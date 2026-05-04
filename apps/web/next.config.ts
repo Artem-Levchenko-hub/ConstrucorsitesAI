@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
     // typecheck (which is the source of truth for type safety anyway).
     ignoreDuringBuilds: true,
   },
+  // Build a self-contained server bundle for slim production Docker images.
+  output: "standalone",
 };
 
 export default nextConfig;
