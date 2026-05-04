@@ -63,7 +63,9 @@ services:
       REDIS_URL: redis://redis:6379/1
       LOG_LEVEL: INFO
     ports:
-      - "8001:8001"
+      # Override host port via GATEWAY_HOST_PORT in .env if 8001 is taken
+      # (e.g. on a server already running another :8001 service).
+      - "${GATEWAY_HOST_PORT:-8001}:8001"
     restart: unless-stopped
     networks:
       - gw-net
