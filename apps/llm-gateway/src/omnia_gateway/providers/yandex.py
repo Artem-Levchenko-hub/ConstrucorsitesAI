@@ -19,6 +19,7 @@ import httpx
 
 from omnia_gateway.core.config import get_settings
 from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from omnia_gateway.core.http import get_http
 
 YANDEX_COMPLETION_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
@@ -86,10 +87,12 @@ async def acompletion(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(YANDEX_COMPLETION_URL, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        client = get_http()
+        resp = await client.post(
+            YANDEX_COMPLETION_URL, json=payload, headers=headers, timeout=timeout
+        )
+        resp.raise_for_status()
+        data = resp.json()
     except httpx.HTTPStatusError as exc:
         raise UpstreamProviderError(
             f"YandexGPT HTTP {exc.response.status_code}",

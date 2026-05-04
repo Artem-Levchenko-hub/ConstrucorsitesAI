@@ -14,6 +14,9 @@ from omnia_api.core.errors import (
     validation_error_handler,
 )
 from omnia_api.routers import auth as auth_router
+from omnia_api.routers import projects as projects_router
+from omnia_api.routers import public as public_router
+from omnia_api.routers import snapshots as snapshots_router
 
 
 @asynccontextmanager
@@ -42,6 +45,9 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, unhandled_error_handler)
 
     app.include_router(auth_router.router)
+    app.include_router(projects_router.router)
+    app.include_router(snapshots_router.router)
+    app.include_router(public_router.router)
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:

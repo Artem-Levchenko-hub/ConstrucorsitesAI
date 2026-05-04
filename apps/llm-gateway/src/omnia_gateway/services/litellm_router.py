@@ -47,6 +47,27 @@ _FALLBACKS: list[dict[str, list[str]]] = [
     {"gpt-4.1": ["gpt-5-mini"]},
 ]
 
+# Reverse map for billing: when a fallback fires, response.model holds the
+# LiteLLM slug, possibly with a date suffix (e.g. "gpt-4o-2024-08-06"). We
+# strip prefixes/suffixes via prefix-match.
+_SLUG_TO_OMNIA: dict[str, str] = {v: k for k, v in _LITELLM_MODEL_SLUG.items()}
+
+
+def slug_to_omnia(slug: str) -> str | None:
+    """Map a LiteLLM model slug back to its Omnia ID. None if unknown."""
+    if not slug:
+        return None
+    if slug in _SLUG_TO_OMNIA:
+        return _SLUG_TO_OMNIA[slug]
+    # LiteLLM sometimes returns the bare provider model (no `provider/` prefix)
+    # or a date-stamped variant. Try both directions.
+    for known_slug, omnia_id in _SLUG_TO_OMNIA.items():
+        bare = known_slug.split("/", 1)[-1]
+        if slug == bare or slug.startswith(known_slug) or slug.startswith(bare):
+            return omnia_id
+    return None
+
+
 _router: Router | None = None
 
 
