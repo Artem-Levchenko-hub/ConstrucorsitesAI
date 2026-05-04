@@ -9,10 +9,13 @@ from sqlalchemy.exc import IntegrityError
 
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.core.minio import preview_public_url
+from omnia_api.core.redis import publish_event
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.project import ProjectCreate, ProjectPublic
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.queue import enqueue_preview
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -64,6 +67,27 @@ async def create_project(
         ) from e
 
     await session.refresh(project)
+    await session.refresh(snapshot)
+
+    await asyncio.to_thread(enqueue_preview, snapshot.id)
+    await publish_event(
+        project.id,
+        "snapshot.created",
+        {
+            "snapshot": {
+                "id": str(snapshot.id),
+                "project_id": str(snapshot.project_id),
+                "commit_sha": snapshot.commit_sha,
+                "prompt_text": snapshot.prompt_text,
+                "model_id": snapshot.model_id,
+                "parent_id": str(snapshot.parent_id) if snapshot.parent_id else None,
+                "preview_url": preview_public_url(snapshot.preview_key),
+                "is_rollback_target": snapshot.is_rollback_target,
+                "created_at": snapshot.created_at.isoformat(),
+            }
+        },
+    )
+
     return project
 
 

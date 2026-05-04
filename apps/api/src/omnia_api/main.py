@@ -13,18 +13,24 @@ from omnia_api.core.errors import (
     unhandled_error_handler,
     validation_error_handler,
 )
+from omnia_api.core.redis import dispose_redis
 from omnia_api.routers import auth as auth_router
 from omnia_api.routers import projects as projects_router
 from omnia_api.routers import public as public_router
 from omnia_api.routers import snapshots as snapshots_router
+from omnia_api.routers import ws as ws_router
+from omnia_api.services.ws_hub import hub
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     get_engine()
+    await hub.start_listener()
     try:
         yield
     finally:
+        await hub.stop_listener()
+        await dispose_redis()
         await dispose_engine()
 
 
@@ -48,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router.router)
     app.include_router(snapshots_router.router)
     app.include_router(public_router.router)
+    app.include_router(ws_router.router)
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
