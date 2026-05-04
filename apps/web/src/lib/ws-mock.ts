@@ -152,10 +152,11 @@ export function simulatePromptStream(opts: {
         timers.push(
           setTimeout(() => {
             if (cancelled) return;
-            // Wallet was already deducted; emit fresh balance to the UI.
+            // Wallet was already deducted in mockApi.charge above; just push the
+            // fresh balance to the UI so the badge animates.
             emit({
               type: "wallet.updated",
-              data: { balance_rub: getCurrentBalance() },
+              data: { balance_rub: mockApi.currentBalance() },
             });
           }, 200),
         );
@@ -169,13 +170,4 @@ export function simulatePromptStream(opts: {
     cancelled = true;
     for (const t of timers) clearTimeout(t);
   };
-}
-
-function getCurrentBalance(): number {
-  // Re-read from mock store via its public surface.
-  // (mockApi.getWallet is async; for the WS event we want a sync read. Use a small probe.)
-  // Lightweight cheat: stash balance through a global to avoid making the API async here.
-  return (
-    (globalThis as unknown as { __omniaBalance?: number }).__omniaBalance ?? 0
-  );
 }

@@ -18,7 +18,11 @@ import type {
   WalletState,
 } from "./types";
 
-export const USE_MOCKS = process.env.NEXT_PUBLIC_USE_MOCKS === "true";
+/**
+ * Mocks ON by default — apps/api isn't wired up yet. Flip this off
+ * (`NEXT_PUBLIC_USE_MOCKS=false`) once the real backend is reachable.
+ */
+export const USE_MOCKS = process.env.NEXT_PUBLIC_USE_MOCKS !== "false";
 
 const uuid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -362,6 +366,10 @@ export const mockApi = {
       charge,
       ...STORE.wallet.recent_charges,
     ].slice(0, 20);
+  },
+
+  currentBalance(): number {
+    return STORE.wallet.balance_rub;
   },
 
   templateLabel(t: ProjectTemplate): string {

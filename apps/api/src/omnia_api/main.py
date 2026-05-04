@@ -15,9 +15,13 @@ from omnia_api.core.errors import (
 )
 from omnia_api.core.redis import dispose_redis
 from omnia_api.routers import auth as auth_router
+from omnia_api.routers import messages as messages_router
+from omnia_api.routers import models_router
 from omnia_api.routers import projects as projects_router
 from omnia_api.routers import public as public_router
+from omnia_api.routers import rollback as rollback_router
 from omnia_api.routers import snapshots as snapshots_router
+from omnia_api.routers import wallet as wallet_router
 from omnia_api.routers import ws as ws_router
 from omnia_api.services.ws_hub import hub
 
@@ -53,6 +57,10 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router)
     app.include_router(projects_router.router)
     app.include_router(snapshots_router.router)
+    app.include_router(messages_router.router)
+    app.include_router(rollback_router.router)
+    app.include_router(wallet_router.router)
+    app.include_router(models_router.router)
     app.include_router(public_router.router)
     app.include_router(ws_router.router)
 
