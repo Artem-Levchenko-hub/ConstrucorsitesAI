@@ -20,6 +20,7 @@ import structlog
 from fastapi import Request
 
 from omnia_gateway.core.errors import GatewayError, UpstreamProviderError
+from omnia_gateway.providers import sber as sber_provider
 from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services import litellm_router as router_module
@@ -40,17 +41,19 @@ def _sse(payload: dict[str, Any] | str) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-async def _yandex_pseudo_stream(
+async def _custom_provider_pseudo_stream(
+    provider_acompletion: Any,
     model: str,
     messages: list[dict[str, str]],
     temperature: float | None,
     max_tokens: int | None,
+    default_temperature: float,
 ) -> AsyncIterator[tuple[str, str]]:
-    """Yandex doesn't expose streaming via our wrapper; chunk the full response."""
-    full = await yandex_provider.acompletion(
+    """For providers without native streaming (Yandex, Sber): full response → word chunks."""
+    full = await provider_acompletion(
         model=model,
         messages=messages,
-        temperature=0.6 if temperature is None else temperature,
+        temperature=default_temperature if temperature is None else temperature,
         max_tokens=2000 if max_tokens is None else max_tokens,
     )
     text = full["choices"][0]["message"]["content"]
@@ -119,7 +122,13 @@ async def stream_completion(
 
     source: AsyncIterator[tuple[str, str]]
     if yandex_provider.is_yandex_model(model):
-        source = _yandex_pseudo_stream(model, messages, temperature, max_tokens)
+        source = _custom_provider_pseudo_stream(
+            yandex_provider.acompletion, model, messages, temperature, max_tokens, 0.6
+        )
+    elif sber_provider.is_sber_model(model):
+        source = _custom_provider_pseudo_stream(
+            sber_provider.acompletion, model, messages, temperature, max_tokens, 0.7
+        )
     else:
         source = _litellm_stream(model, messages, user_id, temperature, max_tokens)
 

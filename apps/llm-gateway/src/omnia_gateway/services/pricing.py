@@ -29,6 +29,12 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     "gpt-5-mini": ModelPrice(Decimal("0.06"), Decimal("0.24")),
     "yandexgpt-5": ModelPrice(Decimal("0.10"), Decimal("0.40")),
     "qwen-3-coder": ModelPrice(Decimal("0.05"), Decimal("0.20")),
+    # Sber GigaChat — RUB-native, no FX conversion. Numbers approximate Sber's
+    # public price list (May 2026); adjust against the official table before bumping
+    # markup. Output is priced same as input on Sber's tariffs.
+    "gigachat-2": ModelPrice(Decimal("0.20"), Decimal("0.20")),
+    "gigachat-2-pro": ModelPrice(Decimal("1.50"), Decimal("1.50")),
+    "gigachat-2-max": ModelPrice(Decimal("1.95"), Decimal("1.95")),
 }
 
 _PER_1K = Decimal("1000")
@@ -53,7 +59,7 @@ def calculate_cost_rub(model_id: str, tokens_in: int, tokens_out: int) -> Decima
 @dataclass(frozen=True, slots=True)
 class _ModelMeta:
     display_name: str
-    provider: str  # 'anthropic' | 'openai' | 'yandex' | 'alibaba'
+    provider: str  # 'anthropic' | 'openai' | 'yandex' | 'alibaba' | 'sber'
     context_window: int
     recommended_for: tuple[str, ...]
 
@@ -65,6 +71,9 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
     "gpt-5-mini": _ModelMeta("GPT-5 Mini", "openai", 128_000, ("fast", "budget")),
     "yandexgpt-5": _ModelMeta("YandexGPT 5", "yandex", 32_000, ("budget",)),
     "qwen-3-coder": _ModelMeta("Qwen 3 Coder", "alibaba", 128_000, ("budget", "fast")),
+    "gigachat-2": _ModelMeta("GigaChat 2", "sber", 32_000, ("fast", "budget")),
+    "gigachat-2-pro": _ModelMeta("GigaChat 2 Pro", "sber", 128_000, ("quality",)),
+    "gigachat-2-max": _ModelMeta("GigaChat 2 Max", "sber", 128_000, ("quality",)),
 }
 
 

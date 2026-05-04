@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     yandex_folder_id: str | None = None
     openrouter_api_key: SecretStr | None = None
 
+    # Sber GigaChat — auth key is base64(client_id:client_secret) from Sber developer cabinet.
+    # Sber's API uses the Russian Trusted Root CA, which most Python builds don't trust by
+    # default — set GIGACHAT_VERIFY_SSL=false locally if you don't have the cert installed.
+    gigachat_auth_key: SecretStr | None = None
+    gigachat_scope: str = "GIGACHAT_API_PERS"  # or GIGACHAT_API_CORP
+    gigachat_verify_ssl: bool = False
+
     database_url: str = "postgresql://omnia:omnia@localhost:5432/omnia"
     redis_url: str = "redis://localhost:6379/1"
 

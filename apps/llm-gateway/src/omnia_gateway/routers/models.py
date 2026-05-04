@@ -15,6 +15,7 @@ _PROVIDER_KEY_PRESENT = {
     "openai": lambda s: s.openai_api_key is not None,
     "yandex": lambda s: s.yandex_api_key is not None and s.yandex_folder_id is not None,
     "alibaba": lambda s: s.openrouter_api_key is not None,  # via OpenRouter
+    "sber": lambda s: s.gigachat_auth_key is not None,
 }
 
 

@@ -23,6 +23,7 @@ from omnia_gateway.core.errors import (
     ModelUnavailableError,
     UpstreamProviderError,
 )
+from omnia_gateway.providers import sber as sber_provider
 from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services.pricing import PRICE_TABLE
 
@@ -148,6 +149,14 @@ async def acompletion(
             model=model,
             messages=messages,
             temperature=0.6 if temperature is None else temperature,
+            max_tokens=2000 if max_tokens is None else max_tokens,
+        )
+
+    if sber_provider.is_sber_model(model):
+        return await sber_provider.acompletion(
+            model=model,
+            messages=messages,
+            temperature=0.7 if temperature is None else temperature,
             max_tokens=2000 if max_tokens is None else max_tokens,
         )
 
