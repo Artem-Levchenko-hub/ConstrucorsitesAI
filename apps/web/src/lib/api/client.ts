@@ -1,0 +1,73 @@
+import type { ApiErrorBody, ApiErrorCode } from "./types";
+
+const baseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+/**
+ * Typed error mirroring docs/01-api-contract.md error envelope. Throw site is
+ * `apiFetch`; consumers `instanceof ApiError` to discriminate from network errors.
+ */
+export class ApiError extends Error {
+  readonly code: ApiErrorCode;
+  readonly status: number;
+  readonly details?: Record<string, unknown>;
+
+  constructor(status: number, body: ApiErrorBody["error"]) {
+    super(body.message);
+    this.name = "ApiError";
+    this.code = body.code;
+    this.status = status;
+    this.details = body.details;
+  }
+}
+
+type RequestInitWithJson = Omit<RequestInit, "body"> & {
+  /** Object to JSON.stringify; sets Content-Type: application/json. */
+  json?: unknown;
+};
+
+/**
+ * Narrow API over fetch: takes a path and an init, returns parsed JSON or throws
+ * `ApiError` on a non-2xx response. Hides baseURL, credentials cookie, JSON
+ * serialization, error envelope parsing, and the 204 quirk.
+ */
+export async function apiFetch<T>(
+  path: string,
+  init: RequestInitWithJson = {},
+): Promise<T> {
+  const { json, headers, ...rest } = init;
+
+  const response = await fetch(`${baseUrl}${path}`, {
+    ...rest,
+    credentials: "include",
+    headers: {
+      ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...headers,
+    },
+    body: json !== undefined ? JSON.stringify(json) : undefined,
+  });
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload: unknown = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+
+  if (!response.ok) {
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      "error" in payload
+    ) {
+      throw new ApiError(response.status, (payload as ApiErrorBody).error);
+    }
+    throw new ApiError(response.status, {
+      code: "internal_error",
+      message: typeof payload === "string" ? payload : `HTTP ${response.status}`,
+    });
+  }
+
+  return payload as T;
+}
