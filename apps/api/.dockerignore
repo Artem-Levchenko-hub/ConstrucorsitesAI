@@ -8,5 +8,6 @@ __pycache__/
 .git/
 tests/
 *.md
+!README.md
 .env
 .env.local
