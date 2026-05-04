@@ -75,11 +75,14 @@ _router: Router | None = None
 def _api_key_for(slug: str) -> str | None:
     s = get_settings()
     if slug.startswith("anthropic/") and s.anthropic_api_key:
-        return s.anthropic_api_key.get_secret_value()
+        v = s.anthropic_api_key.get_secret_value()
+        return v or None
     if slug.startswith("openai/") and s.openai_api_key:
-        return s.openai_api_key.get_secret_value()
+        v = s.openai_api_key.get_secret_value()
+        return v or None
     if slug.startswith("openrouter/") and s.openrouter_api_key:
-        return s.openrouter_api_key.get_secret_value()
+        v = s.openrouter_api_key.get_secret_value()
+        return v or None
     return None
 
 
