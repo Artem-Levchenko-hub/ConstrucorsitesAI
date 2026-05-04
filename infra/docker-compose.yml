@@ -1,0 +1,87 @@
+# Локальная инфра Omnia.AI MVP.
+# Postgres + Redis + MinIO + одноразовый minio-init создающий buckets.
+# Сервисы api / worker / llm-gateway появятся в M2+ (агенты B, C).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: omnia-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-omnia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnia}
+      POSTGRES_DB: ${POSTGRES_DB:-omnia}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omnia} -d ${POSTGRES_DB:-omnia}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - omnia-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: omnia-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - omnia-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: omnia-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-omnia}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-omnia-secret}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console
+    volumes:
+      - ./data/minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - omnia-net
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: omnia-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-omnia}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-omnia-secret}
+      MINIO_BUCKET_PROJECTS: ${MINIO_BUCKET_PROJECTS:-projects}
+      MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mc alias set omnia http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "omnia/$$MINIO_BUCKET_PROJECTS"
+        mc mb --ignore-existing "omnia/$$MINIO_BUCKET_PREVIEWS"
+        mc anonymous set download "omnia/$$MINIO_BUCKET_PREVIEWS"
+        echo "MinIO buckets ready: $$MINIO_BUCKET_PROJECTS (private), $$MINIO_BUCKET_PREVIEWS (public read)"
+    restart: "no"
+    networks:
+      - omnia-net
+
+networks:
+  omnia-net:
+    driver: bridge
