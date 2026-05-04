@@ -1,7 +1,8 @@
 """POST /v1/chat/completions — non-streaming, with mocked provider + DB."""
+
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 

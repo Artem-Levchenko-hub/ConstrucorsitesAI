@@ -1,4 +1,5 @@
 """GET /v1/models — model catalog with RUB prices and per-key availability."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter
@@ -11,9 +12,9 @@ router = APIRouter(prefix="/v1", tags=["models"])
 # Single dispatch — no scattered conditionals when a new provider lands.
 _PROVIDER_KEY_PRESENT = {
     "anthropic": lambda s: s.anthropic_api_key is not None,
-    "openai":    lambda s: s.openai_api_key is not None,
-    "yandex":    lambda s: s.yandex_api_key is not None and s.yandex_folder_id is not None,
-    "alibaba":   lambda s: s.openrouter_api_key is not None,  # via OpenRouter
+    "openai": lambda s: s.openai_api_key is not None,
+    "yandex": lambda s: s.yandex_api_key is not None and s.yandex_folder_id is not None,
+    "alibaba": lambda s: s.openrouter_api_key is not None,  # via OpenRouter
 }
 
 

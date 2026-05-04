@@ -4,6 +4,7 @@ R-08 (ubiquitous language): error codes match the contract verbatim
 (`wallet_empty`, `model_unavailable`, …) so frontend / backend / gateway speak
 one language.
 """
+
 from __future__ import annotations
 
 from typing import Any

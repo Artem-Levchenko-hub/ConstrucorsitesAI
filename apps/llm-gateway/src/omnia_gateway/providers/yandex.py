@@ -8,6 +8,7 @@ maintain for MVP and easy to delete once LiteLLM fully supports Yandex.
 R-01 (deep module): the public surface is a single async function;
 authentication, payload shaping, and error translation live entirely inside.
 """
+
 from __future__ import annotations
 
 import time
@@ -53,7 +54,7 @@ async def acompletion(
     messages: list[dict[str, str]],
     temperature: float = 0.6,
     max_tokens: int = 2000,
-    timeout: float = 60.0,
+    timeout: float = 60.0,  # noqa: ASYNC109 — passed to httpx.AsyncClient, which enforces it
 ) -> dict[str, Any]:
     """Call YandexGPT, return an OpenAI-compatible response dict.
 
@@ -105,8 +106,7 @@ async def acompletion(
 
     usage = result.get("usage") or {}
     tokens_in = int(
-        usage.get("inputTextTokens")
-        or _approx_tokens("".join(m["content"] for m in messages))
+        usage.get("inputTextTokens") or _approx_tokens("".join(m["content"] for m in messages))
     )
     tokens_out = int(usage.get("completionTokens") or _approx_tokens(content))
 

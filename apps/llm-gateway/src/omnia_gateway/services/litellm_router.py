@@ -9,6 +9,7 @@ of provider. Routing, fallback config, and error translation are hidden here.
 R-07: this module depends on both providers and pricing, but the chat router
 depends only on this — providers stay invisible to the HTTP layer.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -34,16 +35,16 @@ litellm.suppress_debug_info = True
 # anthropic/claude-sonnet-4-5 until a 4.6 alias ships).
 _LITELLM_MODEL_SLUG: dict[str, str] = {
     "claude-sonnet-4-6": "anthropic/claude-sonnet-4-5",
-    "claude-opus-4-7":   "anthropic/claude-opus-4-5",
-    "gpt-4.1":           "openai/gpt-4o",
-    "gpt-5-mini":        "openai/gpt-4o-mini",
-    "qwen-3-coder":      "openrouter/qwen/qwen3-coder",
+    "claude-opus-4-7": "anthropic/claude-opus-4-5",
+    "gpt-4.1": "openai/gpt-4o",
+    "gpt-5-mini": "openai/gpt-4o-mini",
+    "qwen-3-coder": "openrouter/qwen/qwen3-coder",
 }
 
 _FALLBACKS: list[dict[str, list[str]]] = [
-    {"claude-opus-4-7":   ["claude-sonnet-4-6", "gpt-4.1"]},
+    {"claude-opus-4-7": ["claude-sonnet-4-6", "gpt-4.1"]},
     {"claude-sonnet-4-6": ["gpt-4.1", "gpt-5-mini"]},
-    {"gpt-4.1":           ["gpt-5-mini"]},
+    {"gpt-4.1": ["gpt-5-mini"]},
 ]
 
 _router: Router | None = None

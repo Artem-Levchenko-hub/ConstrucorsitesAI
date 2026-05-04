@@ -3,6 +3,7 @@
 Schema lives in docs/02-data-model.md. Wallet debit + wallet_charges insert
 land in M3 (`services/billing.py`); for M0 we only record analytics.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal

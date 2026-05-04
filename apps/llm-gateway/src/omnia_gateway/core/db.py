@@ -3,6 +3,7 @@
 The gateway is read-tiny / write-tiny against the shared DB owned by Agent B
 (see docs/02-data-model.md). One pool, max 10 connections, is enough.
 """
+
 from __future__ import annotations
 
 import asyncpg

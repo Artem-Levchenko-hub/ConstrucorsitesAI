@@ -3,6 +3,7 @@
 R-02 (hide what changes): all env access goes through `get_settings()`. If we
 later swap pydantic-settings for vault / SSM, only this module changes.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache

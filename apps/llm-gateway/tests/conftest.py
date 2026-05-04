@@ -1,4 +1,5 @@
 """Pytest config — disable .env loading and reset cached singletons per session."""
+
 from __future__ import annotations
 
 import os

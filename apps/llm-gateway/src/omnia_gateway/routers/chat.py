@@ -3,6 +3,7 @@
 Streaming (`stream: true`) returns 501 here; M1 will implement SSE per
 docs/01-api-contract.md.
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal

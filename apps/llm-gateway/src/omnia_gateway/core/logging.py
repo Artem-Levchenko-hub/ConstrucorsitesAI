@@ -1,4 +1,5 @@
 """structlog setup — JSON lines to stdout for container-friendly logging."""
+
 from __future__ import annotations
 
 import logging
