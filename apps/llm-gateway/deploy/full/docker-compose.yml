@@ -160,13 +160,14 @@ services:
       - omnia-prod
 
   worker:
-    build:
-      context: ../../../api
-      dockerfile: Dockerfile
+    # Reuses the omnia-api:prod image built by the `api` service — no separate
+    # build step (both Compose race on the same tag otherwise).
     image: omnia-api:prod
     container_name: omnia-prod-worker
     command: ["uv", "run", "python", "-m", "omnia_api.workers.run"]
     depends_on:
+      api:
+        condition: service_started
       postgres:
         condition: service_healthy
       redis:
