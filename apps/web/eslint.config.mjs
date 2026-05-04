@@ -1,7 +1,8 @@
 import nextPlugin from "@next/eslint-plugin-next";
 import reactHooksPlugin from "eslint-plugin-react-hooks";
+import tseslint from "typescript-eslint";
 
-export default [
+export default tseslint.config(
   {
     ignores: [
       ".next/**",
@@ -11,6 +12,7 @@ export default [
       "*.config.ts",
     ],
   },
+  ...tseslint.configs.recommended,
   {
     files: ["**/*.{js,jsx,ts,tsx,mjs}"],
     plugins: {
@@ -23,4 +25,4 @@ export default [
       ...reactHooksPlugin.configs.recommended.rules,
     },
   },
-];
+);
