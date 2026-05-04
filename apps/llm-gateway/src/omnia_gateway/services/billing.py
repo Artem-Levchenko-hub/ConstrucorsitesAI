@@ -26,9 +26,7 @@ async def get_balance(user_id: UUID) -> Decimal:
     """Return current wallet balance for `user_id` (0 if no wallet row)."""
     pool = get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT balance_rub FROM wallets WHERE user_id = $1", user_id
-        )
+        row = await conn.fetchrow("SELECT balance_rub FROM wallets WHERE user_id = $1", user_id)
     return Decimal(row["balance_rub"]) if row else Decimal("0")
 
 

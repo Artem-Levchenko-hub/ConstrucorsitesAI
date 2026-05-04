@@ -72,9 +72,7 @@ def _estimate_cost(model: str, messages: list[dict[str, str]]) -> Decimal:
 
 
 @router.post("/chat/completions")
-async def chat_completions(
-    req: ChatCompletionRequest, request: Request
-) -> Any:
+async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
     raw_messages = [m.model_dump() for m in req.messages]
     filtered_messages = safety.sanitize_messages(raw_messages)
 
@@ -84,7 +82,9 @@ async def chat_completions(
         # Pre-check balance before opening the SSE generator (cheap reject).
         if req.user is not None:
             try:
-                await billing.precheck_balance(req.user, _estimate_cost(req.model, filtered_messages))
+                await billing.precheck_balance(
+                    req.user, _estimate_cost(req.model, filtered_messages)
+                )
             except WalletEmptyError as exc:
                 raise _gateway_error_to_http(exc) from exc
             except Exception:

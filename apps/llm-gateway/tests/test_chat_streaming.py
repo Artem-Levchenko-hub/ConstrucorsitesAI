@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Iterator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -33,7 +33,10 @@ async def _fake_stream() -> AsyncIterator[_FakeChunk]:
 
 class _FakeRouter:
     model_list: list[dict] = [
-        {"model_name": "claude-sonnet-4-6", "litellm_params": {"model": "anthropic/claude-sonnet-4-5"}}
+        {
+            "model_name": "claude-sonnet-4-6",
+            "litellm_params": {"model": "anthropic/claude-sonnet-4-5"},
+        }
     ]
 
     async def acompletion(self, **kwargs):
@@ -85,7 +88,11 @@ def test_chat_streaming_yields_sse_chunks(client: TestClient) -> None:
 
     events = _parse_sse(r.text)
     # At least: 3 deltas + final usage chunk + [DONE]
-    delta_chunks = [e for e in events if isinstance(e, dict) and e.get("choices", [{}])[0].get("delta", {}).get("content")]
+    delta_chunks = [
+        e
+        for e in events
+        if isinstance(e, dict) and e.get("choices", [{}])[0].get("delta", {}).get("content")
+    ]
     final_chunks = [e for e in events if isinstance(e, dict) and e.get("usage")]
     done = [e for e in events if e == "[DONE]"]
     assert len(delta_chunks) == 3

@@ -7,6 +7,7 @@ never the un-streamed tail (per AGENT-C-LLM-GATEWAY.md, M1 cancellation rule).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
@@ -29,9 +30,14 @@ log = structlog.get_logger(__name__)
 
 
 def _sse(payload: dict[str, Any] | str) -> str:
+    """Serialize payload for sse_starlette.
+
+    EventSourceResponse adds the `data: ` prefix and trailing blank line itself
+    — we only need the JSON body (or the `[DONE]` sentinel).
+    """
     if isinstance(payload, str):
-        return f"data: {payload}\n\n"
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        return payload
+    return json.dumps(payload, ensure_ascii=False)
 
 
 async def _yandex_pseudo_stream(
@@ -118,48 +124,49 @@ async def stream_completion(
         source = _litellm_stream(model, messages, user_id, temperature, max_tokens)
 
     try:
-        async for delta, slug in source:
-            if await request.is_disconnected():
-                cancelled = True
-                break
-            if slug:
-                mapped = router_module.slug_to_omnia(slug)
-                if mapped and mapped != actual_model:
-                    fallback_used = True
-                    actual_model = mapped
-            if delta:
-                accumulated.append(delta)
-                yield _sse(
-                    {
-                        "id": response_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": actual_model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": delta},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                )
-    except GatewayError as exc:
-        upstream_error = exc
+        try:
+            async for delta, slug in source:
+                if slug:
+                    mapped = router_module.slug_to_omnia(slug)
+                    if mapped and mapped != actual_model:
+                        fallback_used = True
+                        actual_model = mapped
+                if delta:
+                    accumulated.append(delta)
+                    yield _sse(
+                        {
+                            "id": response_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": actual_model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"content": delta},
+                                    "finish_reason": None,
+                                }
+                            ],
+                        }
+                    )
+        except GatewayError as exc:
+            upstream_error = exc
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
 
-    output_text = "".join(accumulated)
-    tokens_in = count_message_tokens(actual_model, messages) if output_text else 0
-    tokens_out = count_text_tokens(actual_model, output_text) if output_text else 0
-    try:
-        cost_rub = (
-            calculate_cost_rub(actual_model, tokens_in, tokens_out)
-            if tokens_out
-            else Decimal("0")
-        )
-    except Exception:
-        cost_rub = Decimal("0")
+        # Normal completion: emit final usage chunk + [DONE].
+        output_text = "".join(accumulated)
+        tokens_in = count_message_tokens(actual_model, messages) if output_text else 0
+        tokens_out = count_text_tokens(actual_model, output_text) if output_text else 0
+        try:
+            cost_rub = (
+                calculate_cost_rub(actual_model, tokens_in, tokens_out)
+                if tokens_out
+                else Decimal("0")
+            )
+        except Exception:
+            cost_rub = Decimal("0")
 
-    if not cancelled:
         if upstream_error is not None:
             yield _sse(
                 {
@@ -176,9 +183,7 @@ async def stream_completion(
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": actual_model,
-                    "choices": [
-                        {"index": 0, "delta": {}, "finish_reason": "stop"}
-                    ],
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                     "usage": {
                         "prompt_tokens": tokens_in,
                         "completion_tokens": tokens_out,
@@ -192,35 +197,55 @@ async def stream_completion(
                 }
             )
         yield _sse("[DONE]")
-
-    if user_id is not None and tokens_out > 0:
+    finally:
+        # Bookkeeping based on what actually went out to the wire — runs
+        # regardless of cancellation / error / clean exit.
+        output_text = "".join(accumulated)
+        if output_text:
+            tokens_in_final = count_message_tokens(actual_model, messages)
+            tokens_out_final = count_text_tokens(actual_model, output_text)
+        else:
+            tokens_in_final, tokens_out_final = 0, 0
         try:
-            await billing.charge(
-                user_id=user_id,
-                project_id=project_id,
-                message_id=message_id,
-                model_id=actual_model,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                cost_rub=cost_rub,
-                description=f"Streamed completion via {actual_model}",
+            cost_rub_final = (
+                calculate_cost_rub(actual_model, tokens_in_final, tokens_out_final)
+                if tokens_out_final
+                else Decimal("0")
             )
         except Exception:
-            log.exception("stream.charge_failed", user_id=str(user_id), model=actual_model)
+            cost_rub_final = Decimal("0")
 
-    file_logger.log_request(
-        {
-            "user_id": user_id,
-            "project_id": project_id,
-            "message_id": message_id,
-            "model": actual_model,
-            "tokens_in": tokens_in,
-            "tokens_out": tokens_out,
-            "cost_rub": cost_rub,
-            "cache_hit": False,
-            "fallback_used": fallback_used,
-            "stream": True,
-            "cancelled": cancelled,
-            "error": upstream_error.code if upstream_error else None,
-        }
-    )
+        if user_id is not None and tokens_out_final > 0:
+            try:
+                await billing.charge(
+                    user_id=user_id,
+                    project_id=project_id,
+                    message_id=message_id,
+                    model_id=actual_model,
+                    tokens_in=tokens_in_final,
+                    tokens_out=tokens_out_final,
+                    cost_rub=cost_rub_final,
+                    description=f"Streamed completion via {actual_model}",
+                )
+            except Exception:
+                log.exception("stream.charge_failed", user_id=str(user_id), model=actual_model)
+
+        try:
+            file_logger.log_request(
+                {
+                    "user_id": user_id,
+                    "project_id": project_id,
+                    "message_id": message_id,
+                    "model": actual_model,
+                    "tokens_in": tokens_in_final,
+                    "tokens_out": tokens_out_final,
+                    "cost_rub": cost_rub_final,
+                    "cache_hit": False,
+                    "fallback_used": fallback_used,
+                    "stream": True,
+                    "cancelled": cancelled,
+                    "error": upstream_error.code if upstream_error else None,
+                }
+            )
+        except Exception:
+            log.exception("stream.file_log_failed")
