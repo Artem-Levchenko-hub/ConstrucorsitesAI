@@ -22,6 +22,8 @@ def get_engine() -> AsyncEngine:
             pool_pre_ping=True,
             pool_size=10,
             max_overflow=10,
+            pool_recycle=1800,
+            connect_args={"timeout": 5.0, "command_timeout": 10.0},
         )
         _session_factory = async_sessionmaker(
             _engine,

@@ -8,7 +8,12 @@ from sqlalchemy.exc import IntegrityError
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.core.security import create_access_token, hash_password, verify_password
+from omnia_api.core.security import (
+    consume_dummy_verify,
+    create_access_token,
+    hash_password,
+    verify_password,
+)
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.user import UserCreate, UserLogin, UserPublic
@@ -36,7 +41,8 @@ def _set_session_cookie(response: Response, token: str) -> None:
 )
 async def register(payload: UserCreate, response: Response, session: SessionDep) -> User:
     settings = get_settings()
-    user = User(email=payload.email, password_hash=hash_password(payload.password))
+    pwd_hash = await hash_password(payload.password)
+    user = User(email=payload.email, password_hash=pwd_hash)
     user.wallet = Wallet(balance_rub=Decimal(str(settings.initial_wallet_balance_rub)))
     session.add(user)
     try:
@@ -57,7 +63,10 @@ async def register(payload: UserCreate, response: Response, session: SessionDep)
 async def login(payload: UserLogin, response: Response, session: SessionDep) -> User:
     result = await session.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
-    if user is None or not verify_password(payload.password, user.password_hash):
+    if user is None:
+        await consume_dummy_verify()
+        raise ApiError("unauthorized", "invalid credentials", status.HTTP_401_UNAUTHORIZED)
+    if not await verify_password(payload.password, user.password_hash):
         raise ApiError("unauthorized", "invalid credentials", status.HTTP_401_UNAUTHORIZED)
     user.last_login_at = datetime.now(UTC)
     await session.commit()

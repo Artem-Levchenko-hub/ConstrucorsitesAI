@@ -1,4 +1,6 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from uuid import UUID
 
 from jose import JWTError, jwt
@@ -9,12 +11,23 @@ from omnia_api.core.config import get_settings
 _pwd_context = CryptContext(schemes=["bcrypt"], bcrypt__rounds=12, deprecated="auto")
 
 
-def hash_password(password: str) -> str:
-    return _pwd_context.hash(password)
+@lru_cache(maxsize=1)
+def _dummy_hash() -> str:
+    """Постоянный хэш для constant-time fallback при login с несуществующим email."""
+    return _pwd_context.hash("__omnia_dummy_password_for_constant_time__")
 
 
-def verify_password(password: str, password_hash: str) -> bool:
-    return _pwd_context.verify(password, password_hash)
+async def hash_password(password: str) -> str:
+    return await asyncio.to_thread(_pwd_context.hash, password)
+
+
+async def verify_password(password: str, password_hash: str) -> bool:
+    return await asyncio.to_thread(_pwd_context.verify, password, password_hash)
+
+
+async def consume_dummy_verify() -> None:
+    """Имитирует bcrypt-verify, чтобы login на несуществующий email занимал то же время."""
+    await asyncio.to_thread(_pwd_context.verify, "x", _dummy_hash())
 
 
 def create_access_token(user_id: UUID) -> str:
