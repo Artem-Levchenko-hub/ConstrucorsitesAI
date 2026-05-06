@@ -64,29 +64,48 @@ async function callAuth(
     return message;
   }
 
-  // Extract `omnia_session` from the api's Set-Cookie header(s) and re-emit it
-  // through Next.js so the browser stores it.
-  const setCookies = (response.headers as Headers & { getSetCookie?: () => string[] })
-    .getSetCookie?.() ?? [];
-  const sessionCookie = setCookies.find((c) => c.startsWith(`${COOKIE_NAME}=`));
-  if (sessionCookie) {
-    const [pair] = sessionCookie.split(";");
-    const eq = pair.indexOf("=");
-    if (eq > 0) {
-      const value = pair.slice(eq + 1);
-      const cookieStore = await cookies();
-      cookieStore.set({
-        name: COOKIE_NAME,
-        value,
-        httpOnly: true,
-        secure: true,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 60 * 60 * 24 * 7,
-      });
-    }
+  // Extract `omnia_session=...` from Set-Cookie. Try the spec method first;
+  // fall back to the raw header (the spec method is only Node 19.7+ and some
+  // proxied fetches strip it). Always log what we see so a misfire is visible
+  // in `docker logs omnia-prod-web`.
+  const headersAny = response.headers as Headers & { getSetCookie?: () => string[] };
+  const fromMethod = typeof headersAny.getSetCookie === "function"
+    ? headersAny.getSetCookie()
+    : [];
+  const fromRaw = response.headers.get("set-cookie");
+
+  // raw header may join multiple cookies with `, ` — splitting naively is unsafe,
+  // but for our case we only need the FIRST `omnia_session=...; ...` segment.
+  const candidates: string[] = [...fromMethod];
+  if (fromRaw) candidates.push(fromRaw);
+
+  let token: string | null = null;
+  for (const raw of candidates) {
+    const idx = raw.indexOf(`${COOKIE_NAME}=`);
+    if (idx === -1) continue;
+    const after = raw.slice(idx + COOKIE_NAME.length + 1);
+    const end = after.search(/[;,\s]/);
+    token = end === -1 ? after : after.slice(0, end);
+    break;
   }
 
+  console.log("[auth] api %s OK; set-cookie methods=%d raw=%s tokenFound=%s",
+    endpoint, fromMethod.length, fromRaw ? "yes" : "no", token ? "yes" : "no");
+
+  if (!token) {
+    return "Не удалось установить сессию (cookie не получен от api)";
+  }
+
+  const cookieStore = await cookies();
+  cookieStore.set({
+    name: COOKIE_NAME,
+    value: token,
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 7,
+  });
   return null;
 }
 
