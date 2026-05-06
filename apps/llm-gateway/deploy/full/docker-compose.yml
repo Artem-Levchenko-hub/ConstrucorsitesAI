@@ -200,7 +200,13 @@ services:
         NEXT_PUBLIC_USE_MOCKS: "false"
     image: omnia-web:prod
     container_name: omnia-prod-web
+    depends_on:
+      api:
+        condition: service_started
     environment:
+      # Server-side fetches from Next.js → api stay inside the docker network,
+      # avoiding the public nginx hop and DNS resolution.
+      INTERNAL_API_URL: http://api:8000
       NEXTAUTH_URL: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in .env}
       NODE_ENV: production
