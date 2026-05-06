@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
 from omnia_api.core.config import get_settings
+
+log = logging.getLogger(__name__)
 
 
 class LLMError(Exception):
@@ -43,14 +46,21 @@ async def stream_chat_completion(
         "metadata": {"project_id": project_id, "message_id": message_id},
     }
     timeout = httpx.Timeout(120.0, connect=5.0, read=120.0)
+    log.info("llm.stream.start url=%s model=%s msgs=%d", url, model, len(messages))
+    line_count = 0
+    delta_count = 0
+    usage_seen = False
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", url, json=payload) as resp:
+                log.info("llm.stream.connected status=%s", resp.status_code)
                 if resp.status_code >= 400:
                     body = await resp.aread()
+                    log.error("llm.stream.http_error status=%s body=%s", resp.status_code, body[:300])
                     yield {"error": f"gateway {resp.status_code}: {body!r}"}
                     return
                 async for line in resp.aiter_lines():
+                    line_count += 1
                     if not line.startswith("data:"):
                         continue
                     chunk = line[5:].strip()
@@ -58,7 +68,8 @@ async def stream_chat_completion(
                         continue
                     try:
                         data = json.loads(chunk)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as exc:
+                        log.warning("llm.stream.json_decode_error chunk=%r err=%s", chunk[:100], exc)
                         continue
                     delta = (
                         data.get("choices", [{}])[0]
@@ -66,18 +77,33 @@ async def stream_chat_completion(
                         .get("content")
                     )
                     if delta:
+                        delta_count += 1
                         yield {"delta": delta}
                     usage = data.get("usage")
                     if usage:
+                        usage_seen = True
+                        # gateway puts cost_rub in metadata, not usage; pull from
+                        # either location for forward compat.
+                        meta = data.get("metadata") or {}
+                        cost_rub = (
+                            float(meta.get("cost_rub", 0))
+                            if meta.get("cost_rub")
+                            else float(usage.get("cost_rub", 0))
+                        )
                         yield {
                             "usage": {
                                 "tokens_in": usage.get("prompt_tokens", 0),
                                 "tokens_out": usage.get("completion_tokens", 0),
-                                "cost_rub": float(usage.get("cost_rub", 0)),
+                                "cost_rub": cost_rub,
                             }
                         }
     except httpx.HTTPError as e:
+        log.exception("llm.stream.transport_error err=%s", e)
         yield {"error": f"http: {e}"}
+    log.info(
+        "llm.stream.done lines=%d deltas=%d usage_seen=%s",
+        line_count, delta_count, usage_seen,
+    )
 
 
 async def _mock_stream(messages: list[dict[str, str]]) -> AsyncIterator[dict[str, Any]]:
