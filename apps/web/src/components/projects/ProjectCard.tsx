@@ -32,7 +32,7 @@ export function ProjectCard({ project }: { project: Project }) {
           <div className="space-y-1">
             <h3 className="text-lg font-medium truncate">{project.name}</h3>
             <p className="text-xs font-mono text-fg-tertiary truncate">
-              {project.slug}.omnia.ai
+              /p/{project.slug}
             </p>
           </div>
 
