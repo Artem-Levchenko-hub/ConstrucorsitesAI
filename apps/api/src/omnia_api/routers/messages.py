@@ -31,6 +31,38 @@ RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом
 
 router = APIRouter(prefix="/api/projects", tags=["messages"])
 
+# Strong references to fire-and-forget background tasks. Without this set,
+# `asyncio.create_task(...)` returns a Task whose only reference is the
+# anonymous expression — the GC can collect it mid-flight, silently aborting
+# the prompt-processing coroutine and leaving the assistant message empty
+# in the DB. https://docs.python.org/3/library/asyncio-task.html#creating-tasks
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _spawn_process_prompt(**kwargs: object) -> None:
+    """Fire-and-forget _process_prompt with a guaranteed strong reference.
+
+    Any exception that escapes the coroutine is logged via the structlog
+    fallback below, so it surfaces in `docker logs` instead of being eaten
+    by `_process_prompt`'s broad except → publish_event(llm.error).
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    task = asyncio.create_task(_process_prompt(**kwargs))  # type: ignore[arg-type]
+    _BACKGROUND_TASKS.add(task)
+
+    def _on_done(t: asyncio.Task[None]) -> None:
+        _BACKGROUND_TASKS.discard(t)
+        if t.cancelled():
+            log.warning("_process_prompt task cancelled")
+            return
+        exc = t.exception()
+        if exc is not None:
+            log.error("_process_prompt failed", exc_info=exc)
+
+    task.add_done_callback(_on_done)
+
 
 def _snapshot_payload(s: Snapshot) -> dict[str, object]:
     return {
@@ -87,16 +119,14 @@ async def post_prompt(
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
 
-    asyncio.create_task(
-        _process_prompt(
-            project_id=project_id,
-            user_id=current_user.id,
-            user_message_id=user_msg.id,
-            assistant_message_id=assistant_msg.id,
-            current_snapshot_id=project.current_snapshot_id,
-            prompt_text=payload.prompt,
-            model_id=payload.model_id,
-        )
+    _spawn_process_prompt(
+        project_id=project_id,
+        user_id=current_user.id,
+        user_message_id=user_msg.id,
+        assistant_message_id=assistant_msg.id,
+        current_snapshot_id=project.current_snapshot_id,
+        prompt_text=payload.prompt,
+        model_id=payload.model_id,
     )
 
     return PromptResponse(message_id=assistant_msg.id, snapshot_id=None)
