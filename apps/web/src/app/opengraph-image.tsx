@@ -1,6 +1,8 @@
 import { ImageResponse } from "next/og";
 
-export const runtime = "edge";
+// Node runtime — Edge runtime requires cloudflare/vercel-style streaming that
+// our standalone-output Docker image doesn't ship. Node works everywhere.
+export const runtime = "nodejs";
 export const alt = "Omnia.AI — пиши промпты, получай готовый сайт";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
