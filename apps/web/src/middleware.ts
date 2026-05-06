@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-const AUTH_COOKIE = "omnia_session_mock";
+// Real api JWT cookie (api/auth sets this; middleware just checks presence —
+// the layout calls /api/auth/me to validate the token).
+const AUTH_COOKIE = "omnia_session";
 
 export function middleware(req: NextRequest) {
   const session = req.cookies.get(AUTH_COOKIE);
