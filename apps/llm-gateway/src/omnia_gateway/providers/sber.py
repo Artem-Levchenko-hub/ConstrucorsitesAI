@@ -63,6 +63,32 @@ def _client_kwargs(timeout: float) -> dict[str, Any]:
     }
 
 
+def _fetch_token_sync(auth_key: str, scope: str, verify_ssl: bool) -> dict[str, Any]:
+    """Synchronous OAuth call.
+
+    Empirically `httpx.AsyncClient` inside the long-running uvicorn process
+    keeps timing out the TCP+TLS handshake to ngw.devices.sberbank.ru:9443
+    (some interaction with the event loop / DNS resolver), while a sync
+    httpx.Client in a fresh thread works in ~250ms. Run this on a thread.
+    """
+    with httpx.Client(
+        timeout=httpx.Timeout(45.0, connect=30.0),
+        verify=verify_ssl,
+    ) as client:
+        resp = client.post(
+            OAUTH_URL,
+            headers={
+                "Authorization": f"Basic {auth_key}",
+                "RqUID": str(uuid4()),
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            data={"scope": scope},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def _get_token() -> str:
     global _token_cache
     async with _token_lock:
@@ -75,19 +101,12 @@ async def _get_token() -> str:
             raise UpstreamProviderError("GIGACHAT_AUTH_KEY not configured")
 
         try:
-            async with httpx.AsyncClient(**_client_kwargs(45.0)) as client:
-                resp = await client.post(
-                    OAUTH_URL,
-                    headers={
-                        "Authorization": f"Basic {settings.gigachat_auth_key.get_secret_value()}",
-                        "RqUID": str(uuid4()),
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        "Accept": "application/json",
-                    },
-                    data={"scope": settings.gigachat_scope},
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            data = await asyncio.to_thread(
+                _fetch_token_sync,
+                settings.gigachat_auth_key.get_secret_value(),
+                settings.gigachat_scope,
+                settings.gigachat_verify_ssl,
+            )
         except httpx.HTTPStatusError as exc:
             print(
                 f"[SBER] OAuth HTTP {exc.response.status_code}: {exc.response.text[:300]!r}",
@@ -155,18 +174,35 @@ async def acompletion(
         "Accept": "application/json",
     }
 
+    def _completion_sync() -> dict[str, Any]:
+        with httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=30.0),
+            verify=get_settings().gigachat_verify_ssl,
+        ) as client:
+            r = client.post(COMPLETION_URL, json=payload, headers=headers)
+            r.raise_for_status()
+            return r.json()
+
     try:
-        async with httpx.AsyncClient(**_client_kwargs(timeout)) as client:
-            resp = await client.post(COMPLETION_URL, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
+        print(
+            f"[SBER] completion HTTP {exc.response.status_code}: {exc.response.text[:300]!r}",
+            flush=True,
+        )
         raise UpstreamProviderError(
             f"GigaChat HTTP {exc.response.status_code}",
             details={"body": exc.response.text[:500]},
         ) from exc
     except httpx.HTTPError as exc:
-        raise UpstreamProviderError(f"GigaChat transport error: {exc}") from exc
+        import traceback as _tb
+        print(
+            f"[SBER] completion transport error {type(exc).__name__} {exc!r}\n{_tb.format_exc()}",
+            flush=True,
+        )
+        raise UpstreamProviderError(
+            f"GigaChat transport error: {type(exc).__name__}: {exc}"
+        ) from exc
 
     # GigaChat already returns OpenAI-shaped {choices, usage}; just normalize the
     # outward-facing fields and remap `model` to our omnia ID for billing.
