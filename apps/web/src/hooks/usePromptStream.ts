@@ -6,6 +6,7 @@ import { simulatePromptStream } from "@/lib/ws-mock";
 import type { Message, Snapshot, WalletState, WsEvent } from "@/lib/api/types";
 import { sendPrompt } from "@/lib/api/messages";
 import { USE_MOCKS } from "@/lib/api/mocks";
+import { useWorkspaceStore } from "@/store/workspace";
 
 /**
  * Opens a real WebSocket to /api/ws/projects/:id and routes server events
@@ -55,6 +56,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   const qc = useQueryClient();
   const cancelRef = useRef<(() => void) | null>(null);
   const streamingRef = useRef(false);
+  const selectSnapshot = useWorkspaceStore((s) => s.selectSnapshot);
 
   const apply = useCallback(
     (event: WsEvent) => {
@@ -97,6 +99,11 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           event.data.snapshot,
           ...(prev ?? []),
         ]);
+        // Hot-reload: jump the iframe to the freshly-created HEAD so the
+        // user sees their generated site immediately without manually
+        // clicking the new card in the timeline. `null` = "show HEAD",
+        // which PreviewFrame resolves to snapshots[0].
+        selectSnapshot(null);
         return;
       }
 
