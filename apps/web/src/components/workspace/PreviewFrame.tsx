@@ -1,15 +1,29 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLink, Loader2 } from "lucide-react";
+import {
+  ExternalLink,
+  Loader2,
+  RotateCw,
+  Smartphone,
+  Tablet,
+  Monitor,
+} from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listSnapshots } from "@/lib/api/snapshots";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
 import type { Project, Snapshot } from "@/lib/api/types";
 import { Skeleton } from "@/components/ui/skeleton";
-import { shortSha } from "@/lib/utils";
-import { toast } from "sonner";
+import { shortSha, cn } from "@/lib/utils";
+
+type Device = "mobile" | "tablet" | "desktop";
+const DEVICE_WIDTH: Record<Device, string> = {
+  mobile: "390px",
+  tablet: "768px",
+  desktop: "100%",
+};
 
 export function PreviewFrame({ project }: { project: Project }) {
   const selectedSnapshotId = useWorkspaceStore((s) => s.selectedSnapshotId);
@@ -22,14 +36,23 @@ export function PreviewFrame({ project }: { project: Project }) {
     ? snapshots?.find((s) => s.id === selectedSnapshotId)
     : snapshots?.[0];
 
-  // Real public URL of this project's HEAD on our hosting. Falls back to a
-  // *.omnia.ai placeholder only when no api origin is configured (dev/mock).
+  const [device, setDevice] = useState<Device>("desktop");
+  const [iframeKey, setIframeKey] = useState(0);
+
   const apiOrigin =
     process.env.NEXT_PUBLIC_API_URL ??
     (typeof window !== "undefined" ? window.location.origin : "");
   const publicUrl = apiOrigin
     ? `${apiOrigin.replace(/\/$/, "")}/p/${project.slug}`
     : `https://${project.slug}.omnia.ai`;
+
+  // The /p/<slug> endpoint always serves the project's current_snapshot HEAD.
+  // To show a *historical* snapshot, append ?snapshot=<id>. Re-key the iframe
+  // when the visible snapshot changes so React fully remounts (clean reload).
+  const iframeSrc =
+    visible && snapshots && visible.id !== snapshots[0]?.id
+      ? `${publicUrl}?snapshot=${visible.id}#k=${iframeKey}`
+      : `${publicUrl}#k=${iframeKey}`;
 
   return (
     <div className="flex flex-col h-full bg-surface-base">
@@ -45,12 +68,49 @@ export function PreviewFrame({ project }: { project: Project }) {
           )}
         </div>
 
-        <Button size="sm" variant="ghost" asChild>
-          <a href={publicUrl} target="_blank" rel="noreferrer">
-            <ExternalLink className="h-3.5 w-3.5" />
-            Открыть
-          </a>
-        </Button>
+        <div className="flex items-center gap-1">
+          {/* Device toggle */}
+          <div className="flex items-center rounded-md border border-border-subtle p-0.5">
+            {(
+              [
+                ["mobile", Smartphone],
+                ["tablet", Tablet],
+                ["desktop", Monitor],
+              ] as const
+            ).map(([d, Icon]) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setDevice(d)}
+                title={d}
+                className={cn(
+                  "p-1.5 rounded transition-colors",
+                  device === d
+                    ? "bg-surface-raised text-fg-primary"
+                    : "text-fg-tertiary hover:text-fg-secondary",
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </button>
+            ))}
+          </div>
+
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setIframeKey((k) => k + 1)}
+            title="Перезагрузить превью"
+          >
+            <RotateCw className="h-3.5 w-3.5" />
+          </Button>
+
+          <Button size="sm" variant="ghost" asChild>
+            <a href={publicUrl} target="_blank" rel="noreferrer">
+              <ExternalLink className="h-3.5 w-3.5" />
+              Открыть
+            </a>
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 p-4 overflow-hidden">
@@ -70,7 +130,7 @@ export function PreviewFrame({ project }: { project: Project }) {
             </a>
           </div>
 
-          <div className="flex-1 relative bg-surface-base">
+          <div className="flex-1 relative bg-surface-base flex items-start justify-center overflow-auto">
             {isPending && (
               <div className="absolute inset-0 p-4">
                 <Skeleton className="w-full h-full" />
@@ -78,32 +138,22 @@ export function PreviewFrame({ project }: { project: Project }) {
             )}
 
             <AnimatePresence mode="wait">
-              {visible && visible.preview_url && (
-                <motion.img
-                  key={visible.id}
-                  src={visible.preview_url}
-                  alt="Превью сайта"
+              {visible && (
+                <motion.iframe
+                  key={`${visible.id}-${iframeKey}`}
+                  src={iframeSrc}
+                  title={`Preview ${shortSha(visible.commit_sha)}`}
+                  // sandbox lets the rendered site run JS, fonts, links inside
+                  // the iframe but blocks privileged APIs (downloads, top-level
+                  // navigation away from us). same-origin so cookies don't leak.
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="absolute inset-0 w-full h-full object-cover"
+                  transition={{ duration: 0.2 }}
+                  style={{ width: DEVICE_WIDTH[device], maxWidth: "100%" }}
+                  className="h-full bg-white border-0 mx-auto shadow-xl"
                 />
-              )}
-              {visible && !visible.preview_url && !isPending && (
-                <motion.div
-                  key="rendering"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-secondary"
-                >
-                  <Loader2 className="h-5 w-5 animate-spin text-accent" />
-                  <div className="text-sm">Рендерим preview через Playwright…</div>
-                  <div className="text-xs text-fg-tertiary font-mono">
-                    {shortSha(visible.commit_sha)}
-                  </div>
-                </motion.div>
               )}
               {!visible && !isPending && (
                 <motion.div
