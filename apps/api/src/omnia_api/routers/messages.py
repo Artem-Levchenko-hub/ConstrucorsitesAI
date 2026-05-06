@@ -158,6 +158,10 @@ async def _process_prompt(
     prompt_text: str,
     model_id: str,
 ) -> None:
+    import logging as _log_mod
+    _log = _log_mod.getLogger(__name__)
+    _log.info("process_prompt.start project=%s asst_msg=%s model=%s", project_id, assistant_message_id, model_id)
+
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     accumulated = ""
     usage_data: dict[str, float | int] | None = None
@@ -182,13 +186,16 @@ async def _process_prompt(
             history_serialized = [
                 {"role": m.role, "content": m.content} for m in rows if m.content
             ]
+        _log.info("process_prompt.ctx_loaded sha=%s history=%d", current_sha, len(history_serialized))
 
         if current_sha:
             current_files = await asyncio.to_thread(
                 repo_svc.read_files, project_id, current_sha
             )
+        _log.info("process_prompt.files_loaded count=%d", len(current_files))
 
         messages = build_messages(current_files, history_serialized, prompt_text)
+        _log.info("process_prompt.messages_built count=%d", len(messages))
 
         async for event in stream_chat_completion(
             messages,
@@ -210,6 +217,7 @@ async def _process_prompt(
             elif "usage" in event:
                 usage_data = event["usage"]  # type: ignore[assignment]
             elif "error" in event:
+                _log.error("process_prompt.stream_error err=%s", event["error"])
                 await _finalize_message(
                     factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
                 )
@@ -219,6 +227,11 @@ async def _process_prompt(
                     {"message_id": str(assistant_message_id), "error": event["error"]},
                 )
                 return
+
+        _log.info(
+            "process_prompt.stream_complete acc_len=%d usage=%s",
+            len(accumulated), usage_data,
+        )
 
         try:
             files = extract_files(accumulated)
@@ -312,6 +325,20 @@ async def _process_prompt(
         )
 
     except Exception as e:  # noqa: BLE001 — широкий лов, чтобы dispatch error в WS
+        _log.exception("process_prompt.fatal project=%s asst=%s", project_id, assistant_message_id)
+        # Mark the assistant row as failed so the UI input unblocks instead of
+        # spinning forever; otherwise tokens_out stays NULL and ChatPanel
+        # treats the message as still-streaming.
+        try:
+            async with factory() as session:
+                m = await session.get(Message, assistant_message_id)
+                if m is not None and m.tokens_out is None:
+                    m.content = f"[Ошибка: {e}]"[:1000]
+                    m.tokens_out = 0
+                    m.tokens_in = 0
+                    await session.commit()
+        except Exception:
+            _log.exception("process_prompt.failure_marker_write_failed")
         await publish_event(
             project_id,
             "llm.error",
