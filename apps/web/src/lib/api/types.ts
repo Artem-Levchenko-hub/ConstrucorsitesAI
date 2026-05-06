@@ -57,7 +57,12 @@ export type Message = {
   created_at: IsoDateTime;
 };
 
-export type ModelProvider = "anthropic" | "openai" | "yandex" | "alibaba";
+export type ModelProvider =
+  | "anthropic"
+  | "openai"
+  | "yandex"
+  | "alibaba"
+  | "sber";
 export type ModelTag = "fast" | "quality" | "budget";
 
 export type Model = {
@@ -68,6 +73,8 @@ export type Model = {
   price_rub_per_1k_out: number;
   context_window: number;
   recommended_for: ModelTag[];
+  /** Optional: whether the gateway has the provider key for this model. */
+  available?: boolean;
 };
 
 export type Charge = {

@@ -15,7 +15,9 @@ type WorkspaceState = {
 };
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
-  selectedModelId: "claude-sonnet-4-6",
+  // Default to gigachat-2 because that's the only provider with a configured
+  // API key on the demo server. Users can switch in the ModelSelector dropdown.
+  selectedModelId: "gigachat-2",
   selectedSnapshotId: null,
   chatCollapsed: false,
   timelineCollapsed: false,
