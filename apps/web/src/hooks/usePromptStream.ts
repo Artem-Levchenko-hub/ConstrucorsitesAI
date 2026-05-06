@@ -5,6 +5,51 @@ import { useCallback, useRef } from "react";
 import { simulatePromptStream } from "@/lib/ws-mock";
 import type { Message, Snapshot, WalletState, WsEvent } from "@/lib/api/types";
 import { sendPrompt } from "@/lib/api/messages";
+import { USE_MOCKS } from "@/lib/api/mocks";
+
+/**
+ * Opens a real WebSocket to /api/ws/projects/:id and routes server events
+ * through `apply`. Returns a cancel function that closes the socket.
+ *
+ * The session JWT cookie travels automatically on the WS handshake (browsers
+ * include cookies). No extra auth wiring needed here.
+ */
+function openRealStream(
+  projectId: string,
+  apply: (event: WsEvent) => void,
+): () => void {
+  const wsBase =
+    process.env.NEXT_PUBLIC_WS_URL ??
+    (typeof window !== "undefined"
+      ? `wss://${window.location.host}`
+      : "wss://constructor.lead-generator.ru");
+  const ws = new WebSocket(`${wsBase}/api/ws/projects/${projectId}`);
+
+  ws.onmessage = (ev) => {
+    try {
+      apply(JSON.parse(ev.data) as WsEvent);
+    } catch {
+      // ignore malformed frames
+    }
+  };
+
+  // Keep-alive ping — many proxies (and our nginx) close idle WS at 60s.
+  const pingInt = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "ping" }));
+    }
+  }, 25_000);
+
+  return () => {
+    clearInterval(pingInt);
+    if (
+      ws.readyState === WebSocket.OPEN ||
+      ws.readyState === WebSocket.CONNECTING
+    ) {
+      ws.close();
+    }
+  };
+}
 
 export function usePromptStream(projectId: string, projectSlug: string) {
   const qc = useQueryClient();
@@ -36,6 +81,14 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               : m,
           ),
         );
+        // Real backend: re-fetch messages and snapshots to capture
+        // server-side state we may have missed during streaming.
+        if (!USE_MOCKS) {
+          qc.invalidateQueries({ queryKey: ["messages", projectId] });
+          qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+          qc.invalidateQueries({ queryKey: ["wallet"] });
+        }
+        streamingRef.current = false;
         return;
       }
 
@@ -63,7 +116,6 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           balance_rub: event.data.balance_rub,
           recent_charges: prev?.recent_charges ?? [],
         }));
-        // Re-sync charges list from mock truth.
         qc.invalidateQueries({ queryKey: ["wallet"] });
         return;
       }
@@ -87,22 +139,31 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       if (streamingRef.current) return;
       streamingRef.current = true;
 
+      // Real prod path: open WS BEFORE POST so we don't race the first chunk.
+      if (!USE_MOCKS) {
+        cancelRef.current?.();
+        cancelRef.current = openRealStream(projectId, apply);
+      }
+
       const { message_id } = await sendPrompt(projectId, promptText, modelId);
 
-      // Refetch messages so the new user + empty assistant rows appear.
+      // New user + assistant rows are written by the api — refetch to display.
       await qc.invalidateQueries({ queryKey: ["messages", projectId] });
 
-      cancelRef.current?.();
-      cancelRef.current = simulatePromptStream({
-        projectId,
-        projectSlug,
-        promptText,
-        modelId,
-        assistantMessageId: message_id,
-        emit: apply,
-      });
+      if (USE_MOCKS) {
+        cancelRef.current?.();
+        cancelRef.current = simulatePromptStream({
+          projectId,
+          projectSlug,
+          promptText,
+          modelId,
+          assistantMessageId: message_id,
+          emit: apply,
+        });
+      }
 
-      // Streaming flag stays true until llm.done lands; flip it then.
+      // Mocks set tokens_out on the assistant row when done — keep the
+      // existing waiter so the streamingRef releases on llm.done.
       const unsub = qc.getQueryCache().subscribe((evt) => {
         if (
           evt.type === "updated" &&
@@ -111,7 +172,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         ) {
           const data = evt.query.state.data as Message[] | undefined;
           const m = data?.find((x) => x.id === message_id);
-          if (m && m.tokens_out !== null) {
+          if (m && m.tokens_out !== null && m.tokens_out !== undefined) {
             streamingRef.current = false;
             unsub();
           }
