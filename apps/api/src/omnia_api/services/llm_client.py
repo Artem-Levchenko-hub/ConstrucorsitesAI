@@ -46,21 +46,25 @@ async def stream_chat_completion(
         "metadata": {"project_id": project_id, "message_id": message_id},
     }
     timeout = httpx.Timeout(120.0, connect=5.0, read=120.0)
-    log.info("llm.stream.start url=%s model=%s msgs=%d", url, model, len(messages))
+    print(f"[LLM] start url={url} model={model} msgs={len(messages)}", flush=True)
     line_count = 0
     delta_count = 0
     usage_seen = False
+    last_line_sample = ""
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", url, json=payload) as resp:
-                log.info("llm.stream.connected status=%s", resp.status_code)
+                print(f"[LLM] connected status={resp.status_code}", flush=True)
                 if resp.status_code >= 400:
                     body = await resp.aread()
-                    log.error("llm.stream.http_error status=%s body=%s", resp.status_code, body[:300])
+                    print(f"[LLM] http_error {resp.status_code} {body[:300]!r}", flush=True)
                     yield {"error": f"gateway {resp.status_code}: {body!r}"}
                     return
                 async for line in resp.aiter_lines():
                     line_count += 1
+                    if line_count <= 3 or line_count % 10 == 0:
+                        last_line_sample = line[:120]
+                        print(f"[LLM] line#{line_count}: {last_line_sample!r}", flush=True)
                     if not line.startswith("data:"):
                         continue
                     chunk = line[5:].strip()
@@ -69,7 +73,7 @@ async def stream_chat_completion(
                     try:
                         data = json.loads(chunk)
                     except json.JSONDecodeError as exc:
-                        log.warning("llm.stream.json_decode_error chunk=%r err=%s", chunk[:100], exc)
+                        print(f"[LLM] json_err chunk={chunk[:100]!r} err={exc}", flush=True)
                         continue
                     delta = (
                         data.get("choices", [{}])[0]
@@ -82,8 +86,6 @@ async def stream_chat_completion(
                     usage = data.get("usage")
                     if usage:
                         usage_seen = True
-                        # gateway puts cost_rub in metadata, not usage; pull from
-                        # either location for forward compat.
                         meta = data.get("metadata") or {}
                         cost_rub = (
                             float(meta.get("cost_rub", 0))
@@ -98,11 +100,12 @@ async def stream_chat_completion(
                             }
                         }
     except httpx.HTTPError as e:
-        log.exception("llm.stream.transport_error err=%s", e)
+        import traceback as _tb
+        print(f"[LLM] transport_error err={e!r}\n{_tb.format_exc()}", flush=True)
         yield {"error": f"http: {e}"}
-    log.info(
-        "llm.stream.done lines=%d deltas=%d usage_seen=%s",
-        line_count, delta_count, usage_seen,
+    print(
+        f"[LLM] done lines={line_count} deltas={delta_count} usage_seen={usage_seen} last={last_line_sample!r}",
+        flush=True,
     )
 
 
