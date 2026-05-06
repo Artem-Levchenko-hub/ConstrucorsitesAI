@@ -84,12 +84,23 @@ async def _get_token() -> str:
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPStatusError as exc:
+            print(
+                f"[SBER] OAuth HTTP {exc.response.status_code}: {exc.response.text[:300]!r}",
+                flush=True,
+            )
             raise UpstreamProviderError(
                 f"GigaChat OAuth HTTP {exc.response.status_code}",
                 details={"body": exc.response.text[:500]},
             ) from exc
         except httpx.HTTPError as exc:
-            raise UpstreamProviderError(f"GigaChat OAuth transport error: {exc}") from exc
+            import traceback as _tb
+            print(
+                f"[SBER] OAuth transport error type={type(exc).__name__} repr={exc!r}\n{_tb.format_exc()}",
+                flush=True,
+            )
+            raise UpstreamProviderError(
+                f"GigaChat OAuth transport error: {type(exc).__name__}: {exc}"
+            ) from exc
 
         token = data.get("access_token")
         expires_ms = data.get("expires_at")
