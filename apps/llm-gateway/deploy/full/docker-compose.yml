@@ -56,6 +56,11 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-omnia-minio-secret-please-change}
     volumes:
       - minio-data:/data
+    # S3 API on 127.0.0.1:${MINIO_HOST_PORT:-9000} so nginx can reverse-proxy
+    # /minio/* into the previews bucket (anonymous read is set by minio-init).
+    # Bound to loopback only — nginx is the public face.
+    ports:
+      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
