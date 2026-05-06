@@ -22,6 +22,15 @@ export function PreviewFrame({ project }: { project: Project }) {
     ? snapshots?.find((s) => s.id === selectedSnapshotId)
     : snapshots?.[0];
 
+  // Real public URL of this project's HEAD on our hosting. Falls back to a
+  // *.omnia.ai placeholder only when no api origin is configured (dev/mock).
+  const apiOrigin =
+    process.env.NEXT_PUBLIC_API_URL ??
+    (typeof window !== "undefined" ? window.location.origin : "");
+  const publicUrl = apiOrigin
+    ? `${apiOrigin.replace(/\/$/, "")}/p/${project.slug}`
+    : `https://${project.slug}.omnia.ai`;
+
   return (
     <div className="flex flex-col h-full bg-surface-base">
       <div className="h-10 flex items-center justify-between px-4 border-b border-border-subtle">
@@ -36,17 +45,11 @@ export function PreviewFrame({ project }: { project: Project }) {
           )}
         </div>
 
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() =>
-            toast.info("В демо preview-окно симулировано", {
-              description: `${project.slug}.omnia.ai откроется после деплоя`,
-            })
-          }
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          Открыть
+        <Button size="sm" variant="ghost" asChild>
+          <a href={publicUrl} target="_blank" rel="noreferrer">
+            <ExternalLink className="h-3.5 w-3.5" />
+            Открыть
+          </a>
         </Button>
       </div>
 
@@ -56,9 +59,15 @@ export function PreviewFrame({ project }: { project: Project }) {
             <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
             <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
             <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
-            <span className="ml-3 text-xs font-mono text-fg-tertiary truncate">
-              https://{project.slug}.omnia.ai
-            </span>
+            <a
+              href={publicUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-3 text-xs font-mono text-fg-tertiary truncate hover:text-fg-secondary transition-colors"
+              title="Открыть в новой вкладке"
+            >
+              {publicUrl}
+            </a>
           </div>
 
           <div className="flex-1 relative bg-surface-base">
