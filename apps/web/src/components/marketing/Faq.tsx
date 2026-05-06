@@ -33,8 +33,23 @@ const QUESTIONS = [
 ];
 
 export function Faq() {
+  // Schema.org FAQPage — gives Google/Yandex rich-result eligibility.
+  const faqJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: QUESTIONS.map((item) => ({
+      "@type": "Question",
+      name: item.q,
+      acceptedAnswer: { "@type": "Answer", text: item.a },
+    })),
+  };
+
   return (
     <section id="faq" className="border-b border-border-subtle">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
+      />
       <div className="mx-auto max-w-3xl px-6 py-24">
         <h2 className="text-3xl font-semibold tracking-tight mb-2">
           Частые вопросы
