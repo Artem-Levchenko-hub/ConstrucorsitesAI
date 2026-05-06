@@ -51,9 +51,14 @@ def reset_token_cache() -> None:
 
 
 def _client_kwargs(timeout: float) -> dict[str, Any]:
-    """Build httpx.AsyncClient kwargs honoring the verify flag."""
+    """Build httpx.AsyncClient kwargs honoring the verify flag.
+
+    Sber's OAuth endpoint (ngw.devices.sberbank.ru:9443) regularly takes 15-25s
+    for the TLS handshake from RU VPSes — observed empirically. We use a
+    generous connect timeout and a moderate read timeout.
+    """
     return {
-        "timeout": timeout,
+        "timeout": httpx.Timeout(timeout, connect=30.0, read=timeout, write=15.0),
         "verify": get_settings().gigachat_verify_ssl,
     }
 
@@ -70,7 +75,7 @@ async def _get_token() -> str:
             raise UpstreamProviderError("GIGACHAT_AUTH_KEY not configured")
 
         try:
-            async with httpx.AsyncClient(**_client_kwargs(15.0)) as client:
+            async with httpx.AsyncClient(**_client_kwargs(45.0)) as client:
                 resp = await client.post(
                     OAUTH_URL,
                     headers={
