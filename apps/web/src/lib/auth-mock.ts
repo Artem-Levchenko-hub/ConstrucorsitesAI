@@ -1,34 +1,52 @@
 /**
- * Cookie-backed mock auth for the demo path. Once apps/api is wired up,
- * this gets swapped for next-auth Credentials provider per
- * docs/01-api-contract.md auth flow. Until then, every login that meets
- * the validation rules succeeds and stores `omnia_session_mock`.
+ * Server-side session helpers backed by the api's JWT cookie (`omnia_session`).
+ *
+ * Keeps the original module name so existing imports (`@/lib/auth-mock`) stay
+ * stable, but the implementation now talks to the real backend instead of the
+ * dev-time mock.
  */
 
 import { cookies } from "next/headers";
 
-export const AUTH_COOKIE = "omnia_session_mock";
+export const AUTH_COOKIE = "omnia_session";
 
 export type SessionUser = { id: string; email: string };
 
+function apiBaseUrl(): string {
+  return (
+    process.env.INTERNAL_API_URL ??
+    process.env.NEXT_PUBLIC_API_URL ??
+    "http://localhost:8000"
+  );
+}
+
+/** Read the JWT cookie and resolve the user via /api/auth/me. */
 export async function getSession(): Promise<SessionUser | null> {
   const c = await cookies();
-  const raw = c.get(AUTH_COOKIE)?.value;
-  if (!raw) return null;
+  const token = c.get(AUTH_COOKIE)?.value;
+  if (!token) return null;
+
   try {
-    return JSON.parse(decodeURIComponent(raw)) as SessionUser;
+    const r = await fetch(`${apiBaseUrl()}/api/auth/me`, {
+      method: "GET",
+      headers: { Cookie: `${AUTH_COOKIE}=${token}` },
+      cache: "no-store",
+    });
+    if (!r.ok) return null;
+    const user = (await r.json()) as { id: string; email: string };
+    return { id: user.id, email: user.email };
   } catch {
     return null;
   }
 }
 
-export async function setSession(user: SessionUser): Promise<void> {
-  const c = await cookies();
-  c.set(AUTH_COOKIE, encodeURIComponent(JSON.stringify(user)), {
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  });
+/**
+ * Legacy stub kept for backwards compatibility; the real cookie is set by the
+ * api response in actions.ts (`callAuth`). Calling this is a no-op in the
+ * production flow but harmless if some test fixture still does.
+ */
+export async function setSession(_user: SessionUser): Promise<void> {
+  // intentionally empty
 }
 
 export async function clearSession(): Promise<void> {
