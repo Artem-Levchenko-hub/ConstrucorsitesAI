@@ -160,7 +160,7 @@ async def _process_prompt(
 ) -> None:
     import logging as _log_mod
     _log = _log_mod.getLogger(__name__)
-    _log.info("process_prompt.start project=%s asst_msg=%s model=%s", project_id, assistant_message_id, model_id)
+    print(f"[PP] start project={project_id} asst_msg={assistant_message_id} model={model_id}", flush=True)
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     accumulated = ""
@@ -186,16 +186,16 @@ async def _process_prompt(
             history_serialized = [
                 {"role": m.role, "content": m.content} for m in rows if m.content
             ]
-        _log.info("process_prompt.ctx_loaded sha=%s history=%d", current_sha, len(history_serialized))
+        print(f"[PP] ctx_loaded sha={current_sha} history={len(history_serialized)}", flush=True)
 
         if current_sha:
             current_files = await asyncio.to_thread(
                 repo_svc.read_files, project_id, current_sha
             )
-        _log.info("process_prompt.files_loaded count=%d", len(current_files))
+        print(f"[PP] files_loaded count={len(current_files)}", flush=True)
 
         messages = build_messages(current_files, history_serialized, prompt_text)
-        _log.info("process_prompt.messages_built count=%d", len(messages))
+        print(f"[PP] messages_built count={len(messages)}", flush=True)
 
         async for event in stream_chat_completion(
             messages,
@@ -217,7 +217,7 @@ async def _process_prompt(
             elif "usage" in event:
                 usage_data = event["usage"]  # type: ignore[assignment]
             elif "error" in event:
-                _log.error("process_prompt.stream_error err=%s", event["error"])
+                print(f"[PP] stream_error err={event['error']!r}", flush=True)
                 await _finalize_message(
                     factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
                 )
@@ -228,10 +228,7 @@ async def _process_prompt(
                 )
                 return
 
-        _log.info(
-            "process_prompt.stream_complete acc_len=%d usage=%s",
-            len(accumulated), usage_data,
-        )
+        print(f"[PP] stream_complete acc_len={len(accumulated)} usage={usage_data}", flush=True)
 
         try:
             files = extract_files(accumulated)
@@ -325,7 +322,8 @@ async def _process_prompt(
         )
 
     except Exception as e:  # noqa: BLE001 — широкий лов, чтобы dispatch error в WS
-        _log.exception("process_prompt.fatal project=%s asst=%s", project_id, assistant_message_id)
+        import traceback as _tb
+        print(f"[PP] FATAL project={project_id} asst={assistant_message_id} err={e!r}\n{_tb.format_exc()}", flush=True)
         # Mark the assistant row as failed so the UI input unblocks instead of
         # spinning forever; otherwise tokens_out stays NULL and ChatPanel
         # treats the message as still-streaming.
@@ -338,7 +336,8 @@ async def _process_prompt(
                     m.tokens_in = 0
                     await session.commit()
         except Exception:
-            _log.exception("process_prompt.failure_marker_write_failed")
+            import traceback as _tb2
+            print(f"[PP] failure_marker_write_failed\n{_tb2.format_exc()}", flush=True)
         await publish_event(
             project_id,
             "llm.error",
