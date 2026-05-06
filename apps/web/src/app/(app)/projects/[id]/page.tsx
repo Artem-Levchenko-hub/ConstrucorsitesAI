@@ -3,16 +3,20 @@ import { getSession } from "@/lib/auth-mock";
 import { TopBar } from "@/components/workspace/TopBar";
 import { Workspace } from "@/components/workspace/Workspace";
 import { mockApi, USE_MOCKS } from "@/lib/api/mocks";
-import { apiFetch } from "@/lib/api/client";
+import { serverApiFetch } from "@/lib/api/server";
 import type { Project } from "@/lib/api/types";
 
 async function loadProject(id: string): Promise<Project | null> {
-  try {
-    if (USE_MOCKS) return await mockApi.getProject(id);
-    return await apiFetch<Project>(`/api/projects/${id}`);
-  } catch {
-    return null;
+  if (USE_MOCKS) {
+    try {
+      return await mockApi.getProject(id);
+    } catch {
+      return null;
+    }
   }
+  // serverApiFetch attaches the omnia_session cookie from next/headers
+  // (browser cookies don't reach server fetches automatically).
+  return await serverApiFetch<Project>(`/api/projects/${id}`);
 }
 
 export default async function WorkspacePage({
