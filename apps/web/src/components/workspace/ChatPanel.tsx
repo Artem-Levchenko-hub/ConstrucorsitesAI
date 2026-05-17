@@ -18,7 +18,10 @@ export function ChatPanel({
   projectSlug: string;
 }) {
   const modelId = useWorkspaceStore((s) => s.selectedModelId);
-  const { submit, cancel } = usePromptStream(projectId, projectSlug);
+  const { submit, cancel, cancelPending, pendingPrompt } = usePromptStream(
+    projectId,
+    projectSlug,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const { data: messages, isPending } = useQuery({
@@ -83,7 +86,9 @@ export function ChatPanel({
       <PromptInput
         onSubmit={(text) => submit(text, modelId)}
         onCancel={cancel}
+        onCancelPending={cancelPending}
         isStreaming={isStreaming}
+        pendingPrompt={pendingPrompt}
       />
     </div>
   );

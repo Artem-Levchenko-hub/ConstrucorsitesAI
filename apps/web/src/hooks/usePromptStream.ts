@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { simulatePromptStream } from "@/lib/ws-mock";
 import type { Message, Snapshot, WalletState, WsEvent } from "@/lib/api/types";
 import { sendPrompt } from "@/lib/api/messages";
@@ -56,7 +56,28 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   const qc = useQueryClient();
   const cancelRef = useRef<(() => void) | null>(null);
   const streamingRef = useRef(false);
+  // Очередь — один слот. Если юзер кидает второй промпт, пока стримит первый,
+  // он сюда попадает и автоматом стартует на llm.done/llm.error. Если новый
+  // промпт прилетает поверх — заменяет предыдущий (предсказуемее, чем стек).
+  const pendingRef = useRef<{ text: string; modelId: string } | null>(null);
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  // submitRef нужен, потому что fireQueued вызывается из apply (стабильный
+  // useCallback), а submit пересоздаётся при каждом рендере с свежим apply —
+  // прямая ссылка на submit замкнётся на устаревшую версию.
+  const submitRef = useRef<((text: string, modelId: string) => void) | null>(
+    null,
+  );
   const selectSnapshot = useWorkspaceStore((s) => s.selectSnapshot);
+
+  const fireQueued = useCallback(() => {
+    const p = pendingRef.current;
+    if (!p) return;
+    pendingRef.current = null;
+    setPendingPrompt(null);
+    // setTimeout, чтобы не вызвать submit изнутри обработчика событий react-query
+    // и дать React закоммитить текущий рендер.
+    setTimeout(() => submitRef.current?.(p.text, p.modelId), 0);
+  }, []);
 
   const apply = useCallback(
     (event: WsEvent) => {
@@ -91,6 +112,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.invalidateQueries({ queryKey: ["wallet"] });
         }
         streamingRef.current = false;
+        fireQueued();
         return;
       }
 
@@ -131,19 +153,32 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>
             m.id === event.data.message_id
-              ? { ...m, content: `[Ошибка: ${event.data.error}]` }
+              ? {
+                  ...m,
+                  content: `[Ошибка: ${event.data.error}]`,
+                  // Без tokens_out !== null ChatPanel считает сообщение
+                  // всё ещё стримящимся — UI не разлочивается.
+                  tokens_out: m.tokens_out ?? 0,
+                  tokens_in: m.tokens_in ?? 0,
+                }
               : m,
           ),
         );
         streamingRef.current = false;
+        fireQueued();
       }
     },
-    [qc, projectId],
+    [qc, projectId, fireQueued, selectSnapshot],
   );
 
   const submit = useCallback(
     async (promptText: string, modelId: string) => {
-      if (streamingRef.current) return;
+      // Стрим в процессе — кладём в очередь (один слот, новый замещает старый).
+      if (streamingRef.current) {
+        pendingRef.current = { text: promptText, modelId };
+        setPendingPrompt(promptText);
+        return;
+      }
       streamingRef.current = true;
 
       // Real prod path: open WS BEFORE POST so we don't race the first chunk.
@@ -189,11 +224,42 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     [projectId, projectSlug, qc, apply],
   );
 
+  // Сохраняем актуальный submit в ref, чтобы fireQueued мог его вызвать,
+  // не замыкаясь на устаревшую версию (useCallback пересоздаётся каждый рендер).
+  submitRef.current = submit;
+
   const cancel = useCallback(() => {
+    // 1) Рвём WS — фронт перестаёт получать чанки.
     cancelRef.current?.();
     cancelRef.current = null;
     streamingRef.current = false;
+
+    // 2) Помечаем последнее ассистентское сообщение завершённым, чтобы
+    //    ChatPanel.isStreaming (читает tokens_out из кэша) сразу разблокировался.
+    //    Бэкенд может ещё какое-то время дописывать в БД — это TODO для
+    //    отдельного /messages/:id/cancel-эндпоинта; пока best-effort на фронте.
+    qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+      (prev ?? []).map((m, i, arr) =>
+        i === arr.length - 1 && m.role === "assistant" && m.tokens_out === null
+          ? {
+              ...m,
+              content: m.content + "\n\n[Отменено пользователем]",
+              tokens_out: m.tokens_out ?? 0,
+              tokens_in: m.tokens_in ?? 0,
+            }
+          : m,
+      ),
+    );
+
+    // 3) Сбрасываем очередь — Стоп = «всё, прекратить».
+    pendingRef.current = null;
+    setPendingPrompt(null);
+  }, [qc, projectId]);
+
+  const cancelPending = useCallback(() => {
+    pendingRef.current = null;
+    setPendingPrompt(null);
   }, []);
 
-  return { submit, cancel };
+  return { submit, cancel, cancelPending, pendingPrompt };
 }
