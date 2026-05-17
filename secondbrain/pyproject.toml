@@ -1,0 +1,13 @@
+[project]
+name = "omnia-secondbrain"
+version = "0.1.0"
+description = "SecondBrain memory compiler for Omnia.AI team"
+requires-python = ">=3.11"
+dependencies = [
+  "claude-agent-sdk>=0.1.29",
+  "python-dotenv>=1.0.0",
+  "tzdata>=2024.1",
+]
+
+[tool.uv]
+package = false

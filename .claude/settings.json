@@ -1,0 +1,64 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory \"$CLAUDE_PROJECT_DIR/secondbrain\" python hooks/session-start.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory \"$CLAUDE_PROJECT_DIR/secondbrain\" python hooks/pre-compact.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory \"$CLAUDE_PROJECT_DIR/secondbrain\" python hooks/session-end.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory \"$CLAUDE_PROJECT_DIR/secondbrain\" python hooks/post-tool-use.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory \"$CLAUDE_PROJECT_DIR/secondbrain\" python hooks/after-agent-response.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

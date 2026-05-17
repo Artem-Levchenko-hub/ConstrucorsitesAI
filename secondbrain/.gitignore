@@ -1,0 +1,24 @@
+# State / cache (machine-local, не для шара)
+scripts/state.json
+scripts/last-flush.json
+scripts/docs-state.json
+scripts/memory-state.json
+scripts/maintenance-state.json
+scripts/last-memory-sync.json
+scripts/context-dirty.json
+scripts/*.log
+scripts/tmp/
+
+# Live activity (генерится post-tool-use хуком — slot для Obsidian)
+knowledge/live-activity.md
+
+# Lint / health reports
+reports/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Obsidian (если кто-то откроет seconbrain как vault)
+.obsidian/
