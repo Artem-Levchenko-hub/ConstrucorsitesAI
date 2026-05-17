@@ -25,6 +25,11 @@ class ModelPrice:
 PRICE_TABLE: Mapping[str, ModelPrice] = {
     "claude-sonnet-4-6": ModelPrice(Decimal("0.30"), Decimal("1.50")),
     "claude-opus-4-7": ModelPrice(Decimal("1.50"), Decimal("7.50")),
+    # Haiku 4.5 via proxyapi.ru (sk- key, OpenAI-compat). Anthropic list price
+    # ~$1/$5 per 1M; converted at the same factor as Sonnet (0.30/1.50 ≈ $3/$15)
+    # then padded ~25% for proxyapi markup → 0.15/0.75 ₽ per 1k. Recheck the
+    # proxyapi price page before billing real users.
+    "claude-haiku-4-5": ModelPrice(Decimal("0.15"), Decimal("0.75")),
     "gpt-4.1": ModelPrice(Decimal("0.50"), Decimal("2.00")),
     "gpt-5-mini": ModelPrice(Decimal("0.06"), Decimal("0.24")),
     "yandexgpt-5": ModelPrice(Decimal("0.10"), Decimal("0.40")),
@@ -67,6 +72,7 @@ class _ModelMeta:
 _MODEL_META: Mapping[str, _ModelMeta] = {
     "claude-sonnet-4-6": _ModelMeta("Claude Sonnet 4.6", "anthropic", 200_000, ("quality",)),
     "claude-opus-4-7": _ModelMeta("Claude Opus 4.7", "anthropic", 200_000, ("quality",)),
+    "claude-haiku-4-5": _ModelMeta("Claude Haiku 4.5", "anthropic", 200_000, ("fast", "budget")),
     "gpt-4.1": _ModelMeta("GPT-4.1", "openai", 128_000, ("quality",)),
     "gpt-5-mini": _ModelMeta("GPT-5 Mini", "openai", 128_000, ("fast", "budget")),
     "yandexgpt-5": _ModelMeta("YandexGPT 5", "yandex", 32_000, ("budget",)),

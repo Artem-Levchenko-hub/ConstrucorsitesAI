@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     yandex_folder_id: str | None = None
     openrouter_api_key: SecretStr | None = None
 
+    # proxyapi.ru — Russian proxy that fronts native Anthropic Messages API.
+    # The same balance covers all proxyapi-routed models; per-model routing is
+    # declared in _PROXY_ROUTES in services/litellm_router.py.
+    proxyapi_api_key: SecretStr | None = None
+    # Anthropic provider in LiteLLM appends /v1/messages itself; do not include /v1 here.
+    proxyapi_base_url: str = "https://api.proxyapi.ru/anthropic"
+
     # Sber GigaChat — auth key is base64(client_id:client_secret) from Sber developer cabinet.
     # Sber's API uses the Russian Trusted Root CA, which most Python builds don't trust by
     # default — set GIGACHAT_VERIFY_SSL=false locally if you don't have the cert installed.

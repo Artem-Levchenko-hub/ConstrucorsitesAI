@@ -306,8 +306,24 @@ async def _process_prompt(
                 {"snapshot": _snapshot_payload(snapshot)},
             )
         else:
+            # Модель ответила, но ни одного <file path="...">...</file> в выводе.
+            # Раньше тут была тишина — UI получал только llm.done и думал, что
+            # всё ок, хотя preview не обновлялся. Теперь шлём явный llm.error,
+            # чтобы юзер видел, что произошло, и сообщение в чате становится
+            # видимым (а не висит «пустым» из-за пустого snapshot_id).
             await _finalize_message(
                 factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
+            )
+            hint = (
+                "Модель не вернула ни одного файла в формате "
+                '<file path="...">...</file>. Похоже, выбранная модель плохо '
+                "следует структурному формату для генерации сайтов — попробуй "
+                "Claude Haiku 4.5 (быстро) или Claude Sonnet 4.6 (качественно)."
+            )
+            await publish_event(
+                project_id,
+                "llm.error",
+                {"message_id": str(assistant_message_id), "error": hint},
             )
 
         await publish_event(

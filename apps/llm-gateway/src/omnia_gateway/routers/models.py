@@ -9,6 +9,7 @@ from omnia_gateway.services.pricing import list_models
 
 router = APIRouter(prefix="/v1", tags=["models"])
 
+
 def _has(secret) -> bool:
     """SecretStr is not None AND has non-empty value (env vars often arrive empty)."""
     return secret is not None and bool(secret.get_secret_value())
@@ -23,9 +24,16 @@ _PROVIDER_KEY_PRESENT = {
     "sber": lambda s: _has(s.gigachat_auth_key),
 }
 
+# Models whose key lives outside the default per-provider mapping — e.g. an
+# Anthropic-branded model served via a 3rd-party proxy. Mirrors _PROXY_ROUTES
+# in services/litellm_router.py; keep these in sync.
+_MODEL_KEY_OVERRIDE = {
+    "claude-haiku-4-5": lambda s: _has(s.proxyapi_api_key),
+}
 
-def _is_available(provider: str) -> bool:
-    check = _PROVIDER_KEY_PRESENT.get(provider)
+
+def _is_available(model_id: str, provider: str) -> bool:
+    check = _MODEL_KEY_OVERRIDE.get(model_id) or _PROVIDER_KEY_PRESENT.get(provider)
     return bool(check and check(get_settings()))
 
 
@@ -34,6 +42,6 @@ async def list_models_endpoint() -> dict:
     data: list[dict] = []
     for m in list_models():
         entry = dict(m)
-        entry["available"] = _is_available(entry["provider"])
+        entry["available"] = _is_available(entry["id"], entry["provider"])
         data.append(entry)
     return {"object": "list", "data": data}

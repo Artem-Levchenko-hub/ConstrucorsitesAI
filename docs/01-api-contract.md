@@ -89,7 +89,7 @@ POST http://llm-gateway:8001/v1/chat/completions
 Content-Type: application/json
 
 {
-  "model": "claude-sonnet-4-6" | "gpt-4.1" | "yandexgpt-5" | "qwen-3-coder",
+  "model": "claude-sonnet-4-6" | "claude-opus-4-7" | "claude-haiku-4-5" | "gpt-4.1" | "gpt-5-mini" | "yandexgpt-5" | "qwen-3-coder" | "gigachat-2" | "gigachat-2-pro" | "gigachat-2-max",
   "messages": [{ "role": "system" | "user" | "assistant", "content": "..." }],
   "stream": true,
   "user": "<user_id>",                  // для usage tracking

@@ -68,14 +68,16 @@ apps/llm-gateway/
 
 ## Поддерживаемые модели (MVP)
 
-| Model ID | Provider | LiteLLM string |
-|---|---|---|
-| `claude-sonnet-4-6` | Anthropic | `anthropic/claude-sonnet-4-5` (или актуальный slug) |
-| `claude-opus-4-7` | Anthropic | `anthropic/claude-opus-4-5` |
-| `gpt-4.1` | OpenAI | `openai/gpt-4o` (как ближайший эквивалент в MVP) |
-| `gpt-5-mini` | OpenAI | `openai/gpt-4o-mini` |
-| `yandexgpt-5` | Yandex | `custom_provider/yandexgpt` (своя обёртка через httpx, если нет в LiteLLM) |
-| `qwen-3-coder` | Alibaba | `openrouter/qwen/qwen3-coder` (через OpenRouter — проще, чем регать Alibaba Cloud) |
+| Model ID | Provider | LiteLLM string | Key env |
+|---|---|---|---|
+| `claude-sonnet-4-6` | Anthropic | `anthropic/claude-sonnet-4-5` (или актуальный slug) | `ANTHROPIC_API_KEY` |
+| `claude-opus-4-7` | Anthropic | `anthropic/claude-opus-4-5` | `ANTHROPIC_API_KEY` |
+| `claude-haiku-4-5` | Anthropic (via proxyapi.ru) | `anthropic/claude-haiku-4-5` + `api_base=https://api.proxyapi.ru/anthropic` (LiteLLM adds `/v1/messages`) | `PROXYAPI_API_KEY` |
+| `gpt-4.1` | OpenAI | `openai/gpt-4o` (как ближайший эквивалент в MVP) | `OPENAI_API_KEY` |
+| `gpt-5-mini` | OpenAI | `openai/gpt-4o-mini` | `OPENAI_API_KEY` |
+| `yandexgpt-5` | Yandex | `custom_provider/yandexgpt` (своя обёртка через httpx, если нет в LiteLLM) | `YANDEX_API_KEY` + `YANDEX_FOLDER_ID` |
+| `qwen-3-coder` | Alibaba | `openrouter/qwen/qwen3-coder` (через OpenRouter — проще, чем регать Alibaba Cloud) | `OPENROUTER_API_KEY` |
+| `gigachat-2{,-pro,-max}` | Sber | прямой `providers/sber.py` (OAuth + `httpx`, в LiteLLM нет) | `GIGACHAT_AUTH_KEY` |
 
 Уточни актуальные slug'и в LiteLLM docs (`/v1/model_info`). Если конкретной модели нет — оставь TODO в `services/litellm_router.py` и временно используй ближайшую.
 

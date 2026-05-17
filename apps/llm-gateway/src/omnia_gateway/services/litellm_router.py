@@ -12,12 +12,14 @@ depends only on this — providers stay invisible to the HTTP layer.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import litellm
 from litellm import Router
 
-from omnia_gateway.core.config import get_settings
+from omnia_gateway.core.config import Settings, get_settings
 from omnia_gateway.core.errors import (
     ModelNotFoundError,
     ModelUnavailableError,
@@ -37,14 +39,38 @@ litellm.suppress_debug_info = True
 _LITELLM_MODEL_SLUG: dict[str, str] = {
     "claude-sonnet-4-6": "anthropic/claude-sonnet-4-5",
     "claude-opus-4-7": "anthropic/claude-opus-4-5",
+    # Haiku 4.5 routed via proxyapi.ru native-Anthropic endpoint (the proxyapi
+    # /openai/v1 surface doesn't carry Claude models — they live under
+    # /anthropic/v1 in raw Anthropic Messages format). The proxy key flows in
+    # through _PROXY_ROUTES below, not the default anthropic_api_key channel.
+    "claude-haiku-4-5": "anthropic/claude-haiku-4-5",
     "gpt-4.1": "openai/gpt-4o",
     "gpt-5-mini": "openai/gpt-4o-mini",
     "qwen-3-coder": "openrouter/qwen/qwen3-coder",
 }
 
+
+@dataclass(frozen=True, slots=True)
+class _ProxyRoute:
+    """Override for models whose key/base differ from the default per-prefix routing."""
+
+    api_key: Callable[[Settings], str | None]
+    api_base: Callable[[Settings], str]
+
+
+# Models that bypass slug-prefix routing — e.g. an Anthropic model served via a
+# Russian OpenAI-compatible proxy whose key lives under a different env var.
+_PROXY_ROUTES: dict[str, _ProxyRoute] = {
+    "claude-haiku-4-5": _ProxyRoute(
+        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
+        api_base=lambda s: s.proxyapi_base_url,
+    ),
+}
+
 _FALLBACKS: list[dict[str, list[str]]] = [
     {"claude-opus-4-7": ["claude-sonnet-4-6", "gpt-4.1"]},
-    {"claude-sonnet-4-6": ["gpt-4.1", "gpt-5-mini"]},
+    {"claude-sonnet-4-6": ["claude-haiku-4-5", "gpt-4.1", "gpt-5-mini"]},
+    {"claude-haiku-4-5": ["gpt-5-mini"]},
     {"gpt-4.1": ["gpt-5-mini"]},
 ]
 
@@ -88,7 +114,25 @@ def _api_key_for(slug: str) -> str | None:
 
 def _build_model_list() -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
+    settings = get_settings()
     for omnia_id, slug in _LITELLM_MODEL_SLUG.items():
+        proxy = _PROXY_ROUTES.get(omnia_id)
+        if proxy is not None:
+            api_key = proxy.api_key(settings)
+            if not api_key:
+                continue
+            items.append(
+                {
+                    "model_name": omnia_id,
+                    "litellm_params": {
+                        "model": slug,
+                        "api_key": api_key,
+                        "api_base": proxy.api_base(settings),
+                    },
+                }
+            )
+            continue
+
         api_key = _api_key_for(slug)
         if api_key is None:
             # No key configured — skip; acompletion() will surface
