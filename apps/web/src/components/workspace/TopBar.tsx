@@ -31,7 +31,7 @@ export function TopBar({
   const initial = user.email.slice(0, 1).toUpperCase();
 
   return (
-    <header className="h-14 flex items-center justify-between px-6 border-b border-border-default bg-surface-base">
+    <header className="shrink-0 h-14 flex items-center justify-between px-6 border-b border-border-default bg-surface-base">
       <div className="flex items-center gap-4 min-w-0">
         <Link
           href="/projects"
