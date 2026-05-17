@@ -75,6 +75,33 @@ export function collectStreamingFiles(content: string): Record<string, string> {
 }
 
 /**
+ * Как collectStreamingFiles, но включает и не закрытые `<file>` блоки
+ * (с body до текущего конца стрима). Для realtime-preview, где нужно показать
+ * частично написанный index.html, не дожидаясь `</file>`.
+ */
+export function collectStreamingFilesPartial(
+  content: string,
+): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (const p of parseAssistantContent(content)) {
+    if (p.kind === "file") files[p.path] = p.body;
+  }
+  return files;
+}
+
+/**
+ * Возвращает body последнего встретившегося `<file path="index.html">` блока
+ * (открытого или закрытого) — или null, если index.html ещё не начался.
+ */
+export function extractStreamingBody(content: string): string | null {
+  let last: string | null = null;
+  for (const p of parseAssistantContent(content)) {
+    if (p.kind === "file" && p.path === "index.html") last = p.body;
+  }
+  return last;
+}
+
+/**
  * Собирает HTML, пригодный для iframe srcDoc во время стриминга: inline-ит
  * относительные `<link rel="stylesheet" href="style.css">` и
  * `<script src="...">` из dict-а сгенерированных файлов. Без этого srcDoc
