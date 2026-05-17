@@ -37,9 +37,14 @@ export function SnapshotCard({
     <motion.div
       initial={{ opacity: 0, x: 10 }}
       animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.2 }}
+      whileHover={{ scale: 1.04 }}
+      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+      // Hover лифтит карточку на ~4%, выше z-index, чтобы соседи не залезали.
+      // origin-center → масштаб равномерно во все стороны, не "выпрыгивает" из ленты.
+      style={{ transformOrigin: "center" }}
       className={cn(
         "rounded-md border bg-surface-raised overflow-hidden cursor-pointer transition-colors",
+        "hover:z-10 hover:shadow-xl hover:shadow-black/40 relative",
         isSelected
           ? "border-accent"
           : "border-border-default hover:border-border-strong",
@@ -57,34 +62,34 @@ export function SnapshotCard({
             className="w-full h-full object-cover"
           />
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center text-fg-tertiary text-xs">
-            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+          <div className="absolute inset-0 flex items-center justify-center text-fg-tertiary text-[10px]">
+            <Loader2 className="h-3 w-3 animate-spin mr-1" />
             Рендер…
           </div>
         )}
 
         {isCurrent && (
-          <Badge variant="accent" className="absolute top-2 left-2">
+          <Badge variant="accent" className="absolute top-1.5 left-1.5 text-[9px] px-1.5 py-0">
             Текущая
           </Badge>
         )}
         {snapshot.is_rollback_target && (
-          <Badge variant="outline" className="absolute top-2 right-2">
-            Был откат
+          <Badge variant="outline" className="absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0">
+            Откат
           </Badge>
         )}
       </div>
 
-      <div className="p-3 space-y-2">
-        <div className="text-xs text-fg-primary line-clamp-2 leading-5 min-h-[40px]">
+      <div className="px-2 py-1.5 space-y-1">
+        <div className="text-[11px] text-fg-primary line-clamp-1 leading-4">
           {snapshot.prompt_text ?? (
             <span className="text-fg-tertiary italic">
-              {snapshot.parent_id ? "Откат к версии" : "Стартовый snapshot"}
+              {snapshot.parent_id ? "Откат к версии" : "Стартовый"}
             </span>
           )}
         </div>
 
-        <div className="flex items-center justify-between text-[11px] font-mono text-fg-tertiary">
+        <div className="flex items-center justify-between text-[10px] font-mono text-fg-tertiary">
           <span>{shortSha(snapshot.commit_sha)}</span>
           <span>{formatRelativeTime(snapshot.created_at)}</span>
         </div>
@@ -93,13 +98,13 @@ export function SnapshotCard({
           <Button
             size="sm"
             variant="secondary"
-            className="w-full gap-1.5"
+            className="w-full gap-1 h-6 text-[11px] px-2"
             onClick={(e) => {
               e.stopPropagation();
               setConfirmOpen(true);
             }}
           >
-            <Undo2 className="h-3.5 w-3.5" />
+            <Undo2 className="h-3 w-3" />
             Откатить
           </Button>
         )}
