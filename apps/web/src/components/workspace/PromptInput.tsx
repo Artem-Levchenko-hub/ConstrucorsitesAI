@@ -66,10 +66,13 @@ export function PromptInput({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Опишите, что изменить или добавить…"
+          placeholder={
+            isStreaming
+              ? "Можно набирать — отправится, как закончится текущая генерация"
+              : "Опишите, что изменить или добавить…"
+          }
           rows={2}
           className="w-full bg-transparent px-3 py-2.5 text-sm text-fg-primary placeholder:text-fg-tertiary resize-none focus:outline-none"
-          disabled={isStreaming}
         />
 
         <div className="flex items-center justify-between px-2 pb-2">

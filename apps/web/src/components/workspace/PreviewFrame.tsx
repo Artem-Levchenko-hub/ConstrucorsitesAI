@@ -12,11 +12,13 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listSnapshots } from "@/lib/api/snapshots";
+import { listMessages } from "@/lib/api/messages";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
 import type { Project, Snapshot } from "@/lib/api/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shortSha, cn } from "@/lib/utils";
+import { buildStreamingPreview } from "@/lib/parse-assistant";
 
 type Device = "mobile" | "tablet" | "desktop";
 const DEVICE_WIDTH: Record<Device, string> = {
@@ -30,6 +32,13 @@ export function PreviewFrame({ project }: { project: Project }) {
   const { data: snapshots, isPending } = useQuery({
     queryKey: ["snapshots", project.id],
     queryFn: () => listSnapshots(project.id),
+  });
+  // Реалтайм-preview: тянем messages, чтобы достать частичный <file path="index.html">
+  // из текущего стриминг-сообщения. Кэш разделяем с ChatPanel, второй запрос
+  // дёшев и react-query сам дедуплицирует.
+  const { data: messages } = useQuery({
+    queryKey: ["messages", project.id],
+    queryFn: () => listMessages(project.id),
   });
 
   const visible: Snapshot | undefined = selectedSnapshotId
@@ -53,6 +62,16 @@ export function PreviewFrame({ project }: { project: Project }) {
     visible && snapshots && visible.id !== snapshots[0]?.id
       ? `${publicUrl}?snapshot=${visible.id}#k=${iframeKey}`
       : `${publicUrl}#k=${iframeKey}`;
+
+  // Пока ассистент стримит ответ — попробуем собрать preview из его частичного
+  // вывода через srcDoc. Когда стрим закончится и снапшот создастся,
+  // streamingHtml станет null и iframe вернётся на `src` (бэкенд-preview).
+  const last = messages?.[messages.length - 1];
+  const isStreaming = last?.role === "assistant" && last.tokens_out === null;
+  const streamingHtml =
+    isStreaming && !selectedSnapshotId
+      ? buildStreamingPreview(last?.content ?? "")
+      : null;
 
   return (
     <div className="flex flex-col h-full bg-surface-base">
@@ -138,7 +157,20 @@ export function PreviewFrame({ project }: { project: Project }) {
             )}
 
             <AnimatePresence mode="wait">
-              {visible && (
+              {streamingHtml ? (
+                <motion.iframe
+                  key="streaming"
+                  srcDoc={streamingHtml}
+                  title="Preview (streaming)"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  style={{ width: DEVICE_WIDTH[device], maxWidth: "100%" }}
+                  className="h-full bg-white border-0 mx-auto shadow-xl"
+                />
+              ) : visible && (
                 <motion.iframe
                   key={`${visible.id}-${iframeKey}`}
                   src={iframeSrc}
