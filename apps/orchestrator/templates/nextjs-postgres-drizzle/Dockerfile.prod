@@ -18,10 +18,10 @@ FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN addgroup -g 1000 omnia && adduser -D -u 1000 -G omnia omnia
-COPY --from=build --chown=omnia:omnia /app/.next/standalone ./
-COPY --from=build --chown=omnia:omnia /app/.next/static ./.next/static
-COPY --from=build --chown=omnia:omnia /app/public ./public
-USER omnia
+# Reuse the builtin `node` user (uid/gid 1000) shipped with node:20-alpine.
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
+USER node
 EXPOSE 3000
 CMD ["node", "server.js"]

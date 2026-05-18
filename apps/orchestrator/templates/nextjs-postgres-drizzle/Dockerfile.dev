@@ -4,25 +4,25 @@
 
 FROM node:20-alpine
 
+# node:20-alpine ships with a builtin `node` user at uid/gid 1000.
+# The orchestrator's --user 1000:1000 maps to that user; we don't create
+# a new one to avoid `gid in use` collisions.
 WORKDIR /app
-
-# Allow non-root user for the orchestrator's --user 1000:1000 flag.
-RUN apk add --no-cache libc6-compat \
-    && addgroup -g 1000 omnia \
-    && adduser -D -u 1000 -G omnia omnia
+RUN apk add --no-cache libc6-compat && chown -R node:node /app
 
 # Install pnpm (Next 15 + Turbopack work cleanly with it).
 RUN corepack enable && corepack prepare pnpm@9 --activate
 
+USER node
+
 # Pre-install dependencies to warm the layer cache. The orchestrator
 # bind-mounts /app/src and /app/drizzle on top of the template at run time
 # so AI writes show up immediately.
-COPY package.json pnpm-lock.yaml* ./
+COPY --chown=node:node package.json pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile || pnpm install
 
-COPY . .
+COPY --chown=node:node . .
 
-USER omnia
 EXPOSE 3000
 
 # Default: hot-reload dev server. Container envs (DATABASE_URL, etc.)
