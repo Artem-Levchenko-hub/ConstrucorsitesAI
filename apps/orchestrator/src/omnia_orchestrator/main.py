@@ -1,0 +1,58 @@
+"""Omnia.AI V2 — Orchestrator FastAPI app (:8003).
+
+Single entry point. apps/api talks to us over internal HTTP with a shared
+secret in `X-Internal-Token`. Web clients never reach this surface.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+
+from omnia_orchestrator.core.errors import (
+    OrchestratorError,
+    orchestrator_error_handler,
+    unhandled_error_handler,
+)
+from omnia_orchestrator.routers import health, runtime
+from omnia_orchestrator.services.hibernate import (
+    start_hibernate_loop,
+    stop_hibernate_loop,
+)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await start_hibernate_loop()
+    try:
+        yield
+    finally:
+        await stop_hibernate_loop()
+
+
+def create_app() -> FastAPI:
+    # TODO sprint A1: init_sentry() — copy pattern from apps/api/core/sentry.py.
+    app = FastAPI(
+        title="Omnia.AI Orchestrator",
+        version="0.0.1",
+        lifespan=lifespan,
+        # Internal API — no auto-generated public docs/openapi in prod.
+        docs_url="/internal/docs",
+        redoc_url=None,
+        openapi_url="/internal/openapi.json",
+    )
+
+    app.add_exception_handler(OrchestratorError, orchestrator_error_handler)
+    app.add_exception_handler(RequestValidationError, unhandled_error_handler)
+    app.add_exception_handler(Exception, unhandled_error_handler)
+
+    app.include_router(health.router)
+    app.include_router(runtime.router)
+
+    return app
+
+
+app = create_app()
