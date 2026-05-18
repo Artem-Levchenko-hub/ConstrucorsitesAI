@@ -40,6 +40,13 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     "gigachat-2": ModelPrice(Decimal("0.20"), Decimal("0.20")),
     "gigachat-2-pro": ModelPrice(Decimal("1.50"), Decimal("1.50")),
     "gigachat-2-max": ModelPrice(Decimal("1.95"), Decimal("1.95")),
+    # Google Gemini via AI Studio (free tier available; same key works for paid).
+    # List prices (May 2026, ≤200k context window):
+    #   2.5 Pro:   $1.25 / $10.00  per 1M tokens → ~0.15 / 1.20 ₽ per 1k (x100 FX + 20% markup)
+    #   2.5 Flash: $0.30 / $2.50   per 1M tokens → ~0.04 / 0.30 ₽ per 1k
+    # On free tier real charge is 0; these values are correct once we move to paid.
+    "gemini-2.5-pro": ModelPrice(Decimal("0.15"), Decimal("1.20")),
+    "gemini-2.5-flash": ModelPrice(Decimal("0.04"), Decimal("0.30")),
 }
 
 _PER_1K = Decimal("1000")
@@ -80,6 +87,8 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
     "gigachat-2": _ModelMeta("GigaChat 2", "sber", 32_000, ("fast", "budget")),
     "gigachat-2-pro": _ModelMeta("GigaChat 2 Pro", "sber", 128_000, ("quality",)),
     "gigachat-2-max": _ModelMeta("GigaChat 2 Max", "sber", 128_000, ("quality",)),
+    "gemini-2.5-pro": _ModelMeta("Gemini 2.5 Pro", "google", 1_000_000, ("quality",)),
+    "gemini-2.5-flash": _ModelMeta("Gemini 2.5 Flash", "google", 1_000_000, ("fast", "budget")),
 }
 
 

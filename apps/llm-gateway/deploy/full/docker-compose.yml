@@ -114,6 +114,17 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       PROXYAPI_API_KEY: ${PROXYAPI_API_KEY:-}
       PROXYAPI_BASE_URL: ${PROXYAPI_BASE_URL:-https://api.proxyapi.ru/anthropic}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # --- Gemini-only outbound HTTP proxy (geo-bypass) ---
+      # When GEMINI_HTTPS_PROXY is empty these vars are also empty, so they
+      # have no effect — httpx ignores empty proxy env. Whitelist domains
+      # in GEMINI_NO_PROXY ensure proxyapi.ru / Sber / Postgres stay direct.
+      HTTPS_PROXY: ${GEMINI_HTTPS_PROXY:-}
+      HTTP_PROXY: ${GEMINI_HTTPS_PROXY:-}
+      https_proxy: ${GEMINI_HTTPS_PROXY:-}
+      http_proxy: ${GEMINI_HTTPS_PROXY:-}
+      NO_PROXY: ${GEMINI_NO_PROXY:-}
+      no_proxy: ${GEMINI_NO_PROXY:-}
       GIGACHAT_AUTH_KEY: ${GIGACHAT_AUTH_KEY:-}
       GIGACHAT_SCOPE: ${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
       GIGACHAT_VERIFY_SSL: ${GIGACHAT_VERIFY_SSL:-false}
@@ -136,6 +147,9 @@ services:
       dockerfile: Dockerfile
     image: omnia-api:prod
     container_name: omnia-prod-api
+    # Bypass `uv run` — avoids on-start network calls to pypi.org.
+    # Everything is already installed in /app/.venv inside the image.
+    command: ["/app/.venv/bin/uvicorn", "omnia_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -171,7 +185,8 @@ services:
     # build step (both Compose race on the same tag otherwise).
     image: omnia-api:prod
     container_name: omnia-prod-worker
-    command: ["uv", "run", "python", "-m", "omnia_api.workers.run"]
+    # Same uv-run bypass as api — direct python from the venv.
+    command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.run"]
     depends_on:
       api:
         condition: service_started
