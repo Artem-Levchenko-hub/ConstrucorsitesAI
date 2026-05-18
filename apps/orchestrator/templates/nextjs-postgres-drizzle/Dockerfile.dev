@@ -1,14 +1,17 @@
 # Dev image — used by orchestrator for the per-project dev container.
 # Builds once at template-cache time; project files mount as volumes so
 # AI edits are picked up by Turbopack HMR without rebuild.
+#
+# Debian-slim instead of Alpine — Alpine's dl-cdn.alpinelinux.org is
+# blocked by some Russian DPI, while Debian's deb.debian.org stays
+# reachable. node:20-slim already has glibc, so libc6-compat is not needed.
 
-FROM node:20-alpine
+FROM node:20-slim
 
-# node:20-alpine ships with a builtin `node` user at uid/gid 1000.
-# The orchestrator's --user 1000:1000 maps to that user; we don't create
-# a new one to avoid `gid in use` collisions.
+# node:20-slim ships with a builtin `node` user at uid/gid 1000.
+# The orchestrator's --user 1000:1000 maps to that user.
 WORKDIR /app
-RUN apk add --no-cache libc6-compat && chown -R node:node /app
+RUN chown -R node:node /app
 
 # Install pnpm (Next 15 + Turbopack work cleanly with it).
 RUN corepack enable && corepack prepare pnpm@9 --activate
