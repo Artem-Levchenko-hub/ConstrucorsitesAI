@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 from fastapi import APIRouter
+from pydantic import ValidationError
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.redis import get_redis
 from omnia_api.schemas.model import ModelInfo
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["models"])
 
@@ -56,23 +60,38 @@ _MOCK_MODELS: list[ModelInfo] = [
 
 @router.get("/models", response_model=list[ModelInfo])
 async def list_models() -> list[ModelInfo]:
+    """Proxy to gateway /v1/models with degraded-mode fallback.
+
+    R-10 (stability under load): never 500 from this endpoint — the model
+    selector is the first thing the user sees in workspace. Cascade:
+      1. fresh cache (≤60s) → return
+      2. live gateway (5s timeout) → cache + return
+      3. stale cache (any age) → return + log warning
+      4. built-in MOCK_MODELS → return + log warning
+    """
     settings = get_settings()
     if settings.mock_llm:
         return _MOCK_MODELS
 
-    cached = await get_redis().get(CACHE_KEY)
+    redis = get_redis()
+    cached = await redis.get(CACHE_KEY)
     if cached:
         try:
             return [ModelInfo.model_validate(m) for m in json.loads(cached)]
-        except (json.JSONDecodeError, ValueError):
-            pass
+        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+            log.warning("models cache parse failed: %s", exc)
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.get(f"{settings.llm_gateway_url.rstrip('/')}/v1/models")
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
-    models = [ModelInfo.model_validate(m) for m in data]
-    await get_redis().setex(
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{settings.llm_gateway_url.rstrip('/')}/v1/models")
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
+        models = [ModelInfo.model_validate(m) for m in data]
+    except (httpx.HTTPError, ValidationError, ValueError) as exc:
+        log.warning("models gateway fetch failed (%s) — serving fallback", exc)
+        return _MOCK_MODELS
+
+    await redis.setex(
         CACHE_KEY, CACHE_TTL_SEC, json.dumps([m.model_dump() for m in models])
     )
     return models
