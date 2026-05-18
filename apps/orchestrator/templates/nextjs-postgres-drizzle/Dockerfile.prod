@@ -1,0 +1,27 @@
+# Production image — built by orchestrator at deploy time.
+# Multi-stage: deps → build → run. Output is standalone (~150 MB).
+
+FROM node:20-alpine AS deps
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@9 --activate
+COPY package.json pnpm-lock.yaml* ./
+RUN pnpm install --frozen-lockfile --prod=false || pnpm install
+
+FROM node:20-alpine AS build
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN corepack enable && corepack prepare pnpm@9 --activate && pnpm build
+
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN addgroup -g 1000 omnia && adduser -D -u 1000 -G omnia omnia
+COPY --from=build --chown=omnia:omnia /app/.next/standalone ./
+COPY --from=build --chown=omnia:omnia /app/.next/static ./.next/static
+COPY --from=build --chown=omnia:omnia /app/public ./public
+USER omnia
+EXPOSE 3000
+CMD ["node", "server.js"]
