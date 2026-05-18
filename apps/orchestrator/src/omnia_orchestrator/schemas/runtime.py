@@ -15,9 +15,12 @@ Tier = Literal["free", "pro", "business"]
 RuntimeState = Literal["provisioning", "running", "paused", "stopped", "failed"]
 
 
+_SLUG_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$"
+
+
 class ProvisionRequest(BaseModel):
     project_id: UUID
-    slug: str = Field(min_length=3, max_length=63, pattern=r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
+    slug: str = Field(min_length=3, max_length=63, pattern=_SLUG_PATTERN)
     template: str  # e.g. "nextjs-postgres-drizzle"
     tier: Tier = "free"
     initial_env: dict[str, str] = Field(default_factory=dict)

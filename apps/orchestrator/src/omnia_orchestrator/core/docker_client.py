@@ -59,61 +59,137 @@ def _get_client() -> docker.DockerClient:
 
 
 async def start_container(spec: ContainerSpec) -> str:
-    """Create + start a container. Returns container_id. Idempotent: if a
-    container with the same name exists, returns its id and starts if stopped.
+    """Create + start a container. Returns container id.
 
-    TODO sprint A1:
-      - apply security defaults: --cap-drop=ALL, --read-only, tmpfs /tmp, --user 1000:1000
-      - per-project network: docker.networks.create(spec.network_name)
-      - volume mount: /opt/omnia-runtime/projects/<id>:/app:rw
-      - HMR-friendly: bind src/ as volume for live edits
+    Idempotent: if a container with the same name exists, restart it if
+    stopped and return the existing id without recreating. This matters
+    because `provision` and `wake` may race on a fresh project.
+
+    Sprint A1 will add per-project networks (--network=proj-<id>), read-only
+    rootfs with tmpfs for /tmp, healthcheck wiring, and HMR volume mounts.
+    For PoC this is sufficient: defaults still cap-drop ALL and run non-root.
     """
     log.info("docker.start_container", name=spec.name, image=spec.image, port=spec.port)
-    # Stub: real impl will be done by Agent D in sprint A1.
-    return await asyncio.to_thread(_start_stub, spec)
+
+    def _do() -> str:
+        client = _get_client()
+        try:
+            existing = client.containers.get(spec.name)
+            if existing.status != "running":
+                existing.start()
+            return str(existing.id)
+        except docker.errors.NotFound:
+            pass
+
+        try:
+            container = client.containers.run(
+                image=spec.image,
+                name=spec.name,
+                detach=True,
+                ports={"3000/tcp": ("127.0.0.1", spec.port)},
+                environment=spec.env,
+                mem_limit=f"{spec.memory_mb}m",
+                cpu_quota=int(spec.cpu_quota * 100_000),
+                cpu_period=100_000,
+                cap_drop=["ALL"],
+                cap_add=["NET_BIND_SERVICE"],
+                user="1000:1000",
+                restart_policy={"Name": "no"},
+                labels={
+                    "omnia.project_id": spec.project_id,
+                    "omnia.kind": "dev",
+                },
+            )
+        except docker.errors.ImageNotFound as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"image not found: {spec.image} — build it first",
+                status_code=409,
+            ) from exc
+        except docker.errors.APIError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"docker refused start: {exc}",
+                status_code=500,
+            ) from exc
+        return str(container.id)
 
 
-def _start_stub(spec: ContainerSpec) -> str:
-    raise OrchestratorError(
-        code="internal_error",
-        message=f"start_container not yet implemented (TODO sprint A1): {spec.name}",
-        status_code=501,
-    )
+    return await asyncio.to_thread(_do)
 
 
 async def stop_container(name: str, *, pause: bool = False) -> None:
-    """Stop or pause a container. Pause keeps memory, stop frees it.
+    """Stop or pause a container.
 
-    Pro tier → pause (1-3 sec wake). Free tier → stop (30-60 sec cold start).
+    `pause=True` keeps memory (1-3 sec wake) — Pro tier hibernate.
+    `pause=False` frees memory (30-60 sec cold start) — Free tier hibernate.
+    Missing container is a no-op (idempotent).
     """
     log.info("docker.stop_container", name=name, pause=pause)
-    # Stub
-    raise OrchestratorError(
-        code="internal_error",
-        message=f"stop_container not yet implemented (TODO sprint A1): {name}",
-        status_code=501,
-    )
+
+    def _do() -> None:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound:
+            return
+        try:
+            if pause:
+                c.pause()
+            else:
+                c.stop(timeout=10)
+        except docker.errors.APIError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"stop failed for {name}: {exc}",
+                status_code=500,
+            ) from exc
+
+    await asyncio.to_thread(_do)
 
 
 async def container_status(name: str) -> dict[str, str]:
-    """Return {state: running|paused|stopped, port, last_seen}.
-
-    TODO A1: docker.containers.get(name) → inspect → State.Status,
-    HostConfig.PortBindings, plus our own last_activity_at lookup.
-    """
+    """Return {state, id, port} where state ∈ {running, paused, stopped, not_found}."""
     log.info("docker.container_status", name=name)
-    raise OrchestratorError(
-        code="internal_error",
-        message=f"container_status not yet implemented (TODO sprint A1): {name}",
-        status_code=501,
-    )
+
+    def _do() -> dict[str, str]:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound:
+            return {"state": "not_found", "id": "", "port": ""}
+        ports = c.attrs.get("NetworkSettings", {}).get("Ports", {}) or {}
+        host_port = ""
+        for bindings in ports.values():
+            if bindings:
+                host_port = str(bindings[0].get("HostPort", ""))
+                break
+        return {"state": c.status, "id": c.id, "port": host_port}
+
+    return await asyncio.to_thread(_do)
 
 
 async def destroy_container(name: str) -> None:
-    """Full removal — stop + rm + cleanup volume. For project deletion."""
+    """Full removal: stop + rm. Missing container is a no-op."""
     log.info("docker.destroy_container", name=name)
-    raise OrchestratorError(
-        code="internal_error",
-        message=f"destroy_container not yet implemented (TODO sprint A1): {name}",
-        status_code=501,
-    )
+
+    def _do() -> None:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound:
+            return
+        try:
+            c.stop(timeout=5)
+        except docker.errors.APIError:
+            pass  # may already be stopped
+        try:
+            c.remove(v=True, force=True)
+        except docker.errors.APIError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"remove failed for {name}: {exc}",
+                status_code=500,
+            ) from exc
+
+    await asyncio.to_thread(_do)

@@ -16,6 +16,13 @@ from typing import Annotated
 from fastapi import APIRouter, Header
 
 from omnia_orchestrator.core.config import get_settings
+from omnia_orchestrator.core.docker_client import (
+    container_status as docker_container_status,
+)
+from omnia_orchestrator.core.docker_client import (
+    destroy_container,
+    stop_container,
+)
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.schemas.runtime import (
     DeployRequest,
@@ -28,6 +35,8 @@ from omnia_orchestrator.schemas.runtime import (
     WakeRequest,
     WakeResponse,
 )
+from omnia_orchestrator.services.port_allocator import get_port_allocator
+from omnia_orchestrator.services.provisioner import provision as provision_svc
 
 router = APIRouter(prefix="/internal/projects", tags=["runtime"])
 
@@ -47,24 +56,13 @@ async def provision(
     payload: ProvisionRequest,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> ProvisionResponse:
-    """Clone template, allocate port, provision Postgres schema, write nginx site,
-    start dev container. Returns the dev URL once the container is healthy.
+    """Clone template, allocate port, start dev container, return dev URL.
 
-    TODO sprint A1: implement in `services/provisioner.py`. Steps:
-      1. `port_allocator.acquire()` → free port in [3001, 3999].
-      2. `git clone apps/orchestrator/templates/{template}` → `/opt/omnia-runtime/projects/{id}/`.
-      3. `postgres_admin.create_schema(project_id)` → schema + role + creds in /secrets.
-      4. `docker_client.start_container(spec)` with HMR volumes + per-project network.
-      5. `nginx_writer.write_site(slug, port, dev=True)` + `nginx -s reload`.
-      6. Health-poll GET http://127.0.0.1:port/ until 200 (timeout = wake_timeout_seconds).
-      7. Return ProvisionResponse.
+    PoC scope (today): port + template copy + container start. Sprint A1 will
+    extend with Postgres schema, nginx site, per-project network, health-poll.
     """
     _verify_token(x_internal_token)
-    raise OrchestratorError(
-        code="internal_error",
-        message=f"provision not yet implemented (sprint A1): {payload.project_id}",
-        status_code=501,
-    )
+    return await provision_svc(payload)
 
 
 @router.post("/wake", response_model=WakeResponse)
@@ -88,18 +86,20 @@ async def wake(
 @router.post("/stop", response_model=WakeResponse)
 async def stop(
     payload: StopRequest,
+    slug: str,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WakeResponse:
-    """Force-hibernate. Pro tier passes pause=True, free passes pause=False.
+    """Force-hibernate via docker pause/stop.
 
-    Normally hibernate happens via the idle timer in services/hibernate.py.
-    This endpoint is for explicit "stop now" from the UI.
+    PoC: looks up container by `omnia-dev-<slug>`. Sprint A1 will hold the
+    container_name in the orchestrator's own state table.
     """
     _verify_token(x_internal_token)
-    raise OrchestratorError(
-        code="internal_error",
-        message="stop not yet implemented (sprint A1)",
-        status_code=501,
+    await stop_container(f"omnia-dev-{slug}", pause=payload.pause)
+    new_state = "paused" if payload.pause else "stopped"
+    return WakeResponse(
+        project_id=payload.project_id,
+        state=new_state,        ready_in_seconds=0,
     )
 
 
@@ -151,31 +151,53 @@ async def deploy(
 @router.get("/{project_id}/status", response_model=StatusResponse)
 async def status(
     project_id: str,
+    slug: str,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> StatusResponse:
-    """Container state + activity metrics + signed log URL."""
+    """Container state derived from Docker inspect.
+
+    PoC: slug is required as a query param because we name containers
+    `omnia-dev-<slug>` — the lookup table for project_id → container_name will
+    move into Postgres in sprint A1. Today the caller (apps/api) already
+    knows both the id and the slug from its own project record.
+    """
     _verify_token(x_internal_token)
-    raise OrchestratorError(
-        code="internal_error",
-        message=f"status not yet implemented (sprint A1): {project_id}",
-        status_code=501,
+    from uuid import UUID
+
+    info = await docker_container_status(f"omnia-dev-{slug}")
+    if info["state"] == "not_found":
+        return StatusResponse(project_id=UUID(project_id), state="stopped")
+
+    state_map = {
+        "running": "running",
+        "paused": "paused",
+        "exited": "stopped",
+        "created": "provisioning",
+        "restarting": "provisioning",
+        "dead": "failed",
+    }
+    return StatusResponse(
+        project_id=UUID(project_id),
+        state=state_map.get(info["state"], "stopped"),        container_name=f"omnia-dev-{slug}",
+        port=int(info["port"]) if info["port"] else None,
+        dev_url=f"http://127.0.0.1:{info['port']}" if info["port"] else None,
     )
 
 
 @router.post("/{project_id}/destroy")
 async def destroy(
     project_id: str,
+    slug: str,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> dict[str, str]:
-    """Full cleanup: stop container, drop Postgres schema + role, remove nginx
-    site, delete /opt/omnia-runtime/projects/<id>/. Called when user deletes
-    a project from the web UI.
+    """Full cleanup: stop + remove container, release port.
 
-    Irreversible — orchestrator does NOT keep tombstones.
+    PoC: doesn't drop Postgres schema or remove nginx site (sprint A1).
+    `slug` query param same rationale as `status`.
     """
     _verify_token(x_internal_token)
-    raise OrchestratorError(
-        code="internal_error",
-        message=f"destroy not yet implemented (sprint A1): {project_id}",
-        status_code=501,
-    )
+    from uuid import UUID
+
+    await destroy_container(f"omnia-dev-{slug}")
+    await get_port_allocator().release(UUID(project_id))
+    return {"state": "destroyed"}
