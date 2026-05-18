@@ -100,14 +100,18 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         **req.initial_env,
     }
 
+    # Next.js 15 + Turbopack peaks at ~1.5 GB during the first compile of a
+    # cold project; once warm it settles around 500-800 MB. 512 MB will be
+    # OOM-killed mid-compile. Sprint A1 will pick limits per tier (free 1 GB,
+    # pro 2 GB, business 4 GB); PoC picks the pro-tier ceiling for everyone.
     spec = ContainerSpec(
         name=container_name,
         image=image_tag,
         port=port,
         project_id=str(req.project_id),
         env=env,
-        cpu_quota=0.5,
-        memory_mb=512,
+        cpu_quota=1.0,
+        memory_mb=2048,
     )
 
     container_id = await start_container(spec)

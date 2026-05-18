@@ -128,9 +128,10 @@ if [ -z "$PORT" ]; then
     exit 1
 fi
 
-echo "  waiting for Next.js to bind on 127.0.0.1:$PORT (cold start 30-90s)"
-for i in {1..60}; do
-    if curl -sf -o /dev/null "http://127.0.0.1:$PORT/"; then
+echo "  waiting for Next.js to bind on 127.0.0.1:$PORT (Turbopack first compile takes 30-180s)"
+for i in {1..120}; do
+    # -m 8: cap per-request to 8s so we don't hang waiting on an in-flight compile.
+    if curl -sf -m 8 -o /dev/null "http://127.0.0.1:$PORT/"; then
         echo
         echo "=== SUCCESS ==="
         echo "  dev URL (from VPS):    http://127.0.0.1:$PORT/"
@@ -148,7 +149,11 @@ done
 
 echo
 echo "=== TIMEOUT ==="
-echo "  container started but never bound on $PORT within 120s"
+echo "  container never bound on $PORT within 240s"
+echo "  container status:"
+docker ps -a --filter "name=omnia-dev-$SLUG" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | sed 's/^/    /'
+echo "  inspect:"
+docker inspect "omnia-dev-$SLUG" 2>/dev/null | python3 -c 'import json,sys; s=json.load(sys.stdin)[0]["State"]; print("    OOMKilled:", s.get("OOMKilled"), "ExitCode:", s.get("ExitCode"))' 2>/dev/null || true
 echo "  logs:"
-docker logs --tail 30 "omnia-dev-$SLUG" 2>&1 | sed 's/^/    /'
+docker logs --tail 40 "omnia-dev-$SLUG" 2>&1 | sed 's/^/    /'
 exit 1
