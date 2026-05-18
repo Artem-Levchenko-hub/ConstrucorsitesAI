@@ -27,7 +27,7 @@ class ProvisionResponse(BaseModel):
     project_id: UUID
     container_name: str
     port: int
-    dev_url: str  # https://<slug>-dev.<base_domain>
+    dev_url: str  # https://<slug>.preview.<base_domain>
     state: RuntimeState
 
 

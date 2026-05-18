@@ -17,11 +17,11 @@ V2 расширяет это до полноценных **full-stack** прод
 |---|---|---|
 | Артефакт AI | `<file path="index.html">` | целое приложение: `package.json`, `src/app/`, `drizzle/migrations/`, `Dockerfile` |
 | Хранилище кода | bare git repo в MinIO | bare git repo в MinIO + Postgres schema-per-project |
-| Live preview | iframe → `/p/<slug>` (статика) | iframe → `https://<slug>-dev.omnia.app` (real Next.js dev server) |
+| Live preview | iframe → `/p/<slug>` (статика) | iframe → `https://<slug>.preview.omniadevelop.ru` (real Next.js dev server) |
 | Runtime | Playwright рендерит PNG один раз | **persistent dev-контейнер** живёт между промптами |
-| Deploy | preview = «деплой» | preview = dev, **отдельная кнопка** → prod-контейнер на `<slug>.omnia.app` |
+| Deploy | preview = «деплой» | preview = dev, **отдельная кнопка** → prod-контейнер на `<slug>.app.omniadevelop.ru` |
 | Биллинг | только токены | токены + runtime hours + deploy slots |
-| Domain | preview под `omnia.ai/p/<slug>` | dev и prod под subdomains `<slug>-dev.omnia.app` / `<slug>.omnia.app` |
+| Domain | preview под `omnia.ai/p/<slug>` | dev и prod под subdomains `<slug>.preview.omniadevelop.ru` / `<slug>.app.omniadevelop.ru` |
 
 ## Новые компоненты
 
@@ -68,9 +68,9 @@ V2 расширяет это до полноценных **full-stack** прод
 │  └────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
        ▲
-       │ nginx reverse proxy: <slug>-dev.omnia.app → :PORT
-       │                      <slug>.omnia.app     → :PROD_PORT
-       └─ ingress на VPS (Caddy или nginx + certbot)
+       │ system nginx (уже есть на VPS): <slug>.preview.omniadevelop.ru → :PORT
+       │                                  <slug>.app.omniadevelop.ru     → :PROD_PORT
+       └─ ingress = существующий /etc/nginx + per-project conf от orchestrator
 ```
 
 ## Поток V2: «AI напиши мне SaaS для учёта расходов»
@@ -82,9 +82,9 @@ V2 расширяет это до полноценных **full-stack** прод
 | 3 | API | `POST orchestrator:8003/provision {project_id}` | <100ms |
 | 4 | Orchestrator | `git clone` template в `/opt/omnia-runtime/projects/<id>/` | <1s |
 | 5 | Orchestrator | `docker compose up -d` базовый dev-stack (Next.js + Postgres schema) | 30-60s (cold) |
-| 6 | Orchestrator | nginx config + DNS `<slug>-dev.omnia.app` → `:PORT` | <2s |
+| 6 | Orchestrator | nginx config + DNS `<slug>.preview.omniadevelop.ru` → `:PORT` | <2s |
 | 7 | API → Web | WS `runtime.started {url, port}` | мгновенно |
-| 8 | Web | iframe загружает `https://<slug>-dev.omnia.app` (template defaults) | <1s |
+| 8 | Web | iframe загружает `https://<slug>.preview.omniadevelop.ru` (template defaults) | <1s |
 | 9 | User | Пишет промпт «добавь страницу учёта расходов» | — |
 | 10 | API | Стримит LLM (V1 path), парсит `<file>` блоки | 5-30s |
 | 11 | API | `pygit2` коммитит файлы в bare-repo (как в V1) | <100ms |
@@ -136,7 +136,7 @@ SYSTEM_PROMPT.md          # инструкции AI: формат файлов, 
 2. Push образа в local registry на VPS (`registry:5000`).
 3. Provision prod-контейнера с новым контейнером name `proj-<id>-prod`.
 4. `docker run --restart=unless-stopped` (не hibernate).
-5. nginx update: `<slug>.omnia.app` → новый prod-порт.
+5. nginx update: `<slug>.app.omniadevelop.ru` → новый prod-порт.
 6. Health check (10 retries × 3с): GET `/` → 200.
 7. WS `deploy.progress` со стадиями build → push → run → healthy.
 8. Запись в БД `deploys (project_id, image_tag, status, deployed_at)`.
@@ -187,7 +187,7 @@ Rollback: prev `image_tag` хранится → одна кнопка → nginx 
 6. **Shared Postgres `:5433`**: schema-per-project + Postgres `REVOKE ALL` для cross-schema. Один проект **физически не может** прочитать таблицы другого.
 7. **Secrets**: orchestrator имеет own keystore (`/opt/omnia-runtime/secrets/<project_id>/.env`, chmod 600, owner=orchestrator). Контейнер получает только свои env. **Никогда** в коде/git.
 8. **Network egress**: dev-контейнеру можно ходить наружу (для `npm install`, API calls). Prod — то же. SSRF к internal IP (172.17.x.x, 10.x.x.x) **должен** блокироваться через iptables.
-9. **No real DNS for free tier** — `<slug>-dev.omnia.app` указывает на наш VPS, а сам proj не имеет доступа к public IP без routing.
+9. **No real DNS for free tier** — `<slug>.preview.omniadevelop.ru` указывает на наш VPS, а сам proj не имеет доступа к public IP без routing.
 
 ## Phase A roadmap (6-8 недель, что нужно сделать)
 
@@ -207,14 +207,14 @@ Rollback: prev `image_tag` хранится → одна кнопка → nginx 
 1. SSH на 170.168.72.200, создать папку `/opt/omnia-runtime/`.
 2. Установить Docker (если ещё нет — V1 уже использует Docker).
 3. Открыть порты 80/443 (если ещё закрыты).
-4. Купить домен `omnia.app` или `omnia.ai` (.app дешевле и подходит больше — нужно подтвердить).
-5. Wildcard SSL cert для `*.omnia.app` через Let's Encrypt DNS-01.
+4. Использовать существующий **`omniadevelop.ru`** (домен уже зарегистрирован, nginx config в `/etc/nginx/sites-enabled/omniadevelop.ru` для landing/waitlist). Добавить DNS-записи `*.preview.omniadevelop.ru` и `*.app.omniadevelop.ru` → 170.168.72.200.
+5. Wildcard SSL cert для `*.preview.omniadevelop.ru` и `*.app.omniadevelop.ru` через Let's Encrypt DNS-01 (требует Cloudflare API token, см. `docs/08-vps-setup.md` шаг 5).
 6. Создать Docker user группу orchestrator.
 7. Установить Docker SDK Python через uv.
 
 ## Open questions
 
-1. **Домен.** `omnia.app` ($14/год Namecheap) vs `omnia.ai` (~$150-1000/год) vs `omnia.ru` (`reg.ru`, ~700₽/год). Решение нужно до Phase A2.
+1. ~~**Домен.**~~ **Решено**: используем существующий `omniadevelop.ru` (`*.preview.` для dev, `*.app.` для prod). Покупка `omnia.app` / `omnia.ai` — отложено до публичного launch и не блокирует V2.
 2. **Postgres-per-project vs shared with schemas.** Phase A — shared (проще). Если масштаб >100 проектов — pgbouncer + reads/writes split.
 3. **Docker rootless** на текущем Serverum VPS — нужна 4.18+ kernel, проверить.
 4. **Stripe-style runtime metering** — почасово ловим через Prometheus или внутренний таймер orchestrator? Phase A: внутренний таймер достаточно.

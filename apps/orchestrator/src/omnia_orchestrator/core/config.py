@@ -38,11 +38,12 @@ class Settings(BaseSettings):
     # Local Docker registry for prod images.
     registry_url: str = Field(default="127.0.0.1:5000")
 
-    # Wildcard cert domain — `<slug>.${base_domain}` for prod, `<slug>-dev.${base_domain}` for dev.
-    base_domain: str = Field(default="omnia.app")
+    # Wildcard pattern: `<slug>.preview.${base_domain}` for dev,
+    # `<slug>.app.${base_domain}` for prod. Both wildcards need DNS + cert.
+    base_domain: str = Field(default="omniadevelop.ru")
 
-    # Dev container port pool. nginx maps slug → port from here.
-    port_range_min: int = Field(default=3001)
+    # Dev container port pool. 3001-3199 reserved for V1 + other tenants.
+    port_range_min: int = Field(default=3200)
     port_range_max: int = Field(default=3999)
 
     # Hibernate policy (minutes of inactivity before pause/stop).

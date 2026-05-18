@@ -65,7 +65,7 @@
 | `GET` | `/p/:slug` | `index.html` текущего HEAD (только `kind=static`) |
 | `GET` | `/p/:slug/*` | статика проекта (CSS, JS, img) |
 
-Для `kind=fullstack` preview работает иначе: web iframe грузит `https://<slug>-dev.omnia.app` напрямую (apps/api в этом не участвует, см. секцию V2).
+Для `kind=fullstack` preview работает иначе: web iframe грузит `https://<slug>.preview.omniadevelop.ru` напрямую (apps/api в этом не участвует, см. секцию V2).
 
 ### V2: Runtime + Deploy (Phase A, доступно только для `kind=fullstack`)
 
@@ -187,14 +187,14 @@ export type Project = {
   id: string;
   owner_id: string;
   name: string;
-  slug: string;              // для /p/:slug (static) или <slug>-dev.omnia.app (fullstack)
+  slug: string;              // для /p/:slug (static) или <slug>.preview.omniadevelop.ru (fullstack)
   kind: "static" | "fullstack";   // V2: режим работы
   template: string;          // "blank"|"landing"|"portfolio"|"blog" для static;
                              // "nextjs-postgres-drizzle"... для fullstack
   current_snapshot_id: string | null;
   // V2 fullstack-only поля (null для static):
-  dev_url: string | null;    // https://<slug>-dev.omnia.app
-  prod_url: string | null;   // https://<slug>.omnia.app после первого deploy
+  dev_url: string | null;    // https://<slug>.preview.omniadevelop.ru
+  prod_url: string | null;   // https://<slug>.app.omniadevelop.ru после первого deploy
   runtime_state: "provisioning" | "running" | "paused" | "stopped" | "failed" | null;
   tier: "free" | "pro" | "business";
   created_at: string;

@@ -78,12 +78,12 @@ curl -X POST https://omnia-internal.constructor.lead-generator.ru/internal/proje
   -d '{"project_id":"00000000-0000-0000-0000-000000000001","slug":"test","template":"nextjs-postgres-drizzle","tier":"free"}'
 
 # Через 60 сек:
-curl https://test-dev.omnia.app
+curl https://test.preview.omniadevelop.ru
 # → 200, Next.js дефолтная страница
 
 # Hibernate test:
 sleep 900  # 15 минут idle
 docker ps | grep proj-00000000  # → нет (free tier = stop)
-curl https://test-dev.omnia.app
+curl https://test.preview.omniadevelop.ru
 # → 200 (после 30-60 сек wake)
 ```
