@@ -199,6 +199,7 @@ Rollback: prev `image_tag` хранится → одна кнопка → nginx 
 | **A3 (2 недели)** — UI в apps/web: deploy button, runtime status, logs viewer, billing-by-hours; hot-reload через WS из orchestrator в dev-контейнер | UX V2 | Agent A |
 | **A4 (1 неделя)** — billing: новые типы charge, тариф auto-pick, deploy slot allocation | Backend | Agent B |
 | **A5 (1 неделя)** — Sentry/observability для контейнеров, prometheus metrics, alerts на OOM/crash | Stability | Agent D |
+| **A.5 — click-to-edit «select mode»** (2-3 дня, parallel с A3-A5). Юзер включает inspector в toolbar, кликает по элементу в preview iframe → элемент попадает в чат как chip (selector + outerHtml + thumb); AI делает точечный edit, не переписывая весь файл. **Аналог Lovable / v0 inspector.** Iframe inspector injected через postMessage handshake (preview iframe — cross-origin к workspace). Backend: prompt-builder обогащает system prompt текстом «user pointed at <selector>, change only this block». См. [memory: omnia_select_mode.md](../../.claude/projects/omnia-mvp/memory/omnia_select_mode.md). | UX killer feature | Agent A (70%) + Agent B (30%) |
 | **A6 (1 неделя)** — beta launch на 10 проверенных юзерах, fix critical, performance tuning | Launch | все |
 
 ## Что нужно сделать пользователю на сервере **прежде чем V2 можно тестировать**
