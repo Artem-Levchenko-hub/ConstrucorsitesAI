@@ -52,14 +52,12 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="Omnia.AI Backend", version="0.0.1", lifespan=lifespan)
 
-    # ProxyHeadersMiddleware must run before SlowAPIMiddleware so the limiter
-    # sees the real client IP from X-Forwarded-For (nginx → uvicorn). Trusted
-    # hosts "*" is fine here because in prod nginx is the only upstream.
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-
-    app.state.limiter = limiter
-    app.add_middleware(SlowAPIMiddleware)
-
+    # Middleware order matters: Starlette wraps `user_middleware` in REVERSE,
+    # so the LAST `add_middleware` call becomes the OUTERMOST wrapper. For
+    # ProxyHeadersMiddleware to rewrite scope["client"] from X-Forwarded-For
+    # BEFORE slowapi keys its bucket, it must be registered LAST. The intended
+    # request flow (outer → inner) is:
+    #     ProxyHeaders (real IP) → SlowAPI (rate-limit) → CORS → router
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
@@ -67,6 +65,11 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization"],
     )
+
+    app.state.limiter = limiter
+    app.add_middleware(SlowAPIMiddleware)
+
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
     app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
     app.add_exception_handler(ApiError, api_error_handler)
