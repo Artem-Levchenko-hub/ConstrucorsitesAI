@@ -46,6 +46,12 @@ _LITELLM_MODEL_SLUG: dict[str, str] = {
     "claude-haiku-4-5": "anthropic/claude-haiku-4-5",
     "gpt-4.1": "openai/gpt-4o",
     "gpt-5-mini": "openai/gpt-4o-mini",
+    # GPT-5 family via proxyapi.ru/openai/v1 (LiteLLM treats proxyapi as a
+    # regular OpenAI endpoint when we pass `api_base`). slugs MUST exactly
+    # match the model names proxyapi proxies through to OpenAI — they
+    # support the real `gpt-5` and `gpt-5-nano` names verbatim.
+    "gpt-5": "openai/gpt-5",
+    "gpt-5-nano": "openai/gpt-5-nano",
     "qwen-3-coder": "openrouter/qwen/qwen3-coder",
     # Google Gemini via AI Studio (not Vertex AI). LiteLLM reads the key from
     # GEMINI_API_KEY or whatever is passed explicitly in the model_list below.
@@ -65,10 +71,20 @@ class _ProxyRoute:
 
 # Models that bypass slug-prefix routing — e.g. an Anthropic model served via a
 # Russian OpenAI-compatible proxy whose key lives under a different env var.
+# All three entries below share the same proxyapi.ru balance: one top-up
+# covers Claude Haiku, GPT-5, and GPT-5 Nano simultaneously.
 _PROXY_ROUTES: dict[str, _ProxyRoute] = {
     "claude-haiku-4-5": _ProxyRoute(
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_base_url,
+    ),
+    "gpt-5": _ProxyRoute(
+        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
+        api_base=lambda s: s.proxyapi_openai_base_url,
+    ),
+    "gpt-5-nano": _ProxyRoute(
+        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
+        api_base=lambda s: s.proxyapi_openai_base_url,
     ),
 }
 
@@ -81,9 +97,11 @@ _FALLBACKS: list[dict[str, list[str]]] = [
     # bottom-of-stack — every chain terminates there.
     {"claude-opus-4-7": ["claude-sonnet-4-6", "claude-haiku-4-5"]},
     {"claude-sonnet-4-6": ["claude-haiku-4-5"]},
-    {"claude-haiku-4-5": ["gigachat-2-pro"]},
-    {"gpt-4.1": ["claude-haiku-4-5"]},
-    {"gpt-5-mini": ["claude-haiku-4-5"]},
+    {"claude-haiku-4-5": ["gpt-5-nano", "gigachat-2-pro"]},
+    {"gpt-4.1": ["gpt-5", "claude-haiku-4-5"]},
+    {"gpt-5-mini": ["gpt-5-nano", "claude-haiku-4-5"]},
+    {"gpt-5": ["claude-haiku-4-5", "gpt-5-nano"]},
+    {"gpt-5-nano": ["gpt-5-mini", "claude-haiku-4-5"]},
     # Gemini Pro free tier may be hard-capped to 0 on accounts without billing
     # (the API reports `free_tier_input_token_count limit: 0`); fall back to
     # Flash, which has a real free quota. If both fail, hop to claude-haiku-4-5.
@@ -244,19 +262,25 @@ async def acompletion(
         kwargs["max_tokens"] = max_tokens
     kwargs.update(extra)
 
-    # Gemini 2.5 — thinking models. Without explicit max_tokens / disabled
-    # thinking, reasoning_tokens consume the entire output budget and the
-    # final text response is 0–2 tokens. We force two safeguards for every
-    # Gemini call so the user gets a real answer:
-    #   1) max_tokens default of 16k — large enough that even with full
-    #      thinking budget there are tokens left for the response.
-    #   2) thinking_budget=0 via reasoning_effort="disable" — LiteLLM maps
-    #      this to Gemini's generationConfig.thinkingConfig.thinkingBudget=0,
-    #      skipping the silent reasoning phase altogether for site-generation
-    #      where we want files emitted directly.
+    # Gemini 2.5 AND GPT-5 family are reasoning models. Without an explicit
+    # max_tokens AND minimal reasoning budget, ALL output tokens get spent
+    # on hidden reasoning_tokens and the visible text response is 0–2 tokens
+    # (we saw `tokens_out=1, content="От"` from Gemini, `content=""`,
+    # `reasoning_tokens=30/30` from gpt-5-nano).
+    #
+    # Two safeguards apply to both families:
+    #   1) max_tokens default 16k — leaves headroom for both reasoning and
+    #      the actual answer.
+    #   2) reasoning_effort: "disable" for Gemini (LiteLLM maps to
+    #      `thinkingConfig.thinkingBudget=0`), "minimal" for OpenAI (lowest
+    #      legal value on GPT-5 — "disable" isn't supported, "minimal"
+    #      reserves only the bare minimum reasoning tokens).
     if model.startswith("gemini-"):
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "disable")
+    elif model in ("gpt-5", "gpt-5-nano"):
+        kwargs.setdefault("max_tokens", 16384)
+        kwargs.setdefault("reasoning_effort", "minimal")
 
     try:
         response = await router.acompletion(**kwargs)

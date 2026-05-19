@@ -32,6 +32,14 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     "claude-haiku-4-5": ModelPrice(Decimal("0.15"), Decimal("0.75")),
     "gpt-4.1": ModelPrice(Decimal("0.50"), Decimal("2.00")),
     "gpt-5-mini": ModelPrice(Decimal("0.06"), Decimal("0.24")),
+    # GPT-5 family routed via proxyapi.ru/openai/v1 (same balance as Haiku).
+    # OpenAI list prices (May 2026, USD → RUB at ~100 + 20% markup):
+    #   gpt-5      : $1.25 / $10.00  → 0.15 / 1.20 ₽ per 1k
+    #   gpt-5-nano : $0.05 / $0.40   → 0.006 / 0.05 ₽ per 1k (we use 0.01/0.05
+    #                                 as a slightly padded floor so accounting
+    #                                 stays integer-friendly).
+    "gpt-5": ModelPrice(Decimal("0.15"), Decimal("1.20")),
+    "gpt-5-nano": ModelPrice(Decimal("0.01"), Decimal("0.05")),
     "yandexgpt-5": ModelPrice(Decimal("0.10"), Decimal("0.40")),
     "qwen-3-coder": ModelPrice(Decimal("0.05"), Decimal("0.20")),
     # Sber GigaChat — RUB-native, no FX conversion. Numbers approximate Sber's
@@ -82,6 +90,8 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
     "claude-haiku-4-5": _ModelMeta("Claude Haiku 4.5", "anthropic", 200_000, ("fast", "budget")),
     "gpt-4.1": _ModelMeta("GPT-4.1", "openai", 128_000, ("quality",)),
     "gpt-5-mini": _ModelMeta("GPT-5 Mini", "openai", 128_000, ("fast", "budget")),
+    "gpt-5": _ModelMeta("GPT-5", "openai", 200_000, ("quality",)),
+    "gpt-5-nano": _ModelMeta("GPT-5 Nano", "openai", 128_000, ("fast", "budget")),
     "yandexgpt-5": _ModelMeta("YandexGPT 5", "yandex", 32_000, ("budget",)),
     "qwen-3-coder": _ModelMeta("Qwen 3 Coder", "alibaba", 128_000, ("budget", "fast")),
     "gigachat-2": _ModelMeta("GigaChat 2", "sber", 32_000, ("fast", "budget")),

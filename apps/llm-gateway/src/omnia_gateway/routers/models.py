@@ -26,10 +26,15 @@ _PROVIDER_KEY_PRESENT = {
 }
 
 # Models whose key lives outside the default per-provider mapping — e.g. an
-# Anthropic-branded model served via a 3rd-party proxy. Mirrors _PROXY_ROUTES
-# in services/litellm_router.py; keep these in sync.
+# Anthropic-branded or OpenAI-branded model served via a 3rd-party proxy.
+# Mirrors _PROXY_ROUTES in services/litellm_router.py; keep these in sync.
 _MODEL_KEY_OVERRIDE = {
     "claude-haiku-4-5": lambda s: _has(s.proxyapi_api_key),
+    # GPT-5 family lives on the same proxyapi balance as Haiku — both check
+    # the same key here. If proxyapi credit is empty, ALL three flip to
+    # `available: false` simultaneously, which is what users should see.
+    "gpt-5": lambda s: _has(s.proxyapi_api_key),
+    "gpt-5-nano": lambda s: _has(s.proxyapi_api_key),
 }
 
 
