@@ -28,10 +28,12 @@
 
 | Метод | Path | Тело | Ответ |
 |---|---|---|---|
-| `POST` | `/api/projects` | `{name, template?: "blank"\|"landing"\|"portfolio"\|"blog"}` | `Project` |
+| `POST` | `/api/projects` | `{name, kind?: "static"\|"fullstack", template?: <см. ниже>}` | `Project` |
 | `GET` | `/api/projects` | — | `Project[]` (только свои) |
 | `GET` | `/api/projects/:id` | — | `Project` |
-| `DELETE` | `/api/projects/:id` | — | 204 |
+| `DELETE` | `/api/projects/:id` | — | 204 (orchestrator destroy для fullstack) |
+
+`kind` (V2): `static` → V1 шаблоны (`blank/landing/portfolio/blog`). `fullstack` → V2 шаблоны (`nextjs-postgres-drizzle`, далее — `nextjs-supabase`, `fastapi-postgres`, `nextjs-resend`, `telegram-bot-python` и т.д.). Дефолт — `static` для backward-compatibility до полного V2 launch.
 
 ### Промпт и снапшоты
 
@@ -60,8 +62,49 @@
 
 | Метод | Path | Ответ |
 |---|---|---|
-| `GET` | `/p/:slug` | `index.html` текущего HEAD |
+| `GET` | `/p/:slug` | `index.html` текущего HEAD (только `kind=static`) |
 | `GET` | `/p/:slug/*` | статика проекта (CSS, JS, img) |
+
+Для `kind=fullstack` preview работает иначе: web iframe грузит `https://<slug>.preview.omniadevelop.ru` напрямую (apps/api в этом не участвует, см. секцию V2).
+
+### V2: Runtime + Deploy (Phase A, доступно только для `kind=fullstack`)
+
+apps/api тут — тонкий прокси на orchestrator. Слой авторизации (JWT cookie, ownership check) — в apps/api, бизнес-логика (Docker, postgres-schema, nginx) — в orchestrator.
+
+| Метод | Path | Тело | Ответ |
+|---|---|---|---|
+| `POST` | `/api/projects/:id/runtime/start` | — | `RuntimeStatus` (после wake) |
+| `POST` | `/api/projects/:id/runtime/stop` | `{pause?: bool}` | `RuntimeStatus` |
+| `GET` | `/api/projects/:id/runtime` | — | `RuntimeStatus` |
+| `POST` | `/api/projects/:id/deploy` | `{commit_sha?: string}` | `DeployStatus` (асинхронный, прогресс — через WS) |
+| `GET` | `/api/projects/:id/deploy` | — | `DeployStatus` последнего деплоя |
+
+`commit_sha` опционален: по умолчанию — текущий HEAD проекта. Использование одного коммита — для rollback prod без пересборки.
+
+### V2 WebSocket-события (поверх V1)
+
+```json
+{ "type": "runtime.started",  "data": { "project_id": "uuid", "dev_url": "https://...", "state": "running" } }
+{ "type": "runtime.stopped",  "data": { "project_id": "uuid", "state": "paused"|"stopped" } }
+{ "type": "runtime.failed",   "data": { "project_id": "uuid", "error": "string" } }
+{ "type": "deploy.progress",  "data": { "project_id": "uuid", "stage": "building"|"pushing"|"running"|"healthy"|"failed", "log_tail": "..." } }
+{ "type": "deploy.complete",  "data": { "project_id": "uuid", "prod_url": "https://...", "image_tag": "string" } }
+```
+
+### V2 Internal API (apps/api ↔ orchestrator на :8003)
+
+Не доступно публично. Auth: header `X-Internal-Token` (shared secret). Полный контракт — `apps/orchestrator/src/omnia_orchestrator/schemas/runtime.py`. Краткий список:
+
+| Метод | Path | Назначение |
+|---|---|---|
+| `GET`  | `/health` | docker + postgres probe |
+| `POST` | `/internal/projects/provision` | clone template + container + nginx |
+| `POST` | `/internal/projects/wake` | start/unpause |
+| `POST` | `/internal/projects/stop` | pause или stop по tier |
+| `POST` | `/internal/projects/hot-reload` | copy AI-сгенерированных файлов в running container |
+| `POST` | `/internal/projects/deploy` | build → push → swap |
+| `GET`  | `/internal/projects/:id/status` | состояние + URLs |
+| `POST` | `/internal/projects/:id/destroy` | полная очистка |
 
 ## WebSocket: `/api/ws/projects/:id`
 
@@ -144,11 +187,41 @@ export type Project = {
   id: string;
   owner_id: string;
   name: string;
-  slug: string;              // для /p/:slug
-  template: "blank" | "landing" | "portfolio" | "blog";
+  slug: string;              // для /p/:slug (static) или <slug>.preview.omniadevelop.ru (fullstack)
+  kind: "static" | "fullstack";   // V2: режим работы
+  template: string;          // "blank"|"landing"|"portfolio"|"blog" для static;
+                             // "nextjs-postgres-drizzle"... для fullstack
   current_snapshot_id: string | null;
+  // V2 fullstack-only поля (null для static):
+  dev_url: string | null;    // https://<slug>.preview.omniadevelop.ru
+  prod_url: string | null;   // https://<slug>.app.omniadevelop.ru после первого deploy
+  runtime_state: "provisioning" | "running" | "paused" | "stopped" | "failed" | null;
+  tier: "free" | "pro" | "business";
   created_at: string;
   updated_at: string;
+};
+
+// V2: runtime lifecycle
+export type RuntimeStatus = {
+  project_id: string;
+  state: "provisioning" | "running" | "paused" | "stopped" | "failed";
+  dev_url: string | null;
+  last_activity_at: string | null;
+  cpu_pct: number | null;
+  memory_mb: number | null;
+  // Подписанный URL для просмотра последних 200 строк stdout/stderr.
+  // Истекает через 5 минут, выдаётся orchestrator-ом.
+  logs_tail_url: string | null;
+};
+
+// V2: deploy lifecycle
+export type DeployStatus = {
+  project_id: string;
+  image_tag: string;                     // proj-<id>:<commit-sha>
+  state: "building" | "pushing" | "running" | "healthy" | "failed";
+  prod_url: string | null;               // выставляется на `healthy`
+  deployed_at: string | null;
+  error: string | null;                  // если state=failed
 };
 
 export type Snapshot = {
@@ -196,7 +269,10 @@ export type Charge = {
 export type ApiError = {
   error: {
     code: "validation_failed" | "unauthorized" | "forbidden" | "not_found"
-        | "rate_limited" | "wallet_empty" | "model_unavailable" | "internal_error";
+        | "rate_limited" | "wallet_empty" | "model_unavailable" | "internal_error"
+        // V2-добавления:
+        | "container_failure" | "docker_unavailable" | "postgres_unavailable"
+        | "port_exhausted" | "conflict";
     message: string;
     details?: Record<string, unknown>;
   };
@@ -209,6 +285,8 @@ export type ApiError = {
 |---|---|
 | `/api/auth/login` `/register` | 5/мин на IP |
 | `/api/projects/:id/prompt` | 10/мин на user, 100/час |
+| `/api/projects/:id/deploy` | 5/час на user (V2 — деплой ресурсоёмкий) |
+| `/api/projects/:id/runtime/start` | 30/мин на user (V2 — wake может быть частым) |
 | Остальные | 60/мин на user |
 
 Заголовки: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
