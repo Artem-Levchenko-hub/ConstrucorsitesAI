@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+from fastapi import APIRouter, Request
 from sqlalchemy import select
-
-from fastapi import APIRouter
 
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.core.redis import publish_event
+from omnia_api.core.rate_limit import limiter
 from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.schemas.wallet import (
@@ -36,8 +35,12 @@ async def get_wallet(session: SessionDep, current_user: CurrentUserDep) -> Walle
 
 
 @router.post("/topup", response_model=TopupResponse)
+@limiter.limit("3/minute")
 async def topup_wallet(
-    payload: TopupRequest, session: SessionDep, current_user: CurrentUserDep
+    request: Request,
+    payload: TopupRequest,
+    session: SessionDep,
+    current_user: CurrentUserDep,
 ) -> TopupResponse:
     new_balance = await topup_svc(
         session, current_user.id, payload.amount_rub, "Top-up (MVP stub)"
