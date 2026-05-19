@@ -73,15 +73,20 @@ _PROXY_ROUTES: dict[str, _ProxyRoute] = {
 }
 
 _FALLBACKS: list[dict[str, list[str]]] = [
-    {"claude-opus-4-7": ["claude-sonnet-4-6", "gpt-4.1"]},
-    {"claude-sonnet-4-6": ["claude-haiku-4-5", "gpt-4.1", "gpt-5-mini"]},
-    {"claude-haiku-4-5": ["gpt-5-mini"]},
-    {"gpt-4.1": ["gpt-5-mini"]},
+    # All fallback chains route through providers actually configured in prod
+    # (proxyapi.ru for Anthropic models, Google AI Studio for Gemini, Sber for
+    # GigaChat). gpt-* keys are not set on the Serverum VPS, so any chain that
+    # ends on OpenAI was producing "no healthy deployments" 503s the moment
+    # the primary 4xx'd. Anthropic Haiku via proxyapi.ru is the most reliable
+    # bottom-of-stack — every chain terminates there.
+    {"claude-opus-4-7": ["claude-sonnet-4-6", "claude-haiku-4-5"]},
+    {"claude-sonnet-4-6": ["claude-haiku-4-5"]},
+    {"claude-haiku-4-5": ["gigachat-2-pro"]},
+    {"gpt-4.1": ["claude-haiku-4-5"]},
+    {"gpt-5-mini": ["claude-haiku-4-5"]},
     # Gemini Pro free tier may be hard-capped to 0 on accounts without billing
     # (the API reports `free_tier_input_token_count limit: 0`); fall back to
-    # Flash, which has a real free quota. If both fail, hop to claude-haiku-4-5
-    # (via proxyapi.ru — already wired in prod) rather than gpt-5-mini, which
-    # often lacks a configured key in RU deployments.
+    # Flash, which has a real free quota. If both fail, hop to claude-haiku-4-5.
     {"gemini-2.5-pro": ["gemini-2.5-flash", "claude-haiku-4-5"]},
     {"gemini-2.5-flash": ["claude-haiku-4-5"]},
 ]
