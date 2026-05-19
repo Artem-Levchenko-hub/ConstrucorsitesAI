@@ -15,6 +15,21 @@ def _resolve_root() -> Path:
 
 
 ROOT_DIR = _resolve_root()
+
+# Auto-load `secondbrain/.env` so every script + hook + cron job that imports
+# this module picks up SECOND_BRAIN_LLM_BACKEND, GEMINI_API_KEY, optional
+# GEMINI_HTTPS_PROXY etc. without each entry point having to remember to
+# `load_dotenv` first. We only set values that aren't already in the real env
+# — explicit shell exports always win over the file.
+try:
+    from dotenv import load_dotenv  # type: ignore[import-not-found]
+
+    load_dotenv(ROOT_DIR / ".env", override=False)
+except Exception:
+    # python-dotenv is listed in pyproject deps, so this should never fire in
+    # a normal `uv sync`-ed env. Keep the import defensive so a missing
+    # package doesn't bring the whole compiler down — just silently skips.
+    pass
 PROJECT_ROOT = ROOT_DIR.parent
 RAW_DIR = ROOT_DIR / "raw"
 RAW_WEB_DIR = RAW_DIR / "web"
