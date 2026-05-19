@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     llm_gateway_url: str = Field(default="http://localhost:8001")
     mock_llm: bool = Field(default=True)
 
+    # V2 orchestrator (apps/orchestrator on :8003). Internal-only API behind
+    # a shared-secret header — token MUST match the one in the orchestrator's
+    # /opt/omnia-runtime/.env.orchestrator file.
+    orchestrator_url: str = Field(default="http://localhost:8003")
+    orchestrator_internal_token: SecretStr | None = Field(default=None)
+
     cors_origins: str = Field(default="http://localhost:3000")
 
     initial_wallet_balance_rub: float = Field(default=100.0)

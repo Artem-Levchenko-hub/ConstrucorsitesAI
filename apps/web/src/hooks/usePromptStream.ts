@@ -149,6 +149,29 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         return;
       }
 
+      // V2 — orchestrator-originated events flow through the same WS pipe.
+      // We don't render logs/progress here yet; RuntimeButton subscribes to
+      // ["runtime", projectId] via React Query, so flipping that cache is
+      // enough to update the button label + colour the moment the container
+      // changes state on the host.
+      if (event.type === "runtime.started" || event.type === "runtime.stopped") {
+        qc.setQueryData(["runtime", projectId], event.data.runtime);
+        qc.invalidateQueries({ queryKey: ["runtime", projectId] });
+        return;
+      }
+      if (event.type === "runtime.crashed") {
+        qc.invalidateQueries({ queryKey: ["runtime", projectId] });
+        return;
+      }
+      if (event.type === "deploy.progress" || event.type === "deploy.done") {
+        qc.invalidateQueries({ queryKey: ["deploy", projectId] });
+        return;
+      }
+      if (event.type === "deploy.failed") {
+        qc.invalidateQueries({ queryKey: ["deploy", projectId] });
+        return;
+      }
+
       if (event.type === "llm.error") {
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>

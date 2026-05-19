@@ -15,6 +15,11 @@ ErrorCode = Literal[
     "model_unavailable",
     "internal_error",
     "conflict",
+    # V2: orchestrator-proxy errors surfaced through apps/api/services/orchestrator_client.
+    # `unavailable` = transport / 5xx / token missing (503). `rejected` = orchestrator
+    # returned 4xx that we passed through (400/404/etc).
+    "orchestrator_unavailable",
+    "orchestrator_rejected",
 ]
 
 
