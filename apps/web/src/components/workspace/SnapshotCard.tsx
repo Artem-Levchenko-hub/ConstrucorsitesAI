@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Undo2, Loader2 } from "lucide-react";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import type { Snapshot } from "@/lib/api/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -32,16 +32,25 @@ export function SnapshotCard({
   rolling: boolean;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [hovered, setHovered] = useState(false);
 
   return (
     <motion.div
+      layout
       initial={{ opacity: 0, x: 10 }}
       animate={{ opacity: 1, x: 0 }}
-      whileHover={{ scale: 1.04 }}
-      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-      // Hover лифтит карточку на ~4%, выше z-index, чтобы соседи не залезали.
-      // origin-center → масштаб равномерно во все стороны, не "выпрыгивает" из ленты.
-      style={{ transformOrigin: "center" }}
+      transition={{ layout: { duration: 0.22, ease: [0.16, 1, 0.3, 1] }, duration: 0.18 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+      // Базовая карточка реально (layout-wise) меньше прежней на ~33% —
+      // достигается за счёт меньшего шрифта prompt-текста, тонких отступов
+      // и схлопывания кнопки "Откатить" в hover-only. На hover мы плавно
+      // расширяемся до примерно 80% прежнего размера (вместо 100% — по
+      // просьбе уменьшить «взрыв при наведении» на 20%). framer-motion
+      // `layout` обеспечивает плавный morph между двумя реальными размерами,
+      // без CSS transform — поэтому никаких пустых зазоров в потоке нет.
       className={cn(
         "rounded-md border bg-surface-raised overflow-hidden cursor-pointer transition-colors",
         "hover:z-10 hover:shadow-xl hover:shadow-black/40 relative",
@@ -69,19 +78,42 @@ export function SnapshotCard({
         )}
 
         {isCurrent && (
-          <Badge variant="accent" className="absolute top-1.5 left-1.5 text-[9px] px-1.5 py-0">
+          <Badge
+            variant="accent"
+            className={cn(
+              "absolute top-1.5 left-1.5 px-1.5 py-0 transition-[font-size]",
+              hovered ? "text-[9px]" : "text-[7px]",
+            )}
+          >
             Текущая
           </Badge>
         )}
         {snapshot.is_rollback_target && (
-          <Badge variant="outline" className="absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0">
+          <Badge
+            variant="outline"
+            className={cn(
+              "absolute top-1.5 right-1.5 px-1.5 py-0 transition-[font-size]",
+              hovered ? "text-[9px]" : "text-[7px]",
+            )}
+          >
             Откат
           </Badge>
         )}
       </div>
 
-      <div className="px-2 py-1.5 space-y-1">
-        <div className="text-[11px] text-fg-primary line-clamp-1 leading-4">
+      <motion.div
+        layout="position"
+        className={cn(
+          "transition-[padding] duration-200",
+          hovered ? "px-2 py-1.5 space-y-1" : "px-1.5 py-1 space-y-0.5",
+        )}
+      >
+        <div
+          className={cn(
+            "text-fg-primary line-clamp-1 transition-[font-size,line-height] duration-200",
+            hovered ? "text-[10px] leading-4" : "text-[8px] leading-3",
+          )}
+        >
           {snapshot.prompt_text ?? (
             <span className="text-fg-tertiary italic">
               {snapshot.parent_id ? "Откат к версии" : "Стартовый"}
@@ -89,26 +121,42 @@ export function SnapshotCard({
           )}
         </div>
 
-        <div className="flex items-center justify-between text-[10px] font-mono text-fg-tertiary">
+        <div
+          className={cn(
+            "flex items-center justify-between font-mono text-fg-tertiary transition-[font-size] duration-200",
+            hovered ? "text-[9px]" : "text-[7px]",
+          )}
+        >
           <span>{shortSha(snapshot.commit_sha)}</span>
           <span>{formatRelativeTime(snapshot.created_at)}</span>
         </div>
 
-        {!isCurrent && (
-          <Button
-            size="sm"
-            variant="secondary"
-            className="w-full gap-1 h-6 text-[11px] px-2"
-            onClick={(e) => {
-              e.stopPropagation();
-              setConfirmOpen(true);
-            }}
-          >
-            <Undo2 className="h-3 w-3" />
-            Откатить
-          </Button>
-        )}
-      </div>
+        {/* Кнопка "Откатить" появляется только при hover/focus — на компактной
+            карточке она занимала бы лишнее место и мешала бы лайнам сетки. */}
+        <AnimatePresence initial={false}>
+          {!isCurrent && hovered && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <Button
+                size="sm"
+                variant="secondary"
+                className="w-full gap-1 h-5 text-[10px] px-2 mt-0.5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmOpen(true);
+                }}
+              >
+                <Undo2 className="h-2.5 w-2.5" />
+                Откатить
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>

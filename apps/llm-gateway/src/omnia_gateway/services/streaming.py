@@ -77,6 +77,14 @@ async def _litellm_stream(
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
 
+    # Gemini 2.5 — thinking models. Without explicit max_tokens and with
+    # thinking enabled, the entire output budget is consumed by reasoning_tokens
+    # and the visible response is 0–2 tokens. Mirrors the non-streaming guard
+    # in services.litellm_router.acompletion — keep both in sync.
+    if model.startswith("gemini-"):
+        kwargs.setdefault("max_tokens", 16384)
+        kwargs.setdefault("reasoning_effort", "disable")
+
     router = router_module.get_router()
     try:
         stream = await router.acompletion(**kwargs)

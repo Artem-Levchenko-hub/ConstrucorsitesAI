@@ -49,7 +49,13 @@ export function Timeline({ project }: { project: Project }) {
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="p-3 space-y-3">
+        {/*
+          Карточки используют framer-motion `layout` — их реальные размеры
+          (paddings, font-size) меньше прежних, и плавно растут на hover.
+          Никаких CSS-scale-трюков → никакого фантомного пустого места между
+          карточками. Стандартный space-y-2 даёт чистый ритм ленты.
+        */}
+        <div className="p-2 space-y-2">
           {isPending && (
             <>
               <Skeleton className="h-40" />
