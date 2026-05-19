@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
+import { toast } from "sonner";
 import { simulatePromptStream } from "@/lib/ws-mock";
 import type { Message, Snapshot, WalletState, WsEvent } from "@/lib/api/types";
 import { sendPrompt } from "@/lib/api/messages";
@@ -187,6 +188,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               : m,
           ),
         );
+        // Loud surface so the user notices: silent inline-error in the chat
+        // tab was getting overlooked while the preview placeholder kept
+        // shimmering — they thought generation was still in progress.
+        toast.error("Генерация прервалась", {
+          description: event.data.error.slice(0, 240),
+          duration: 8_000,
+        });
         streamingRef.current = false;
         fireQueued();
       }
