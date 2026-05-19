@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
+import { toast } from "sonner";
 import { simulatePromptStream } from "@/lib/ws-mock";
 import type { Message, Snapshot, WalletState, WsEvent } from "@/lib/api/types";
 import { sendPrompt } from "@/lib/api/messages";
@@ -149,6 +150,29 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         return;
       }
 
+      // V2 — orchestrator-originated events flow through the same WS pipe.
+      // We don't render logs/progress here yet; RuntimeButton subscribes to
+      // ["runtime", projectId] via React Query, so flipping that cache is
+      // enough to update the button label + colour the moment the container
+      // changes state on the host.
+      if (event.type === "runtime.started" || event.type === "runtime.stopped") {
+        qc.setQueryData(["runtime", projectId], event.data.runtime);
+        qc.invalidateQueries({ queryKey: ["runtime", projectId] });
+        return;
+      }
+      if (event.type === "runtime.crashed") {
+        qc.invalidateQueries({ queryKey: ["runtime", projectId] });
+        return;
+      }
+      if (event.type === "deploy.progress" || event.type === "deploy.done") {
+        qc.invalidateQueries({ queryKey: ["deploy", projectId] });
+        return;
+      }
+      if (event.type === "deploy.failed") {
+        qc.invalidateQueries({ queryKey: ["deploy", projectId] });
+        return;
+      }
+
       if (event.type === "llm.error") {
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>
@@ -164,6 +188,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               : m,
           ),
         );
+        // Loud surface so the user notices: silent inline-error in the chat
+        // tab was getting overlooked while the preview placeholder kept
+        // shimmering — they thought generation was still in progress.
+        toast.error("Генерация прервалась", {
+          description: event.data.error.slice(0, 240),
+          duration: 8_000,
+        });
         streamingRef.current = false;
         fireQueued();
       }

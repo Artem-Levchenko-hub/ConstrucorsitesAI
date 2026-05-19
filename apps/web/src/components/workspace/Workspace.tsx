@@ -10,7 +10,10 @@ export function Workspace({ project }: { project: Project }) {
     <div
       className="flex-1 grid min-h-0"
       style={{
-        gridTemplateColumns: "320px minmax(0, 1fr) 320px",
+        // Колонка с историей версий сжата с 320 до 220px — основная площадь
+        // отдаётся preview-iframe (центральная колонка). Чат слева оставлен
+        // в 320px: его читаемость важнее «лишнего» пространства превью.
+        gridTemplateColumns: "320px minmax(0, 1fr) 220px",
       }}
     >
       <div className="border-r border-border-default min-h-0">

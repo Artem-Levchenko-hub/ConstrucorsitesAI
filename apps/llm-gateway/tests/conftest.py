@@ -32,6 +32,7 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "OPENROUTER_API_KEY",
         "PROXYAPI_API_KEY",
         "GIGACHAT_AUTH_KEY",
+        "GEMINI_API_KEY",
     ):
         monkeypatch.setenv(var, "")
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test_omnia")

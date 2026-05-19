@@ -38,6 +38,9 @@ It helps keep concept backlinks consistent across fallback and LLM-assisted comp
 
 - [[concepts/daily-2026-04-12-summary]]
 - [[concepts/daily-insights-2026-04-12]]
+
+- [[concepts/daily-2026-05-17-summary]]
+- [[concepts/daily-2026-05-18-summary]]
 <!-- SECOND_BRAIN_AUTO_ENRICH_START -->
 
 ## Quality Enrichment
@@ -53,3 +56,5 @@ Additional retrieval context: this page remains part of the persistent project m
 Additional retrieval context: this page remains part of the persistent project memory graph, captures prior decisions, and should be read together with linked pages for accurate synthesis during future query runs.
 
 <!-- SECOND_BRAIN_AUTO_ENRICH_END -->
+- [[concepts/code-view-and-snapshot-management]]
+- [[concepts/enhanced-chat-ui-and-prompt-queueing]]

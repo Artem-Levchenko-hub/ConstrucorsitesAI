@@ -62,7 +62,15 @@ export function SnapshotCard({
       role="button"
       tabIndex={0}
     >
-      <div className="aspect-[16/10] bg-surface-base relative overflow-hidden">
+      {/* Preview короче (aspect-[16/7] вместо 16/10) — карточка становится
+          ещё ниже в потоке Timeline. На hover пропорции остаются, потому что
+          aspect-ratio — это про сам preview, а не про meta-блок снизу. */}
+      <div
+        className={cn(
+          "bg-surface-base relative overflow-hidden transition-[aspect-ratio] duration-200",
+          hovered ? "aspect-[16/9]" : "aspect-[16/7]",
+        )}
+      >
         {snapshot.preview_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -71,8 +79,8 @@ export function SnapshotCard({
             className="w-full h-full object-cover"
           />
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center text-fg-tertiary text-[10px]">
-            <Loader2 className="h-3 w-3 animate-spin mr-1" />
+          <div className="absolute inset-0 flex items-center justify-center text-fg-tertiary text-[9px]">
+            <Loader2 className="h-2.5 w-2.5 animate-spin mr-1" />
             Рендер…
           </div>
         )}
@@ -81,8 +89,8 @@ export function SnapshotCard({
           <Badge
             variant="accent"
             className={cn(
-              "absolute top-1.5 left-1.5 px-1.5 py-0 transition-[font-size]",
-              hovered ? "text-[9px]" : "text-[7px]",
+              "absolute top-1 left-1 px-1 py-0 transition-[font-size]",
+              hovered ? "text-[8px]" : "text-[6px]",
             )}
           >
             Текущая
@@ -92,8 +100,8 @@ export function SnapshotCard({
           <Badge
             variant="outline"
             className={cn(
-              "absolute top-1.5 right-1.5 px-1.5 py-0 transition-[font-size]",
-              hovered ? "text-[9px]" : "text-[7px]",
+              "absolute top-1 right-1 px-1 py-0 transition-[font-size]",
+              hovered ? "text-[8px]" : "text-[6px]",
             )}
           >
             Откат
@@ -105,13 +113,13 @@ export function SnapshotCard({
         layout="position"
         className={cn(
           "transition-[padding] duration-200",
-          hovered ? "px-2 py-1.5 space-y-1" : "px-1.5 py-1 space-y-0.5",
+          hovered ? "px-1.5 py-1 space-y-0.5" : "px-1 py-0.5 space-y-0",
         )}
       >
         <div
           className={cn(
             "text-fg-primary line-clamp-1 transition-[font-size,line-height] duration-200",
-            hovered ? "text-[10px] leading-4" : "text-[8px] leading-3",
+            hovered ? "text-[9px] leading-3.5" : "text-[7px] leading-[10px]",
           )}
         >
           {snapshot.prompt_text ?? (
@@ -124,7 +132,7 @@ export function SnapshotCard({
         <div
           className={cn(
             "flex items-center justify-between font-mono text-fg-tertiary transition-[font-size] duration-200",
-            hovered ? "text-[9px]" : "text-[7px]",
+            hovered ? "text-[8px]" : "text-[6px]",
           )}
         >
           <span>{shortSha(snapshot.commit_sha)}</span>

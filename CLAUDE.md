@@ -4,26 +4,31 @@
 
 **Бизнес-план:** `C:\Бизнес план\AI_Site_Builder_Business_Plan_v1.xlsx` (12 листов, владельцы — Артём Левченко + Рома Исакин).
 
-## Параллельная разработка (3 агента в worktree-ах)
+## Параллельная разработка (4 агента в worktree-ах с V2)
 
-Этот репозиторий разрабатывается **тремя параллельными Claude-сессиями**:
+Этот репозиторий разрабатывается **четырьмя параллельными Claude-сессиями** (V2 добавил Agent D):
 
 | Агент | Папка | Бриф |
 |---|---|---|
 | **A — Frontend** | `apps/web/` | [`agents/AGENT-A-FRONTEND.md`](agents/AGENT-A-FRONTEND.md) |
 | **B — Backend** | `apps/api/` | [`agents/AGENT-B-BACKEND.md`](agents/AGENT-B-BACKEND.md) |
-| **C — LLM Gateway + DevOps** | `apps/llm-gateway/`, `infra/` | [`agents/AGENT-C-LLM-GATEWAY.md`](agents/AGENT-C-LLM-GATEWAY.md) |
+| **C — LLM Gateway** | `apps/llm-gateway/` | [`agents/AGENT-C-LLM-GATEWAY.md`](agents/AGENT-C-LLM-GATEWAY.md) |
+| **D — Orchestrator + DevOps (V2)** | `apps/orchestrator/`, `infra/` | [`agents/AGENT-D-ORCHESTRATOR.md`](agents/AGENT-D-ORCHESTRATOR.md) |
 
 **Правило #1:** агент ПИШЕТ только в свою папку. Если нужно поменять контракт — правь `docs/01-api-contract.md` и сообщай через `~/.claude/coordination/<slug>/inbox/`.
+
+Note: до V2 launch `infra/` оставался зоной агента C. С V2 (Phase A) — переходит в зону D, потому что инфра-композиция теперь связана с runtime-orchestration юзерских проектов, а не только с обслуживающим стеком.
 
 **Worktrees:** плагин `claude-session-driver` автоматически создаёт worktree под каждую сессию в `.claude/worktrees/`. Не редактируй там вручную.
 
 ## Точки синхронизации (read-only для агентов, single source of truth)
 
-- [`docs/00-architecture.md`](docs/00-architecture.md) — как A/B/C соединяются
-- [`docs/01-api-contract.md`](docs/01-api-contract.md) — REST + WebSocket контракт
+- [`docs/00-architecture.md`](docs/00-architecture.md) — как A/B/C соединяются (V1)
+- [`docs/01-api-contract.md`](docs/01-api-contract.md) — REST + WebSocket контракт (V1 + V2)
 - [`docs/02-data-model.md`](docs/02-data-model.md) — Postgres-схема
 - [`docs/03-design-system.md`](docs/03-design-system.md) — палитра, типографика, компоненты
+- [`docs/07-v2-architecture.md`](docs/07-v2-architecture.md) — **V2 Phase A**: full-stack runtime, orchestrator, deploy
+- [`docs/08-vps-setup.md`](docs/08-vps-setup.md) — конкретные shell-команды для VPS под V2
 
 ## Стек (фиксированный — не менять без обсуждения)
 

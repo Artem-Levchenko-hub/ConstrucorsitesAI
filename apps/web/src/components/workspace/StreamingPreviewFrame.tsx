@@ -74,6 +74,33 @@ export function StreamingPreviewFrame({
     return () => window.clearTimeout(id);
   }, [ready, bodyHtml, cssText]);
 
+  // Honest status pings into the placeholder. The bootstrap iframe listens
+  // for `omnia:status` and updates its label without tearing the skeleton
+  // down. Without this the user stares at a frozen "AI пишет ответ" even
+  // when the backend has switched to a fallback model mid-stream.
+  useEffect(() => {
+    if (!ready) return;
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    const chars = content.length;
+    // If we have any HTML content yet, the bootstrap script will tear down
+    // the placeholder on the next render — no point updating its label.
+    if (bodyHtml.length > 0) return;
+    let status: string;
+    if (chars === 0) {
+      status = "AI читает контекст";
+    } else if (content.includes("Переключаюсь на")) {
+      // Match the inline notice the api sends as an llm.chunk delta when it
+      // falls back to a different model — see _process_prompt empty_fallback.
+      status = "Запасная модель пишет ответ";
+    } else if (chars < 80) {
+      status = "Модель думает";
+    } else {
+      status = "AI генерирует код";
+    }
+    win.postMessage({ type: "omnia:status", text: status }, "*");
+  }, [ready, content, bodyHtml]);
+
   return (
     <motion.iframe
       ref={iframeRef}

@@ -12,6 +12,7 @@ const TEMPLATE_LABEL: Record<Project["template"], string> = {
   landing: "Лендинг",
   portfolio: "Портфолио",
   blog: "Блог",
+  fullstack: "Full-stack",
 };
 
 export function ProjectCard({ project }: { project: Project }) {

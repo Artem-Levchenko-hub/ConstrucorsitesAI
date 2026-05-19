@@ -3,6 +3,7 @@
 Backends:
 - cursor: tries Cursor CLI agent command
 - claude: uses claude-agent-sdk
+- gemini: direct Google AI Studio REST call (with optional UK proxy)
 - none: disabled
 """
 
@@ -15,6 +16,11 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import httpx  # type: ignore  # noqa: F401  used only in gemini backend
+except Exception:  # pragma: no cover — httpx optional unless gemini is the chosen backend
+    httpx = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -155,6 +161,70 @@ def _run_claude_cli_direct(prompt: str, cwd: Path, max_turns: int) -> LLMResult:
     return LLMResult(False, "claude_cli", "", error=f"{_classify_error(combined)}: {combined.strip()[:800]}")
 
 
+def _run_gemini(prompt: str, cwd: Path, max_turns: int) -> LLMResult:
+    """Direct REST call to Google AI Studio. Reads:
+       - GEMINI_API_KEY (mandatory)
+       - SECOND_BRAIN_GEMINI_MODEL (optional, default 'gemini-2.5-flash')
+       - GEMINI_HTTPS_PROXY (optional — UK proxy used on the VPS to bypass
+         Google's RU geo-block; same format http://user:pass@host:port)
+    The Gemini 2.5 family is a thinking model; we force `thinkingBudget: 0`
+    via `generationConfig.thinkingConfig` so the entire token budget goes to
+    visible output (same workaround as in apps/llm-gateway).
+    `cwd` and `max_turns` are accepted for signature parity with other
+    backends but Gemini's REST flow doesn't use them.
+    """
+    del cwd, max_turns  # signature parity only
+    if httpx is None:
+        return LLMResult(False, "gemini", "", error="httpx_not_installed")
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return LLMResult(False, "gemini", "", error="missing_gemini_api_key")
+
+    model = os.environ.get("SECOND_BRAIN_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    proxy = os.environ.get("GEMINI_HTTPS_PROXY", "").strip() or None
+
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent?key={api_key}"
+    )
+    body: dict = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 8192,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }
+
+    try:
+        with httpx.Client(proxy=proxy, timeout=120.0) as client:
+            resp = client.post(url, json=body)
+    except Exception as exc:
+        return LLMResult(False, "gemini", "", error=f"{_classify_error(str(exc))}: {exc}")
+
+    if resp.status_code >= 400:
+        msg = (resp.text or "")[:1200]
+        return LLMResult(False, "gemini", "", error=f"{_classify_error(msg)}: {resp.status_code} {msg}")
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        return LLMResult(False, "gemini", "", error=f"json_decode_error:{exc}")
+
+    candidates = data.get("candidates") or []
+    if not candidates:
+        # Most often this is safety-block; surface the reason.
+        feedback = data.get("promptFeedback", {})
+        return LLMResult(False, "gemini", "", error=f"empty_response: {json.dumps(feedback)[:300]}")
+
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts).strip()
+    if not text:
+        finish = candidates[0].get("finishReason", "")
+        return LLMResult(False, "gemini", "", error=f"empty_response: finish_reason={finish}")
+    return LLMResult(True, "gemini", text)
+
+
 def run_llm_text(prompt: str, cwd: Path, max_turns: int = 2) -> LLMResult:
     backend = os.environ.get("SECOND_BRAIN_LLM_BACKEND", "claude").strip().lower()
     if backend in {"", "auto"}:
@@ -165,6 +235,9 @@ def run_llm_text(prompt: str, cwd: Path, max_turns: int = 2) -> LLMResult:
 
     if backend == "cursor":
         return _run_cursor_cli(prompt, cwd, max_turns)
+
+    if backend == "gemini":
+        return _run_gemini(prompt, cwd, max_turns)
 
     if backend == "claude":
         # Try async SDK first; fall back to direct CLI (works in detached subprocesses)
