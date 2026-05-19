@@ -21,7 +21,6 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
 from omnia_api.services import repo as repo_svc
-from omnia_api.services.billing import charge_for_message
 from omnia_api.services.file_extractor import UnsafePathError, extract_files
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.prompt_builder import build_messages
@@ -276,26 +275,16 @@ async def _process_prompt(
                         msg.tokens_in = int(usage_data.get("tokens_in") or 0)
                         msg.tokens_out = int(usage_data.get("tokens_out") or 0)
 
-                if usage_data and float(usage_data.get("cost_rub") or 0) > 0:
-                    new_balance = await charge_for_message(
-                        session,
-                        user_id,
-                        assistant_message_id,
-                        project_id,
-                        model_id,
-                        int(usage_data.get("tokens_in") or 0),
-                        int(usage_data.get("tokens_out") or 0),
-                        Decimal(str(usage_data["cost_rub"])),
-                        f"Generation: {prompt_text[:80]}",
-                    )
-                    await session.commit()
-                    await publish_event(
-                        project_id,
-                        "wallet.updated",
-                        {"balance_rub": float(new_balance)},
-                    )
-                else:
-                    await session.commit()
+                # Billing is the LLM Gateway's responsibility — it already
+                # wrote `wallet_charges` + `usage` + decremented `wallets`
+                # the moment the upstream stream finished (see
+                # apps/llm-gateway/src/omnia_gateway/services/streaming.py:
+                # billing.charge call). Re-charging here was double-billing
+                # users (each prompt cost 2× the displayed price). The frontend
+                # still picks up the new balance: usePromptStream invalidates
+                # ["wallet"] on every `llm.done` event, which triggers a fresh
+                # GET /api/wallet that reflects the gateway-side debit.
+                await session.commit()
 
                 await session.refresh(snapshot)
 
