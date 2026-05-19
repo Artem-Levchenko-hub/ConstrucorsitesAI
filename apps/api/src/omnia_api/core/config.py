@@ -41,6 +41,16 @@ class Settings(BaseSettings):
 
     initial_wallet_balance_rub: float = Field(default=100.0)
 
+    # Rate limiting (slowapi). Disable in dev/CI to keep Playwright tests from
+    # hitting limits; enable in any environment that faces the public internet.
+    rate_limit_enabled: bool = Field(default=True)
+
+    # Sentry — leave empty in dev to skip init. In prod: project-specific DSN
+    # from sentry.io. Traces+profiles sampled at 10% to stay inside the free tier.
+    sentry_dsn: SecretStr | None = None
+    sentry_traces_sample_rate: float = Field(default=0.1)
+    sentry_profiles_sample_rate: float = Field(default=0.1)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

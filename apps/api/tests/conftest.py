@@ -7,8 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.db import get_session
+from omnia_api.core.rate_limit import limiter
 from omnia_api.main import app
 from omnia_api.models.base import Base
+
+# Tests hammer /api/auth/login dozens of times — slowapi would 429 after the
+# 5th. Disable globally at import time; production env keeps RATE_LIMIT_ENABLED=true.
+limiter.enabled = False
 
 
 def _resolve_test_database_url() -> str:

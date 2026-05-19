@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -14,6 +14,7 @@ from omnia_api.core.db import get_engine
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
+from omnia_api.core.rate_limit import limiter
 from omnia_api.core.redis import publish_event
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
@@ -90,7 +91,10 @@ async def _ensure_owner(session: SessionDep, project_id: UUID, user_id: UUID) ->
     response_model=PromptResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
+@limiter.limit("10/minute")
+@limiter.limit("100/hour")
 async def post_prompt(
+    request: Request,
     project_id: UUID,
     payload: PromptRequest,
     session: SessionDep,

@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2.6",
     "structlog>=24.4",
     "python-dotenv>=1.0",
+    "sentry-sdk[fastapi]>=2.18,<3.0",
 ]
 
 [project.optional-dependencies]

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     gigachat_auth_key: SecretStr | None = None
     gigachat_scope: str = "GIGACHAT_API_PERS"  # or GIGACHAT_API_CORP
     gigachat_verify_ssl: bool = False
+    # Master kill-switch: when False, gigachat models are filtered out of /v1/models
+    # and acompletion() refuses them with ModelUnavailableError. Default off until
+    # the long-lived-uvicorn TLS hang is solved upstream.
+    gigachat_enabled: bool = False
 
     database_url: str = "postgresql://omnia:omnia@localhost:5432/omnia"
     redis_url: str = "redis://localhost:6379/1"
@@ -54,6 +58,13 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 60
 
     log_level: str = "INFO"
+    env: str = "dev"
+
+    # Sentry — leave empty to skip. In prod: project-specific DSN. Sampled at
+    # 10% for traces/profiles to keep the free-tier event budget healthy.
+    sentry_dsn: SecretStr | None = None
+    sentry_traces_sample_rate: float = 0.1
+    sentry_profiles_sample_rate: float = 0.1
 
 
 @lru_cache(maxsize=1)
