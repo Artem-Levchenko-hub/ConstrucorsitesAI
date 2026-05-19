@@ -22,6 +22,7 @@ _PROVIDER_KEY_PRESENT = {
     "yandex": lambda s: _has(s.yandex_api_key) and bool(s.yandex_folder_id),
     "alibaba": lambda s: _has(s.openrouter_api_key),  # via OpenRouter
     "sber": lambda s: _has(s.gigachat_auth_key),
+    "google": lambda s: _has(s.gemini_api_key),  # Gemini via Google AI Studio
 }
 
 # Models whose key lives outside the default per-provider mapping — e.g. an

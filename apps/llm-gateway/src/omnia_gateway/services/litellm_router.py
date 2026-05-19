@@ -47,6 +47,11 @@ _LITELLM_MODEL_SLUG: dict[str, str] = {
     "gpt-4.1": "openai/gpt-4o",
     "gpt-5-mini": "openai/gpt-4o-mini",
     "qwen-3-coder": "openrouter/qwen/qwen3-coder",
+    # Google Gemini via AI Studio (not Vertex AI). LiteLLM reads the key from
+    # GEMINI_API_KEY or whatever is passed explicitly in the model_list below.
+    # Same key works for both free and paid tier on AI Studio.
+    "gemini-2.5-pro": "gemini/gemini-2.5-pro",
+    "gemini-2.5-flash": "gemini/gemini-2.5-flash",
 }
 
 
@@ -72,6 +77,13 @@ _FALLBACKS: list[dict[str, list[str]]] = [
     {"claude-sonnet-4-6": ["claude-haiku-4-5", "gpt-4.1", "gpt-5-mini"]},
     {"claude-haiku-4-5": ["gpt-5-mini"]},
     {"gpt-4.1": ["gpt-5-mini"]},
+    # Gemini Pro free tier may be hard-capped to 0 on accounts without billing
+    # (the API reports `free_tier_input_token_count limit: 0`); fall back to
+    # Flash, which has a real free quota. If both fail, hop to claude-haiku-4-5
+    # (via proxyapi.ru — already wired in prod) rather than gpt-5-mini, which
+    # often lacks a configured key in RU deployments.
+    {"gemini-2.5-pro": ["gemini-2.5-flash", "claude-haiku-4-5"]},
+    {"gemini-2.5-flash": ["claude-haiku-4-5"]},
 ]
 
 # Reverse map for billing: when a fallback fires, response.model holds the
@@ -108,6 +120,9 @@ def _api_key_for(slug: str) -> str | None:
         return v or None
     if slug.startswith("openrouter/") and s.openrouter_api_key:
         v = s.openrouter_api_key.get_secret_value()
+        return v or None
+    if slug.startswith("gemini/") and s.gemini_api_key:
+        v = s.gemini_api_key.get_secret_value()
         return v or None
     return None
 
@@ -223,6 +238,20 @@ async def acompletion(
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
     kwargs.update(extra)
+
+    # Gemini 2.5 — thinking models. Without explicit max_tokens / disabled
+    # thinking, reasoning_tokens consume the entire output budget and the
+    # final text response is 0–2 tokens. We force two safeguards for every
+    # Gemini call so the user gets a real answer:
+    #   1) max_tokens default of 16k — large enough that even with full
+    #      thinking budget there are tokens left for the response.
+    #   2) thinking_budget=0 via reasoning_effort="disable" — LiteLLM maps
+    #      this to Gemini's generationConfig.thinkingConfig.thinkingBudget=0,
+    #      skipping the silent reasoning phase altogether for site-generation
+    #      where we want files emitted directly.
+    if model.startswith("gemini-"):
+        kwargs.setdefault("max_tokens", 16384)
+        kwargs.setdefault("reasoning_effort", "disable")
 
     try:
         response = await router.acompletion(**kwargs)

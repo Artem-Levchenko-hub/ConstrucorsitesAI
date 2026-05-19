@@ -52,6 +52,6 @@ def test_list_models_covers_price_table() -> None:
         assert m["price_rub_per_1k_in"] > 0
         assert m["price_rub_per_1k_out"] > 0
         assert m["context_window"] >= 16_000
-        assert m["provider"] in {"anthropic", "openai", "yandex", "alibaba", "sber"}
+        assert m["provider"] in {"anthropic", "openai", "yandex", "alibaba", "sber", "google"}
         assert m["display_name"]
         assert isinstance(m["recommended_for"], list)

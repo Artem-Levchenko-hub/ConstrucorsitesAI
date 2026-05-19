@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     yandex_api_key: SecretStr | None = None
     yandex_folder_id: str | None = None
     openrouter_api_key: SecretStr | None = None
+    # Google Gemini API key from Google AI Studio (https://aistudio.google.com/apikey).
+    # Free tier covers gemini-2.5-pro (low RPM/RPD) and gemini-2.5-flash (higher quota);
+    # the same key transparently bills the paid tier once a billing project is attached.
+    gemini_api_key: SecretStr | None = None
 
     # proxyapi.ru — Russian proxy that fronts native Anthropic Messages API.
     # The same balance covers all proxyapi-routed models; per-model routing is
