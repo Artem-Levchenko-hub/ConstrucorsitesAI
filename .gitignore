@@ -44,3 +44,10 @@ infra/data/
 playwright-report/
 test-results/
 coverage/
+
+# Generated backups (env + docker-compose) — never commit, may contain secrets
+.env.bak
+.env.bak.*
+**/.env.bak.*
+docker-compose.yml.bak.*
+**/docker-compose.yml.bak.*
