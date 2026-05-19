@@ -37,19 +37,25 @@ export function Timeline({ project }: { project: Project }) {
 
   return (
     <div className="flex flex-col h-full bg-surface-base">
-      <div className="h-10 flex items-center justify-between px-4 border-b border-border-subtle">
-        <span className="text-xs font-mono text-fg-tertiary uppercase tracking-wider">
+      <div className="h-8 flex items-center justify-between px-3 border-b border-border-subtle">
+        <span className="text-[10px] font-mono text-fg-tertiary uppercase tracking-wider">
           История
         </span>
         {data && (
-          <span className="text-[11px] font-mono text-fg-tertiary">
-            {data.length} версий
+          <span className="text-[10px] font-mono text-fg-tertiary">
+            {data.length}
           </span>
         )}
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="p-3 space-y-3">
+        {/*
+          Карточки используют framer-motion `layout` — их реальные размеры
+          (paddings, font-size) меньше прежних, и плавно растут на hover.
+          Никаких CSS-scale-трюков → никакого фантомного пустого места между
+          карточками. Стандартный space-y-2 даёт чистый ритм ленты.
+        */}
+        <div className="p-2 space-y-2">
           {isPending && (
             <>
               <Skeleton className="h-40" />

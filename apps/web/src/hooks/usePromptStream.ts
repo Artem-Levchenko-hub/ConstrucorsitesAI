@@ -181,6 +181,41 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
       streamingRef.current = true;
 
+      // OPTIMISTIC INSERT — show user's prompt and an empty assistant placeholder
+      // in the chat INSTANTLY, before the HTTP POST round-trip completes. Without
+      // this the UI is silent for the 1–2s the api spends inserting rows + we
+      // re-fetch them, which feels like "did my click register?". The temp ids
+      // are deterministic prefixes — `last assistant.tokens_out === null` makes
+      // ChatPanel.isStreaming flip true immediately, so the Stop button and
+      // streaming hint appear without waiting on the network.
+      const tempUserId = `__opt_user_${Date.now()}`;
+      const tempAssistantId = `__opt_asst_${Date.now()}`;
+      qc.setQueryData<Message[]>(["messages", projectId], (prev) => [
+        ...(prev ?? []),
+        {
+          id: tempUserId,
+          project_id: projectId,
+          role: "user",
+          content: promptText,
+          model_id: modelId,
+          snapshot_id: null,
+          tokens_in: 0,
+          tokens_out: 0,
+          created_at: new Date().toISOString(),
+        } as Message,
+        {
+          id: tempAssistantId,
+          project_id: projectId,
+          role: "assistant",
+          content: "",
+          model_id: modelId,
+          snapshot_id: null,
+          tokens_in: null,
+          tokens_out: null,
+          created_at: new Date().toISOString(),
+        } as Message,
+      ]);
+
       // Real prod path: open WS BEFORE POST so we don't race the first chunk.
       if (!USE_MOCKS) {
         cancelRef.current?.();
@@ -189,8 +224,20 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
       const { message_id } = await sendPrompt(projectId, promptText, modelId);
 
-      // New user + assistant rows are written by the api — refetch to display.
-      await qc.invalidateQueries({ queryKey: ["messages", projectId] });
+      // Swap the optimistic assistant row for the real id (so incoming
+      // `llm.chunk` events for `event.data.message_id` actually find the row).
+      // The user row is left as-is — the refetch below replaces both with the
+      // canonical server-side records.
+      qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+        (prev ?? []).map((m) =>
+          m.id === tempAssistantId ? { ...m, id: message_id } : m,
+        ),
+      );
+
+      // Now refetch in the background to swap optimistic rows for canonical
+      // server records (ids, created_at). Stays non-blocking so streaming
+      // chunks already landing via WS aren't held up.
+      qc.invalidateQueries({ queryKey: ["messages", projectId] });
 
       if (USE_MOCKS) {
         cancelRef.current?.();

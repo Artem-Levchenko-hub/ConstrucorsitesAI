@@ -22,6 +22,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   yandex: "Яндекс",
   alibaba: "Alibaba",
   sber: "Сбер",
+  google: "Google",
 };
 
 export function ModelSelector() {
@@ -51,8 +52,13 @@ export function ModelSelector() {
         </Button>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel>Модель</DropdownMenuLabel>
+      <DropdownMenuContent
+        align="end"
+        className="w-72 max-h-[min(70vh,32rem)] overflow-y-auto"
+      >
+        <DropdownMenuLabel className="sticky top-0 bg-popover">
+          Модель
+        </DropdownMenuLabel>
         <DropdownMenuSeparator />
         {data!.map((m) => {
           // `available` reflects whether the gateway has the provider key
