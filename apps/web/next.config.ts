@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -11,4 +12,13 @@ const nextConfig: NextConfig = {
   output: "standalone",
 };
 
-export default nextConfig;
+// withSentryConfig is safe to apply even when SENTRY_DSN is empty — it only
+// affects the build pipeline (source-map upload, error route generation) and
+// runtime Sentry SDK is gated separately by DSN in sentry.*.config.ts.
+export default withSentryConfig(nextConfig, {
+  // Source-map upload is no-op without SENTRY_AUTH_TOKEN. Provide via CI env.
+  silent: true,
+  hideSourceMaps: true,
+  disableLogger: true,
+  tunnelRoute: "/monitoring",
+});

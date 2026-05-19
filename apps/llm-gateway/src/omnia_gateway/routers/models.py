@@ -45,8 +45,14 @@ def _is_available(model_id: str, provider: str) -> bool:
 
 @router.get("/models")
 async def list_models_endpoint() -> dict:
+    settings = get_settings()
     data: list[dict] = []
     for m in list_models():
+        # Master kill-switch for Sber: known TLS hang under long-lived uvicorn
+        # (commits 6983db9, 7f9647a). Skip entirely until the upstream issue is
+        # resolved — the UI won't see the model and can't accidentally pick it.
+        if m["provider"] == "sber" and not settings.gigachat_enabled:
+            continue
         entry = dict(m)
         entry["available"] = _is_available(entry["id"], entry["provider"])
         data.append(entry)

@@ -69,3 +69,24 @@ async def validation_error_handler(request: Request, exc: Exception) -> JSONResp
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     body = ErrorBody(code="internal_error", message="internal server error")
     return JSONResponse(status_code=500, content={"error": body.model_dump(exclude_none=True)})
+
+
+async def rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Translate slowapi's RateLimitExceeded into our error envelope.
+
+    Keeps the `X-RateLimit-*` and `Retry-After` headers that slowapi attaches
+    via `exc.headers`, so clients can back off correctly.
+    """
+    from slowapi.errors import RateLimitExceeded
+
+    assert isinstance(exc, RateLimitExceeded)
+    body = ErrorBody(
+        code="rate_limited",
+        message=f"rate limit exceeded: {exc.detail}",
+    )
+    headers: dict[str, str] = getattr(exc, "headers", None) or {}
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"error": body.model_dump(exclude_none=True)},
+        headers=headers,
+    )

@@ -102,9 +102,13 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-omnia-secret}
       MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://localhost:9000}
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me-please-32-bytes-min}
+      JWT_COOKIE_SECURE: ${JWT_COOKIE_SECURE:-false}
       LLM_GATEWAY_URL: ${LLM_GATEWAY_URL:-http://llm-gateway:8001}
       MOCK_LLM: ${MOCK_LLM:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      SENTRY_DSN: ${SENTRY_DSN_API:-}
+      ENV: ${ENV:-dev}
     ports:
       - "8000:8000"
     networks:

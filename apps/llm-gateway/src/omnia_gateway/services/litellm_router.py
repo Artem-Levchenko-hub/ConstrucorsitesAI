@@ -238,6 +238,10 @@ async def acompletion(
         )
 
     if sber_provider.is_sber_model(model):
+        if not get_settings().gigachat_enabled:
+            raise ModelUnavailableError(
+                f"Sber GigaChat is disabled (GIGACHAT_ENABLED=false) — model {model} unavailable"
+            )
         return await sber_provider.acompletion(
             model=model,
             messages=messages,

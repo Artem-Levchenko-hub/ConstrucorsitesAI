@@ -1,13 +1,14 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.core.rate_limit import limiter
 from omnia_api.core.security import (
     consume_dummy_verify,
     create_access_token,
@@ -39,7 +40,10 @@ def _set_session_cookie(response: Response, token: str) -> None:
     response_model=UserPublic,
     status_code=status.HTTP_201_CREATED,
 )
-async def register(payload: UserCreate, response: Response, session: SessionDep) -> User:
+@limiter.limit("5/minute")
+async def register(
+    request: Request, payload: UserCreate, response: Response, session: SessionDep
+) -> User:
     settings = get_settings()
     pwd_hash = await hash_password(payload.password)
     user = User(email=payload.email, password_hash=pwd_hash)
@@ -60,7 +64,10 @@ async def register(payload: UserCreate, response: Response, session: SessionDep)
 
 
 @router.post("/login", response_model=UserPublic)
-async def login(payload: UserLogin, response: Response, session: SessionDep) -> User:
+@limiter.limit("5/minute")
+async def login(
+    request: Request, payload: UserLogin, response: Response, session: SessionDep
+) -> User:
     result = await session.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
     if user is None:

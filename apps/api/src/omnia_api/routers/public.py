@@ -40,6 +40,36 @@ async def _resolve_snapshot(
     return project, snapshot
 
 
+_HTML_MIMES = {"text/html", "application/xhtml+xml"}
+
+# Locked-down CSP for AI-generated content. Key guarantees:
+# - `connect-src 'none'`     — generated JS can't fetch/XHR/WS attacker.com (SSRF/exfil shield).
+# - `frame-ancestors 'self'` — only our workspace iframe can embed previews.
+# - `script-src 'unsafe-inline'` is unavoidable: the model writes JS inline into HTML.
+#   The DOM is still sandboxed from the parent (different docs, can't reach our cookies).
+# - `style-src 'unsafe-inline'` — same reason for CSS.
+# - Google Fonts whitelisted because LLMs reach for it constantly.
+_CSP = (
+    "default-src 'self'; "
+    "img-src 'self' data: blob: https:; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' data: https://fonts.gstatic.com; "
+    "script-src 'self' 'unsafe-inline'; "
+    "connect-src 'none'; "
+    "frame-ancestors 'self'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+_SECURITY_HEADERS = {
+    "X-Frame-Options": "SAMEORIGIN",
+    "Cache-Control": "no-cache",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=(), payment=(), usb=()",
+}
+
+
 async def _serve_file(project: Project, snapshot: Snapshot, path: str) -> Response:
     content = await asyncio.to_thread(
         repo_svc.read_file, project.id, snapshot.commit_sha, path
@@ -47,12 +77,11 @@ async def _serve_file(project: Project, snapshot: Snapshot, path: str) -> Respon
     if content is None:
         raise ApiError("not_found", f"file {path} not found", status.HTTP_404_NOT_FOUND)
     mime, _ = guess_type(path)
-    headers = {
-        # Allow the workspace iframe (same origin) to embed this preview.
-        "X-Frame-Options": "SAMEORIGIN",
-        # Don't let stale HEADs linger — every navigation re-fetches.
-        "Cache-Control": "no-cache",
-    }
+    headers = dict(_SECURITY_HEADERS)
+    # CSP only applies meaningfully to HTML documents; assets (CSS, JS, images)
+    # don't need it and adding it bloats responses with no security gain.
+    if (mime or "").lower() in _HTML_MIMES:
+        headers["Content-Security-Policy"] = _CSP
     return Response(
         content=content,
         media_type=mime or "application/octet-stream",

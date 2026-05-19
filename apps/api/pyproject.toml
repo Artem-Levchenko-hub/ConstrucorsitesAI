@@ -29,6 +29,7 @@ dependencies = [
     "httpx>=0.27,<1.0",
     "slowapi>=0.1.9,<1.0",
     "python-slugify>=8.0,<9.0",
+    "sentry-sdk[fastapi]>=2.18,<3.0",
 ]
 
 [dependency-groups]

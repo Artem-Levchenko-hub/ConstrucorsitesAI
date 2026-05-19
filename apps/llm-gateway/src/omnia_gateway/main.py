@@ -18,6 +18,7 @@ from omnia_gateway.core.db import close_pool, init_pool
 from omnia_gateway.core.http import close_http, init_http
 from omnia_gateway.core.logging import configure_logging
 from omnia_gateway.core.redis import close_redis, init_redis
+from omnia_gateway.core.sentry import init_sentry
 from omnia_gateway.routers import chat, health, models
 
 
@@ -50,6 +51,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    init_sentry()
     app = FastAPI(
         title="Omnia LLM Gateway",
         version="0.1.0",
