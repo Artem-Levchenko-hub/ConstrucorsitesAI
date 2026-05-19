@@ -14,7 +14,15 @@ export type User = {
   last_login_at: IsoDateTime | null;
 };
 
-export type ProjectTemplate = "blank" | "landing" | "portfolio" | "blog";
+export type ProjectTemplate =
+  | "blank"
+  | "landing"
+  | "portfolio"
+  | "blog"
+  // V2 Phase A — runs as a Next.js + Drizzle dev container managed by the
+  // orchestrator. Preview iframe points at the live container's dev_url
+  // instead of the static /p/<slug> path.
+  | "fullstack";
 
 export type Project = {
   id: Uuid;

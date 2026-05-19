@@ -15,6 +15,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { listSnapshots } from "@/lib/api/snapshots";
 import { listMessages } from "@/lib/api/messages";
+import { getRuntime } from "@/lib/api/runtime";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
 import type { Project, Snapshot } from "@/lib/api/types";
@@ -48,6 +49,21 @@ export function PreviewFrame({ project }: { project: Project }) {
     queryFn: () => listMessages(project.id),
   });
 
+  // Fullstack projects (V2 Phase A) preview a live Next.js dev container,
+  // not a static Playwright PNG. We hit /api/projects/:id/runtime on a short
+  // poll while the container is provisioning, then settle on the dev_url
+  // returned by orchestrator. For V1 projects (template !== "fullstack")
+  // this query is skipped — we keep the existing /p/<slug> iframe.
+  const isFullstack = project.template === "fullstack";
+  const { data: runtime } = useQuery({
+    queryKey: ["runtime", project.id],
+    queryFn: () => getRuntime(project.id),
+    enabled: isFullstack,
+    refetchInterval: (q) =>
+      q.state.data?.state === "provisioning" ? 2_000 : false,
+    retry: false,
+  });
+
   const headSnapshot = snapshots?.[0];
   const visible: Snapshot | undefined = selectedSnapshotId
     ? snapshots?.find((s) => s.id === selectedSnapshotId)
@@ -64,11 +80,22 @@ export function PreviewFrame({ project }: { project: Project }) {
     ? `${apiOrigin.replace(/\/$/, "")}/p/${project.slug}`
     : `https://${project.slug}.omnia.ai`;
 
-  // The /p/<slug> endpoint always serves the project's current_snapshot HEAD.
-  // To show a *historical* snapshot, append ?snapshot=<id>. Re-key the iframe
-  // when the visible snapshot changes so React fully remounts (clean reload).
-  const iframeSrc =
-    visible && snapshots && visible.id !== snapshots[0]?.id
+  // For V1 projects the /p/<slug> endpoint always serves the project's
+  // current_snapshot HEAD. To show a *historical* snapshot, append
+  // `?snapshot=<id>`. Re-key the iframe when the visible snapshot changes
+  // so React fully remounts (clean reload).
+  //
+  // For V2 fullstack: when the dev container is up, swap the iframe to
+  // `runtime.dev_url` — the live Next.js process with HMR. We deliberately
+  // do NOT pass `?snapshot=…` here because the dev container only knows
+  // about HEAD (orchestrator hot-reload always writes the latest snapshot's
+  // files). Historical snapshots on fullstack will need a deploy-time
+  // checkout in a later sprint.
+  const fullstackLive =
+    isFullstack && runtime?.state === "running" && !!runtime.dev_url;
+  const iframeSrc = fullstackLive
+    ? `${runtime!.dev_url}#k=${iframeKey}`
+    : visible && snapshots && visible.id !== snapshots[0]?.id
       ? `${publicUrl}?snapshot=${visible.id}#k=${iframeKey}`
       : `${publicUrl}#k=${iframeKey}`;
 
@@ -192,13 +219,13 @@ export function PreviewFrame({ project }: { project: Project }) {
                 <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
                 <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
                 <a
-                  href={publicUrl}
+                  href={fullstackLive ? runtime!.dev_url! : publicUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="ml-3 text-xs font-mono text-fg-tertiary truncate hover:text-fg-secondary transition-colors"
                   title="Открыть в новой вкладке"
                 >
-                  {publicUrl}
+                  {fullstackLive ? runtime!.dev_url : publicUrl}
                 </a>
               </div>
 

@@ -21,7 +21,9 @@ from omnia_orchestrator.core.docker_client import (
 )
 from omnia_orchestrator.core.docker_client import (
     destroy_container,
+    exec_cmd,
     stop_container,
+    write_files,
 )
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.schemas.runtime import (
@@ -106,20 +108,63 @@ async def stop(
 @router.post("/hot-reload")
 async def hot_reload(
     payload: HotReloadRequest,
+    slug: str,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> dict[str, str]:
     """Copy AI-generated files into the running dev container; Next.js HMR
-    picks up changes without restart. Same file-payload shape as apps/api
-    file_extractor output.
+    picks up changes without restart.
 
-    TODO sprint A1: `docker.containers.get(name).put_archive(path, tar_stream)`.
+    Lookup is by `omnia-dev-<slug>` for the same reason `status` / `destroy`
+    do it (PoC: no project-name registry yet — apps/api always knows the slug).
+    `slug` is a query param to keep the JSON body matching `HotReloadRequest`
+    exactly (which only carries project_id + files; slug-resolution is the
+    orchestrator's internal concern).
+
+    Side-effects beyond the file write:
+      - If any file under `src/lib/db/schema.ts` or `src/lib/db/migrations/`
+        changed, run `npm exec drizzle-kit push` in the container. This makes
+        the new schema/migrations land in the project's Postgres without
+        the user having to ask. Failure here is logged into the response but
+        does NOT fail the whole hot-reload (drizzle errors are far more
+        useful inside the dev preview than as a 5xx to the user).
     """
     _verify_token(x_internal_token)
-    raise OrchestratorError(
-        code="internal_error",
-        message="hot_reload not yet implemented (sprint A1)",
-        status_code=501,
+    container_name = f"omnia-dev-{slug}"
+
+    write_result = await write_files(container_name, payload.files)
+
+    # If the AI touched the DB schema or migrations, push it to Postgres now.
+    schema_touched = any(
+        p == "src/lib/db/schema.ts" or p.startswith("src/lib/db/migrations/")
+        for p in payload.files
     )
+    drizzle_result: dict[str, str] | None = None
+    if schema_touched:
+        try:
+            drizzle_result = await exec_cmd(
+                container_name,
+                cmd=["npx", "--yes", "drizzle-kit", "push", "--config=drizzle.config.ts"],
+                workdir="/app",
+                timeout_sec=90,
+            )
+        except OrchestratorError as exc:
+            # Log as failure but don't propagate — see docstring.
+            drizzle_result = {
+                "exit_code": "-1",
+                "stdout": "",
+                "stderr": f"orchestrator: {exc.message}",
+            }
+
+    response: dict[str, str] = {
+        "state": "hot_reloaded",
+        "written": write_result.get("written", "0"),
+        "total_bytes": write_result.get("total_bytes", "0"),
+        "dropped": write_result.get("dropped", ""),
+    }
+    if drizzle_result is not None:
+        response["drizzle_exit_code"] = drizzle_result["exit_code"]
+        response["drizzle_stderr_tail"] = drizzle_result["stderr"][-500:]
+    return response
 
 
 @router.post("/deploy", response_model=DeployResponse)

@@ -158,3 +158,22 @@ async def deploy(project_id: UUID, *, commit_sha: str | None = None) -> dict[str
 async def destroy(project_id: UUID) -> dict[str, Any]:
     """POST /internal/projects/<uuid>/destroy — full teardown (CASCADE delete)."""
     return await _request("POST", f"/internal/projects/{project_id}/destroy")
+
+
+async def hot_reload(
+    project_id: UUID, slug: str, files: dict[str, str]
+) -> dict[str, Any]:
+    """POST /internal/projects/hot-reload — write AI-generated files into the
+    dev container; orchestrator additionally runs `drizzle-kit push` if the
+    diff touches `src/lib/db/schema.ts` or `src/lib/db/migrations/*`.
+
+    `slug` is required as a query param because orchestrator's container
+    lookup is `omnia-dev-<slug>` (no project_id ↔ container_name registry
+    yet, PoC). apps/api always has the slug at hand from its own Project row.
+    """
+    return await _request(
+        "POST",
+        "/internal/projects/hot-reload",
+        json={"project_id": str(project_id), "files": files},
+        params={"slug": slug},
+    )

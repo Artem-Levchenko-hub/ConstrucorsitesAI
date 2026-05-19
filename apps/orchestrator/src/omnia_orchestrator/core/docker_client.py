@@ -169,6 +169,173 @@ async def container_status(name: str) -> dict[str, str]:
     return await asyncio.to_thread(_do)
 
 
+async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/app") -> dict[str, str]:
+    """Stream a set of AI-generated files into a running container via
+    `docker cp` semantics (put_archive). Paths in `files` are container-relative
+    to `dest_root` (default `/app`, matching Next.js workdir in the template).
+
+    Returns a small summary {written: int, total_bytes: int, dropped: list-of-paths}.
+
+    Safety: refuses any path with `..`, leading `/`, or escaping `dest_root`.
+    Empty content (`""`) means "delete this file" — we write a zero-length
+    file rather than removing; the file_extractor on the api side already
+    treats empty as delete-intent, but here we keep a sentinel so a future
+    audit (`docker exec ls -la`) shows the intent without a separate exec.
+
+    Missing container = explicit OrchestratorError (caller should handle).
+    """
+    import io
+    import tarfile
+    import time
+    import posixpath
+
+    log.info("docker.write_files", name=name, files=len(files), dest_root=dest_root)
+
+    def _do() -> dict[str, object]:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound as exc:
+            raise OrchestratorError(
+                code="not_found",
+                message=f"container not found: {name}",
+                status_code=404,
+            ) from exc
+        if c.status not in ("running", "paused"):
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"container {name} state={c.status}; can't write files into a stopped container",
+                status_code=409,
+            )
+
+        dropped: list[str] = []
+        written = 0
+        total_bytes = 0
+
+        # Build one tar in memory containing every file with its directory entries.
+        # Docker SDK's put_archive needs a tar stream and a target directory.
+        buf = io.BytesIO()
+        ts = int(time.time())
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            seen_dirs: set[str] = set()
+            for raw_path, content in files.items():
+                # Sanitize: no .., no absolute, must stay under dest_root.
+                norm = posixpath.normpath(raw_path)
+                if norm.startswith("/") or norm.startswith(".."):
+                    dropped.append(raw_path)
+                    continue
+                # Prevent escape via well-crafted normpath edge cases.
+                joined = posixpath.normpath(posixpath.join(dest_root, norm))
+                if not (joined == dest_root or joined.startswith(dest_root + "/")):
+                    dropped.append(raw_path)
+                    continue
+
+                # Add missing parent dirs as tar entries so put_archive
+                # can write into nested paths the very first time.
+                parts = norm.split("/")
+                for i in range(1, len(parts)):
+                    d = "/".join(parts[:i])
+                    if d and d not in seen_dirs:
+                        di = tarfile.TarInfo(name=d)
+                        di.type = tarfile.DIRTYPE
+                        di.mode = 0o755
+                        di.uid = 1000
+                        di.gid = 1000
+                        di.mtime = ts
+                        tar.addfile(di)
+                        seen_dirs.add(d)
+
+                data = content.encode("utf-8")
+                info = tarfile.TarInfo(name=norm)
+                info.size = len(data)
+                info.mode = 0o644
+                info.uid = 1000
+                info.gid = 1000
+                info.mtime = ts
+                tar.addfile(info, io.BytesIO(data))
+                written += 1
+                total_bytes += len(data)
+
+        buf.seek(0)
+        try:
+            ok = c.put_archive(path=dest_root, data=buf.getvalue())
+        except docker.errors.APIError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"put_archive failed for {name}: {exc}",
+                status_code=500,
+            ) from exc
+        if not ok:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"put_archive returned False for {name}",
+                status_code=500,
+            )
+
+        return {"written": written, "total_bytes": total_bytes, "dropped": dropped}
+
+    raw = await asyncio.to_thread(_do)
+    # Coerce types for the response (mypy: dict[str,object] → dict[str,str|int|list]).
+    return {
+        "written": str(raw["written"]),
+        "total_bytes": str(raw["total_bytes"]),
+        "dropped": ",".join(raw["dropped"]) if raw["dropped"] else "",  # type: ignore[arg-type]
+    }
+
+
+async def exec_cmd(
+    name: str,
+    cmd: list[str],
+    *,
+    workdir: str | None = None,
+    user: str = "1000:1000",
+    timeout_sec: int = 120,
+) -> dict[str, str]:
+    """Run a command inside a container, return {exit_code, stdout, stderr}.
+
+    Used for follow-up actions after `write_files`: notably `drizzle-kit push`
+    when the AI changed `src/lib/db/schema.ts`. Idempotent for the caller —
+    a non-zero exit is returned in the dict, not raised, so the api layer
+    can decide whether to surface it.
+    """
+    log.info("docker.exec_cmd", name=name, cmd=cmd, workdir=workdir)
+
+    def _do() -> dict[str, str]:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound as exc:
+            raise OrchestratorError(
+                code="not_found",
+                message=f"container not found: {name}",
+                status_code=404,
+            ) from exc
+        # demux=True splits stdout/stderr — the SDK signature is awkward but
+        # gives us back two bytes-streams in a tuple.
+        result = c.exec_run(
+            cmd=cmd,
+            workdir=workdir or "/app",
+            user=user,
+            demux=True,
+        )
+        out_bytes, err_bytes = result.output if isinstance(result.output, tuple) else (result.output, b"")
+        return {
+            "exit_code": str(result.exit_code),
+            "stdout": (out_bytes or b"").decode("utf-8", errors="replace")[:8000],
+            "stderr": (err_bytes or b"").decode("utf-8", errors="replace")[:8000],
+        }
+
+    # exec_run does not honor an explicit timeout; wrap in asyncio.wait_for.
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_do), timeout=timeout_sec)
+    except asyncio.TimeoutError as exc:
+        raise OrchestratorError(
+            code="container_failure",
+            message=f"exec {cmd[0]} on {name} timed out after {timeout_sec}s",
+            status_code=504,
+        ) from exc
+
+
 async def destroy_container(name: str) -> None:
     """Full removal: stop + rm. Missing container is a no-op."""
     log.info("docker.destroy_container", name=name)

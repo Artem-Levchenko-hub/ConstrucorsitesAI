@@ -20,6 +20,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
+from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.file_extractor import UnsafePathError, extract_files
 from omnia_api.services.llm_client import stream_chat_completion
@@ -155,9 +156,20 @@ async def list_messages(
 # the conversation moving. Order: most capable that's *not* the primary,
 # guarded by `model != primary`.
 _EMPTY_RESPONSE_FALLBACKS: dict[str, list[str]] = {
-    "gemini-2.5-pro": ["gemini-2.5-flash", "claude-haiku-4-5"],
-    "gemini-2.5-flash": ["claude-haiku-4-5"],
-    # Other models could land here too if we see them misbehave in prod.
+    "gemini-2.5-pro": ["gemini-2.5-flash", "claude-haiku-4-5", "gpt-5-nano"],
+    "gemini-2.5-flash": ["claude-haiku-4-5", "gpt-5-nano"],
+    # proxyapi.ru occasionally short-replies even for Haiku (we've seen
+    # acc_len=3 / tokens_out=2 on long prompts). Fallback to gpt-5-nano on
+    # the same proxyapi balance — different upstream, same key, same money.
+    "claude-haiku-4-5": ["gpt-5-nano", "gigachat-2-pro"],
+    "claude-sonnet-4-6": ["claude-haiku-4-5", "gpt-5-nano"],
+    "claude-opus-4-7": ["claude-sonnet-4-6", "claude-haiku-4-5"],
+    # GPT-5 family are reasoning models and may shadow-drop output even with
+    # reasoning_effort=minimal; fall back to Haiku (same proxyapi key).
+    "gpt-5": ["claude-haiku-4-5", "gpt-5-nano"],
+    "gpt-5-nano": ["claude-haiku-4-5", "gigachat-2-pro"],
+    "gpt-5-mini": ["claude-haiku-4-5", "gpt-5-nano"],
+    "gpt-4.1": ["claude-haiku-4-5", "gpt-5"],
 }
 
 
@@ -404,6 +416,53 @@ async def _process_prompt(
                 "snapshot.created",
                 {"snapshot": _snapshot_payload(snapshot)},
             )
+
+            # Fullstack projects: push the same files into the live dev
+            # container so the user sees the new code immediately via HMR.
+            # Failure here is logged + surfaced as a chat notice but does
+            # NOT roll the snapshot back — the canonical state is still in
+            # git/MinIO and the user can hit "Запустить" again to retry.
+            if project is not None and project.template == "fullstack":
+                try:
+                    hot = await orchestrator_client.hot_reload(
+                        project_id=project_id,
+                        slug=project.slug,
+                        files=files,
+                    )
+                    print(
+                        f"[PP] hot_reload OK written={hot.get('written')} "
+                        f"drizzle={hot.get('drizzle_exit_code', 'n/a')}",
+                        flush=True,
+                    )
+                    drizzle_exit = hot.get("drizzle_exit_code")
+                    if drizzle_exit and drizzle_exit not in ("0", "n/a"):
+                        # Drizzle push failed — tell the user, don't fail the prompt.
+                        await publish_event(
+                            project_id,
+                            "llm.chunk",
+                            {
+                                "message_id": str(assistant_message_id),
+                                "delta": (
+                                    f"\n\n*Файлы записаны в dev-контейнер, но `drizzle-kit push` "
+                                    f"завершился с кодом {drizzle_exit}. Проверь src/lib/db/schema.ts и "
+                                    f"подключение к Postgres.*\n\n"
+                                ),
+                            },
+                        )
+                except Exception as hot_exc:  # noqa: BLE001 — never fail prompt over hot-reload
+                    print(f"[PP] hot_reload failed: {hot_exc!r}", flush=True)
+                    await publish_event(
+                        project_id,
+                        "llm.chunk",
+                        {
+                            "message_id": str(assistant_message_id),
+                            "delta": (
+                                f"\n\n*Снапшот сохранён в git, но синхронизация с dev-контейнером "
+                                f"не удалась: {hot_exc}. Нажми «Запустить» в верхней панели чтобы "
+                                f"проверить runtime.*\n\n"
+                            ),
+                        },
+                    )
         else:
             # Модель ответила, но ни одного <file path="...">...</file> в выводе.
             # Раньше тут была тишина — UI получал только llm.done и думал, что
