@@ -215,6 +215,7 @@ async def _process_prompt(
     current_sha: str | None = None
     current_files: dict[str, str] = {}
     history_serialized: list[dict[str, str]] = []
+    project_template = "blank"
 
     try:
         async with factory() as session:
@@ -222,6 +223,9 @@ async def _process_prompt(
                 snap = await session.get(Snapshot, current_snapshot_id)
                 if snap is not None:
                     current_sha = snap.commit_sha
+            proj = await session.get(Project, project_id)
+            if proj is not None:
+                project_template = proj.template
             res = await session.execute(
                 select(Message)
                 .where(Message.project_id == project_id)
@@ -241,7 +245,9 @@ async def _process_prompt(
             )
         print(f"[PP] files_loaded count={len(current_files)}", flush=True)
 
-        messages = build_messages(current_files, history_serialized, prompt_text)
+        messages = build_messages(
+            current_files, history_serialized, prompt_text, project_template
+        )
         print(f"[PP] messages_built count={len(messages)}", flush=True)
 
         # ──────────────────────────────────────────────────────────────
