@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLink,
   RotateCw,
@@ -11,11 +11,14 @@ import {
   Eye,
   Code as CodeIcon,
   Clock,
+  Loader2,
+  Play,
+  ServerCog,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listSnapshots } from "@/lib/api/snapshots";
 import { listMessages } from "@/lib/api/messages";
-import { getRuntime } from "@/lib/api/runtime";
+import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
 import type { Project, Snapshot } from "@/lib/api/types";
@@ -55,7 +58,12 @@ export function PreviewFrame({ project }: { project: Project }) {
   // returned by orchestrator. For V1 projects (template !== "fullstack")
   // this query is skipped — we keep the existing /p/<slug> iframe.
   const isFullstack = project.template === "fullstack";
-  const { data: runtime } = useQuery({
+  const qc = useQueryClient();
+  const {
+    data: runtime,
+    isError: runtimeError,
+    isLoading: runtimeLoading,
+  } = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
     enabled: isFullstack,
@@ -63,6 +71,30 @@ export function PreviewFrame({ project }: { project: Project }) {
       q.state.data?.state === "provisioning" ? 2_000 : false,
     retry: false,
   });
+
+  // V2: provision the dev container on open so the live Next.js app appears
+  // by itself — no need to hunt for the TopBar "Запустить". `provision` is
+  // idempotent; we fire it once. If the orchestrator is down the mutation
+  // errors and the in-frame panel below shows a "Запустить" retry instead of
+  // a blank iframe.
+  const startMut = useMutation({
+    mutationFn: () => startRuntime(project.id),
+    onSuccess: (s) => qc.setQueryData(["runtime", project.id], s),
+  });
+  const autoStarted = useRef(false);
+  const runtimeState = runtime?.state;
+  useEffect(() => {
+    if (!isFullstack || autoStarted.current || runtimeLoading) return;
+    const idle =
+      runtimeError ||
+      runtimeState === "stopped" ||
+      runtimeState === "failed" ||
+      runtimeState === undefined;
+    if (idle) {
+      autoStarted.current = true;
+      startMut.mutate();
+    }
+  }, [isFullstack, runtimeLoading, runtimeError, runtimeState, startMut]);
 
   const headSnapshot = snapshots?.[0];
   const visible: Snapshot | undefined = selectedSnapshotId
@@ -93,9 +125,9 @@ export function PreviewFrame({ project }: { project: Project }) {
   // checkout in a later sprint.
   const fullstackLive =
     isFullstack && runtime?.state === "running" && !!runtime.dev_url;
-  const iframeSrc = fullstackLive
-    ? `${runtime!.dev_url}#k=${iframeKey}`
-    : visible && snapshots && visible.id !== snapshots[0]?.id
+  const liveSrc = `${runtime?.dev_url ?? ""}#k=${iframeKey}`;
+  const staticSrc =
+    visible && snapshots && visible.id !== snapshots[0]?.id
       ? `${publicUrl}?snapshot=${visible.id}#k=${iframeKey}`
       : `${publicUrl}#k=${iframeKey}`;
 
@@ -105,7 +137,10 @@ export function PreviewFrame({ project }: { project: Project }) {
   // committed-снапшота (бэкенд `/p/<slug>`).
   const last = messages?.[messages.length - 1];
   const isStreaming = last?.role === "assistant" && last.tokens_out === null;
-  const showStreaming = isStreaming && !selectedSnapshotId;
+  // Streaming morphdom preview only applies to static HTML (it patches the
+  // index.html body). Full-stack projects render via the live dev container
+  // (HMR), so we never show the morph frame for them.
+  const showStreaming = isStreaming && !selectedSnapshotId && !isFullstack;
 
   return (
     <div className="flex flex-col h-full bg-surface-base">
@@ -243,10 +278,33 @@ export function PreviewFrame({ project }: { project: Project }) {
                       content={last?.content ?? ""}
                       device={device}
                     />
-                  ) : visible && (
+                  ) : fullstackLive ? (
+                    <motion.iframe
+                      key={`live-${iframeKey}`}
+                      src={liveSrc}
+                      title="Preview (live dev container)"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                      style={{ width: DEVICE_WIDTH[device], maxWidth: "100%" }}
+                      className="h-full bg-white border-0 mx-auto shadow-xl"
+                    />
+                  ) : isFullstack ? (
+                    <RuntimeStartupPanel
+                      key="runtime"
+                      state={runtimeState}
+                      starting={startMut.isPending}
+                      onStart={() => {
+                        autoStarted.current = true;
+                        startMut.mutate();
+                      }}
+                    />
+                  ) : visible ? (
                     <motion.iframe
                       key={`${visible.id}-${iframeKey}`}
-                      src={iframeSrc}
+                      src={staticSrc}
                       title={`Preview ${shortSha(visible.commit_sha)}`}
                       // sandbox lets the rendered site run JS, fonts, links inside
                       // the iframe but blocks privileged APIs (downloads, top-level
@@ -259,8 +317,8 @@ export function PreviewFrame({ project }: { project: Project }) {
                       style={{ width: DEVICE_WIDTH[device], maxWidth: "100%" }}
                       className="h-full bg-white border-0 mx-auto shadow-xl"
                     />
-                  )}
-                  {!visible && !isPending && (
+                  ) : null}
+                  {!visible && !isPending && !isFullstack && (
                     <motion.div
                       key="empty"
                       initial={{ opacity: 0 }}
@@ -283,5 +341,64 @@ export function PreviewFrame({ project }: { project: Project }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * In-frame state for full-stack projects whose dev container isn't live yet.
+ * Replaces what used to be a blank/404 iframe with an honest "запускается" /
+ * "Запустить" affordance. Provisioning is also auto-triggered on open (see the
+ * effect in PreviewFrame); this panel is the manual + status surface.
+ */
+function RuntimeStartupPanel({
+  state,
+  starting,
+  onStart,
+}: {
+  state?: string;
+  starting: boolean;
+  onStart: () => void;
+}) {
+  const provisioning = starting || state === "provisioning";
+  const failed = state === "failed" && !starting;
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6"
+    >
+      <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border-subtle bg-surface-base">
+        {provisioning ? (
+          <Loader2 className="h-5 w-5 animate-spin text-accent" />
+        ) : (
+          <ServerCog className="h-5 w-5 text-fg-tertiary" />
+        )}
+      </div>
+      {provisioning ? (
+        <>
+          <div className="text-sm text-fg-secondary">Приложение запускается…</div>
+          <div className="max-w-xs text-xs leading-5 text-fg-tertiary">
+            Поднимаем dev-контейнер Next.js. Первый запуск занимает до минуты —
+            дальше превью обновляется мгновенно.
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="text-sm text-fg-secondary">
+            {failed ? "Не удалось запустить приложение" : "Full-stack приложение"}
+          </div>
+          <div className="max-w-xs text-xs leading-5 text-fg-tertiary">
+            {failed
+              ? "Среда выполнения сейчас недоступна. Попробуйте ещё раз."
+              : "Это проект на Next.js. Запустите dev-контейнер, чтобы увидеть живое превью."}
+          </div>
+          <Button size="sm" onClick={onStart} className="mt-1 gap-1.5">
+            <Play className="h-3.5 w-3.5" />
+            {failed ? "Повторить" : "Запустить приложение"}
+          </Button>
+        </>
+      )}
+    </motion.div>
   );
 }
