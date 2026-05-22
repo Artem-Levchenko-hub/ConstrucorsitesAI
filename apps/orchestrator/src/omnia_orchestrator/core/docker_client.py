@@ -77,7 +77,10 @@ async def start_container(spec: ContainerSpec) -> str:
         client = _get_client()
         try:
             existing = client.containers.get(spec.name)
-            if existing.status != "running":
+            existing.reload()
+            if existing.status == "paused":
+                existing.unpause()  # can't .start() a frozen container
+            elif existing.status != "running":
                 existing.start()
             return str(existing.id)
         except docker.errors.NotFound:
@@ -121,11 +124,16 @@ async def start_container(spec: ContainerSpec) -> str:
 
 
 async def stop_container(name: str, *, pause: bool = False) -> None:
-    """Stop or pause a container.
+    """Stop or pause a container — fully idempotent.
 
     `pause=True` keeps memory (1-3 sec wake) — Pro tier hibernate.
     `pause=False` frees memory (30-60 sec cold start) — Free tier hibernate.
-    Missing container is a no-op (idempotent).
+
+    No-ops cleanly when the container is missing OR already in the target
+    state: pausing an already-paused container (or stopping a stopped one)
+    must NOT error — the UI fires repeat clicks, and Docker raises 500 on
+    `pause` of a paused container. We check status first and also swallow the
+    idempotency races.
     """
     log.info("docker.stop_container", name=name, pause=pause)
 
@@ -135,12 +143,33 @@ async def stop_container(name: str, *, pause: bool = False) -> None:
             c = client.containers.get(name)
         except docker.errors.NotFound:
             return
+        c.reload()
+        status = c.status
         try:
             if pause:
-                c.pause()
+                if status == "running":
+                    c.pause()
+                # paused / exited / created → already not running, no-op
             else:
-                c.stop(timeout=10)
+                if status == "paused":
+                    c.unpause()  # can't stop a frozen container — thaw first
+                    c.stop(timeout=10)
+                elif status == "running":
+                    c.stop(timeout=10)
+                # exited / created → already stopped, no-op
         except docker.errors.APIError as exc:
+            msg = str(exc).lower()
+            if any(
+                token in msg
+                for token in (
+                    "already paused",
+                    "not running",
+                    "is not paused",
+                    "already stopped",
+                    "304",
+                )
+            ):
+                return  # idempotency race — treat as success
             raise OrchestratorError(
                 code="container_failure",
                 message=f"stop failed for {name}: {exc}",
