@@ -32,18 +32,22 @@ class CmdResult:
         return self.rc == 0
 
 
-async def run(cmd: list[str], *, timeout: float = 30.0) -> CmdResult:
+async def run(
+    cmd: list[str], *, timeout: float = 30.0, env: dict[str, str] | None = None
+) -> CmdResult:
     """Run `cmd` (no shell), capture output, enforce `timeout` seconds.
 
     Returns a CmdResult even on failure/timeout (rc != 0); never raises for a
     non-zero exit — callers decide how to react. Only raises if the binary is
-    missing (FileNotFoundError), which is a real misconfiguration.
+    missing (FileNotFoundError), which is a real misconfiguration. `env`, when
+    given, replaces the child's environment (default: inherit the parent's).
     """
     log.info("shell.run", cmd=cmd, timeout=timeout)
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     try:
         out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)

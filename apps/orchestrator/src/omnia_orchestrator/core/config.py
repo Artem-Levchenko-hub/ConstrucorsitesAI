@@ -54,7 +54,12 @@ class Settings(BaseSettings):
     # be issued the site stays HTTP-only rather than failing the whole flow.
     enable_tls: bool = Field(default=True)
     acme_email: str = Field(default="artem@omniadevelop.ru")
-    acme_webroot: str = Field(default="/var/www/certbot")
+    # Webroot for ACME http-01 challenges — orchestrator-owned (no sudo to
+    # write). nginx serves /.well-known/acme-challenge/ from here. Certs are
+    # issued by acme.sh (the system certbot 2.1.0 is broken on this box).
+    acme_webroot: str = Field(default="/opt/omnia-runtime/acme-webroot")
+    # Where acme.sh installs issued certs (orchestrator-owned; nginx reads).
+    acme_certs_dir: str = Field(default="/opt/omnia-runtime/certs")
 
     # Dev container port pool. 3001-3199 reserved for V1 + other tenants.
     port_range_min: int = Field(default=3200)

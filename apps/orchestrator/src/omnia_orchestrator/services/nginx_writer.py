@@ -21,6 +21,7 @@ down (it is shared with other tenants).
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -104,7 +105,7 @@ server {{
 
 
 def _https_block(host: str, port: int) -> str:
-    live = f"/etc/letsencrypt/live/{host}"
+    cert_dir = f"{get_settings().acme_certs_dir}/{host}"
     return f"""\
 # omnia auto-generated — {host} (HTTPS)
 server {{
@@ -122,8 +123,8 @@ server {{
     listen [::]:443 ssl;
     server_name {host};
 
-    ssl_certificate     {live}/fullchain.pem;
-    ssl_certificate_key {live}/privkey.pem;
+    ssl_certificate     {cert_dir}/fullchain.pem;
+    ssl_certificate_key {cert_dir}/privkey.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
 {_proxy_location(port)}
@@ -140,25 +141,55 @@ async def _reload() -> CmdResult:
 
 
 async def _issue_cert(host: str) -> bool:
-    """Obtain/refresh a Let's Encrypt cert for `host` via webroot http-01.
+    """Issue + install a Let's Encrypt cert for `host` via acme.sh (webroot
+    http-01). We use acme.sh, NOT the system certbot (2.1.0 is broken on this
+    box with `AttributeError: can't set attribute`).
 
-    Idempotent: `--keep-until-expiring` reuses a still-valid cert. Returns
-    True iff certbot exits 0 (cert present at /etc/letsencrypt/live/<host>/).
+    `acme.sh --issue` returns non-zero when a still-valid cert already exists,
+    so we don't gate on its exit code — `--install-cert` copies whatever cert
+    acme.sh holds, and success is "the installed files exist afterwards".
     """
     s = get_settings()
-    res = await run(
+    acme = os.path.expanduser("~/.acme.sh/acme.sh")
+    # acme.sh treats LOG_LEVEL/DEBUG as integers; the orchestrator sets
+    # LOG_LEVEL=INFO, which makes acme.sh's `[ "$LOG_LEVEL" -ge 2 ]` abort with
+    # "integer expression expected". Strip them for the acme.sh subprocess.
+    acme_env = {k: v for k, v in os.environ.items() if k not in ("LOG_LEVEL", "DEBUG")}
+    cert_dir = Path(s.acme_certs_dir) / host
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    fullchain = cert_dir / "fullchain.pem"
+    privkey = cert_dir / "privkey.pem"
+
+    await run(
         [
-            "sudo", "-n", "certbot", "certonly", "--webroot",
+            acme, "--issue", "-d", host,
             "-w", s.acme_webroot,
-            "-d", host,
-            "--non-interactive", "--agree-tos", "-m", s.acme_email,
-            "--keep-until-expiring",
+            "--server", "letsencrypt",
+            "--keylength", "ec-256",
         ],
-        timeout=120,
+        timeout=180,
+        env=acme_env,
     )
-    if not res.ok:
-        log.warning("nginx.cert_failed", host=host, stderr=res.stderr[-400:])
-    return res.ok
+    install = await run(
+        [
+            acme, "--install-cert", "-d", host, "--ecc",
+            "--key-file", str(privkey),
+            "--fullchain-file", str(fullchain),
+            "--reloadcmd", "sudo -n systemctl reload nginx",
+        ],
+        timeout=60,
+        env=acme_env,
+    )
+    # Gate on a real installed cert — empty/garbage files would crash nginx.
+    ok = False
+    if fullchain.exists() and privkey.exists():
+        try:
+            ok = "BEGIN CERTIFICATE" in fullchain.read_text(errors="ignore")
+        except OSError:
+            ok = False
+    if not ok:
+        log.warning("nginx.cert_failed", host=host, stderr=install.stderr[-400:])
+    return ok
 
 
 def _validate_host(host: str) -> None:
