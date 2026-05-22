@@ -38,6 +38,8 @@ class ContainerSpec:
     cpu_quota: float = 0.5  # default for free tier — 50% of 1 core
     memory_mb: int = 512
     network_name: str | None = None  # `proj-<id>` for per-project isolation
+    kind: str = "dev"  # `omnia.kind` label — "dev" or "prod"
+    restart_policy_name: str = "no"  # "unless-stopped" for deployed prod
 
 
 _client: docker.DockerClient | None = None
@@ -94,10 +96,10 @@ async def start_container(spec: ContainerSpec) -> str:
                 cap_drop=["ALL"],
                 cap_add=["NET_BIND_SERVICE"],
                 user="1000:1000",
-                restart_policy={"Name": "no"},
+                restart_policy={"Name": spec.restart_policy_name},
                 labels={
                     "omnia.project_id": spec.project_id,
-                    "omnia.kind": "dev",
+                    "omnia.kind": spec.kind,
                 },
             )
         except docker.errors.ImageNotFound as exc:
@@ -146,6 +148,27 @@ async def stop_container(name: str, *, pause: bool = False) -> None:
             ) from exc
 
     await asyncio.to_thread(_do)
+
+
+async def find_project_container(project_id: str, *, kind: str = "dev") -> str | None:
+    """Return the container name for a project by label, or None if absent.
+
+    Containers are labeled `omnia.project_id` + `omnia.kind` at creation (see
+    `start_container`). Resolving by label lets stop/status/deploy work from
+    `project_id` alone — no slug→name guessing and no slug query-param coupling
+    (the source of the pause-never-stops and status-422 bugs).
+    """
+    log.info("docker.find_project_container", project_id=project_id, kind=kind)
+
+    def _do() -> str | None:
+        client = _get_client()
+        containers = client.containers.list(
+            all=True,
+            filters={"label": [f"omnia.project_id={project_id}", f"omnia.kind={kind}"]},
+        )
+        return str(containers[0].name) if containers else None
+
+    return await asyncio.to_thread(_do)
 
 
 async def container_status(name: str) -> dict[str, str]:
@@ -360,3 +383,98 @@ async def destroy_container(name: str) -> None:
             ) from exc
 
     await asyncio.to_thread(_do)
+
+
+async def unpause_container(name: str) -> None:
+    """Unpause a paused container so its filesystem can be read. No-op otherwise."""
+    log.info("docker.unpause_container", name=name)
+
+    def _do() -> None:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound:
+            return
+        if c.status == "paused":
+            try:
+                c.unpause()
+            except docker.errors.APIError:
+                pass
+
+    await asyncio.to_thread(_do)
+
+
+async def copy_path_from_container(
+    name: str, container_path: str, dest_dir: str
+) -> bool:
+    """Extract `container_path` from a container into `dest_dir` on the host.
+
+    Used to assemble a prod build context from the live dev container. Returns
+    False if the path is absent (best-effort overlay) so the caller can layer
+    optional paths without each one being fatal.
+    """
+    import io
+    import tarfile
+
+    log.info("docker.copy_from_container", name=name, path=container_path)
+
+    def _do() -> bool:
+        client = _get_client()
+        c = client.containers.get(name)
+        try:
+            bits, _stat = c.get_archive(container_path)
+        except docker.errors.NotFound:
+            return False
+        raw = b"".join(bits)
+        with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
+            tar.extractall(dest_dir, filter="data")  # filter blocks path traversal
+        return True
+
+    return await asyncio.to_thread(_do)
+
+
+async def build_image(
+    context_dir: str, dockerfile: str, tag: str, *, timeout_sec: int = 900
+) -> None:
+    """`docker build` a prod image. Raises OrchestratorError (with a log tail)
+    on failure. Blocking — call from a background task, not a request handler.
+    """
+    log.info("docker.build_image", tag=tag, context=context_dir, dockerfile=dockerfile)
+
+    def _do() -> None:
+        client = _get_client()
+        try:
+            client.images.build(
+                path=context_dir,
+                dockerfile=dockerfile,
+                tag=tag,
+                rm=True,
+                forcerm=True,
+                pull=False,
+            )
+        except docker.errors.BuildError as exc:
+            tail: list[str] = []
+            for chunk in getattr(exc, "build_log", None) or []:
+                if isinstance(chunk, dict) and chunk.get("stream"):
+                    tail.append(str(chunk["stream"]))
+            detail = ("".join(tail))[-1500:] or str(exc)
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"prod build failed: {detail}",
+                status_code=500,
+            ) from exc
+        except docker.errors.APIError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"docker build error: {exc}",
+                status_code=500,
+            ) from exc
+
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_do), timeout=timeout_sec)
+    except asyncio.TimeoutError as exc:
+        raise OrchestratorError(
+            code="container_failure",
+            message=f"prod build timed out after {timeout_sec}s",
+            status_code=504,
+        ) from exc

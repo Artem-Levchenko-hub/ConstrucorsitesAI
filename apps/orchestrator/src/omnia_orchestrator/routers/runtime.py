@@ -22,6 +22,7 @@ from omnia_orchestrator.core.docker_client import (
 from omnia_orchestrator.core.docker_client import (
     destroy_container,
     exec_cmd,
+    find_project_container,
     stop_container,
     write_files,
 )
@@ -37,6 +38,7 @@ from omnia_orchestrator.schemas.runtime import (
     WakeRequest,
     WakeResponse,
 )
+from omnia_orchestrator.services import builder, deploy_state, nginx_writer
 from omnia_orchestrator.services.port_allocator import get_port_allocator
 from omnia_orchestrator.services.provisioner import provision as provision_svc
 
@@ -88,20 +90,31 @@ async def wake(
 @router.post("/stop", response_model=WakeResponse)
 async def stop(
     payload: StopRequest,
-    slug: str,
+    slug: str | None = None,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WakeResponse:
     """Force-hibernate via docker pause/stop.
 
-    PoC: looks up container by `omnia-dev-<slug>`. Sprint A1 will hold the
-    container_name in the orchestrator's own state table.
+    Resolves the container by the `omnia.project_id` label; `slug` is an
+    optional fallback kept for backward-compat. This is the pause-never-stops
+    fix: apps/api never sent the `slug` query param, so the old required-slug
+    signature returned 422 and the container kept running.
     """
     _verify_token(x_internal_token)
-    await stop_container(f"omnia-dev-{slug}", pause=payload.pause)
+    name = await find_project_container(str(payload.project_id), kind="dev")
+    if name is None and slug:
+        name = f"omnia-dev-{slug}"
+    if name is None:
+        # Nothing to stop — already gone. Idempotent.
+        return WakeResponse(
+            project_id=payload.project_id, state="stopped", ready_in_seconds=0
+        )
+    await stop_container(name, pause=payload.pause)
     new_state = "paused" if payload.pause else "stopped"
     return WakeResponse(
         project_id=payload.project_id,
-        state=new_state,        ready_in_seconds=0,
+        state=new_state,
+        ready_in_seconds=0,
     )
 
 
@@ -167,49 +180,74 @@ async def hot_reload(
     return response
 
 
+def _deploy_record_to_response(rec: deploy_state.DeployRecord) -> DeployResponse:
+    from uuid import UUID
+
+    return DeployResponse(
+        project_id=UUID(rec.project_id),
+        phase=rec.phase,  # type: ignore[arg-type]  # validated by DeployPhase
+        prod_url=rec.prod_url,
+        image_tag=rec.image_tag,
+        error=rec.error,
+        started_at=rec.started_at,
+        finished_at=rec.finished_at,
+    )
+
+
 @router.post("/deploy", response_model=DeployResponse)
 async def deploy(
     payload: DeployRequest,
+    slug: str | None = None,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> DeployResponse:
-    """Build prod image from current commit, push to local registry, switch
-    nginx to new prod container. Emits progress events that apps/api forwards
-    to the web client via WebSocket `deploy.progress`.
+    """Build a prod image from the LIVE dev container, run it, swap nginx.
 
-    TODO sprint A1: implement in `services/builder.py`. Steps:
-      1. Checkout commit_sha into a temp dir.
-      2. `docker build -t {registry}/proj-{id}:{sha} -f Dockerfile.prod .`
-      3. `docker push {registry}/proj-{id}:{sha}`.
-      4. `docker run -d --restart=unless-stopped --name proj-{id}-prod ...`.
-      5. Health-poll new container.
-      6. `nginx_writer.write_site(slug, port, dev=False)` + reload.
-      7. Stop the previous prod container (zero-downtime swap).
+    Async: returns immediately with phase=building and the deterministic prod
+    URL; progress is tracked server-side and read via GET .../deploy. `slug` is
+    optional — the dev container is resolved by the `omnia.project_id` label.
     """
     _verify_token(x_internal_token)
-    raise OrchestratorError(
-        code="internal_error",
-        message="deploy not yet implemented (sprint A1)",
-        status_code=501,
-    )
+    rec = await builder.start_deploy(str(payload.project_id), slug)
+    return _deploy_record_to_response(rec)
+
+
+@router.get("/{project_id}/deploy", response_model=DeployResponse)
+async def get_deploy(
+    project_id: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> DeployResponse:
+    """Last deploy state for a project (phase / prod_url / image_tag / error)."""
+    _verify_token(x_internal_token)
+    from uuid import UUID
+
+    rec = deploy_state.get(project_id)
+    if rec is None:
+        return DeployResponse(project_id=UUID(project_id), phase="queued")
+    return _deploy_record_to_response(rec)
 
 
 @router.get("/{project_id}/status", response_model=StatusResponse)
 async def status(
     project_id: str,
-    slug: str,
+    slug: str | None = None,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> StatusResponse:
     """Container state derived from Docker inspect.
 
-    PoC: slug is required as a query param because we name containers
-    `omnia-dev-<slug>` — the lookup table for project_id → container_name will
-    move into Postgres in sprint A1. Today the caller (apps/api) already
-    knows both the id and the slug from its own project record.
+    Resolves the dev container by the `omnia.project_id` label (`slug` is an
+    optional fallback). Returns the browser-reachable nginx dev URL — not the
+    `127.0.0.1:<port>` loopback, which was the "connection refused" preview.
     """
     _verify_token(x_internal_token)
     from uuid import UUID
 
-    info = await docker_container_status(f"omnia-dev-{slug}")
+    name = await find_project_container(project_id, kind="dev")
+    if name is None and slug:
+        name = f"omnia-dev-{slug}"
+    if name is None:
+        return StatusResponse(project_id=UUID(project_id), state="stopped")
+
+    info = await docker_container_status(name)
     if info["state"] == "not_found":
         return StatusResponse(project_id=UUID(project_id), state="stopped")
 
@@ -221,11 +259,13 @@ async def status(
         "restarting": "provisioning",
         "dead": "failed",
     }
+    derived_slug = name.removeprefix("omnia-dev-")
     return StatusResponse(
         project_id=UUID(project_id),
-        state=state_map.get(info["state"], "stopped"),        container_name=f"omnia-dev-{slug}",
+        state=state_map.get(info["state"], "stopped"),
+        container_name=name,
         port=int(info["port"]) if info["port"] else None,
-        dev_url=f"http://127.0.0.1:{info['port']}" if info["port"] else None,
+        dev_url=nginx_writer.dev_url(derived_slug) if derived_slug else None,
     )
 
 
