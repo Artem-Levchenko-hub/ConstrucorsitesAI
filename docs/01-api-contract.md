@@ -279,6 +279,43 @@ export type ApiError = {
 };
 ```
 
+## GitHub Export (Export to GitHub)
+
+OAuth App flow + push проекта в его GitHub-репозиторий. Источник правды — MinIO/pygit2; GitHub — зеркало. Токен хранится **зашифрованным** (Fernet) в `github_connections` (1:1 к user).
+
+### Endpoints
+
+| Метод | Path | Тело | Ответ |
+|---|---|---|---|
+| `GET` | `/api/integrations/github/connect` | — | `{ authorize_url }` (фронт делает redirect на GitHub) |
+| `GET` | `/api/integrations/github/callback` | `?code&state` | 302 → `{web}/account?github=connected\|denied\|error` |
+| `GET` | `/api/integrations/github/status` | — | `GithubStatus` |
+| `DELETE` | `/api/integrations/github` | — | 204 |
+| `POST` | `/api/projects/:id/export/github` | `{repo_name?, private?, description?}` | `GithubExportResult` |
+
+`state` — подписанный короткоживущий JWT (CSRF, 10 мин). `repo_name` по умолчанию = `project.slug`, `private` по умолчанию `true`. Push — force (Omnia = source of truth), git-история сохраняется.
+
+### WS-события (поверх V1/V2)
+```json
+{ "type": "github.export.progress", "data": { "project_id": "uuid", "stage": "pushing" } }
+{ "type": "github.export.complete", "data": { "project_id": "uuid", "repo_url": "https://github.com/u/r", "repo_full_name": "u/r" } }
+{ "type": "github.export.failed",   "data": { "project_id": "uuid", "error": "string" } }
+```
+
+### Error codes (добавлены в `ApiError.code`)
+`github_not_connected` · `github_unavailable` (github.com 5xx/недоступен — часто RU egress) · `github_rejected` (4xx от GitHub).
+
+### Типы
+```typescript
+export type GithubStatus = { connected: boolean; github_username: string | null; scopes: string | null; connected_at: string | null };
+export type GithubConnectResponse = { authorize_url: string };
+export type GithubExportRequest = { repo_name?: string; private?: boolean; description?: string };
+export type GithubExportResult = { repo_url: string; repo_full_name: string; default_branch: string; pushed_at: string };
+```
+
+### Env (apps/api)
+`GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_OAUTH_REDIRECT_URI`, `GITHUB_OAUTH_SCOPES`=`repo`, `GITHUB_TOKEN_ENC_KEY` (Fernet), `GITHUB_API_BASE`, `GITHUB_OAUTH_BASE`. Без CLIENT_ID+ENC_KEY → `/connect` = 503.
+
 ## Rate limits
 
 | Endpoint | Лимит |

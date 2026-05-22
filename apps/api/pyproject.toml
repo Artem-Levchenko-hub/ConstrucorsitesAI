@@ -19,6 +19,7 @@ dependencies = [
     "pygit2>=1.15,<2.0",
     "playwright>=1.47,<2.0",
     "python-jose[cryptography]>=3.3,<4.0",
+    "cryptography>=42,<46",
     "passlib[bcrypt]>=1.7,<2.0",
     # passlib 1.7.x detect_wrap_bug check fails on bcrypt>=4.1 — pin to 4.0.x.
     "bcrypt>=4.0,<4.1",

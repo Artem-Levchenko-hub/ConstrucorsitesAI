@@ -62,3 +62,45 @@ def decode_access_token(token: str) -> UUID | None:
         return UUID(sub)
     except ValueError:
         return None
+
+
+# Short-lived signed CSRF token for the GitHub OAuth round-trip. Stateless
+# (no DB/Redis) — the user id is carried in the token and verified on callback.
+_OAUTH_STATE_TTL_SECONDS = 600
+
+
+def create_oauth_state(user_id: UUID) -> str:
+    settings = get_settings()
+    now = int(datetime.now(UTC).timestamp())
+    payload = {
+        "sub": str(user_id),
+        "purpose": "github_oauth",
+        "iat": now,
+        "exp": now + _OAUTH_STATE_TTL_SECONDS,
+    }
+    return jwt.encode(
+        payload,
+        settings.jwt_secret.get_secret_value(),
+        algorithm=settings.jwt_algorithm,
+    )
+
+
+def verify_oauth_state(state: str) -> UUID | None:
+    settings = get_settings()
+    try:
+        payload = jwt.decode(
+            state,
+            settings.jwt_secret.get_secret_value(),
+            algorithms=[settings.jwt_algorithm],
+        )
+    except JWTError:
+        return None
+    if payload.get("purpose") != "github_oauth":
+        return None
+    sub = payload.get("sub")
+    if not isinstance(sub, str):
+        return None
+    try:
+        return UUID(sub)
+    except ValueError:
+        return None

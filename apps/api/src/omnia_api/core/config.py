@@ -37,6 +37,20 @@ class Settings(BaseSettings):
     llm_gateway_url: str = Field(default="http://localhost:8001")
     mock_llm: bool = Field(default=True)
 
+    # "Export to GitHub" OAuth App. client_id/secret come from the registered
+    # OAuth App; token_enc_key (a Fernet key) encrypts stored access tokens at
+    # rest. The api/oauth base URLs are configurable so traffic can be routed
+    # through a proxy if github.com is throttled from the deployment region.
+    github_oauth_client_id: str | None = Field(default=None)
+    github_oauth_client_secret: SecretStr | None = Field(default=None)
+    github_oauth_redirect_uri: str = Field(
+        default="http://localhost:8000/api/integrations/github/callback"
+    )
+    github_oauth_scopes: str = Field(default="repo")
+    github_token_enc_key: SecretStr | None = Field(default=None)
+    github_api_base: str = Field(default="https://api.github.com")
+    github_oauth_base: str = Field(default="https://github.com")
+
     cors_origins: str = Field(default="http://localhost:3000")
 
     initial_wallet_balance_rub: float = Field(default=100.0)

@@ -195,6 +195,39 @@ def checkout(project_id: UUID, target_commit_sha: str) -> str:
         return str(commit_oid)
 
 
+def push_to_remote(
+    project_id: UUID,
+    remote_url: str,
+    token: str,
+    target_branch: str = "main",
+) -> str:
+    """Push the project's repo HEAD to ``remote_url`` as ``target_branch``.
+
+    Credentials go through RemoteCallbacks (never embedded in the URL), so the
+    token is not written into ``.git/config`` and cannot leak into the MinIO
+    tarball. Force-push: Omnia is the source of truth for the generated site,
+    so the remote branch is overwritten to mirror it. Returns the pushed sha.
+    """
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        repo = pygit2.Repository(str(workdir))
+        if repo.is_empty:
+            raise ValueError("project repo has no commits to push")
+        local_branch = repo.head.shorthand
+        head_sha = str(repo.head.target)
+        callbacks = pygit2.RemoteCallbacks(
+            credentials=pygit2.UserPass("x-access-token", token)
+        )
+        remote = repo.remotes.create("omnia-export", remote_url)
+        try:
+            remote.push(
+                [f"+refs/heads/{local_branch}:refs/heads/{target_branch}"],
+                callbacks=callbacks,
+            )
+        finally:
+            repo.remotes.delete("omnia-export")
+        return head_sha
+
+
 def _walk(repo: pygit2.Repository, tree: pygit2.Tree, prefix: str, out: dict[str, str]) -> None:
     for entry in tree:
         path = f"{prefix}{entry.name}" if prefix else entry.name

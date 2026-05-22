@@ -103,7 +103,37 @@ export type ApiErrorCode =
   | "rate_limited"
   | "wallet_empty"
   | "model_unavailable"
-  | "internal_error";
+  | "internal_error"
+  | "conflict"
+  // GitHub "Export to GitHub".
+  | "github_not_connected"
+  | "github_unavailable"
+  | "github_rejected";
+
+/** GitHub "Export to GitHub" integration. */
+export type GithubConnectResponse = {
+  authorize_url: string;
+};
+
+export type GithubStatus = {
+  connected: boolean;
+  github_username: string | null;
+  scopes: string | null;
+  connected_at: IsoDateTime | null;
+};
+
+export type GithubExportRequest = {
+  repo_name?: string;
+  private?: boolean;
+  description?: string;
+};
+
+export type GithubExportResult = {
+  repo_url: string;
+  repo_full_name: string;
+  default_branch: string;
+  pushed_at: IsoDateTime;
+};
 
 export type ApiErrorBody = {
   error: {
@@ -131,6 +161,14 @@ export type WsEvent =
       };
     }
   | { type: "llm.error"; data: { message_id: Uuid; error: string } }
-  | { type: "wallet.updated"; data: { balance_rub: number } };
+  | { type: "wallet.updated"; data: { balance_rub: number } }
+  // GitHub export progress (server is synchronous today; these let other open
+  // tabs/sessions reflect the result).
+  | { type: "github.export.progress"; data: { project_id: Uuid; stage: string } }
+  | {
+      type: "github.export.complete";
+      data: { project_id: Uuid; repo_url: string; repo_full_name: string };
+    }
+  | { type: "github.export.failed"; data: { project_id: Uuid; error: string } };
 
 export type WsEventType = WsEvent["type"];

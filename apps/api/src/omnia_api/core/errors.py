@@ -15,6 +15,12 @@ ErrorCode = Literal[
     "model_unavailable",
     "internal_error",
     "conflict",
+    # GitHub "Export to GitHub": `not_connected` = no stored OAuth token for the
+    # user; `unavailable` = github.com network/5xx (often RU egress throttling);
+    # `rejected` = GitHub returned a 4xx we pass through.
+    "github_not_connected",
+    "github_unavailable",
+    "github_rejected",
 ]
 
 
