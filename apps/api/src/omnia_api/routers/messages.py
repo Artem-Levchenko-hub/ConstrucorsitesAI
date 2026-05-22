@@ -23,6 +23,7 @@ from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptRespon
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.file_extractor import UnsafePathError, extract_files
+from omnia_api.services.link_validator import find_dead_links
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.prompt_builder import build_messages
 from omnia_api.services.queue import enqueue_preview
@@ -369,6 +370,50 @@ async def _process_prompt(
                 # chat header shows e.g. "claude-haiku-4-5" instead of the
                 # original Gemini that failed.
                 model_id = effective_model
+
+        # --- Pass N+1: one-shot dead-link repair (static only) ----------
+        # The prompt forbids dead links, but weaker models still slip in
+        # href="#" / broken anchors. If we find any, re-prompt ONCE with the
+        # exact issues and keep the result only if it's strictly better.
+        # Fail-safe: a single pass, never blocks the commit (R-10 fail fast).
+        if files and project_template != "fullstack":
+            dead = find_dead_links(files)
+            if dead:
+                print(f"[PP] dead_links found={len(dead)} -> repair pass", flush=True)
+                prior_answer = accumulated
+                notice = (
+                    "\n\n*Проверка ссылок: часть кнопок вела в никуда — "
+                    "перегенерирую с рабочими ссылками…*\n\n"
+                )
+                accumulated = accumulated + notice
+                await publish_event(
+                    project_id,
+                    "llm.chunk",
+                    {"message_id": str(assistant_message_id), "delta": notice},
+                )
+                repair_request = (
+                    "В предыдущем ответе есть ссылки/кнопки, ведущие в никуда:\n"
+                    + "\n".join(f"— {d}" for d in dead[:20])
+                    + "\n\nВерни ПОЛНЫЕ исправленные файлы целиком (в тех же "
+                    "<file>-блоках). Каждая ссылка обязана вести на существующий "
+                    "якорь (создай секцию с нужным id), tel:/mailto:/мессенджер или "
+                    'реальную страницу. Ни одного href="#", пустого href или '
+                    "javascript:void(0). Больше ничего не меняй."
+                )
+                messages.append({"role": "assistant", "content": prior_answer})
+                messages.append({"role": "user", "content": repair_request})
+                await _run_stream(effective_model)
+                repaired_acc = str(state["accumulated"])
+                try:
+                    repaired_files = extract_files(repaired_acc)
+                except (UnsafePathError, ValueError):
+                    repaired_files = {}
+                if repaired_files and len(find_dead_links(repaired_files)) < len(dead):
+                    files = repaired_files
+                    accumulated = accumulated + repaired_acc
+                    print(f"[PP] repair applied files={len(files)}", flush=True)
+                else:
+                    print("[PP] repair skipped (no improvement)", flush=True)
 
         new_snapshot_id: UUID | None = None
         if files:
