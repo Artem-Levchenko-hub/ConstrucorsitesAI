@@ -21,10 +21,16 @@ from omnia_orchestrator.core.errors import OrchestratorError
 
 
 class PortAllocator:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        port_range: tuple[int, int] | None = None,
+        registry_filename: str = ".port-registry.json",
+    ) -> None:
         s = get_settings()
-        self._range = range(s.port_range_min, s.port_range_max + 1)
-        self._registry_path = Path(s.projects_root) / ".port-registry.json"
+        lo, hi = port_range or (s.port_range_min, s.port_range_max)
+        self._range = range(lo, hi + 1)
+        self._registry_path = Path(s.projects_root) / registry_filename
         self._lock = asyncio.Lock()
         self._loaded: dict[str, int] | None = None
 
@@ -79,3 +85,19 @@ def get_port_allocator() -> PortAllocator:
     if _singleton is None:
         _singleton = PortAllocator()
     return _singleton
+
+
+_prod_singleton: PortAllocator | None = None
+
+
+def get_prod_port_allocator() -> PortAllocator:
+    """Separate pool for deployed prod containers so a project's dev and prod
+    ports never collide."""
+    global _prod_singleton
+    if _prod_singleton is None:
+        s = get_settings()
+        _prod_singleton = PortAllocator(
+            port_range=(s.prod_port_range_min, s.prod_port_range_max),
+            registry_filename=".prod-port-registry.json",
+        )
+    return _prod_singleton

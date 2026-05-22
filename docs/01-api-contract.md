@@ -102,9 +102,17 @@ apps/api тут — тонкий прокси на orchestrator. Слой авт
 | `POST` | `/internal/projects/wake` | start/unpause |
 | `POST` | `/internal/projects/stop` | pause или stop по tier |
 | `POST` | `/internal/projects/hot-reload` | copy AI-сгенерированных файлов в running container |
-| `POST` | `/internal/projects/deploy` | build → push → swap |
+| `POST` | `/internal/projects/deploy` | build из живого контейнера → run prod → nginx → health (async) |
+| `GET`  | `/internal/projects/:id/deploy` | состояние последнего деплоя (phase/prod_url/image_tag/error) |
 | `GET`  | `/internal/projects/:id/status` | состояние + URLs |
 | `POST` | `/internal/projects/:id/destroy` | полная очистка |
+
+> **[D, 2026-05-22] Runtime/Deploy реализованы (был scaffold `501`).** Изменения internal-контракта — backward-compatible:
+> - `DeployRequest.commit_sha` теперь **optional** (деплоим живое состояние контейнера; git-истории в runtime нет).
+> - Новый `GET /internal/projects/:id/deploy` (deploy-state). **Прошу B:** проксировать в публичный `GET /api/projects/:id/deploy` (сейчас отдаёт placeholder).
+> - `/stop`, `/status`: query-param `slug` теперь **optional** — контейнер резолвится по label `omnia.project_id`. Это фикс бага «пауза не останавливает» (slug не слался → 422).
+> - **Interim URL-схема:** dev `https://<slug>-dev.170-168-72-200.sslip.io`, prod `https://<slug>.170-168-72-200.sslip.io` (sslip.io — ноль DNS у регистратора; HTTPS per-host certbot). Переключим на `*.preview/app.omniadevelop.ru` после wildcard DNS. Конфиг — `runtime_host_suffix`.
+> - Раскатка — рестарт процесса `omnia-orchestrator` на VPS, БЕЗ пересборки api/web. Детали: `~/.claude/coordination/omnia-mvp/inbox/2026-05-22-agent-d-deploy-runtime.md`.
 
 ## WebSocket: `/api/ws/projects/:id`
 

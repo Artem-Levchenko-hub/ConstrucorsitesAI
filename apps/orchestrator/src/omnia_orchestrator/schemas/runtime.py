@@ -70,11 +70,21 @@ class StatusResponse(BaseModel):
 
 class DeployRequest(BaseModel):
     project_id: UUID
-    commit_sha: str = Field(min_length=40, max_length=40)
+    # Optional: we deploy the live container state, not a git commit (runtime
+    # has no git history — hot-reload writes files straight into the container).
+    # Kept for forward-compat (future rollback-by-sha).
+    commit_sha: str | None = None
+
+
+# Phases match apps/api DeployStatus so the api forwards them unchanged.
+DeployPhase = Literal["queued", "building", "swapping", "done", "failed"]
 
 
 class DeployResponse(BaseModel):
     project_id: UUID
-    image_tag: str
-    state: Literal["building", "pushing", "running", "healthy", "failed"]
+    phase: DeployPhase
     prod_url: str | None = None
+    image_tag: str | None = None
+    error: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
