@@ -25,7 +25,7 @@ from omnia_api.services import repo as repo_svc
 from omnia_api.services.file_extractor import UnsafePathError, extract_files
 from omnia_api.services.link_validator import find_dead_links
 from omnia_api.services.llm_client import stream_chat_completion
-from omnia_api.services.prompt_builder import build_messages
+from omnia_api.services.prompt_builder import KIT_FILES, build_messages
 from omnia_api.services.queue import enqueue_preview
 
 RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом генерации
@@ -197,6 +197,37 @@ def _looks_truncated(accumulated: str, files: dict[str, str]) -> bool:
     return False
 
 
+_KIT_LINK = '<link rel="stylesheet" href="assets/omnia-kit.css">'
+_KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
+
+
+def _ensure_kit_linked(files: dict[str, str]) -> dict[str, str]:
+    """Гарантировать, что каждая возвращённая HTML-страница подключает Omnia-кит.
+
+    Если модель «уронила» теги — переинжектим их перед </head> (иначе анимации и
+    интерактив тихо ломаются). Идемпотентно: страницы со ссылкой пропускаем.
+    """
+    out = dict(files)
+    for path, content in files.items():
+        if not path.lower().endswith((".html", ".htm")):
+            continue
+        has_css = "assets/omnia-kit.css" in content
+        has_js = "assets/omnia-kit.js" in content
+        if has_css and has_js:
+            continue
+        inject = ""
+        if not has_css:
+            inject += "  " + _KIT_LINK + "\n"
+        if not has_js:
+            inject += "  " + _KIT_SCRIPT + "\n"
+        if "</head>" in content:
+            content = content.replace("</head>", inject + "</head>", 1)
+        else:
+            content = inject + content
+        out[path] = content
+    return out
+
+
 async def _process_prompt(
     project_id: UUID,
     user_id: UUID,
@@ -245,6 +276,10 @@ async def _process_prompt(
                 repo_svc.read_files, project_id, current_sha
             )
         print(f"[PP] files_loaded count={len(current_files)}", flush=True)
+
+        # Kit files are Omnia-managed infra — keep them out of the model's context
+        # (saves tokens and stops the model rewriting them from what it "saw").
+        current_files = {p: c for p, c in current_files.items() if p not in KIT_FILES}
 
         messages = build_messages(
             current_files, history_serialized, prompt_text, project_template
@@ -414,6 +449,13 @@ async def _process_prompt(
                     print(f"[PP] repair applied files={len(files)}", flush=True)
                 else:
                     print("[PP] repair skipped (no improvement)", flush=True)
+
+        # Kit files are Omnia-managed: drop any model attempt to write/delete them,
+        # and re-inject the kit <link>/<script> into returned HTML if the model
+        # dropped them (so animations/interactivity never silently break).
+        if files and project_template != "fullstack":
+            files = {p: c for p, c in files.items() if p not in KIT_FILES}
+            files = _ensure_kit_linked(files)
 
         new_snapshot_id: UUID | None = None
         if files:

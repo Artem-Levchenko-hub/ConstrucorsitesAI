@@ -3,10 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Omnia — пустой проект</title>
+  <title>Новый проект — Omnia.AI</title>
+  <meta name="description" content="Пустой проект Omnia.AI. Напишите промпт — и здесь появится ваш сайт.">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/omnia-kit.css">
+  <script src="assets/omnia-kit.js" defer></script>
+  <script>
+    tailwind.config = { theme: { extend: {
+      fontFamily: { display: ['"Space Grotesk"', 'system-ui', 'sans-serif'], sans: ['"DM Sans"', 'system-ui', 'sans-serif'] }
+    } } };
+  </script>
 </head>
-<body style="font-family:-apple-system,Segoe UI,sans-serif;max-width:720px;margin:48px auto;padding:0 16px;">
-  <h1>Здравствуй, мир</h1>
-  <p>Это пустой шаблон. Напиши промпт — и Omnia заменит его на сайт мечты.</p>
+<body class="font-sans text-slate-600 bg-white antialiased min-h-screen flex items-center justify-center px-6">
+  <main class="max-w-xl text-center">
+    <span class="fade-in inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-1.5 text-sm font-medium text-slate-500">
+      <span class="h-2 w-2 rounded-full bg-indigo-500"></span> Чистый холст
+    </span>
+    <h1 class="fade-up delay-1 font-display text-4xl md:text-5xl font-bold tracking-tight mt-6">
+      <span class="gradient-text" style="--g1:#6366f1;--g2:#ec4899">Напишите промпт</span><br>и сайт появится здесь
+    </h1>
+    <p class="fade-up delay-2 mt-5 text-lg text-slate-600">
+      Опишите, что хотите получить — «лендинг для кофейни», «портфолио фотографа», «сайт стоматологии». Omnia соберёт готовую страницу с дизайном и анимациями.
+    </p>
+    <p class="fade-up delay-3 mt-8 text-sm text-slate-400">Подсказка: чем конкретнее ниша и оффер, тем точнее результат.</p>
+  </main>
 </body>
 </html>

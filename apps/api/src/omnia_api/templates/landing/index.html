@@ -3,57 +3,254 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Лендинг бизнеса</title>
+  <title>Flowdesk — CRM, которая закрывает сделки за вас</title>
+  <meta name="description" content="Flowdesk — CRM для малого бизнеса: заявки, сделки и аналитика в одном окне. Запуск за 10 минут, оплата в рублях.">
+  <meta property="og:title" content="Flowdesk — CRM, которая закрывает сделки за вас">
+  <meta property="og:description" content="Заявки, сделки и аналитика в одном окне. Запуск за 10 минут.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232563eb'/><path d='M9 21l5-10 4 6 5-8' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/omnia-kit.css">
+  <script src="assets/omnia-kit.js" defer></script>
+  <script>
+    tailwind.config = { theme: { extend: {
+      fontFamily: { display: ['"Space Grotesk"', 'system-ui', 'sans-serif'], sans: ['"DM Sans"', 'system-ui', 'sans-serif'] },
+      colors: { brand: { DEFAULT: '#2563eb', dark: '#1d4ed8' }, accent: '#ea580c' }
+    } } };
+  </script>
 </head>
-<body class="bg-slate-50 text-slate-900 font-sans">
-  <header class="bg-white border-b">
-    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-      <div class="font-bold text-xl">Бренд</div>
-      <nav class="space-x-6 text-sm">
-        <a href="#features" class="hover:text-indigo-600">Возможности</a>
-        <a href="#pricing" class="hover:text-indigo-600">Цены</a>
-        <a href="#contact" class="hover:text-indigo-600">Контакты</a>
+<body class="font-sans text-slate-700 bg-white antialiased">
+
+  <!-- Header -->
+  <header class="glass sticky top-0 z-40 border-b border-slate-200/60">
+    <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+      <a href="#top" class="font-display font-bold text-lg text-slate-900 flex items-center gap-2">
+        <span class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-brand text-white">
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16l4-8 3 5 4-7"/></svg>
+        </span>Flowdesk
+      </a>
+      <nav class="hidden md:flex items-center gap-8 text-sm font-medium">
+        <a href="#features" class="hover:text-brand transition-colors">Возможности</a>
+        <a href="#how" class="hover:text-brand transition-colors">Как работает</a>
+        <a href="#pricing" class="hover:text-brand transition-colors">Цены</a>
+        <a href="#faq" class="hover:text-brand transition-colors">Вопросы</a>
+      </nav>
+      <div class="hidden md:block">
+        <a href="#cta" class="press inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-dark">Попробовать бесплатно</a>
+      </div>
+      <button id="menu-toggle" aria-label="Меню" aria-expanded="false" class="md:hidden inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100">
+        <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </div>
+    <div id="mobile-menu" class="hidden md:hidden border-t border-slate-200 bg-white">
+      <nav class="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-3 text-sm font-medium">
+        <a href="#features" class="py-1">Возможности</a>
+        <a href="#how" class="py-1">Как работает</a>
+        <a href="#pricing" class="py-1">Цены</a>
+        <a href="#faq" class="py-1">Вопросы</a>
+        <a href="#cta" class="rounded-lg bg-brand px-4 py-2 text-center font-semibold text-white">Попробовать бесплатно</a>
       </nav>
     </div>
   </header>
 
-  <section class="max-w-5xl mx-auto px-6 py-24 text-center">
-    <h1 class="text-5xl font-bold mb-4 leading-tight">Заголовок, бьющий точно в боль клиента</h1>
-    <p class="text-xl text-slate-600 mb-8 max-w-2xl mx-auto">
-      Подзаголовок с краткой ценностью продукта в одном предложении.
-    </p>
-    <button class="bg-indigo-600 text-white px-8 py-3 rounded-lg font-semibold hover:bg-indigo-700">
-      Начать бесплатно
-    </button>
-  </section>
+  <main id="top">
+    <!-- Hero -->
+    <section class="bg-aurora text-white" style="--a1:#2563eb;--a2:#4f46e5;--a3:#7c3aed">
+      <div class="max-w-5xl mx-auto px-6 py-24 md:py-32 text-center">
+        <span class="fade-in inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-1.5 text-sm font-medium backdrop-blur">
+          <span class="h-2 w-2 rounded-full bg-emerald-300"></span> Уже с нами 2 400+ команд
+        </span>
+        <h1 class="fade-up font-display text-4xl md:text-6xl font-bold leading-tight mt-6 tracking-tight">
+          CRM, которая закрывает<br class="hidden md:block"> сделки за вас
+        </h1>
+        <p class="fade-up delay-1 mx-auto mt-6 max-w-2xl text-lg md:text-xl text-white/85">
+          Заявки, сделки и аналитика в одном окне. Запуск за 10 минут, без программистов и без подписки в долларах.
+        </p>
+        <div class="fade-up delay-2 mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+          <a href="#cta" class="press w-full sm:w-auto rounded-lg bg-white px-7 py-3.5 font-semibold text-brand shadow-lg shadow-black/10 transition hover:shadow-xl">Начать бесплатно</a>
+          <a href="#how" class="w-full sm:w-auto rounded-lg border border-white/40 px-7 py-3.5 font-semibold text-white transition hover:bg-white/10">Как это работает</a>
+        </div>
+        <p class="fade-up delay-3 mt-5 text-sm text-white/70">14 дней бесплатно · карта не нужна</p>
+      </div>
+    </section>
 
-  <section id="features" class="max-w-5xl mx-auto px-6 py-16 grid md:grid-cols-3 gap-6">
-    <div class="bg-white p-6 rounded-xl shadow-sm border">
-      <h3 class="font-bold mb-2">Быстрый старт</h3>
-      <p class="text-slate-600">Один промпт — и сайт готов.</p>
-    </div>
-    <div class="bg-white p-6 rounded-xl shadow-sm border">
-      <h3 class="font-bold mb-2">Полный контроль</h3>
-      <p class="text-slate-600">Каждое изменение — отдельная версия. Откат за 1 клик.</p>
-    </div>
-    <div class="bg-white p-6 rounded-xl shadow-sm border">
-      <h3 class="font-bold mb-2">В рублях</h3>
-      <p class="text-slate-600">Прозрачная оплата без подписки.</p>
-    </div>
-  </section>
+    <!-- Trust bar -->
+    <section class="border-b border-slate-100 bg-slate-50">
+      <div class="max-w-6xl mx-auto px-6 py-10 grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
+        <div class="reveal"><div class="font-display text-3xl font-bold text-slate-900">2 400+</div><div class="text-sm text-slate-500 mt-1">активных команд</div></div>
+        <div class="reveal" data-reveal-delay="1"><div class="font-display text-3xl font-bold text-slate-900">+38%</div><div class="text-sm text-slate-500 mt-1">к конверсии в сделку</div></div>
+        <div class="reveal" data-reveal-delay="2"><div class="font-display text-3xl font-bold text-slate-900">10 мин</div><div class="text-sm text-slate-500 mt-1">на запуск</div></div>
+        <div class="reveal" data-reveal-delay="3"><div class="font-display text-3xl font-bold text-slate-900">99,9%</div><div class="text-sm text-slate-500 mt-1">аптайм</div></div>
+      </div>
+    </section>
 
-  <section id="pricing" class="bg-white py-16">
-    <div class="max-w-5xl mx-auto px-6 text-center">
-      <h2 class="text-3xl font-bold mb-8">Цены</h2>
-      <p class="text-slate-600">Платите только за то, чем пользуетесь.</p>
-    </div>
-  </section>
+    <!-- Features -->
+    <section id="features" class="max-w-6xl mx-auto px-6 py-20 md:py-28">
+      <div class="reveal max-w-2xl mx-auto text-center">
+        <h2 class="font-display text-3xl md:text-4xl font-bold text-slate-900 tracking-tight">Всё для продаж — в одном окне</h2>
+        <p class="mt-4 text-lg text-slate-600">Не нужно держать пять вкладок. Заявки, переписка, задачи и отчёты живут вместе.</p>
+      </div>
+      <div class="mt-14 grid md:grid-cols-3 gap-6">
+        <article class="reveal card-soft hover-lift bg-white p-7" data-reveal-delay="1">
+          <div class="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-brand"><svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg></div>
+          <h3 class="font-display text-lg font-semibold text-slate-900 mt-5">Заявки со всех каналов</h3>
+          <p class="text-slate-600 mt-2">Сайт, телефон, мессенджеры и почта собираются в одну воронку — ни одна заявка не теряется.</p>
+        </article>
+        <article class="reveal card-soft hover-lift bg-white p-7" data-reveal-delay="2">
+          <div class="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-brand"><svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg></div>
+          <h3 class="font-display text-lg font-semibold text-slate-900 mt-5">Аналитика в реальном времени</h3>
+          <p class="text-slate-600 mt-2">Видно, где сделки застревают и кто из менеджеров перевыполняет план — без выгрузок в Excel.</p>
+        </article>
+        <article class="reveal card-soft hover-lift bg-white p-7" data-reveal-delay="3">
+          <div class="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-brand"><svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg></div>
+          <h3 class="font-display text-lg font-semibold text-slate-900 mt-5">Автозадачи и напоминания</h3>
+          <p class="text-slate-600 mt-2">Flowdesk сам ставит задачи «перезвонить» и «выставить счёт», чтобы клиент не остыл.</p>
+        </article>
+      </div>
+    </section>
 
-  <footer id="contact" class="bg-slate-900 text-slate-300 py-12">
-    <div class="max-w-5xl mx-auto px-6 text-center">
-      <p>&copy; 2026 Бренд. Сделано на Omnia.AI.</p>
+    <!-- How it works -->
+    <section id="how" class="bg-slate-50 border-y border-slate-100">
+      <div class="max-w-6xl mx-auto px-6 py-20 md:py-28">
+        <h2 class="reveal font-display text-3xl md:text-4xl font-bold text-slate-900 text-center tracking-tight">Запуск за три шага</h2>
+        <div class="mt-14 grid md:grid-cols-3 gap-8">
+          <div class="reveal" data-reveal-delay="1">
+            <div class="font-display text-5xl font-bold gradient-text" style="--g1:#2563eb;--g2:#7c3aed">01</div>
+            <h3 class="font-display text-lg font-semibold text-slate-900 mt-3">Подключите каналы</h3>
+            <p class="text-slate-600 mt-2">Сайт, телефония и мессенджеры — в пару кликов, без разработчиков.</p>
+          </div>
+          <div class="reveal" data-reveal-delay="2">
+            <div class="font-display text-5xl font-bold gradient-text" style="--g1:#2563eb;--g2:#7c3aed">02</div>
+            <h3 class="font-display text-lg font-semibold text-slate-900 mt-3">Настройте воронку</h3>
+            <p class="text-slate-600 mt-2">Готовые шаблоны под услуги, опт и розницу — поправьте под себя.</p>
+          </div>
+          <div class="reveal" data-reveal-delay="3">
+            <div class="font-display text-5xl font-bold gradient-text" style="--g1:#2563eb;--g2:#7c3aed">03</div>
+            <h3 class="font-display text-lg font-semibold text-slate-900 mt-3">Продавайте больше</h3>
+            <p class="text-slate-600 mt-2">Команда работает в одном окне, а вы видите цифры в реальном времени.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pricing -->
+    <section id="pricing" class="max-w-6xl mx-auto px-6 py-20 md:py-28">
+      <div class="reveal max-w-2xl mx-auto text-center">
+        <h2 class="font-display text-3xl md:text-4xl font-bold text-slate-900 tracking-tight">Честные цены в рублях</h2>
+        <p class="mt-4 text-lg text-slate-600">Без скрытых платежей. Меняйте тариф когда угодно.</p>
+      </div>
+      <div class="mt-14 grid md:grid-cols-3 gap-6 items-start">
+        <div class="reveal card-soft bg-white p-7" data-reveal-delay="1">
+          <h3 class="font-display font-semibold text-slate-900">Старт</h3>
+          <div class="mt-4 font-display text-4xl font-bold text-slate-900">0 ₽</div>
+          <p class="text-sm text-slate-500 mt-1">до 2 пользователей</p>
+          <ul class="mt-6 space-y-3 text-sm text-slate-600">
+            <li class="flex gap-2"><span class="text-brand">✓</span> 1 воронка продаж</li>
+            <li class="flex gap-2"><span class="text-brand">✓</span> Заявки с сайта и почты</li>
+            <li class="flex gap-2"><span class="text-brand">✓</span> Базовые отчёты</li>
+          </ul>
+          <a href="#cta" class="press mt-7 block rounded-lg border border-slate-200 px-5 py-3 text-center font-semibold text-slate-900 transition hover:border-slate-300">Начать</a>
+        </div>
+        <div class="reveal card-soft bg-white p-7 ring-2 ring-brand relative" data-reveal-delay="2">
+          <span class="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-brand px-3 py-1 text-xs font-semibold text-white">Популярный</span>
+          <h3 class="font-display font-semibold text-slate-900">Бизнес</h3>
+          <div class="mt-4 font-display text-4xl font-bold text-slate-900">1 490 ₽</div>
+          <p class="text-sm text-slate-500 mt-1">за пользователя в месяц</p>
+          <ul class="mt-6 space-y-3 text-sm text-slate-600">
+            <li class="flex gap-2"><span class="text-brand">✓</span> Безлимит воронок и заявок</li>
+            <li class="flex gap-2"><span class="text-brand">✓</span> Мессенджеры и телефония</li>
+            <li class="flex gap-2"><span class="text-brand">✓</span> Автозадачи и аналитика</li>
+          </ul>
+          <a href="#cta" class="press mt-7 block rounded-lg bg-brand px-5 py-3 text-center font-semibold text-white transition hover:bg-brand-dark">Попробовать 14 дней</a>
+        </div>
+        <div class="reveal card-soft bg-white p-7" data-reveal-delay="3">
+          <h3 class="font-display font-semibold text-slate-900">Команда</h3>
+          <div class="mt-4 font-display text-4xl font-bold text-slate-900">3 900 ₽</div>
+          <p class="text-sm text-slate-500 mt-1">за пользователя в месяц</p>
+          <ul class="mt-6 space-y-3 text-sm text-slate-600">
+            <li class="flex gap-2"><span class="text-brand">✓</span> Всё из «Бизнес»</li>
+            <li class="flex gap-2"><span class="text-brand">✓</span> Роли и права доступа</li>
+            <li class="flex gap-2"><span class="text-brand">✓</span> Персональный менеджер</li>
+          </ul>
+          <a href="#cta" class="press mt-7 block rounded-lg border border-slate-200 px-5 py-3 text-center font-semibold text-slate-900 transition hover:border-slate-300">Связаться</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section id="faq" class="bg-slate-50 border-y border-slate-100">
+      <div class="max-w-3xl mx-auto px-6 py-20 md:py-28">
+        <h2 class="reveal font-display text-3xl md:text-4xl font-bold text-slate-900 text-center tracking-tight">Частые вопросы</h2>
+        <div class="faq mt-12 space-y-3">
+          <div class="faq-item reveal card-soft bg-white">
+            <button class="faq-question w-full flex items-center justify-between gap-4 px-6 py-5 text-left font-semibold text-slate-900">
+              Нужен ли программист для запуска?
+              <svg class="h-5 w-5 shrink-0 text-slate-400 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="faq-answer"><p class="px-6 pb-5 text-slate-600">Нет. Настройка происходит мышкой: подключаете каналы, выбираете шаблон воронки — и работаете. Среднее время до первой сделки — 10 минут.</p></div>
+          </div>
+          <div class="faq-item reveal card-soft bg-white" data-reveal-delay="1">
+            <button class="faq-question w-full flex items-center justify-between gap-4 px-6 py-5 text-left font-semibold text-slate-900">
+              Можно перенести данные из другой CRM?
+              <svg class="h-5 w-5 shrink-0 text-slate-400 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="faq-answer"><p class="px-6 pb-5 text-slate-600">Да, импорт из Excel и популярных CRM бесплатный. На тарифах «Бизнес» и выше перенос делает наш менеджер.</p></div>
+          </div>
+          <div class="faq-item reveal card-soft bg-white" data-reveal-delay="2">
+            <button class="faq-question w-full flex items-center justify-between gap-4 px-6 py-5 text-left font-semibold text-slate-900">
+              Где хранятся данные?
+              <svg class="h-5 w-5 shrink-0 text-slate-400 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="faq-answer"><p class="px-6 pb-5 text-slate-600">На серверах в России, в соответствии с 152-ФЗ. Резервные копии — каждый час.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Final CTA -->
+    <section id="cta" class="bg-aurora text-white" style="--a1:#1d4ed8;--a2:#4f46e5;--a3:#7c3aed">
+      <div class="reveal max-w-3xl mx-auto px-6 py-20 md:py-24 text-center">
+        <h2 class="font-display text-3xl md:text-4xl font-bold tracking-tight">Готовы продавать больше уже на этой неделе?</h2>
+        <p class="mt-4 text-lg text-white/85">14 дней бесплатно. Карта не нужна. Поможем перенести данные.</p>
+        <form class="mt-8 flex flex-col sm:flex-row gap-3 max-w-md mx-auto" onsubmit="event.preventDefault(); this.querySelector('[data-ok]').classList.remove('hidden'); this.querySelector('button').disabled = true;">
+          <input type="email" required placeholder="Рабочая почта" class="flex-1 rounded-lg px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-white/70" aria-label="Рабочая почта">
+          <button type="submit" class="press rounded-lg bg-white px-6 py-3 font-semibold text-brand transition hover:shadow-xl">Получить доступ</button>
+          <p data-ok class="hidden text-sm text-emerald-200 sm:absolute sm:mt-14">Спасибо! Письмо с доступом уже летит к вам.</p>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="bg-slate-900 text-slate-400">
+    <div class="max-w-6xl mx-auto px-6 py-12 grid sm:grid-cols-2 md:grid-cols-4 gap-8 text-sm">
+      <div class="col-span-2 md:col-span-1">
+        <div class="font-display font-bold text-white text-lg">Flowdesk</div>
+        <p class="mt-3 max-w-xs">CRM для малого бизнеса. Заявки, сделки и аналитика в одном окне.</p>
+      </div>
+      <div>
+        <div class="font-semibold text-white">Продукт</div>
+        <ul class="mt-3 space-y-2"><li><a href="#features" class="hover:text-white transition-colors">Возможности</a></li><li><a href="#pricing" class="hover:text-white transition-colors">Цены</a></li><li><a href="#faq" class="hover:text-white transition-colors">Вопросы</a></li></ul>
+      </div>
+      <div>
+        <div class="font-semibold text-white">Контакты</div>
+        <ul class="mt-3 space-y-2"><li><a href="tel:+78001234567" class="hover:text-white transition-colors">8 800 123-45-67</a></li><li><a href="mailto:hello@flowdesk.ru" class="hover:text-white transition-colors">hello@flowdesk.ru</a></li><li><a href="https://wa.me/78001234567" target="_blank" rel="noopener" class="hover:text-white transition-colors">WhatsApp</a></li></ul>
+      </div>
+      <div>
+        <div class="font-semibold text-white">Соцсети</div>
+        <ul class="mt-3 space-y-2"><li><a href="https://t.me/flowdesk" target="_blank" rel="noopener" class="hover:text-white transition-colors">Telegram</a></li><li><a href="https://vk.com/flowdesk" target="_blank" rel="noopener" class="hover:text-white transition-colors">ВКонтакте</a></li></ul>
+      </div>
     </div>
+    <div class="border-t border-slate-800"><div class="max-w-6xl mx-auto px-6 py-6 text-sm">© 2026 Flowdesk. Сделано на Omnia.AI.</div></div>
   </footer>
+
+  <!-- Back to top -->
+  <button id="back-to-top" aria-label="Наверх" class="press fixed bottom-6 right-6 z-40 inline-flex h-11 w-11 items-center justify-center rounded-full bg-brand text-white shadow-lg hover:bg-brand-dark">
+    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+  </button>
+
 </body>
 </html>

@@ -48,6 +48,36 @@ Every page must look like a finished enterprise product, not a scaffold (same ba
   - Portfolio / creative: `#18181B` / `#2563EB`; Space Grotesk + Archivo
 - Real Russian content (offers, prices in ₽, names, FAQ) — no lorem ipsum, no "Заголовок 1". A landing is 7–9 meaningful sections, responsive (375/768/1024/1440), accessible (one `<h1>`, `alt`, visible focus states), with hover/transition polish. SVG icons (Lucide), never emoji.
 
+## Animations (use the built-in CSS kit in `globals.css`)
+
+`globals.css` ships reduced-motion-safe utilities — use them, don't reinvent:
+
+- Entrance (self-resolving, safe without JS): `.fade-up` (+ `.delay-1/-2/-3`), `.fade-in`, `.scale-in` — for hero / above-the-fold.
+- Polish: `.hover-lift` on cards & buttons, `.card-soft` surfaces, `.gradient-text` (set `--g1/--g2`), `.glass` headers.
+- Scroll reveal (opt-in): add `.reveal` to elements + a tiny client component that toggles `.is-visible`:
+
+  ```tsx
+  "use client";
+  import { useEffect } from "react";
+  export function Reveal() {
+    useEffect(() => {
+      const els = document.querySelectorAll(".reveal");
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        els.forEach((el) => el.classList.add("is-visible"));
+        return;
+      }
+      const io = new IntersectionObserver((entries) => entries.forEach((e) => {
+        if (e.isIntersecting) { e.target.classList.add("is-visible"); io.unobserve(e.target); }
+      }), { rootMargin: "0px 0px -10% 0px" });
+      els.forEach((el) => io.observe(el));
+      return () => io.disconnect();
+    }, []);
+    return null;
+  }
+  ```
+
+  Render `<Reveal />` once in `layout.tsx`. Keep to 2–4 animation accents per section.
+
 ## Zero dead-ends contract (binding)
 
 Every clickable element must lead somewhere and do something:
