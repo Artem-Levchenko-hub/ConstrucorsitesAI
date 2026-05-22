@@ -8,7 +8,7 @@ with the expanded allowlist; both operations are fast even on large
 tables because Postgres rewrites only the constraint metadata.
 
 Revision ID: 0004_template_fullstack
-Revises: 0003_billing
+Revises: 0003
 Create Date: 2026-05-19
 """
 
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0004_template_fullstack"
-down_revision = "0003_billing"
+down_revision = "0003"
 branch_labels = None
 depends_on = None
 
