@@ -15,6 +15,8 @@ from omnia_api.core.errors import (
 )
 from omnia_api.core.redis import dispose_redis
 from omnia_api.routers import auth as auth_router
+from omnia_api.routers import github as github_router
+from omnia_api.routers import github_export as github_export_router
 from omnia_api.routers import messages as messages_router
 from omnia_api.routers import models_router
 from omnia_api.routers import projects as projects_router
@@ -56,6 +58,8 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, unhandled_error_handler)
 
     app.include_router(auth_router.router)
+    app.include_router(github_router.router)
+    app.include_router(github_export_router.router)
     app.include_router(projects_router.router)
     app.include_router(snapshots_router.router)
     app.include_router(messages_router.router)

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from omnia_api.models.base import Base
 
 if TYPE_CHECKING:
+    from omnia_api.models.github_connection import GithubConnection
     from omnia_api.models.wallet import Wallet
 
 
@@ -26,6 +27,12 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     wallet: Mapped["Wallet"] = relationship(
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    github_connection: Mapped["GithubConnection | None"] = relationship(
         back_populates="user",
         uselist=False,
         cascade="all, delete-orphan",

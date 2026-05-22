@@ -101,6 +101,20 @@
 
 Эту таблицу пишет **LLM Gateway** (агент C) после каждого запроса. Отдельно от `wallet_charges`, потому что usage — аналитика, charges — финансы (могут быть несоответствия и их надо видеть отдельно).
 
+### `github_connections` (Export to GitHub)
+| Поле | Тип | Constraints |
+|---|---|---|
+| `user_id` | uuid | PK, FK → `users(id)` ON DELETE CASCADE |
+| `access_token_encrypted` | text | NOT NULL — Fernet-шифр OAuth-токена (**не** плейнтекст) |
+| `github_username` | text | NOT NULL |
+| `scopes` | text | NULL |
+| `connected_at` | timestamptz | NOT NULL DEFAULT now() |
+| `updated_at` | timestamptz | NOT NULL DEFAULT now() — триггер на UPDATE |
+
+1:1 к user (как `wallets`). Токен хранится только зашифрованным.
+
+**`projects` (+github-export):** добавлены `github_repo_full_name text NULL`, `github_repo_url text NULL`, `github_last_pushed_at timestamptz NULL` — зеркало последнего экспорта.
+
 ## Что хранится НЕ в Postgres
 
 | Данные | Где | Почему |
@@ -118,6 +132,7 @@
 | `0001` | extensions (citext, uuid-ossp), `users`, `wallets` | агент B (M0) |
 | `0002` | `projects`, `snapshots`, `messages` | агент B (M1) |
 | `0003` | `wallet_charges`, `usage` + индексы | агент B (M2) |
+| `0005` | `github_connections` + `projects.github_*` (Export to GitHub) | github-export |
 
 ## Trigger для `updated_at`
 

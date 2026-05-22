@@ -36,6 +36,11 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    github_repo_full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_repo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_last_pushed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     snapshots: Mapped[list["Snapshot"]] = relationship(
         back_populates="project",

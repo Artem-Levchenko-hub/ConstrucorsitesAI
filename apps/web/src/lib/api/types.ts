@@ -116,7 +116,11 @@ export type ApiErrorCode =
   | "conflict"
   // V2 — surfaced from apps/api/services/orchestrator_client.
   | "orchestrator_unavailable"
-  | "orchestrator_rejected";
+  | "orchestrator_rejected"
+  // GitHub "Export to GitHub".
+  | "github_not_connected"
+  | "github_unavailable"
+  | "github_rejected";
 
 /** V2 — full-stack runtime state, returned by /api/projects/:id/runtime*. */
 export type RuntimeState =
@@ -150,6 +154,31 @@ export type DeployStatus = {
   prod_url: string | null;
   image_tag: string | null;
   error: string | null;
+};
+
+/** GitHub "Export to GitHub" integration. */
+export type GithubConnectResponse = {
+  authorize_url: string;
+};
+
+export type GithubStatus = {
+  connected: boolean;
+  github_username: string | null;
+  scopes: string | null;
+  connected_at: IsoDateTime | null;
+};
+
+export type GithubExportRequest = {
+  repo_name?: string;
+  private?: boolean;
+  description?: string;
+};
+
+export type GithubExportResult = {
+  repo_url: string;
+  repo_full_name: string;
+  default_branch: string;
+  pushed_at: IsoDateTime;
 };
 
 export type ApiErrorBody = {
@@ -187,6 +216,14 @@ export type WsEvent =
   | { type: "runtime.crashed"; data: { error: string } }
   | { type: "deploy.progress"; data: { deploy: DeployStatus } }
   | { type: "deploy.done"; data: { deploy: DeployStatus } }
-  | { type: "deploy.failed"; data: { error: string } };
+  | { type: "deploy.failed"; data: { error: string } }
+  // GitHub export progress (server is synchronous today; these let other open
+  // tabs/sessions reflect the result).
+  | { type: "github.export.progress"; data: { project_id: Uuid; stage: string } }
+  | {
+      type: "github.export.complete";
+      data: { project_id: Uuid; repo_url: string; repo_full_name: string };
+    }
+  | { type: "github.export.failed"; data: { project_id: Uuid; error: string } };
 
 export type WsEventType = WsEvent["type"];

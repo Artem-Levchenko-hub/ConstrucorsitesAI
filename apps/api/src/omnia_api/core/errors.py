@@ -20,6 +20,12 @@ ErrorCode = Literal[
     # returned 4xx that we passed through (400/404/etc).
     "orchestrator_unavailable",
     "orchestrator_rejected",
+    # GitHub "Export to GitHub": `not_connected` = no stored OAuth token for the
+    # user; `unavailable` = github.com network/5xx (often RU egress throttling);
+    # `rejected` = GitHub returned a 4xx we pass through.
+    "github_not_connected",
+    "github_unavailable",
+    "github_rejected",
 ]
 
 

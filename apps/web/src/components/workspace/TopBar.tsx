@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronDown, LogOut, User as UserIcon } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User as UserIcon } from "lucide-react";
 import { logoutAction } from "@/app/(auth)/actions";
 import {
   Avatar,
@@ -16,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { GithubExportButton } from "./GithubExportButton";
 import { ModelSelector } from "./ModelSelector";
 import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
@@ -57,6 +58,7 @@ export function TopBar({
         {showProjectControls && (
           <>
             {projectId && <RuntimeButton projectId={projectId} />}
+            {projectId && <GithubExportButton projectId={projectId} />}
             <ModelSelector />
             <WalletBadge />
           </>
@@ -84,6 +86,12 @@ export function TopBar({
               <Link href="/projects">
                 <UserIcon className="h-4 w-4" />
                 Мои проекты
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/account">
+                <Settings className="h-4 w-4" />
+                Аккаунт
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
