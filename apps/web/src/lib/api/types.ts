@@ -53,6 +53,24 @@ export type SnapshotWithFiles = Snapshot & {
 
 export type MessageRole = "user" | "assistant" | "system";
 
+/**
+ * Element the user picked in the preview (select-mode), with their per-element
+ * comment. Wire shape — mirrors apps/api schemas/message.py:SelectedElement.
+ * The picker assigns a transient client id (see store/inspector.ts); it is not
+ * part of this persisted/sent shape.
+ */
+export type SelectedElement = {
+  selector: string;
+  /** Short `tag#id.class` for the chip label. */
+  label?: string | null;
+  /** Truncated outerHTML — helps the model find the element in the source. */
+  html?: string | null;
+  /** Truncated visible text. */
+  text?: string | null;
+  /** Per-element instruction, e.g. "сделай красной". */
+  comment?: string | null;
+};
+
 export type Message = {
   id: Uuid;
   project_id: Uuid;
@@ -62,6 +80,8 @@ export type Message = {
   model_id: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
+  /** Select-mode context attached to a user message (for chat-history chips). */
+  selected_elements?: SelectedElement[] | null;
   created_at: IsoDateTime;
 };
 

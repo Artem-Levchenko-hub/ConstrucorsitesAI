@@ -39,7 +39,7 @@
 
 | Метод | Path | Тело | Ответ |
 |---|---|---|---|
-| `POST` | `/api/projects/:id/prompt` | `{prompt: string, model_id: string}` | `{message_id, snapshot_id?}` (snapshot_id появится позже через WS) |
+| `POST` | `/api/projects/:id/prompt` | `{prompt: string, model_id: string, selected_elements?: SelectedElement[]}` | `{message_id, snapshot_id?}` (snapshot_id появится позже через WS) |
 | `GET` | `/api/projects/:id/snapshots` | — | `Snapshot[]` (DESC по `created_at`) |
 | `GET` | `/api/projects/:id/snapshots/:sid` | — | `Snapshot & { files: { [path]: string } }` |
 | `POST` | `/api/projects/:id/rollback` | `{snapshot_id}` | `Snapshot` (новый — результат отката) |
@@ -244,6 +244,19 @@ export type Snapshot = {
   created_at: string;
 };
 
+// Select-mode: элемент, выделенный пользователем в превью, с комментарием.
+// Опционально прикладывается к POST /prompt и сохраняется на user-сообщении,
+// чтобы история чата перерисовывала чипы. Все поля, кроме selector, опциональны;
+// длины ограничены на бэкенде (selector≤600, html≤2000, text≤300, comment≤1000,
+// не более 12 элементов). Backward-compatible — старые клиенты поле не шлют.
+export type SelectedElement = {
+  selector: string;
+  label?: string | null;
+  html?: string | null;
+  text?: string | null;
+  comment?: string | null;
+};
+
 export type Message = {
   id: string;
   project_id: string;
@@ -253,6 +266,7 @@ export type Message = {
   model_id: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
+  selected_elements?: SelectedElement[] | null;
   created_at: string;
 };
 

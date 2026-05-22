@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Query, status
@@ -103,11 +103,21 @@ async def post_prompt(
     if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
         raise ApiError("wallet_empty", "insufficient balance", 402)
 
+    # Select-mode: элементы, выделенные в превью, с комментариями. Сериализуем в
+    # list[dict] для JSONB-колонки и для передачи в фоновую _process_prompt
+    # (сервис prompt_builder не знает про Pydantic-схему — R-07).
+    selected_dump = (
+        [el.model_dump() for el in payload.selected_elements]
+        if payload.selected_elements
+        else None
+    )
+
     user_msg = Message(
         project_id=project_id,
         role="user",
         content=payload.prompt,
         model_id=payload.model_id,
+        selected_elements=selected_dump,
     )
     assistant_msg = Message(
         project_id=project_id,
@@ -128,6 +138,7 @@ async def post_prompt(
         current_snapshot_id=project.current_snapshot_id,
         prompt_text=payload.prompt,
         model_id=payload.model_id,
+        selected_elements=selected_dump,
     )
 
     return PromptResponse(message_id=assistant_msg.id, snapshot_id=None)
@@ -236,6 +247,7 @@ async def _process_prompt(
     current_snapshot_id: UUID | None,
     prompt_text: str,
     model_id: str,
+    selected_elements: list[dict[str, Any]] | None = None,
 ) -> None:
     import logging as _log_mod
     _log = _log_mod.getLogger(__name__)
@@ -282,7 +294,11 @@ async def _process_prompt(
         current_files = {p: c for p, c in current_files.items() if p not in KIT_FILES}
 
         messages = build_messages(
-            current_files, history_serialized, prompt_text, project_template
+            current_files,
+            history_serialized,
+            prompt_text,
+            project_template,
+            selected_elements,
         )
         print(f"[PP] messages_built count={len(messages)}", flush=True)
 

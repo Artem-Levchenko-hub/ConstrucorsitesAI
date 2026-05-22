@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { Send, StopCircle, Clock, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { SelectedElement } from "@/lib/api/types";
+import { useInspectorStore } from "@/store/inspector";
+import { SelectedChips } from "./SelectedChips";
 
 export function PromptInput({
   onSubmit,
@@ -13,7 +16,7 @@ export function PromptInput({
   pendingPrompt,
   className,
 }: {
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string, selections: SelectedElement[]) => void;
   onCancel: () => void;
   onCancelPending: () => void;
   isStreaming: boolean;
@@ -22,6 +25,11 @@ export function PromptInput({
 }) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  const selections = useInspectorStore((s) => s.selections);
+  const setComment = useInspectorStore((s) => s.setComment);
+  const removeSelection = useInspectorStore((s) => s.removeSelection);
+  const clearSelections = useInspectorStore((s) => s.clear);
 
   // Auto-resize textarea up to a sensible max.
   useEffect(() => {
@@ -35,7 +43,11 @@ export function PromptInput({
   // в этом случае ставится в очередь хуком).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && value.trim()) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key === "Enter" &&
+        (value.trim() || useInspectorStore.getState().selections.length)
+      ) {
         send();
       }
     };
@@ -46,9 +58,20 @@ export function PromptInput({
 
   const send = () => {
     const text = value.trim();
-    if (!text) return;
-    onSubmit(text);
+    // Fresh from the store — the global Ctrl+Enter handler can be a stale closure.
+    const picks = useInspectorStore.getState().selections;
+    const wire: SelectedElement[] = picks.map(({ id: _id, ...rest }) => rest);
+    // Allow sending with only picks: the per-element comments carry the intent,
+    // so synthesize a prompt (backend requires non-empty text + reads naturally).
+    const finalText =
+      text ||
+      (wire.length
+        ? "Внеси правки по выделенным элементам — что сделать, написано в комментарии к каждому."
+        : "");
+    if (!finalText) return;
+    onSubmit(finalText, wire);
     setValue("");
+    clearSelections();
   };
 
   const onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
@@ -83,6 +106,12 @@ export function PromptInput({
         </div>
       )}
 
+      <SelectedChips
+        items={selections}
+        onComment={setComment}
+        onRemove={removeSelection}
+      />
+
       <div className="rounded-md border border-border-default bg-surface-input focus-within:border-accent transition-colors">
         <textarea
           ref={ref}
@@ -92,7 +121,9 @@ export function PromptInput({
           placeholder={
             isStreaming
               ? "Можно писать следующий — отправится после текущей генерации"
-              : "Опишите, что изменить или добавить…"
+              : selections.length
+                ? "Общий комментарий (необязательно) — правки по элементам уже заданы…"
+                : "Опишите, что изменить или добавить…"
           }
           rows={2}
           className="w-full bg-transparent px-3 py-2.5 text-sm text-fg-primary placeholder:text-fg-tertiary resize-none focus:outline-none"
@@ -129,7 +160,7 @@ export function PromptInput({
               type="button"
               size="sm"
               onClick={send}
-              disabled={!value.trim()}
+              disabled={!value.trim() && selections.length === 0}
               className="gap-1.5"
               title={
                 isStreaming

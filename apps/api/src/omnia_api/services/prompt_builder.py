@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 _IDENTITY = """\
 Ты — Omnia.AI, AI-конструктор сайтов и веб-продуктов для русского рынка.
@@ -462,11 +463,48 @@ def build_system_prompt(template: str) -> str:
     return "\n\n".join(sections)
 
 
+def _format_selection_block(selected_elements: Sequence[dict[str, Any]]) -> str:
+    """Собрать блок «пользователь выделил элементы в превью» для промпта.
+
+    Когда юзер тыкает в элементы превью (select-mode) и пишет к каждому
+    комментарий, мы вкладываем это в финальное user-сообщение. Инструкция —
+    инлайн и на языке домена (R-08): «выделенный элемент» = адресная правка,
+    модель меняет ТОЛЬКО эти блоки, остальную страницу сохраняет. `outerHTML`
+    и видимый текст помогают модели найти элемент в исходнике (она правит код,
+    а не DOM), поэтому важнее селектора.
+    """
+    lines = [
+        "[Контекст правки: пользователь выделил элементы прямо в превью и оставил "
+        "к каждому комментарий. Это ТОЧЕЧНАЯ правка — измени только эти элементы "
+        "(и то, что просят с ними сделать). Остальную страницу — вёрстку, тексты, "
+        "стили, не относящиеся к выделению — сохрани без изменений.]",
+        "",
+        "Выделенные элементы:",
+    ]
+    for i, el in enumerate(selected_elements, 1):
+        selector = (el.get("selector") or "").strip()
+        label = (el.get("label") or "").strip()
+        text = (el.get("text") or "").strip()
+        html = (el.get("html") or "").strip()
+        comment = (el.get("comment") or "").strip()
+        head = f"{i}. Селектор: {selector}"
+        if label:
+            head += f"  ·  {label}"
+        lines.append(head)
+        if text:
+            lines.append(f"   Видимый текст: {text}")
+        if html:
+            lines.append(f"   HTML: {html}")
+        lines.append(f"   Что сделать: {comment or '(см. сообщение ниже)'}")
+    return "\n".join(lines)
+
+
 def build_messages(
     current_files: dict[str, str],
     history: Sequence[dict[str, str]],
     user_prompt: str,
     template: str = "blank",
+    selected_elements: Sequence[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = [
         {"role": "system", "content": build_system_prompt(template)}
@@ -488,5 +526,8 @@ def build_messages(
         if m.get("role") in {"user", "assistant"} and m.get("content"):
             messages.append({"role": m["role"], "content": m["content"]})
 
-    messages.append({"role": "user", "content": user_prompt})
+    final_user = user_prompt
+    if selected_elements:
+        final_user = _format_selection_block(selected_elements) + "\n\n" + user_prompt
+    messages.append({"role": "user", "content": final_user})
     return messages
