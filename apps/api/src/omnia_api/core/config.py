@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     orchestrator_url: str = Field(default="http://localhost:8003")
     orchestrator_internal_token: SecretStr | None = Field(default=None)
 
+    # GitHub OAuth — "Push to GitHub": user authorizes once, we store a per-user
+    # access token (Fernet-encrypted at rest, key derived from jwt_secret) and push
+    # the project's files into a repo on their account. Register an OAuth App at
+    # github.com/settings/developers; client id/secret come from env (never committed).
+    github_client_id: str | None = Field(default=None)
+    github_client_secret: SecretStr | None = Field(default=None)
+    github_callback_url: str = Field(default="http://localhost:8000/api/github/callback")
+    github_oauth_scope: str = Field(default="repo")
+    web_base_url: str = Field(default="http://localhost:3000")
+
     cors_origins: str = Field(default="http://localhost:3000")
 
     initial_wallet_balance_rub: float = Field(default=100.0)

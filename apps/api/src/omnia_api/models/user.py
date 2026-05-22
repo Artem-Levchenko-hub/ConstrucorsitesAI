@@ -25,6 +25,15 @@ class User(Base):
     )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # GitHub OAuth connection ("Push to GitHub"). Token is Fernet-encrypted at rest
+    # (see core/crypto.py); all nullable until the user connects their account.
+    github_login: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_connected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     wallet: Mapped["Wallet"] = relationship(
         back_populates="user",
         uselist=False,
