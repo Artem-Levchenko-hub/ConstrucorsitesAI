@@ -172,5 +172,53 @@
         });
       });
     }
+
+    // 9. v3.0 Awwwards-tier presets
+
+    // 9a. Kinetic marquee (festival-brutalist): дублирует children внутри
+    // .kinetic-marquee-track ×2, чтобы линейная CSS-анимация петлилась бесшовно.
+    if (!reduce) {
+      [].slice.call(document.querySelectorAll(".kinetic-marquee-track")).forEach(function (track) {
+        if (track.dataset.cloned === "1") return;
+        var originals = [].slice.call(track.children);
+        originals.forEach(function (node) { track.appendChild(node.cloneNode(true)); });
+        track.dataset.cloned = "1";
+      });
+    }
+
+    // 9b. Custom cursor blob (wellness-casual): активируется через body[data-cursor="blob"].
+    // Создаёт .cursor-blob-el, следующий за указателем; авто-выключен на touch/reduce.
+    if (!reduce && canHover && document.body && document.body.dataset.cursor === "blob") {
+      var blob = document.createElement("div");
+      blob.className = "cursor-blob-el";
+      blob.setAttribute("aria-hidden", "true");
+      document.body.appendChild(blob);
+      var blobX = window.innerWidth / 2;
+      var blobY = window.innerHeight / 2;
+      var targetX = blobX;
+      var targetY = blobY;
+      document.addEventListener("pointermove", function (ev) {
+        targetX = ev.clientX;
+        targetY = ev.clientY;
+      }, { passive: true });
+      var animateBlob = function () {
+        blobX += (targetX - blobX) * 0.18;
+        blobY += (targetY - blobY) * 0.18;
+        blob.style.transform = "translate(" + blobX.toFixed(1) + "px," + blobY.toFixed(1) + "px) translate(-50%,-50%)";
+        requestAnimationFrame(animateBlob);
+      };
+      requestAnimationFrame(animateBlob);
+      var enlargeSel = "a,button,[role=button],input,textarea,select,.hover-lift,.magnetic";
+      document.addEventListener("pointerover", function (ev) {
+        if (ev.target && ev.target.closest && ev.target.closest(enlargeSel)) {
+          blob.style.width = "56px"; blob.style.height = "56px";
+        }
+      });
+      document.addEventListener("pointerout", function (ev) {
+        if (ev.target && ev.target.closest && ev.target.closest(enlargeSel)) {
+          blob.style.width = "28px"; blob.style.height = "28px";
+        }
+      });
+    }
   });
 })();

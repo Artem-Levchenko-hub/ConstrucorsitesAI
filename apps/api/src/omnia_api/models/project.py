@@ -25,6 +25,7 @@ class Project(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     template: Mapped[str] = mapped_column(Text, nullable=False)
+    design_preset_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("snapshots.id", ondelete="SET NULL", use_alter=True),

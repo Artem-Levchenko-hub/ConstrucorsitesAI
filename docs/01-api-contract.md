@@ -199,6 +199,11 @@ export type Project = {
   kind: "static" | "fullstack";   // V2: режим работы
   template: string;          // "blank"|"landing"|"portfolio"|"blog" для static;
                              // "nextjs-postgres-drizzle"... для fullstack
+  design_preset_id?: string; // v3.0 auto-classifier: 'editorial-trust'|'studio-showreel'|
+                             // 'saas-product'|'scandi-editorial'|'festival-brutalist'|
+                             // 'wellness-casual'|'boutique-reel'|'editorial-publication'.
+                             // Каталог — docs/09-generated-site-presets.md. Migration 0007.
+  design_preset_name?: string;  // computed человекочитаемое имя пресета для UI-badge.
   current_snapshot_id: string | null;
   // V2 fullstack-only поля (null для static):
   dev_url: string | null;    // https://<slug>.preview.omniadevelop.ru

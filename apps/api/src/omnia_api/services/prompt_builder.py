@@ -30,6 +30,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from omnia_api.services.design_presets import AWWWARDS_PRINCIPLES, format_preset_block
+
 _IDENTITY = """\
 Ты — Omnia.AI, AI-конструктор сайтов и веб-продуктов для русского рынка.
 Твоя задача — по запросу выдавать ЗАКОНЧЕННЫЙ, готовый к запуску продукт
@@ -428,18 +430,27 @@ KIT_FILES = frozenset({"assets/omnia-kit.css", "assets/omnia-kit.js"})
 HISTORY_LIMIT = 6
 
 
-def build_system_prompt(template: str) -> str:
+def build_system_prompt(template: str, preset_id: str | None = None) -> str:
     """Собрать system prompt под тип проекта. `fullstack` → Next.js, иначе статика.
 
     Дизайн-кит и контракт «ноль тупиков» применяются в обоих режимах. Визуальные
     пресеты (`_STYLE_KIT`) и встроенный кит анимаций (`_ANIMATION_KIT`) — только для
     статики: в fullstack-режиме файлов кита нет. Self-check идёт последним.
+
+    ``preset_id`` (Awwwards-tier пресет из ``design_presets.PRESETS``) — опциональный.
+    Если указан, declarative-блок пресета инжектится СРАЗУ после ``_STYLE_KIT`` и
+    overrides default «Refined Minimal». ``AWWWARDS_PRINCIPLES`` (8 сквозных
+    floor-правил) инжектится ВСЕГДА — даже без preset_id.
     """
+    preset_block = format_preset_block(preset_id) if preset_id else ""
+
     if template == "fullstack":
         sections: tuple[str, ...] = (
             _IDENTITY,
             _QUALITY_BAR,
+            AWWWARDS_PRINCIPLES,
             _DESIGN_KIT,
+            *((preset_block,) if preset_block else ()),
             _FUNCTIONAL_CONTRACT,
             _FULLSTACK_STACK,
             _SELF_CHECK,
@@ -449,9 +460,11 @@ def build_system_prompt(template: str) -> str:
         sections = (
             _IDENTITY,
             _QUALITY_BAR,
+            AWWWARDS_PRINCIPLES,
             _TASTE,
             _DESIGN_KIT,
             _STYLE_KIT,
+            *((preset_block,) if preset_block else ()),
             _DETAILS_KIT,
             _SIGNATURE_MOVES,
             _FUNCTIONAL_CONTRACT,
@@ -505,9 +518,10 @@ def build_messages(
     user_prompt: str,
     template: str = "blank",
     selected_elements: Sequence[dict[str, Any]] | None = None,
+    preset_id: str | None = None,
 ) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = [
-        {"role": "system", "content": build_system_prompt(template)}
+        {"role": "system", "content": build_system_prompt(template, preset_id)}
     ]
 
     if current_files:

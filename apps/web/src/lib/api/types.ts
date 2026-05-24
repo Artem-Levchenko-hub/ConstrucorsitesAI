@@ -33,6 +33,8 @@ export type Project = {
   current_snapshot_id: Uuid | null;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
+  design_preset_id?: string;
+  design_preset_name?: string;
 };
 
 export type Snapshot = {
@@ -136,7 +138,38 @@ export type ApiErrorCode =
   | "conflict"
   // V2 — surfaced from apps/api/services/orchestrator_client.
   | "orchestrator_unavailable"
-  | "orchestrator_rejected";
+  | "orchestrator_rejected"
+  // GitHub export — apps/api/src/omnia_api/routers/github.py.
+  | "github_not_connected"
+  | "github_state_invalid"
+  | "github_state_expired"
+  | "github_unavailable"
+  | "project_empty";
+
+// === GitHub OAuth + Push (apps/api/src/omnia_api/schemas/github.py) ===
+
+export type GithubStatus = {
+  connected: boolean;
+  login: string | null;
+};
+
+export type GithubConnectResponse = {
+  authorize_url: string;
+};
+
+export type GithubPushRequest = {
+  /** Имя репозитория. Должно матчить /^[A-Za-z0-9._-]+$/, max 100. */
+  repo_name: string;
+  /** По умолчанию приватный — безопасно для сгенерённого AI кода. */
+  private?: boolean;
+  /** Описание репо, max 350. */
+  description?: string;
+};
+
+export type GithubPushResponse = {
+  repo_url: string;
+  full_name: string;
+};
 
 /** V2 — full-stack runtime state, returned by /api/projects/:id/runtime*. */
 export type RuntimeState =

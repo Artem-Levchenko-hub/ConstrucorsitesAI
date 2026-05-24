@@ -15,7 +15,10 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.project import ProjectCreate, ProjectPublic
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.preset_classifier import classify_preset_sync
 from omnia_api.services.queue import enqueue_preview
+
+_UNTITLED_NAMES = frozenset({"untitled", "новый проект", "проект", "new project"})
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -32,11 +35,25 @@ async def create_project(
     base_slug = slugify(payload.name)[:60] or "project"
     slug = f"{base_slug}-{short_id}"
 
+    # Auto-classify design preset from project name if informative.
+    # Heuristic-only (sync, no LLM) on hot path — if name is generic ("Untitled")
+    # or too short, leave NULL; classifier in routers/messages.py will
+    # fill it on the first prompt via Haiku-fallback.
+    preset_id: str | None = None
+    name_stripped = payload.name.strip()
+    if len(name_stripped) > 5 and name_stripped.lower() not in _UNTITLED_NAMES:
+        preset_id = classify_preset_sync(
+            project_name=name_stripped,
+            template=payload.template,
+            first_prompt=None,
+        ) or None
+
     project = Project(
         owner_id=current_user.id,
         name=payload.name,
         slug=slug,
         template=payload.template,
+        design_preset_id=preset_id,
     )
     session.add(project)
     await session.flush()

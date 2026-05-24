@@ -25,6 +25,7 @@ from omnia_api.services import repo as repo_svc
 from omnia_api.services.file_extractor import UnsafePathError, extract_files
 from omnia_api.services.link_validator import find_dead_links
 from omnia_api.services.llm_client import stream_chat_completion
+from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
 from omnia_api.services.queue import enqueue_preview
 
@@ -260,6 +261,8 @@ async def _process_prompt(
     current_files: dict[str, str] = {}
     history_serialized: list[dict[str, str]] = []
     project_template = "blank"
+    project_name = ""
+    project_design_preset_id: str | None = None
 
     try:
         async with factory() as session:
@@ -270,6 +273,8 @@ async def _process_prompt(
             proj = await session.get(Project, project_id)
             if proj is not None:
                 project_template = proj.template
+                project_name = proj.name or ""
+                project_design_preset_id = proj.design_preset_id
             res = await session.execute(
                 select(Message)
                 .where(Message.project_id == project_id)
@@ -293,12 +298,37 @@ async def _process_prompt(
         # (saves tokens and stops the model rewriting them from what it "saw").
         current_files = {p: c for p, c in current_files.items() if p not in KIT_FILES}
 
+        # Auto-classify design preset on first prompt if not set yet.
+        # Heuristic is sync+cheap; LLM-fallback (Haiku, ~150 tokens) only fires
+        # if heuristic is ambiguous. Cached in projects.design_preset_id forever.
+        if not project_design_preset_id:
+            try:
+                project_design_preset_id = await classify_preset(
+                    project_name=project_name,
+                    template=project_template,
+                    first_prompt=prompt_text,
+                )
+                # Persist so subsequent prompts skip the classifier entirely.
+                async with factory() as cls_session:
+                    cls_proj = await cls_session.get(Project, project_id)
+                    if cls_proj is not None and not cls_proj.design_preset_id:
+                        cls_proj.design_preset_id = project_design_preset_id
+                        await cls_session.commit()
+                print(
+                    f"[PP] preset_classified preset_id={project_design_preset_id}",
+                    flush=True,
+                )
+            except Exception as cls_exc:  # noqa: BLE001 — never block generation
+                _log.warning("preset classify failed: %r", cls_exc)
+                project_design_preset_id = None
+
         messages = build_messages(
             current_files,
             history_serialized,
             prompt_text,
             project_template,
             selected_elements,
+            preset_id=project_design_preset_id,
         )
         print(f"[PP] messages_built count={len(messages)}", flush=True)
 
