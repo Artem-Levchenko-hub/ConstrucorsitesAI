@@ -79,39 +79,92 @@ Every page must look like a finished enterprise product, not a scaffold (same ba
 
   Render `<Reveal />` once in `layout.tsx`. Keep to 2–4 animation accents per section.
 
-## Images (binding) — use the `data-omnia-gen` auto-generation tag
+## Visual richness (binding) — every section must be styled
 
-For every real photo (food, product, people, interior, nature — anything that should
-look "like a photo"), use the special tag instead of `next/image` or external URLs:
+"Text on white" is forbidden. Every section ships with a visual element from the
+list below — never a bare container.
+
+1. **Hero** MUST have one of: animated gradient background (`bg-aurora` analogue
+   via CSS), abstract `blob` cluster, OR a large inline `<svg>` decorative
+   backdrop (`absolute inset-0 -z-10`). Empty hero = broken response.
+2. **Each content section** carries a decorative element: dot/line pattern
+   underlay (inline `<svg><pattern></svg>`), gradient strip, soft card
+   composition, or a thematic illustration.
+3. **Empty containers ≥200px** are filled with one of: inline SVG illustration,
+   `linear-gradient` background + decorative blob, or a bento card with a large
+   `bg-gradient-to-br from-X to-Y` and inline SVG accent.
+4. **Theme-aware palette** — pick brand+accent from the industry the user
+   described, and reuse them in `style={{ background: "linear-gradient(...)" }}`
+   on backgrounds. Don't fall back to the same purple-pink AI gradient every
+   time. Restaurant → warm ochre/terracotta; fintech → deep navy/cyan; kids
+   /toy → mint/coral; SaaS → graphite/indigo; luxury → graphite/gold.
+5. **SVG illustrations are inline only** — never link out. Wave/mountain
+   silhouettes, abstract blob clusters with `filter: blur(40px)`, geometric
+   `<pattern>+<rect>` tilings. Always set `viewBox` and scale with `width="100%"`.
+6. **Forbidden** — empty `bg-white` sections, grey placeholder rectangles,
+   monotone walls without rhythm, default purple gradient on white without
+   palette tokens.
+
+Walk every section before finishing and ask: "is there a visual element —
+background, SVG, gradient — beyond text and icons?" If not, add one.
+
+## Images — toggle-aware (binding)
+
+The runtime tells you whether image auto-generation is **on** or **off** through
+the prompt above. Behave accordingly.
+
+### When auto-generation is ON (🎨 Картинки = on)
+
+For real photos (food, product, people, interior, nature — anything that should
+look "like a photo"), use the special tag:
 
 ```tsx
 <img
-  data-omnia-gen="detailed prompt IN ENGLISH: subject, style, lighting, angle"
+  data-omnia-gen="english prompt: subject, scene, style, lighting, angle, lens"
   alt="русский alt-текст"
-  className="w-full h-64 object-cover rounded-xl"
+  style={{ background: "linear-gradient(135deg, var(--brand, #1e293b), var(--accent, #0ea5e9))" }}
+  className="w-full h-72 object-cover rounded-2xl shadow-tint"
 />
 ```
 
-After the response lands, Omnia's post-processor finds every `data-omnia-gen` tag,
-generates the image through `gpt-image-1` (low quality) and rewrites the tag with
-a real `src` URL from MinIO. HMR picks up the rewritten file automatically.
+Omnia's post-processor scans every `data-omnia-gen`, generates the image via
+`gpt-image-1` (low quality), uploads to MinIO and swaps `src`. HMR picks up the
+rewritten file. Rules:
 
-Rules:
-- The prompt MUST be English and concrete: `"professional food photography, gourmet
-  burger with melted cheese on wooden board, warm lighting, shallow depth of field"` —
-  never `"вкусный бургер"`.
-- Lock the rendered size with Tailwind classes (`w-full h-64`) to avoid layout shift
-  while the resolver is still working.
-- Up to 30 images per response — Omnia caps anything above that.
-- Do NOT wrap `data-omnia-gen` in `next/image` — the resolver swaps `src` on the
-  raw `<img>` element after HMR. Use a plain `<img>` for these.
-- For abstract / hero art (gradients, blobs, mesh), keep using CSS / inline SVG —
-  cheaper, faster, and the styling kit in `globals.css` already covers it.
+- Prompt MUST be English and concrete: `"professional food photography, gourmet
+  burger with melted cheese on wooden board, warm lighting, shallow depth of field,
+  35mm lens"` — never `"вкусный бургер"`.
+- Lock the size with Tailwind (`w-full h-72`) to avoid layout shift.
+- ALWAYS include an inline `style` gradient — it shows during the second-or-two
+  while the resolver is working (no broken-image icon).
+- Up to 30 images per response — extras are dropped.
+- Do NOT wrap `data-omnia-gen` in `next/image` — use a plain `<img>`. The
+  resolver targets raw `<img>` elements.
+- Use it for hero shots, portfolio cards, testimonial avatars, team portraits,
+  interior galleries. NOT for abstract backgrounds, decoration, or icons —
+  those stay CSS/SVG (see "Visual richness" above).
 
-Forbidden image sources (do NOT emit URLs from these — they will be flagged as a
-broken response): `picsum.photos`, `source.unsplash.com`, `unsplash.com/...`,
-`placehold.co`, `placeholder.com`, `dummyimage.com`. Every raster image goes
-through `data-omnia-gen` or inline SVG/CSS.
+### When auto-generation is OFF (🎨 Картинки = off)
+
+Do NOT emit `data-omnia-gen` — the resolver will not run and the tag will stay
+broken. Replace every photo slot with:
+
+- Inline SVG illustration on theme (preferred — looks like authored art).
+- CSS composition: gradient + decorative blob + grain texture.
+- Bento card with a large gradient symbol or thematic inline SVG (≥60% of the
+  card area).
+- Themed pattern via `<pattern>+<rect>` — waves for water/travel, dots for
+  tech, chevrons for direction.
+- Split layout: text on one side, large decorative SVG on the other.
+
+NEVER ship an empty `<img>`, a `<img>` pointing at a placeholder service, or a
+grey placeholder div without a fill.
+
+### Forbidden image sources (both modes)
+
+`picsum.photos`, `source.unsplash.com`, `unsplash.com/...`, `placehold.co`,
+`placeholder.com`, `dummyimage.com`, `via.placeholder.com`. Raster images go
+through `data-omnia-gen` (when ON) or inline SVG / CSS (always).
 
 ## Zero dead-ends contract (binding)
 

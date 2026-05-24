@@ -332,6 +332,7 @@ async def _process_prompt(
             project_template,
             selected_elements,
             preset_id=project_design_preset_id,
+            image_gen_enabled=project_image_gen_enabled,
         )
         print(f"[PP] messages_built count={len(messages)}", flush=True)
 
