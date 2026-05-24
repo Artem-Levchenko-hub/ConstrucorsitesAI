@@ -23,6 +23,7 @@ Emit each new or changed file inside an XML-style block:
 - **Database**: Drizzle ORM (`src/lib/db/schema.ts`). To add a table, extend the schema, then generate a migration:
   - You don't run `drizzle-kit generate` yourself — the orchestrator runs it after every write.
   - Use `uuid().primaryKey().defaultRandom()` for ids, `timestamp({ withTimezone: true })` for time columns.
+  - **Driver is `drizzle-orm/node-postgres` with `Pool` from `pg`** (see `src/lib/db/index.ts`). Never `import from "postgres"` or use `drizzle-orm/postgres-js` — that driver is NOT in `package.json` and the build will fail with `Module not found: Can't resolve 'postgres'`. All queries go through the exported `db` from `src/lib/db/index.ts`; reuse it, do not create new clients.
 - **Styling**: Tailwind v4 only (`@import "tailwindcss"` in `globals.css`). No inline styles, no styled-components. Use `clsx` + `tailwind-merge` via `src/lib/utils.ts` (cn helper).
 - **UI**: Composed with native Tailwind utilities. shadcn/ui not pre-installed; if needed, ask the user before adding.
 - **Forms / actions**: Server Actions in the same file as the route. Validate with `zod`.
