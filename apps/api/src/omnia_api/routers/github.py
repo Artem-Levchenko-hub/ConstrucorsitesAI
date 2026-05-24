@@ -142,12 +142,30 @@ async def github_push(
         raise ApiError("project_empty", "Нет файлов для пуша", 400)
 
     token = decrypt_secret(current_user.github_token_enc)
-    repo = await github_client.create_repo(
-        token,
-        payload.repo_name,
-        private=payload.private,
-        description=payload.description or "Сайт, созданный в Omnia.AI",
-    )
+    # Try create. If GitHub says "уже существует" — fetch existing repo и решаем:
+    # пустой → дожать push (предыдущая попытка скорее всего упала на git/trees);
+    # непустой → реальный конфликт имени, отдать понятную ошибку юзеру.
+    try:
+        repo = await github_client.create_repo(
+            token,
+            payload.repo_name,
+            private=payload.private,
+            description=payload.description or "Сайт, созданный в Omnia.AI",
+        )
+    except ApiError as exc:
+        if exc.code != "github_repo_exists":
+            raise
+        existing = await github_client.get_user_repo(token, payload.repo_name)
+        if existing is None:
+            raise
+        if existing.get("is_empty") != "true":
+            raise ApiError(
+                "github_repo_exists",
+                f"Репозиторий «{payload.repo_name}» уже занят и содержит файлы — "
+                "выбери другое имя.",
+                409,
+            ) from exc
+        repo = existing
     await github_client.push_files(
         token,
         repo["full_name"],

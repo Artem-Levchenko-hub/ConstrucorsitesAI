@@ -168,6 +168,32 @@ async def create_repo(
     }
 
 
+async def get_user_repo(token: str, name: str) -> dict[str, str] | None:
+    """Найти существующий репозиторий у владельца токена. None если нет."""
+    login = await get_login(token)
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_GH_API}/repos/{login}/{name}", headers=_auth_headers(token)
+        )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        raise ApiError(
+            "github_repo_failed",
+            f"Не удалось получить репо (HTTP {resp.status_code})",
+            502,
+        )
+    j: dict[str, Any] = resp.json()
+    return {
+        "full_name": str(j["full_name"]),
+        "html_url": str(j["html_url"]),
+        "default_branch": str(j.get("default_branch") or "main"),
+        # Empty repo от GitHub приходит с `"size": 0` И без default-branch HEAD.
+        # Используем это чтобы решить — можно ли безопасно пушить first commit.
+        "is_empty": "true" if j.get("size", 0) == 0 else "false",
+    }
+
+
 async def push_files(
     token: str,
     full_name: str,
