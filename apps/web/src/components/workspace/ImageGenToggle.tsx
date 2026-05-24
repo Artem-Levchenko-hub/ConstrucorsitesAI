@@ -101,10 +101,10 @@ export function ImageGenToggle({
       disabled={mut.isPending}
       title={tooltip}
       className={cn(
-        "inline-flex items-center gap-1 h-7 px-2 rounded-md text-xs whitespace-nowrap transition-colors border",
+        "inline-flex items-center gap-1 h-7 px-2.5 rounded-full text-xs whitespace-nowrap transition-all border",
         enabled
-          ? "border-accent/40 bg-accent/[0.08] text-fg-primary hover:bg-accent/[0.14]"
-          : "border-border-default bg-surface-base text-fg-tertiary hover:bg-surface-muted",
+          ? "border-[rgba(124,92,255,0.4)] bg-accent-subtle text-fg-primary hover:bg-[rgba(124,92,255,0.16)] shadow-[0_0_0_1px_rgba(124,92,255,0.18),0_4px_12px_-4px_rgba(124,92,255,0.35)]"
+          : "border-border-default bg-surface-raised text-fg-tertiary hover:border-border-strong",
         mut.isPending && "opacity-60 cursor-wait",
       )}
     >

@@ -84,7 +84,7 @@ export function PromptInput({
   return (
     <div
       className={cn(
-        "border-t border-border-default bg-surface-base p-3 space-y-2",
+        "border-t border-border-subtle bg-surface-panel-dark p-3 space-y-2",
         className,
       )}
     >
@@ -112,7 +112,7 @@ export function PromptInput({
         onRemove={removeSelection}
       />
 
-      <div className="rounded-xl border border-border-default bg-surface-input focus-within:border-accent transition-colors">
+      <div className="rounded-2xl border border-border-default bg-surface-input focus-within:border-[rgba(124,92,255,0.5)] focus-within:shadow-[0_0_0_4px_rgba(124,92,255,0.10)] transition-all">
         <textarea
           ref={ref}
           value={value}

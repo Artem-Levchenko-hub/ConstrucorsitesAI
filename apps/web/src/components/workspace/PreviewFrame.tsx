@@ -260,8 +260,8 @@ export function PreviewFrame({ project }: { project: Project }) {
     <div className="flex flex-col h-full bg-surface-base">
       <div className="h-10 flex items-center justify-between px-4 border-b border-border-subtle gap-3">
         <div className="flex items-center gap-1.5 shrink-0">
-          {/* Preview / Code tabs */}
-          <div className="flex items-center rounded-md border border-border-subtle p-0.5">
+          {/* Preview / Code tabs — pill style matching landing */}
+          <div className="flex items-center rounded-full border border-border-subtle bg-surface-raised p-0.5">
             {(
               [
                 ["preview", Eye, "Preview"],
@@ -273,9 +273,9 @@ export function PreviewFrame({ project }: { project: Project }) {
                 type="button"
                 onClick={() => setViewMode(mode)}
                 className={cn(
-                  "px-2 h-6 rounded text-xs font-medium transition-colors flex items-center gap-1.5",
+                  "px-2.5 h-6 rounded-full text-xs font-medium transition-all flex items-center gap-1.5",
                   viewMode === mode
-                    ? "bg-surface-raised text-fg-primary"
+                    ? "bg-accent-subtle text-accent ring-1 ring-inset ring-[rgba(124,92,255,0.25)]"
                     : "text-fg-tertiary hover:text-fg-secondary",
                 )}
               >
@@ -295,7 +295,7 @@ export function PreviewFrame({ project }: { project: Project }) {
           {/* Device toggle + reload — только для preview-режима */}
           {viewMode === "preview" && (
             <>
-              <div className="flex items-center rounded-md border border-border-subtle p-0.5">
+              <div className="flex items-center rounded-full border border-border-subtle bg-surface-raised p-0.5">
                 {(
                   [
                     ["mobile", Smartphone],
@@ -309,9 +309,9 @@ export function PreviewFrame({ project }: { project: Project }) {
                     onClick={() => setDevice(d)}
                     title={d}
                     className={cn(
-                      "p-1.5 rounded transition-colors",
+                      "p-1.5 rounded-full transition-all",
                       device === d
-                        ? "bg-surface-raised text-fg-primary"
+                        ? "bg-accent-subtle text-accent ring-1 ring-inset ring-[rgba(124,92,255,0.25)]"
                         : "text-fg-tertiary hover:text-fg-secondary",
                     )}
                   >

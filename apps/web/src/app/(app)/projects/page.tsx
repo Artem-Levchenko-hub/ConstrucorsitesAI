@@ -10,7 +10,7 @@ export default async function ProjectsPage() {
   return (
     <>
       <TopBar user={session} showProjectControls={false} />
-      <div className="mx-auto w-full max-w-6xl px-6 py-10 space-y-8">
+      <div className="mx-auto w-full max-w-[1240px] px-8 py-10 space-y-8">
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-1">
             <h1 className="text-3xl font-semibold tracking-tight">Проекты</h1>

@@ -48,13 +48,13 @@ export function TopBar({
   const initial = user.email.slice(0, 1).toUpperCase();
 
   return (
-    <header className="shrink-0 h-14 flex items-center justify-between px-6 border-b border-border-default bg-surface-base">
+    <header className="shrink-0 h-14 flex items-center justify-between px-6 border-b border-border-subtle bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
       <div className="flex items-center gap-4 min-w-0">
         <Link
           href="/projects"
           className="flex items-center gap-2 text-fg-primary font-semibold tracking-tight"
         >
-          <span className="inline-block h-5 w-5 rounded-md bg-accent" />
+          <span className="inline-block h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] shadow-[0_4px_12px_-2px_rgba(124,92,255,0.5)]" />
           <span className="hidden sm:inline">Omnia.AI</span>
         </Link>
 
@@ -86,7 +86,7 @@ export function TopBar({
             {designPresetId && designPresetName && (
               <span
                 title={`Дизайн-пресет: ${designPresetName}. AI выбрал автоматически.`}
-                className="inline-flex items-center gap-1 h-7 px-2 rounded-md border border-border-default bg-surface-base text-xs text-fg-secondary whitespace-nowrap cursor-default select-none"
+                className="inline-flex items-center gap-1 h-7 px-2.5 rounded-full border border-border-default bg-surface-raised text-xs text-fg-secondary whitespace-nowrap cursor-default select-none"
               >
                 <span aria-hidden="true">🎨</span>
                 <span className="truncate max-w-[140px]">{designPresetName}</span>
