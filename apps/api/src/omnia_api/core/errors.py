@@ -20,6 +20,13 @@ ErrorCode = Literal[
     # returned 4xx that we passed through (400/404/etc).
     "orchestrator_unavailable",
     "orchestrator_rejected",
+    # GitHub export — apps/api/src/omnia_api/routers/github.py + services/github_client.py.
+    "github_not_configured",
+    "github_not_connected",
+    "github_state_invalid",
+    "github_state_expired",
+    "github_unavailable",
+    "project_empty",
 ]
 
 
