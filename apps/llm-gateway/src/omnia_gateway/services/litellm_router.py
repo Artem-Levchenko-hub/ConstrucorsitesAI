@@ -78,6 +78,10 @@ _PROXY_ROUTES: dict[str, _ProxyRoute] = {
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_base_url,
     ),
+    "claude-sonnet-4-6": _ProxyRoute(
+        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
+        api_base=lambda s: s.proxyapi_base_url,
+    ),
     "gpt-5": _ProxyRoute(
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_openai_base_url,
