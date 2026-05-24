@@ -1,63 +1,66 @@
 @import "tailwindcss";
 
 /*
- * Omnia.AI design tokens — single source of truth is docs/03-design-system.md.
- * Token naming mirrors that file 1:1 so code reads the same as the spec.
- *
+ * Omnia.AI design tokens — mirror landing.omniadevelop.ru visual identity.
  * Tailwind v4 generates utility classes from --color-* / --font-* / --radius-*:
- *   --color-surface-base → bg-surface-base, text-surface-base, …
- *   --color-fg-primary   → text-fg-primary, …
- *   --color-border-default → border-border-default (yes, doubled — Tailwind's
- *     border- utility prefix collides with our border-* namespace; the doubling
- *     is the price of keeping ubiquitous-language naming with the spec).
+ *   --color-surface-base   → bg-surface-base, text-surface-base, …
+ *   --color-fg-primary     → text-fg-primary, …
+ *   --color-border-default → border-border-default
+ *   --radius-md            → rounded-md
  */
 
 @theme {
-  /* Surfaces — Apple-restrained: true black base, cool greys on top */
-  --color-surface-base: #0a0a0a;
-  --color-surface-raised: #161618;
-  --color-surface-overlay: #1d1d1f;
-  --color-surface-input: #0f0f10;
-  --color-surface-glass: rgb(255 255 255 / 0.04);
+  /* Surfaces — indigo-tinted dark (mirrors landing --bg / --bg-2 / --bg-3) */
+  --color-surface-base: #0d0d12;
+  --color-surface-raised: #14141b;
+  --color-surface-overlay: #1c1c25;
+  --color-surface-input: #14141b;
+  --color-surface-panel-dark: #08080c;
+  --color-surface-glass: rgb(20 20 27 / 0.55);
 
-  /* Borders — neutral cool */
-  --color-border-subtle: #1c1c1e;
-  --color-border-default: #2a2a2e;
-  --color-border-strong: #3a3a3d;
+  /* Borders */
+  --color-border-subtle: #23232d;
+  --color-border-default: #2c2c38;
+  --color-border-strong: #3a3a4a;
+  --color-border-accent: rgb(124 92 255 / 0.28);
 
-  /* Foreground — Apple SF system grays */
-  --color-fg-primary: #f5f5f7;
-  --color-fg-secondary: #a1a1a6;
-  --color-fg-tertiary: #6e6e73;
+  /* Foreground */
+  --color-fg-primary: #f5f5fa;
+  --color-fg-secondary: #c9c9d6;
+  --color-fg-tertiary: #8a8a99;
+  --color-fg-muted: #54545e;
   --color-fg-on-accent: #ffffff;
 
-  /* Accent — Apple system blue (dark mode); cooler + less saturated than blue-500 */
-  --color-accent: #0a84ff;
-  --color-accent-hover: #0071e3;
-  --color-accent-subtle: rgb(10 132 255 / 0.12);
+  /* Accent — violet (landing --accent / --accent-2) */
+  --color-accent: #7c5cff;
+  --color-accent-hover: #6647e8;
+  --color-accent-subtle: rgb(124 92 255 / 0.10);
+  --color-accent-secondary: #5cb8ff;
 
   /* Semantic */
-  --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-danger: #ef4444;
-  --color-info: #06b6d4;
+  --color-success: #4cd9a4;
+  --color-warning: #ffd166;
+  --color-danger: #ff6b8a;
+  --color-info: #5cb8ff;
 
-  /* Radii */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  /* Radii — landing 8/14/22 + pill */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
 
-  /* Shadows — minimal; prefer ring-1 over box-shadow */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.5);
-  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.6);
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 3px rgb(0 0 0 / 0.2);
+  --shadow-md: 0 4px 14px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.25);
+  --shadow-lg: 0 24px 60px -20px rgb(0 0 0 / 0.6), 0 8px 28px -10px rgb(0 0 0 / 0.4);
+  --shadow-glow: 0 0 0 1px rgb(124 92 255 / 0.25), 0 30px 80px -20px rgb(124 92 255 / 0.4);
 
   /* Easings */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* Fonts — wired to next/font CSS variables in app/layout.tsx */
   --font-sans:
-    var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    var(--font-onest), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono:
     var(--font-jetbrains), ui-monospace, "Cascadia Code", "Source Code Pro",
@@ -67,23 +70,32 @@
 @layer base {
   html {
     color-scheme: dark;
+    scroll-behavior: smooth;
   }
 
   body {
-    background: var(--color-surface-base);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
     color: var(--color-fg-primary);
+    background:
+      radial-gradient(ellipse 80% 50% at 20% 0%, rgb(124 92 255 / 0.10), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 80% 30%, rgb(92 184 255 / 0.06), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 50% 100%, rgb(236 92 255 / 0.05), transparent 60%),
+      var(--color-surface-base);
+    background-attachment: fixed;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
 
   ::selection {
-    background: var(--color-accent-subtle);
-    color: var(--color-fg-primary);
+    background: var(--color-accent);
+    color: #ffffff;
   }
 
-  /* Design system rule: focus-ring always visible (2px accent, 2px offset). */
+  /* Design system rule: focus-ring always visible (2px accent, 3px offset). */
   :focus-visible {
     outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
+    outline-offset: 3px;
+    border-radius: 4px;
   }
 }

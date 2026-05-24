@@ -1,17 +1,19 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Onest, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 
-const inter = Inter({
+const onest = Onest({
   subsets: ["latin", "cyrillic"],
-  variable: "--font-inter",
+  variable: "--font-onest",
+  weight: ["300", "400", "500", "600", "700", "800"],
   display: "swap",
 });
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin", "cyrillic"],
   variable: "--font-jetbrains",
+  weight: ["400", "500", "600"],
   display: "swap",
 });
 
@@ -105,7 +107,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+    { media: "(prefers-color-scheme: dark)", color: "#0d0d12" },
   ],
   width: "device-width",
   initialScale: 1,
@@ -146,7 +148,7 @@ export default function RootLayout({
   return (
     <html
       lang="ru"
-      className={`dark ${inter.variable} ${jetbrainsMono.variable}`}
+      className={`dark ${onest.variable} ${jetbrainsMono.variable}`}
     >
       <head>
         <script
@@ -158,7 +160,7 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: JSON.stringify(APP_JSON_LD) }}
         />
       </head>
-      <body className="bg-surface-base text-fg-primary font-sans antialiased">
+      <body className="text-fg-primary font-sans antialiased">
         <Providers>{children}</Providers>
       </body>
     </html>
