@@ -112,7 +112,7 @@ export function PromptInput({
         onRemove={removeSelection}
       />
 
-      <div className="rounded-md border border-border-default bg-surface-input focus-within:border-accent transition-colors">
+      <div className="rounded-xl border border-border-default bg-surface-input focus-within:border-accent transition-colors">
         <textarea
           ref={ref}
           value={value}
@@ -126,33 +126,35 @@ export function PromptInput({
                 : "Опишите, что изменить или добавить…"
           }
           rows={2}
-          className="w-full bg-transparent px-3 py-2.5 text-sm text-fg-primary placeholder:text-fg-tertiary resize-none focus:outline-none"
+          className="w-full bg-transparent px-3.5 py-3 text-sm text-fg-primary placeholder:text-fg-tertiary resize-none focus:outline-none"
         />
 
-        <div className="flex items-center justify-between px-2 pb-2 gap-2">
-          <span className="text-[11px] font-mono text-fg-tertiary shrink-0">
+        <div className="flex items-center justify-between px-2.5 pb-2.5 gap-2">
+          <span
+            className="text-[11px] font-mono text-fg-tertiary min-w-0 truncate"
+            title="Ctrl + Enter — отправить"
+          >
             <kbd className="px-1 rounded bg-surface-raised border border-border-subtle">
               Ctrl
-            </kbd>{" "}
-            +{" "}
+            </kbd>
+            <span className="mx-0.5">+</span>
             <kbd className="px-1 rounded bg-surface-raised border border-border-subtle">
-              Enter
-            </kbd>{" "}
-            — отправить
+              ↵
+            </kbd>
           </span>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 shrink-0">
             {isStreaming && (
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
                 onClick={onCancel}
-                className="gap-1.5"
+                className="px-2.5"
                 title="Прервать текущую генерацию"
+                aria-label="Прервать генерацию"
               >
                 <StopCircle className="h-3.5 w-3.5" />
-                Стоп
               </Button>
             )}
 
@@ -161,7 +163,7 @@ export function PromptInput({
               size="sm"
               onClick={send}
               disabled={!value.trim() && selections.length === 0}
-              className="gap-1.5"
+              className="gap-1.5 rounded-full px-3.5"
               title={
                 isStreaming
                   ? "Будет отправлено после текущей генерации"
@@ -169,7 +171,7 @@ export function PromptInput({
               }
             >
               <Send className="h-3.5 w-3.5" />
-              {isStreaming ? "В очередь" : "Отправить"}
+              <span>{isStreaming ? "В очередь" : "Отправить"}</span>
             </Button>
           </div>
         </div>
