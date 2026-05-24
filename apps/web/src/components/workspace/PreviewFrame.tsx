@@ -23,6 +23,7 @@ import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
 import { useInspectorStore } from "@/store/inspector";
+import { toast } from "sonner";
 import type { Project, Snapshot } from "@/lib/api/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shortSha, cn, formatRelativeTime } from "@/lib/utils";
@@ -51,6 +52,9 @@ export function PreviewFrame({ project }: { project: Project }) {
   const addSelection = useInspectorStore((s) => s.addSelection);
   const selections = useInspectorStore((s) => s.selections);
   const prevPickIds = useRef<string[]>([]);
+  // Tracks which iframe key has emitted `omnia:inspect:ready` — used by the
+  // race-fallback timer to know whether to warn the user.
+  const inspectorReadyKeyRef = useRef<number | null>(null);
   const postToPreview = useCallback((msg: Record<string, unknown>) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
@@ -120,13 +124,44 @@ export function PreviewFrame({ project }: { project: Project }) {
   const [device, setDevice] = useState<Device>("desktop");
   const [iframeKey, setIframeKey] = useState(0);
 
+  // Reset the per-iframe ready latch whenever the frame remounts so the toggle
+  // effect below can correctly tell "inspector is alive in this frame" from
+  // "stale ready signal from the previous iframe".
+  useEffect(() => {
+    inspectorReadyKeyRef.current = null;
+  }, [iframeKey]);
+
   // Flip picking on/off when the toolbar toggle changes. (Re)loads while the
   // mode is on are handled by the `omnia:inspect:ready` branch below.
+  //
+  // Race fix (fullstack template): the inspector loads via Next.js
+  // `<Script strategy="afterInteractive">`, which attaches its message
+  // listener AFTER React hydration — by then our initial `enable` may have
+  // flown past a not-yet-listening script. We re-send at ~700ms and, if no
+  // `omnia:inspect:ready` arrived by 3s, surface a user-facing toast so the
+  // owner doesn't sit in front of a dead toggle wondering why hover doesn't
+  // highlight anything.
   useEffect(() => {
     postToPreview({
       type: inspectMode ? "omnia:inspect:enable" : "omnia:inspect:disable",
     });
-  }, [inspectMode, postToPreview]);
+    if (!inspectMode) return;
+    const retry = window.setTimeout(() => {
+      postToPreview({ type: "omnia:inspect:enable" });
+    }, 700);
+    const warn = window.setTimeout(() => {
+      if (inspectorReadyKeyRef.current !== iframeKey) {
+        toast.error("Инспектор не загрузился в превью", {
+          description:
+            "Нажмите кнопку перезагрузки превью (↻ справа от инспектора) и попробуйте ещё раз.",
+        });
+      }
+    }, 3000);
+    return () => {
+      window.clearTimeout(retry);
+      window.clearTimeout(warn);
+    };
+  }, [inspectMode, iframeKey, postToPreview]);
 
   // Picking on an old snapshot would edit HEAD — confusing, so disable it.
   useEffect(() => {
@@ -144,6 +179,9 @@ export function PreviewFrame({ project }: { project: Project }) {
       };
       if (!d || typeof d.type !== "string") return;
       if (d.type === "omnia:inspect:ready") {
+        // Latch which frame is alive so the toggle effect's fallback timer
+        // can distinguish "script loaded" from "script never loaded".
+        inspectorReadyKeyRef.current = iframeKey;
         if (inspectMode) postToPreview({ type: "omnia:inspect:enable" });
         return;
       }
@@ -161,7 +199,7 @@ export function PreviewFrame({ project }: { project: Project }) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [inspectMode, addSelection, postToPreview]);
+  }, [inspectMode, iframeKey, addSelection, postToPreview]);
 
   // Keep the preview's outlines in sync when chips are removed/cleared (e.g.
   // after send): diff against the previous pick ids and tell the inspector.
@@ -384,6 +422,18 @@ export function PreviewFrame({ project }: { project: Project }) {
                       transition={{ duration: 0.2 }}
                       style={{ width: DEVICE_WIDTH[device], maxWidth: "100%" }}
                       className="h-full bg-white border-0 mx-auto shadow-xl"
+                      onLoad={() => {
+                        // Belt-and-braces: re-fire enable after iframe DOM
+                        // finishes loading. The Next.js Script tag (afterInteractive)
+                        // may attach its message listener AFTER our toggle effect
+                        // already posted, so we re-emit here for the late case.
+                        if (inspectMode) {
+                          window.setTimeout(
+                            () => postToPreview({ type: "omnia:inspect:enable" }),
+                            150,
+                          );
+                        }
+                      }}
                     />
                   ) : isFullstack ? (
                     <RuntimeStartupPanel
@@ -411,6 +461,16 @@ export function PreviewFrame({ project }: { project: Project }) {
                       transition={{ duration: 0.2 }}
                       style={{ width: DEVICE_WIDTH[device], maxWidth: "100%" }}
                       className="h-full bg-white border-0 mx-auto shadow-xl"
+                      onLoad={() => {
+                        // Same race protection as the live iframe — defensive
+                        // re-enable after inspector script settles.
+                        if (inspectMode) {
+                          window.setTimeout(
+                            () => postToPreview({ type: "omnia:inspect:enable" }),
+                            150,
+                          );
+                        }
+                      }}
                     />
                   ) : null}
                   {!visible && !isPending && !isFullstack && (
