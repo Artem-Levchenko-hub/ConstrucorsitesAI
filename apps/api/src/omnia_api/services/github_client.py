@@ -176,19 +176,61 @@ async def push_files(
     message: str,
     branch: str = "main",
 ) -> None:
-    """Залить файлы первым коммитом в пустой репозиторий через Git Data API."""
+    """Залить файлы первым коммитом в пустой репозиторий через Git Data API.
+
+    Файлы заливаются blob-эндпоинтом с base64-кодированием (а не inline-content
+    в tree) — это устойчиво к utf-8 control chars, бинарникам и крупным файлам.
+    Inline-content в tree давал спорадический HTTP 409 от GitHub на нашей
+    генерации (Haiku/Sonnet иногда вставляют \\u0000 или surrogate halves).
+    """
+    import base64
+
     if not files:
         raise ApiError("github_push_failed", "Нет файлов для пуша", 400)
-    tree = [
-        {"path": path, "mode": "100644", "type": "blob", "content": content}
-        for path, content in files.items()
-    ]
+
     async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_auth_headers(token)) as client:
+        # 1) Каждый файл → blob (base64). SHA блоба попадает в tree.
+        tree_entries: list[dict[str, Any]] = []
+        for path, content in files.items():
+            encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+            r_blob = await client.post(
+                f"{_GH_API}/repos/{full_name}/git/blobs",
+                json={"content": encoded, "encoding": "base64"},
+            )
+            if r_blob.status_code not in (200, 201):
+                body = r_blob.text[:300]
+                _log.error(
+                    "github_client: blob HTTP %d for %s: %s",
+                    r_blob.status_code,
+                    path,
+                    body,
+                )
+                raise ApiError(
+                    "github_push_failed",
+                    f"git/blobs HTTP {r_blob.status_code} ({path}): {body[:120]}",
+                    502,
+                )
+            tree_entries.append(
+                {
+                    "path": path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": str(r_blob.json()["sha"]),
+                }
+            )
+
+        # 2) Tree из blob-shas. Без base_tree — initial commit в пустой repo.
         r_tree = await client.post(
-            f"{_GH_API}/repos/{full_name}/git/trees", json={"tree": tree}
+            f"{_GH_API}/repos/{full_name}/git/trees", json={"tree": tree_entries}
         )
         if r_tree.status_code not in (200, 201):
-            raise ApiError("github_push_failed", f"git/trees HTTP {r_tree.status_code}", 502)
+            body = r_tree.text[:400]
+            _log.error("github_client: tree HTTP %d: %s", r_tree.status_code, body)
+            raise ApiError(
+                "github_push_failed",
+                f"git/trees HTTP {r_tree.status_code}: {body[:160]}",
+                502,
+            )
         tree_sha = str(r_tree.json()["sha"])
 
         r_commit = await client.post(
@@ -196,7 +238,13 @@ async def push_files(
             json={"message": message, "tree": tree_sha},
         )
         if r_commit.status_code not in (200, 201):
-            raise ApiError("github_push_failed", f"git/commits HTTP {r_commit.status_code}", 502)
+            body = r_commit.text[:400]
+            _log.error("github_client: commit HTTP %d: %s", r_commit.status_code, body)
+            raise ApiError(
+                "github_push_failed",
+                f"git/commits HTTP {r_commit.status_code}: {body[:160]}",
+                502,
+            )
         commit_sha = str(r_commit.json()["sha"])
 
         r_ref = await client.post(
@@ -204,4 +252,10 @@ async def push_files(
             json={"ref": f"refs/heads/{branch}", "sha": commit_sha},
         )
         if r_ref.status_code not in (200, 201):
-            raise ApiError("github_push_failed", f"git/refs HTTP {r_ref.status_code}", 502)
+            body = r_ref.text[:400]
+            _log.error("github_client: ref HTTP %d: %s", r_ref.status_code, body)
+            raise ApiError(
+                "github_push_failed",
+                f"git/refs HTTP {r_ref.status_code}: {body[:160]}",
+                502,
+            )
