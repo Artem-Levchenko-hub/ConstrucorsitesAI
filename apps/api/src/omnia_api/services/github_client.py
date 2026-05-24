@@ -21,14 +21,15 @@ import logging
 
 _GH_API = "https://api.github.com"
 _GH_OAUTH = "https://github.com"
-# Wider connect-timeout — на проде ловим спорадические `httpx.ConnectTimeout`
-# к github.com из api-контейнера даже когда сеть в целом отвечает за <1s.
-# Подозреваем DNS-pause / TCP RST под нагрузкой; 25s connect даёт двойной запас
-# для слоу-handshake.
-_TIMEOUT = httpx.Timeout(30.0, connect=25.0)
-# Retry policy для transient network failures (ConnectTimeout/ConnectError) —
-# те ошибки которые НЕ дают «нерабочий OAuth», а просто следствие сетевых
-# спайков. Делаем 3 попытки с экспоненциальной задержкой 0.5/1.5/4.5s.
+# 60s overall, 30s connect — на проде ловили спорадический ConnectTimeout
+# к api.github.com из FastAPI/async-httpx даже когда curl/sync проходил
+# за 0.5s. Источник — async DNS resolution через anyio в Docker контейнере
+# (первый запрос иногда висит). `transport=retries=5` ниже добавляет
+# auto-reconnect на connection-establishment failures.
+_TIMEOUT = httpx.Timeout(60.0, connect=30.0)
+
+# Application-level retry policy для POST'ов где transport-retries не помогает
+# (например 5xx от GitHub). Connection-level retries — на transport.
 _RETRY_ATTEMPTS = 3
 _RETRY_BACKOFF_BASE = 0.5
 _API_HEADERS = {
@@ -39,19 +40,33 @@ _API_HEADERS = {
 _log = logging.getLogger(__name__)
 
 
+def _make_client(*, headers: dict[str, str] | None = None) -> httpx.AsyncClient:
+    """AsyncClient с auto-retry на connection-failures.
+
+    `httpx.AsyncHTTPTransport(retries=5)` ретраит ConnectError/ConnectTimeout
+    на уровне транспорта (читай: TCP/TLS handshake фейлы), что обходит async-DNS
+    pause без явных try/sleep циклов.
+    """
+    transport = httpx.AsyncHTTPTransport(retries=5)
+    return httpx.AsyncClient(
+        timeout=_TIMEOUT,
+        transport=transport,
+        headers=headers,
+    )
+
+
 async def _post_with_retry(
     url: str, *, data: dict[str, Any], headers: dict[str, str]
 ) -> httpx.Response:
-    """POST с retry на transient network-сбои (ConnectTimeout/ConnectError).
+    """POST с retry на transient network-сбои.
 
-    Поднимает последний `httpx.HTTPError` если все попытки провалились —
-    вызывающий ловит и оборачивает в ApiError(github_oauth_failed) с
-    осмысленным сообщением для пользователя.
+    Поверх transport-retries — application-level loop на случай если все 5
+    transport-попыток провалились ИЛИ GitHub вернул 5xx.
     """
     last_exc: Exception | None = None
     for attempt in range(1, _RETRY_ATTEMPTS + 1):
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            async with _make_client() as client:
                 return await client.post(url, data=data, headers=headers)
         except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             last_exc = exc
@@ -126,7 +141,7 @@ def _auth_headers(token: str) -> dict[str, str]:
 
 async def get_login(token: str) -> str:
     """GitHub-логин владельца токена (проверяет, что токен живой)."""
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    async with _make_client() as client:
         resp = await client.get(f"{_GH_API}/user", headers=_auth_headers(token))
     if resp.status_code != 200:
         raise ApiError("github_token_invalid", "GitHub-токен недействителен", 401)
@@ -137,7 +152,7 @@ async def create_repo(
     token: str, name: str, *, private: bool, description: str
 ) -> dict[str, str]:
     """Создать пустой (auto_init=False) репозиторий у пользователя."""
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    async with _make_client() as client:
         resp = await client.post(
             f"{_GH_API}/user/repos",
             headers=_auth_headers(token),
@@ -171,7 +186,7 @@ async def create_repo(
 async def get_user_repo(token: str, name: str) -> dict[str, str] | None:
     """Найти существующий репозиторий у владельца токена. None если нет."""
     login = await get_login(token)
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    async with _make_client() as client:
         resp = await client.get(
             f"{_GH_API}/repos/{login}/{name}", headers=_auth_headers(token)
         )
@@ -214,7 +229,7 @@ async def push_files(
     if not files:
         raise ApiError("github_push_failed", "Нет файлов для пуша", 400)
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_auth_headers(token)) as client:
+    async with _make_client(headers=_auth_headers(token)) as client:
         # 1) Каждый файл → blob (base64). SHA блоба попадает в tree.
         tree_entries: list[dict[str, Any]] = []
         for path, content in files.items():
