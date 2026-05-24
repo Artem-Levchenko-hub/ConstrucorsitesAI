@@ -393,6 +393,11 @@ VPS уже крутится dev-контейнер с Postgres и Drizzle, по�
 • Tailwind v4 (@import "tailwindcss" в globals.css).
 • Drizzle ORM, схема в src/lib/db/schema.ts. Клиент: import { db } from "@/lib/db"
   (алиас @/* → src/*; НЕ пиши "@/db").
+• Driver — drizzle-orm/node-postgres + Pool из "pg" (см. src/lib/db/index.ts).
+  НИКОГДА не пиши import from "postgres" и не используй drizzle-orm/postgres-js —
+  этого пакета нет в package.json шаблона, билд упадёт с
+  "Module not found: Can't resolve 'postgres'". Не создавай новый Pool/client —
+  переиспользуй экспорт `db` из src/lib/db/index.ts.
 • Импорты из drizzle-orm/pg-core: pgTable, text, boolean, integer, uuid,
   timestamp, numeric, jsonb. timestamptz НЕТ — timezone-колонка это
   timestamp("col", { withTimezone: true }). id: uuid().primaryKey().defaultRandom().
