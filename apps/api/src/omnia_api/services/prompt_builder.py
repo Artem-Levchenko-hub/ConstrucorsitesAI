@@ -504,7 +504,73 @@ Awwwards. Применяй железно:
      минимум один визуальный элемент.
 
 ПЕРЕД КАЖДОЙ СЕКЦИЕЙ спроси: «есть тут визуальный элемент / фон / SVG /
-градиент кроме текста и иконок?». Если нет — ДОБАВЬ до выдачи."""
+градиент кроме текста и иконок?». Если нет — ДОБАВЬ до выдачи.
+
+КОНКРЕТНЫЕ ОБРАЗЦЫ MARKUP — ОБЯЗАТЕЛЬНО ставь подобные конструкции
+(копируй структуру, подбирай цвета под палитру проекта):
+
+ГЕРОЙ (для STATIC — с kit-классами):
+<section id="hero" class="relative min-h-[90vh] flex items-center bg-mesh grain"
+         style="--m1:#1e1b4b;--m2:#312e81;--m3:#0c0a09">
+  <div class="orb" style="--o:#f59e0b;top:10%;right:-5%;width:520px;height:520px"></div>
+  <div class="blob" style="--b1:#ec4899;--b2:#f59e0b;left:-8%;bottom:-10%;width:480px;height:480px"></div>
+  <div class="container mx-auto px-6 relative z-10">
+    <h1 class="display-fill gradient-text" style="--g1:#fff;--g2:#f59e0b">…</h1>
+    …
+  </div>
+</section>
+
+ГЕРОЙ (для FULLSTACK Next.js — те же приёмы инлайном без kit-кит-классов):
+<section className="relative min-h-[90vh] overflow-hidden">
+  <div className="absolute inset-0 -z-10 bg-gradient-to-br from-indigo-950 via-purple-900 to-amber-900" />
+  <div className="absolute inset-0 -z-10 opacity-60"
+       style={{background:"radial-gradient(circle at 20% 30%, #f59e0b 0%, transparent 50%), radial-gradient(circle at 80% 70%, #ec4899 0%, transparent 50%)", filter:"blur(80px)"}} />
+  <div className="absolute inset-0 -z-10 mix-blend-overlay opacity-20"
+       style={{backgroundImage:"url(\"data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E\")"}} />
+  …
+</section>
+
+СЕКЦИЯ ВОЗМОЖНОСТЕЙ (с dot-pattern фоном):
+<section className="relative py-24">
+  <svg className="absolute inset-0 -z-10 h-full w-full opacity-30" aria-hidden="true">
+    <defs>
+      <pattern id="dots" x="0" y="0" width="32" height="32" patternUnits="userSpaceOnUse">
+        <circle cx="2" cy="2" r="1.5" fill="currentColor" />
+      </pattern>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#dots)" />
+  </svg>
+  …
+</section>
+
+CTA-СЕКЦИЯ (волны inline SVG):
+<section className="relative overflow-hidden bg-gradient-to-r from-amber-500 to-pink-600 py-32">
+  <svg className="absolute bottom-0 left-0 w-full" viewBox="0 0 1440 200" preserveAspectRatio="none">
+    <path d="M0,100 C480,0 960,200 1440,100 L1440,200 L0,200 Z" fill="white" fillOpacity="0.1"/>
+    <path d="M0,140 C480,40 960,240 1440,140 L1440,200 L0,200 Z" fill="white" fillOpacity="0.2"/>
+  </svg>
+  …
+</section>
+
+ОТЗЫВЫ-СЕКЦИЯ (мягкий aurora фон):
+<section className="relative bg-slate-950 py-24">
+  <div className="absolute inset-0 opacity-50"
+       style={{background:"radial-gradient(ellipse at top, rgba(99,102,241,0.3), transparent 50%), radial-gradient(ellipse at bottom, rgba(236,72,153,0.2), transparent 50%)"}} />
+  <div className="relative container mx-auto px-6">…</div>
+</section>
+
+ПУСТАЯ КАРТОЧКА (с inline-SVG иллюстрацией):
+<div className="rounded-2xl bg-gradient-to-br from-amber-100 to-pink-100 p-8 relative overflow-hidden">
+  <svg className="absolute -bottom-8 -right-8 w-40 h-40 opacity-40" viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="40" fill="#ec4899"/>
+    <circle cx="30" cy="40" r="25" fill="#f59e0b"/>
+  </svg>
+  <h3 className="relative">…</h3>
+</div>
+
+КОПИРУЙ ЭТИ ПРИЁМЫ — не оставляй ни одной секции без декоративного слоя
+(градиент + блобы + SVG-паттерн). Голые `bg-white` или `bg-slate-50` без
+декора = плоский AI-сайт. ИЗБЕГАЙ."""
 
 _IMAGE_GEN_ON = """\
 АВТО-ГЕНЕРАЦИЯ ФОТО ВКЛЮЧЕНА (🎨 Картинки = on). Для каждого реального фото
