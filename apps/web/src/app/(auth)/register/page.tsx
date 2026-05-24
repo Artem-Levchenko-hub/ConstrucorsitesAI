@@ -2,7 +2,14 @@ import Link from "next/link";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { RegisterForm } from "@/components/auth/RegisterForm";
 
-export default function RegisterPage() {
+export default async function RegisterPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string }>;
+}) {
+  const { next } = await searchParams;
+  const loginHref = next ? `/login?next=${encodeURIComponent(next)}` : "/login";
+
   return (
     <AuthCard
       title="Создать аккаунт"
@@ -11,7 +18,7 @@ export default function RegisterPage() {
         <>
           Уже есть аккаунт?{" "}
           <Link
-            href="/login"
+            href={loginHref}
             className="text-accent hover:text-accent-hover transition"
           >
             Войдите
@@ -19,7 +26,7 @@ export default function RegisterPage() {
         </>
       }
     >
-      <RegisterForm />
+      <RegisterForm next={next} />
     </AuthCard>
   );
 }

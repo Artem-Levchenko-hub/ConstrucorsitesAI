@@ -31,6 +31,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
         secure=settings.jwt_cookie_secure,
         samesite="lax",
         path="/",
+        domain=settings.jwt_cookie_domain,
     )
 
 
@@ -78,7 +79,11 @@ async def login(payload: UserLogin, response: Response, session: SessionDep) -> 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(response: Response) -> None:
     settings = get_settings()
-    response.delete_cookie(key=settings.jwt_cookie_name, path="/")
+    response.delete_cookie(
+        key=settings.jwt_cookie_name,
+        path="/",
+        domain=settings.jwt_cookie_domain,
+    )
 
 
 @router.get("/me", response_model=UserPublic)

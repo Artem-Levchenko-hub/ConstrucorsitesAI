@@ -27,6 +27,15 @@ function apiBaseUrl(): string {
   );
 }
 
+/** Same safety rules as middleware.ts:safeNext — only same-origin paths. */
+function safeNext(raw: FormDataEntryValue | null): string | null {
+  if (typeof raw !== "string" || !raw) return null;
+  if (!raw.startsWith("/")) return null;
+  if (raw.startsWith("//")) return null;
+  if (raw.includes("\\")) return null;
+  return raw;
+}
+
 /**
  * Call the api auth endpoint, forward the JWT cookie it sets to the browser via
  * Next.js cookies(). The api response's `Set-Cookie` is consumed by node-fetch
@@ -105,6 +114,10 @@ async function callAuth(
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 7,
+    // Set to ".omniadevelop.ru" in prod env so the session cookie is visible
+    // on landing.* (marketing) and app.* (constructor). In dev, leave the env
+    // unset — browsers reject explicit ".localhost" and the request host is used.
+    domain: process.env.NEXT_PUBLIC_COOKIE_DOMAIN || undefined,
   });
   return null;
 }
@@ -120,7 +133,7 @@ export async function loginAction(
 
   const error = await callAuth("login", email, password);
   if (error) return { error };
-  redirect("/projects");
+  redirect(safeNext(formData.get("next")) ?? "/projects");
 }
 
 export async function registerAction(
@@ -137,7 +150,7 @@ export async function registerAction(
 
   const error = await callAuth("register", email, password);
   if (error) return { error };
-  redirect("/projects");
+  redirect(safeNext(formData.get("next")) ?? "/projects");
 }
 
 export async function logoutAction() {
@@ -152,7 +165,15 @@ export async function logoutAction() {
         cache: "no-store",
       }).catch(() => undefined);
     }
-    cookieStore.delete(COOKIE_NAME);
+    // Must clear with the same domain we set it under, otherwise the
+    // parent-domain cookie survives and /api/auth/me would still succeed.
+    cookieStore.set({
+      name: COOKIE_NAME,
+      value: "",
+      path: "/",
+      maxAge: 0,
+      domain: process.env.NEXT_PUBLIC_COOKIE_DOMAIN || undefined,
+    });
   } catch {
     // best-effort
   }

@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     jwt_ttl_days: int = Field(default=7)
     jwt_cookie_name: str = Field(default="omnia_session")
     jwt_cookie_secure: bool = Field(default=False)
+    # Production: ".omniadevelop.ru" — cookie visible on landing.* and app.*
+    # subdomains so the sign-in performed on app.* is also recognised by the
+    # marketing site (used by future "log out everywhere" / "switch account"
+    # surfaces on the landing). Leave unset in dev — browsers reject explicit
+    # `.localhost` domains and fall back to the request host anyway.
+    jwt_cookie_domain: str | None = Field(default=None)
 
     llm_gateway_url: str = Field(default="http://localhost:8001")
     mock_llm: bool = Field(default=True)

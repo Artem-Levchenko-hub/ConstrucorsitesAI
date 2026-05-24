@@ -6,13 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function LoginForm() {
+export function LoginForm({ next }: { next?: string }) {
   const [state, formAction, pending] = useActionState(loginAction, {
     error: null,
   });
 
   return (
     <form action={formAction} className="space-y-4">
+      {next && <input type="hidden" name="next" value={next} />}
+
       <div className="space-y-2">
         <Label htmlFor="email">Email</Label>
         <Input
@@ -37,11 +39,15 @@ export function LoginForm() {
         />
       </div>
 
-      {state.error && (
-        <p className="text-xs text-danger">{state.error}</p>
-      )}
+      {state.error && <p className="text-xs text-danger">{state.error}</p>}
 
-      <Button type="submit" size="lg" className="w-full" disabled={pending}>
+      <Button
+        type="submit"
+        variant="pill-primary"
+        size="lg"
+        className="w-full"
+        disabled={pending}
+      >
         {pending ? "Вход…" : "Войти"}
       </Button>
     </form>
