@@ -23,6 +23,17 @@ class ProjectCreate(BaseModel):
     template: Template = "blank"
 
 
+class ProjectUpdate(BaseModel):
+    """Partial update — fields the owner can toggle from the workspace.
+
+    Only `image_gen_enabled` is exposed for now (TopBar 🎨 toggle). Adding more
+    fields here later (e.g. rename) is just a matter of declaring them
+    Optional and applying them in the PATCH handler.
+    """
+
+    image_gen_enabled: bool | None = None
+
+
 class ProjectPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -32,6 +43,7 @@ class ProjectPublic(BaseModel):
     slug: str
     template: Template
     design_preset_id: str | None = None
+    image_gen_enabled: bool = True
     current_snapshot_id: UUID | None
     created_at: datetime
     updated_at: datetime

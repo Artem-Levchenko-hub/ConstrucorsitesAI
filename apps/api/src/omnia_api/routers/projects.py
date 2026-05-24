@@ -130,6 +130,40 @@ async def get_project(
     return project
 
 
+@router.patch("/{project_id}", response_model=ProjectPublic)
+async def update_project(
+    project_id: UUID,
+    payload: ProjectUpdate,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> Project:
+    project = await session.get(Project, project_id)
+    if project is None or project.owner_id != current_user.id:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    if payload.image_gen_enabled is not None:
+        project.image_gen_enabled = payload.image_gen_enabled
+    await session.commit()
+    await session.refresh(project)
+    return project
+
+
+@router.patch("/{project_id}", response_model=ProjectPublic)
+async def update_project(
+    project_id: UUID,
+    payload: ProjectUpdate,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> Project:
+    project = await session.get(Project, project_id)
+    if project is None or project.owner_id != current_user.id:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    if payload.image_gen_enabled is not None:
+        project.image_gen_enabled = payload.image_gen_enabled
+    await session.commit()
+    await session.refresh(project)
+    return project
+
+
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
