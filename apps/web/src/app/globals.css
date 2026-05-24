@@ -13,27 +13,28 @@
  */
 
 @theme {
-  /* Surfaces */
+  /* Surfaces — Apple-restrained: true black base, cool greys on top */
   --color-surface-base: #0a0a0a;
-  --color-surface-raised: #141414;
-  --color-surface-overlay: #1f1f1f;
-  --color-surface-input: #0f0f0f;
+  --color-surface-raised: #161618;
+  --color-surface-overlay: #1d1d1f;
+  --color-surface-input: #0f0f10;
+  --color-surface-glass: rgb(255 255 255 / 0.04);
 
-  /* Borders */
-  --color-border-subtle: #1f1f1f;
-  --color-border-default: #262626;
-  --color-border-strong: #404040;
+  /* Borders — neutral cool */
+  --color-border-subtle: #1c1c1e;
+  --color-border-default: #2a2a2e;
+  --color-border-strong: #3a3a3d;
 
-  /* Foreground */
-  --color-fg-primary: #fafafa;
-  --color-fg-secondary: #a1a1aa;
-  --color-fg-tertiary: #71717a;
+  /* Foreground — Apple SF system grays */
+  --color-fg-primary: #f5f5f7;
+  --color-fg-secondary: #a1a1a6;
+  --color-fg-tertiary: #6e6e73;
   --color-fg-on-accent: #ffffff;
 
-  /* Accent — single accent across the product */
-  --color-accent: #3b82f6;
-  --color-accent-hover: #2563eb;
-  --color-accent-subtle: rgb(30 58 138 / 0.15);
+  /* Accent — Apple system blue (dark mode); cooler + less saturated than blue-500 */
+  --color-accent: #0a84ff;
+  --color-accent-hover: #0071e3;
+  --color-accent-subtle: rgb(10 132 255 / 0.12);
 
   /* Semantic */
   --color-success: #10b981;

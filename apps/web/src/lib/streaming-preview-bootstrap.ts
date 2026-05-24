@@ -54,14 +54,36 @@ export const BOOTSTRAP_HTML = `<!doctype html>
     font-size: 13px;
     color: #71717a;
     text-align: center;
-    margin-bottom: 24px;
+    margin-bottom: 8px;
     letter-spacing: 0.02em;
+  }
+  .omnia-placeholder .hint {
+    font-size: 11px;
+    color: #a1a1aa;
+    text-align: center;
+    margin-bottom: 24px;
+    letter-spacing: 0.01em;
+  }
+  .omnia-placeholder .dots::after {
+    display: inline-block;
+    content: "";
+    animation: omnia-dots 1.4s steps(4, end) infinite;
+    width: 1.2em;
+    text-align: left;
+  }
+  @keyframes omnia-dots {
+    0%   { content: ""; }
+    25%  { content: "."; }
+    50%  { content: ".."; }
+    75%  { content: "..."; }
+    100% { content: ""; }
   }
 </style>
 </head>
 <body>
 <div id="omnia-placeholder" class="omnia-placeholder">
-  <div class="label">Собираем структуру сайта…</div>
+  <div class="label"><span id="omnia-status">AI пишет ответ</span><span class="dots"></span></div>
+  <div class="hint">Обычно 5–15 секунд. Если ответ пустой — переключусь на запасную модель автоматически.</div>
   <div class="omnia-shimmer" style="height: 52px; margin-bottom: 16px;"></div>
   <div class="omnia-shimmer" style="height: 16px; width: 80%; margin-bottom: 10px;"></div>
   <div class="omnia-shimmer" style="height: 16px; width: 65%; margin-bottom: 28px;"></div>
@@ -137,9 +159,22 @@ export const BOOTSTRAP_HTML = `<!doctype html>
     }, 400);
   }
 
+  function updateStatus(text) {
+    var el = document.getElementById('omnia-status');
+    if (el) el.textContent = text;
+  }
+
   window.addEventListener('message', function (event) {
     var data = event.data;
-    if (!data || data.type !== 'omnia:render') return;
+    if (!data) return;
+    // Status pings let React tell the placeholder what's going on without
+    // tearing it down: e.g. "переключаюсь на Claude Haiku…" when the primary
+    // model returns junk, or "AI пишет ответ" baseline.
+    if (data.type === 'omnia:status') {
+      try { updateStatus(String(data.text || '')); } catch (_) {}
+      return;
+    }
+    if (data.type !== 'omnia:render') return;
     try {
       render(data.bodyHtml, data.cssText);
     } catch (err) {

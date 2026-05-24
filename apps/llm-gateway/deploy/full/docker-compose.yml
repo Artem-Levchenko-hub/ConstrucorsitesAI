@@ -171,9 +171,15 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       JWT_COOKIE_SECURE: "true"
       LLM_GATEWAY_URL: http://gateway:8001
+      ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://host.docker.internal:8003}
+      ORCHESTRATOR_INTERNAL_TOKEN: ${ORCHESTRATOR_INTERNAL_TOKEN:-}
       MOCK_LLM: "false"
       CORS_ORIGINS: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       INITIAL_WALLET_BALANCE_RUB: ${INITIAL_WALLET_BALANCE_RUB:-100.0}
+    extra_hosts:
+      # api container reaches the orchestrator (systemd user service on host
+      # bound to 127.0.0.1:8003) through the docker0 bridge gateway.
+      - "host.docker.internal:host-gateway"
     ports:
       - "${API_HOST_PORT:-8200}:8000"
     restart: unless-stopped

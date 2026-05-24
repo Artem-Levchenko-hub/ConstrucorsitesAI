@@ -30,6 +30,13 @@ const TEMPLATES: Array<{
   { id: "landing", label: "Лендинг", hint: "Hero · фичи · CTA · форма" },
   { id: "portfolio", label: "Портфолио", hint: "Грид работ + о себе" },
   { id: "blog", label: "Блог", hint: "Список постов + страница поста" },
+  // V2 Phase A — runs as a real Next.js + Postgres + Drizzle dev container
+  // managed by the orchestrator. Promptable as a SaaS, not a static site.
+  {
+    id: "fullstack",
+    label: "Full-stack SaaS",
+    hint: "Next.js + Postgres + Drizzle, live dev-сервер",
+  },
 ];
 
 export function NewProjectDialog() {

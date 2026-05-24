@@ -88,7 +88,7 @@ export function ChatPanel({
 
       <div className="shrink-0">
         <PromptInput
-          onSubmit={(text) => submit(text, modelId)}
+          onSubmit={(text, selections) => submit(text, modelId, selections)}
           onCancel={cancel}
           onCancelPending={cancelPending}
           isStreaming={isStreaming}

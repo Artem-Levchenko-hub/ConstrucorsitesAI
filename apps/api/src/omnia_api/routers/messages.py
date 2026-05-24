@@ -20,8 +20,8 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
+from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
-from omnia_api.services.billing import charge_for_message
 from omnia_api.services.file_extractor import UnsafePathError, extract_files
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.prompt_builder import build_messages
@@ -149,6 +149,53 @@ async def list_messages(
     return list(res.scalars().all())
 
 
+# Fallback chain when the primary model returns junk (empty / <50 chars /
+# malformed). Gemini Flash on the free tier silently truncates ~10% of
+# responses to 1-2 tokens; rather than make the user notice + retry by hand,
+# we transparently re-run the same prompt against a stable model and keep
+# the conversation moving. Order: most capable that's *not* the primary,
+# guarded by `model != primary`.
+_EMPTY_RESPONSE_FALLBACKS: dict[str, list[str]] = {
+    "gemini-2.5-pro": ["gemini-2.5-flash", "claude-haiku-4-5", "gpt-5-nano"],
+    "gemini-2.5-flash": ["claude-haiku-4-5", "gpt-5-nano"],
+    # proxyapi.ru occasionally short-replies even for Haiku (we've seen
+    # acc_len=3 / tokens_out=2 on long prompts). Fallback to gpt-5-nano on
+    # the same proxyapi balance — different upstream, same key, same money.
+    "claude-haiku-4-5": ["gpt-5-nano", "gigachat-2-pro"],
+    "claude-sonnet-4-6": ["claude-haiku-4-5", "gpt-5-nano"],
+    "claude-opus-4-7": ["claude-sonnet-4-6", "claude-haiku-4-5"],
+    # GPT-5 family are reasoning models and may shadow-drop output even with
+    # reasoning_effort=minimal; fall back to Haiku (same proxyapi key).
+    "gpt-5": ["claude-haiku-4-5", "gpt-5-nano"],
+    "gpt-5-nano": ["claude-haiku-4-5", "gigachat-2-pro"],
+    "gpt-5-mini": ["claude-haiku-4-5", "gpt-5-nano"],
+    "gpt-4.1": ["claude-haiku-4-5", "gpt-5"],
+}
+
+
+def _looks_truncated(accumulated: str, files: dict[str, str]) -> bool:
+    """Heuristic: did the upstream return usable content?
+
+    True when files extracted = 0 AND the raw text is either empty, very
+    short, or trailed off mid-syntax (`<` / ` ```html\\n<` / unfinished tag).
+    We deliberately don't try to be too clever: better to occasionally retry
+    a perfectly fine refusal than to leave the user staring at an empty
+    preview.
+    """
+    if files:
+        return False
+    stripped = accumulated.strip()
+    if not stripped:
+        return True
+    if len(stripped) < 50:
+        return True
+    # Common patterns we've actually seen Gemini cut off with.
+    tail = stripped[-10:]
+    if tail.endswith("<") or tail.endswith("```html\n<") or tail.endswith("```html"):
+        return True
+    return False
+
+
 async def _process_prompt(
     project_id: UUID,
     user_id: UUID,
@@ -197,36 +244,60 @@ async def _process_prompt(
         messages = build_messages(current_files, history_serialized, prompt_text)
         print(f"[PP] messages_built count={len(messages)}", flush=True)
 
-        async for event in stream_chat_completion(
-            messages,
-            model_id,
-            str(user_id),
-            str(project_id),
-            str(assistant_message_id),
-        ):
-            if "delta" in event:
-                accumulated += event["delta"]
-                await publish_event(
-                    project_id,
-                    "llm.chunk",
-                    {
-                        "message_id": str(assistant_message_id),
-                        "delta": event["delta"],
-                    },
-                )
-            elif "usage" in event:
-                usage_data = event["usage"]  # type: ignore[assignment]
-            elif "error" in event:
-                print(f"[PP] stream_error err={event['error']!r}", flush=True)
-                await _finalize_message(
-                    factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
-                )
-                await publish_event(
-                    project_id,
-                    "llm.error",
-                    {"message_id": str(assistant_message_id), "error": event["error"]},
-                )
-                return
+        # ──────────────────────────────────────────────────────────────
+        # Inner stream loop, extracted so we can retry the whole thing
+        # against a fallback model when the primary returns junk.
+        # `accumulated` and `usage_data` are mutated through closure refs
+        # via the dict trick — Python doesn't let us rebind outer names
+        # cleanly from a nested coroutine.
+        # ──────────────────────────────────────────────────────────────
+        state: dict[str, object] = {"accumulated": "", "usage": None, "error": None}
+
+        async def _run_stream(use_model: str) -> None:
+            """Drain one stream from the gateway into `state`."""
+            state["accumulated"] = ""
+            state["usage"] = None
+            state["error"] = None
+            async for event in stream_chat_completion(
+                messages,
+                use_model,
+                str(user_id),
+                str(project_id),
+                str(assistant_message_id),
+            ):
+                if "delta" in event:
+                    state["accumulated"] = str(state["accumulated"]) + event["delta"]
+                    await publish_event(
+                        project_id,
+                        "llm.chunk",
+                        {
+                            "message_id": str(assistant_message_id),
+                            "delta": event["delta"],
+                        },
+                    )
+                elif "usage" in event:
+                    state["usage"] = event["usage"]
+                elif "error" in event:
+                    state["error"] = event["error"]
+                    return
+
+        # --- Pass 1: primary model ----------------------------------
+        await _run_stream(model_id)
+        accumulated = str(state["accumulated"])
+        usage_data = state["usage"]  # type: ignore[assignment]
+        stream_error = state["error"]
+
+        if stream_error:
+            print(f"[PP] stream_error err={stream_error!r}", flush=True)
+            await _finalize_message(
+                factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
+            )
+            await publish_event(
+                project_id,
+                "llm.error",
+                {"message_id": str(assistant_message_id), "error": str(stream_error)},
+            )
+            return
 
         print(f"[PP] stream_complete acc_len={len(accumulated)} usage={usage_data}", flush=True)
 
@@ -242,6 +313,56 @@ async def _process_prompt(
                 {"message_id": str(assistant_message_id), "error": str(e)},
             )
             return
+
+        # --- Pass 2..N: empty-content fallback ----------------------
+        # If we got nothing usable back AND the primary model has known
+        # fallbacks, transparently re-run against them. The user sees a
+        # short inline notice in the chat (delivered as an llm.chunk) and
+        # the assistant message ends up labeled with whichever model
+        # actually produced the final answer.
+        retried_models: list[str] = []
+        effective_model = model_id
+        if _looks_truncated(accumulated, files):
+            for fb_model in _EMPTY_RESPONSE_FALLBACKS.get(model_id, []):
+                notice = (
+                    f"\n\n*Модель `{effective_model}` вернула пустой ответ "
+                    f"({len(accumulated)} символов). Переключаюсь на "
+                    f"`{fb_model}`…*\n\n"
+                )
+                # Append to accumulated AND broadcast to UI so user sees what's happening.
+                accumulated = accumulated + notice
+                await publish_event(
+                    project_id,
+                    "llm.chunk",
+                    {"message_id": str(assistant_message_id), "delta": notice},
+                )
+                print(f"[PP] empty_fallback {effective_model} -> {fb_model}", flush=True)
+                await _run_stream(fb_model)
+                fb_acc = str(state["accumulated"])
+                fb_usage = state["usage"]
+                fb_err = state["error"]
+                accumulated = accumulated + fb_acc
+                if fb_usage and isinstance(fb_usage, dict):
+                    # Keep token counts of the successful model — that's the
+                    # one actually billed (gateway charges per call).
+                    usage_data = fb_usage  # type: ignore[assignment]
+                retried_models.append(fb_model)
+                effective_model = fb_model
+                if fb_err:
+                    print(f"[PP] fallback_error {fb_model}: {fb_err!r}", flush=True)
+                    continue
+                try:
+                    files = extract_files(accumulated)
+                except (UnsafePathError, ValueError):
+                    files = {}
+                if not _looks_truncated(fb_acc, files):
+                    break
+
+            if retried_models:
+                # Reflect the actually-used model on the message row so the
+                # chat header shows e.g. "claude-haiku-4-5" instead of the
+                # original Gemini that failed.
+                model_id = effective_model
 
         new_snapshot_id: UUID | None = None
         if files:
@@ -276,26 +397,16 @@ async def _process_prompt(
                         msg.tokens_in = int(usage_data.get("tokens_in") or 0)
                         msg.tokens_out = int(usage_data.get("tokens_out") or 0)
 
-                if usage_data and float(usage_data.get("cost_rub") or 0) > 0:
-                    new_balance = await charge_for_message(
-                        session,
-                        user_id,
-                        assistant_message_id,
-                        project_id,
-                        model_id,
-                        int(usage_data.get("tokens_in") or 0),
-                        int(usage_data.get("tokens_out") or 0),
-                        Decimal(str(usage_data["cost_rub"])),
-                        f"Generation: {prompt_text[:80]}",
-                    )
-                    await session.commit()
-                    await publish_event(
-                        project_id,
-                        "wallet.updated",
-                        {"balance_rub": float(new_balance)},
-                    )
-                else:
-                    await session.commit()
+                # Billing is the LLM Gateway's responsibility — it already
+                # wrote `wallet_charges` + `usage` + decremented `wallets`
+                # the moment the upstream stream finished (see
+                # apps/llm-gateway/src/omnia_gateway/services/streaming.py:
+                # billing.charge call). Re-charging here was double-billing
+                # users (each prompt cost 2× the displayed price). The frontend
+                # still picks up the new balance: usePromptStream invalidates
+                # ["wallet"] on every `llm.done` event, which triggers a fresh
+                # GET /api/wallet that reflects the gateway-side debit.
+                await session.commit()
 
                 await session.refresh(snapshot)
 
@@ -305,6 +416,53 @@ async def _process_prompt(
                 "snapshot.created",
                 {"snapshot": _snapshot_payload(snapshot)},
             )
+
+            # Fullstack projects: push the same files into the live dev
+            # container so the user sees the new code immediately via HMR.
+            # Failure here is logged + surfaced as a chat notice but does
+            # NOT roll the snapshot back — the canonical state is still in
+            # git/MinIO and the user can hit "Запустить" again to retry.
+            if project is not None and project.template == "fullstack":
+                try:
+                    hot = await orchestrator_client.hot_reload(
+                        project_id=project_id,
+                        slug=project.slug,
+                        files=files,
+                    )
+                    print(
+                        f"[PP] hot_reload OK written={hot.get('written')} "
+                        f"drizzle={hot.get('drizzle_exit_code', 'n/a')}",
+                        flush=True,
+                    )
+                    drizzle_exit = hot.get("drizzle_exit_code")
+                    if drizzle_exit and drizzle_exit not in ("0", "n/a"):
+                        # Drizzle push failed — tell the user, don't fail the prompt.
+                        await publish_event(
+                            project_id,
+                            "llm.chunk",
+                            {
+                                "message_id": str(assistant_message_id),
+                                "delta": (
+                                    f"\n\n*Файлы записаны в dev-контейнер, но `drizzle-kit push` "
+                                    f"завершился с кодом {drizzle_exit}. Проверь src/lib/db/schema.ts и "
+                                    f"подключение к Postgres.*\n\n"
+                                ),
+                            },
+                        )
+                except Exception as hot_exc:  # noqa: BLE001 — never fail prompt over hot-reload
+                    print(f"[PP] hot_reload failed: {hot_exc!r}", flush=True)
+                    await publish_event(
+                        project_id,
+                        "llm.chunk",
+                        {
+                            "message_id": str(assistant_message_id),
+                            "delta": (
+                                f"\n\n*Снапшот сохранён в git, но синхронизация с dev-контейнером "
+                                f"не удалась: {hot_exc}. Нажми «Запустить» в верхней панели чтобы "
+                                f"проверить runtime.*\n\n"
+                            ),
+                        },
+                    )
         else:
             # Модель ответила, но ни одного <file path="...">...</file> в выводе.
             # Раньше тут была тишина — UI получал только llm.done и думал, что

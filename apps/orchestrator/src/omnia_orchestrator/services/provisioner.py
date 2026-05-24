@@ -34,6 +34,7 @@ from omnia_orchestrator.schemas.runtime import (
     ProvisionRequest,
     ProvisionResponse,
 )
+from omnia_orchestrator.services import nginx_writer
 from omnia_orchestrator.services.port_allocator import get_port_allocator
 
 log = structlog.get_logger("omnia_orchestrator.provisioner")
@@ -117,10 +118,20 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
     container_id = await start_container(spec)
     log.info("provision.container_started", id=container_id[:12], name=container_name)
 
-    # Sprint A1 builds dev_url around BASE_DOMAIN + nginx. For PoC we hand
-    # back the direct host:port URL — fine for a local smoke or a single
-    # tester hitting the VPS IP.
-    dev_url = f"http://127.0.0.1:{port}"
+    # Expose the dev container at a browser-reachable host via nginx.
+    # 127.0.0.1:<port> is the VPS loopback — unreachable from the user's
+    # browser (that was the "connection refused" preview). publish_http is
+    # fast (~1-2s); the TLS upgrade runs in the background so provision stays
+    # within the api call budget. Fail-soft: on nginx failure fall back to the
+    # loopback URL so provision still succeeds.
+    host = nginx_writer.dev_host(req.slug)
+    try:
+        await nginx_writer.publish_http(host, port)
+        nginx_writer.publish_tls_in_background(host, port)
+        dev_url = nginx_writer.dev_url(req.slug)
+    except OrchestratorError as exc:
+        log.warning("provision.nginx_failed", host=host, err=exc.message)
+        dev_url = f"http://127.0.0.1:{port}"
 
     return ProvisionResponse(
         project_id=req.project_id,

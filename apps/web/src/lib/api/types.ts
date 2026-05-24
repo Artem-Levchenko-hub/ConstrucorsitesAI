@@ -14,7 +14,15 @@ export type User = {
   last_login_at: IsoDateTime | null;
 };
 
-export type ProjectTemplate = "blank" | "landing" | "portfolio" | "blog";
+export type ProjectTemplate =
+  | "blank"
+  | "landing"
+  | "portfolio"
+  | "blog"
+  // V2 Phase A — runs as a Next.js + Drizzle dev container managed by the
+  // orchestrator. Preview iframe points at the live container's dev_url
+  // instead of the static /p/<slug> path.
+  | "fullstack";
 
 export type Project = {
   id: Uuid;
@@ -45,6 +53,24 @@ export type SnapshotWithFiles = Snapshot & {
 
 export type MessageRole = "user" | "assistant" | "system";
 
+/**
+ * Element the user picked in the preview (select-mode), with their per-element
+ * comment. Wire shape — mirrors apps/api schemas/message.py:SelectedElement.
+ * The picker assigns a transient client id (see store/inspector.ts); it is not
+ * part of this persisted/sent shape.
+ */
+export type SelectedElement = {
+  selector: string;
+  /** Short `tag#id.class` for the chip label. */
+  label?: string | null;
+  /** Truncated outerHTML — helps the model find the element in the source. */
+  html?: string | null;
+  /** Truncated visible text. */
+  text?: string | null;
+  /** Per-element instruction, e.g. "сделай красной". */
+  comment?: string | null;
+};
+
 export type Message = {
   id: Uuid;
   project_id: Uuid;
@@ -54,6 +80,8 @@ export type Message = {
   model_id: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
+  /** Select-mode context attached to a user message (for chat-history chips). */
+  selected_elements?: SelectedElement[] | null;
   created_at: IsoDateTime;
 };
 
@@ -62,7 +90,8 @@ export type ModelProvider =
   | "openai"
   | "yandex"
   | "alibaba"
-  | "sber";
+  | "sber"
+  | "google";
 export type ModelTag = "fast" | "quality" | "budget";
 
 export type Model = {
@@ -103,7 +132,45 @@ export type ApiErrorCode =
   | "rate_limited"
   | "wallet_empty"
   | "model_unavailable"
-  | "internal_error";
+  | "internal_error"
+  | "conflict"
+  // V2 — surfaced from apps/api/services/orchestrator_client.
+  | "orchestrator_unavailable"
+  | "orchestrator_rejected";
+
+/** V2 — full-stack runtime state, returned by /api/projects/:id/runtime*. */
+export type RuntimeState =
+  | "provisioning"
+  | "running"
+  | "paused"
+  | "stopped"
+  | "failed";
+
+export type RuntimeStatus = {
+  state: RuntimeState;
+  container_name: string | null;
+  port: number | null;
+  dev_url: string | null;
+  last_active_at: IsoDateTime | null;
+  hibernate_after_seconds: number | null;
+};
+
+export type DeployPhase =
+  | "queued"
+  | "building"
+  | "pushing"
+  | "swapping"
+  | "done"
+  | "failed";
+
+export type DeployStatus = {
+  phase: DeployPhase;
+  started_at: IsoDateTime | null;
+  finished_at: IsoDateTime | null;
+  prod_url: string | null;
+  image_tag: string | null;
+  error: string | null;
+};
 
 export type ApiErrorBody = {
   error: {
@@ -131,6 +198,15 @@ export type WsEvent =
       };
     }
   | { type: "llm.error"; data: { message_id: Uuid; error: string } }
-  | { type: "wallet.updated"; data: { balance_rub: number } };
+  | { type: "wallet.updated"; data: { balance_rub: number } }
+  // V2 runtime/deploy events. The api router broadcasts these from the
+  // orchestrator (Phase A — only `started` and `progress` may fire for now;
+  // the rest land once orchestrator's hibernate/health loops are wired in).
+  | { type: "runtime.started"; data: { runtime: RuntimeStatus } }
+  | { type: "runtime.stopped"; data: { runtime: RuntimeStatus } }
+  | { type: "runtime.crashed"; data: { error: string } }
+  | { type: "deploy.progress"; data: { deploy: DeployStatus } }
+  | { type: "deploy.done"; data: { deploy: DeployStatus } }
+  | { type: "deploy.failed"; data: { error: string } };
 
 export type WsEventType = WsEvent["type"];

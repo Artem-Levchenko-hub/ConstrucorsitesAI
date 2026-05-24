@@ -30,12 +30,17 @@ class Settings(BaseSettings):
     # the same key transparently bills the paid tier once a billing project is attached.
     gemini_api_key: SecretStr | None = None
 
-    # proxyapi.ru — Russian proxy that fronts native Anthropic Messages API.
-    # The same balance covers all proxyapi-routed models; per-model routing is
-    # declared in _PROXY_ROUTES in services/litellm_router.py.
+    # proxyapi.ru — Russian proxy that fronts both Anthropic Messages API and
+    # OpenAI's chat-completions surface. The same key + same balance cover
+    # every proxyapi-routed model (Claude Haiku, GPT-5 family, etc.) —
+    # per-model routing is declared in `_PROXY_ROUTES` in
+    # `services/litellm_router.py`.
     proxyapi_api_key: SecretStr | None = None
     # Anthropic provider in LiteLLM appends /v1/messages itself; do not include /v1 here.
     proxyapi_base_url: str = "https://api.proxyapi.ru/anthropic"
+    # OpenAI-compatible surface on proxyapi: GPT-5 family + GPT-4o family.
+    # LiteLLM's openai provider expects the `/v1` suffix already on the base.
+    proxyapi_openai_base_url: str = "https://api.proxyapi.ru/openai/v1"
 
     # Sber GigaChat — auth key is base64(client_id:client_secret) from Sber developer cabinet.
     # Sber's API uses the Russian Trusted Root CA, which most Python builds don't trust by

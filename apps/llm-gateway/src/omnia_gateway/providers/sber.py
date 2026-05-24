@@ -56,10 +56,25 @@ def _client_kwargs(timeout: float) -> dict[str, Any]:
     Sber's OAuth endpoint (ngw.devices.sberbank.ru:9443) regularly takes 15-25s
     for the TLS handshake from RU VPSes — observed empirically. We use a
     generous connect timeout and a moderate read timeout.
+
+    `mounts={"all://": HTTPTransport(...)}` is critical on the prod VPS: the
+    gateway container has HTTPS_PROXY/HTTP_PROXY set so Gemini traffic gets
+    tunnelled through a UK proxy (geo-block bypass for
+    generativelanguage.googleapis.com). NO_PROXY whitelists sberbank
+    hostnames, but httpx ≥ 0.28's whitelist matcher doesn't reliably handle
+    `host:port` forms (Sber listens on `:9443`), and `trust_env=False` alone
+    proved insufficient — even with it set, requests still went through the
+    proxy. The most bullet-proof workaround is to install a transport with
+    no proxy at all, which always wins over env/trust_env.
     """
+    transport = httpx.HTTPTransport(verify=get_settings().gigachat_verify_ssl)
     return {
         "timeout": httpx.Timeout(timeout, connect=30.0, read=timeout, write=15.0),
         "verify": get_settings().gigachat_verify_ssl,
+        "trust_env": False,
+        # The mounts= dict overrides any proxy resolution httpx would
+        # otherwise do via env vars — Sber traffic goes direct, period.
+        "mounts": {"all://": transport},
     }
 
 
@@ -71,9 +86,13 @@ def _fetch_token_sync(auth_key: str, scope: str, verify_ssl: bool) -> dict[str, 
     (some interaction with the event loop / DNS resolver), while a sync
     httpx.Client in a fresh thread works in ~250ms. Run this on a thread.
     """
+    # See _client_kwargs() for the full rationale on `mounts=`: it's the only
+    # way to make sure httpx ≥0.28 ignores HTTPS_PROXY for Sber.
     with httpx.Client(
         timeout=httpx.Timeout(45.0, connect=30.0),
         verify=verify_ssl,
+        trust_env=False,
+        mounts={"all://": httpx.HTTPTransport(verify=verify_ssl)},
     ) as client:
         resp = client.post(
             OAUTH_URL,
@@ -175,9 +194,15 @@ async def acompletion(
     }
 
     def _completion_sync() -> dict[str, Any]:
+        verify_ssl = get_settings().gigachat_verify_ssl
+        # Same rationale as _fetch_token_sync: ignore HTTPS_PROXY env via
+        # both `trust_env=False` AND an explicit mounts override (httpx
+        # ≥0.28 honors only the mounts entry reliably in our setup).
         with httpx.Client(
             timeout=httpx.Timeout(timeout, connect=30.0),
-            verify=get_settings().gigachat_verify_ssl,
+            verify=verify_ssl,
+            trust_env=False,
+            mounts={"all://": httpx.HTTPTransport(verify=verify_ssl)},
         ) as client:
             r = client.post(COMPLETION_URL, json=payload, headers=headers)
             r.raise_for_status()

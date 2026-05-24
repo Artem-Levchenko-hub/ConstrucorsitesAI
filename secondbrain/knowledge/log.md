@@ -94,3 +94,68 @@
 - Backlink repair done. Updated files: 14
 - Structural lint: completed
 
+## [2026-05-20T03:30:41+03:00] compile | 2026-05-20.md
+- Source: daily/2026-05-20.md
+- Counts: concepts_created=4, concepts_updated=0, connections_created=0, connections_updated=0
+- Concepts upserted: [[knowledge/concepts/api-contract-omnia]], [[knowledge/concepts/omnia-v2-architecture-phase-a]], [[knowledge/concepts/vps-setup-for-omnia-v2-phase-a-runtime]], [[knowledge/concepts/agent-d-orchestrator-devops-v2-phase-a]]
+- Connections upserted: (none)
+- Mode: llm-assisted
+
+## [2026-05-20T03:30:41+03:00] compile | summary
+- Daily files compiled: 1
+- Concepts: new=4, updated=0, upserted=4
+- Connections: new=0, updated=0, upserted=0
+- Quality enrichment: enriched=11, touched=2
+
+## [2026-05-20T03:30:41+03:00] maintenance | nightly
+- Wiki totals: before=32, after=36, delta=4
+- Docs changed: 4
+- Quality enrichment: enriched=11, touched=2
+- Compile metrics: concepts(new=4, updated=0, upserted=4), connections(new=0, updated=0, upserted=0)
+- Backlink repair done. Updated files: 2
+- Structural lint: completed
+
+## [2026-05-21T03:30:23+03:00] compile | noop
+- No changed daily logs. quality_enriched=11, quality_touched=0
+
+## [2026-05-21T03:30:23+03:00] maintenance | nightly
+- Wiki totals: before=36, after=36, delta=0
+- Docs changed: 0
+- Quality enrichment: enriched=11, touched=0
+- Compile metrics: n/a (no changed daily logs)
+- Backlink repair done. Updated files: 0
+- Structural lint: completed
+
+## [2026-05-22T03:30:23+03:00] compile | noop
+- No changed daily logs. quality_enriched=11, quality_touched=0
+
+## [2026-05-22T03:30:23+03:00] maintenance | nightly
+- Wiki totals: before=36, after=36, delta=0
+- Docs changed: 0
+- Quality enrichment: enriched=11, touched=0
+- Compile metrics: n/a (no changed daily logs)
+- Backlink repair done. Updated files: 0
+- Structural lint: completed
+
+## [2026-05-23T03:30:03+03:00] compile | noop
+- No changed daily logs. quality_enriched=11, quality_touched=0
+
+## [2026-05-23T03:30:03+03:00] maintenance | nightly
+- Wiki totals: before=36, after=36, delta=0
+- Docs changed: 0
+- Quality enrichment: enriched=11, touched=0
+- Compile metrics: n/a (no changed daily logs)
+- Backlink repair done. Updated files: 0
+- Structural lint: completed
+
+## [2026-05-24T03:30:03+03:00] compile | noop
+- No changed daily logs. quality_enriched=11, quality_touched=0
+
+## [2026-05-24T03:30:03+03:00] maintenance | nightly
+- Wiki totals: before=36, after=36, delta=0
+- Docs changed: 0
+- Quality enrichment: enriched=11, touched=0
+- Compile metrics: n/a (no changed daily logs)
+- Backlink repair done. Updated files: 0
+- Structural lint: completed
+

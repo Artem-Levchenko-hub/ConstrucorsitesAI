@@ -94,6 +94,7 @@ const TEMPLATE_LABELS: Record<ProjectTemplate, string> = {
   landing: "Лендинг бизнеса",
   portfolio: "Портфолио",
   blog: "Простой блог",
+  fullstack: "Full-stack SaaS",
 };
 
 type Store = {

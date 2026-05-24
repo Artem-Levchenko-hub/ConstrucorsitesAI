@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { Send, StopCircle, Clock, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { SelectedElement } from "@/lib/api/types";
+import { useInspectorStore } from "@/store/inspector";
+import { SelectedChips } from "./SelectedChips";
 
 export function PromptInput({
   onSubmit,
@@ -13,7 +16,7 @@ export function PromptInput({
   pendingPrompt,
   className,
 }: {
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string, selections: SelectedElement[]) => void;
   onCancel: () => void;
   onCancelPending: () => void;
   isStreaming: boolean;
@@ -22,6 +25,11 @@ export function PromptInput({
 }) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  const selections = useInspectorStore((s) => s.selections);
+  const setComment = useInspectorStore((s) => s.setComment);
+  const removeSelection = useInspectorStore((s) => s.removeSelection);
+  const clearSelections = useInspectorStore((s) => s.clear);
 
   // Auto-resize textarea up to a sensible max.
   useEffect(() => {
@@ -35,7 +43,11 @@ export function PromptInput({
   // в этом случае ставится в очередь хуком).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && value.trim()) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key === "Enter" &&
+        (value.trim() || useInspectorStore.getState().selections.length)
+      ) {
         send();
       }
     };
@@ -46,9 +58,20 @@ export function PromptInput({
 
   const send = () => {
     const text = value.trim();
-    if (!text) return;
-    onSubmit(text);
+    // Fresh from the store — the global Ctrl+Enter handler can be a stale closure.
+    const picks = useInspectorStore.getState().selections;
+    const wire: SelectedElement[] = picks.map(({ id: _id, ...rest }) => rest);
+    // Allow sending with only picks: the per-element comments carry the intent,
+    // so synthesize a prompt (backend requires non-empty text + reads naturally).
+    const finalText =
+      text ||
+      (wire.length
+        ? "Внеси правки по выделенным элементам — что сделать, написано в комментарии к каждому."
+        : "");
+    if (!finalText) return;
+    onSubmit(finalText, wire);
     setValue("");
+    clearSelections();
   };
 
   const onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
@@ -83,7 +106,13 @@ export function PromptInput({
         </div>
       )}
 
-      <div className="rounded-md border border-border-default bg-surface-input focus-within:border-accent transition-colors">
+      <SelectedChips
+        items={selections}
+        onComment={setComment}
+        onRemove={removeSelection}
+      />
+
+      <div className="rounded-xl border border-border-default bg-surface-input focus-within:border-accent transition-colors">
         <textarea
           ref={ref}
           value={value}
@@ -92,36 +121,40 @@ export function PromptInput({
           placeholder={
             isStreaming
               ? "Можно писать следующий — отправится после текущей генерации"
-              : "Опишите, что изменить или добавить…"
+              : selections.length
+                ? "Общий комментарий (необязательно) — правки по элементам уже заданы…"
+                : "Опишите, что изменить или добавить…"
           }
           rows={2}
-          className="w-full bg-transparent px-3 py-2.5 text-sm text-fg-primary placeholder:text-fg-tertiary resize-none focus:outline-none"
+          className="w-full bg-transparent px-3.5 py-3 text-sm text-fg-primary placeholder:text-fg-tertiary resize-none focus:outline-none"
         />
 
-        <div className="flex items-center justify-between px-2 pb-2 gap-2">
-          <span className="text-[11px] font-mono text-fg-tertiary shrink-0">
+        <div className="flex items-center justify-between px-2.5 pb-2.5 gap-2">
+          <span
+            className="text-[11px] font-mono text-fg-tertiary min-w-0 truncate"
+            title="Ctrl + Enter — отправить"
+          >
             <kbd className="px-1 rounded bg-surface-raised border border-border-subtle">
               Ctrl
-            </kbd>{" "}
-            +{" "}
+            </kbd>
+            <span className="mx-0.5">+</span>
             <kbd className="px-1 rounded bg-surface-raised border border-border-subtle">
-              Enter
-            </kbd>{" "}
-            — отправить
+              ↵
+            </kbd>
           </span>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 shrink-0">
             {isStreaming && (
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
                 onClick={onCancel}
-                className="gap-1.5"
+                className="px-2.5"
                 title="Прервать текущую генерацию"
+                aria-label="Прервать генерацию"
               >
                 <StopCircle className="h-3.5 w-3.5" />
-                Стоп
               </Button>
             )}
 
@@ -129,8 +162,8 @@ export function PromptInput({
               type="button"
               size="sm"
               onClick={send}
-              disabled={!value.trim()}
-              className="gap-1.5"
+              disabled={!value.trim() && selections.length === 0}
+              className="gap-1.5 rounded-full px-3.5"
               title={
                 isStreaming
                   ? "Будет отправлено после текущей генерации"
@@ -138,7 +171,7 @@ export function PromptInput({
               }
             >
               <Send className="h-3.5 w-3.5" />
-              {isStreaming ? "В очередь" : "Отправить"}
+              <span>{isStreaming ? "В очередь" : "Отправить"}</span>
             </Button>
           </div>
         </div>

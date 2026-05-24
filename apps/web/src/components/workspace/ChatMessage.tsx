@@ -16,6 +16,7 @@ import {
   formatBytes,
   type AssistantPart,
 } from "@/lib/parse-assistant";
+import { SelectedChips } from "./SelectedChips";
 
 export function ChatMessage({
   message,
@@ -85,6 +86,12 @@ export function ChatMessage({
               <span className="inline-block w-[6px] h-[14px] -mb-0.5 ml-0.5 bg-accent animate-pulse align-middle" />
             )}
         </div>
+
+        {isUser &&
+          message.selected_elements &&
+          message.selected_elements.length > 0 && (
+            <SelectedChips items={message.selected_elements} className="pt-1" />
+          )}
 
         {!isUser &&
           message.tokens_out !== null &&

@@ -1,0 +1,11 @@
+services:
+  api:
+    image: omnia-api:ghexport
+    environment:
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      GITHUB_TOKEN_ENC_KEY: ${GITHUB_TOKEN_ENC_KEY:-}
+      GITHUB_OAUTH_REDIRECT_URI: ${GITHUB_OAUTH_REDIRECT_URI:-https://constructor.lead-generator.ru/api/integrations/github/callback}
+      GITHUB_OAUTH_SCOPES: ${GITHUB_OAUTH_SCOPES:-repo}
+  web:
+    image: omnia-web:ghexport

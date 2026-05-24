@@ -17,15 +17,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ModelSelector } from "./ModelSelector";
+import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
 
 export function TopBar({
   user,
   projectName,
+  projectId,
   showProjectControls = true,
 }: {
   user: { email: string };
   projectName?: string;
+  /** V2 — required when showProjectControls is true so we can render the runtime button. */
+  projectId?: string;
   showProjectControls?: boolean;
 }) {
   const initial = user.email.slice(0, 1).toUpperCase();
@@ -52,6 +56,7 @@ export function TopBar({
       <div className="flex items-center gap-2">
         {showProjectControls && (
           <>
+            {projectId && <RuntimeButton projectId={projectId} />}
             <ModelSelector />
             <WalletBadge />
           </>

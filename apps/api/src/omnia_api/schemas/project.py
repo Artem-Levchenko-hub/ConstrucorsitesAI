@@ -4,7 +4,16 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Template = Literal["blank", "landing", "portfolio", "blog"]
+# V1 templates ship static HTML; "fullstack" ships a Next.js 15 + Drizzle
+# project that runs in an orchestrator-managed dev container. The two stacks
+# share the `<file path="...">` AI contract but live on different preview
+# surfaces — V1 on `/p/<slug>`, fullstack on `runtime.dev_url`.
+Template = Literal["blank", "landing", "portfolio", "blog", "fullstack"]
+
+
+def is_fullstack(template: str) -> bool:
+    """Single source of truth: which templates run inside a dev container."""
+    return template == "fullstack"
 
 
 class ProjectCreate(BaseModel):

@@ -77,13 +77,17 @@ async def _litellm_stream(
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
 
-    # Gemini 2.5 — thinking models. Without explicit max_tokens and with
-    # thinking enabled, the entire output budget is consumed by reasoning_tokens
-    # and the visible response is 0–2 tokens. Mirrors the non-streaming guard
-    # in services.litellm_router.acompletion — keep both in sync.
+    # Gemini 2.5 AND GPT-5 family are reasoning models — without max_tokens
+    # and minimal reasoning budget, all output goes into reasoning_tokens
+    # and the visible response is 0–2 tokens. Mirrors the same guard in
+    # services.litellm_router.acompletion — keep both in sync. See that
+    # function's comment for the full justification.
     if model.startswith("gemini-"):
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "disable")
+    elif model in ("gpt-5", "gpt-5-nano"):
+        kwargs.setdefault("max_tokens", 16384)
+        kwargs.setdefault("reasoning_effort", "minimal")
 
     router = router_module.get_router()
     try:

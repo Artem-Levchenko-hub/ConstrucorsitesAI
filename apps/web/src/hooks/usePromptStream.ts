@@ -2,8 +2,15 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
+import { toast } from "sonner";
 import { simulatePromptStream } from "@/lib/ws-mock";
-import type { Message, Snapshot, WalletState, WsEvent } from "@/lib/api/types";
+import type {
+  Message,
+  SelectedElement,
+  Snapshot,
+  WalletState,
+  WsEvent,
+} from "@/lib/api/types";
 import { sendPrompt } from "@/lib/api/messages";
 import { USE_MOCKS } from "@/lib/api/mocks";
 import { useWorkspaceStore } from "@/store/workspace";
@@ -59,14 +66,19 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   // Очередь — один слот. Если юзер кидает второй промпт, пока стримит первый,
   // он сюда попадает и автоматом стартует на llm.done/llm.error. Если новый
   // промпт прилетает поверх — заменяет предыдущий (предсказуемее, чем стек).
-  const pendingRef = useRef<{ text: string; modelId: string } | null>(null);
+  const pendingRef = useRef<{
+    text: string;
+    modelId: string;
+    selections?: SelectedElement[];
+  } | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   // submitRef нужен, потому что fireQueued вызывается из apply (стабильный
   // useCallback), а submit пересоздаётся при каждом рендере с свежим apply —
   // прямая ссылка на submit замкнётся на устаревшую версию.
-  const submitRef = useRef<((text: string, modelId: string) => void) | null>(
-    null,
-  );
+  const submitRef = useRef<
+    | ((text: string, modelId: string, selections?: SelectedElement[]) => void)
+    | null
+  >(null);
   const selectSnapshot = useWorkspaceStore((s) => s.selectSnapshot);
 
   const fireQueued = useCallback(() => {
@@ -76,7 +88,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     setPendingPrompt(null);
     // setTimeout, чтобы не вызвать submit изнутри обработчика событий react-query
     // и дать React закоммитить текущий рендер.
-    setTimeout(() => submitRef.current?.(p.text, p.modelId), 0);
+    setTimeout(() => submitRef.current?.(p.text, p.modelId, p.selections), 0);
   }, []);
 
   const apply = useCallback(
@@ -149,6 +161,29 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         return;
       }
 
+      // V2 — orchestrator-originated events flow through the same WS pipe.
+      // We don't render logs/progress here yet; RuntimeButton subscribes to
+      // ["runtime", projectId] via React Query, so flipping that cache is
+      // enough to update the button label + colour the moment the container
+      // changes state on the host.
+      if (event.type === "runtime.started" || event.type === "runtime.stopped") {
+        qc.setQueryData(["runtime", projectId], event.data.runtime);
+        qc.invalidateQueries({ queryKey: ["runtime", projectId] });
+        return;
+      }
+      if (event.type === "runtime.crashed") {
+        qc.invalidateQueries({ queryKey: ["runtime", projectId] });
+        return;
+      }
+      if (event.type === "deploy.progress" || event.type === "deploy.done") {
+        qc.invalidateQueries({ queryKey: ["deploy", projectId] });
+        return;
+      }
+      if (event.type === "deploy.failed") {
+        qc.invalidateQueries({ queryKey: ["deploy", projectId] });
+        return;
+      }
+
       if (event.type === "llm.error") {
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>
@@ -164,6 +199,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               : m,
           ),
         );
+        // Loud surface so the user notices: silent inline-error in the chat
+        // tab was getting overlooked while the preview placeholder kept
+        // shimmering — they thought generation was still in progress.
+        toast.error("Генерация прервалась", {
+          description: event.data.error.slice(0, 240),
+          duration: 8_000,
+        });
         streamingRef.current = false;
         fireQueued();
       }
@@ -172,10 +214,15 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   );
 
   const submit = useCallback(
-    async (promptText: string, modelId: string) => {
+    async (
+      promptText: string,
+      modelId: string,
+      selections?: SelectedElement[],
+    ) => {
       // Стрим в процессе — кладём в очередь (один слот, новый замещает старый).
+      // Выделения переносим вместе с текстом, чтобы отложенный промпт сохранил контекст.
       if (streamingRef.current) {
-        pendingRef.current = { text: promptText, modelId };
+        pendingRef.current = { text: promptText, modelId, selections };
         setPendingPrompt(promptText);
         return;
       }
@@ -201,6 +248,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           snapshot_id: null,
           tokens_in: 0,
           tokens_out: 0,
+          selected_elements: selections ?? null,
           created_at: new Date().toISOString(),
         } as Message,
         {
@@ -222,7 +270,12 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         cancelRef.current = openRealStream(projectId, apply);
       }
 
-      const { message_id } = await sendPrompt(projectId, promptText, modelId);
+      const { message_id } = await sendPrompt(
+        projectId,
+        promptText,
+        modelId,
+        selections,
+      );
 
       // Swap the optimistic assistant row for the real id (so incoming
       // `llm.chunk` events for `event.data.message_id` actually find the row).

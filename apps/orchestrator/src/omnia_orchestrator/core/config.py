@@ -42,9 +42,33 @@ class Settings(BaseSettings):
     # `<slug>.app.${base_domain}` for prod. Both wildcards need DNS + cert.
     base_domain: str = Field(default="omniadevelop.ru")
 
+    # Public hostname suffix for user-facing dev/prod URLs. Default is the
+    # sslip.io wildcard that resolves "<anything>.170-168-72-200.sslip.io" to
+    # this VPS with ZERO registrar setup — used until proper wildcard DNS for
+    # *.app.omniadevelop.ru exists. Switch to "app.omniadevelop.ru" then.
+    #   dev preview → "{slug}-dev.{suffix}"   prod deploy → "{slug}.{suffix}"
+    runtime_host_suffix: str = Field(default="170-168-72-200.sslip.io")
+
+    # Per-host Let's Encrypt (HTTP-01 via webroot). No DNS API token needed
+    # because sslip.io hosts already resolve to us. Fail-soft: if a cert can't
+    # be issued the site stays HTTP-only rather than failing the whole flow.
+    enable_tls: bool = Field(default=True)
+    acme_email: str = Field(default="artem@omniadevelop.ru")
+    # Webroot for ACME http-01 challenges — orchestrator-owned (no sudo to
+    # write). nginx serves /.well-known/acme-challenge/ from here. Certs are
+    # issued by acme.sh (the system certbot 2.1.0 is broken on this box).
+    acme_webroot: str = Field(default="/opt/omnia-runtime/acme-webroot")
+    # Where acme.sh installs issued certs (orchestrator-owned; nginx reads).
+    acme_certs_dir: str = Field(default="/opt/omnia-runtime/certs")
+
     # Dev container port pool. 3001-3199 reserved for V1 + other tenants.
     port_range_min: int = Field(default=3200)
     port_range_max: int = Field(default=3999)
+
+    # Prod (deployed) container port pool — separate range so a project's
+    # dev and prod containers never collide on a host port.
+    prod_port_range_min: int = Field(default=4000)
+    prod_port_range_max: int = Field(default=4999)
 
     # Hibernate policy (minutes of inactivity before pause/stop).
     hibernate_free_tier_minutes: int = Field(default=15)
