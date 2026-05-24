@@ -38,6 +38,7 @@ export default async function WorkspacePage({
         projectName={project.name}
         projectId={project.id}
         projectSlug={project.slug}
+        imageGenEnabled={project.image_gen_enabled ?? true}
       />
       <Workspace project={project} />
     </>

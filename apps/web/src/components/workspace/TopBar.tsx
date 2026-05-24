@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { GithubPushButton } from "./GithubPushButton";
+import { ImageGenToggle } from "./ImageGenToggle";
 import { ModelSelector } from "./ModelSelector";
 import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
@@ -28,6 +29,7 @@ export function TopBar({
   projectSlug,
   designPresetId,
   designPresetName,
+  imageGenEnabled,
   showProjectControls = true,
 }: {
   user: { email: string };
@@ -39,6 +41,8 @@ export function TopBar({
   /** Read-only: AI auto-classified design preset for this project. */
   designPresetId?: string;
   designPresetName?: string;
+  /** Per-project: auto image-generation via gpt-image-1. Default true. */
+  imageGenEnabled?: boolean;
   showProjectControls?: boolean;
 }) {
   const initial = user.email.slice(0, 1).toUpperCase();
@@ -70,6 +74,12 @@ export function TopBar({
               <GithubPushButton
                 projectId={projectId}
                 projectSlug={projectSlug}
+              />
+            )}
+            {projectId && (
+              <ImageGenToggle
+                projectId={projectId}
+                imageGenEnabled={imageGenEnabled ?? true}
               />
             )}
             <ModelSelector />

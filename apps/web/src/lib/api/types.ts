@@ -35,6 +35,9 @@ export type Project = {
   updated_at: IsoDateTime;
   design_preset_id?: string;
   design_preset_name?: string;
+  /** Per-project toggle: when true, AI-emitted <img data-omnia-gen> tags are
+   *  resolved to real images via gpt-image-1. Default true. */
+  image_gen_enabled?: boolean;
 };
 
 export type Snapshot = {

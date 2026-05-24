@@ -24,3 +24,21 @@ export async function deleteProject(id: string): Promise<void> {
   if (USE_MOCKS) return mockApi.deleteProject(id);
   return apiFetch<void>(`/api/projects/${id}`, { method: "DELETE" });
 }
+
+export type ProjectUpdate = {
+  image_gen_enabled?: boolean;
+};
+
+export async function updateProject(
+  id: string,
+  payload: ProjectUpdate,
+): Promise<Project> {
+  if (USE_MOCKS) {
+    const current = await mockApi.getProject(id);
+    return { ...current, ...payload };
+  }
+  return apiFetch<Project>(`/api/projects/${id}`, {
+    method: "PATCH",
+    json: payload,
+  });
+}
