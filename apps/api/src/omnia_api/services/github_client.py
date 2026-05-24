@@ -151,7 +151,14 @@ async def get_login(token: str) -> str:
 async def create_repo(
     token: str, name: str, *, private: bool, description: str
 ) -> dict[str, str]:
-    """Создать пустой (auto_init=False) репозиторий у пользователя."""
+    """Создать репозиторий у пользователя с auto-init (README + initial commit).
+
+    `auto_init=False` создавал «пустой» repo без default-branch ref'а, и
+    последующие вызовы /git/blobs возвращали 409 «Git Repository is empty»
+    (GitHub bug — docs утверждают что blob работает, API отказывает).
+    С `auto_init=True` GitHub сразу пишет initial commit + main branch,
+    и наш push добавляет файлы поверх через base_tree.
+    """
     async with _make_client() as client:
         resp = await client.post(
             f"{_GH_API}/user/repos",
@@ -160,7 +167,7 @@ async def create_repo(
                 "name": name,
                 "private": private,
                 "description": description,
-                "auto_init": False,
+                "auto_init": True,
             },
         )
     if resp.status_code == 422:
@@ -217,12 +224,18 @@ async def push_files(
     message: str,
     branch: str = "main",
 ) -> None:
-    """Залить файлы первым коммитом в пустой репозиторий через Git Data API.
+    """Залить файлы коммитом в инициализированный (auto_init=True) репо.
 
-    Файлы заливаются blob-эндпоинтом с base64-кодированием (а не inline-content
-    в tree) — это устойчиво к utf-8 control chars, бинарникам и крупным файлам.
-    Inline-content в tree давал спорадический HTTP 409 от GitHub на нашей
-    генерации (Haiku/Sonnet иногда вставляют \\u0000 или surrogate halves).
+    Pipeline:
+      1) GET /git/refs/heads/{branch}      → head_sha
+      2) GET /git/commits/{head_sha}       → base_tree_sha
+      3) POST /git/blobs (per файл)        → blob_sha
+      4) POST /git/trees (base_tree + новые blobs)  → new_tree_sha
+      5) POST /git/commits (parents=[head], tree=new_tree)  → new_commit_sha
+      6) PATCH /git/refs/heads/{branch}    → fast-forward к new_commit_sha
+
+    На свежем repo (даже auto_init) GitHub initials API takes ~500ms;
+    transport-level retries в _make_client сглаживают это.
     """
     import base64
 
@@ -230,7 +243,39 @@ async def push_files(
         raise ApiError("github_push_failed", "Нет файлов для пуша", 400)
 
     async with _make_client(headers=_auth_headers(token)) as client:
-        # 1) Каждый файл → blob (base64). SHA блоба попадает в tree.
+        # 1) HEAD ref → head commit sha
+        r_ref_get = await client.get(
+            f"{_GH_API}/repos/{full_name}/git/refs/heads/{branch}"
+        )
+        if r_ref_get.status_code != 200:
+            body = r_ref_get.text[:400]
+            _log.error("github_client: ref-get HTTP %d: %s", r_ref_get.status_code, body)
+            raise ApiError(
+                "github_push_failed",
+                f"git/refs GET HTTP {r_ref_get.status_code}: {body[:160]}",
+                502,
+            )
+        head_sha = str(r_ref_get.json()["object"]["sha"])
+
+        # 2) HEAD commit → base tree sha
+        r_commit_get = await client.get(
+            f"{_GH_API}/repos/{full_name}/git/commits/{head_sha}"
+        )
+        if r_commit_get.status_code != 200:
+            body = r_commit_get.text[:400]
+            _log.error(
+                "github_client: commit-get HTTP %d: %s",
+                r_commit_get.status_code,
+                body,
+            )
+            raise ApiError(
+                "github_push_failed",
+                f"git/commits GET HTTP {r_commit_get.status_code}: {body[:160]}",
+                502,
+            )
+        base_tree_sha = str(r_commit_get.json()["tree"]["sha"])
+
+        # 3) Каждый файл → blob (base64)
         tree_entries: list[dict[str, Any]] = []
         for path, content in files.items():
             encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
@@ -260,9 +305,11 @@ async def push_files(
                 }
             )
 
-        # 2) Tree из blob-shas. Без base_tree — initial commit в пустой repo.
+        # 4) Tree поверх base_tree (README от auto_init остаётся, файлы юзера
+        #    добавляются; одноимённые перетирают).
         r_tree = await client.post(
-            f"{_GH_API}/repos/{full_name}/git/trees", json={"tree": tree_entries}
+            f"{_GH_API}/repos/{full_name}/git/trees",
+            json={"base_tree": base_tree_sha, "tree": tree_entries},
         )
         if r_tree.status_code not in (200, 201):
             body = r_tree.text[:400]
@@ -272,31 +319,41 @@ async def push_files(
                 f"git/trees HTTP {r_tree.status_code}: {body[:160]}",
                 502,
             )
-        tree_sha = str(r_tree.json()["sha"])
+        new_tree_sha = str(r_tree.json()["sha"])
 
+        # 5) Commit с parents=[head_sha]
         r_commit = await client.post(
             f"{_GH_API}/repos/{full_name}/git/commits",
-            json={"message": message, "tree": tree_sha},
+            json={
+                "message": message,
+                "tree": new_tree_sha,
+                "parents": [head_sha],
+            },
         )
         if r_commit.status_code not in (200, 201):
             body = r_commit.text[:400]
-            _log.error("github_client: commit HTTP %d: %s", r_commit.status_code, body)
+            _log.error(
+                "github_client: commit HTTP %d: %s",
+                r_commit.status_code,
+                body,
+            )
             raise ApiError(
                 "github_push_failed",
                 f"git/commits HTTP {r_commit.status_code}: {body[:160]}",
                 502,
             )
-        commit_sha = str(r_commit.json()["sha"])
+        new_commit_sha = str(r_commit.json()["sha"])
 
-        r_ref = await client.post(
-            f"{_GH_API}/repos/{full_name}/git/refs",
-            json={"ref": f"refs/heads/{branch}", "sha": commit_sha},
+        # 6) Fast-forward existing ref (PATCH, не POST — иначе «ref exists»)
+        r_ref_upd = await client.patch(
+            f"{_GH_API}/repos/{full_name}/git/refs/heads/{branch}",
+            json={"sha": new_commit_sha, "force": False},
         )
-        if r_ref.status_code not in (200, 201):
-            body = r_ref.text[:400]
-            _log.error("github_client: ref HTTP %d: %s", r_ref.status_code, body)
+        if r_ref_upd.status_code not in (200, 201):
+            body = r_ref_upd.text[:400]
+            _log.error("github_client: ref PATCH HTTP %d: %s", r_ref_upd.status_code, body)
             raise ApiError(
                 "github_push_failed",
-                f"git/refs HTTP {r_ref.status_code}: {body[:160]}",
+                f"git/refs PATCH HTTP {r_ref_upd.status_code}: {body[:160]}",
                 502,
             )
