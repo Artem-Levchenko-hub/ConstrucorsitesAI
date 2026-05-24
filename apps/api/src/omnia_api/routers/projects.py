@@ -13,7 +13,7 @@ from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.schemas.project import ProjectCreate, ProjectPublic
+from omnia_api.schemas.project import ProjectCreate, ProjectPublic, ProjectUpdate
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.preset_classifier import classify_preset_sync
 from omnia_api.services.queue import enqueue_preview
@@ -127,23 +127,6 @@ async def get_project(
     project = await session.get(Project, project_id)
     if project is None or project.owner_id != current_user.id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
-    return project
-
-
-@router.patch("/{project_id}", response_model=ProjectPublic)
-async def update_project(
-    project_id: UUID,
-    payload: ProjectUpdate,
-    session: SessionDep,
-    current_user: CurrentUserDep,
-) -> Project:
-    project = await session.get(Project, project_id)
-    if project is None or project.owner_id != current_user.id:
-        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
-    if payload.image_gen_enabled is not None:
-        project.image_gen_enabled = payload.image_gen_enabled
-    await session.commit()
-    await session.refresh(project)
     return project
 
 
