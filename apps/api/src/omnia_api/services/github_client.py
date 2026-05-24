@@ -16,13 +16,58 @@ import httpx
 from omnia_api.core.config import get_settings
 from omnia_api.core.errors import ApiError
 
+import asyncio
+import logging
+
 _GH_API = "https://api.github.com"
 _GH_OAUTH = "https://github.com"
-_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+# Wider connect-timeout — на проде ловим спорадические `httpx.ConnectTimeout`
+# к github.com из api-контейнера даже когда сеть в целом отвечает за <1s.
+# Подозреваем DNS-pause / TCP RST под нагрузкой; 25s connect даёт двойной запас
+# для слоу-handshake.
+_TIMEOUT = httpx.Timeout(30.0, connect=25.0)
+# Retry policy для transient network failures (ConnectTimeout/ConnectError) —
+# те ошибки которые НЕ дают «нерабочий OAuth», а просто следствие сетевых
+# спайков. Делаем 3 попытки с экспоненциальной задержкой 0.5/1.5/4.5s.
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF_BASE = 0.5
 _API_HEADERS = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
 }
+
+_log = logging.getLogger(__name__)
+
+
+async def _post_with_retry(
+    url: str, *, data: dict[str, Any], headers: dict[str, str]
+) -> httpx.Response:
+    """POST с retry на transient network-сбои (ConnectTimeout/ConnectError).
+
+    Поднимает последний `httpx.HTTPError` если все попытки провалились —
+    вызывающий ловит и оборачивает в ApiError(github_oauth_failed) с
+    осмысленным сообщением для пользователя.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _RETRY_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                return await client.post(url, data=data, headers=headers)
+        except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+            last_exc = exc
+            if attempt >= _RETRY_ATTEMPTS:
+                break
+            backoff = _RETRY_BACKOFF_BASE * (3 ** (attempt - 1))
+            _log.warning(
+                "github_client: %s on attempt %d/%d — retry in %.1fs",
+                type(exc).__name__,
+                attempt,
+                _RETRY_ATTEMPTS,
+                backoff,
+            )
+            await asyncio.sleep(backoff)
+    assert last_exc is not None
+    raise last_exc
 
 
 def authorize_url(state: str) -> str:
@@ -47,8 +92,8 @@ async def exchange_code(code: str) -> dict[str, str]:
     s = get_settings()
     if not s.github_client_id or not s.github_client_secret:
         raise ApiError("github_not_configured", "GitHub OAuth не настроен на сервере", 503)
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(
+    try:
+        resp = await _post_with_retry(
             f"{_GH_OAUTH}/login/oauth/access_token",
             headers={"Accept": "application/json"},
             data={
@@ -58,6 +103,13 @@ async def exchange_code(code: str) -> dict[str, str]:
                 "redirect_uri": s.github_callback_url,
             },
         )
+    except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+        _log.error("github_client: exchange_code network failure: %r", exc)
+        raise ApiError(
+            "github_network_error",
+            "Не удалось соединиться с GitHub. Попробуйте ещё раз через минуту.",
+            502,
+        ) from exc
     if resp.status_code != 200:
         raise ApiError("github_oauth_failed", "GitHub отклонил обмен кода", 502)
     data: dict[str, Any] = resp.json()
