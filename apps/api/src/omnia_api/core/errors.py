@@ -26,6 +26,11 @@ ErrorCode = Literal[
     "github_state_invalid",
     "github_state_expired",
     "github_unavailable",
+    "github_oauth_failed",
+    "github_token_invalid",
+    "github_repo_exists",
+    "github_repo_failed",
+    "github_push_failed",
     "project_empty",
 ]
 
