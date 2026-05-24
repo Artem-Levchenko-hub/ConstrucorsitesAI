@@ -160,6 +160,16 @@ async def _issue_cert(host: str) -> bool:
     fullchain = cert_dir / "fullchain.pem"
     privkey = cert_dir / "privkey.pem"
 
+    # Short-circuit: a valid cert is already present (e.g. a symlink to a
+    # pre-issued wildcard cert covering this host). Skip the acme.sh round-trip
+    # — it would waste rate-limit, time, and a network call for nothing.
+    try:
+        if fullchain.exists() and privkey.exists() and "BEGIN CERTIFICATE" in fullchain.read_text(errors="ignore"):
+            log.info("nginx.cert_short_circuit", host=host)
+            return True
+    except OSError:
+        pass
+
     await run(
         [
             acme, "--issue", "-d", host,
