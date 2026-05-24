@@ -30,6 +30,9 @@ _PROVIDER_KEY_PRESENT = {
 # Mirrors _PROXY_ROUTES in services/litellm_router.py; keep these in sync.
 _MODEL_KEY_OVERRIDE = {
     "claude-haiku-4-5": lambda s: _has(s.proxyapi_api_key),
+    # Sonnet 4.6 routed through proxyapi too — shares the same balance with
+    # Haiku and the GPT-5 family.
+    "claude-sonnet-4-6": lambda s: _has(s.proxyapi_api_key),
     # GPT-5 family lives on the same proxyapi balance as Haiku — both check
     # the same key here. If proxyapi credit is empty, ALL three flip to
     # `available: false` simultaneously, which is what users should see.
