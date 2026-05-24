@@ -3,41 +3,120 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Блог</title>
+  <title>На полях — заметки о ремесле и продукте</title>
+  <meta name="description" content="Личный блог о дизайне, разработке и привычках мышления. Эссе по вторникам.">
+  <meta property="og:title" content="На полях — заметки о ремесле и продукте">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230f172a'/><text x='16' y='23' font-size='20' fill='white' text-anchor='middle' font-family='Georgia,serif'>П</text></svg>">
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/omnia-kit.css">
+  <script src="assets/omnia-kit.js" defer></script>
+  <script>
+    tailwind.config = { theme: { extend: {
+      fontFamily: { serif: ['"Newsreader"', 'Georgia', 'serif'], sans: ['"Inter"', 'system-ui', 'sans-serif'] },
+      colors: { ink: '#0f172a', accent: '#b45309' }
+    } } };
+  </script>
 </head>
-<body class="bg-white text-slate-900 font-serif">
-  <header class="border-b">
-    <div class="max-w-3xl mx-auto px-6 py-6">
-      <h1 class="text-3xl font-bold">Название блога</h1>
-      <p class="text-slate-600 text-sm mt-1">Заметки и наблюдения</p>
+<body class="font-sans text-slate-600 bg-stone-50 antialiased">
+
+  <header class="glass sticky top-0 z-40 border-b border-stone-200/70">
+    <div class="max-w-3xl mx-auto px-6 h-16 flex items-center justify-between">
+      <a href="#top" class="font-serif font-bold text-xl text-ink">На полях</a>
+      <nav class="hidden sm:flex items-center gap-7 text-sm font-medium">
+        <a href="#posts" class="hover:text-accent transition-colors">Записи</a>
+        <a href="#about" class="hover:text-accent transition-colors">Об авторе</a>
+        <a href="#subscribe" class="hover:text-accent transition-colors">Подписка</a>
+      </nav>
+      <button id="menu-toggle" aria-label="Меню" aria-expanded="false" class="sm:hidden inline-flex h-10 w-10 items-center justify-center rounded-lg text-ink hover:bg-stone-200/60">
+        <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </div>
+    <div id="mobile-menu" class="hidden sm:hidden border-t border-stone-200 bg-stone-50">
+      <nav class="max-w-3xl mx-auto px-6 py-4 flex flex-col gap-3 text-sm font-medium">
+        <a href="#posts" class="py-1">Записи</a>
+        <a href="#about" class="py-1">Об авторе</a>
+        <a href="#subscribe" class="py-1">Подписка</a>
+      </nav>
     </div>
   </header>
 
-  <main class="max-w-3xl mx-auto px-6 py-12 space-y-12">
-    <article>
-      <h2 class="text-2xl font-bold mb-2">
-        <a href="#" class="hover:text-indigo-600">Первая запись</a>
-      </h2>
-      <p class="text-slate-500 text-sm mb-4">4 мая 2026</p>
-      <p class="text-slate-800 leading-relaxed">
-        Здесь будет первый пост. Замени его своим контентом — расскажи, о чём этот блог.
-      </p>
-    </article>
+  <main id="top">
+    <!-- Intro -->
+    <section class="max-w-3xl mx-auto px-6 py-20 md:py-28 text-center">
+      <h1 class="fade-up font-serif text-4xl md:text-5xl font-bold text-ink leading-tight tracking-tight">Заметки о ремесле и продукте</h1>
+      <p class="fade-up delay-1 mt-5 text-lg text-slate-600 max-w-xl mx-auto">Эссе о дизайне, разработке и привычках мышления. Без воды, по одному в неделю.</p>
+    </section>
 
-    <article>
-      <h2 class="text-2xl font-bold mb-2">
-        <a href="#" class="hover:text-indigo-600">Вторая запись</a>
-      </h2>
-      <p class="text-slate-500 text-sm mb-4">3 мая 2026</p>
-      <p class="text-slate-800 leading-relaxed">
-        Ещё один пример поста. Поддерживается markdown — пиши свободно.
-      </p>
-    </article>
+    <!-- Posts -->
+    <section id="posts" class="max-w-3xl mx-auto px-6 pb-12 space-y-12">
+      <article id="post-1" class="reveal">
+        <p class="text-sm font-medium text-accent">12 мая 2026 · 6 мин</p>
+        <h2 class="font-serif text-2xl md:text-3xl font-semibold text-ink mt-2 leading-snug">
+          <a href="#post-1" class="hover:text-accent transition-colors">Почему хороший интерфейс — это меньше решений</a>
+        </h2>
+        <p class="mt-3 text-lg leading-relaxed text-slate-700">Каждый лишний выбор на экране — это микро-усталость пользователя. Разбираю, как сокращать количество решений, не теряя гибкости, и почему «настройки по умолчанию» — главный продуктовый рычаг.</p>
+        <a href="mailto:author@example.ru?subject=Статья про интерфейсы" class="mt-4 inline-flex items-center gap-1 font-medium text-ink hover:text-accent transition-colors">Читать дальше →</a>
+      </article>
+      <hr class="divider-fade">
+      <article id="post-2" class="reveal" data-reveal-delay="1">
+        <p class="text-sm font-medium text-accent">5 мая 2026 · 4 мин</p>
+        <h2 class="font-serif text-2xl md:text-3xl font-semibold text-ink mt-2 leading-snug">
+          <a href="#post-2" class="hover:text-accent transition-colors">Дисциплина важнее вдохновения</a>
+        </h2>
+        <p class="mt-3 text-lg leading-relaxed text-slate-700">Вдохновение приходит к тем, кто уже сидит за работой. Делюсь рутиной, которая помогает выпускать тексты и проекты стабильно, а не раз в полгода рывком.</p>
+        <a href="mailto:author@example.ru?subject=Статья про дисциплину" class="mt-4 inline-flex items-center gap-1 font-medium text-ink hover:text-accent transition-colors">Читать дальше →</a>
+      </article>
+      <hr class="divider-fade">
+      <article id="post-3" class="reveal" data-reveal-delay="2">
+        <p class="text-sm font-medium text-accent">28 апреля 2026 · 8 мин</p>
+        <h2 class="font-serif text-2xl md:text-3xl font-semibold text-ink mt-2 leading-snug">
+          <a href="#post-3" class="hover:text-accent transition-colors">Как я веду заметки десять лет</a>
+        </h2>
+        <p class="mt-3 text-lg leading-relaxed text-slate-700">Система, которая пережила пять приложений и ни одной потери данных. О том, почему формат важнее инструмента и как заметки превращаются в статьи.</p>
+        <a href="mailto:author@example.ru?subject=Статья про заметки" class="mt-4 inline-flex items-center gap-1 font-medium text-ink hover:text-accent transition-colors">Читать дальше →</a>
+      </article>
+    </section>
+
+    <!-- About -->
+    <section id="about" class="bg-white border-y border-stone-200/70">
+      <div class="reveal max-w-3xl mx-auto px-6 py-16 flex items-start gap-5">
+        <div class="h-16 w-16 shrink-0 rounded-full bg-gradient-to-br from-amber-400 to-orange-600"></div>
+        <div>
+          <h2 class="font-serif text-xl font-semibold text-ink">Об авторе</h2>
+          <p class="mt-2 text-lg leading-relaxed text-slate-700">Пишу о продукте и ремесле с 2016 года. Днём проектирую интерфейсы, вечером записываю мысли, которые иначе бы забыл.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Subscribe -->
+    <section id="subscribe" class="max-w-3xl mx-auto px-6 py-20 text-center">
+      <h2 class="reveal font-serif text-3xl font-bold text-ink tracking-tight">Новое эссе — каждый вторник</h2>
+      <p class="reveal mt-3 text-lg text-slate-600" data-reveal-delay="1">Без спама. Только тексты. Отписаться можно в один клик.</p>
+      <form class="reveal mt-7 flex flex-col sm:flex-row gap-3 max-w-md mx-auto" data-reveal-delay="2" onsubmit="event.preventDefault(); this.querySelector('[data-ok]').classList.remove('hidden'); this.querySelector('button').disabled = true;">
+        <input type="email" required placeholder="Ваш email" class="flex-1 rounded-lg border border-stone-300 px-4 py-3 text-ink placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-accent/50" aria-label="Ваш email">
+        <button type="submit" class="press rounded-lg bg-ink px-6 py-3 font-semibold text-white transition hover:bg-slate-800">Подписаться</button>
+      </form>
+      <p data-ok class="hidden mt-3 text-sm text-emerald-700">Готово! Проверьте почту — там письмо с подтверждением.</p>
+    </section>
   </main>
 
-  <footer class="border-t mt-16 py-8 text-center text-slate-500 text-sm">
-    <p>&copy; 2026 · Сделано на Omnia.AI</p>
+  <footer class="border-t border-stone-200/70 bg-white">
+    <div class="max-w-3xl mx-auto px-6 py-8 text-sm text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <p>© 2026 На полях</p>
+      <div class="flex gap-5">
+        <a href="https://t.me/napolyah" target="_blank" rel="noopener" class="hover:text-ink transition-colors">Telegram</a>
+        <a href="mailto:author@example.ru" class="hover:text-ink transition-colors">Почта</a>
+      </div>
+    </div>
   </footer>
+
+  <button id="back-to-top" aria-label="Наверх" class="press fixed bottom-6 right-6 z-40 inline-flex h-11 w-11 items-center justify-center rounded-full bg-ink text-white shadow-lg hover:bg-slate-800">
+    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+  </button>
+
 </body>
 </html>

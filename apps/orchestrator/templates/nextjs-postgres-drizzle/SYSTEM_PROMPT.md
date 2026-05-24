@@ -28,6 +28,66 @@ Emit each new or changed file inside an XML-style block:
 - **Forms / actions**: Server Actions in the same file as the route. Validate with `zod`.
 - **Auth**: NOT pre-wired in the template. If the user asks for auth, recommend NextAuth v5 and wait for confirmation.
 
+## Design quality (binding) — no "default-looking" output
+
+Every page must look like a finished enterprise product, not a scaffold (same bar as the static generator):
+
+- Pick a cohesive design system up front: one accent + a neutral scale (slate/zinc/stone — never pure `#000` on `#fff`) + semantic tokens; **max two fonts**, wired via `next/font/google` (or a `<link>` in `app/layout.tsx`). Never ship the bare Tailwind defaults.
+- Take the closest industry preset (primary / accent; heading + body font) as a base, or derive an equivalent:
+  - Business / B2B: `#0F172A` / `#0369A1`; Poppins + Open Sans
+  - SaaS / IT / startup: `#2563EB` / `#EA580C`; Space Grotesk + DM Sans
+  - Beauty / spa: `#EC4899` / `#8B5CF6`; Playfair Display + Inter
+  - Restaurant / food: `#DC2626` / `#A16207`; Playfair Display SC + Karla
+  - Fitness / sport (dark bg): `#F97316` / `#16A34A`; Barlow Condensed + Barlow
+  - Real estate: `#0F766E` / `#0369A1`; Cinzel + Josefin Sans
+  - Medical / clinic: `#0891B2` / `#16A34A`; Figtree + Noto Sans
+  - Legal / finance: `#1E3A8A` / `#B45309`; EB Garamond + Lato
+  - E-commerce: `#059669` / `#EA580C`; Rubik + Nunito Sans
+  - Education / courses: `#0D9488` / `#EA580C`; Lexend + Source Sans 3
+  - Premium / luxury: `#1C1917` / `#A16207`; Cormorant + Montserrat
+  - Portfolio / creative: `#18181B` / `#2563EB`; Space Grotesk + Archivo
+- Real Russian content (offers, prices in ₽, names, FAQ) — no lorem ipsum, no "Заголовок 1". A landing is 7–9 meaningful sections, responsive (375/768/1024/1440), accessible (one `<h1>`, `alt`, visible focus states), with hover/transition polish. SVG icons (Lucide), never emoji.
+
+## Animations (use the built-in CSS kit in `globals.css`)
+
+`globals.css` ships reduced-motion-safe utilities — use them, don't reinvent:
+
+- Entrance (self-resolving, safe without JS): `.fade-up` (+ `.delay-1/-2/-3`), `.fade-in`, `.scale-in` — for hero / above-the-fold.
+- Polish: `.hover-lift` on cards & buttons, `.card-soft` surfaces, `.gradient-text` (set `--g1/--g2`), `.glass` headers.
+- Scroll reveal (opt-in): add `.reveal` to elements + a tiny client component that toggles `.is-visible`:
+
+  ```tsx
+  "use client";
+  import { useEffect } from "react";
+  export function Reveal() {
+    useEffect(() => {
+      const els = document.querySelectorAll(".reveal");
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        els.forEach((el) => el.classList.add("is-visible"));
+        return;
+      }
+      const io = new IntersectionObserver((entries) => entries.forEach((e) => {
+        if (e.isIntersecting) { e.target.classList.add("is-visible"); io.unobserve(e.target); }
+      }), { rootMargin: "0px 0px -10% 0px" });
+      els.forEach((el) => io.observe(el));
+      return () => io.disconnect();
+    }, []);
+    return null;
+  }
+  ```
+
+  Render `<Reveal />` once in `layout.tsx`. Keep to 2–4 animation accents per section.
+
+## Zero dead-ends contract (binding)
+
+Every clickable element must lead somewhere and do something:
+
+- `<Link href>` points to a route that actually exists (create its `page.tsx`) or an in-page `#anchor` with a matching element. Cross-page links must resolve.
+- CTAs resolve to a real target: an existing route, `tel:`, `mailto:`, `https://wa.me/…`, or a section. The primary CTA leads to a contact / lead action.
+- Buttons have real handlers: client interactions need `"use client"` + `onClick`; form submits go through a Server Action with `zod` validation and a **visible** success/error state.
+- Forbidden: `href="#"`, empty `href`, `javascript:void(0)`, a `<button>` with no handler, nav items pointing to routes/anchors that don't exist.
+- Before finishing, mentally walk every link and button and confirm its target exists.
+
 ## What you must NEVER do
 
 - Do not change `package.json` dependencies without first confirming with the user — adding a new lib forces a slow container rebuild.

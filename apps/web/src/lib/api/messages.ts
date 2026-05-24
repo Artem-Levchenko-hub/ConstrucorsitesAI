@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
 import { mockApi, USE_MOCKS } from "./mocks";
-import type { Message, PromptResponse } from "./types";
+import type { Message, PromptResponse, SelectedElement } from "./types";
 
 export async function listMessages(projectId: string): Promise<Message[]> {
   if (USE_MOCKS) return mockApi.listMessages(projectId);
@@ -11,6 +11,7 @@ export async function sendPrompt(
   projectId: string,
   prompt: string,
   modelId: string,
+  selectedElements?: SelectedElement[] | null,
 ): Promise<PromptResponse> {
   if (USE_MOCKS) {
     const { assistantMessageId } = mockApi.beginPrompt(
@@ -22,6 +23,14 @@ export async function sendPrompt(
   }
   return apiFetch<PromptResponse>(`/api/projects/${projectId}/prompt`, {
     method: "POST",
-    json: { prompt, model_id: modelId },
+    // Omit the field entirely when there are no picks — keeps old behaviour
+    // byte-identical and the backend field optional.
+    json: {
+      prompt,
+      model_id: modelId,
+      ...(selectedElements && selectedElements.length
+        ? { selected_elements: selectedElements }
+        : {}),
+    },
   });
 }

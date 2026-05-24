@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronDown, LogOut, User as UserIcon } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User as UserIcon } from "lucide-react";
 import { logoutAction } from "@/app/(auth)/actions";
 import {
   Avatar,
@@ -16,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { GithubPushButton } from "./GithubPushButton";
 import { ModelSelector } from "./ModelSelector";
 import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
@@ -24,12 +25,20 @@ export function TopBar({
   user,
   projectName,
   projectId,
+  projectSlug,
+  designPresetId,
+  designPresetName,
   showProjectControls = true,
 }: {
   user: { email: string };
   projectName?: string;
   /** V2 — required when showProjectControls is true so we can render the runtime button. */
   projectId?: string;
+  /** Используется как default repo_name в диалоге «Залить в GitHub». */
+  projectSlug?: string;
+  /** Read-only: AI auto-classified design preset for this project. */
+  designPresetId?: string;
+  designPresetName?: string;
   showProjectControls?: boolean;
 }) {
   const initial = user.email.slice(0, 1).toUpperCase();
@@ -57,7 +66,22 @@ export function TopBar({
         {showProjectControls && (
           <>
             {projectId && <RuntimeButton projectId={projectId} />}
+            {projectId && projectSlug && (
+              <GithubPushButton
+                projectId={projectId}
+                projectSlug={projectSlug}
+              />
+            )}
             <ModelSelector />
+            {designPresetId && designPresetName && (
+              <span
+                title={`Дизайн-пресет: ${designPresetName}. AI выбрал автоматически.`}
+                className="inline-flex items-center gap-1 h-7 px-2 rounded-md border border-border-default bg-surface-base text-xs text-fg-secondary whitespace-nowrap cursor-default select-none"
+              >
+                <span aria-hidden="true">🎨</span>
+                <span className="truncate max-w-[140px]">{designPresetName}</span>
+              </span>
+            )}
             <WalletBadge />
           </>
         )}
@@ -84,6 +108,12 @@ export function TopBar({
               <Link href="/projects">
                 <UserIcon className="h-4 w-4" />
                 Мои проекты
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/account">
+                <Settings className="h-4 w-4" />
+                Аккаунт
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />

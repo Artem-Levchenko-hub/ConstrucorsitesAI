@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +14,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ru">
-      <body className="bg-zinc-950 text-zinc-100 antialiased">{children}</body>
+      <body className="bg-zinc-950 text-zinc-100 antialiased">
+        {children}
+        {/* Omnia select-mode inspector — synced copy of apps/api static/omnia-inspector.js
+            (a drift test keeps them identical). Dormant until the workspace enables it
+            over postMessage, so it costs nothing in normal preview/prod use. */}
+        <Script src="/omnia-inspector.js" strategy="afterInteractive" />
+      </body>
     </html>
   );
 }

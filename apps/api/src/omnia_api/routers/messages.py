@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Query, status
@@ -23,8 +23,10 @@ from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptRespon
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.file_extractor import UnsafePathError, extract_files
+from omnia_api.services.link_validator import find_dead_links
 from omnia_api.services.llm_client import stream_chat_completion
-from omnia_api.services.prompt_builder import build_messages
+from omnia_api.services.preset_classifier import classify_preset
+from omnia_api.services.prompt_builder import KIT_FILES, build_messages
 from omnia_api.services.queue import enqueue_preview
 
 RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом генерации
@@ -102,11 +104,21 @@ async def post_prompt(
     if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
         raise ApiError("wallet_empty", "insufficient balance", 402)
 
+    # Select-mode: элементы, выделенные в превью, с комментариями. Сериализуем в
+    # list[dict] для JSONB-колонки и для передачи в фоновую _process_prompt
+    # (сервис prompt_builder не знает про Pydantic-схему — R-07).
+    selected_dump = (
+        [el.model_dump() for el in payload.selected_elements]
+        if payload.selected_elements
+        else None
+    )
+
     user_msg = Message(
         project_id=project_id,
         role="user",
         content=payload.prompt,
         model_id=payload.model_id,
+        selected_elements=selected_dump,
     )
     assistant_msg = Message(
         project_id=project_id,
@@ -127,6 +139,7 @@ async def post_prompt(
         current_snapshot_id=project.current_snapshot_id,
         prompt_text=payload.prompt,
         model_id=payload.model_id,
+        selected_elements=selected_dump,
     )
 
     return PromptResponse(message_id=assistant_msg.id, snapshot_id=None)
@@ -196,6 +209,37 @@ def _looks_truncated(accumulated: str, files: dict[str, str]) -> bool:
     return False
 
 
+_KIT_LINK = '<link rel="stylesheet" href="assets/omnia-kit.css">'
+_KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
+
+
+def _ensure_kit_linked(files: dict[str, str]) -> dict[str, str]:
+    """Гарантировать, что каждая возвращённая HTML-страница подключает Omnia-кит.
+
+    Если модель «уронила» теги — переинжектим их перед </head> (иначе анимации и
+    интерактив тихо ломаются). Идемпотентно: страницы со ссылкой пропускаем.
+    """
+    out = dict(files)
+    for path, content in files.items():
+        if not path.lower().endswith((".html", ".htm")):
+            continue
+        has_css = "assets/omnia-kit.css" in content
+        has_js = "assets/omnia-kit.js" in content
+        if has_css and has_js:
+            continue
+        inject = ""
+        if not has_css:
+            inject += "  " + _KIT_LINK + "\n"
+        if not has_js:
+            inject += "  " + _KIT_SCRIPT + "\n"
+        if "</head>" in content:
+            content = content.replace("</head>", inject + "</head>", 1)
+        else:
+            content = inject + content
+        out[path] = content
+    return out
+
+
 async def _process_prompt(
     project_id: UUID,
     user_id: UUID,
@@ -204,6 +248,7 @@ async def _process_prompt(
     current_snapshot_id: UUID | None,
     prompt_text: str,
     model_id: str,
+    selected_elements: list[dict[str, Any]] | None = None,
 ) -> None:
     import logging as _log_mod
     _log = _log_mod.getLogger(__name__)
@@ -216,6 +261,8 @@ async def _process_prompt(
     current_files: dict[str, str] = {}
     history_serialized: list[dict[str, str]] = []
     project_template = "blank"
+    project_name = ""
+    project_design_preset_id: str | None = None
 
     try:
         async with factory() as session:
@@ -226,6 +273,8 @@ async def _process_prompt(
             proj = await session.get(Project, project_id)
             if proj is not None:
                 project_template = proj.template
+                project_name = proj.name or ""
+                project_design_preset_id = proj.design_preset_id
             res = await session.execute(
                 select(Message)
                 .where(Message.project_id == project_id)
@@ -245,8 +294,41 @@ async def _process_prompt(
             )
         print(f"[PP] files_loaded count={len(current_files)}", flush=True)
 
+        # Kit files are Omnia-managed infra — keep them out of the model's context
+        # (saves tokens and stops the model rewriting them from what it "saw").
+        current_files = {p: c for p, c in current_files.items() if p not in KIT_FILES}
+
+        # Auto-classify design preset on first prompt if not set yet.
+        # Heuristic is sync+cheap; LLM-fallback (Haiku, ~150 tokens) only fires
+        # if heuristic is ambiguous. Cached in projects.design_preset_id forever.
+        if not project_design_preset_id:
+            try:
+                project_design_preset_id = await classify_preset(
+                    project_name=project_name,
+                    template=project_template,
+                    first_prompt=prompt_text,
+                )
+                # Persist so subsequent prompts skip the classifier entirely.
+                async with factory() as cls_session:
+                    cls_proj = await cls_session.get(Project, project_id)
+                    if cls_proj is not None and not cls_proj.design_preset_id:
+                        cls_proj.design_preset_id = project_design_preset_id
+                        await cls_session.commit()
+                print(
+                    f"[PP] preset_classified preset_id={project_design_preset_id}",
+                    flush=True,
+                )
+            except Exception as cls_exc:  # noqa: BLE001 — never block generation
+                _log.warning("preset classify failed: %r", cls_exc)
+                project_design_preset_id = None
+
         messages = build_messages(
-            current_files, history_serialized, prompt_text, project_template
+            current_files,
+            history_serialized,
+            prompt_text,
+            project_template,
+            selected_elements,
+            preset_id=project_design_preset_id,
         )
         print(f"[PP] messages_built count={len(messages)}", flush=True)
 
@@ -369,6 +451,57 @@ async def _process_prompt(
                 # chat header shows e.g. "claude-haiku-4-5" instead of the
                 # original Gemini that failed.
                 model_id = effective_model
+
+        # --- Pass N+1: one-shot dead-link repair (static only) ----------
+        # The prompt forbids dead links, but weaker models still slip in
+        # href="#" / broken anchors. If we find any, re-prompt ONCE with the
+        # exact issues and keep the result only if it's strictly better.
+        # Fail-safe: a single pass, never blocks the commit (R-10 fail fast).
+        if files and project_template != "fullstack":
+            dead = find_dead_links(files)
+            if dead:
+                print(f"[PP] dead_links found={len(dead)} -> repair pass", flush=True)
+                prior_answer = accumulated
+                notice = (
+                    "\n\n*Проверка ссылок: часть кнопок вела в никуда — "
+                    "перегенерирую с рабочими ссылками…*\n\n"
+                )
+                accumulated = accumulated + notice
+                await publish_event(
+                    project_id,
+                    "llm.chunk",
+                    {"message_id": str(assistant_message_id), "delta": notice},
+                )
+                repair_request = (
+                    "В предыдущем ответе есть ссылки/кнопки, ведущие в никуда:\n"
+                    + "\n".join(f"— {d}" for d in dead[:20])
+                    + "\n\nВерни ПОЛНЫЕ исправленные файлы целиком (в тех же "
+                    "<file>-блоках). Каждая ссылка обязана вести на существующий "
+                    "якорь (создай секцию с нужным id), tel:/mailto:/мессенджер или "
+                    'реальную страницу. Ни одного href="#", пустого href или '
+                    "javascript:void(0). Больше ничего не меняй."
+                )
+                messages.append({"role": "assistant", "content": prior_answer})
+                messages.append({"role": "user", "content": repair_request})
+                await _run_stream(effective_model)
+                repaired_acc = str(state["accumulated"])
+                try:
+                    repaired_files = extract_files(repaired_acc)
+                except (UnsafePathError, ValueError):
+                    repaired_files = {}
+                if repaired_files and len(find_dead_links(repaired_files)) < len(dead):
+                    files = repaired_files
+                    accumulated = accumulated + repaired_acc
+                    print(f"[PP] repair applied files={len(files)}", flush=True)
+                else:
+                    print("[PP] repair skipped (no improvement)", flush=True)
+
+        # Kit files are Omnia-managed: drop any model attempt to write/delete them,
+        # and re-inject the kit <link>/<script> into returned HTML if the model
+        # dropped them (so animations/interactivity never silently break).
+        if files and project_template != "fullstack":
+            files = {p: c for p, c in files.items() if p not in KIT_FILES}
+            files = _ensure_kit_linked(files)
 
         new_snapshot_id: UUID | None = None
         if files:

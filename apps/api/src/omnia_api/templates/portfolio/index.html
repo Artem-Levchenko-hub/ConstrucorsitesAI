@@ -3,40 +3,118 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Портфолио</title>
+  <title>Анна Корнеева — продуктовый дизайнер</title>
+  <meta name="description" content="Портфолио продуктового дизайнера Анны Корнеевой: интерфейсы, бренды и продукты, которыми пользуются миллионы.">
+  <meta property="og:title" content="Анна Корнеева — продуктовый дизайнер">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2318181b'/><text x='16' y='22' font-size='18' fill='white' text-anchor='middle' font-family='sans-serif' font-weight='700'>А</text></svg>">
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/omnia-kit.css">
+  <script src="assets/omnia-kit.js" defer></script>
+  <script>
+    tailwind.config = { theme: { extend: {
+      fontFamily: { display: ['"Space Grotesk"', 'system-ui', 'sans-serif'], sans: ['"Archivo"', 'system-ui', 'sans-serif'] },
+      colors: { ink: '#18181b', accent: '#2563eb' }
+    } } };
+  </script>
 </head>
-<body class="bg-white text-slate-900 font-sans">
-  <main class="max-w-4xl mx-auto px-6 py-16">
-    <header class="mb-16">
-      <h1 class="text-5xl font-bold mb-2">Имя Фамилия</h1>
-      <p class="text-xl text-slate-600">Дизайнер · Разработчик · Создатель</p>
-    </header>
+<body class="font-sans text-zinc-600 bg-white antialiased">
 
-    <section class="mb-16">
-      <h2 class="text-2xl font-bold mb-6">Обо мне</h2>
-      <p class="text-slate-700 leading-relaxed">
-        Несколько предложений, которые расскажут, кто вы и над чем сейчас работаете.
+  <header class="glass sticky top-0 z-40 border-b border-zinc-200/60">
+    <div class="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
+      <a href="#top" class="font-display font-bold text-lg text-ink">Анна Корнеева</a>
+      <nav class="hidden md:flex items-center gap-8 text-sm font-medium">
+        <a href="#work" class="hover:text-accent transition-colors">Работы</a>
+        <a href="#about" class="hover:text-accent transition-colors">Обо мне</a>
+        <a href="#contact" class="hover:text-accent transition-colors">Контакты</a>
+      </nav>
+      <button id="menu-toggle" aria-label="Меню" aria-expanded="false" class="md:hidden inline-flex h-10 w-10 items-center justify-center rounded-lg text-ink hover:bg-zinc-100">
+        <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </div>
+    <div id="mobile-menu" class="hidden md:hidden border-t border-zinc-200 bg-white">
+      <nav class="max-w-5xl mx-auto px-6 py-4 flex flex-col gap-3 text-sm font-medium">
+        <a href="#work" class="py-1">Работы</a>
+        <a href="#about" class="py-1">Обо мне</a>
+        <a href="#contact" class="py-1">Контакты</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- Hero -->
+    <section class="max-w-5xl mx-auto px-6 py-24 md:py-32">
+      <p class="fade-up text-sm font-medium uppercase tracking-widest text-accent">Продуктовый дизайнер · Москва</p>
+      <h1 class="fade-up delay-1 font-display text-4xl md:text-6xl font-bold text-ink leading-[1.05] tracking-tight mt-5 max-w-3xl">
+        Проектирую интерфейсы, которыми пользуются миллионы
+      </h1>
+      <p class="fade-up delay-2 mt-6 max-w-xl text-lg text-zinc-600">
+        8 лет помогаю продуктам стать понятными и красивыми — от первого экрана до дизайн-системы.
       </p>
-    </section>
-
-    <section class="mb-16">
-      <h2 class="text-2xl font-bold mb-6">Работы</h2>
-      <div class="grid md:grid-cols-2 gap-6">
-        <article class="bg-slate-50 p-6 rounded-xl">
-          <h3 class="font-bold mb-1">Проект 1</h3>
-          <p class="text-slate-600 text-sm">Краткое описание</p>
-        </article>
-        <article class="bg-slate-50 p-6 rounded-xl">
-          <h3 class="font-bold mb-1">Проект 2</h3>
-          <p class="text-slate-600 text-sm">Краткое описание</p>
-        </article>
+      <div class="fade-up delay-3 mt-9 flex flex-wrap gap-4">
+        <a href="#work" class="press rounded-lg bg-ink px-6 py-3 font-semibold text-white transition hover:bg-zinc-800">Смотреть работы</a>
+        <a href="mailto:anna@example.ru" class="rounded-lg border border-zinc-300 px-6 py-3 font-semibold text-ink transition hover:border-zinc-400">Написать мне</a>
       </div>
     </section>
 
-    <footer class="border-t pt-8 text-slate-500 text-sm">
-      <p>Связаться: <a href="mailto:hello@example.com" class="text-indigo-600 hover:underline">hello@example.com</a></p>
-    </footer>
+    <!-- Work -->
+    <section id="work" class="max-w-5xl mx-auto px-6 py-16 md:py-24 border-t border-zinc-100">
+      <h2 class="reveal font-display text-2xl md:text-3xl font-bold text-ink tracking-tight">Избранные проекты</h2>
+      <div class="mt-10 grid sm:grid-cols-2 gap-6">
+        <a href="mailto:anna@example.ru?subject=Проект Nimbus" class="reveal hover-lift block overflow-hidden rounded-2xl border border-zinc-100" data-reveal-delay="1">
+          <div class="aspect-[4/3] bg-gradient-to-br from-indigo-500 to-violet-600"></div>
+          <div class="p-6"><h3 class="font-display font-semibold text-ink">Nimbus — банковское приложение</h3><p class="text-sm text-zinc-500 mt-1">UX-аудит и редизайн · +24% к удержанию</p></div>
+        </a>
+        <a href="mailto:anna@example.ru?subject=Проект Orbit" class="reveal hover-lift block overflow-hidden rounded-2xl border border-zinc-100" data-reveal-delay="2">
+          <div class="aspect-[4/3] bg-gradient-to-br from-orange-400 to-rose-500"></div>
+          <div class="p-6"><h3 class="font-display font-semibold text-ink">Orbit — дизайн-система</h3><p class="text-sm text-zinc-500 mt-1">120+ компонентов для 6 продуктов</p></div>
+        </a>
+        <a href="mailto:anna@example.ru?subject=Проект Verde" class="reveal hover-lift block overflow-hidden rounded-2xl border border-zinc-100" data-reveal-delay="3">
+          <div class="aspect-[4/3] bg-gradient-to-br from-emerald-400 to-teal-600"></div>
+          <div class="p-6"><h3 class="font-display font-semibold text-ink">Verde — сервис доставки</h3><p class="text-sm text-zinc-500 mt-1">Брендинг и мобильное приложение</p></div>
+        </a>
+        <a href="mailto:anna@example.ru?subject=Проект Atlas" class="reveal hover-lift block overflow-hidden rounded-2xl border border-zinc-100" data-reveal-delay="4">
+          <div class="aspect-[4/3] bg-gradient-to-br from-sky-400 to-blue-600"></div>
+          <div class="p-6"><h3 class="font-display font-semibold text-ink">Atlas — B2B-аналитика</h3><p class="text-sm text-zinc-500 mt-1">Дашборды и сложные таблицы</p></div>
+        </a>
+      </div>
+    </section>
+
+    <!-- About -->
+    <section id="about" class="bg-zinc-50 border-y border-zinc-100">
+      <div class="max-w-5xl mx-auto px-6 py-16 md:py-24 grid md:grid-cols-3 gap-10">
+        <h2 class="reveal font-display text-2xl md:text-3xl font-bold text-ink tracking-tight">Обо мне</h2>
+        <div class="reveal md:col-span-2 space-y-4 text-lg" data-reveal-delay="1">
+          <p>Работала в финтехе и e-commerce, вела дизайн продуктов с аудиторией более 3 млн человек. Люблю превращать сложные сценарии в простые экраны.</p>
+          <p>Сейчас беру 1–2 проекта в квартал — чтобы погрузиться по-настоящему. Если у вас интересная задача — давайте поговорим.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Contact -->
+    <section id="contact" class="max-w-5xl mx-auto px-6 py-20 md:py-28 text-center">
+      <h2 class="reveal font-display text-3xl md:text-4xl font-bold text-ink tracking-tight">Давайте сделаем что-то отличное</h2>
+      <p class="reveal mt-4 text-lg text-zinc-600" data-reveal-delay="1">Открыта для проектов с весны 2026.</p>
+      <div class="reveal mt-8 flex flex-wrap justify-center gap-4" data-reveal-delay="2">
+        <a href="mailto:anna@example.ru" class="press rounded-lg bg-ink px-6 py-3 font-semibold text-white transition hover:bg-zinc-800">anna@example.ru</a>
+        <a href="https://t.me/anna" target="_blank" rel="noopener" class="rounded-lg border border-zinc-300 px-6 py-3 font-semibold text-ink transition hover:border-zinc-400">Telegram</a>
+      </div>
+    </section>
   </main>
+
+  <footer class="border-t border-zinc-100">
+    <div class="max-w-5xl mx-auto px-6 py-8 text-sm text-zinc-500 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <p>© 2026 Анна Корнеева</p>
+      <p>Сделано на Omnia.AI</p>
+    </div>
+  </footer>
+
+  <button id="back-to-top" aria-label="Наверх" class="press fixed bottom-6 right-6 z-40 inline-flex h-11 w-11 items-center justify-center rounded-full bg-ink text-white shadow-lg hover:bg-zinc-800">
+    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+  </button>
+
 </body>
 </html>

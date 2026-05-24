@@ -2,7 +2,9 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+
+from omnia_api.services.design_presets import PRESETS
 
 # V1 templates ship static HTML; "fullstack" ships a Next.js 15 + Drizzle
 # project that runs in an orchestrator-managed dev container. The two stacks
@@ -29,6 +31,15 @@ class ProjectPublic(BaseModel):
     name: str
     slug: str
     template: Template
+    design_preset_id: str | None = None
     current_snapshot_id: UUID | None
     created_at: datetime
     updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def design_preset_name(self) -> str | None:
+        """Human-readable preset name derived from id (for read-only UI badge)."""
+        if self.design_preset_id and (preset := PRESETS.get(self.design_preset_id)):
+            return preset.name
+        return None

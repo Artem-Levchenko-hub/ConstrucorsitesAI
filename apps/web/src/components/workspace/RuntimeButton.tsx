@@ -3,17 +3,21 @@
 /**
  * V2 — runtime + deploy controls for the TopBar.
  *
- * Renders one compact button that shows the current runtime state and morphs
- * its action based on context:
- *   - `stopped` / `failed` / `null`  → "Запустить" (POST /runtime/start)
- *   - `provisioning`                  → "Запускается…" (disabled, spinner)
- *   - `running`                       → "Остановить" (secondary) +
- *                                       primary "Деплой" button next to it
- *   - `paused`                        → "Разбудить" (POST /runtime/start)
+ * Per state, rendered controls:
+ *   - `stopped` / `failed` / null  → "Запустить" / "Повторить"
+ *   - `provisioning`               → "Запускается…" (disabled, spinner)
+ *   - `running`                    → "Пауза" (secondary) + "Опубликовать" (primary)
+ *   - `paused`                     → "Разбудить" (primary, breath-pulse badge)
  *
- * Phase A scope: we don't render a full RuntimePanel with logs yet — that's
- * Phase A.5. This button is the smallest possible surface that lets a beta
- * tester provision + see a dev container, plus trigger a deploy.
+ * Why split `paused` from `running` (was both lumped under `isUpish`):
+ * the previous UI rendered the Pause button on top of an already-paused
+ * container, so the owner would click "Пауза" again, backend would
+ * idempotent-respond, and nothing visible changed — dead loop. Now paused
+ * has a single primary "Разбудить" CTA, and the badge breathes so it's
+ * obvious the project is asleep.
+ *
+ * Deploy button conditions are now explicit per state (see `deployUx`
+ * helper below) with hover-tooltips explaining each disabled case.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -26,6 +30,7 @@ import {
   Rocket,
   Square,
 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import {
   deployProject,
@@ -41,7 +46,7 @@ import { cn } from "@/lib/utils";
 const STATE_LABEL: Record<RuntimeState, string> = {
   provisioning: "Готовится…",
   running: "Запущен",
-  paused: "На паузе",
+  paused: "Спит — разбудить?",
   stopped: "Остановлен",
   failed: "Ошибка",
 };
@@ -49,18 +54,81 @@ const STATE_LABEL: Record<RuntimeState, string> = {
 const STATE_COLOR: Record<RuntimeState, string> = {
   provisioning: "text-warning",
   running: "text-success",
-  paused: "text-fg-secondary",
+  paused: "text-warning",
   stopped: "text-fg-tertiary",
   failed: "text-danger",
 };
 
 function StateIcon({ state }: { state: RuntimeState }) {
   const cls = cn("h-3 w-3", STATE_COLOR[state]);
-  if (state === "provisioning") return <Loader2 className={cn(cls, "animate-spin")} />;
+  if (state === "provisioning")
+    return <Loader2 className={cn(cls, "animate-spin")} />;
   if (state === "running") return <CircleCheck className={cls} />;
-  if (state === "paused") return <Pause className={cls} />;
+  if (state === "paused")
+    // Breathing dot — owner asked for clearer "this is paused, click me" cue.
+    return (
+      <motion.span
+        aria-hidden="true"
+        className="inline-block h-2 w-2 rounded-full bg-warning"
+        animate={{ scale: [1, 1.25, 1], opacity: [1, 0.55, 1] }}
+        transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+      />
+    );
   if (state === "failed") return <CircleX className={cls} />;
   return <Square className={cls} />;
+}
+
+type DeployUx = {
+  enabled: boolean;
+  label: string;
+  tooltip: string;
+};
+
+/**
+ * Single source of truth for what the Deploy button shows and whether it's
+ * clickable. Owner asked for "более явные условия" — every state maps to one
+ * row here so the UI is debuggable from a glance.
+ */
+function deployUx(state: RuntimeState, deploying: boolean): DeployUx {
+  if (deploying)
+    return {
+      enabled: false,
+      label: "Публикуется…",
+      tooltip: "Сборка prod-образа уже идёт",
+    };
+  switch (state) {
+    case "running":
+      return {
+        enabled: true,
+        label: "Опубликовать",
+        tooltip: "Собрать prod-образ и переключить трафик",
+      };
+    case "paused":
+      return {
+        enabled: false,
+        label: "Опубликовать",
+        tooltip: "Сначала разбудите контейнер",
+      };
+    case "provisioning":
+      return {
+        enabled: false,
+        label: "Опубликовать",
+        tooltip: "Дождитесь окончания запуска",
+      };
+    case "failed":
+      return {
+        enabled: false,
+        label: "Опубликовать",
+        tooltip: "Сначала перезапустите контейнер",
+      };
+    case "stopped":
+    default:
+      return {
+        enabled: false,
+        label: "Опубликовать",
+        tooltip: "Сначала запустите контейнер",
+      };
+  }
 }
 
 export function RuntimeButton({ projectId }: { projectId: string }) {
@@ -69,12 +137,8 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
   const { data: runtime, isPending } = useQuery({
     queryKey: ["runtime", projectId],
     queryFn: () => getRuntime(projectId),
-    // First call is heavy on orchestrator side — don't poll while paused.
     refetchInterval: (q) =>
       q.state.data?.state === "provisioning" ? 2_000 : false,
-    // GET /runtime returns 503 until first runtime/start (provision-on-call).
-    // Treat 503 as "stopped" so the UI shows a sensible default rather than
-    // an error toast on first paint.
     retry: false,
   });
 
@@ -109,9 +173,7 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
     onSuccess: (d) => {
       toast.success("Деплой запущен", {
         description:
-          d.phase === "done"
-            ? d.prod_url ?? "готово"
-            : `фаза: ${d.phase}`,
+          d.phase === "done" ? d.prod_url ?? "готово" : `фаза: ${d.phase}`,
       });
     },
     onError: (err: unknown) => {
@@ -120,8 +182,6 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
     },
   });
 
-  // Until /runtime returns a real state the safe default is "stopped" — that
-  // makes the button say "Запустить", which provisions on first click.
   const state: RuntimeState = runtime?.state ?? "stopped";
   const busy = startMut.isPending || stopMut.isPending || deployMut.isPending;
 
@@ -134,27 +194,39 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
     );
   }
 
-  // Primary action depends on current state. Single button keeps the TopBar
-  // dense — full RuntimePanel ships in a later iteration.
-  const isUpish = state === "running" || state === "paused";
+  const deploy = deployUx(state, deployMut.isPending);
 
   return (
     <div className="flex items-center gap-1">
       <Badge
         variant="outline"
-        className="gap-1.5 px-2 py-1 text-[11px] font-normal whitespace-nowrap"
+        className={cn(
+          "gap-1.5 px-2 py-1 text-[11px] font-normal whitespace-nowrap transition-colors",
+          state === "paused" && "border-warning/40 bg-warning/[0.06]",
+        )}
         title={
           runtime?.dev_url ? `dev: ${runtime.dev_url}` : "контейнер не запущен"
         }
       >
         <StateIcon state={state} />
-        {STATE_LABEL[state]}
+        {/* Crossfade label on state change so transitions feel intentional */}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.span
+            key={state}
+            initial={{ opacity: 0, y: 2 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -2 }}
+            transition={{ duration: 0.15 }}
+          >
+            {STATE_LABEL[state]}
+          </motion.span>
+        </AnimatePresence>
         {runtime?.port && (
           <span className="font-mono text-fg-tertiary">:{runtime.port}</span>
         )}
       </Badge>
 
-      {isUpish ? (
+      {state === "running" && (
         <>
           <Button
             size="sm"
@@ -162,40 +234,67 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
             disabled={busy}
             onClick={() => stopMut.mutate()}
             className="gap-1.5 h-7 px-2 text-xs"
-            title="Приостановить dev-контейнер"
+            title="Приостановить dev-контейнер (можно будет разбудить одним кликом)"
           >
             <Pause className="h-3 w-3" />
             Пауза
           </Button>
           <Button
             size="sm"
-            disabled={busy}
+            disabled={!deploy.enabled}
             onClick={() => deployMut.mutate()}
             className="gap-1.5 h-7 px-2.5 text-xs"
-            title="Собрать prod-образ и заменить трафик"
+            title={deploy.tooltip}
           >
             {deployMut.isPending ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <Rocket className="h-3 w-3" />
             )}
-            Деплой
+            {deploy.label}
           </Button>
         </>
-      ) : (
+      )}
+
+      {state === "paused" && (
         <Button
           size="sm"
           disabled={busy}
           onClick={() => startMut.mutate()}
           className="gap-1.5 h-7 px-2.5 text-xs"
-          title="Запустить или восстановить dev-контейнер"
+          title="Поднять контейнер из паузы — секунда, не полный перезапуск"
         >
           {startMut.isPending ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : (
             <Play className="h-3 w-3" />
           )}
-          {state === "stopped" || state === "failed" ? "Запустить" : "Разбудить"}
+          Разбудить
+        </Button>
+      )}
+
+      {(state === "stopped" ||
+        state === "failed" ||
+        state === "provisioning") && (
+        <Button
+          size="sm"
+          disabled={busy || state === "provisioning"}
+          onClick={() => startMut.mutate()}
+          className="gap-1.5 h-7 px-2.5 text-xs"
+          title={
+            state === "provisioning"
+              ? "Контейнер уже поднимается, подождите"
+              : state === "failed"
+                ? "Перезапустить — предыдущий запуск завершился ошибкой"
+                : "Запустить dev-контейнер"
+          }
+        >
+          {startMut.isPending || state === "provisioning" ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Play className="h-3 w-3" />
+          )}
+          {state === "failed" ? "Повторить" : "Запустить"}
         </Button>
       )}
     </div>

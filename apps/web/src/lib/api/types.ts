@@ -33,6 +33,8 @@ export type Project = {
   current_snapshot_id: Uuid | null;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
+  design_preset_id?: string;
+  design_preset_name?: string;
 };
 
 export type Snapshot = {
@@ -53,6 +55,24 @@ export type SnapshotWithFiles = Snapshot & {
 
 export type MessageRole = "user" | "assistant" | "system";
 
+/**
+ * Element the user picked in the preview (select-mode), with their per-element
+ * comment. Wire shape — mirrors apps/api schemas/message.py:SelectedElement.
+ * The picker assigns a transient client id (see store/inspector.ts); it is not
+ * part of this persisted/sent shape.
+ */
+export type SelectedElement = {
+  selector: string;
+  /** Short `tag#id.class` for the chip label. */
+  label?: string | null;
+  /** Truncated outerHTML — helps the model find the element in the source. */
+  html?: string | null;
+  /** Truncated visible text. */
+  text?: string | null;
+  /** Per-element instruction, e.g. "сделай красной". */
+  comment?: string | null;
+};
+
 export type Message = {
   id: Uuid;
   project_id: Uuid;
@@ -62,6 +82,8 @@ export type Message = {
   model_id: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
+  /** Select-mode context attached to a user message (for chat-history chips). */
+  selected_elements?: SelectedElement[] | null;
   created_at: IsoDateTime;
 };
 
@@ -116,7 +138,38 @@ export type ApiErrorCode =
   | "conflict"
   // V2 — surfaced from apps/api/services/orchestrator_client.
   | "orchestrator_unavailable"
-  | "orchestrator_rejected";
+  | "orchestrator_rejected"
+  // GitHub export — apps/api/src/omnia_api/routers/github.py.
+  | "github_not_connected"
+  | "github_state_invalid"
+  | "github_state_expired"
+  | "github_unavailable"
+  | "project_empty";
+
+// === GitHub OAuth + Push (apps/api/src/omnia_api/schemas/github.py) ===
+
+export type GithubStatus = {
+  connected: boolean;
+  login: string | null;
+};
+
+export type GithubConnectResponse = {
+  authorize_url: string;
+};
+
+export type GithubPushRequest = {
+  /** Имя репозитория. Должно матчить /^[A-Za-z0-9._-]+$/, max 100. */
+  repo_name: string;
+  /** По умолчанию приватный — безопасно для сгенерённого AI кода. */
+  private?: boolean;
+  /** Описание репо, max 350. */
+  description?: string;
+};
+
+export type GithubPushResponse = {
+  repo_url: string;
+  full_name: string;
+};
 
 /** V2 — full-stack runtime state, returned by /api/projects/:id/runtime*. */
 export type RuntimeState =

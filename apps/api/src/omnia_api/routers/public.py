@@ -1,6 +1,7 @@
 import asyncio
 import html
 from mimetypes import guess_type
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -14,6 +15,18 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.services import repo as repo_svc
 
 router = APIRouter(prefix="/p", tags=["public"], include_in_schema=False)
+
+# Select-mode inspector — single source of truth is static/omnia-inspector.js (a
+# synced copy ships in the orchestrator Next.js template; a drift test keeps them
+# identical). Inlined into the workspace preview only when ?inspect=1 is present,
+# so public share links (/p/<slug>) stay clean. Read once at import — a missing
+# file fails loudly at startup rather than silently per-request.
+_INSPECTOR_JS = (
+    Path(__file__).resolve().parent.parent / "static" / "omnia-inspector.js"
+).read_text(encoding="utf-8")
+_INSPECTOR_TAG = (
+    b'<script id="omnia-inspector">' + _INSPECTOR_JS.encode("utf-8") + b"</script>"
+)
 
 
 async def _resolve_snapshot(
@@ -54,6 +67,18 @@ def _file_response(path: str, content: bytes) -> Response:
         media_type=mime or "application/octet-stream",
         headers=headers,
     )
+
+
+def _inject_inspector(content: bytes) -> bytes:
+    """Inline the select-mode inspector before the last </body> (fallback: append).
+
+    Bytes in, bytes out — we never decode the page, so its charset is preserved.
+    """
+    marker = b"</body>"
+    idx = content.rfind(marker)
+    if idx != -1:
+        return content[:idx] + _INSPECTOR_TAG + content[idx:]
+    return content + _INSPECTOR_TAG
 
 
 async def _serve_file(project: Project, snapshot: Snapshot, path: str) -> Response:
@@ -144,6 +169,7 @@ async def get_index(
     slug: str,
     session: SessionDep,
     snapshot: Annotated[UUID | None, Query()] = None,
+    inspect: Annotated[str | None, Query()] = None,
 ) -> Response:
     project, snap = await _resolve_snapshot(session, slug, snapshot)
     for candidate in _INDEX_CANDIDATES:
@@ -151,6 +177,9 @@ async def get_index(
             repo_svc.read_file, project.id, snap.commit_sha, candidate
         )
         if content is not None:
+            # Workspace preview opts in with ?inspect=1 to enable select-mode.
+            if inspect == "1":
+                content = _inject_inspector(content)
             return _file_response("index.html", content)
     # No static entrypoint anywhere (full-stack project, or not generated yet)
     # → serve the branded shell instead of a raw 404 / blank iframe.
