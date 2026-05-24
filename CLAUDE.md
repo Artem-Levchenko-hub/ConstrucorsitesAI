@@ -6,32 +6,47 @@
 
 ## Параллельная разработка (4 агента в worktree-ах с V2)
 
-Этот репозиторий разрабатывается **четырьмя параллельными Claude-сессиями** (V2 добавил Agent D). Чтобы 4 агента работали эффективно и не ломали друг другу работу — соблюдай протокол ниже.
+Этот репозиторий разрабатывается **четырьмя параллельными Claude-сессиями** (V2 добавил Agent D). Координация — через плагин `multi-chat-coord` (auto-claims + zone-block + inbox).
 
-| Агент | Папка (пишет ТОЛЬКО сюда) | Бриф |
+| Агент | Папка (зона) | Бриф |
 |---|---|---|
 | **A — Frontend** | `apps/web/` | [`agents/AGENT-A-FRONTEND.md`](agents/AGENT-A-FRONTEND.md) |
 | **B — Backend** | `apps/api/` | [`agents/AGENT-B-BACKEND.md`](agents/AGENT-B-BACKEND.md) |
 | **C — LLM Gateway** | `apps/llm-gateway/` | [`agents/AGENT-C-LLM-GATEWAY.md`](agents/AGENT-C-LLM-GATEWAY.md) |
 | **D — Orchestrator + DevOps (V2)** | `apps/orchestrator/`, `infra/` | [`agents/AGENT-D-ORCHESTRATOR.md`](agents/AGENT-D-ORCHESTRATOR.md) |
 
-**Правило #1 — границы зон.** Агент ПИШЕТ только в свою папку. Чужая папка и shared-файлы (`docs/**`, `CLAUDE.md`, `docker-compose*.yml`, `.github/**`, корневые конфиги) — только через координацию (см. ниже).
+### Координация через плагин (inform-mode, не блокирует)
 
-**Канал координации** (общий, лежит **вне** worktree-ов → виден всем сессиям сразу, без git): `~/.claude/coordination/omnia-mvp/`
-- `BOARD.md` — живой статус: кто что трогает, блокировки/заморозки, открытые запросы между агентами.
-- `inbox/<дата>-agent-<X>-<тема>.md` — сообщения агентам (анонс правки, запрос, предупреждение).
+Зоны и shared-файлы описаны в [`.claude/coordination/config.json`](.claude/coordination/config.json). Плагин `~/.claude/plugins/multi-chat-coord/` действует как **диспетчер** — даёт каждому агенту видеть остальных и общаться через inbox, но НЕ блокирует ничьи edit'ы. Команда работает как реальные разработчики: видят, кто что делает, договариваются.
 
-**Протокол координации — обязателен каждой сессии:**
-1. **В начале сессии** прочитай `BOARD.md` и новые `inbox/*.md`; обнови свою строку в `BOARD.md`.
-2. **Перед правкой shared-файла или чужой папки** — проверь блокировки в `BOARD.md`, поставь claim там же и оставь сообщение в `inbox/` затронутым агентам. После правки коммить быстро (atomic), чтобы другие могли rebase.
-3. **Контракт** (`docs/01-api-contract.md`) — менять только backward-compatible + анонс в `inbox/`.
-4. **Прод** (`omnia-prod-*` на VPS) — НЕ пересобирать/деплоить без согласования: в `/opt/omnia` копятся незадеплоенные правки нескольких агентов. Смотри `DEPLOY FREEZE` в `BOARD.md`.
-5. **Ветка-на-фичу**, частые atomic-коммиты, перед shared-правкой — `git pull --rebase`.
-6. **Гигиена общего рабочего дерева** (сессии иногда делят один worktree): перед правкой shared-файла **перечитай его прямо перед `Edit`** — другой агент мог переписать содержимое (не только git-статус); не завязывайся на поля, которые другая сессия откатывает. В общем дереве **никогда** `git stash` / `reset` / `checkout` — стэш выдёргивает файлы из-под активной сессии; чтобы сохранить незавершённое, делай **`commit`** (снимок не мешает чужим несохранённым правкам). Свою фичу держи в отдельном worktree на **ASCII-пути** (Glob/Grep с параметром `path` молча ломается на кириллице+пробеле, как в `C:\Бизнес план\…`).
+- **SessionStart** — определяет твоего агента по cwd (нужно `cd apps/web` перед стартом Claude), регистрирует сессию, показывает живых соседей + их feature/файлы + unread inbox.
+- **UserPromptSubmit** — доставляет новые inbox-сообщения от других агентов.
+- **PreToolUse (Edit/Write)** — никогда не блокирует. Если ты редактируешь чужую зону → автоматически шлёт inbox-нотификацию ВСЕМ живым сессиям того агента + инжектит heads-up в твой контекст. Если на файле есть живой co-editor → шлёт ему inbox "я тоже редактирую" + инжектит его `git diff` snapshot тебе.
+- **SessionEnd** — release всех claims, генерация replay-summary для каждого тронутого файла, inbox-нотификация co-owners.
+
+**Daily cheat sheet:**
+- `cd apps/<твоя-зона>` ДО запуска `claude` — иначе агент не определится.
+- `/multi-chat-status` — кто сейчас активен, что claim'ит.
+- При edit чужой зоны / коллизии — читай инжектированный контекст (там diff соседа + inbox-notify уже ушли), решай сам: incorporate их diff, ответить через inbox, или продолжить независимо.
+- Срочно нужен diff соседа на конкретном файле — `python "<plugin>/scripts/replay.py" for-file <path>` (после их SessionEnd) или `live_snapshot` (пока живы).
+
+State плагина: `~/.claude/coordination/omnia-mvp-<hash>/` (`active-sessions.json`, `claims.json`, `inbox/*.json`, `replay/*.md`, `history/`). Слаг общий для всех worktree одного репо.
+
+### Manual fallback (если плагин отключён)
+
+Старый канал `~/.claude/coordination/omnia-mvp/` (`BOARD.md` + `inbox/*.md`) — read-only для людей; плагин туда не пишет (он пишет в свой slug-dir). BOARD.md остаётся местом для ручных заметок владельца (deploy freeze, специальные блокировки).
+
+Если плагин отключён (`CLAUDE_COORD_DISABLE=1` или не загружен) — действует старый ручной протокол:
+1. Прочитать BOARD.md + inbox/*.md в начале сессии, обновить свою строку.
+2. Перед shared-файлом — claim в BOARD, inbox-сообщение, atomic commit.
+3. Контракт (`docs/01-api-contract.md`) — backward-compatible + announce.
+4. Прод (`omnia-prod-*` VPS) — НЕ деплоить без согласования (`DEPLOY FREEZE` в BOARD).
+5. Ветка-на-фичу, частые atomic-коммиты, перед shared — `git pull --rebase`.
+6. Общее рабочее дерево: перечитать shared-файл прямо перед `Edit` (плагин теперь делает это автоматически через `replay/`); **никогда** `git stash`/`reset`/`checkout` в общем дереве; ASCII worktree-пути для Glob/Grep.
 
 Note: до V2 launch `infra/` оставался зоной агента C. С V2 (Phase A) — переходит в зону D, потому что инфра-композиция теперь связана с runtime-orchestration юзерских проектов, а не только с обслуживающим стеком.
 
-**Worktrees:** плагин `claude-session-driver` автоматически создаёт worktree под каждую сессию в `.claude/worktrees/`. Не редактируй там вручную. (Полная авто-координация с `claims.json`/`active-sessions.json` через хуки — как в проекте CorporateMessanger — для omnia пока НЕ установлена; координация ручная через `BOARD.md` + `inbox/`.)
+**Worktrees:** плагин `claude-session-driver` автоматически создаёт worktree под каждую сессию в `.claude/worktrees/`. Не редактируй там вручную.
 
 ## Точки синхронизации (read-only для агентов, single source of truth)
 
