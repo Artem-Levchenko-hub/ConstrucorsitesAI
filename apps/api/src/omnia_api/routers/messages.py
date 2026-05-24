@@ -23,7 +23,9 @@ from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptRespon
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.file_extractor import UnsafePathError, extract_files
+from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.link_validator import find_dead_links
+from omnia_api.services.visual_enricher import enrich_files as enrich_visual_files
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
@@ -514,6 +516,20 @@ async def _process_prompt(
         # hot_reload pushes the rewritten files into the dev container, so HMR
         # picks up the real images automatically. Per-project opt-out via
         # projects.image_gen_enabled (TopBar toggle).
+        # Visual enricher — гарантируем декор в каждом <section> голого HTML
+        # ДО image_resolver, чтобы добавленные нами SVG-теги не считались
+        # «уже есть SVG» при последующих pass'ах. Запускаем безусловно (декор
+        # нужен независимо от toggle картинок).
+        if files:
+            try:
+                files, enr_count, enr_total = enrich_visual_files(files)
+                print(
+                    f"[PP] visual_enricher enriched={enr_count} sections={enr_total}",
+                    flush=True,
+                )
+            except Exception as enr_exc:  # noqa: BLE001
+                print(f"[PP] visual_enricher failed: {enr_exc!r}", flush=True)
+
         if files and project_image_gen_enabled:
             try:
                 files, resolved, total = await resolve_images(files, str(project_id))
