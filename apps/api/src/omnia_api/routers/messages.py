@@ -263,6 +263,8 @@ async def _process_prompt(
     project_template = "blank"
     project_name = ""
     project_design_preset_id: str | None = None
+    project_image_gen_enabled: bool = True
+    project_image_gen_enabled: bool = True
 
     try:
         async with factory() as session:
@@ -275,6 +277,7 @@ async def _process_prompt(
                 project_template = proj.template
                 project_name = proj.name or ""
                 project_design_preset_id = proj.design_preset_id
+                project_image_gen_enabled = proj.image_gen_enabled
             res = await session.execute(
                 select(Message)
                 .where(Message.project_id == project_id)
@@ -502,6 +505,36 @@ async def _process_prompt(
         if files and project_template != "fullstack":
             files = {p: c for p, c in files.items() if p not in KIT_FILES}
             files = _ensure_kit_linked(files)
+
+        # Image-resolver: if Haiku/Sonnet wrote <img data-omnia-gen="..."> tags,
+        # call gateway → MinIO and rewrite the tags with real src URLs BEFORE
+        # the commit so the snapshot / GitHub export / rollback all carry final
+        # URLs (single source of truth in git). For fullstack the subsequent
+        # hot_reload pushes the rewritten files into the dev container, so HMR
+        # picks up the real images automatically. Per-project opt-out via
+        # projects.image_gen_enabled (TopBar toggle).
+        if files and project_image_gen_enabled:
+            try:
+                files, resolved, total = await resolve_images(files, str(project_id))
+                print(
+                    f"[PP] image_resolver resolved={resolved} total={total}",
+                    flush=True,
+                )
+                if total > 0 and resolved < total:
+                    await publish_event(
+                        project_id,
+                        "llm.chunk",
+                        {
+                            "message_id": str(assistant_message_id),
+                            "delta": (
+                                f"\n\n*Сгенерировано картинок: {resolved} из {total}. "
+                                f"Часть промптов не удалась — попробуй переключить toggle "
+                                f"«🎨 Картинки» в шапке или перегенерировать промпт.*\n\n"
+                            ),
+                        },
+                    )
+            except Exception as img_exc:  # noqa: BLE001 — never break the prompt
+                print(f"[PP] image_resolver failed: {img_exc!r}", flush=True)
 
         new_snapshot_id: UUID | None = None
         if files:

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     minio_secure: bool = Field(default=False)
     minio_bucket_projects: str = Field(default="projects")
     minio_bucket_previews: str = Field(default="previews")
+    # Bucket for AI-generated images (gpt-image-1 via gateway). Created lazily
+    # on first image upload — see services/image_resolver.py:_ensure_bucket().
+    minio_bucket_images: str = Field(default="omnia-images")
     minio_public_url: str = Field(default="http://localhost:9000")
 
     jwt_secret: SecretStr
