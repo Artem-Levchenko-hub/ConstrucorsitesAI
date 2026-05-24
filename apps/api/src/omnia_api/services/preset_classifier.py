@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 
 from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.llm_client import stream_chat_completion
@@ -32,6 +33,12 @@ CLASSIFIER_MODEL = "claude-haiku-4-5"
 MIN_HEURISTIC_SCORE = 1  # минимум совпавших keyword-стемов
 HEURISTIC_LEAD = 1  # лидер должен опережать второго на это число matches
 STEM_LEN = 5  # длина префикса для матчинга русских падежных форм
+
+# Синтетические UUID для атрибуции телеметрии classifier-вызовов в LLM-gateway.
+# Gateway валидирует user/project/message как UUID, поэтому реальный путь
+# (фоновый сервис, не пользовательский) использует фиксированные стабильные id.
+_CLASSIFIER_USER_ID = "00000000-0000-0000-0000-c0de4c1a55ef"
+_CLASSIFIER_PROJECT_ID = "00000000-0000-0000-0000-c0deca5511fe"
 
 
 _TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+", re.UNICODE)
@@ -134,9 +141,9 @@ async def _llm_classify(project_name: str, template: str, first_prompt: str | No
         async for event in stream_chat_completion(
             messages=messages,
             model=CLASSIFIER_MODEL,
-            user_id="omnia-preset-classifier",
-            project_id="classifier",
-            message_id="classify",
+            user_id=_CLASSIFIER_USER_ID,
+            project_id=_CLASSIFIER_PROJECT_ID,
+            message_id=str(uuid.uuid4()),
         ):
             if delta := event.get("delta"):
                 chunks.append(delta)
