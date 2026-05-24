@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0004_template_fullstack"
-down_revision = "0003_billing"
+down_revision = "0003"
 branch_labels = None
 depends_on = None
 
