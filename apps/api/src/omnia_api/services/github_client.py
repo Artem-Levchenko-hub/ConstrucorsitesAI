@@ -244,9 +244,26 @@ async def push_files(
 
     async with _make_client(headers=_auth_headers(token)) as client:
         # 1) HEAD ref → head commit sha
-        r_ref_get = await client.get(
-            f"{_GH_API}/repos/{full_name}/git/refs/heads/{branch}"
-        )
+        # GitHub bug: после create_repo(auto_init=True) ref/heads/main иногда
+        # пару секунд возвращает 409 «Git Repository is empty» пока GitHub
+        # дописывает initial commit. Опрашиваем до 10×1s.
+        r_ref_get = None
+        for attempt in range(10):
+            r_ref_get = await client.get(
+                f"{_GH_API}/repos/{full_name}/git/refs/heads/{branch}"
+            )
+            if r_ref_get.status_code == 200:
+                break
+            if r_ref_get.status_code == 409 and "empty" in r_ref_get.text.lower():
+                _log.info(
+                    "github_client: repo %s still initialising (attempt %d/10), wait 1s",
+                    full_name,
+                    attempt + 1,
+                )
+                await asyncio.sleep(1.0)
+                continue
+            break
+        assert r_ref_get is not None
         if r_ref_get.status_code != 200:
             body = r_ref_get.text[:400]
             _log.error("github_client: ref-get HTTP %d: %s", r_ref_get.status_code, body)
