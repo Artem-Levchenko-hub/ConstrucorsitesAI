@@ -93,7 +93,7 @@ async def github_callback(
     await session.commit()
 
     web = get_settings().web_base_url.rstrip("/")
-    return RedirectResponse(url=f"{web}/?github=connected", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url=f"{web}/account?github=connected", status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/status", response_model=GitHubStatus)

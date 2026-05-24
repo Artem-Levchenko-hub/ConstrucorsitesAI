@@ -33,7 +33,12 @@ export default async function WorkspacePage({
 
   return (
     <>
-      <TopBar user={session} projectName={project.name} projectId={project.id} />
+      <TopBar
+        user={session}
+        projectName={project.name}
+        projectId={project.id}
+        projectSlug={project.slug}
+      />
       <Workspace project={project} />
     </>
   );
