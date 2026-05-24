@@ -15,10 +15,10 @@
  * without an extra round trip.
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image as ImageIcon, ImageOff } from "lucide-react";
 import { toast } from "sonner";
-import { updateProject } from "@/lib/api/projects";
+import { getProject, updateProject } from "@/lib/api/projects";
 import type { Project } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +36,26 @@ export function ImageGenToggle({
   imageGenEnabled: boolean;
 }) {
   const qc = useQueryClient();
+
+  // The TopBar passes the initial flag from a server-side fetch in
+  // projects/[id]/page.tsx — that prop never updates after mount. We bind a
+  // useQuery to the same ["project", projectId] cache key so the optimistic
+  // onMutate write below (and any future invalidation) flips the chip's
+  // colour without a page reload.
+  const { data: project } = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: () => getProject(projectId),
+    initialData: () =>
+      ({
+        // Stub — only image_gen_enabled is read here; full Project shape
+        // gets filled by onSuccess after the PATCH lands.
+        id: projectId,
+        image_gen_enabled: imageGenEnabled,
+      }) as Project,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
+  });
 
   const mut = useMutation({
     mutationFn: (next: boolean) =>
@@ -68,7 +88,7 @@ export function ImageGenToggle({
     },
   });
 
-  const enabled = imageGenEnabled;
+  const enabled = project?.image_gen_enabled ?? imageGenEnabled;
   const tooltip = enabled
     ? `Авто-генерация картинок включена. До ${MAX_IMAGES} картинок на промпт, ≈₽${Math.round(MAX_IMAGES * PRICE_PER_IMAGE_RUB)} максимум.`
     : "Авто-генерация картинок выключена. AI-теги останутся в коде без подмены.";
