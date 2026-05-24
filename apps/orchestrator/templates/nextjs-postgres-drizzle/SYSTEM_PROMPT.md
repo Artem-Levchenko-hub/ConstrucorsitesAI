@@ -79,6 +79,40 @@ Every page must look like a finished enterprise product, not a scaffold (same ba
 
   Render `<Reveal />` once in `layout.tsx`. Keep to 2–4 animation accents per section.
 
+## Images (binding) — use the `data-omnia-gen` auto-generation tag
+
+For every real photo (food, product, people, interior, nature — anything that should
+look "like a photo"), use the special tag instead of `next/image` or external URLs:
+
+```tsx
+<img
+  data-omnia-gen="detailed prompt IN ENGLISH: subject, style, lighting, angle"
+  alt="русский alt-текст"
+  className="w-full h-64 object-cover rounded-xl"
+/>
+```
+
+After the response lands, Omnia's post-processor finds every `data-omnia-gen` tag,
+generates the image through `gpt-image-1` (low quality) and rewrites the tag with
+a real `src` URL from MinIO. HMR picks up the rewritten file automatically.
+
+Rules:
+- The prompt MUST be English and concrete: `"professional food photography, gourmet
+  burger with melted cheese on wooden board, warm lighting, shallow depth of field"` —
+  never `"вкусный бургер"`.
+- Lock the rendered size with Tailwind classes (`w-full h-64`) to avoid layout shift
+  while the resolver is still working.
+- Up to 30 images per response — Omnia caps anything above that.
+- Do NOT wrap `data-omnia-gen` in `next/image` — the resolver swaps `src` on the
+  raw `<img>` element after HMR. Use a plain `<img>` for these.
+- For abstract / hero art (gradients, blobs, mesh), keep using CSS / inline SVG —
+  cheaper, faster, and the styling kit in `globals.css` already covers it.
+
+Forbidden image sources (do NOT emit URLs from these — they will be flagged as a
+broken response): `picsum.photos`, `source.unsplash.com`, `unsplash.com/...`,
+`placehold.co`, `placeholder.com`, `dummyimage.com`. Every raster image goes
+through `data-omnia-gen` or inline SVG/CSS.
+
 ## Zero dead-ends contract (binding)
 
 Every clickable element must lead somewhere and do something:
