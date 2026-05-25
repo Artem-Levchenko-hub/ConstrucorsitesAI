@@ -58,8 +58,37 @@ export function ChatPanel({
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
     // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
-    <div className="flex flex-col h-full min-h-0 bg-surface-panel-dark">
-      <div className="shrink-0 px-4 h-10 flex items-center gap-2 border-b border-border-subtle">
+    <div
+      className="relative flex flex-col h-full min-h-0 backdrop-blur-xl"
+      style={{
+        // Layered background: glass-like base over a violet radial tint so the
+        // panel reads as warm/active rather than flat black. The Workspace
+        // ambient orbs glow through via the alpha channel.
+        background:
+          "radial-gradient(ellipse 100% 70% at 0% 0%, rgb(124 92 255 / 0.22), transparent 65%), radial-gradient(ellipse 80% 50% at 100% 100%, rgb(124 92 255 / 0.08), transparent 65%), rgb(8 8 12 / 0.6)",
+      }}
+    >
+      {/* Decorative dot grid — 2 px dots on 24 px spacing at 4 % opacity. Adds
+          texture without distracting from chat content. Pointer-events: none. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-[0.04]"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle at 1px 1px, #ffffff 1px, transparent 0)",
+          backgroundSize: "24px 24px",
+        }}
+      />
+
+      {/* Vertical accent gradient on the left edge — same trick the running
+          badge uses, but anchored to the panel itself so the violet identity
+          reads even when the chat is full of messages. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 left-0 w-px bg-gradient-to-b from-transparent via-accent/40 to-transparent"
+      />
+
+      <div className="relative shrink-0 px-4 h-10 flex items-center gap-2 border-b border-border-subtle">
         <MessagesSquare className="h-3.5 w-3.5 text-accent/80" aria-hidden="true" />
         <span className="text-xs font-mono text-fg-tertiary uppercase tracking-wider">
           Чат

@@ -62,15 +62,17 @@ export function TopBar({
           className="flex items-center gap-2.5 font-semibold tracking-tight group"
           aria-label="Omnia.AI — мои проекты"
         >
-          {/* Logo mark — gradient square with a soft halo that breathes under it.
-              The halo lives in an ::after-style absolute span so the logo's own
-              size stays stable (no layout shift on the pulse). */}
+          {/* Logo mark — gradient square with a large soft halo that breathes
+              behind it. The halo is bigger than the mark (h-10 vs h-6) and
+              blurred heavily so the violet glow is unmistakable. Negative
+              positioning keeps the mark itself aligned to the original 24 px
+              footprint — no layout shift, only ambient light. */}
           <span className="relative inline-flex h-6 w-6 items-center justify-center">
             <span
               aria-hidden="true"
-              className="absolute inset-0 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] blur-md opacity-60 animate-breathe-glow"
+              className="absolute -inset-2 rounded-full bg-[radial-gradient(circle,rgba(124,92,255,0.7)_0%,rgba(124,92,255,0.25)_45%,transparent_70%)] blur-lg animate-breathe-glow"
             />
-            <span className="relative h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] shadow-[0_4px_12px_-2px_rgba(124,92,255,0.5)] transition-transform group-hover:scale-110" />
+            <span className="relative h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] shadow-[0_6px_20px_-4px_rgba(124,92,255,0.7)] transition-transform group-hover:scale-110" />
           </span>
           <span className="hidden sm:inline text-gradient-accent">Omnia.AI</span>
         </Link>

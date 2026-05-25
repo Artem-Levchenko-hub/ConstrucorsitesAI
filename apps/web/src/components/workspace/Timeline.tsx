@@ -37,8 +37,31 @@ export function Timeline({ project }: { project: Project }) {
   });
 
   return (
-    <div className="flex flex-col h-full bg-surface-panel-dark">
-      <div className="h-8 flex items-center justify-between gap-2 px-3 border-b border-border-subtle">
+    <div
+      className="relative flex flex-col h-full backdrop-blur-xl"
+      style={{
+        // Mirror of ChatPanel but with the cyan accent so the two side panels
+        // read as distinct surfaces. The Workspace ambient cyan orb anchored
+        // bottom-right glows through this layer.
+        background:
+          "radial-gradient(ellipse 100% 70% at 100% 100%, rgb(92 184 255 / 0.22), transparent 65%), radial-gradient(ellipse 80% 50% at 0% 0%, rgb(92 184 255 / 0.08), transparent 65%), rgb(8 8 12 / 0.6)",
+      }}
+    >
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-[0.04]"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle at 1px 1px, #ffffff 1px, transparent 0)",
+          backgroundSize: "24px 24px",
+        }}
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-accent-secondary/40 to-transparent"
+      />
+
+      <div className="relative h-8 flex items-center justify-between gap-2 px-3 border-b border-border-subtle">
         <div className="flex items-center gap-1.5 min-w-0">
           <History className="h-3 w-3 text-accent/80" aria-hidden="true" />
           <span className="text-[10px] font-mono text-fg-tertiary uppercase tracking-wider">
