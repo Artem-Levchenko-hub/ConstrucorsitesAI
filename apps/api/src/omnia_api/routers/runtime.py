@@ -96,18 +96,15 @@ async def start_runtime(
     does not change.
     """
     project = await _project_owned_by(session, project_id, current_user.id)
-    # Map the api-side template name to the orchestrator's container template.
     # Today there's only one orchestrator template (nextjs-postgres-drizzle),
-    # so static V1 projects also fall back to it — that lets a V1 user opt
-    # into "give me a real backend" by just hitting Start without re-creating
-    # the project. New fullstack projects are explicit about wanting it.
-    template_slug = (
-        "nextjs-postgres-drizzle" if project.template == "fullstack" else "nextjs-postgres-drizzle"
-    )
+    # so every project — fullstack or static — provisions into it when the
+    # user hits Start. That lets a V1 static user opt into "give me a real
+    # backend" without re-creating the project. When a second template lands
+    # this becomes a real switch on `project.template`.
     payload = await orchestrator_client.provision(
         project_id=project_id,
         slug=project.slug,
-        template=template_slug,
+        template="nextjs-postgres-drizzle",
         tier="free",
     )
     return _to_runtime_status(payload)

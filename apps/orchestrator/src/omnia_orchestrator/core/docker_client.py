@@ -99,6 +99,12 @@ async def start_container(spec: ContainerSpec) -> str:
                 cap_drop=["ALL"],
                 cap_add=["NET_BIND_SERVICE"],
                 user="1000:1000",
+                # User containers reach `omnia-postgres-users` on the host via
+                # `host.docker.internal`. On Linux this resolves only when the
+                # container is started with this extra_hosts entry; on Docker
+                # Desktop it already does. Matches the DSN built by
+                # `postgres_admin._user_facing_host`.
+                extra_hosts={"host.docker.internal": "host-gateway"},
                 restart_policy={"Name": spec.restart_policy_name},
                 labels={
                     "omnia.project_id": spec.project_id,
@@ -507,3 +513,44 @@ async def build_image(
             message=f"prod build timed out after {timeout_sec}s",
             status_code=504,
         ) from exc
+
+
+async def prune_old_app_images(slug: str, *, keep: int = 3) -> None:
+    """Remove old `omnia-app-<slug>:*` tags, keeping the `keep` most recent.
+
+    Called after a successful deploy so the VPS doesn't accumulate image
+    layers (prod was sitting on 9 dangling revisions of one project before
+    this was wired). Idempotent and best-effort: API errors are logged, not
+    raised — a deploy is not invalidated by a failed prune.
+    """
+    log.info("docker.prune_old_app_images", slug=slug, keep=keep)
+
+    def _do() -> None:
+        client = _get_client()
+        prefix = f"omnia-app-{slug}"
+        try:
+            images = client.images.list(name=prefix)
+        except docker.errors.APIError as exc:
+            log.warning("docker.prune_list_failed", slug=slug, err=str(exc))
+            return
+
+        tagged: list[tuple[int, str]] = []
+        for img in images:
+            for tag in img.tags or []:
+                if not tag.startswith(prefix + ":"):
+                    continue
+                ts_str = tag.split(":", 1)[1]
+                try:
+                    tagged.append((int(ts_str), tag))
+                except ValueError:
+                    continue  # non-timestamp tag — leave alone
+
+        tagged.sort(reverse=True)
+        for _ts, tag in tagged[keep:]:
+            try:
+                client.images.remove(image=tag, force=True)
+                log.info("docker.image_pruned", tag=tag)
+            except docker.errors.APIError as exc:
+                log.warning("docker.prune_failed", tag=tag, err=str(exc))
+
+    await asyncio.to_thread(_do)

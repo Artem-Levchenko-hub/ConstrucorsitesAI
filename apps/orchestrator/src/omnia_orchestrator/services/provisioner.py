@@ -27,6 +27,7 @@ from pathlib import Path
 
 import structlog
 
+from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import ContainerSpec, start_container
 from omnia_orchestrator.core.errors import OrchestratorError
@@ -36,6 +37,12 @@ from omnia_orchestrator.schemas.runtime import (
 )
 from omnia_orchestrator.services import nginx_writer
 from omnia_orchestrator.services.port_allocator import get_port_allocator
+
+# Fallback DSN — syntactically valid, points nowhere. Used only when Postgres
+# schema provisioning fails (degraded mode): the template's db module still
+# imports cleanly, the static landing page still renders, and the failure
+# surfaces only when AI-generated code actually queries the DB.
+_DB_FALLBACK = "postgresql://placeholder:placeholder@127.0.0.1:1/placeholder"
 
 log = structlog.get_logger("omnia_orchestrator.provisioner")
 
@@ -91,12 +98,27 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
     container_name = f"omnia-dev-{req.slug}"
     image_tag = f"omnia-template-{req.template}:dev"
 
-    # Sprint A1 will inject a real DATABASE_URL pointing at the per-project
-    # schema. For PoC we hand the template a syntactically-valid placeholder
-    # so the Pool constructor doesn't throw at import — the landing page
-    # renders without touching the DB.
+    # Real per-project DSN — reuse persisted creds on re-provision, otherwise
+    # create a fresh schema + role on `omnia-postgres-users`. Fail-soft: if
+    # schema provisioning errors out we still hand the template a syntactically
+    # valid placeholder so the Pool constructor doesn't throw at import. The
+    # static landing renders either way; the DB-backed routes break only when
+    # AI generates them on top of a degraded provision.
+    database_url = postgres_admin.load_existing_dsn(req.project_id)
+    if database_url is None:
+        try:
+            creds = await postgres_admin.create_schema(req.project_id)
+            database_url = creds.dsn
+        except Exception as exc:
+            log.warning(
+                "provision.db_fallback",
+                project_id=str(req.project_id),
+                err=str(exc),
+            )
+            database_url = _DB_FALLBACK
+
     env = {
-        "DATABASE_URL": "postgresql://placeholder:placeholder@127.0.0.1:1/placeholder",
+        "DATABASE_URL": database_url,
         "NODE_ENV": "development",
         **req.initial_env,
     }

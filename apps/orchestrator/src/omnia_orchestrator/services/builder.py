@@ -27,7 +27,7 @@ from uuid import UUID
 
 import structlog
 
-from omnia_orchestrator.core import docker_client
+from omnia_orchestrator.core import docker_client, postgres_admin
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.services import deploy_state, nginx_writer
 from omnia_orchestrator.services.port_allocator import get_prod_port_allocator
@@ -51,10 +51,23 @@ _OVERLAY_PATHS = [
     "tailwind.config.ts",
 ]
 
-# Same syntactically-valid placeholder provision hands the dev container — the
-# generated landing renders without a live DB. Real per-project DATABASE_URL is
-# a later sprint.
+# Build-time placeholder. `next build` collects route data and imports the db
+# module — without DATABASE_URL the import throws. The `output: standalone`
+# runtime never reads `.env.production`, so this string never reaches a live
+# request. Runtime DSN is resolved from the per-project secrets file (see
+# `_resolve_runtime_dsn`) and overrides this placeholder in the container env.
 _DB_PLACEHOLDER = "postgresql://placeholder:placeholder@127.0.0.1:1/placeholder"
+
+
+def _resolve_runtime_dsn(project_id: str) -> str:
+    """Use the dev container's persisted DSN for prod — same schema, same role.
+    Falls back to the placeholder so a project provisioned in degraded mode
+    still deploys (DB-backed routes will surface the underlying issue at first
+    query, same UX as dev)."""
+    from uuid import UUID
+
+    dsn = postgres_admin.load_existing_dsn(UUID(project_id))
+    return dsn or _DB_PLACEHOLDER
 
 _TEMPLATE = "nextjs-postgres-drizzle"
 
@@ -181,7 +194,7 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
                 "NODE_ENV": "production",
                 "PORT": "3000",
                 "HOSTNAME": "0.0.0.0",  # standalone server must bind all ifaces
-                "DATABASE_URL": _DB_PLACEHOLDER,
+                "DATABASE_URL": _resolve_runtime_dsn(project_id),
             },
             cpu_quota=1.0,
             memory_mb=1024,
@@ -207,6 +220,14 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
             finished_at=deploy_state.now_iso(),
         )
         log.info("deploy.done", project_id=project_id, url=prod_url)
+
+        # 7. GC old prod image revisions for this slug. Best-effort: a failure
+        # here does NOT roll back the deploy (image accumulation is cosmetic).
+        try:
+            await docker_client.prune_old_app_images(slug, keep=3)
+        except Exception as exc:
+            # Best-effort: a failed prune is cosmetic, never invalidates a deploy.
+            log.warning("deploy.prune_failed", project_id=project_id, err=str(exc))
     except Exception as exc:
         msg = exc.message if isinstance(exc, OrchestratorError) else str(exc)
         log.warning("deploy.failed", project_id=project_id, err=msg)
@@ -217,8 +238,14 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
         shutil.rmtree(build_dir, ignore_errors=True)
 
 
-async def _healthy(port: int, *, tries: int = 30, delay: float = 3.0) -> bool:
-    """Poll http://127.0.0.1:<port>/ until it answers (<500) or we give up."""
+async def _healthy(port: int, *, tries: int = 60, delay: float = 3.0) -> bool:
+    """Poll http://127.0.0.1:<port>/ until it answers (<500) or we give up.
+
+    Budget: 60 tries x 3 s = 3 min. Next.js 15 + Turbopack cold compile of a
+    real user project can peak at ~90 s on the free tier; the previous 90 s
+    ceiling was flaky for larger generated pages. 3 min stays well under the
+    api request budget because deploy runs in a background task anyway.
+    """
     import httpx
 
     url = f"http://127.0.0.1:{port}/"
