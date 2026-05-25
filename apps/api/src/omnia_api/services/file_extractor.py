@@ -1,4 +1,18 @@
-"""Парсер AI-ответа в формате <file path="...">...</file> + санитизация путей."""
+"""Парсер AI-ответа в формате <file path="...">...</file> + санитизация путей.
+
+Поддерживает ДВА формата:
+* ``<file path="...">{full content}</file>`` — для новых файлов или полных
+  пересборок. Body заменяет содержимое целиком.
+* ``<edit path="...">`` с одной или несколькими SEARCH/REPLACE-секциями
+  внутри (aider-style). Body парсится, каждая секция применяется к
+  существующему содержимому файла. Намного дешевле по токенам когда
+  правка маленькая (точечная замена кнопки, цвета, текста), потому что
+  модель не переписывает весь файл.
+
+Парсер этого модуля чисто-функциональный: на входе текст ответа AI, на
+выходе словарь "что записать". Чтение текущих файлов для apply_edits
+делает caller (см. ``routers/messages.py``).
+"""
 
 from __future__ import annotations
 
@@ -10,6 +24,21 @@ log = logging.getLogger(__name__)
 
 _FILE_BLOCK = re.compile(
     r'<file\s+path="(?P<path>[^"]+)"\s*>(?P<body>.*?)</file>',
+    re.DOTALL,
+)
+
+# `<edit path="src/index.html">...</edit>`. Body содержит ≥1 SEARCH/REPLACE.
+_EDIT_BLOCK = re.compile(
+    r'<edit\s+path="(?P<path>[^"]+)"\s*>(?P<body>.*?)</edit>',
+    re.DOTALL,
+)
+
+# aider-style маркеры внутри <edit>. Допускаются 7-символьные `<<<<<<<` и
+# `>>>>>>>` (классика), а также любая длина 6-9 — некоторые модели сбиваются.
+# `=======` обязателен ровно 7-символьный (это безопасно — модель сама редко
+# отклоняется).
+_SR_BLOCK = re.compile(
+    r"<{6,9}\s*SEARCH\s*\n(?P<search>.*?)\n={7}\s*\n(?P<replace>.*?)\n>{6,9}\s*REPLACE",
     re.DOTALL,
 )
 
@@ -108,3 +137,97 @@ def extract_files(answer: str) -> dict[str, str]:
         if len(files) > MAX_FILES:
             raise ValueError(f"too many files in answer: {len(files)} > {MAX_FILES}")
     return files
+
+
+class EditConflict(ValueError):
+    """SEARCH-блок не нашёлся или нашёлся несколько раз — не можем
+    однозначно применить замену."""
+
+
+def extract_edits(answer: str) -> dict[str, list[tuple[str, str]]]:
+    """Парсит `<edit path="...">` блоки в `{path: [(search, replace), ...]}`.
+
+    Каждый <edit>-блок может содержать несколько SEARCH/REPLACE секций; они
+    применяются в порядке появления (`apply_edits`). Здесь только парсинг —
+    проверка матчинга и применение делает `apply_edits`.
+
+    Пустой словарь — нормально (модель просто не использовала формат).
+    Невалидный path / огромный body — поднимаем те же исключения, что и
+    `extract_files`, чтобы caller обрабатывал единообразно.
+    """
+    edits: dict[str, list[tuple[str, str]]] = {}
+    for match in _EDIT_BLOCK.finditer(answer):
+        raw_path = match.group("path").strip()
+        body = match.group("body")
+        if not is_safe_path(raw_path):
+            raise UnsafePathError(f"unsafe edit path: {raw_path!r}")
+        if len(body.encode("utf-8")) > MAX_FILE_BYTES:
+            raise ValueError(f"edit {raw_path} exceeds {MAX_FILE_BYTES} bytes")
+
+        pairs: list[tuple[str, str]] = []
+        for sr in _SR_BLOCK.finditer(body):
+            search = sr.group("search")
+            replace = sr.group("replace")
+            pairs.append((search, replace))
+        if not pairs:
+            log.warning(
+                "extract_edits: <edit> for %r had no SEARCH/REPLACE blocks "
+                "— skipping (model likely forgot the markers)",
+                raw_path,
+            )
+            continue
+        edits.setdefault(raw_path, []).extend(pairs)
+        if len(edits) > MAX_FILES:
+            raise ValueError(f"too many edited files: {len(edits)} > {MAX_FILES}")
+    return edits
+
+
+def apply_edits(
+    edits: dict[str, list[tuple[str, str]]],
+    base_files: dict[str, str],
+) -> tuple[dict[str, str], list[str]]:
+    """Применить SEARCH/REPLACE-замены к копиям файлов из ``base_files``.
+
+    Возвращает ``(updated, conflicts)``:
+    * ``updated`` — только изменённые файлы (готовы для commit), путь→новое
+      содержимое. Файлы из ``edits`` которых нет в ``base_files`` или где
+      SEARCH не нашёлся (или нашёлся >1 раза) — попадают в ``conflicts``
+      и в ``updated`` не входят.
+    * ``conflicts`` — человекочитаемые описания, для логов / телеметрии.
+
+    Этот частичный успех — by design (R-10 fail-soft): один сбойный edit
+    не должен ломать остальные правильные правки в том же ответе. Caller
+    может решить fallback: попросить модель прислать <file> для конфликтных
+    файлов, или просто принять что они не изменились.
+    """
+    updated: dict[str, str] = {}
+    conflicts: list[str] = []
+    for path, pairs in edits.items():
+        if path not in base_files:
+            conflicts.append(
+                f"{path}: edit для несуществующего файла — нужен <file> блок"
+            )
+            continue
+        content = base_files[path]
+        for i, (search, replace) in enumerate(pairs, 1):
+            count = content.count(search)
+            if count == 0:
+                conflicts.append(
+                    f"{path} #{i}: SEARCH-блок не найден в файле "
+                    f"(первые 60 chars: {search[:60]!r})"
+                )
+                # Прекращаем дальнейшие правки этого файла — последующие
+                # SEARCH могут зависеть от предыдущего REPLACE, который не
+                # применился, и тогда будут ещё больше промахов.
+                break
+            if count > 1:
+                conflicts.append(
+                    f"{path} #{i}: SEARCH-блок неоднозначен ({count} вхождений), "
+                    f"нужен больший контекст"
+                )
+                break
+            content = content.replace(search, replace, 1)
+        else:
+            # for-else: цикл прошёл без break → все пары применились
+            updated[path] = content
+    return updated, conflicts

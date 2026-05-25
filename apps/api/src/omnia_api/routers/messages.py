@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Sequence
 from decimal import Decimal
 from typing import Annotated, Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 from sqlalchemy import select
@@ -22,14 +22,19 @@ from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
-from omnia_api.services.file_extractor import UnsafePathError, extract_files
+from omnia_api.services.file_extractor import (
+    UnsafePathError,
+    apply_edits,
+    extract_edits,
+    extract_files,
+)
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.link_validator import find_dead_links
-from omnia_api.services.visual_enricher import enrich_files as enrich_visual_files
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
 from omnia_api.services.queue import enqueue_preview
+from omnia_api.services.visual_enricher import enrich_files as enrich_visual_files
 
 RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом генерации
 
@@ -215,6 +220,37 @@ _KIT_LINK = '<link rel="stylesheet" href="assets/omnia-kit.css">'
 _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 
 
+def _extract_files_and_edits(
+    accumulated: str, base_files: dict[str, str]
+) -> tuple[dict[str, str], list[str]]:
+    """Объединяет два формата ответа AI:
+
+    * ``<file path="...">`` — полное содержимое (новый файл / полный rewrite).
+    * ``<edit path="...">`` с SEARCH/REPLACE-блоками — точечные правки. Намного
+      дешевле по токенам: модель отдаёт ~200-500 символов diff вместо 25K
+      переписанного файла.
+
+    Контракт мерджа: если модель прислала и ``<file>``, и ``<edit>`` для
+    одного path — побеждает ``<file>`` (явный полный replace > патч).
+    Edit с конфликтом (SEARCH не нашёлся или нашёлся >1 раз) попадает в
+    ``conflicts`` и в результат не входит — caller может решить попросить
+    модель прислать <file> вместо.
+
+    Возвращает ``(files_to_commit, conflicts)``. ``files_to_commit`` идёт
+    дальше в обычный commit-flow.
+    """
+    files = extract_files(accumulated)
+    edits = extract_edits(accumulated)
+    if not edits:
+        return files, []
+    # Edit base = текущее состояние МИНУС те файлы, которые модель явно
+    # переписала через <file>. Это предотвращает гонку «применили патч к
+    # старой версии, потом перезаписали полной новой».
+    edit_base = {p: c for p, c in base_files.items() if p not in files}
+    patched, conflicts = apply_edits(edits, edit_base)
+    return {**patched, **files}, conflicts
+
+
 def _ensure_kit_linked(files: dict[str, str]) -> dict[str, str]:
     """Гарантировать, что каждая возвращённая HTML-страница подключает Omnia-кит.
 
@@ -323,7 +359,7 @@ async def _process_prompt(
                     f"[PP] preset_classified preset_id={project_design_preset_id}",
                     flush=True,
                 )
-            except Exception as cls_exc:  # noqa: BLE001 — never block generation
+            except Exception as cls_exc:
                 _log.warning("preset classify failed: %r", cls_exc)
                 project_design_preset_id = None
 
@@ -399,7 +435,13 @@ async def _process_prompt(
         print(f"[PP] stream_complete acc_len={len(accumulated)} usage={usage_data}", flush=True)
 
         try:
-            files = extract_files(accumulated)
+            files, edit_conflicts = _extract_files_and_edits(
+                accumulated, current_files
+            )
+            if edit_conflicts:
+                _log.warning(
+                    "edit conflicts on first pass: %s", edit_conflicts[:5]
+                )
         except (UnsafePathError, ValueError) as e:
             await _finalize_message(
                 factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
@@ -449,7 +491,7 @@ async def _process_prompt(
                     print(f"[PP] fallback_error {fb_model}: {fb_err!r}", flush=True)
                     continue
                 try:
-                    files = extract_files(accumulated)
+                    files, _ = _extract_files_and_edits(accumulated, current_files)
                 except (UnsafePathError, ValueError):
                     files = {}
                 if not _looks_truncated(fb_acc, files):
@@ -495,7 +537,9 @@ async def _process_prompt(
                 await _run_stream(effective_model)
                 repaired_acc = str(state["accumulated"])
                 try:
-                    repaired_files = extract_files(repaired_acc)
+                    repaired_files, _ = _extract_files_and_edits(
+                        repaired_acc, current_files
+                    )
                 except (UnsafePathError, ValueError):
                     repaired_files = {}
                 if repaired_files and len(find_dead_links(repaired_files)) < len(dead):
@@ -530,7 +574,7 @@ async def _process_prompt(
                     f"[PP] visual_enricher enriched={enr_count} sections={enr_total}",
                     flush=True,
                 )
-            except Exception as enr_exc:  # noqa: BLE001
+            except Exception as enr_exc:
                 print(f"[PP] visual_enricher failed: {enr_exc!r}", flush=True)
 
         if files and project_image_gen_enabled:
@@ -553,7 +597,7 @@ async def _process_prompt(
                             ),
                         },
                     )
-            except Exception as img_exc:  # noqa: BLE001 — never break the prompt
+            except Exception as img_exc:
                 print(f"[PP] image_resolver failed: {img_exc!r}", flush=True)
 
         new_snapshot_id: UUID | None = None
@@ -641,7 +685,7 @@ async def _process_prompt(
                                 ),
                             },
                         )
-                except Exception as hot_exc:  # noqa: BLE001 — never fail prompt over hot-reload
+                except Exception as hot_exc:
                     print(f"[PP] hot_reload failed: {hot_exc!r}", flush=True)
                     await publish_event(
                         project_id,
@@ -687,7 +731,7 @@ async def _process_prompt(
             },
         )
 
-    except Exception as e:  # noqa: BLE001 — широкий лов, чтобы dispatch error в WS
+    except Exception as e:
         import traceback as _tb
         print(f"[PP] FATAL project={project_id} asst={assistant_message_id} err={e!r}\n{_tb.format_exc()}", flush=True)
         # Mark the assistant row as failed so the UI input unblocks instead of
