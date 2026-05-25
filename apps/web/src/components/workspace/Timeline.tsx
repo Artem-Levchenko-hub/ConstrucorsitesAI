@@ -44,9 +44,15 @@ export function Timeline({ project }: { project: Project }) {
         // read as distinct surfaces. The Workspace ambient cyan orb anchored
         // bottom-right glows through this layer.
         background:
-          "radial-gradient(ellipse 100% 70% at 100% 100%, rgb(92 184 255 / 0.22), transparent 65%), radial-gradient(ellipse 80% 50% at 0% 0%, rgb(92 184 255 / 0.08), transparent 65%), rgb(8 8 12 / 0.6)",
+          "linear-gradient(180deg, rgb(92 184 255 / 0.18) 0%, rgb(92 184 255 / 0.08) 30%, rgb(92 184 255 / 0.04) 100%), radial-gradient(ellipse 120% 60% at 100% 100%, rgb(92 184 255 / 0.28), transparent 70%), rgb(8 8 12 / 0.55)",
       }}
     >
+      {/* Top accent bar — 3 px cyan gradient to mirror the violet bar on
+          ChatPanel. Side-panel identity reads at a glance. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-gradient-to-l from-accent-secondary via-accent-secondary/60 to-transparent"
+      />
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 opacity-[0.04]"

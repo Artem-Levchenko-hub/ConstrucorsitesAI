@@ -97,23 +97,23 @@ export function ImageGenToggle({
     <button
       type="button"
       aria-pressed={enabled}
+      aria-label={enabled ? "Картинки: вкл" : "Картинки: выкл"}
       onClick={() => mut.mutate(!enabled)}
       disabled={mut.isPending}
       title={tooltip}
       className={cn(
-        "inline-flex items-center gap-1 h-7 px-2.5 rounded-full text-xs whitespace-nowrap transition-all border",
+        "inline-flex h-9 w-9 items-center justify-center rounded-xl border backdrop-blur-md transition-all",
         enabled
-          ? "border-[rgba(124,92,255,0.4)] bg-accent-subtle text-fg-primary hover:bg-[rgba(124,92,255,0.16)] shadow-[0_0_0_1px_rgba(124,92,255,0.18),0_4px_12px_-4px_rgba(124,92,255,0.35)]"
-          : "border-border-default bg-surface-raised text-fg-tertiary hover:border-border-strong",
+          ? "border-accent/50 bg-accent/15 text-accent hover:bg-accent/25 shadow-glow-accent"
+          : "border-border-default bg-surface-raised/60 text-fg-tertiary hover:text-fg-secondary hover:border-border-strong",
         mut.isPending && "opacity-60 cursor-wait",
       )}
     >
       {enabled ? (
-        <ImageIcon className="h-3.5 w-3.5" />
+        <ImageIcon className="h-4 w-4" />
       ) : (
-        <ImageOff className="h-3.5 w-3.5" />
+        <ImageOff className="h-4 w-4" />
       )}
-      <span>Картинки</span>
     </button>
   );
 }

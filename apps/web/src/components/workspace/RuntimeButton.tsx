@@ -201,12 +201,15 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
       <Badge
         variant="outline"
         className={cn(
-          "gap-1.5 px-2 py-1 text-[11px] font-normal whitespace-nowrap transition-colors",
-          state === "paused" && "border-warning/40 bg-warning/[0.06]",
+          "gap-1.5 px-2.5 h-9 rounded-xl text-[11px] font-normal whitespace-nowrap backdrop-blur-md transition-colors",
+          state === "paused" && "border-warning/40 bg-warning/[0.08]",
           // Running state gets a soft green outline + halo so the live-port
           // badge reads as "ready / talking to a real container" at a glance.
           state === "running" &&
-            "border-success/40 bg-success/[0.06] shadow-glow-success",
+            "border-success/40 bg-success/[0.08] shadow-glow-success",
+          state === "stopped" &&
+            "border-border-default bg-surface-raised/60",
+          state === "failed" && "border-danger/40 bg-danger/[0.08]",
         )}
         title={
           runtime?.dev_url ? `dev: ${runtime.dev_url}` : "контейнер не запущен"
@@ -234,32 +237,36 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
         <>
           <Button
             size="sm"
-            variant="secondary"
+            variant="ghost"
             disabled={busy}
             onClick={() => stopMut.mutate()}
-            className="gap-1.5 h-7 px-2 text-xs"
+            className="h-9 w-9 rounded-xl border border-border-default bg-surface-raised/60 backdrop-blur-md p-0"
             title="Приостановить dev-контейнер (можно будет разбудить одним кликом)"
+            aria-label="Пауза"
           >
-            <Pause className="h-3 w-3" />
-            Пауза
+            <Pause className="h-4 w-4" />
           </Button>
+          {/*
+           * Опубликовать — primary CTA. Bigger and louder than the other
+           * controls: 36 px high, accent gradient, persistent halo so the eye
+           * lands here instantly. We drop the halo while publishing to avoid
+           * a glow ping-pong during the in-flight state.
+           */}
           <Button
             size="sm"
             disabled={!deploy.enabled}
             onClick={() => deployMut.mutate()}
             className={cn(
-              "gap-1.5 h-7 px-2.5 text-xs transition-shadow",
-              // Primary CTA when the container is ready: subtle accent halo so
-              // the eye knows where to land. Drops to a plain button while
-              // publishing — no glow ping-pong during the in-flight state.
+              "gap-2 h-9 px-4 rounded-xl text-sm font-semibold tracking-tight transition-shadow",
+              "bg-[linear-gradient(135deg,#7c5cff_0%,#6647e8_60%,#5cb8ff_120%)] text-white border-0 hover:brightness-110",
               deploy.enabled && !deployMut.isPending && "shadow-glow-accent",
             )}
             title={deploy.tooltip}
           >
             {deployMut.isPending ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <Rocket className="h-3 w-3" />
+              <Rocket className="h-4 w-4" />
             )}
             {deploy.label}
           </Button>
@@ -271,13 +278,16 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
           size="sm"
           disabled={busy}
           onClick={() => startMut.mutate()}
-          className="gap-1.5 h-7 px-2.5 text-xs"
+          className={cn(
+            "gap-2 h-9 px-4 rounded-xl text-sm font-semibold tracking-tight",
+            "bg-[linear-gradient(135deg,#7c5cff_0%,#6647e8_60%,#5cb8ff_120%)] text-white border-0 hover:brightness-110 shadow-glow-accent",
+          )}
           title="Поднять контейнер из паузы — секунда, не полный перезапуск"
         >
           {startMut.isPending ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            <Play className="h-3 w-3" />
+            <Play className="h-4 w-4" />
           )}
           Разбудить
         </Button>
@@ -290,7 +300,10 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
           size="sm"
           disabled={busy || state === "provisioning"}
           onClick={() => startMut.mutate()}
-          className="gap-1.5 h-7 px-2.5 text-xs"
+          className={cn(
+            "gap-2 h-9 px-4 rounded-xl text-sm font-semibold tracking-tight",
+            "bg-[linear-gradient(135deg,#7c5cff_0%,#6647e8_60%,#5cb8ff_120%)] text-white border-0 hover:brightness-110 shadow-glow-accent",
+          )}
           title={
             state === "provisioning"
               ? "Контейнер уже поднимается, подождите"
@@ -300,9 +313,9 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
           }
         >
           {startMut.isPending || state === "provisioning" ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            <Play className="h-3 w-3" />
+            <Play className="h-4 w-4" />
           )}
           {state === "failed" ? "Повторить" : "Запустить"}
         </Button>

@@ -61,13 +61,20 @@ export function ChatPanel({
     <div
       className="relative flex flex-col h-full min-h-0 backdrop-blur-xl"
       style={{
-        // Layered background: glass-like base over a violet radial tint so the
-        // panel reads as warm/active rather than flat black. The Workspace
-        // ambient orbs glow through via the alpha channel.
+        // Layered background: glass-like base over a violet linear+radial
+        // gradient so the panel reads as warm/active rather than flat black.
+        // The Workspace ambient orbs glow through via the alpha channel.
         background:
-          "radial-gradient(ellipse 100% 70% at 0% 0%, rgb(124 92 255 / 0.22), transparent 65%), radial-gradient(ellipse 80% 50% at 100% 100%, rgb(124 92 255 / 0.08), transparent 65%), rgb(8 8 12 / 0.6)",
+          "linear-gradient(180deg, rgb(124 92 255 / 0.18) 0%, rgb(124 92 255 / 0.08) 30%, rgb(124 92 255 / 0.04) 100%), radial-gradient(ellipse 120% 60% at 0% 0%, rgb(124 92 255 / 0.28), transparent 70%), rgb(8 8 12 / 0.55)",
       }}
     >
+      {/* Top accent bar — 3 px violet gradient at the very top of the panel.
+          The eye picks up panel identity instantly without needing the user to
+          read the "Чат" label. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-accent via-accent/60 to-transparent"
+      />
       {/* Decorative dot grid — 2 px dots on 24 px spacing at 4 % opacity. Adds
           texture without distracting from chat content. Pointer-events: none. */}
       <div
