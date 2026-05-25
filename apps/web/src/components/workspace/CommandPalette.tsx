@@ -143,7 +143,7 @@ export function CommandPalette() {
           >
             <PaletteItem
               icon={<Rocket className="h-4 w-4 text-white" />}
-              iconBg="linear-gradient(135deg,#6d4eff 0%,#b056ff 50%,#ec4cb8 100%)"
+              iconBg="linear-gradient(135deg,#7c5cff 0%,#6647e8 60%,#5cb8ff 120%)"
               iconGlow
               title="Опубликовать"
               hint="собрать prod-образ и переключить трафик"

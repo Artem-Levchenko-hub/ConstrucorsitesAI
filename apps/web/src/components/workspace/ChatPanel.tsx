@@ -59,42 +59,37 @@ export function ChatPanel({
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
     // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
     <div
-      className="relative flex flex-col h-full min-h-0 glass-card"
+      className="relative flex flex-col h-full min-h-0 backdrop-blur-xl"
       style={{
-        // 1:1 with landing `.glass-card` — frosted white over the workspace
-        // ambient haze. The violet identity comes from the 3 px top accent
-        // strip + a barely-there radial tint in the top-left corner, NOT
-        // from a heavy dark-theme background tint (which read murky against
-        // the new lilac canvas).
-        backgroundImage:
-          "radial-gradient(ellipse 120% 60% at 0% 0%, rgb(109 78 255 / 0.06), transparent 70%)",
-        borderRadius: 0,
-        border: "none",
+        // Layered background: glass-like base over a violet linear+radial
+        // gradient so the panel reads as warm/active rather than flat black.
+        // The Workspace ambient orbs glow through via the alpha channel.
+        background:
+          "linear-gradient(180deg, rgb(124 92 255 / 0.18) 0%, rgb(124 92 255 / 0.08) 30%, rgb(124 92 255 / 0.04) 100%), radial-gradient(ellipse 120% 60% at 0% 0%, rgb(124 92 255 / 0.28), transparent 70%), rgb(8 8 12 / 0.55)",
       }}
     >
-      {/* Top accent bar — landing-grad violet→pink. Stronger than before
-          because the white glass otherwise eats the colour. */}
+      {/* Top accent bar — 3 px violet gradient at the very top of the panel.
+          The eye picks up panel identity instantly without needing the user to
+          read the "Чат" label. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[3px]"
-        style={{
-          background:
-            "linear-gradient(90deg, var(--color-accent) 0%, var(--color-accent-pink) 50%, transparent 100%)",
-        }}
+        className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-accent via-accent/60 to-transparent"
       />
-      {/* Dot grid texture — dots now ink (0.04 black) so they read on the
-          white panel. */}
+      {/* Decorative dot grid — 2 px dots on 24 px spacing at 4 % opacity. Adds
+          texture without distracting from chat content. Pointer-events: none. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 opacity-[0.06]"
+        className="pointer-events-none absolute inset-0 opacity-[0.04]"
         style={{
           backgroundImage:
-            "radial-gradient(circle at 1px 1px, #0d0a1f 1px, transparent 0)",
+            "radial-gradient(circle at 1px 1px, #ffffff 1px, transparent 0)",
           backgroundSize: "24px 24px",
         }}
       />
 
-      {/* Vertical accent gradient on the left edge. */}
+      {/* Vertical accent gradient on the left edge — same trick the running
+          badge uses, but anchored to the panel itself so the violet identity
+          reads even when the chat is full of messages. */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-0 left-0 w-px bg-gradient-to-b from-transparent via-accent/40 to-transparent"

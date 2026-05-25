@@ -48,7 +48,7 @@ export function TopBar({
   const initial = user.email.slice(0, 1).toUpperCase();
 
   return (
-    <header className="shrink-0 h-14 flex items-center justify-between px-6 border-b border-border-default bg-[rgba(255,255,255,0.72)] backdrop-blur-xl relative">
+    <header className="shrink-0 h-14 flex items-center justify-between px-6 border-b border-border-subtle bg-[rgba(13,13,18,0.72)] backdrop-blur-xl relative">
       {/* Hair-thin accent line under the border so the top edge isn't dead-flat.
           Echoes the body aurora at low opacity. */}
       <div
@@ -72,7 +72,7 @@ export function TopBar({
               aria-hidden="true"
               className="absolute -inset-2 rounded-full bg-[radial-gradient(circle,rgba(124,92,255,0.7)_0%,rgba(124,92,255,0.25)_45%,transparent_70%)] blur-lg animate-breathe-glow"
             />
-            <span className="relative h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#6d4eff_0%,#ec4cb8_100%)] shadow-[0_6px_20px_-4px_rgba(124,92,255,0.7)] transition-transform group-hover:scale-110" />
+            <span className="relative h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] shadow-[0_6px_20px_-4px_rgba(124,92,255,0.7)] transition-transform group-hover:scale-110" />
           </span>
           <span className="hidden sm:inline text-gradient-accent">Omnia.AI</span>
         </Link>

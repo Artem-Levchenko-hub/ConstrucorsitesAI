@@ -286,7 +286,7 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
             onClick={() => deployMut.mutate()}
             className={cn(
               "gap-2 h-9 px-4 rounded-xl text-sm font-semibold tracking-tight transition-shadow",
-              "bg-[linear-gradient(135deg,#6d4eff_0%,#b056ff_50%,#ec4cb8_100%)] text-white border-0 hover:brightness-110",
+              "bg-[linear-gradient(135deg,#7c5cff_0%,#6647e8_60%,#5cb8ff_120%)] text-white border-0 hover:brightness-110",
               deploy.enabled && !deployMut.isPending && "shadow-glow-accent",
             )}
             title={deploy.tooltip}
@@ -308,7 +308,7 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
           onClick={() => startMut.mutate()}
           className={cn(
             "gap-2 h-9 px-4 rounded-xl text-sm font-semibold tracking-tight",
-            "bg-[linear-gradient(135deg,#6d4eff_0%,#b056ff_50%,#ec4cb8_100%)] text-white border-0 hover:brightness-110 shadow-glow-accent",
+            "bg-[linear-gradient(135deg,#7c5cff_0%,#6647e8_60%,#5cb8ff_120%)] text-white border-0 hover:brightness-110 shadow-glow-accent",
           )}
           title="Поднять контейнер из паузы — секунда, не полный перезапуск"
         >
@@ -330,7 +330,7 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
           onClick={() => startMut.mutate()}
           className={cn(
             "gap-2 h-9 px-4 rounded-xl text-sm font-semibold tracking-tight",
-            "bg-[linear-gradient(135deg,#6d4eff_0%,#b056ff_50%,#ec4cb8_100%)] text-white border-0 hover:brightness-110 shadow-glow-accent",
+            "bg-[linear-gradient(135deg,#7c5cff_0%,#6647e8_60%,#5cb8ff_120%)] text-white border-0 hover:brightness-110 shadow-glow-accent",
           )}
           title={
             state === "provisioning"
