@@ -767,22 +767,204 @@ KIT_FILES = frozenset({"assets/omnia-kit.css", "assets/omnia-kit.js"})
 HISTORY_LIMIT = 6
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# RU → EN industry mapping for `ui-ux-pro-max` palette/font lookup.
+# ──────────────────────────────────────────────────────────────────────────
+# `colors.csv` and `typography.csv` use English `product_type` names
+# ("Pharmacy/Drug Store", "Healthcare App", "Bakery/Cafe", …). Bag-of-words
+# matching against raw Russian tokens never hits these rows, so before today
+# 9 of 12 typical Russian prompts fell through to the bundled `_DESIGN_KIT`.
+#
+# The keys are Russian word STEMS (5-7 chars) so a single entry catches all
+# inflections — `аптек` matches `аптека / аптеки / аптеке / аптекой / аптечный`.
+# Each value is one or more English keywords that the CSV row text contains,
+# space-separated so `_score_match` counts each as a distinct hit.
+#
+# Curated against the actual product_type column dumped from `colors.csv`;
+# rows that don't exist there are NOT mapped (would silently miss anyway).
+# When adding a new mapping, verify the English keyword appears in at least
+# one CSV `product_type` cell.
+_RU_INDUSTRY_KEYWORDS: dict[str, str] = {
+    # Medical / pharmacy
+    "аптек": "pharmacy drug",
+    "медицин": "medical clinic healthcare",
+    "клиник": "medical clinic healthcare",
+    "стоматолог": "dental clinic",
+    "дантист": "dental",
+    "врач": "medical clinic healthcare",
+    "здоровь": "healthcare medical",
+    "ветеринар": "veterinary clinic",
+    "ветклиник": "veterinary",
+    "психолог": "mental health",
+    # Food / beverage
+    "кофейн": "bakery cafe",
+    "кафе": "bakery cafe restaurant",
+    "пекарн": "bakery",
+    "ресторан": "restaurant food",
+    "доставк еды": "food delivery restaurant",
+    "пивн": "brewery",
+    "винодельн": "winery",
+    "винотек": "winery",
+    "кондитерск": "bakery",
+    # Beauty / wellness
+    "салон красот": "beauty spa",
+    "бьюти": "beauty spa",
+    "парикмахер": "beauty spa",
+    "спа": "spa wellness beauty",
+    "космет": "beauty spa",
+    "массаж": "wellness spa",
+    "йог": "yoga stretching wellness",
+    "медитац": "meditation mindfulness",
+    # Fitness / sport
+    "фитнес": "fitness gym",
+    "спортзал": "fitness gym",
+    "тренажерн": "fitness gym",
+    "тренер по": "fitness gym",
+    "бокс": "fitness gym",
+    # Real estate / construction
+    "недвижимост": "real estate property",
+    "риелтор": "real estate",
+    "квартир": "real estate property",
+    "строительств": "construction architecture",
+    "ремонт квартир": "construction interior",
+    "интерьер": "interior architecture",
+    "архитектор": "architecture",
+    # Legal / finance / B2B
+    "юрист": "legal",
+    "юридическ": "legal",
+    "адвокат": "legal",
+    "нотариус": "legal",
+    "консалтинг": "b2b service",
+    "финтех": "fintech finance crypto",
+    "крипт": "fintech crypto",
+    "банк": "banking finance",
+    "страхов": "insurance",
+    "бухгалтер": "invoice billing b2b",
+    # E-commerce / retail
+    "магазин": "e-commerce ecommerce retail",
+    "интернет-магазин": "e-commerce ecommerce",
+    "ритейл": "e-commerce retail",
+    "маркетплейс": "marketplace",
+    "доставк": "logistics delivery",
+    "логистик": "logistics delivery",
+    "цвет": "florist plant",
+    "флорист": "florist",
+    "автосалон": "automotive car",
+    "автомобил": "automotive car",
+    "электромобил": "ev charging",
+    # Education
+    "школ": "educational online course learning",
+    "курс": "online course educational learning",
+    "обучен": "educational online course learning",
+    "репетитор": "educational learning",
+    "вебинар": "online course",
+    # Tech / SaaS
+    "стартап": "saas startup",
+    "айти": "saas tech",
+    "разработк": "developer saas",
+    "облачн": "saas",
+    "crm": "crm client management saas",
+    "дашборд": "analytics dashboard",
+    "аналитик": "analytics dashboard",
+    "ai": "ai chatbot",
+    "ии": "ai chatbot",
+    "чатбот": "ai chatbot",
+    "нейросет": "ai",
+    "кибербезопасн": "cybersecurity",
+    "гейм": "gaming game",
+    "игр": "gaming game",  # игры / игра / игровой
+    "геймдев": "gaming",
+    "vpn": "vpn privacy",
+    "впн": "vpn privacy",
+    "впр": "vpn privacy",  # «впр» в опечатках
+    # Marketing / creative
+    "маркетинг": "marketing agency",
+    "креативн": "creative agency",
+    "диджитал": "marketing creative agency",
+    "брендинг": "creative agency",
+    "дизайн-студ": "creative agency",
+    "фотограф": "photography studio",
+    "видеограф": "photography studio",
+    "портфоли": "portfolio personal",
+    # Real estate / hospitality
+    "отель": "hotel hospitality",
+    "гостиниц": "hotel hospitality",
+    "хостел": "hotel hospitality",
+    "турагентств": "travel tourism",
+    "путешеств": "travel tourism",
+    # Events
+    "свад": "wedding event planning",  # свадьба / свадебное / свадебный
+    "ивент": "event planning",
+    "мероприят": "event planning local events",
+    "конферен": "event planning",
+    "выставк": "museum gallery event",
+    # Misc
+    "коворкинг": "coworking",
+    "блог": "magazine blog",
+    "новост": "news media",
+    "сми": "news media",
+    "благотвор": "non-profit charity",
+    "нко": "non-profit charity",
+    "детск": "kids childcare",
+    "детсад": "childcare daycare",
+    "церков": "church religious",
+    "храм": "church religious",
+    # Premium / luxury
+    "люкс": "luxury premium",
+    "премиум": "luxury premium",
+    "ювелир": "luxury premium e-commerce",
+}
+
+
+def _expand_ru_to_en(prompt: str) -> tuple[str, ...]:
+    """Augment a Russian prompt with English industry keywords so the
+    bag-of-words matcher can hit `product_type` rows that are English-only
+    in `colors.csv` / `typography.csv`.
+
+    Returns a tuple of tokens (original + injected English). Match rule:
+    each stem in `_RU_INDUSTRY_KEYWORDS` must be a **prefix of a word**
+    in the prompt — substring-anywhere would falsely fire short stems
+    like ``ai`` on ``сайт`` ("ai" ⊂ "сайт") and route a dental clinic
+    to the AI/Chatbot palette. Multi-word stems (``доставк еды``) are
+    checked as a contiguous substring in the lowercased prompt.
+
+    `lookup_palette` does substring match against full row text — adding
+    English equivalents next to Russian originals widens the match
+    surface without hurting English-native prompts ("SaaS", "fintech
+    crypto", …) which still match directly.
+    """
+    lower = prompt.lower()
+    words = [w for w in lower.replace(",", " ").replace("/", " ").split() if w]
+    tokens: list[str] = [w for w in words if len(w) >= 3]
+    for stem, en_keywords in _RU_INDUSTRY_KEYWORDS.items():
+        if " " in stem:
+            # Multi-word stem — fall back to substring (rare; covers cases
+            # like "доставк еды" / "ремонт квартир").
+            if stem in lower:
+                tokens.extend(en_keywords.split())
+        else:
+            # Single-word stem — must be a prefix of some word so "ai"
+            # doesn't trigger on "сайт".
+            if any(w.startswith(stem) for w in words):
+                tokens.extend(en_keywords.split())
+    return tuple(tokens)
+
+
 def _compute_skill_brief(
     user_prompt: str | None, project_id: str | None
 ) -> str | None:
     """Pull a project-specific design brief out of the vendored `ui-ux-pro-max`
     library (`apps/api/skills/ui-ux-pro-max/`).
 
-    Strategy: extract bag-of-words from the user prompt, match against
-    `colors.csv` `product_type` and `typography.csv` `keywords + best_for`.
-    Returns a compact `format_design_brief(...)` block or None when nothing
-    scores above zero (caller falls through to `_DESIGN_KIT`).
+    Strategy: extract bag-of-words from the user prompt (with RU→EN industry
+    expansion via `_expand_ru_to_en`), match against `colors.csv`
+    `product_type` and `typography.csv` `keywords + best_for`. Returns a
+    compact `format_design_brief(...)` block or None when nothing scores
+    above zero (caller falls through to `_DESIGN_KIT`).
 
-    Why not always inject: the bundled `_DESIGN_KIT` already covers 12 broad
-    industry presets; the skill library matters most when the prompt names
-    something specific ("гейминг", "финтех", "хелскеа", etc.) that the kit
-    doesn't have a direct row for. Falling through keeps the prompt lean for
-    generic cases.
+    Why expansion: the CSV rows are English-only ("Pharmacy/Drug Store",
+    "Bakery/Cafe", …). Without `_RU_INDUSTRY_KEYWORDS` mapping, 9/12 typical
+    Russian prompts miss palette+font lookups and only get UX-guidelines.
 
     The 5 UX guidelines we pull are seeded by `project_id` so re-prompts
     within the same project surface the same rules — the model sees rules
@@ -790,14 +972,7 @@ def _compute_skill_brief(
     """
     if not user_prompt:
         return None
-    # Naive tokenisation — words >= 3 chars, lowercased. Russian + English
-    # both work because `lookup_palette` does a substring match against the
-    # CSV row text (which has English product types like "Healthcare App",
-    # "Fintech/Crypto", "Gaming", …). A 2-3-word user prompt that mentions
-    # an industry will reliably score 1+ on one of those rows.
-    tokens = tuple(
-        w for w in user_prompt.lower().replace(",", " ").split() if len(w) >= 3
-    )
+    tokens = _expand_ru_to_en(user_prompt)
     if not tokens:
         return None
 
