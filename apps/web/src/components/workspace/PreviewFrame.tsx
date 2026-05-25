@@ -25,7 +25,7 @@ import { useWorkspaceStore } from "@/store/workspace";
 import { useInspectorStore } from "@/store/inspector";
 import { toast } from "sonner";
 import type { Project, Snapshot } from "@/lib/api/types";
-import { Skeleton } from "@/components/ui/skeleton";
+import { PreviewSkeleton } from "./PreviewSkeleton";
 import { shortSha, cn, formatRelativeTime } from "@/lib/utils";
 import { StreamingPreviewFrame } from "./StreamingPreviewFrame";
 import { CodeView } from "./CodeView";
@@ -420,8 +420,8 @@ export function PreviewFrame({ project }: { project: Project }) {
 
               <div className="flex-1 relative bg-surface-base flex items-start justify-center overflow-auto">
                 {isPending && (
-                  <div className="absolute inset-0 p-4">
-                    <Skeleton className="w-full h-full" />
+                  <div className="absolute inset-0">
+                    <PreviewSkeleton label="Загружаю превью…" />
                   </div>
                 )}
 

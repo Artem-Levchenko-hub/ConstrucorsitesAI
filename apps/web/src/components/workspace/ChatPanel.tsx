@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MessagesSquare, Sparkles } from "lucide-react";
+import { ChevronLeft, MessagesSquare, Sparkles } from "lucide-react";
 import { listMessages } from "@/lib/api/messages";
 import { ChatMessage } from "./ChatMessage";
 import { PromptInput } from "./PromptInput";
@@ -95,18 +95,8 @@ export function ChatPanel({
         className="pointer-events-none absolute inset-y-0 left-0 w-px bg-gradient-to-b from-transparent via-accent/40 to-transparent"
       />
 
-      <div className="relative shrink-0 px-4 h-10 flex items-center gap-2 border-b border-border-subtle">
-        <MessagesSquare className="h-3.5 w-3.5 text-accent/80" aria-hidden="true" />
-        <span className="text-xs font-mono text-fg-tertiary uppercase tracking-wider">
-          Чат
-        </span>
-        {/* Hair-thin gradient line to the right of the label — visual cadence
-            with the TopBar accent line. */}
-        <div
-          aria-hidden="true"
-          className="flex-1 h-px bg-gradient-to-r from-border-subtle to-transparent ml-1"
-        />
-      </div>
+      <ChatHeader />
+
 
       <div
         ref={scrollRef}
@@ -186,6 +176,37 @@ export function ChatPanel({
           pendingPrompt={pendingPrompt}
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Header row for the chat panel — title, accent hairline, and the new
+ * collapse-chevron. The chevron mirrors the hotkey `[` from `Workspace`
+ * so users discover keyboard-shortcuts naturally (tooltip surfaces the
+ * binding).
+ */
+function ChatHeader() {
+  const toggleChat = useWorkspaceStore((s) => s.toggleChat);
+  return (
+    <div className="relative shrink-0 px-4 h-10 flex items-center gap-2 border-b border-border-subtle">
+      <MessagesSquare className="h-3.5 w-3.5 text-accent/80" aria-hidden="true" />
+      <span className="text-xs font-mono text-fg-tertiary uppercase tracking-wider">
+        Чат
+      </span>
+      <div
+        aria-hidden="true"
+        className="flex-1 h-px bg-gradient-to-r from-border-subtle to-transparent ml-1"
+      />
+      <button
+        type="button"
+        onClick={toggleChat}
+        title="Свернуть чат (хоткей: [)"
+        aria-label="Свернуть чат"
+        className="h-6 w-6 rounded-md text-fg-tertiary hover:text-fg-primary hover:bg-surface-raised/60 transition flex items-center justify-center"
+      >
+        <ChevronLeft className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }

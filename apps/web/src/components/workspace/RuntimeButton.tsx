@@ -20,6 +20,7 @@
  * helper below) with hover-tooltips explaining each disabled case.
  */
 
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CircleCheck,
@@ -184,6 +185,33 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
 
   const state: RuntimeState = runtime?.state ?? "stopped";
   const busy = startMut.isPending || stopMut.isPending || deployMut.isPending;
+
+  // Listen for command-palette events so ⌘K can drive the same mutations
+  // the visible buttons do. Each event is honoured only when the action
+  // is actually valid in the current state — palette doesn't know what's
+  // legal, the component does. Same toast/error chain as button clicks.
+  useEffect(() => {
+    const onDeploy = () => {
+      if (state === "running" && !deployMut.isPending) deployMut.mutate();
+      else toast.info("Опубликовать можно когда контейнер запущен");
+    };
+    const onPause = () => {
+      if (state === "running" && !stopMut.isPending) stopMut.mutate();
+      else toast.info("Пауза доступна для запущенного контейнера");
+    };
+    const onStart = () => {
+      if (state !== "running" && !startMut.isPending) startMut.mutate();
+      else toast.info("Контейнер уже запущен");
+    };
+    window.addEventListener("omnia:trigger-deploy", onDeploy);
+    window.addEventListener("omnia:trigger-pause", onPause);
+    window.addEventListener("omnia:trigger-start", onStart);
+    return () => {
+      window.removeEventListener("omnia:trigger-deploy", onDeploy);
+      window.removeEventListener("omnia:trigger-pause", onPause);
+      window.removeEventListener("omnia:trigger-start", onStart);
+    };
+  }, [state, deployMut, stopMut, startMut]);
 
   if (isPending) {
     return (

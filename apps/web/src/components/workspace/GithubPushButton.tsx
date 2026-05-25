@@ -11,11 +11,12 @@
  */
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Github, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
 import { getGithubStatus } from "@/lib/api/github";
 
 import { GithubPushDialog } from "./GithubPushDialog";
@@ -28,6 +29,7 @@ export function GithubPushButton({
   projectSlug: string;
 }) {
   const [open, setOpen] = useState(false);
+  const router = useRouter();
 
   const { data, isPending } = useQuery({
     queryKey: ["github-status"],
@@ -35,6 +37,22 @@ export function GithubPushButton({
     retry: false,
     staleTime: 60_000,
   });
+
+  // ⌘K palette routes the "На GitHub" item here. If GitHub is connected,
+  // pop the push dialog; otherwise navigate to /account to connect first
+  // (and surface why so the click isn't silent).
+  useEffect(() => {
+    const onGithub = () => {
+      if (data?.connected) {
+        setOpen(true);
+      } else {
+        toast.info("Сначала подключи GitHub в /account");
+        router.push("/account");
+      }
+    };
+    window.addEventListener("omnia:trigger-github", onGithub);
+    return () => window.removeEventListener("omnia:trigger-github", onGithub);
+  }, [data?.connected, router]);
 
   // Icon-only button — text dropped per "интуитивно без лишних надписей".
   // Tooltip preserves discoverability (hover/keyboard-focus). Connection

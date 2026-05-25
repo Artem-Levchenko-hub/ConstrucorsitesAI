@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { History } from "lucide-react";
+import { ChevronRight, History } from "lucide-react";
 import { toast } from "sonner";
 import { listSnapshots, rollback } from "@/lib/api/snapshots";
 import type { Project } from "@/lib/api/types";
@@ -67,23 +67,8 @@ export function Timeline({ project }: { project: Project }) {
         className="pointer-events-none absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-accent-secondary/40 to-transparent"
       />
 
-      <div className="relative h-8 flex items-center justify-between gap-2 px-3 border-b border-border-subtle">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <History className="h-3 w-3 text-accent/80" aria-hidden="true" />
-          <span className="text-[10px] font-mono text-fg-tertiary uppercase tracking-wider">
-            История
-          </span>
-          <div
-            aria-hidden="true"
-            className="flex-1 h-px bg-gradient-to-r from-border-subtle to-transparent ml-0.5"
-          />
-        </div>
-        {data && (
-          <span className="text-[10px] font-mono px-1.5 py-px rounded-md bg-surface-raised text-fg-tertiary border border-border-subtle tabular-nums">
-            {data.length}
-          </span>
-        )}
-      </div>
+      <TimelineHeader count={data?.length} />
+
 
       <ScrollArea className="flex-1">
         {/*
@@ -121,6 +106,43 @@ export function Timeline({ project }: { project: Project }) {
           ))}
         </div>
       </ScrollArea>
+    </div>
+  );
+}
+
+/**
+ * Header row for the timeline — chevron right collapses the panel into
+ * its 44 px rail (`Workspace.tsx` swaps the body for `<CollapsedRail>`).
+ * The chevron mirrors hotkey `]` so users discover it via tooltip.
+ */
+function TimelineHeader({ count }: { count?: number }) {
+  const toggleTimeline = useWorkspaceStore((s) => s.toggleTimeline);
+  return (
+    <div className="relative h-8 flex items-center justify-between gap-2 px-3 border-b border-border-subtle">
+      <div className="flex items-center gap-1.5 min-w-0">
+        <button
+          type="button"
+          onClick={toggleTimeline}
+          title="Свернуть историю (хоткей: ])"
+          aria-label="Свернуть историю"
+          className="h-5 w-5 rounded text-fg-tertiary hover:text-fg-primary hover:bg-surface-raised/60 transition flex items-center justify-center"
+        >
+          <ChevronRight className="h-3 w-3" />
+        </button>
+        <History className="h-3 w-3 text-accent/80" aria-hidden="true" />
+        <span className="text-[10px] font-mono text-fg-tertiary uppercase tracking-wider">
+          История
+        </span>
+        <div
+          aria-hidden="true"
+          className="flex-1 h-px bg-gradient-to-r from-border-subtle to-transparent ml-0.5"
+        />
+      </div>
+      {count !== undefined && (
+        <span className="text-[10px] font-mono px-1.5 py-px rounded-md bg-surface-raised text-fg-tertiary border border-border-subtle tabular-nums">
+          {count}
+        </span>
+      )}
     </div>
   );
 }

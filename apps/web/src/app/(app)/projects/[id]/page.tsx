@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getSession } from "@/lib/auth-mock";
+import { CommandPalette } from "@/components/workspace/CommandPalette";
 import { TopBar } from "@/components/workspace/TopBar";
 import { Workspace } from "@/components/workspace/Workspace";
 import { mockApi, USE_MOCKS } from "@/lib/api/mocks";
@@ -41,6 +42,7 @@ export default async function WorkspacePage({
         imageGenEnabled={project.image_gen_enabled ?? true}
       />
       <Workspace project={project} />
+      <CommandPalette />
     </>
   );
 }
