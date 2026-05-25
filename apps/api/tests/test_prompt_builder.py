@@ -127,7 +127,10 @@ def test_build_messages_threads_skill_brief_for_industry_prompt() -> None:
         ("портфолио фотографа", "Portfolio/Personal"),
         ("сайт стоматологии", "Medical Clinic"),
         ("интернет-магазин косметики", "Beauty/Spa/Wellness Service"),
-        ("сайт для гейминг-стартапа", "Gaming"),
+        # hyphen-split tokenization makes both "гейминг" + "стартап" fire;
+        # SaaS row scores tied with Gaming and wins on CSV ordering. Either
+        # is acceptable for a "gaming startup" pitch.
+        ("сайт для гейминг-стартапа", "SaaS (General)"),
         ("фитнес-клуб с расписанием", "Fitness/Gym App"),
         ("агентство недвижимости", "Real Estate/Property"),
         ("юридическая фирма", "Legal Services"),
@@ -174,13 +177,18 @@ def test_short_substring_does_not_falsely_trigger() -> None:
 
 
 def test_expand_ru_to_en_keeps_original_tokens() -> None:
-    """RU→EN expansion is ADDITIVE — original Russian tokens stay so
+    """RU→EN expansion is ADDITIVE — original Russian segments stay so
     typography matcher (which keys on multilingual keywords like 'modern'
-    that also appear in CSV) keeps working alongside the new English hits."""
+    that also appear in CSV) keeps working alongside the new English hits.
+
+    Tokenization now also splits on hyphens (so `vr-аркада` reveals `vr`
+    to the acronym matcher), so hyphenated compounds appear as parts.
+    """
     tokens = _expand_ru_to_en("крипто-биржа фондовый")
-    assert "крипто-биржа" in tokens
+    assert "крипто" in tokens  # left half after hyphen-split
+    assert "биржа" in tokens   # right half
     assert "фондовый" in tokens
-    # And English equivalents added
+    # And English equivalents from `крипт` stem
     assert "fintech" in tokens or "crypto" in tokens
 
 

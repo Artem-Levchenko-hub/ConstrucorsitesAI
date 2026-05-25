@@ -785,80 +785,231 @@ HISTORY_LIMIT = 6
 # When adding a new mapping, verify the English keyword appears in at least
 # one CSV `product_type` cell.
 _RU_INDUSTRY_KEYWORDS: dict[str, str] = {
-    # Medical / pharmacy
+    # ─── Medical / pharmacy ──────────────────────────────────────────
     "аптек": "pharmacy drug",
+    "лекарств": "pharmacy drug",
     "медицин": "medical clinic healthcare",
+    "медцентр": "medical clinic healthcare",
+    "медкабинет": "medical clinic",
     "клиник": "medical clinic healthcare",
+    "поликлиник": "medical clinic",
     "стоматолог": "dental clinic",
     "дантист": "dental",
+    "ортодонт": "dental",
+    "имплантац": "dental clinic",
     "врач": "medical clinic healthcare",
+    "терапевт": "medical clinic",
+    "хирург": "medical clinic",
+    "офтальмолог": "medical clinic",
+    "лор": "medical clinic",
+    "гинеколог": "medical clinic",
+    "педиатр": "medical clinic childcare",
+    "узи": "medical clinic",
+    "анализ": "medical clinic",
+    "лаборатор": "medical clinic",
     "здоровь": "healthcare medical",
     "ветеринар": "veterinary clinic",
     "ветклиник": "veterinary",
     "психолог": "mental health",
-    # Food / beverage
+    "психотерап": "mental health",
+    "психиатр": "mental health",
+    "наркол": "mental health medical",
+    "реабилит": "medical clinic healthcare",
+    "санатор": "spa wellness medical",
+    # ─── Food / beverage ─────────────────────────────────────────────
     "кофейн": "bakery cafe",
+    "кофешоп": "bakery cafe",
     "кафе": "bakery cafe restaurant",
     "пекарн": "bakery",
+    "булочн": "bakery",
+    "кондитер": "bakery",
+    "торт": "bakery",
+    "десерт": "bakery cafe",
     "ресторан": "restaurant food",
+    "столов": "restaurant food",
+    "бистро": "restaurant food",
+    "бургерн": "restaurant food",
+    "пиццер": "restaurant food",
+    "суши": "restaurant food",
+    "шаурм": "restaurant food",
     "доставк еды": "food delivery restaurant",
     "пивн": "brewery",
+    "паб": "brewery restaurant",
+    "бар": "restaurant food",
     "винодельн": "winery",
     "винотек": "winery",
-    "кондитерск": "bakery",
-    # Beauty / wellness
+    "кальянн": "restaurant food",
+    "караок": "restaurant theater music",
+    "фастфуд": "restaurant food",
+    "грузин": "restaurant food",  # грузинская кухня
+    "японск": "restaurant food",
+    "итальянск": "restaurant food",
+    # ─── Beauty / wellness ──────────────────────────────────────────
     "салон красот": "beauty spa",
     "бьюти": "beauty spa",
     "парикмахер": "beauty spa",
-    "спа": "spa wellness beauty",
+    "барбершоп": "beauty spa",
+    "барбер": "beauty spa",
+    "стрижк": "beauty spa",
+    "маникюр": "beauty spa",
+    "педикюр": "beauty spa",
+    "ногт": "beauty spa",
+    "бровист": "beauty spa",
+    "лашмейкер": "beauty spa",
+    "ресниц": "beauty spa",
+    "ламинирован": "beauty spa",
     "космет": "beauty spa",
+    "косметолог": "beauty spa",
+    "эстетическ": "beauty spa",
+    "омолож": "beauty spa medical",
+    "ботокс": "beauty spa medical",
+    "пластическ": "medical clinic beauty",
+    "тату": "beauty",  # тату / татуировка / татуаж (≥4 chars, prefix-safe)
+    "пирсинг": "beauty",
+    "солярий": "beauty spa",
+    "эпиляц": "beauty spa",
     "массаж": "wellness spa",
-    "йог": "yoga stretching wellness",
+    "спа": "spa wellness beauty",
+    "сауна": "spa wellness",
+    "баня": "spa wellness",
+    "хамам": "spa wellness",
+    # "йог*" + "йогурт" share 3-char prefix → can't use prefix-match safely.
+    # Enumerate the (few) morphological forms of "йога" as exact-only entries.
+    "йога": "yoga stretching wellness",  # 4 char prefix → йога/йогой/йогу
+    "йоги": "yoga stretching wellness",  # genitive/plural — separate exact
     "медитац": "meditation mindfulness",
-    # Fitness / sport
+    "ретрит": "meditation mindfulness wellness",
+    "коуч": "consulting b2b",
+    "wellness": "wellness spa",
+    # ─── Fitness / sport ────────────────────────────────────────────
     "фитнес": "fitness gym",
     "спортзал": "fitness gym",
     "тренажерн": "fitness gym",
     "тренер по": "fitness gym",
     "бокс": "fitness gym",
-    # Real estate / construction
+    "ммa": "fitness gym",
+    "мма": "fitness gym",
+    "кроссфит": "fitness gym",
+    "пилатес": "fitness gym yoga",
+    "танц": "fitness gym",
+    "балет": "fitness gym",
+    "скейт": "fitness gym",
+    "сноуборд": "fitness gym",
+    "серф": "fitness gym",
+    "сёрф": "fitness gym",
+    "велосипед": "fitness gym",
+    "велоспорт": "fitness gym",
+    "бассейн": "fitness wellness",
+    "плаван": "fitness wellness",
+    "теннис": "fitness gym",
+    "футбол": "fitness gym sports",
+    "хокке": "fitness gym sports",
+    "баскетбол": "fitness gym sports",
+    "бильярд": "restaurant theater",
+    "боулинг": "restaurant theater",
+    "аквапарк": "travel hotel event",
+    # ─── Real estate / construction ─────────────────────────────────
     "недвижимост": "real estate property",
     "риелтор": "real estate",
     "квартир": "real estate property",
+    "коттедж": "real estate property",
+    "дач": "real estate property",
+    "земельн": "real estate property",
+    "стройматериал": "construction architecture",
     "строительств": "construction architecture",
     "ремонт квартир": "construction interior",
+    "проектирован": "construction architecture",
     "интерьер": "interior architecture",
     "архитектор": "architecture",
-    # Legal / finance / B2B
+    "ландшафтн": "interior architecture",
+    "мебельн": "e-commerce home interior",
+    "мебель": "e-commerce home interior",
+    "кухн": "e-commerce home",  # кухни на заказ
+    # ─── Legal / finance / B2B ──────────────────────────────────────
     "юрист": "legal",
     "юридическ": "legal",
     "адвокат": "legal",
     "нотариус": "legal",
     "консалтинг": "b2b service",
+    "аудит": "b2b service",
+    "бухгалтер": "invoice billing b2b",
     "финтех": "fintech finance crypto",
     "крипт": "fintech crypto",
+    "блокчейн": "fintech crypto",
+    "nft": "nft web3",
+    "web3": "nft web3",
     "банк": "banking finance",
     "страхов": "insurance",
-    "бухгалтер": "invoice billing b2b",
-    # E-commerce / retail
+    "лизинг": "b2b banking finance",
+    "ипотек": "real estate banking",
+    "инвестиц": "fintech finance",
+    "брокер": "fintech finance",
+    "трейдинг": "fintech crypto",
+    # ─── E-commerce / retail / shops ────────────────────────────────
     "магазин": "e-commerce ecommerce retail",
     "интернет-магазин": "e-commerce ecommerce",
     "ритейл": "e-commerce retail",
     "маркетплейс": "marketplace",
     "доставк": "logistics delivery",
     "логистик": "logistics delivery",
+    "грузоперевозк": "logistics delivery",
+    "курьер": "logistics delivery",
+    "такси": "ride hailing transportation",
     "цвет": "florist plant",
     "флорист": "florist",
+    "одежд": "e-commerce retail",
+    "обув": "e-commerce retail",
+    "сумк": "e-commerce retail luxury",
+    "аксессуар": "e-commerce retail",
+    "украшен": "e-commerce luxury",
+    "белье": "e-commerce retail",
+    "детск одежд": "e-commerce kids retail",
+    "игрушк": "e-commerce kids retail",
+    "хобб": "e-commerce retail",
+    "посуд": "e-commerce home retail",
+    "подарк": "e-commerce subscription",
+    "сувенир": "e-commerce retail",
+    "бутик": "e-commerce luxury",
+    "шоурум": "e-commerce luxury",
     "автосалон": "automotive car",
     "автомобил": "automotive car",
-    "электромобил": "ev charging",
-    # Education
+    "автозапчаст": "automotive car ecommerce",
+    "автосервис": "automotive car",
+    "автомойк": "automotive car",
+    "шиномонтаж": "automotive car",
+    "эвакуатор": "automotive car logistics",
+    "электромобил": "ev charging automotive",
+    "зоомагазин": "pet e-commerce",
+    "корм для": "pet e-commerce",
+    "груминг": "pet beauty",
+    "приют": "pet veterinary non-profit",
+    # ─── Education ──────────────────────────────────────────────────
     "школ": "educational online course learning",
+    "колледж": "educational online course",
+    "университет": "educational online course",
     "курс": "online course educational learning",
     "обучен": "educational online course learning",
     "репетитор": "educational learning",
     "вебинар": "online course",
-    # Tech / SaaS
+    "тренинг": "online course learning",
+    "семинар": "online course learning",
+    "мастер-класс": "online course learning",
+    "английск": "language learning online course",
+    "немецк": "language learning online course",
+    "испанск": "language learning online course",
+    "китайск": "language learning online course",
+    "французск": "language learning",
+    "математик": "online course educational",
+    "программирован": "coding bootcamp educational",
+    "айти-курс": "coding bootcamp",
+    "music-school": "music instrument learning",
+    "музыкальн": "music instrument creation",
+    "звукозапис": "music creation",
+    "звукозаписыва": "music creation",
+    "вокальн": "music instrument learning",
+    "гитар": "music instrument learning",
+    "фортепиан": "music instrument learning",
+    # ─── Tech / SaaS / AI ──────────────────────────────────────────
     "стартап": "saas startup",
     "айти": "saas tech",
     "разработк": "developer saas",
@@ -870,49 +1021,147 @@ _RU_INDUSTRY_KEYWORDS: dict[str, str] = {
     "ии": "ai chatbot",
     "чатбот": "ai chatbot",
     "нейросет": "ai",
+    "llm": "ai chatbot",
+    "metaverse": "nft web3 gaming",
+    "метавселен": "nft web3 gaming",
+    "vr": "spatial computing gaming",
+    "ar": "spatial computing",
+    "iot": "smart home iot",
+    "умн дом": "smart home iot",
     "кибербезопасн": "cybersecurity",
     "гейм": "gaming game",
-    "игр": "gaming game",  # игры / игра / игровой
+    "игр": "gaming game",
     "геймдев": "gaming",
+    "киберспорт": "gaming sports",
     "vpn": "vpn privacy",
     "впн": "vpn privacy",
-    "впр": "vpn privacy",  # «впр» в опечатках
-    # Marketing / creative
+    "хостинг": "saas b2b",
+    "облако": "saas",
+    "docker": "developer saas",
+    "devops": "developer saas",
+    "no-code": "saas productivity",
+    "low-code": "saas productivity",
+    # ─── Marketing / creative agencies ─────────────────────────────
     "маркетинг": "marketing agency",
     "креативн": "creative agency",
     "диджитал": "marketing creative agency",
     "брендинг": "creative agency",
+    "брен агентств": "creative agency",
+    "пиар": "marketing agency",
+    "pr-агентств": "marketing agency",
+    "smm": "marketing agency",
+    "seo": "marketing agency saas",
     "дизайн-студ": "creative agency",
+    "веб-студ": "creative agency",
+    "контент-агентств": "marketing creative agency",
     "фотограф": "photography studio",
     "видеограф": "photography studio",
+    "продакшн": "creative agency photography",
+    "монтаж": "video creative",
+    "иллюстрат": "portfolio creative",
+    "график-дизайнер": "portfolio creative",
     "портфоли": "portfolio personal",
-    # Real estate / hospitality
+    # ─── Hospitality / travel / events ──────────────────────────────
     "отель": "hotel hospitality",
     "гостиниц": "hotel hospitality",
     "хостел": "hotel hospitality",
+    "глэмпинг": "hotel hospitality travel",
+    "база отдых": "hotel hospitality travel",
+    "санатори": "hotel wellness spa",
     "турагентств": "travel tourism",
     "путешеств": "travel tourism",
-    # Events
-    "свад": "wedding event planning",  # свадьба / свадебное / свадебный
+    "экскурси": "travel tourism event",
+    "круиз": "travel tourism",
+    "виз": "travel legal",  # визовый центр
+    "авиабилет": "airline travel",
+    "ж/д билет": "travel transportation",
+    "трансфер": "ride hailing transportation",
+    "свад": "wedding event planning",
     "ивент": "event planning",
     "мероприят": "event planning local events",
     "конферен": "event planning",
     "выставк": "museum gallery event",
-    # Misc
-    "коворкинг": "coworking",
+    "фестивал": "event planning local events",
+    "концерт": "event theater music",
+    "вечеринк": "event planning",
+    "квест": "event theater gaming",
+    "детск праздник": "event planning kids",
+    # ─── Arts / culture / media ────────────────────────────────────
+    "театр": "theater cinema",
+    "кино": "theater cinema video",
+    "галере": "museum gallery",
+    "музе": "museum gallery",
+    "художник": "portfolio creative",
+    "художеств школ": "portfolio educational",
+    "арт": "portfolio creative",
     "блог": "magazine blog",
+    "влог": "video creator",
+    "подкаст": "podcast",
     "новост": "news media",
     "сми": "news media",
-    "благотвор": "non-profit charity",
-    "нко": "non-profit charity",
-    "детск": "kids childcare",
-    "детсад": "childcare daycare",
+    "журнал": "magazine blog news",
+    # ─── Pets ─────────────────────────────────────────────────────
+    "пет": "pet tech",
+    "собак": "pet veterinary",
+    "кошк": "pet veterinary",
+    "котят": "pet veterinary",
+    "щенк": "pet veterinary",
+    "зоопарк": "museum gallery event",
+    "питомник": "pet",
+    # ─── Home services / B2C ───────────────────────────────────────
+    "клининг": "home services",
+    "уборк": "home services",
+    "химчистк": "home services",
+    "электрик": "home services",
+    "сантехник": "home services",
+    "плотник": "home services",
+    "сборк мебел": "home services",
+    "переезд": "logistics home services",
+    "ателье": "beauty home services",
+    "швейн": "e-commerce beauty",
+    # ─── Manufacturing / B2B ──────────────────────────────────────
+    "производств": "b2b service",
+    "завод": "b2b service",
+    "цех": "b2b service",
+    "оптовы": "b2b service e-commerce",
+    "опт": "b2b service",
+    "тендер": "b2b legal",
+    # ─── Religious / non-profit ───────────────────────────────────
     "церков": "church religious",
     "храм": "church religious",
-    # Premium / luxury
+    "мечеть": "church religious",
+    "синагог": "church religious",
+    "буддистск": "church religious",
+    "монастыр": "church religious",
+    "приход": "church religious",
+    "благотвор": "non-profit charity",
+    "нко": "non-profit charity",
+    "фонд помощи": "non-profit charity",
+    # ─── Kids / family ────────────────────────────────────────────
+    "детск": "kids childcare",
+    "детсад": "childcare daycare",
+    "ясл": "childcare daycare",
+    "няня": "childcare",
+    "развивающ": "kids educational childcare",
+    "продлёнк": "childcare kids",
+    # ─── Premium / luxury ─────────────────────────────────────────
     "люкс": "luxury premium",
     "премиум": "luxury premium",
+    "элитн": "luxury premium",
     "ювелир": "luxury premium e-commerce",
+    "часы": "luxury premium e-commerce",
+    "винтаж": "luxury vintage retail",
+    "коллекцион": "luxury premium e-commerce",
+    # ─── Coworking / community ────────────────────────────────────
+    "коворкинг": "coworking",
+    "сообществ": "membership community",
+    "клуб": "membership community",  # клуб по интересам
+    "мастерская": "portfolio coworking creative",
+    "хакерспейс": "coworking developer",
+    # ─── Personal services / hyperlocal ───────────────────────────
+    "услуги": "hyperlocal services local",
+    "сервис": "hyperlocal services",
+    "локальн сервис": "hyperlocal services",
 }
 
 
@@ -934,17 +1183,31 @@ def _expand_ru_to_en(prompt: str) -> tuple[str, ...]:
     crypto", …) which still match directly.
     """
     lower = prompt.lower()
-    words = [w for w in lower.replace(",", " ").replace("/", " ").split() if w]
+    # Split on commas, slashes AND hyphens — composite words like
+    # `vr-аркада`, `смм-агентство`, `йогурт-кафе`, `суши-бар` must surface
+    # their parts so short-stem matchers can hit individual segments.
+    for ch in (",", "/", "-"):
+        lower = lower.replace(ch, " ")
+    words = [w for w in lower.split() if w]
     tokens: list[str] = [w for w in words if len(w) >= 3]
     for stem, en_keywords in _RU_INDUSTRY_KEYWORDS.items():
         if " " in stem:
-            # Multi-word stem — fall back to substring (rare; covers cases
-            # like "доставк еды" / "ремонт квартир").
+            # Multi-word stem — substring on the lowered prompt (rare; e.g.
+            # `доставк еды`, `ремонт квартир`).
             if stem in lower:
                 tokens.extend(en_keywords.split())
+        elif len(stem) <= 3:
+            # Very short stems — acronyms (`ai`, `vr`, `crm`, `iot`, `ии`) and
+            # tight 3-char roots (`бар`, `сми`, `опт`, `лор`, `узи`). EXACT
+            # word match only — prefix would falsely fire (`бар` ⊂ `барнауле`
+            # once routed an Apteka prompt to Restaurant; `опт` ⊂ `оптимизация`
+            # would hit B2B for every SaaS prompt).
+            if stem in words:
+                tokens.extend(en_keywords.split())
         else:
-            # Single-word stem — must be a prefix of some word so "ai"
-            # doesn't trigger on "сайт".
+            # ≥4-char stem — prefix-match is safe for Russian morphology
+            # (аптек → аптека/аптеки/аптеке, гейм → геймер/гейминг,
+            # свад → свадебный/свадьба, кафе → кафешка/кафейный).
             if any(w.startswith(stem) for w in words):
                 tokens.extend(en_keywords.split())
     return tuple(tokens)
