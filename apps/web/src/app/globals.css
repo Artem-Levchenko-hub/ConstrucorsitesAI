@@ -1,67 +1,104 @@
 @import "tailwindcss";
 
 /*
- * Omnia.AI design tokens — mirror landing.omniadevelop.ru visual identity.
- * Tailwind v4 generates utility classes from --color-* / --font-* / --radius-*:
- *   --color-surface-base   → bg-surface-base, text-surface-base, …
- *   --color-fg-primary     → text-fg-primary, …
- *   --color-border-default → border-border-default
- *   --radius-md            → rounded-md
+ * Omnia.AI design tokens — 1:1 with landing omniadevelop.ru "constructor
+ * demo" section. Light theme: soft lilac canvas, frosted-white glass cards,
+ * primary violet #6d4eff. All semantic-named utilities (`bg-surface-base`,
+ * `text-fg-primary`, `border-border-default`, etc.) keep their names so the
+ * workspace components don't need rewrites — we just swap the values.
+ *
+ * Landing CSS source: /var/www/omniadevelop/index.html `:root` block. Token
+ * map below shows landing → semantic so future drift is auditable:
+ *
+ *   landing --bg #f7f6ff          → --color-surface-base
+ *   landing --bg-2 #fbfaff        → --color-surface-raised
+ *   landing --bg-card #ffffff     → --color-surface-overlay
+ *   landing --bg-soft #efedfc     → --color-surface-input
+ *   landing --bg-dark #0d0a1f     → --color-surface-panel-dark (rare use)
+ *   landing --ink #0d0a1f         → --color-fg-primary
+ *   landing --ink-2 #5b566e       → --color-fg-secondary
+ *   landing --ink-3 #8c87a3       → --color-fg-tertiary
+ *   landing --ink-4 #c4c0d4       → --color-fg-muted
+ *   landing --line #e7e4f3        → --color-border-default
+ *   landing --line-strong #d6d2e9 → --color-border-strong
+ *   landing --v0 #6d4eff          → --color-accent (was #7c5cff)
+ *   landing --v2 #5a3def          → --color-accent-hover
+ *   landing --v3 #a78bff          → --color-accent-secondary
+ *   landing --p0 #ec4cb8          → exposed as --color-accent-pink
+ *   landing --c0 #4ed5e3          → exposed as --color-accent-cyan
+ *   landing --tint .08            → --color-accent-subtle
+ *   landing --ok #22c55e          → --color-success
  */
 
 @theme {
-  /* Surfaces — indigo-tinted dark (mirrors landing --bg / --bg-2 / --bg-3) */
-  --color-surface-base: #0d0d12;
-  --color-surface-raised: #14141b;
-  --color-surface-overlay: #1c1c25;
-  --color-surface-input: #14141b;
-  --color-surface-panel-dark: #08080c;
-  --color-surface-glass: rgb(20 20 27 / 0.55);
+  /* Surfaces — light, mirrors landing --bg / --bg-2 / --bg-card / --bg-soft */
+  --color-surface-base: #f7f6ff;
+  --color-surface-raised: #fbfaff;
+  --color-surface-overlay: #ffffff;
+  --color-surface-input: #efedfc;
+  --color-surface-panel-dark: #0d0a1f;
+  --color-surface-glass: rgb(255 255 255 / 0.75);
 
-  /* Borders */
-  --color-border-subtle: #23232d;
-  --color-border-default: #2c2c38;
-  --color-border-strong: #3a3a4a;
-  --color-border-accent: rgb(124 92 255 / 0.28);
+  /* Borders — soft lilac on light */
+  --color-border-subtle: #efedfc;
+  --color-border-default: #e7e4f3;
+  --color-border-strong: #d6d2e9;
+  --color-border-accent: rgb(109 78 255 / 0.28);
 
-  /* Foreground */
-  --color-fg-primary: #f5f5fa;
-  --color-fg-secondary: #c9c9d6;
-  --color-fg-tertiary: #8a8a99;
-  --color-fg-muted: #54545e;
+  /* Foreground — landing `--ink` family on light surfaces */
+  --color-fg-primary: #0d0a1f;
+  --color-fg-secondary: #1f1b34;
+  --color-fg-tertiary: #5b566e;
+  --color-fg-muted: #8c87a3;
   --color-fg-on-accent: #ffffff;
 
-  /* Accent — violet (landing --accent / --accent-2) */
-  --color-accent: #7c5cff;
-  --color-accent-hover: #6647e8;
-  --color-accent-subtle: rgb(124 92 255 / 0.10);
-  --color-accent-secondary: #5cb8ff;
+  /* Accent — landing's `--v0` violet (slightly cooler than the old dark theme). */
+  --color-accent: #6d4eff;
+  --color-accent-hover: #5a3def;
+  --color-accent-subtle: rgb(109 78 255 / 0.10);
+  --color-accent-secondary: #a78bff; /* `--v3` soft lavender */
+  --color-accent-pink: #ec4cb8;
+  --color-accent-cyan: #4ed5e3;
 
   /* Semantic */
-  --color-success: #4cd9a4;
-  --color-warning: #ffd166;
-  --color-danger: #ff6b8a;
-  --color-info: #5cb8ff;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-info: #4ed5e3;
 
-  /* Radii — landing 8/14/22 + pill */
-  --radius-sm: 8px;
-  --radius-md: 14px;
+  /* Radii — landing 10/16/22/28. Old 8/14/22 names mapped onto these. */
+  --radius-sm: 10px;
+  --radius-md: 16px;
   --radius-lg: 22px;
+  --radius-xl: 28px;
   --radius-pill: 999px;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 3px rgb(0 0 0 / 0.2);
-  --shadow-md: 0 4px 14px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.25);
-  --shadow-lg: 0 24px 60px -20px rgb(0 0 0 / 0.6), 0 8px 28px -10px rgb(0 0 0 / 0.4);
-  --shadow-glow: 0 0 0 1px rgb(124 92 255 / 0.25), 0 30px 80px -20px rgb(124 92 255 / 0.4);
+  /* Shadows — landing `--sh*` family. Ink-based opacity for proper light
+   * depth (using rgba(0,0,0,…) gives murky shadows on lilac bg). */
+  --shadow-sm: 0 1px 2px rgb(13 10 31 / 0.04);
+  --shadow-md:
+    0 2px 6px rgb(13 10 31 / 0.05), 0 12px 28px -8px rgb(13 10 31 / 0.10);
+  --shadow-lg:
+    0 4px 14px rgb(13 10 31 / 0.06),
+    0 30px 80px -20px rgb(109 78 255 / 0.30);
+  --shadow-card:
+    0 1px 3px rgb(13 10 31 / 0.04), 0 8px 24px -8px rgb(13 10 31 / 0.10);
+  --shadow-violet: 0 8px 30px -8px rgb(109 78 255 / 0.55);
+  --shadow-glow:
+    0 1px 0 rgb(255 255 255 / 0.5) inset,
+    0 -1px 0 rgb(13 10 31 / 0.04) inset,
+    0 30px 80px -30px rgb(109 78 255 / 0.40),
+    0 12px 32px -12px rgb(13 10 31 / 0.12);
 
   /* Easings */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 
-  /* Fonts — wired to next/font CSS variables in app/layout.tsx */
+  /* Fonts — wired to next/font CSS variables in app/layout.tsx.
+   * Landing uses Inter; we keep Onest as the project font (we own it in
+   * brand) but fall back to landing's Inter if Onest is unavailable. */
   --font-sans:
-    var(--font-onest), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, sans-serif;
+    var(--font-onest), "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono:
     var(--font-jetbrains), ui-monospace, "Cascadia Code", "Source Code Pro",
     Menlo, Monaco, Consolas, monospace;
@@ -69,7 +106,7 @@
 
 @layer base {
   html {
-    color-scheme: dark;
+    color-scheme: light;
     scroll-behavior: smooth;
   }
 
@@ -77,8 +114,6 @@
     font-family: var(--font-sans);
     font-feature-settings: "ss01", "cv11";
     color: var(--color-fg-primary);
-    /* Base surface — the gradient layer is rendered separately via ::before so
-     * we can animate it without re-painting the whole body background each frame. */
     background: var(--color-surface-base);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
@@ -86,11 +121,10 @@
     isolation: isolate;
   }
 
-  /* Slow-breathing aurora — three radial gradients drift independently so the
-   * canvas never sits perfectly still. Opacities are higher than the earlier
-   * fixed-background (0.18 vs 0.10) so the violet/cyan/magenta haze is visible
-   * without overpowering. `pointer-events: none` + z-index: -1 keeps it
-   * non-interactive. `prefers-reduced-motion` users get the static layer. */
+  /* Aurora background — 1:1 with landing's `--grad-aurora`. Soft violet
+   * top-left + pink top-right + cyan bottom radial bursts. Opacities are
+   * higher than dark-theme version because they read MUCH softer on a
+   * light canvas (alpha-over-white vs alpha-over-near-black). */
   body::before {
     content: "";
     position: fixed;
@@ -98,15 +132,26 @@
     z-index: -1;
     pointer-events: none;
     background:
-      radial-gradient(ellipse 80% 50% at 20% 0%, rgb(124 92 255 / 0.28), transparent 60%),
-      radial-gradient(ellipse 60% 40% at 80% 30%, rgb(92 184 255 / 0.20), transparent 60%),
-      radial-gradient(ellipse 70% 50% at 50% 100%, rgb(236 92 255 / 0.14), transparent 60%);
+      radial-gradient(
+        ellipse 60% 50% at 15% 0%,
+        rgb(109 78 255 / 0.18),
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse 50% 40% at 85% 10%,
+        rgb(236 76 184 / 0.12),
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse 70% 50% at 50% 100%,
+        rgb(78 213 227 / 0.14),
+        transparent 60%
+      );
     animation: aurora-drift 32s ease-in-out infinite alternate;
   }
 
   @keyframes aurora-drift {
     0% {
-      background-position: 0% 0%, 0% 0%, 0% 0%;
       transform: translate3d(0, 0, 0);
     }
     50% {
@@ -128,7 +173,6 @@
     color: #ffffff;
   }
 
-  /* Design system rule: focus-ring always visible (2px accent, 3px offset). */
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 3px;
@@ -137,33 +181,41 @@
 }
 
 @layer utilities {
-  /* Soft accent halo around an element — sits below content via box-shadow,
-   * stays inside the element's bounding box. Use on the primary CTA in
-   * "running" state to indicate active/ready-to-deploy. */
+  /* Frosted-glass card — 1:1 with landing's `.glass-card`. Use it on any
+   * surface that should "float" over the lilac canvas: side panels, the
+   * Cmd+K palette, browser-frame, modal dialogs. */
+  .glass-card {
+    background: rgb(255 255 255 / 0.75);
+    backdrop-filter: saturate(160%) blur(20px);
+    -webkit-backdrop-filter: saturate(160%) blur(20px);
+    border: 1px solid rgb(255 255 255 / 0.6);
+    box-shadow: var(--shadow-glow);
+  }
+
+  /* Primary CTA halo — softer than the dark-theme version (light needs
+   * less contrast). Mirrors landing's `.cta-primary` deep violet glow. */
   .shadow-glow-accent {
     box-shadow:
-      0 0 0 1px rgb(124 92 255 / 0.4),
-      0 8px 24px -4px rgb(124 92 255 / 0.45),
-      0 0 32px -8px rgb(124 92 255 / 0.35);
+      0 1px 0 rgb(255 255 255 / 0.5) inset,
+      0 8px 24px -4px rgb(109 78 255 / 0.45),
+      0 0 24px -6px rgb(109 78 255 / 0.30);
   }
 
   .shadow-glow-success {
     box-shadow:
-      0 0 0 1px rgb(76 217 164 / 0.35),
-      0 0 24px -6px rgb(76 217 164 / 0.4);
+      0 1px 0 rgb(255 255 255 / 0.5) inset,
+      0 8px 24px -4px rgb(34 197 94 / 0.30);
   }
 
-  /* Animated gradient text — used for the workspace logo + chat empty-state
-   * headline so the violet/cyan accent feels alive. The gradient is wider
-   * than the text so the `background-position` animation sweeps a highlight
-   * across it. */
+  /* Animated gradient text — landing `.gtext`. Violet → pink → cyan sweep
+   * for the logo and key headlines. */
   .text-gradient-accent {
     background: linear-gradient(
       110deg,
       var(--color-accent) 0%,
-      var(--color-accent-secondary) 35%,
+      var(--color-accent-pink) 35%,
       var(--color-accent) 70%,
-      var(--color-accent-secondary) 100%
+      var(--color-accent-pink) 100%
     );
     background-size: 200% 100%;
     background-clip: text;
@@ -182,10 +234,6 @@
     }
   }
 
-  /* Soft pulse — uses opacity + scale on a glow halo so it doesn't shift
-   * layout. Pair with `position: relative` + an absolutely-positioned
-   * ::after for the halo if needed. Standalone class for elements that
-   * want a "breathing" affordance without dancing in the layout. */
   @keyframes breathe-glow {
     0%,
     100% {
@@ -200,6 +248,16 @@
 
   .animate-breathe-glow {
     animation: breathe-glow 3.2s ease-in-out infinite;
+  }
+
+  /* Landing's browser-bar traffic lights — neutral gray dots (not macOS
+   * coloured). Single class because we use the same triplet in 3 places. */
+  .browser-bar-dots span {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgb(13 10 31 / 0.12);
   }
 
   @media (prefers-reduced-motion: reduce) {

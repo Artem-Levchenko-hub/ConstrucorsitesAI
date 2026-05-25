@@ -38,20 +38,25 @@ export function Timeline({ project }: { project: Project }) {
 
   return (
     <div
-      className="relative flex flex-col h-full backdrop-blur-xl"
+      className="relative flex flex-col h-full glass-card"
       style={{
-        // Mirror of ChatPanel but with the cyan accent so the two side panels
-        // read as distinct surfaces. The Workspace ambient cyan orb anchored
-        // bottom-right glows through this layer.
-        background:
-          "linear-gradient(180deg, rgb(92 184 255 / 0.18) 0%, rgb(92 184 255 / 0.08) 30%, rgb(92 184 255 / 0.04) 100%), radial-gradient(ellipse 120% 60% at 100% 100%, rgb(92 184 255 / 0.28), transparent 70%), rgb(8 8 12 / 0.55)",
+        // 1:1 with landing — frosted glass + cyan-tinted radial in the
+        // bottom-right corner. Mirror of ChatPanel, cyan instead of violet
+        // so the two side panels stay visually distinguishable.
+        backgroundImage:
+          "radial-gradient(ellipse 120% 60% at 100% 100%, rgb(78 213 227 / 0.06), transparent 70%)",
+        borderRadius: 0,
+        border: "none",
       }}
     >
-      {/* Top accent bar — 3 px cyan gradient to mirror the violet bar on
-          ChatPanel. Side-panel identity reads at a glance. */}
+      {/* Top accent bar — cyan→pink gradient (right-to-left). */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-gradient-to-l from-accent-secondary via-accent-secondary/60 to-transparent"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[3px]"
+        style={{
+          background:
+            "linear-gradient(270deg, var(--color-accent-cyan) 0%, var(--color-accent-pink) 50%, transparent 100%)",
+        }}
       />
       <div
         aria-hidden="true"

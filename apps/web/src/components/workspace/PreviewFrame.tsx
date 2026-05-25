@@ -376,42 +376,33 @@ export function PreviewFrame({ project }: { project: Project }) {
 
       <div className="flex-1 p-4 overflow-hidden">
         <div
-          className="relative h-full w-full rounded-xl border border-border-default overflow-hidden flex flex-col"
+          className="relative h-full w-full rounded-2xl glass-card overflow-hidden flex flex-col"
           style={{
-            // Soft violet ring + bottom-cyan glow around the whole browser
-            // frame so the preview area feels like the focal point of the
-            // workspace, not just another panel.
-            background:
-              "linear-gradient(180deg, rgb(20 20 27 / 0.5) 0%, rgb(20 20 27 / 0.95) 100%)",
-            boxShadow:
-              "0 0 0 1px rgb(124 92 255 / 0.18), 0 20px 60px -20px rgb(124 92 255 / 0.35), 0 0 80px -20px rgb(92 184 255 / 0.18)",
+            // 1:1 with landing's `.output-card` — frosted white card on
+            // lilac canvas, soft violet halo via the shared `.glass-card`
+            // utility (defined in globals.css). Border rendered as part
+            // of the box-shadow inside the utility, no extra ring.
           }}
         >
           {viewMode === "code" && visible ? (
             <CodeView projectId={project.id} snapshotId={visible.id} />
           ) : (
             <>
-              <div className="h-9 border-b border-border-subtle flex items-center gap-1.5 px-3 shrink-0 bg-[linear-gradient(180deg,rgb(28_28_37/0.6),rgb(20_20_27/0.4))]">
-                {/* macOS-style traffic-light dots — visual cue that this is a
-                    real browser window, not just a panel. The colours match
-                    macOS so the metaphor is instantly readable. */}
-                <span
-                  aria-hidden="true"
-                  className="w-2.5 h-2.5 rounded-full bg-[#ff5f57] shadow-[0_0_0_0.5px_rgba(0,0,0,0.4),inset_0_0_2px_rgba(255,255,255,0.2)]"
-                />
-                <span
-                  aria-hidden="true"
-                  className="w-2.5 h-2.5 rounded-full bg-[#febc2e] shadow-[0_0_0_0.5px_rgba(0,0,0,0.4),inset_0_0_2px_rgba(255,255,255,0.2)]"
-                />
-                <span
-                  aria-hidden="true"
-                  className="w-2.5 h-2.5 rounded-full bg-[#28c840] shadow-[0_0_0_0.5px_rgba(0,0,0,0.4),inset_0_0_2px_rgba(255,255,255,0.2)]"
-                />
+              {/* Browser-bar mirroring landing's `.browser-bar`. Neutral
+                  gray traffic-light dots (NOT macOS coloured) so the
+                  metaphor reads as "a window" not "this is a Mac app".
+                  URL bar is a soft-tinted input pill. */}
+              <div className="h-9 border-b border-border-default flex items-center gap-1.5 px-3 shrink-0 bg-surface-raised">
+                <div className="browser-bar-dots flex items-center gap-1.5">
+                  <span aria-hidden="true" />
+                  <span aria-hidden="true" />
+                  <span aria-hidden="true" />
+                </div>
                 <a
                   href={fullstackLive ? runtime!.dev_url! : publicUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="ml-3 flex-1 min-w-0 text-xs font-mono text-fg-tertiary truncate hover:text-fg-secondary transition-colors px-2.5 py-0.5 rounded-md bg-surface-base/40 border border-border-subtle/60"
+                  className="ml-3 flex-1 min-w-0 text-xs font-mono text-fg-tertiary truncate hover:text-fg-secondary transition-colors px-2.5 py-0.5 rounded-md bg-surface-input border border-border-default"
                   title="Открыть в новой вкладке"
                 >
                   {fullstackLive ? runtime!.dev_url : publicUrl}

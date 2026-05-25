@@ -104,37 +104,37 @@ export function Workspace({ project }: { project: Project }) {
       }}
       transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
     >
-      {/* Ambient orbs — sit behind every panel via z-index: -1, glow
-          through the semi-transparent panel backgrounds. Unchanged from
-          the earlier workspace-ui-glow pass. */}
+      {/* Ambient orbs — landing-style aurora burst (violet TL, pink TR,
+          cyan BR), softer opacities than the dark-theme version so they
+          read as a "haze" not a "halo" against the light lilac canvas. */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute -top-40 -left-40 h-[32rem] w-[32rem] rounded-full"
         style={{
           background:
-            "radial-gradient(circle, rgb(124 92 255 / 0.55) 0%, rgb(124 92 255 / 0.18) 40%, transparent 70%)",
+            "radial-gradient(circle, rgb(109 78 255 / 0.20) 0%, rgb(109 78 255 / 0.06) 40%, transparent 70%)",
           zIndex: -1,
           filter: "blur(50px)",
         }}
       />
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -bottom-40 -right-40 h-[32rem] w-[32rem] rounded-full"
+        className="pointer-events-none absolute -top-32 -right-40 h-[28rem] w-[28rem] rounded-full"
         style={{
           background:
-            "radial-gradient(circle, rgb(92 184 255 / 0.50) 0%, rgb(92 184 255 / 0.15) 40%, transparent 70%)",
+            "radial-gradient(circle, rgb(236 76 184 / 0.16) 0%, rgb(236 76 184 / 0.04) 40%, transparent 70%)",
           zIndex: -1,
           filter: "blur(50px)",
         }}
       />
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute top-1/3 left-1/2 -translate-x-1/2 h-[24rem] w-[24rem] rounded-full"
+        className="pointer-events-none absolute -bottom-40 -right-32 h-[32rem] w-[32rem] rounded-full"
         style={{
           background:
-            "radial-gradient(circle, rgb(236 92 255 / 0.25) 0%, transparent 70%)",
+            "radial-gradient(circle, rgb(78 213 227 / 0.18) 0%, rgb(78 213 227 / 0.05) 40%, transparent 70%)",
           zIndex: -1,
-          filter: "blur(60px)",
+          filter: "blur(50px)",
         }}
       />
 
