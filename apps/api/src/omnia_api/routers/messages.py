@@ -335,6 +335,9 @@ async def _process_prompt(
             selected_elements,
             preset_id=project_design_preset_id,
             image_gen_enabled=project_image_gen_enabled,
+            # Stable seed for the `ui-ux-pro-max` UX-guidelines sample —
+            # re-prompts inside one project always surface the same rules.
+            project_id=str(project_id),
         )
         print(f"[PP] messages_built count={len(messages)}", flush=True)
 

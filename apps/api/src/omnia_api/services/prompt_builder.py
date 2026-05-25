@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from omnia_api.services import skill_library
 from omnia_api.services.design_presets import AWWWARDS_PRINCIPLES, format_preset_block
 
 _IDENTITY = """\
@@ -653,10 +654,76 @@ KIT_FILES = frozenset({"assets/omnia-kit.css", "assets/omnia-kit.js"})
 HISTORY_LIMIT = 6
 
 
+def _compute_skill_brief(
+    user_prompt: str | None, project_id: str | None
+) -> str | None:
+    """Pull a project-specific design brief out of the vendored `ui-ux-pro-max`
+    library (`apps/api/skills/ui-ux-pro-max/`).
+
+    Strategy: extract bag-of-words from the user prompt, match against
+    `colors.csv` `product_type` and `typography.csv` `keywords + best_for`.
+    Returns a compact `format_design_brief(...)` block or None when nothing
+    scores above zero (caller falls through to `_DESIGN_KIT`).
+
+    Why not always inject: the bundled `_DESIGN_KIT` already covers 12 broad
+    industry presets; the skill library matters most when the prompt names
+    something specific ("гейминг", "финтех", "хелскеа", etc.) that the kit
+    doesn't have a direct row for. Falling through keeps the prompt lean for
+    generic cases.
+
+    The 5 UX guidelines we pull are seeded by `project_id` so re-prompts
+    within the same project surface the same rules — the model sees rules
+    consistently and the brief doesn't churn between turns.
+    """
+    if not user_prompt:
+        return None
+    # Naive tokenisation — words >= 3 chars, lowercased. Russian + English
+    # both work because `lookup_palette` does a substring match against the
+    # CSV row text (which has English product types like "Healthcare App",
+    # "Fintech/Crypto", "Gaming", …). A 2-3-word user prompt that mentions
+    # an industry will reliably score 1+ on one of those rows.
+    tokens = tuple(
+        w for w in user_prompt.lower().replace(",", " ").split() if len(w) >= 3
+    )
+    if not tokens:
+        return None
+
+    palette = skill_library.lookup_palette(*tokens)
+    font_pairing = skill_library.lookup_font_pairing(*tokens)
+
+    # Always emit 5 high-severity UX guidelines so the model has concrete,
+    # actionable rules to follow even when the palette/font lookups miss.
+    # Seed on project_id so the same project always sees the same rules.
+    seed = hash(project_id) if project_id else 0
+    guidelines = skill_library.random_ux_guidelines(
+        severity="High", limit=5, seed=seed
+    )
+
+    brief = skill_library.format_design_brief(
+        palette=palette, font_pairing=font_pairing, guidelines=guidelines
+    )
+    return brief or None
+
+
+def _format_skill_brief(brief: str) -> str:
+    """Wrap the raw `format_design_brief` output in a system-prompt section so
+    the model recognises it as authoritative reference rather than a stray
+    paragraph. The block is structured + labelled so it survives compression
+    and re-summarisation in long-context turns."""
+    return (
+        "ДИЗАЙН-БРИФ (auto-matched из `ui-ux-pro-max` под этот промпт — "
+        "приоритет ВЫШЕ дефолтного `_DESIGN_KIT`. Используй ИМЕННО эти токены "
+        "и шрифты; UX-правила обязательны):\n"
+        f"{brief}"
+    )
+
+
 def build_system_prompt(
     template: str,
     preset_id: str | None = None,
     image_gen_enabled: bool = True,
+    *,
+    skill_brief: str | None = None,
 ) -> str:
     """Собрать system prompt под тип проекта. `fullstack` → Next.js, иначе статика.
 
@@ -673,8 +740,14 @@ def build_system_prompt(
     `_IMAGE_GEN_ON` (со спец-тегом `data-omnia-gen`) или `_IMAGE_GEN_OFF`
     (только CSS/SVG, тег запрещён). `_VISUAL_RICH_KIT` инжектится ВСЕГДА —
     визуальная насыщенность обязательна и не зависит от toggle.
+
+    ``skill_brief`` (keyword-only) — already-formatted design brief from
+    `ui-ux-pro-max` (palette + font pairing + UX guidelines for this prompt).
+    Injected RIGHT AFTER `_DESIGN_KIT` so it can override the kit's defaults
+    while still benefiting from the kit's broader guidance. None → no-op.
     """
     preset_block = format_preset_block(preset_id) if preset_id else ""
+    skill_block = _format_skill_brief(skill_brief) if skill_brief else ""
     image_block = _IMAGE_GEN_ON if image_gen_enabled else _IMAGE_GEN_OFF
 
     if template == "fullstack":
@@ -683,6 +756,7 @@ def build_system_prompt(
             _QUALITY_BAR,
             AWWWARDS_PRINCIPLES,
             _DESIGN_KIT,
+            *((skill_block,) if skill_block else ()),
             *((preset_block,) if preset_block else ()),
             _VISUAL_RICH_KIT,
             image_block,
@@ -698,6 +772,7 @@ def build_system_prompt(
             AWWWARDS_PRINCIPLES,
             _TASTE,
             _DESIGN_KIT,
+            *((skill_block,) if skill_block else ()),
             _STYLE_KIT,
             *((preset_block,) if preset_block else ()),
             _DETAILS_KIT,
@@ -757,11 +832,23 @@ def build_messages(
     selected_elements: Sequence[dict[str, Any]] | None = None,
     preset_id: str | None = None,
     image_gen_enabled: bool = True,
+    project_id: str | None = None,
 ) -> list[dict[str, str]]:
+    # Pull a `ui-ux-pro-max` design brief for this specific prompt — palette
+    # + font pairing + 5 high-severity UX rules. Skipped silently when the
+    # prompt has no industry-token signal we can match against
+    # (`_compute_skill_brief` returns None).
+    skill_brief = _compute_skill_brief(user_prompt, project_id)
+
     messages: list[dict[str, str]] = [
         {
             "role": "system",
-            "content": build_system_prompt(template, preset_id, image_gen_enabled),
+            "content": build_system_prompt(
+                template,
+                preset_id,
+                image_gen_enabled,
+                skill_brief=skill_brief,
+            ),
         }
     ]
 
