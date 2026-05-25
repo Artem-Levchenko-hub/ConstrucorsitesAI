@@ -1,18 +1,23 @@
 import asyncio
 import html
+import logging
 from mimetypes import guess_type
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
 from omnia_api.core.deps import SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+
+log = logging.getLogger("omnia_api.public")
 
 router = APIRouter(prefix="/p", tags=["public"], include_in_schema=False)
 
@@ -164,6 +169,35 @@ _INDEX_CANDIDATES = (
 )
 
 
+async def _fullstack_redirect(project: Project) -> Response | None:
+    """For a fullstack project that has a finished deploy, redirect /p/<slug>
+    to the live prod URL so visitors actually see the running app — not the
+    "Приложение запускается" stub. Returns None if no deploy is available, so
+    the caller can fall through to `_preview_shell`.
+
+    Best-effort: any orchestrator failure logs and returns None — the shell is
+    a perfectly safe fallback. The redirect is 302 (not 301) so a future deploy
+    URL change is picked up without browser cache lock-in. `?snapshot=...` and
+    `?inspect=1` are NEVER forwarded — those are dev/workspace-only concepts.
+    """
+    if project.template != "fullstack":
+        return None
+    try:
+        deploy = await orchestrator_client.get_deploy(project.id)
+    except Exception as exc:
+        # Best-effort: any orchestrator failure (timeout, 5xx, network) must
+        # NEVER block /p. Log + fall through to the shell.
+        log.warning("public.deploy_lookup_failed slug=%s err=%s", project.slug, exc)
+        return None
+    if deploy.get("phase") == "done" and deploy.get("prod_url"):
+        return RedirectResponse(
+            url=str(deploy["prod_url"]),
+            status_code=status.HTTP_302_FOUND,
+            headers={"Cache-Control": "no-cache"},
+        )
+    return None
+
+
 @router.get("/{slug}", response_class=Response)
 async def get_index(
     slug: str,
@@ -181,8 +215,16 @@ async def get_index(
             if inspect == "1":
                 content = _inject_inspector(content)
             return _file_response("index.html", content)
-    # No static entrypoint anywhere (full-stack project, or not generated yet)
-    # → serve the branded shell instead of a raw 404 / blank iframe.
+    # No static entrypoint. For deployed full-stack projects we redirect to
+    # the live prod URL so /p/<slug> behaves as a real public share link, not
+    # an eternal "Приложение запускается" stub. Workspace preview (inspect=1)
+    # never redirects — it stays in-iframe so select-mode can talk to it.
+    if inspect != "1":
+        redirect = await _fullstack_redirect(project)
+        if redirect is not None:
+            return redirect
+    # Fall through: pre-deploy fullstack OR a static project with no committed
+    # index.html yet → branded shell instead of a raw 404 / blank iframe.
     return _preview_shell(project)
 
 

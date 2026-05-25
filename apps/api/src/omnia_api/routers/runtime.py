@@ -143,12 +143,18 @@ async def trigger_deploy(
 async def get_last_deploy(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> DeployStatus:
-    """Last-deploy info. Not yet implemented in orchestrator — returns
-    `phase=queued` placeholder until the orchestrator persists deploy history.
+    """Last-deploy info, proxied from the orchestrator's persisted record.
+
+    The orchestrator's `DeployResponse` shape mirrors `DeployStatus` 1-1, so
+    `_to_deploy_status` projects it without massaging. If the orchestrator is
+    unreachable OR has never recorded a deploy for this project, we fall back
+    to `phase=queued` so the frontend's ON/OFF render path stays alive — same
+    contract the placeholder used to enforce, without the lie that we
+    "haven't implemented this yet".
     """
     await _project_owned_by(session, project_id, current_user.id)
-    # TODO sprint A2: orchestrator should serve GET /internal/projects/<id>/deploy
-    # so we can return real history. For now the public surface stays alive
-    # with an empty placeholder rather than 501 — that keeps the frontend
-    # rendering ON / OFF state cleanly.
-    return DeployStatus(phase="queued")
+    try:
+        payload = await orchestrator_client.get_deploy(project_id)
+    except Exception:  # noqa: BLE001 — fall back gracefully on any failure
+        return DeployStatus(phase="queued")
+    return _to_deploy_status(payload)
