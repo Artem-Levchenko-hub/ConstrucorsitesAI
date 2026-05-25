@@ -155,6 +155,18 @@ async def deploy(project_id: UUID, *, commit_sha: str | None = None) -> dict[str
     return await _request("POST", "/internal/projects/deploy", json=payload)
 
 
+async def get_deploy(project_id: UUID) -> dict[str, Any]:
+    """GET /internal/projects/<uuid>/deploy — last-known deploy record.
+
+    Returns the orchestrator's `DeployResponse` shape:
+    `{project_id, phase, prod_url, image_tag, started_at, finished_at, error}`.
+    `phase` is one of `queued | building | swapping | done | failed`. For a
+    project that has never been deployed the orchestrator returns
+    `phase=queued` with no prod_url.
+    """
+    return await _request("GET", f"/internal/projects/{project_id}/deploy")
+
+
 async def destroy(project_id: UUID) -> dict[str, Any]:
     """POST /internal/projects/<uuid>/destroy — full teardown (CASCADE delete)."""
     return await _request("POST", f"/internal/projects/{project_id}/destroy")
