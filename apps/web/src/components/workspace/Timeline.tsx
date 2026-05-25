@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { History } from "lucide-react";
 import { toast } from "sonner";
 import { listSnapshots, rollback } from "@/lib/api/snapshots";
 import type { Project } from "@/lib/api/types";
@@ -37,12 +38,19 @@ export function Timeline({ project }: { project: Project }) {
 
   return (
     <div className="flex flex-col h-full bg-surface-panel-dark">
-      <div className="h-8 flex items-center justify-between px-3 border-b border-border-subtle">
-        <span className="text-[10px] font-mono text-fg-tertiary uppercase tracking-wider">
-          История
-        </span>
+      <div className="h-8 flex items-center justify-between gap-2 px-3 border-b border-border-subtle">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <History className="h-3 w-3 text-accent/80" aria-hidden="true" />
+          <span className="text-[10px] font-mono text-fg-tertiary uppercase tracking-wider">
+            История
+          </span>
+          <div
+            aria-hidden="true"
+            className="flex-1 h-px bg-gradient-to-r from-border-subtle to-transparent ml-0.5"
+          />
+        </div>
         {data && (
-          <span className="text-[10px] font-mono text-fg-tertiary">
+          <span className="text-[10px] font-mono px-1.5 py-px rounded-md bg-surface-raised text-fg-tertiary border border-border-subtle tabular-nums">
             {data.length}
           </span>
         )}

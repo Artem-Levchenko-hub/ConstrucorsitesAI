@@ -77,14 +77,50 @@
     font-family: var(--font-sans);
     font-feature-settings: "ss01", "cv11";
     color: var(--color-fg-primary);
-    background:
-      radial-gradient(ellipse 80% 50% at 20% 0%, rgb(124 92 255 / 0.10), transparent 60%),
-      radial-gradient(ellipse 60% 40% at 80% 30%, rgb(92 184 255 / 0.06), transparent 60%),
-      radial-gradient(ellipse 70% 50% at 50% 100%, rgb(236 92 255 / 0.05), transparent 60%),
-      var(--color-surface-base);
-    background-attachment: fixed;
+    /* Base surface — the gradient layer is rendered separately via ::before so
+     * we can animate it without re-painting the whole body background each frame. */
+    background: var(--color-surface-base);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    position: relative;
+    isolation: isolate;
+  }
+
+  /* Slow-breathing aurora — three radial gradients drift independently so the
+   * canvas never sits perfectly still. Opacities are higher than the earlier
+   * fixed-background (0.18 vs 0.10) so the violet/cyan/magenta haze is visible
+   * without overpowering. `pointer-events: none` + z-index: -1 keeps it
+   * non-interactive. `prefers-reduced-motion` users get the static layer. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse 80% 50% at 20% 0%, rgb(124 92 255 / 0.18), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 80% 30%, rgb(92 184 255 / 0.12), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 50% 100%, rgb(236 92 255 / 0.09), transparent 60%);
+    animation: aurora-drift 32s ease-in-out infinite alternate;
+  }
+
+  @keyframes aurora-drift {
+    0% {
+      background-position: 0% 0%, 0% 0%, 0% 0%;
+      transform: translate3d(0, 0, 0);
+    }
+    50% {
+      transform: translate3d(-2%, 1%, 0);
+    }
+    100% {
+      transform: translate3d(2%, -1%, 0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    body::before {
+      animation: none;
+    }
   }
 
   ::selection {
@@ -97,5 +133,79 @@
     outline: 2px solid var(--color-accent);
     outline-offset: 3px;
     border-radius: 4px;
+  }
+}
+
+@layer utilities {
+  /* Soft accent halo around an element — sits below content via box-shadow,
+   * stays inside the element's bounding box. Use on the primary CTA in
+   * "running" state to indicate active/ready-to-deploy. */
+  .shadow-glow-accent {
+    box-shadow:
+      0 0 0 1px rgb(124 92 255 / 0.4),
+      0 8px 24px -4px rgb(124 92 255 / 0.45),
+      0 0 32px -8px rgb(124 92 255 / 0.35);
+  }
+
+  .shadow-glow-success {
+    box-shadow:
+      0 0 0 1px rgb(76 217 164 / 0.35),
+      0 0 24px -6px rgb(76 217 164 / 0.4);
+  }
+
+  /* Animated gradient text — used for the workspace logo + chat empty-state
+   * headline so the violet/cyan accent feels alive. The gradient is wider
+   * than the text so the `background-position` animation sweeps a highlight
+   * across it. */
+  .text-gradient-accent {
+    background: linear-gradient(
+      110deg,
+      var(--color-accent) 0%,
+      var(--color-accent-secondary) 35%,
+      var(--color-accent) 70%,
+      var(--color-accent-secondary) 100%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: gradient-sweep 8s ease-in-out infinite;
+  }
+
+  @keyframes gradient-sweep {
+    0%,
+    100% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+  }
+
+  /* Soft pulse — uses opacity + scale on a glow halo so it doesn't shift
+   * layout. Pair with `position: relative` + an absolutely-positioned
+   * ::after for the halo if needed. Standalone class for elements that
+   * want a "breathing" affordance without dancing in the layout. */
+  @keyframes breathe-glow {
+    0%,
+    100% {
+      opacity: 0.55;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.08);
+    }
+  }
+
+  .animate-breathe-glow {
+    animation: breathe-glow 3.2s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .text-gradient-accent,
+    .animate-breathe-glow {
+      animation: none;
+    }
   }
 }

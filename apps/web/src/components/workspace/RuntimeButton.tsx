@@ -203,6 +203,10 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
         className={cn(
           "gap-1.5 px-2 py-1 text-[11px] font-normal whitespace-nowrap transition-colors",
           state === "paused" && "border-warning/40 bg-warning/[0.06]",
+          // Running state gets a soft green outline + halo so the live-port
+          // badge reads as "ready / talking to a real container" at a glance.
+          state === "running" &&
+            "border-success/40 bg-success/[0.06] shadow-glow-success",
         )}
         title={
           runtime?.dev_url ? `dev: ${runtime.dev_url}` : "контейнер не запущен"
@@ -243,7 +247,13 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
             size="sm"
             disabled={!deploy.enabled}
             onClick={() => deployMut.mutate()}
-            className="gap-1.5 h-7 px-2.5 text-xs"
+            className={cn(
+              "gap-1.5 h-7 px-2.5 text-xs transition-shadow",
+              // Primary CTA when the container is ready: subtle accent halo so
+              // the eye knows where to land. Drops to a plain button while
+              // publishing — no glow ping-pong during the in-flight state.
+              deploy.enabled && !deployMut.isPending && "shadow-glow-accent",
+            )}
             title={deploy.tooltip}
           >
             {deployMut.isPending ? (

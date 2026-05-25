@@ -48,20 +48,44 @@ export function TopBar({
   const initial = user.email.slice(0, 1).toUpperCase();
 
   return (
-    <header className="shrink-0 h-14 flex items-center justify-between px-6 border-b border-border-subtle bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
+    <header className="shrink-0 h-14 flex items-center justify-between px-6 border-b border-border-subtle bg-[rgba(13,13,18,0.72)] backdrop-blur-xl relative">
+      {/* Hair-thin accent line under the border so the top edge isn't dead-flat.
+          Echoes the body aurora at low opacity. */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-x-0 -bottom-px h-px bg-gradient-to-r from-transparent via-accent/40 to-transparent pointer-events-none"
+      />
+
       <div className="flex items-center gap-4 min-w-0">
         <Link
           href="/projects"
-          className="flex items-center gap-2 text-fg-primary font-semibold tracking-tight"
+          className="flex items-center gap-2.5 font-semibold tracking-tight group"
+          aria-label="Omnia.AI — мои проекты"
         >
-          <span className="inline-block h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] shadow-[0_4px_12px_-2px_rgba(124,92,255,0.5)]" />
-          <span className="hidden sm:inline">Omnia.AI</span>
+          {/* Logo mark — gradient square with a soft halo that breathes under it.
+              The halo lives in an ::after-style absolute span so the logo's own
+              size stays stable (no layout shift on the pulse). */}
+          <span className="relative inline-flex h-6 w-6 items-center justify-center">
+            <span
+              aria-hidden="true"
+              className="absolute inset-0 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] blur-md opacity-60 animate-breathe-glow"
+            />
+            <span className="relative h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] shadow-[0_4px_12px_-2px_rgba(124,92,255,0.5)] transition-transform group-hover:scale-110" />
+          </span>
+          <span className="hidden sm:inline text-gradient-accent">Omnia.AI</span>
         </Link>
 
         {projectName && (
           <>
-            <span className="text-fg-tertiary">/</span>
-            <span className="truncate text-sm font-medium">{projectName}</span>
+            <span
+              aria-hidden="true"
+              className="text-fg-muted text-sm font-light select-none"
+            >
+              /
+            </span>
+            <span className="truncate text-sm font-medium text-fg-primary">
+              {projectName}
+            </span>
           </>
         )}
       </div>
