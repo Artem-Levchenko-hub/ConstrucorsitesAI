@@ -13,6 +13,12 @@ venv/
 dist/
 build/
 *.egg-info/
+# Landing snapshot lives in apps/landing/dist/ — it's NOT a build output of
+# this monorepo, it's a tracked snapshot pulled from the production VPS so
+# we can review/diff/rollback the landing bundle here. Override the global
+# dist/ rule for that specific path.
+!apps/landing/dist/
+!apps/landing/dist/**
 
 # Env / secrets
 .env
