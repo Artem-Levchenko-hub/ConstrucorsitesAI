@@ -18,13 +18,14 @@ WorkingDirectory=/opt/omnia/apps/orchestrator
 # Optional: .env may not exist (env can come from /etc/default/omnia-orchestrator
 # or the unit's Environment= directive). Leading dash makes it non-fatal.
 EnvironmentFile=-/opt/omnia/apps/orchestrator/.env
-# Redirect uv's cache + temp out of $HOME so ProtectHome=read-only stays on
-# without uv exploding when it tries to write a lock file to ~/.cache/uv/.
-# UV_LINK_MODE=copy avoids hardlinks across the cache/venv boundary (different
-# filesystems on the VPS).
-Environment=UV_CACHE_DIR=/opt/omnia-runtime/uv-cache
-Environment=UV_LINK_MODE=copy
-ExecStart=/home/i48ptgvnis/.local/bin/uv run --no-sync uvicorn omnia_orchestrator.main:app --host 0.0.0.0 --port 8003 --workers 1 --no-access-log
+# Pre-sync the venv when the operator pulls new code (`uv sync` from
+# WorkingDirectory) — DO NOT call `uv run` from ExecStart. `uv run` execve()s
+# the target binary and exits the uv intermediary; systemd then sees the
+# Main PID die and triggers a Restart loop while the actual uvicorn child
+# keeps holding port 8003 (zombie reparented to systemd-init). Pointing
+# straight at the venv's uvicorn binary fixes this: systemd's Main PID
+# IS the uvicorn process, lifecycle becomes simple, port conflict gone.
+ExecStart=/opt/omnia/apps/orchestrator/.venv/bin/uvicorn omnia_orchestrator.main:app --host 0.0.0.0 --port 8003 --workers 1 --no-access-log
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
