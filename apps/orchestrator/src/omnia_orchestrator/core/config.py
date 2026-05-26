@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     hibernate_pro_tier_minutes: int = Field(default=60)
     wake_timeout_seconds: int = Field(default=60)
 
+    # Redis pub-sub channel for hibernate activity. Whoever fronts dev preview
+    # traffic (apps/api proxy / nginx ingress) publishes `activity:<project_id>`
+    # on every request; the hibernate loop subscribes to reset idle timers.
+    # Default points at the shared `omnia-redis` (same instance apps/api uses).
+    redis_url: str = Field(default="redis://127.0.0.1:6379/0")
+
     # Shared secret with apps/api. Validated against X-Internal-Token header.
     internal_token: SecretStr
 
