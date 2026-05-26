@@ -146,6 +146,20 @@
           });
         }, { threshold: 0.4 });
         counters.forEach(function (el) { cio.observe(el); });
+        // Kick once on next frame: above-fold counters (hero stats block)
+        // can be already in viewport at init, and IntersectionObserver
+        // doesn't always fire its initial entry synchronously for such
+        // elements — esp. when the parent .reveal starts at opacity:0.
+        // Without this kick, the span stays literal "0".
+        requestAnimationFrame(function () {
+          counters.forEach(function (el) {
+            var r = el.getBoundingClientRect();
+            if (r.top < window.innerHeight * 0.6 && r.bottom > 0) {
+              runCount(el);
+              cio.unobserve(el);
+            }
+          });
+        });
       }
     }
 
