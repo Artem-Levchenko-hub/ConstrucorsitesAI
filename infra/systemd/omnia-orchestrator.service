@@ -1,0 +1,53 @@
+[Unit]
+Description=Omnia.AI V2 Orchestrator (runtime + deploy + hibernate)
+Documentation=https://github.com/Artem-Levchenko-hub/ConstrucorsitesAI/tree/main/apps/orchestrator
+# Order: orchestrator needs Docker (containers), Postgres (user-project schemas),
+# Redis (hibernate activity pub-sub), and network up. Wants= means we depend on
+# them being started but tolerate them being missing — Redis-only install is
+# valid and the orchestrator fails soft on a missing Postgres / Redis.
+After=network-online.target docker.service postgresql.service redis.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+# Must match the owner of /opt/omnia/, /opt/omnia-runtime/, and the docker
+# group (so the orchestrator can talk to /var/run/docker.sock without sudo).
+User=i48ptgvnis
+Group=i48ptgvnis
+WorkingDirectory=/opt/omnia/apps/orchestrator
+# Optional: .env may not exist (env can come from /etc/default/omnia-orchestrator
+# or the unit's Environment= directive). Leading dash makes it non-fatal.
+EnvironmentFile=-/opt/omnia/apps/orchestrator/.env
+ExecStart=/home/i48ptgvnis/.local/bin/uv run uvicorn omnia_orchestrator.main:app --host 0.0.0.0 --port 8003 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+KillMode=mixed
+TimeoutStopSec=30
+
+# Resource fence — orchestrator itself does very little (Docker SDK, ACME shell-
+# outs, Redis pub-sub). 1 GB / 50% CPU is plenty and stops a runaway from
+# crowding the user-project containers it manages.
+MemoryMax=1G
+CPUQuota=50%
+# File-descriptor budget — each managed dev container holds one Docker socket
+# stream + pub-sub channel; comfortably under 4096 even at 100 projects.
+LimitNOFILE=4096
+
+# Hardening — orchestrator only writes to /opt/omnia-runtime/ (projects,
+# nginx-sites, secrets, certs) and reads /opt/omnia/. Everything else is
+# read-only or off-limits.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+# Paths the orchestrator legitimately writes to. ReadWritePaths overrides
+# ProtectSystem=full for these specific roots.
+ReadWritePaths=/opt/omnia-runtime /var/log/omnia-runtime
+# nginx config + reload requires sudo passthrough — see `core/shell.py` and
+# `services/nginx_writer.py:_reload`. Sudoers config (NOPASSWD for `nginx`,
+# `systemctl reload nginx`, `acme.sh`) lives in /etc/sudoers.d/omnia-orchestrator.
+
+[Install]
+WantedBy=multi-user.target
