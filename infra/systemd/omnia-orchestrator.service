@@ -43,8 +43,10 @@ ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=true
 # Paths the orchestrator legitimately writes to. ReadWritePaths overrides
-# ProtectSystem=full for these specific roots.
-ReadWritePaths=/opt/omnia-runtime /var/log/omnia-runtime
+# ProtectSystem=full for these specific roots. /var/log/omnia-runtime is
+# intentionally NOT here — logs go to journald via stdout/stderr (see
+# docker_client.start_container's per-project log streaming TODO).
+ReadWritePaths=/opt/omnia-runtime
 # nginx config + reload requires sudo passthrough — see `core/shell.py` and
 # `services/nginx_writer.py:_reload`. Sudoers config (NOPASSWD for `nginx`,
 # `systemctl reload nginx`, `acme.sh`) lives in /etc/sudoers.d/omnia-orchestrator.
