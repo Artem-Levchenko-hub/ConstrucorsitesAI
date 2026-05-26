@@ -278,6 +278,68 @@ Peak → Fredoka · Quicksand; Helvetica Neue → Inter · Geist.
 
 Эталон — чтобы человек со вкусом сказал «сделано с душой», а не «очередной AI-лендинг»."""
 
+_KIT_V3_REFERENCE = """\
+KIT v3 — ДОПОЛНИТЕЛЬНЫЕ КЛАССЫ omnia-kit (обновление 2026-05). Они УЖЕ есть в
+assets/omnia-kit.{css,js} — используй активно. Без них сайт выглядит как
+generic AI-лендинг 2023 года; с ними — современный продукт.
+
+ВЫБИРАЙ 2-4 «сигнатурных приёма» из этого блока на сайт. Не все сразу.
+
+▸ SCROLL-DRIVEN MOTION (применяй ВМЕСТО .reveal на секциях ниже первого экрана):
+  .scroll-fade-up      Дефолт для большинства секций ниже hero. Fade+translate
+                       по scroll-progress. Заменяет .reveal в новых проектах.
+  .scroll-scale-in     Карточки/изображения, которые должны «прилетать» с глубины.
+                       Сильнее .scroll-fade-up — используй точечно (1-2 элемента).
+  .scroll-clip-reveal  Clip-path mask, открывает блок сверху вниз. Идеально для
+                       hero-фото, manifesto-секций, крупных цитат.
+  .scroll-pin          position:sticky. Применяй на «как это работает» когда хочешь
+                       чтобы шаги 1-2-3 «зависали» по очереди при прокрутке.
+  .scroll-parallax     Мягкий parallax на декоративных элементах (background-orb,
+                       абстрактные фигуры). Глубину задаёшь --depth: 0.1-0.4.
+  .parallax-layer-1/2/3  Multi-layer parallax в hero composition. Слой 1 — самый
+                       глубокий (медленный), 3 — самый близкий (быстрый).
+
+▸ KINETIC TYPOGRAPHY (variable-font axes, требует variable-шрифт в палитре —
+  Bricolage Grotesque / Inter / Hanken Grotesk / Unbounded подходят):
+  .kinetic-weight      wght 500→800 при hover. На крупных H1/H2 и CTA-кнопках —
+                       заголовки «оживают» под курсором. Дешевле эффект, чем
+                       full-blown motion, и не отнимает внимание.
+  .kinetic-width       wdth 100→75. Для слоганов, манифестов одной строкой.
+  .kinetic-slant       slnt 0→-8. Подчёркивает ключевые слова в hero-tagline.
+  .split-chars         Wrap текст в этот класс — JS разбивает на per-char span'ы
+                       со stagger entry (по 32ms каждая буква). ТОЛЬКО на коротких
+                       hero-слоганах (5-12 слов). На длинных абзацах = брак.
+  .text-fluid          clamp() responsive type-scale. На «scaling» заголовках.
+  .text-hanging        hanging-punctuation для редакционных абзацев и цитат.
+
+▸ DEPTH (3-step shadow scale; заменяет хаотичные shadow-X в Tailwind):
+  .depth-1   Мягкая тень для inline-карточек (стат-блоки, badge-карточки).
+  .depth-2   Контентные карточки (features, testimonials). Часто заменяет
+             .card-soft когда нужна более очевидная глубина.
+  .depth-3   Modal-level — hero-image, ключевая CTA-плашка, sticky-bottom-bar.
+  .atmospheric-blur    backdrop-filter blur+saturate. На overlay-баннере, sticky
+             header в скролл-state, glass-секции поверх фото.
+
+▸ CURSOR (полностью автоматически, ничего вручную писать НЕ нужно):
+  .cursor-trail — JS сам инжектит на desktop, скрывает на touch / reduced-motion.
+  data-cursor="link" / "text" — body-атрибут JS ставит автоматом над <a> и <input>.
+
+КОГДА ПРИМЕНЯТЬ ЭТИ КЛАССЫ:
+  ✓ SaaS, портфолио, агентства, ивенты, e-commerce, lifestyle — да, активно
+  ✓ Wellness, медицина с упором на современность — да, осторожно (1-2 приёма)
+  ✗ Юр-фирмы, корпоративный B2B с упором на доверие — нет, оставляй .reveal+.card-soft
+  ✗ Editorial publication, journal — нет, тип-как-герой важнее motion
+
+ЗАПРЕЩЕНО:
+  • Все эффекты одновременно — выбирай 2-4, не 10.
+  • .split-chars на длинных абзацах >15 слов — выглядит как parsing-glitch.
+  • .scroll-pin на CTA-секции — ломает конверсию (CTA должна пройти быстро).
+  • .kinetic-weight на body-тексте — только на display.
+  • Любое из этого если prefers-reduced-motion активен — кит сам всё отключит,
+    но НЕ строй макет где смысл несёт ИСКЛЮЧИТЕЛЬНО motion (графика должна
+    работать и в статике)."""
+
+
 _FUNCTIONAL_CONTRACT = """\
 КОНТРАКТ «НОЛЬ ТУПИКОВ» — критичное правило: готовый продукт значит, что КАЖДЫЙ
 кликабельный элемент куда-то ведёт и что-то делает. Ссылки и кнопки «в никуда»
@@ -1533,6 +1595,7 @@ def build_system_prompt(
         sections: tuple[str, ...] = (
             _IDENTITY,
             *((design_anchor,) if design_anchor else ()),
+            _KIT_V3_REFERENCE,
             _QUALITY_BAR,
             _LAYOUT_RIGOR,
             AWWWARDS_PRINCIPLES,
@@ -1549,6 +1612,7 @@ def build_system_prompt(
         sections = (
             _IDENTITY,
             *((design_anchor,) if design_anchor else ()),
+            _KIT_V3_REFERENCE,
             _QUALITY_BAR,
             _LAYOUT_RIGOR,
             AWWWARDS_PRINCIPLES,
@@ -1583,6 +1647,7 @@ def build_system_prompt(
         sections = (
             _IDENTITY,
             *((design_anchor,) if design_anchor else ()),
+            _KIT_V3_REFERENCE,
             _QUALITY_BAR,
             _LAYOUT_RIGOR,
             AWWWARDS_PRINCIPLES,
