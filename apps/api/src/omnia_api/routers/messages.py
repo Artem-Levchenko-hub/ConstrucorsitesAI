@@ -29,7 +29,7 @@ from omnia_api.services.file_extractor import (
     extract_files,
 )
 from omnia_api.services.image_resolver import resolve_images
-from omnia_api.services.link_validator import find_dead_links
+from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
 from omnia_api.core.config import get_settings
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
@@ -560,15 +560,32 @@ async def _process_prompt(
                 # original Gemini that failed.
                 model_id = effective_model
 
-        # --- Pass N+1: one-shot dead-link repair (static only) ----------
+        # --- Pass N+1: dead-link repair (static only) -------------------
         # The prompt forbids dead links, but weaker models still slip in
-        # href="#" / broken anchors. If we find any, re-prompt ONCE with the
-        # exact issues and keep the result only if it's strictly better.
-        # Fail-safe: a single pass, never blocks the commit (R-10 fail fast).
+        # href="#" placeholders. Two-tier repair:
+        #   1) Server-side inline (FREE) — rewrites href="#" → "#contacts"
+        #      (or first available CTA-class section) without any LLM call.
+        #      Catches ~95% of cases.
+        #   2) LLM re-roll (₽30+) — only fires if >3 dead links REMAIN after
+        #      step 1. Previously fired on ANY single dead link, costing the
+        #      user a full second generation per project. Now reserved for
+        #      severely broken output the inline fixer can't salvage.
+        _DEAD_LINK_LLM_THRESHOLD = 3
         if files and project_template != "fullstack":
-            dead = find_dead_links(files)
-            if dead:
-                print(f"[PP] dead_links found={len(dead)} -> repair pass", flush=True)
+            initial_dead = find_dead_links(files)
+            if initial_dead:
+                files = repair_dead_links_inline(files)
+                post_inline = find_dead_links(files)
+                print(
+                    f"[PP] dead_links initial={len(initial_dead)} "
+                    f"after_inline={len(post_inline)}",
+                    flush=True,
+                )
+                dead = post_inline
+            else:
+                dead = []
+            if len(dead) > _DEAD_LINK_LLM_THRESHOLD:
+                print(f"[PP] dead_links remain={len(dead)} -> LLM repair pass", flush=True)
                 prior_answer = accumulated
                 notice = (
                     "\n\n*Проверка ссылок: часть кнопок вела в никуда — "
