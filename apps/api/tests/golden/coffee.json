@@ -1,0 +1,62 @@
+{
+  "id": "coffee",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for 'coffee shop / cafe' prompt class. Stress-tests warmth/craft-aesthetic palette (not corporate-blue default), photo-forward hero (not text-monster), restaurant-style sections.",
+
+  "input": {
+    "prompt": "Сделай сайт для кофейни 'Бариста' на Патриарших. Авторская обжарка, завтраки до 11, специальные методы заваривания. Атмосфера домашняя, тёплая.",
+    "project_name": "Бариста Патриаршие",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["wellness-casual", "editorial-publication", "scandi-editorial"],
+    "preset_id_forbidden": ["saas-product", "festival-brutalist", "studio-showreel"],
+
+    "palette_range": {
+      "must_include_any_of": ["#A16207", "#92400E", "#7C2D12", "#78350F", "#451A03", "#D97706", "#F59E0B"],
+      "must_avoid_any_of": ["#4f46e5", "#6366f1", "#7c3aed", "#8b5cf6", "#2563EB", "#1E40AF"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero",
+      "menu_or_assortment",
+      "about_or_story",
+      "atmosphere_or_gallery",
+      "location_or_hours",
+      "contact_or_booking",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "saas_tier_pricing",
+      "feature_grid_3_columns_icons_text",
+      "testimonials_corporate_logos"
+    ],
+
+    "content_signals_required": [
+      "адрес или метро Маяковская / Пушкинская",
+      "часы работы",
+      "цены в ₽",
+      "блюда или напитки конкретно"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "img-zoom",
+      "reveal",
+      "scroll-fade-up",
+      "grain",
+      "film-grain",
+      "card-soft",
+      "eyebrow"
+    ],
+    "fonts_must_be_in": [
+      ["Playfair Display", "Karla"],
+      ["Fraunces", "Newsreader"],
+      ["Cormorant", "Montserrat"]
+    ]
+  },
+
+  "notes": "Cafes need warmth (earthy palette), large product photography vibe, and a SHORT page — 5-7 sections, not 9. SaaS pricing tiers are explicitly wrong; this is a place to visit, not a product to subscribe to."
+}

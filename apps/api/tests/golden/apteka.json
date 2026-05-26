@@ -1,0 +1,68 @@
+{
+  "id": "apteka",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for the 'pharmacy with delivery' prompt class. Stress-tests preset_classifier substring matcher (Flowapteka brand-style names), palette anchoring (must NOT come out indigo+violet), and section selection (pharmacies sell products — no SaaS-tier pricing).",
+
+  "input": {
+    "prompt": "Сделай сайт онлайн-аптеки Flowapteka с доставкой по Москве. Консультации фармацевтов, оформление рецептов онлайн, широкий ассортимент лекарств и БАДов.",
+    "project_name": "Flowapteka",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["wellness-casual"],
+    "preset_id_forbidden": ["saas-product", "studio-showreel", "boutique-reel", "festival-brutalist"],
+
+    "palette_range": {
+      "must_include_any_of": ["#16A34A", "#0EA5E9", "#0891B2", "#10B981"],
+      "must_avoid_any_of": ["#4f46e5", "#6366f1", "#818cf8", "#7c3aed", "#8b5cf6", "#a855f7"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero",
+      "assortment_or_categories",
+      "consultations_or_pharmacist_advice",
+      "delivery_or_logistics",
+      "trust_or_certifications",
+      "faq",
+      "cta_or_contact",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "saas_tier_pricing_basic_standard_premium",
+      "feature_grid_with_3_generic_features"
+    ],
+
+    "content_signals_required": [
+      "цены в ₽",
+      "московские районы или метро",
+      "рецепт",
+      "консультация фармацевта",
+      "доставка"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "card-soft",
+      "reveal",
+      "scroll-fade-up",
+      "badge",
+      "eyebrow",
+      "stars"
+    ],
+    "kit_classes_forbidden": [
+      "kinetic-marquee",
+      "display-fill",
+      "blob"
+    ],
+
+    "fonts_must_be_in": [
+      ["Figtree", "DM Sans"],
+      ["Bricolage Grotesque", "DM Sans"],
+      ["Inter", "Inter"]
+    ]
+  },
+
+  "notes": "Genealogy: failure case /p/sait-apteki-53a12d (2026-05-26) — came out with #4f46e5 indigo + SaaS-tier pricing. Root causes documented in [[concepts/omniaai-generation-quality-regressions-2026-05-26]]. This golden exists to catch regressions to that state."
+}

@@ -1,0 +1,70 @@
+{
+  "id": "saas-startup",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for SaaS / analytics startup prompts. This IS the vertical where Tailwind-default indigo/violet is sometimes correct — but only sometimes, and the site must still have proper section depth (not just hero+features+pricing+footer collapse).",
+
+  "input": {
+    "prompt": "Сделай лендинг для SaaS-стартапа 'Pulse Analytics' — облачная аналитика для e-commerce. Dashboards с метриками выручки, конверсии, LTV. Демо-видео, тарифы, кейсы клиентов.",
+    "project_name": "Pulse Analytics",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["saas-product", "editorial-trust"],
+    "preset_id_forbidden": ["wellness-casual", "festival-brutalist", "editorial-publication"],
+
+    "palette_range": {
+      "must_include_any_of": ["#2563EB", "#3B82F6", "#1E40AF", "#0F172A", "#1E293B", "#4F46E5", "#6366F1"],
+      "must_avoid_any_of": ["#A16207", "#92400E", "#EC4899", "#DC2626"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero",
+      "social_proof_or_logos",
+      "features_or_capabilities",
+      "how_it_works_or_demo",
+      "integrations",
+      "case_studies_or_testimonials",
+      "pricing_tiers",
+      "faq",
+      "cta",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "menu_or_food_items",
+      "appointment_booking_calendar"
+    ],
+
+    "content_signals_required": [
+      "цены в ₽",
+      "real metric или процент конверсии",
+      "demo CTA",
+      "integration names"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "gradient-border",
+      "glass",
+      "glow",
+      "magnetic",
+      "scroll-fade-up",
+      "card-soft",
+      "marquee",
+      "depth-2"
+    ],
+    "kit_classes_recommended_for_charts": [
+      "scroll-clip-reveal",
+      "depth-3"
+    ],
+
+    "fonts_must_be_in": [
+      ["Space Grotesk", "DM Sans"],
+      ["Inter", "Inter"],
+      ["Bricolage Grotesque", "Inter"]
+    ]
+  },
+
+  "notes": "SaaS lendings MUST include integrations + case studies sections — without them the page looks like a side-project. Charts/metrics demo should use new kit classes (depth-2, scroll-clip-reveal) introduced in v3 (2026-05-26). Indigo IS acceptable here, but the avoid_any_of warms/pinks would mean the classifier mis-routed."
+}
