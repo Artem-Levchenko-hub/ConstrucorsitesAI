@@ -8,7 +8,9 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uv==0.5.13
 
-RUN useradd -m -u 1000 apiuser
+# chown /app after WORKDIR — see telegram-bot-aiogram/Dockerfile.dev for
+# the same fix. Without this, `uv sync` can't create `/app/.venv`.
+RUN useradd -m -u 1000 apiuser && chown -R apiuser:apiuser /app
 USER apiuser
 
 COPY --chown=apiuser:apiuser pyproject.toml uv.lock* ./

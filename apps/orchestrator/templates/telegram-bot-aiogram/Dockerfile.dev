@@ -12,7 +12,9 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv==0.5.13
 
 # Non-root user matching orchestrator's --user 1000:1000 spec.
-RUN useradd -m -u 1000 botuser
+# Critical: chown /app to botuser AFTER WORKDIR created the dir as root,
+# otherwise `uv sync` can't create `/app/.venv` (permission denied).
+RUN useradd -m -u 1000 botuser && chown -R botuser:botuser /app
 USER botuser
 
 # Layered install — deps first so source changes don't bust the cache.
