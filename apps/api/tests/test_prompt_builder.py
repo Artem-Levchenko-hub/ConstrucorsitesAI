@@ -15,14 +15,20 @@ def test_static_prompt_includes_style_and_animation_kit() -> None:
     sp = build_system_prompt("landing")
     assert "assets/omnia-kit.css" in sp
     assert "assets/omnia-kit.js" in sp
-    assert "Aurora SaaS" in sp  # _STYLE_KIT preset
+    # _STYLE_KIT presence — match on the stable section header. The earlier
+    # check pinned on a preset name ("Aurora SaaS") that was renamed during
+    # the v3 preset overhaul, so the assert silently went stale. The
+    # `ВИЗУАЛЬНЫЙ СТИЛЬ` header is the unique top-line of `_STYLE_KIT` and
+    # survives any preset-roster churn.
+    assert "ВИЗУАЛЬНЫЙ СТИЛЬ" in sp
     assert "data-reveal-delay" in sp  # _ANIMATION_KIT class API
 
 
 def test_fullstack_prompt_excludes_static_kit() -> None:
     fs = build_system_prompt("fullstack")
     assert "assets/omnia-kit.css" not in fs
-    assert "Aurora SaaS" not in fs
+    # fullstack skips `_STYLE_KIT` — its unique header must not appear.
+    assert "ВИЗУАЛЬНЫЙ СТИЛЬ" not in fs
     assert "Drizzle" in fs  # fullstack stack still present
 
 

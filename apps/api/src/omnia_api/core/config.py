@@ -87,3 +87,60 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Phase F.1 — Per-model prompt-routing tier map.
+#
+# Decouples the model the user picked from how we assemble the prompt for
+# it. Premium models (Sonnet/Opus/GPT-5) keep focus on a 14 K-token system
+# prompt and get the full single-shot brief. Budget models (Haiku/Nano)
+# routinely drop focus past ~5 K tokens and will be routed through the
+# multi-pass decomposition pipeline (Phase B, lands in a follow-up). Balanced
+# models (Mini/Yandex-Pro/Gigachat/Gemini-Flash) get a trimmed single-shot —
+# full design anchor + truncated `_DESIGN_KIT` / `_DETAILS_KIT`.
+#
+# Adding a new model means one line here; the prompt assembler reads only
+# the tier, never the model id. Routing branch lives in `routers/messages.py`.
+# ──────────────────────────────────────────────────────────────────────────
+
+MODEL_TIER_MAP: dict[str, str] = {
+    # Premium — full single-shot prompt, no decomposition.
+    "claude-opus-4-7":   "premium",
+    "claude-opus-4-6":   "premium",
+    "claude-sonnet-4-6": "premium",
+    "gpt-5":             "premium",
+    "gemini-2.5-pro":    "premium",
+    # Balanced — single-shot with trimmed kit blocks.
+    "gpt-5-mini":        "balanced",
+    "yandexgpt-5":       "balanced",
+    "gigachat-2-pro":    "balanced",
+    "gemini-2.5-flash":  "balanced",
+    "gpt-4.1":           "balanced",
+    # Budget — destined for the multi-pass pipeline (Phase B).
+    "claude-haiku-4-5":  "budget",
+    "gpt-5-nano":        "budget",
+}
+
+# `budget` tier IS the cheap-model set; CHEAP_MODELS stays as the
+# vocabulary the plan and downstream readers (routers/messages.py) use.
+CHEAP_MODELS: frozenset[str] = frozenset(
+    m for m, tier in MODEL_TIER_MAP.items() if tier == "budget"
+)
+
+# Unknown model ids (frontend selector adds a model before tier map
+# refresh) resolve to `balanced` — safest middle. Crashing on an unknown
+# id would block the user from generating at all.
+DEFAULT_TIER = "balanced"
+
+
+def tier_for_model(model_id: str | None) -> str:
+    """Resolve a model id to its prompt-routing tier.
+
+    `model_id` is the canonical id used by the LLM gateway (matches the
+    keys of `MODEL_TIER_MAP`). Unknown ids and `None` return
+    `DEFAULT_TIER`, so caller logic stays uniform.
+    """
+    if not model_id:
+        return DEFAULT_TIER
+    return MODEL_TIER_MAP.get(model_id, DEFAULT_TIER)
