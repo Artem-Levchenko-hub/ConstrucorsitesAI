@@ -8,6 +8,7 @@ docker-compose for the shared infra.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
@@ -19,6 +20,7 @@ from omnia_gateway.core.http import close_http, init_http
 from omnia_gateway.core.logging import configure_logging
 from omnia_gateway.core.redis import close_redis, init_redis
 from omnia_gateway.routers import chat, health, images, models
+from omnia_gateway.services.warmup import run_warmup_loop
 
 
 @asynccontextmanager
@@ -38,9 +40,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     await init_http()  # local resource, never fails
 
+    # Keep proxyapi.ru hot — without this, the first request to Haiku/nano
+    # after idle returns a 4-10 char empty body that trips the empty-content
+    # fallback chain in apps/api/routers/messages.py. See services/warmup.py.
+    warmup_task = asyncio.create_task(run_warmup_loop(), name="proxyapi-warmup")
+
     try:
         yield
     finally:
+        warmup_task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await warmup_task
         with suppress(Exception):
             await close_http()
         with suppress(Exception):
