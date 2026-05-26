@@ -27,7 +27,103 @@ Emit each new or changed file inside an XML-style block:
 - **Styling**: Tailwind v4 only (`@import "tailwindcss"` in `globals.css`). No inline styles, no styled-components. Use `clsx` + `tailwind-merge` via `src/lib/utils.ts` (cn helper).
 - **UI**: Composed with native Tailwind utilities. shadcn/ui not pre-installed; if needed, ask the user before adding.
 - **Forms / actions**: Server Actions in the same file as the route. Validate with `zod`.
-- **Auth**: NOT pre-wired in the template. If the user asks for auth, recommend NextAuth v5 and wait for confirmation.
+- **Auth**: **PRE-WIRED — DO NOT REINVENT.** Auth.js v5 (NextAuth) is fully configured with Drizzle adapter + Credentials provider (email+password, bcrypt). End-users of the generated app can sign up / sign in immediately. See "Auth primitives" section below.
+
+## Auth primitives (binding)
+
+Auth.js v5 + Drizzle is pre-wired. Use the existing primitives — do NOT
+generate your own login/signup forms, password hashing, or session
+middleware. Reinventing auth ALWAYS breaks because our `auth.ts` config
+expects specific table shapes and the Credentials provider has subtle
+edge cases (Adapter / session callback / role propagation) you'd get
+wrong from scratch.
+
+### What ships pre-built
+
+| File | Purpose |
+|---|---|
+| `src/lib/db/schema.ts` | `users` / `accounts` / `sessions` / `verificationTokens` tables — Auth.js standard. Don't rename or drop these. |
+| `src/lib/auth.ts` | Auth.js config + `hashPassword(plain)` helper. |
+| `src/lib/session.ts` | `getCurrentUser()` (returns `User \| null`) and `requireUser({role?, next?})` (redirects to `/signin` when not authed). |
+| `src/app/signin/page.tsx` | Sign-in form. Restyle the JSX, do NOT change the form action. |
+| `src/app/signup/page.tsx` | Sign-up form. Same rule — restyle, don't rewire. |
+| `src/app/signout/route.ts` | POST-only sign-out. Use `<SignOutButton>` to call it. |
+| `src/components/Protected.tsx` | Server component wrapping protected UI. Supports `role` and `behavior="redirect"\|"hide"`. |
+| `src/components/SignOutButton.tsx` | Drop-in form-POST button. Restyle freely via `className`. |
+| `src/app/api/auth/[...nextauth]/route.ts` | Auth.js catch-all — don't touch. |
+
+### Standard usage
+
+**Protected server-component page (most common):**
+
+```tsx
+// src/app/dashboard/page.tsx
+import { requireUser } from "@/lib/session";
+
+export default async function Dashboard() {
+  const user = await requireUser({ next: "/dashboard" });
+  return <main className="p-8">Привет, {user.name ?? user.email}</main>;
+}
+```
+
+**Conditional render of authed-only UI without redirect:**
+
+```tsx
+import { getCurrentUser } from "@/lib/session";
+import { SignOutButton } from "@/components/SignOutButton";
+
+export default async function Header() {
+  const user = await getCurrentUser();
+  return (
+    <header>
+      {user ? (
+        <SignOutButton />
+      ) : (
+        <a href="/signin">Войти</a>
+      )}
+    </header>
+  );
+}
+```
+
+**Admin-only section:**
+
+```tsx
+import { Protected } from "@/components/Protected";
+
+<Protected role="admin" behavior="hide">
+  <AdminPanelLink />
+</Protected>
+```
+
+**Owner-scoped database query** (pattern for any user-owned table):
+
+```ts
+import { requireUser } from "@/lib/session";
+import { db } from "@/lib/db";
+import { eq } from "drizzle-orm";
+import { orders } from "@/lib/db/schema";
+
+const user = await requireUser();
+const myOrders = await db
+  .select()
+  .from(orders)
+  .where(eq(orders.userId, user.id));
+```
+
+When adding user-owned tables, include a `userId` column FK to
+`users.id` with `onDelete: "cascade"` — then filter by `user.id` on
+every read. Without this filter ANY user reads ANY other user's data.
+
+### Forbidden
+
+- Do NOT install `bcrypt`, `iron-session`, `lucia-auth`, or any other
+  auth library. They conflict with the configured one.
+- Do NOT write your own `/login` or `/register` route — the existing
+  `/signin` and `/signup` are the canonical paths.
+- Do NOT store passwords. Calling `hashPassword()` in your own table
+  is a sign you're recreating users — extend `users` instead.
+- Do NOT generate JWT manually. The session cookie is set by Auth.js.
 
 ## Design quality (binding) — no "default-looking" output
 

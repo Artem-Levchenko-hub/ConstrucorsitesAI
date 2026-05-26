@@ -185,6 +185,18 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
         prod_name = f"omnia-app-{slug}"
         prod_port = await get_prod_port_allocator().acquire(UUID(project_id))
         await docker_client.destroy_container(prod_name)
+        # Auth.js v5 envs — same secret as dev so a deploy doesn't log every
+        # user out. The dev container's `secrets_root/<id>/auth.secret` is
+        # the canonical source; `_load_auth_secret` mirrors what provisioner
+        # does (load or create) so a fresh deploy without a prior dev session
+        # still works.
+        from omnia_orchestrator.services.provisioner import (
+            _load_or_create_auth_secret,
+        )
+
+        auth_secret = _load_or_create_auth_secret(project_id)
+        prod_origin = nginx_writer.prod_url(slug)
+
         spec = docker_client.ContainerSpec(
             name=prod_name,
             image=tag,
@@ -195,6 +207,9 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
                 "PORT": "3000",
                 "HOSTNAME": "0.0.0.0",  # standalone server must bind all ifaces
                 "DATABASE_URL": _resolve_runtime_dsn(project_id),
+                "AUTH_SECRET": auth_secret,
+                "AUTH_URL": prod_origin,
+                "AUTH_TRUST_HOST": "true",
             },
             cpu_quota=1.0,
             memory_mb=1024,

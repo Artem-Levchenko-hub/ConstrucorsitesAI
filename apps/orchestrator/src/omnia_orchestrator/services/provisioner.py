@@ -22,6 +22,7 @@ sprint A1 swaps the body.
 
 from __future__ import annotations
 
+import secrets as _secrets
 import shutil
 from pathlib import Path
 
@@ -43,6 +44,30 @@ from omnia_orchestrator.services.port_allocator import get_port_allocator
 # imports cleanly, the static landing page still renders, and the failure
 # surfaces only when AI-generated code actually queries the DB.
 _DB_FALLBACK = "postgresql://placeholder:placeholder@127.0.0.1:1/placeholder"
+
+
+def _load_or_create_auth_secret(project_id: str) -> str:
+    """Auth.js v5 `AUTH_SECRET` — per-project, persisted under
+    ``secrets_root/<project_id>/auth.secret`` so re-provisions reuse the
+    same value and existing sessions survive a container restart.
+
+    Rotating this secret invalidates every active session for that
+    project's app — intentional fallback if a secret leaks.
+    """
+    secrets_dir = Path(get_settings().secrets_root) / project_id
+    secret_file = secrets_dir / "auth.secret"
+    if secret_file.exists():
+        content = secret_file.read_text(encoding="utf-8").strip()
+        if content:
+            return content
+    secrets_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    value = _secrets.token_urlsafe(48)
+    secret_file.write_text(value, encoding="utf-8")
+    try:
+        secret_file.chmod(0o600)
+    except OSError:
+        pass  # Windows dev path
+    return value
 
 log = structlog.get_logger("omnia_orchestrator.provisioner")
 
@@ -117,9 +142,22 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
             )
             database_url = _DB_FALLBACK
 
+    # AUTH_SECRET — Auth.js v5 cookie/token signing key. Stable per-project
+    # so a container restart doesn't log every user out. AUTH_URL helps
+    # Auth.js build absolute callback URLs when running behind our nginx
+    # proxy (it can't infer the public origin from x-forwarded headers in
+    # all paths). AUTH_TRUST_HOST is required when the host header doesn't
+    # match a known-safe domain — our preview/prod URLs are dynamic so
+    # we trust the host explicitly.
+    auth_secret = _load_or_create_auth_secret(str(req.project_id))
+    dev_origin = nginx_writer.dev_url(req.slug)
+
     env = {
         "DATABASE_URL": database_url,
         "NODE_ENV": "development",
+        "AUTH_SECRET": auth_secret,
+        "AUTH_URL": dev_origin,
+        "AUTH_TRUST_HOST": "true",
         **req.initial_env,
     }
 
