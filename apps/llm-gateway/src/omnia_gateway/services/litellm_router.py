@@ -12,11 +12,13 @@ depends only on this — providers stay invisible to the HTTP layer.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import litellm
+import structlog
 from litellm import Router
 
 from omnia_gateway.core.config import Settings, get_settings
@@ -25,6 +27,17 @@ from omnia_gateway.core.errors import (
     ModelUnavailableError,
     UpstreamProviderError,
 )
+
+log = structlog.get_logger(__name__)
+
+# Below this length we consider the response an empty cold-start artifact
+# from proxyapi.ru and retry once before letting the fallback chain fire.
+# 50 chars is wider than any plausible legit reply (the classifier expects
+# a single preset id like "wellness-casual"); legitimate ultra-short
+# answers from acompletion's only other caller (the warmup ping) are
+# discarded by the caller anyway.
+_MIN_NONEMPTY_RESPONSE_CHARS = 50
+_EMPTY_RETRY_DELAY_S = 0.2
 from omnia_gateway.providers import sber as sber_provider
 from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services.pricing import PRICE_TABLE
@@ -286,15 +299,36 @@ async def acompletion(
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "minimal")
 
+    async def _attempt() -> Any:
+        try:
+            return await router.acompletion(**kwargs)
+        except litellm.AuthenticationError as exc:
+            raise ModelUnavailableError(f"Auth failure for model {model}") from exc
+        except litellm.RateLimitError as exc:
+            raise ModelUnavailableError(f"Rate limited on model {model}") from exc
+        except (litellm.APIConnectionError, litellm.Timeout) as exc:
+            raise UpstreamProviderError(f"Upstream error for model {model}: {exc}") from exc
+        except litellm.APIError as exc:
+            raise UpstreamProviderError(f"Provider error for model {model}: {exc}") from exc
+
+    response = await _attempt()
+
+    # Empty-response retry: proxyapi.ru cold-starts can return <50 chars on
+    # the first call after >5 min idle. Retry once before letting the
+    # caller's empty-content fallback chain fire — saves a redundant
+    # fallback call (and double-billing). Warmup loop in services/warmup.py
+    # makes this rare; this is the in-band safety net.
     try:
-        response = await router.acompletion(**kwargs)
-    except litellm.AuthenticationError as exc:
-        raise ModelUnavailableError(f"Auth failure for model {model}") from exc
-    except litellm.RateLimitError as exc:
-        raise ModelUnavailableError(f"Rate limited on model {model}") from exc
-    except (litellm.APIConnectionError, litellm.Timeout) as exc:
-        raise UpstreamProviderError(f"Upstream error for model {model}: {exc}") from exc
-    except litellm.APIError as exc:
-        raise UpstreamProviderError(f"Provider error for model {model}: {exc}") from exc
+        first_text = response.choices[0].message.content or ""
+    except (AttributeError, IndexError, KeyError):
+        first_text = ""
+    if len(first_text) < _MIN_NONEMPTY_RESPONSE_CHARS:
+        log.info(
+            "acompletion.retry_on_empty",
+            model=model,
+            first_len=len(first_text),
+        )
+        await asyncio.sleep(_EMPTY_RETRY_DELAY_S)
+        response = await _attempt()
 
     return response.model_dump() if hasattr(response, "model_dump") else dict(response)
