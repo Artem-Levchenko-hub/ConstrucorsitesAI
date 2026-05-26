@@ -1334,6 +1334,14 @@ def _expand_ru_to_en(prompt: str) -> tuple[str, ...]:
     return tuple(tokens)
 
 
+_CHART_SIGNAL_TOKENS = frozenset({
+    "dashboard", "analytics", "metrics", "stats", "statistics",
+    "kpi", "graphs", "charts", "visualization", "viz",
+    "аналитик", "график", "метрик", "статистик", "дашборд",
+    "отчёт", "отчет", "панель",
+})
+
+
 def _compute_skill_brief(
     user_prompt: str | None, project_id: str | None
 ) -> str | None:
@@ -1341,10 +1349,10 @@ def _compute_skill_brief(
     library (`apps/api/skills/ui-ux-pro-max/`).
 
     Strategy: extract bag-of-words from the user prompt (with RU→EN industry
-    expansion via `_expand_ru_to_en`), match against `colors.csv`
-    `product_type` and `typography.csv` `keywords + best_for`. Returns a
-    compact `format_design_brief(...)` block or None when nothing scores
-    above zero (caller falls through to `_DESIGN_KIT`).
+    expansion via `_expand_ru_to_en`), match against 6 skill CSVs — colors,
+    typography, landing patterns, style presets, icon families, chart types
+    — plus pull 5 high-severity UX guidelines. Returns a compact
+    `format_design_brief(...)` block or None when nothing matches.
 
     Why expansion: the CSV rows are English-only ("Pharmacy/Drug Store",
     "Bakery/Cafe", …). Without `_RU_INDUSTRY_KEYWORDS` mapping, 9/12 typical
@@ -1353,6 +1361,10 @@ def _compute_skill_brief(
     The 5 UX guidelines we pull are seeded by `project_id` so re-prompts
     within the same project surface the same rules — the model sees rules
     consistently and the brief doesn't churn between turns.
+
+    Charts are gated on `_CHART_SIGNAL_TOKENS` — most landings don't need
+    them, and injecting chart guidance noise into a plain marketing site
+    is worse than silence.
     """
     if not user_prompt:
         return None
@@ -1362,6 +1374,19 @@ def _compute_skill_brief(
 
     palette = skill_library.lookup_palette(*tokens)
     font_pairing = skill_library.lookup_font_pairing(*tokens)
+    # Pass project_id-hashed seed so each project gets a deterministic but
+    # different landing-structure pick when keyword matching misses (which
+    # is most of the time — landing.csv is structurally indexed, not industry).
+    pattern_seed = hash(project_id) if project_id else 0
+    landing_pattern = skill_library.lookup_landing_pattern(*tokens, seed=pattern_seed)
+    style_preset = skill_library.lookup_style_preset(*tokens)
+    icon_family = skill_library.lookup_icon_family(*tokens)
+
+    # Charts only when prompt actually mentions data viz.
+    lowered = user_prompt.lower()
+    chart_types: tuple = ()
+    if any(sig in lowered for sig in _CHART_SIGNAL_TOKENS):
+        chart_types = skill_library.lookup_chart_types(*tokens, limit=2)
 
     # Always emit 5 high-severity UX guidelines so the model has concrete,
     # actionable rules to follow even when the palette/font lookups miss.
@@ -1372,7 +1397,13 @@ def _compute_skill_brief(
     )
 
     brief = skill_library.format_design_brief(
-        palette=palette, font_pairing=font_pairing, guidelines=guidelines
+        palette=palette,
+        font_pairing=font_pairing,
+        landing_pattern=landing_pattern,
+        style_preset=style_preset,
+        icon_family=icon_family,
+        chart_types=chart_types,
+        guidelines=guidelines,
     )
     return brief or None
 
