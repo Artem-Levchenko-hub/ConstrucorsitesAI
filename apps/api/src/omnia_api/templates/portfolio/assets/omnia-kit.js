@@ -234,5 +234,117 @@
         }
       });
     }
+
+    // ─── Omnia-kit v3 — Phase C additions ─────────────────────────────
+    //
+    // 10. Scroll-driven IO fallback for .scroll-fade-up / .scroll-scale-in /
+    //     .scroll-clip-reveal. Native CSS scroll-timeline does the work on
+    //     Chrome 115+ / Safari 17.5+; we still flip the class on older
+    //     browsers so the same markup degrades cleanly. Idempotent — both
+    //     paths reach the same final state.
+    if (!reduce && "IntersectionObserver" in window) {
+      var scrollSel = ".scroll-fade-up,.scroll-scale-in,.scroll-clip-reveal";
+      var scrollEls = [].slice.call(document.querySelectorAll(scrollSel));
+      if (scrollEls.length) {
+        var scrollIO = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) {
+              e.target.classList.add("scroll-visible");
+              scrollIO.unobserve(e.target);
+            }
+          });
+        }, { threshold: 0.18, rootMargin: "0px 0px -8% 0px" });
+        scrollEls.forEach(function (el) {
+          scrollIO.observe(el);
+          // kick if already in viewport at init (same gotcha as count-up)
+          var r = el.getBoundingClientRect();
+          if (r.top < window.innerHeight * 0.7 && r.bottom > 0) {
+            el.classList.add("scroll-visible");
+            scrollIO.unobserve(el);
+          }
+        });
+      }
+    }
+
+    // 11. Parallax — write `--scroll-y` on <html> once per RAF so
+    //     .scroll-parallax / .parallax-layer-N can compute transform purely
+    //     in CSS. Costs ~1 layout-property write per scroll frame.
+    if (!reduce) {
+      var parallaxEls = document.querySelectorAll(".scroll-parallax,.parallax-layer-1,.parallax-layer-2,.parallax-layer-3");
+      if (parallaxEls.length) {
+        var paTicking = false;
+        var paUpdate = function () {
+          root.style.setProperty("--scroll-y", window.scrollY + "px");
+          paTicking = false;
+        };
+        var paOnScroll = function () {
+          if (!paTicking) { paTicking = true; requestAnimationFrame(paUpdate); }
+        };
+        paUpdate();
+        window.addEventListener("scroll", paOnScroll, { passive: true });
+        window.addEventListener("resize", paOnScroll, { passive: true });
+      }
+    }
+
+    // 12. Split-chars walker — wraps each non-space char of any
+    //     `.split-chars` element in `<span style="--i:N">CHAR</span>` so the
+    //     CSS keyframe `omnia-split-in` staggers them on entry. Idempotent
+    //     via `data-omnia-split` marker.
+    if (!reduce) {
+      [].slice.call(document.querySelectorAll(".split-chars")).forEach(function (el) {
+        if (el.getAttribute("data-omnia-split") === "1") return;
+        var text = el.textContent || "";
+        var html = "";
+        var i = 0;
+        for (var k = 0; k < text.length; k++) {
+          var ch = text.charAt(k);
+          if (ch === " " || ch === " ") { html += " "; continue; }
+          html += '<span style="--i:' + i + '">' + (ch === "<" ? "&lt;" : ch === "&" ? "&amp;" : ch) + "</span>";
+          i++;
+        }
+        el.innerHTML = html;
+        el.setAttribute("data-omnia-split", "1");
+      });
+    }
+
+    // 13. Cursor trail — single lagging dot. Skipped on touch / no-hover
+    //     devices and when reduced-motion is on. Picks an existing
+    //     `.cursor-trail` element (auto-created if absent) and updates its
+    //     translate per pointermove via RAF.
+    if (!reduce && canHover) {
+      var trail = document.querySelector(".cursor-trail");
+      if (!trail) {
+        trail = document.createElement("div");
+        trail.className = "cursor-trail";
+        document.body.appendChild(trail);
+      }
+      var trailX = -100, trailY = -100, targetX = -100, targetY = -100, trailOn = false;
+      document.addEventListener("pointermove", function (ev) {
+        targetX = ev.clientX; targetY = ev.clientY;
+        if (!trailOn) { trailOn = true; trail.classList.add("is-on"); }
+      }, { passive: true });
+      document.addEventListener("pointerleave", function () {
+        trailOn = false; trail.classList.remove("is-on");
+      });
+      var trailFrame = function () {
+        trailX += (targetX - trailX) * 0.22;
+        trailY += (targetY - trailY) * 0.22;
+        trail.style.transform = "translate3d(" + trailX.toFixed(1) + "px," + trailY.toFixed(1) + "px,0)";
+        requestAnimationFrame(trailFrame);
+      };
+      requestAnimationFrame(trailFrame);
+
+      // 14. Cursor-context — set body[data-cursor] over links/inputs/text
+      //     so .cursor-blob-el can re-shape via CSS rules added in v3.
+      var contextOver = function (ev) {
+        var t = ev.target;
+        if (!t || !t.closest) return;
+        if (t.closest("a,button,[role=button]")) { document.body.setAttribute("data-cursor", "link"); }
+        else if (t.closest("input,textarea,[contenteditable=true]")) { document.body.setAttribute("data-cursor", "text"); }
+      };
+      var contextOut = function () { document.body.removeAttribute("data-cursor"); };
+      document.addEventListener("pointerover", contextOver, { passive: true });
+      document.addEventListener("pointerout", contextOut, { passive: true });
+    }
   });
 })();

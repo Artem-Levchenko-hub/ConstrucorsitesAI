@@ -394,3 +394,135 @@
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.95' numOctaves='2' seed='3'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
   background-size: 160px 160px;
 }
+
+/* ───────────────────────────────────────────────────────────────────────── */
+/*  Omnia-kit v3 — Phase C: scroll-driven, kinetic typography, depth, cursor */
+/*  Added 2026-05-26. Backward-compatible: pure additions.                    */
+/* ───────────────────────────────────────────────────────────────────────── */
+
+/* C.1 — Scroll-driven animations.
+   Native CSS scroll-timeline (Chrome 115+, Safari 17.5+) when available;
+   otherwise omnia-kit.js falls back to IntersectionObserver and toggles
+   `.scroll-visible` on the element. The initial state is the SAME (invisible
+   / shifted) so both paths look identical. */
+.scroll-fade-up,
+.scroll-scale-in,
+.scroll-clip-reveal {
+  opacity: 0;
+  will-change: opacity, transform, clip-path;
+}
+.scroll-fade-up   { transform: translateY(40px); }
+.scroll-scale-in  { transform: scale(.88); }
+.scroll-clip-reveal { clip-path: inset(0 0 100% 0); opacity: 1; }
+
+@supports (animation-timeline: scroll()) {
+  .scroll-fade-up    { animation: omnia-fade-up linear both; animation-timeline: view(); animation-range: entry 0% cover 45%; }
+  .scroll-scale-in   { animation: omnia-scale-in linear both; animation-timeline: view(); animation-range: entry 0% cover 35%; }
+  .scroll-clip-reveal { animation: omnia-clip-reveal linear both; animation-timeline: view(); animation-range: entry 0% cover 60%; opacity: 1; }
+}
+@keyframes omnia-fade-up    { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes omnia-scale-in   { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: scale(1); } }
+@keyframes omnia-clip-reveal { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+
+/* IO fallback: omnia-kit.js adds `.scroll-visible` when element enters the
+   viewport. Same end-state as the native animation. */
+.scroll-fade-up.scroll-visible,
+.scroll-scale-in.scroll-visible {
+  opacity: 1;
+  transform: none;
+  transition: opacity .65s cubic-bezier(.16, 1, .3, 1), transform .65s cubic-bezier(.16, 1, .3, 1);
+}
+.scroll-clip-reveal.scroll-visible {
+  clip-path: inset(0 0 0 0);
+  transition: clip-path .9s cubic-bezier(.16, 1, .3, 1);
+}
+
+/* Pure progress-driven parallax: omnia-kit.js writes --scroll-y on <html>
+   and per-element [data-depth] (0..1) drives translate. Negligible cost
+   compared to scroll-event-based parallax because it's CSS-transform only. */
+.scroll-parallax { will-change: transform; transform: translateY(calc(var(--scroll-y, 0px) * var(--depth, .2))); }
+.parallax-layer-1 { will-change: transform; transform: translateY(calc(var(--scroll-y, 0px) * -.05)); }
+.parallax-layer-2 { will-change: transform; transform: translateY(calc(var(--scroll-y, 0px) * -.15)); }
+.parallax-layer-3 { will-change: transform; transform: translateY(calc(var(--scroll-y, 0px) * -.30)); }
+
+.scroll-pin { position: sticky; top: 1rem; align-self: start; }
+
+/* C.2 — Kinetic typography.
+   Requires a variable font (the preset's display font usually qualifies —
+   Inter, Bricolage Grotesque, Hanken Grotesk, Unbounded all ship variable
+   axes). For non-variable fonts the variation settings silently degrade. */
+.kinetic-weight {
+  font-variation-settings: "wght" 500;
+  transition: font-variation-settings .45s cubic-bezier(.16, 1, .3, 1);
+}
+.kinetic-weight:hover,
+.kinetic-weight.active { font-variation-settings: "wght" 800; }
+
+.kinetic-width {
+  font-variation-settings: "wdth" 100;
+  transition: font-variation-settings .4s ease;
+}
+.kinetic-width:hover { font-variation-settings: "wdth" 75; }
+
+.kinetic-slant {
+  font-variation-settings: "slnt" 0;
+  transition: font-variation-settings .35s ease;
+}
+.kinetic-slant:hover { font-variation-settings: "slnt" -8; }
+
+/* omnia-kit.js walks `.split-chars` and wraps each non-space char in a span
+   with `--i` index — CSS does the staggered entrance. */
+.split-chars { display: inline-block; }
+.split-chars > span {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(.55em);
+  animation: omnia-split-in .55s cubic-bezier(.16, 1, .3, 1) forwards;
+  animation-delay: calc(var(--i, 0) * 32ms);
+}
+@keyframes omnia-split-in { to { opacity: 1; transform: translateY(0); } }
+
+.text-fluid { font-size: clamp(1rem, .9rem + 1vw, 1.5rem); }
+.text-hanging { hanging-punctuation: first last allow-end; }
+
+/* C.3 — Depth utilities + cursor enhancements.
+   3-step shadow scale. Sites pick a level per surface (card / overlay /
+   modal). Matches Material's elevation 1/4/8 but warmer / less harsh. */
+.depth-1 { box-shadow: 0 2px 6px -2px rgba(15, 23, 42, .08); }
+.depth-2 { box-shadow: 0 10px 28px -8px rgba(15, 23, 42, .14), 0 4px 8px -2px rgba(15, 23, 42, .06); }
+.depth-3 { box-shadow: 0 26px 64px -18px rgba(15, 23, 42, .20), 0 10px 18px -6px rgba(15, 23, 42, .08); }
+
+.atmospheric-blur {
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+}
+
+/* Cursor trail — a single dot that lags behind the actual cursor, written
+   by omnia-kit.js. opacity:0 by default so it doesn't show before JS lands. */
+.cursor-trail {
+  position: fixed;
+  top: 0; left: 0;
+  width: 10px; height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 9999px;
+  pointer-events: none;
+  z-index: 9998;
+  opacity: 0;
+  background: var(--ring, rgba(99, 102, 241, .7));
+  transition: opacity .25s ease, transform .12s cubic-bezier(.2, 1, .3, 1);
+  will-change: transform, opacity;
+}
+.cursor-trail.is-on { opacity: .55; }
+
+/* When the cursor-blob is over a link or text, the kit re-shapes it so the
+   user sees affordance directly on the cursor. */
+[data-cursor="link"] .cursor-blob-el  { transform: translate3d(var(--cx, 0), var(--cy, 0), 0) scale(1.9); }
+[data-cursor="text"] .cursor-blob-el  { transform: translate3d(var(--cx, 0), var(--cy, 0), 0) scaleX(.35) scaleY(1.6); }
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-fade-up, .scroll-scale-in, .scroll-clip-reveal { opacity: 1; transform: none; clip-path: none; animation: none; }
+  .scroll-parallax, .parallax-layer-1, .parallax-layer-2, .parallax-layer-3 { transform: none; }
+  .split-chars > span { opacity: 1; transform: none; animation: none; }
+  .kinetic-weight, .kinetic-width, .kinetic-slant { transition: none; }
+  .cursor-trail { display: none; }
+}
