@@ -192,6 +192,100 @@ def test_expand_ru_to_en_keeps_original_tokens() -> None:
     assert "fintech" in tokens or "crypto" in tokens
 
 
+# ---------------------------------------------------------------------------
+# Per-template system prompts (Phase α) — fullstack/spa/tgbot/api split.
+# Each container-backed template must surface ONLY its stack rules, not
+# every stack's rules. Cross-pollination (Next.js advice in a Python
+# template) was the actual bug this dispatcher prevents.
+# ---------------------------------------------------------------------------
+
+
+# Each _X_STACK block has unique instruction-level markers that ONLY make
+# sense inside its own stack — not as a redirect reference to another
+# template. These let us assert the dispatcher routed to the right block.
+# Cross-mentions ("если юзер просит API → рекомендуй `api` шаблон") are
+# expected and OK.
+
+_NEXT_MARKER = "Server Actions"  # "use server" directive — Next-only primitive
+_SPA_MARKER = "react-router-dom v7"  # SPA's routing lib version
+_TGBOT_MARKER = "long-polling"  # aiogram's update-pull mode
+_API_MARKER = "SQLAlchemy 2"  # async ORM version we ship
+
+
+def test_fullstack_prompt_routes_to_next_stack() -> None:
+    sp = build_system_prompt("fullstack")
+    assert _NEXT_MARKER in sp
+    # Other templates' OWN markers must not appear (their redirect-mentions
+    # might appear in cross-references; checking unique-instruction markers
+    # avoids the cross-mention false-positive).
+    assert _SPA_MARKER not in sp
+    assert _TGBOT_MARKER not in sp
+    assert _API_MARKER not in sp
+
+
+def test_spa_prompt_routes_to_spa_stack() -> None:
+    sp = build_system_prompt("spa")
+    assert _SPA_MARKER in sp
+    assert _NEXT_MARKER not in sp
+    assert _TGBOT_MARKER not in sp
+    assert _API_MARKER not in sp
+
+
+def test_tgbot_prompt_routes_to_tgbot_stack() -> None:
+    sp = build_system_prompt("tgbot")
+    assert _TGBOT_MARKER in sp
+    assert "TELEGRAM_BOT_TOKEN" in sp
+    assert _NEXT_MARKER not in sp
+    assert _SPA_MARKER not in sp
+    assert _API_MARKER not in sp
+
+
+def test_api_prompt_routes_to_api_stack() -> None:
+    sp = build_system_prompt("api")
+    assert _API_MARKER in sp
+    assert "JWT" in sp
+    assert _NEXT_MARKER not in sp
+    assert _SPA_MARKER not in sp
+    assert _TGBOT_MARKER not in sp
+
+
+def test_backend_templates_skip_visual_blocks() -> None:
+    """tgbot/api don't render HTML — visual blocks (layout rigor, design
+    kit, visual richness, image generation) MUST NOT appear. They'd waste
+    tokens AND confuse the model into generating useless HTML."""
+    for template in ("tgbot", "api"):
+        sp = build_system_prompt(template)
+        assert "ЛАЙАУТ-ЖЁСТКОСТЬ" not in sp, f"{template} got layout block"
+        assert "ДИЗАЙН-КИТ" not in sp, f"{template} got design kit"
+        assert "ВИЗУАЛЬНАЯ НАСЫЩЕННОСТЬ" not in sp, f"{template} got visual rich"
+        assert "data-omnia-gen" not in sp, f"{template} got image-gen block"
+
+
+def test_visual_templates_include_layout_rigor() -> None:
+    """fullstack + spa must get the mobile-first / responsive rules."""
+    for template in ("fullstack", "spa"):
+        sp = build_system_prompt(template)
+        assert "ЛАЙАУТ-ЖЁСТКОСТЬ" in sp, f"{template} missing layout block"
+
+
+def test_response_block_present_in_every_template() -> None:
+    """Every template — visual, backend, static — must include the
+    ФОРМАТ ОТВЕТА block so AI knows how to emit `<file>` / `<edit>` blocks."""
+    for template in ("fullstack", "spa", "tgbot", "api", "landing", "blank"):
+        sp = build_system_prompt(template)
+        assert "ФОРМАТ ОТВЕТА" in sp, f"{template} missing _RESPONSE"
+
+
+def test_backend_templates_omit_skill_brief() -> None:
+    """skill_brief is design-tooling — pointless for tgbot/api. Even when
+    a brief is passed (caller doesn't know), backend prompts must not
+    surface it (it'd just confuse the model)."""
+    brief = "PALETTE: primary #ff00ff fonts: Inter"
+    for template in ("tgbot", "api"):
+        sp = build_system_prompt(template, skill_brief=brief)
+        assert "#ff00ff" not in sp, f"{template} leaked skill brief"
+
+
 def test_build_messages_no_brief_when_project_id_absent() -> None:
     """Backward-compat: callers that don't pass project_id still work; the
     brief is silently skipped (or built without seed, but the upstream call
