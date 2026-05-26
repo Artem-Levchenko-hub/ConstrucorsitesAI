@@ -24,6 +24,7 @@ from omnia_orchestrator.core.docker_client import (
     exec_cmd,
     find_project_container,
     stop_container,
+    wake_container,
     write_files,
 )
 from omnia_orchestrator.core.errors import OrchestratorError
@@ -39,6 +40,7 @@ from omnia_orchestrator.schemas.runtime import (
     WakeResponse,
 )
 from omnia_orchestrator.services import builder, deploy_state, nginx_writer
+from omnia_orchestrator.services.hibernate import record_activity
 from omnia_orchestrator.services.port_allocator import get_port_allocator
 from omnia_orchestrator.services.provisioner import provision as provision_svc
 
@@ -72,19 +74,72 @@ async def provision(
 @router.post("/wake", response_model=WakeResponse)
 async def wake(
     payload: WakeRequest,
+    slug: str | None = None,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WakeResponse:
-    """Resume a hibernated container. `pause` → unpause (fast). `stopped` →
-    docker start (slow cold). Returns expected ready-in-seconds.
+    """Resume a hibernated container. `paused` → unpause (~1-3 s, Pro tier).
+    `exited` → docker start (~30-60 s cold, Free tier). Already-running is a
+    no-op that returns ready=0.
 
-    Idempotent: if container is already running, returns state=running, ready=0.
+    Resets the project's hibernate idle timer so the next sweep (60 s later)
+    doesn't pause the container right back. Without this, a user clicking
+    "wake" during an active session could see the preview die mid-edit when
+    the sweeper read a stale `last_activity` from before the wake. The
+    `slug` query param is an optional fallback for callers that don't yet
+    label-resolve (same pattern as /stop and /status).
     """
     _verify_token(x_internal_token)
-    raise OrchestratorError(
-        code="internal_error",
-        message="wake not yet implemented (sprint A1)",
-        status_code=501,
+
+    name = await find_project_container(str(payload.project_id), kind="dev")
+    if name is None and slug:
+        name = f"omnia-dev-{slug}"
+    if name is None:
+        raise OrchestratorError(
+            code="not_found",
+            message="no dev container for this project — provision first",
+            status_code=404,
+        )
+
+    info = await docker_container_status(name)
+    state = info["state"]
+
+    if state == "running":
+        await record_activity(str(payload.project_id))
+        return WakeResponse(
+            project_id=payload.project_id,
+            state="running",
+            ready_in_seconds=0,
+        )
+
+    await wake_container(name)
+    await record_activity(str(payload.project_id))
+
+    # paused → unpause is near-instant; cold start ~30-60 s for Next.js dev
+    # mode (first compile). Caller polls /status for the real readiness.
+    ready = 2 if state == "paused" else 45
+    return WakeResponse(
+        project_id=payload.project_id,
+        state="running",
+        ready_in_seconds=ready,
     )
+
+
+@router.post("/{project_id}/heartbeat")
+async def heartbeat(
+    project_id: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, str]:
+    """Reset the hibernate idle timer for a project — HTTP fallback for the
+    Redis `activity:<project_id>` pub-sub channel.
+
+    Steady-state production publishes activity from the ingress proxy to
+    Redis (one less round-trip). This endpoint exists for environments
+    without Redis (tests, bare-metal docker-compose) and for apps/api to
+    use directly if its proxy already touches the orchestrator anyway.
+    """
+    _verify_token(x_internal_token)
+    await record_activity(project_id)
+    return {"state": "recorded"}
 
 
 @router.post("/stop", response_model=WakeResponse)

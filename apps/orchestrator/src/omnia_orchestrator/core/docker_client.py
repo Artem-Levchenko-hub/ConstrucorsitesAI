@@ -40,6 +40,7 @@ class ContainerSpec:
     network_name: str | None = None  # `proj-<id>` for per-project isolation
     kind: str = "dev"  # `omnia.kind` label — "dev" or "prod"
     restart_policy_name: str = "no"  # "unless-stopped" for deployed prod
+    tier: str = "free"  # `omnia.tier` label — drives hibernate pause/stop policy
 
 
 _client: docker.DockerClient | None = None
@@ -109,6 +110,7 @@ async def start_container(spec: ContainerSpec) -> str:
                 labels={
                     "omnia.project_id": spec.project_id,
                     "omnia.kind": spec.kind,
+                    "omnia.tier": spec.tier,
                 },
             )
         except docker.errors.ImageNotFound as exc:
@@ -414,6 +416,51 @@ async def destroy_container(name: str) -> None:
             raise OrchestratorError(
                 code="container_failure",
                 message=f"remove failed for {name}: {exc}",
+                status_code=500,
+            ) from exc
+
+    await asyncio.to_thread(_do)
+
+
+async def wake_container(name: str) -> None:
+    """Resume a hibernated dev container.
+
+    Handles every reachable state: paused → unpause (instant), exited /
+    created → start (cold boot, 30-60 s on Next.js), running → no-op.
+    The original `containers.run(...)` config (env, mounts, ports, network)
+    is preserved by Docker across stop, so a plain `.start()` brings the
+    project back identically.
+
+    Raises 404 only when the container truly doesn't exist — the caller
+    should re-provision rather than wake.
+    """
+    log.info("docker.wake_container", name=name)
+
+    def _do() -> None:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound as exc:
+            raise OrchestratorError(
+                code="not_found",
+                message=f"container not found: {name}",
+                status_code=404,
+            ) from exc
+        c.reload()
+        status = c.status
+        try:
+            if status == "paused":
+                c.unpause()
+            elif status in ("exited", "created"):
+                c.start()
+            # running → no-op
+        except docker.errors.APIError as exc:
+            msg = str(exc).lower()
+            if any(t in msg for t in ("not paused", "already", "304")):
+                return  # idempotency race
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"wake failed for {name}: {exc}",
                 status_code=500,
             ) from exc
 

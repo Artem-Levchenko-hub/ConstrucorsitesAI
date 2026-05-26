@@ -173,6 +173,7 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         env=env,
         cpu_quota=1.0,
         memory_mb=2048,
+        tier=req.tier,
     )
 
     container_id = await start_container(spec)
