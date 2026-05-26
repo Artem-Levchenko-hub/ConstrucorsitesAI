@@ -1,0 +1,88 @@
+# app.omniadevelop.ru — Omnia.AI constructor (Next.js apps/web + FastAPI apps/api)
+#
+# Activate AFTER:
+#   1. DNS A app.omniadevelop.ru -> 170.168.72.200 propagates
+#   2. sudo certbot --nginx -d app.omniadevelop.ru
+# Then:
+#   sudo cp /etc/nginx/sites-available/app.omniadevelop.ru.template \
+#           /etc/nginx/sites-available/app.omniadevelop.ru
+#   sudo ln -s ../sites-available/app.omniadevelop.ru /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Also update /opt/omnia/apps/llm-gateway/deploy/full/.env:
+#   PUBLIC_ORIGIN=https://app.omniadevelop.ru
+#   WEB_BASE_URL=https://app.omniadevelop.ru
+#   GITHUB_CALLBACK_URL=https://app.omniadevelop.ru/api/github/callback
+#   JWT_COOKIE_DOMAIN=.omniadevelop.ru
+#   NEXT_PUBLIC_COOKIE_DOMAIN=.omniadevelop.ru
+# Then:
+#   cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose up -d --build web api
+#
+# And update the landing CTA target in /var/www/landing-omniadevelop/_omnia-cta.js:
+#   var BASE = "https://app.omniadevelop.ru";
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name app.omniadevelop.ru;
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        try_files $uri =404;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name app.omniadevelop.ru;
+
+    ssl_certificate     /etc/letsencrypt/live/app.omniadevelop.ru/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/app.omniadevelop.ru/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    client_max_body_size 25M;
+
+    # FastAPI WebSocket (chat streaming) — must come BEFORE the /api/ catch-all.
+    location /api/ws {
+        proxy_pass http://127.0.0.1:8200;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 86400s;
+    }
+
+    # FastAPI on :8200 (omnia-prod-api).
+    location /api/ {
+        proxy_pass http://127.0.0.1:8200;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # MinIO previews (public read) — same pattern as constructor.lead-generator.ru.
+    location /minio/ {
+        proxy_pass http://127.0.0.1:9000/;
+        proxy_set_header Host $host;
+    }
+
+    # Next.js on :3100 (omnia-prod-web).
+    location / {
+        proxy_pass http://127.0.0.1:3100;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
