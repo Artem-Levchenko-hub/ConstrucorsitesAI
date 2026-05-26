@@ -1,12 +1,12 @@
 import type { Metadata, Viewport } from "next";
-import { Onest, JetBrains_Mono } from "next/font/google";
+import { Inter_Tight, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 
-const onest = Onest({
+const interTight = Inter_Tight({
   subsets: ["latin", "cyrillic"],
-  variable: "--font-onest",
-  weight: ["300", "400", "500", "600", "700", "800"],
+  variable: "--font-inter-tight",
+  weight: ["400", "500", "600", "700"],
   display: "swap",
 });
 
@@ -107,7 +107,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0d0d12" },
+    { media: "(prefers-color-scheme: dark)", color: "#000000" },
   ],
   width: "device-width",
   initialScale: 1,
@@ -148,7 +148,7 @@ export default function RootLayout({
   return (
     <html
       lang="ru"
-      className={`dark ${onest.variable} ${jetbrainsMono.variable}`}
+      className={`dark ${interTight.variable} ${jetbrainsMono.variable}`}
     >
       <head>
         <script

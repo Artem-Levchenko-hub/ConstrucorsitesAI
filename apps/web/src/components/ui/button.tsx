@@ -13,12 +13,10 @@ const buttonVariants = cva(
           "bg-surface-raised text-fg-primary border border-border-default hover:border-border-strong",
         ghost: "text-fg-primary hover:bg-surface-raised",
         danger: "bg-danger text-fg-on-accent hover:opacity-90",
-        // Magnetic primary CTA — mirrors landing `.om-btn-primary-mag`:
-        // violet gradient + glow shadow, fully rounded pill, slight lift on hover.
         "pill-primary":
-          "rounded-full bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] text-white shadow-[0_20px_50px_-16px_rgba(124,92,255,0.7),inset_0_0_0_1px_rgba(255,255,255,0.08)] hover:shadow-[0_24px_60px_-14px_rgba(124,92,255,0.85),inset_0_0_0_1px_rgba(255,255,255,0.12)] hover:-translate-y-px",
+          "rounded-full bg-accent text-accent-fg hover:bg-accent-hover active:scale-[0.98] transition-transform",
         "pill-secondary":
-          "rounded-full bg-surface-glass text-fg-primary border border-border-default backdrop-blur-md hover:border-border-strong hover:bg-surface-overlay",
+          "rounded-full bg-surface-raised text-fg-primary border border-border-default hover:border-border-strong hover:bg-surface-overlay",
       },
       size: {
         sm: "h-8 px-3 text-xs",
