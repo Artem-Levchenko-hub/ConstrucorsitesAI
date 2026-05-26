@@ -17,6 +17,7 @@ from omnia_orchestrator.core.errors import (
     orchestrator_error_handler,
     unhandled_error_handler,
 )
+from omnia_orchestrator.core.sentry import init_sentry
 from omnia_orchestrator.routers import health, runtime
 from omnia_orchestrator.services.hibernate import (
     start_hibernate_loop,
@@ -34,7 +35,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    # TODO sprint A1: init_sentry() — copy pattern from apps/api/core/sentry.py.
+    # Sentry first — so any FastAPI / Starlette integration patches happen
+    # before routers are registered. No-op when SENTRY_DSN is unset.
+    init_sentry()
     app = FastAPI(
         title="Omnia.AI Orchestrator",
         version="0.0.1",
