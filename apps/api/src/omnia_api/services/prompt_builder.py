@@ -1514,6 +1514,96 @@ _CHART_SIGNAL_TOKENS = frozenset({
 })
 
 
+# Phase J — vertical detection for `lookup_micro_copy` seeding.
+#
+# Maps the matched-palette `product_type` (the English row label from
+# `colors.csv`) to one of the 10 Phase-J verticals. Substring-based and
+# ordered most-specific-first so e.g. "Real Estate" lands on realestate
+# before "Estate" could accidentally match anything else. None means
+# "no vertical match" → caller skips micro_copy injection.
+_PRODUCT_TYPE_TO_VERTICAL: tuple[tuple[str, str], ...] = (
+    ("real estate", "realestate"),
+    ("property",    "realestate"),
+    ("fitness",     "fitness"),
+    ("gym",         "fitness"),
+    ("workout",     "fitness"),
+    ("saas",        "saas"),
+    ("dashboard",   "saas"),
+    ("crm",         "saas"),
+    ("erp",         "saas"),
+    ("b2b",         "saas"),
+    ("medical",     "medical"),
+    ("clinic",      "medical"),
+    ("healthcare",  "medical"),
+    ("pharmacy",    "medical"),
+    ("dental",      "medical"),
+    ("legal",       "legal"),
+    ("law",         "legal"),
+    ("attorney",    "legal"),
+    ("restaurant",  "food"),
+    ("cafe",        "food"),
+    ("bakery",      "food"),
+    ("food",        "food"),
+    ("course",      "education"),
+    ("learning",    "education"),
+    ("school",      "education"),
+    ("e-learning",  "education"),
+    ("childcare",   "education"),
+    ("daycare",     "education"),
+    ("meditation",  "wellness"),
+    ("mindfulness", "wellness"),
+    ("spa",         "wellness"),
+    ("wellness",    "wellness"),
+    ("yoga",        "wellness"),
+    ("blog",        "media"),
+    ("news",        "media"),
+    ("magazine",    "media"),
+    ("media",       "media"),
+    ("e-commerce",  "commerce"),
+    ("ecommerce",   "commerce"),
+    ("shop",        "commerce"),
+    ("store",       "commerce"),
+)
+
+
+def _detect_vertical(product_type: str | None) -> str | None:
+    """Map a `colors.csv` product_type to one of the 10 Phase-J verticals.
+
+    Returns None when no substring matches — caller skips `lookup_micro_copy`
+    rather than seed with a wrong vertical (worse than no copy).
+    """
+    if not product_type:
+        return None
+    pt = product_type.lower()
+    for needle, vertical in _PRODUCT_TYPE_TO_VERTICAL:
+        if needle in pt:
+            return vertical
+    return None
+
+
+# Phase J — target (mobile vs. desktop) detection for `auto_nav_style`.
+# Mention of "app"/"приложение"/"mobile"/"iOS"/"Android" → mobile,
+# everything else → desktop (the default for landings/websites).
+_MOBILE_SIGNAL_TOKENS: tuple[str, ...] = (
+    "mobile", "ios", "android", "приложение", "приложения",
+    " app ", " app,", " app.", "the app",
+    "smartphone", "tablet",
+)
+
+
+def _detect_target(user_prompt: str) -> str:
+    """Heuristic: prompt mentions mobile/app → 'mobile'; else 'desktop'.
+
+    Whitespace-padded matches for `app` so we don't trip on `wrapper`,
+    `mapper`, etc. The other tokens are distinctive enough to substring-match.
+    """
+    lowered = " " + user_prompt.lower() + " "
+    for tok in _MOBILE_SIGNAL_TOKENS:
+        if tok in lowered:
+            return "mobile"
+    return "desktop"
+
+
 def _compute_skill_brief(
     user_prompt: str | None, project_id: str | None
 ) -> str | None:
@@ -1575,6 +1665,56 @@ def _compute_skill_brief(
         *tokens, severity="High", limit=5, seed=seed
     )
 
+    # ────────────────────────────────────────────────────────────────
+    # Phase J — derived Malewicz tokens. We compute concrete values
+    # (gradient hex pair, tinted shadow rgba, action labels, nav style)
+    # so cheap models like Haiku get CONCRETE tokens instead of having
+    # to apply abstract math from the Phase G rule block.
+    #
+    # Each derivation is wrapped in try/except — a single malformed
+    # palette hex must never block the whole brief. Failures degrade
+    # silently to None (block is just skipped in format_design_brief).
+    # ────────────────────────────────────────────────────────────────
+    primary_hex = palette["primary"] if palette is not None else None
+
+    gradient_pair = None
+    if primary_hex:
+        try:
+            gradient_pair = skill_library.derive_gradient_pair(primary_hex)
+        except ValueError:
+            gradient_pair = None
+
+    shadow_tint = None
+    if primary_hex:
+        try:
+            shadow_tint = skill_library.derive_shadow_tint(primary_hex)
+        except ValueError:
+            shadow_tint = None
+
+    micro_copy = None
+    vertical = _detect_vertical(
+        palette["product_type"] if palette is not None else None
+    )
+    if vertical:
+        try:
+            micro_copy = {
+                "save":      skill_library.lookup_micro_copy("save", vertical),
+                "subscribe": skill_library.lookup_micro_copy("subscribe", vertical),
+                "delete":    skill_library.lookup_micro_copy("delete", vertical),
+            }
+        except ValueError:
+            micro_copy = None
+
+    nav_style = None
+    try:
+        target = _detect_target(user_prompt)
+        nav_style = skill_library.auto_nav_style(target, tier="primary")
+        # Annotate with target so the rendered line reads
+        # "bottom-tabs (mobile primary)" — more legible for the model.
+        nav_style = f"{nav_style} ({target} primary)"
+    except ValueError:
+        nav_style = None
+
     brief = skill_library.format_design_brief(
         palette=palette,
         font_pairing=font_pairing,
@@ -1584,6 +1724,10 @@ def _compute_skill_brief(
         chart_types=chart_types,
         design_patterns=design_patterns,
         guidelines=guidelines,
+        gradient_pair=gradient_pair,
+        shadow_tint=shadow_tint,
+        micro_copy=micro_copy,
+        nav_style=nav_style,
     )
     return brief or None
 

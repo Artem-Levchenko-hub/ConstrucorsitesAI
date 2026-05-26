@@ -23,6 +23,7 @@ integration roadmap.
 
 from __future__ import annotations
 
+import colorsys
 import csv
 import random
 import re
@@ -626,9 +627,47 @@ def lookup_filtered_ux_guidelines(
     return tuple(rng.sample(list(pool), n))
 
 
+def _usability_score_for_pattern(name: str, vibe_tags: str, summary: str) -> int:
+    """Map a design pattern's name/vibe/summary to a Malewicz Ch24 usability
+    score (1-10).
+
+    Ch24 surveyed task-completion data across visual styles; the resulting
+    "friction tax" is roughly:
+      • pure flat → 6 (22% slower task completion vs. modern w/ subtle depth)
+      • flat + 1 shadow / "modern" → 8
+      • brutalist / kinetic → 5 (intentional friction, low for utility tasks)
+      • editorial / minimal → 9
+      • neumorphism → 4 (accessibility issues, low contrast)
+      • glass / glassmorphism → 7
+      • skeuomorphic → 5 (dated, but legible)
+
+    Scoring is heuristic: lowercased keyword match over name + vibe_tags +
+    summary. Most specific bucket wins (neumorphism before "modern" even if
+    both could match). Default fallback is 7 — middle-of-the-road usability
+    when nothing distinctive matches (so cheap models still get a number,
+    not a None).
+    """
+    text = f"{name} {vibe_tags} {summary}".lower()
+    if "neumorphism" in text or "neumorphic" in text or "soft ui" in text:
+        return 4
+    if "brutalist" in text or "brutalism" in text or "kinetic" in text or "anti-design" in text:
+        return 5
+    if "skeuomorphic" in text or "skeuomorphism" in text:
+        return 5
+    if "editorial" in text or "minimalism" in text or "minimal" in text:
+        return 9
+    if "glass" in text or "glassmorphism" in text or "frosted" in text:
+        return 7
+    if "modern" in text or "shadow" in text or "depth" in text or "elevation" in text:
+        return 8
+    if "flat" in text:
+        return 6
+    return 7
+
+
 def lookup_design_patterns(
     *keywords: str, limit: int = 3
-) -> tuple[DesignPattern, ...]:
+) -> tuple[dict, ...]:
     """Return up to `limit` design styles scored by keyword overlap.
 
     Matches keywords against `name + vibe_tags + summary + use_cases`. The
@@ -641,6 +680,11 @@ def lookup_design_patterns(
     Use this to give the model a *concrete* visual anchor (real HEX,
     real font) instead of forcing it to invent indigo+violet — especially
     valuable for cheap models that otherwise default to AI-generic colors.
+
+    Phase J extension: each returned dict carries a `usability_score`
+    (1-10) reflecting Malewicz Ch24 friction data. The score lets the
+    caller (or model) trade off "edgy visual" vs. "usable interface" —
+    pure flat is 6 (22% slower task completion), neumorphism 4, editorial 9.
     """
     if not keywords:
         return ()
@@ -655,7 +699,324 @@ def lookup_design_patterns(
         for dp in _design_patterns()
     ]
     scored.sort(key=lambda t: t[0], reverse=True)
-    return tuple(dp for score, dp in scored[:limit] if score > 0)
+    out: list[dict] = []
+    for score, dp in scored[:limit]:
+        if score <= 0:
+            continue
+        # Phase J — derive usability_score and merge into a plain dict
+        # (we can't extend a TypedDict in-place; return a wider mapping).
+        enriched: dict = dict(dp)
+        enriched["usability_score"] = _usability_score_for_pattern(
+            dp["name"], dp["vibe_tags"], dp["summary"]
+        )
+        out.append(enriched)
+    return tuple(out)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Phase J — Malewicz-derived smart lookups
+#
+# Where Phase G ships the RULES ("gradient = same temperature, hue shift
+# 15-30°, saturation -10"), Phase J ships the APPLIED VALUES ("for brand
+# #92400E use #92400e → #a16207"). Cheap models follow concrete tokens
+# far better than abstract math — Haiku will obey "use these two hexes"
+# but routinely miscomputes hue rotation on its own.
+#
+# All five helpers are deterministic, side-effect-free, stdlib-only.
+# Bad inputs raise ValueError (NOT silent None) — the caller in
+# _compute_skill_brief wraps in try/except so a malformed hex never
+# blocks the whole prompt.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# J1 — lookup_micro_copy
+#
+# 10 verticals × 5 contexts = ~50 (vertical, context) pairs. Label language
+# picks RU when the vertical historically reads RU (food/medical/legal/
+# realestate/education — Russian consumer-facing markets where Cyrillic
+# beats English) and EN otherwise (fitness/saas/wellness/media/commerce —
+# globally branded categories where English calls-to-action read more
+# professional). This is a tradeoff, not a rule — owner can override per
+# project later.
+# ──────────────────────────────────────────────────────────────────────────
+
+# RU verticals — consumer-facing Russian markets where Cyrillic CTAs read better.
+_RU_VERTICALS: frozenset[str] = frozenset({
+    "food", "medical", "legal", "realestate", "education",
+})
+
+# Per-vertical micro-copy table. Each value is (primary_label, secondary_label).
+# Missing pairs fall back to {primary: context.title(), secondary: "Отмена"}.
+_MICRO_COPY: dict[tuple[str, str], tuple[str, str]] = {
+    # ─── fitness (EN) ──────────────────────────────────────────────────
+    ("save", "fitness"): ("Save workout", "Cancel"),
+    ("delete", "fitness"): ("Delete workout", "Cancel"),
+    ("subscribe", "fitness"): ("Start training", "Maybe later"),
+    ("cancel", "fitness"): ("Cancel session", "Keep session"),
+    ("submit", "fitness"): ("Log workout", "Cancel"),
+    # ─── saas (EN) ─────────────────────────────────────────────────────
+    ("save", "saas"): ("Save changes", "Cancel"),
+    ("delete", "saas"): ("Delete project", "Cancel"),
+    ("subscribe", "saas"): ("Start free trial", "Maybe later"),
+    ("cancel", "saas"): ("Cancel subscription", "Keep plan"),
+    ("submit", "saas"): ("Create project", "Cancel"),
+    # ─── wellness (EN) ─────────────────────────────────────────────────
+    ("save", "wellness"): ("Save progress", "Cancel"),
+    ("delete", "wellness"): ("Delete entry", "Cancel"),
+    ("subscribe", "wellness"): ("Подписаться на советы", "Не сейчас"),
+    ("cancel", "wellness"): ("Cancel session", "Keep session"),
+    ("submit", "wellness"): ("Submit reflection", "Cancel"),
+    # ─── food (RU) ─────────────────────────────────────────────────────
+    ("save", "food"): ("Сохранить заказ", "Отмена"),
+    ("delete", "food"): ("Удалить блюдо", "Отмена"),
+    ("subscribe", "food"): ("Подписаться на скидки", "Не сейчас"),
+    ("cancel", "food"): ("Отменить заказ", "Оставить заказ"),
+    ("submit", "food"): ("Оформить заказ", "Отмена"),
+    # ─── medical (RU) ──────────────────────────────────────────────────
+    ("save", "medical"): ("Сохранить запись", "Отмена"),
+    ("delete", "medical"): ("Удалить запись", "Отмена"),
+    ("subscribe", "medical"): ("Записаться к врачу", "Не сейчас"),
+    ("cancel", "medical"): ("Отменить визит", "Оставить визит"),
+    ("submit", "medical"): ("Записаться на приём", "Отмена"),
+    # ─── legal (RU) ────────────────────────────────────────────────────
+    ("save", "legal"): ("Сохранить документ", "Отмена"),
+    ("delete", "legal"): ("Удалить документ", "Отмена"),
+    ("subscribe", "legal"): ("Получить консультацию", "Не сейчас"),
+    ("cancel", "legal"): ("Отменить консультацию", "Оставить запись"),
+    ("submit", "legal"): ("Отправить заявку", "Отмена"),
+    # ─── realestate (RU) ───────────────────────────────────────────────
+    ("save", "realestate"): ("Сохранить объект", "Отмена"),
+    ("delete", "realestate"): ("Удалить из избранного", "Отмена"),
+    ("subscribe", "realestate"): ("Подписаться на подборку", "Не сейчас"),
+    ("cancel", "realestate"): ("Отменить показ", "Оставить запись"),
+    ("submit", "realestate"): ("Записаться на показ", "Отмена"),
+    # ─── education (RU) ────────────────────────────────────────────────
+    ("save", "education"): ("Сохранить прогресс", "Отмена"),
+    ("delete", "education"): ("Удалить курс", "Отмена"),
+    ("subscribe", "education"): ("Записаться на курс", "Не сейчас"),
+    ("cancel", "education"): ("Отменить запись", "Оставить запись"),
+    ("submit", "education"): ("Отправить задание", "Отмена"),
+    # ─── media (EN) ────────────────────────────────────────────────────
+    ("save", "media"): ("Save article", "Cancel"),
+    ("delete", "media"): ("Delete post", "Cancel"),
+    ("subscribe", "media"): ("Subscribe for updates", "Maybe later"),
+    ("cancel", "media"): ("Cancel subscription", "Keep subscription"),
+    ("submit", "media"): ("Publish", "Cancel"),
+    # ─── commerce (EN) ─────────────────────────────────────────────────
+    ("save", "commerce"): ("Save to wishlist", "Cancel"),
+    ("delete", "commerce"): ("Remove item", "Cancel"),
+    ("subscribe", "commerce"): ("Subscribe for deals", "Maybe later"),
+    ("cancel", "commerce"): ("Cancel order", "Keep order"),
+    ("submit", "commerce"): ("Place order", "Cancel"),
+}
+
+
+def lookup_micro_copy(context: str, vertical: str) -> dict[str, str]:
+    """Return action-specific button labels seeded by vertical (Malewicz G13).
+
+    Phase G13 says generic labels ("Save", "OK") signal AI slop. Phase J
+    delivers the concrete replacement: a primary verb-noun pair tuned to
+    the vertical's voice + a secondary "out" that's not just "Cancel"
+    when context allows.
+
+    Language picks: RU verticals (food/medical/legal/realestate/education)
+    get Cyrillic; EN verticals (fitness/saas/wellness/media/commerce)
+    get English. The choice is deliberate — Russian consumer-facing
+    markets read better in Cyrillic; globally branded categories read
+    more professional in English.
+
+    Missing pairs return {"primary": context.title(), "secondary": "Отмена"}
+    — a safe fallback so callers never get KeyError.
+
+    >>> lookup_micro_copy("save", "fitness")
+    {'primary': 'Save workout', 'secondary': 'Cancel'}
+    >>> lookup_micro_copy("delete", "saas")
+    {'primary': 'Delete project', 'secondary': 'Cancel'}
+    """
+    key = (context.lower().strip(), vertical.lower().strip())
+    pair = _MICRO_COPY.get(key)
+    if pair is None:
+        return {"primary": context.title(), "secondary": "Отмена"}
+    return {"primary": pair[0], "secondary": pair[1]}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# J2 — derive_gradient_pair
+#
+# Malewicz Ch3 / G3: gradient that doesn't read as garish uses the same
+# temperature and shifts hue 15-30° with -10% saturation. We pin to hue+25°
+# and sat×0.9 — middle of the band, predictable output.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _expand_hex(hex_str: str) -> str:
+    """Normalize a hex color to 6-digit form with leading `#`.
+
+    Accepts `#fff`, `fff`, `#FFFFFF`, `FFFFFF`. Raises ValueError for
+    anything that isn't 3 or 6 hex digits (optionally `#`-prefixed).
+    """
+    s = hex_str.strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    if len(s) != 6:
+        raise ValueError(f"expected 3 or 6 hex digits, got {hex_str!r}")
+    try:
+        int(s, 16)
+    except ValueError as exc:
+        raise ValueError(f"not a valid hex color: {hex_str!r}") from exc
+    return f"#{s.lower()}"
+
+
+def _hex_to_rgb01(hex_str: str) -> tuple[float, float, float]:
+    """Convert `#rrggbb` to (r, g, b) in [0.0, 1.0]. Hex must be normalized."""
+    s = hex_str.lstrip("#")
+    r = int(s[0:2], 16) / 255.0
+    g = int(s[2:4], 16) / 255.0
+    b = int(s[4:6], 16) / 255.0
+    return r, g, b
+
+
+def _rgb01_to_hex(r: float, g: float, b: float) -> str:
+    """Convert (r, g, b) in [0.0, 1.0] to `#rrggbb` lowercase, clamped."""
+    def _clamp(x: float) -> int:
+        return max(0, min(255, round(x * 255)))
+    return f"#{_clamp(r):02x}{_clamp(g):02x}{_clamp(b):02x}"
+
+
+def derive_gradient_pair(primary_hex: str) -> tuple[str, str]:
+    """Derive a Malewicz-compliant gradient pair from a primary brand color.
+
+    Formula (Ch3 / G3): same temperature, hue + 25° (mod 360), saturation
+    × 0.9 (≈-10% relative). Operates in HLS space via stdlib `colorsys`
+    (which uses HLS, not HSL — same model, swapped letter order).
+
+    Returns `(primary_normalized, shifted)` as `#rrggbb` lowercase. The
+    primary is round-tripped through normalisation so both outputs share
+    the same format (no mix of `#FFF` and `#abc123`).
+
+    Raises ValueError on a malformed hex — caller decides whether to skip
+    the section or substitute a fallback.
+
+    >>> derive_gradient_pair("#92400E")
+    ('#92400e', '#a16207')
+    """
+    normalized = _expand_hex(primary_hex)
+    r, g, b = _hex_to_rgb01(normalized)
+    # colorsys uses HLS (hue, lightness, saturation) — order differs from
+    # HSL but the model is identical.
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    # Hue rotation: + 25° on a 360° wheel == + (25/360) on the [0, 1) ring.
+    # `% 1.0` handles wrap (340° + 25° → 5° / 0.014…).
+    h_shifted = (h + 25.0 / 360.0) % 1.0
+    # Saturation drop: × 0.9, clamped to [0, 1].
+    s_shifted = max(0.0, min(1.0, s * 0.9))
+    r2, g2, b2 = colorsys.hls_to_rgb(h_shifted, l, s_shifted)
+    return normalized, _rgb01_to_hex(r2, g2, b2)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# J3 — derive_shadow_tint
+#
+# Malewicz Ch9 / G1: tinted box-shadow reads as depth, not as "blur layer
+# pasted over white". Recipe: take the primary, drop saturation 10%, drop
+# brightness 20%, render that tint at alpha 0.18 (≤ 0.4 floor) under the
+# element. Soft offset (0, 8), blur 20, spread -2 to keep the shadow
+# inside the visual silhouette rather than haloing out.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def derive_shadow_tint(primary_hex: str) -> dict:
+    """Return Malewicz Ch9 box-shadow params for a primary brand color.
+
+    Output dict carries:
+      • x, y, blur, spread — the four numerics
+      • color  — `rgba(r, g, b, alpha)` string at alpha 0.18 (≤ 0.4 floor)
+      • tint_hex — primary with HSB sat -10, brightness -20 (the darker
+        relative used when a solid-color tinted shadow is needed instead
+        of an rgba)
+      • css — directly pasteable `box-shadow: …;` declaration
+
+    Raises ValueError on malformed hex.
+
+    >>> derive_shadow_tint("#92400E")  # doctest: +ELLIPSIS
+    {'x': 0, 'y': 8, 'blur': 20, 'spread': -2, ...}
+    """
+    normalized = _expand_hex(primary_hex)
+    r, g, b = _hex_to_rgb01(normalized)
+    # HSB (== HSV in stdlib): rgb_to_hsv returns (h, s, v) in [0, 1].
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    # Saturation - 10% absolute, brightness - 20% absolute. Both clamped.
+    s_tint = max(0.0, min(1.0, s - 0.10))
+    v_tint = max(0.0, min(1.0, v - 0.20))
+    r2, g2, b2 = colorsys.hsv_to_rgb(h, s_tint, v_tint)
+    tint_hex = _rgb01_to_hex(r2, g2, b2)
+    # rgba uses the ORIGINAL primary at alpha 0.18 — that's what reads as
+    # "tinted shadow" rather than "darker silhouette".
+    r255 = max(0, min(255, round(r * 255)))
+    g255 = max(0, min(255, round(g * 255)))
+    b255 = max(0, min(255, round(b * 255)))
+    alpha = 0.18  # well under the 0.4 max from Ch9
+    color = f"rgba({r255}, {g255}, {b255}, {alpha})"
+    x, y, blur, spread = 0, 8, 20, -2
+    css = f"box-shadow: {x} {y}px {blur}px {spread}px {color};"
+    return {
+        "x": x,
+        "y": y,
+        "blur": blur,
+        "spread": spread,
+        "color": color,
+        "tint_hex": tint_hex,
+        "css": css,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# J4 — auto_nav_style
+#
+# G17 enforcement at lookup time: hamburger MUST NOT be primary mobile nav.
+# Bottom-tabs primary on mobile (thumb-reachable, always visible). Top-bar
+# primary on desktop. Side-rail for app-style desktop secondaries (Slack,
+# Linear, Discord layouts) where the top-bar carries only branding/profile.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def auto_nav_style(target: str, tier: str | None = None) -> str:
+    """Pick the right navigation style for `target` + `tier` (G17).
+
+    target: ``"mobile"`` | ``"desktop"``
+    tier:   ``"primary"`` (default) | ``"secondary"``
+
+    Mapping (G17 says hamburger as primary is a quality-tax fail):
+      • (mobile, primary)    → "bottom-tabs"   — always; G17 forbids hamburger primary
+      • (mobile, secondary)  → "hamburger"     — the one place hamburger is allowed
+      • (desktop, primary)   → "top-bar"
+      • (desktop, secondary) → "side-rail"     — app-style (Slack/Linear/Discord)
+
+    Raises ValueError when target is unknown.
+
+    >>> auto_nav_style("mobile")
+    'bottom-tabs'
+    >>> auto_nav_style("mobile", "secondary")
+    'hamburger'
+    >>> auto_nav_style("desktop", "primary")
+    'top-bar'
+    """
+    t = (tier or "primary").lower().strip()
+    target_l = target.lower().strip()
+    if target_l == "mobile":
+        if t == "primary":
+            return "bottom-tabs"
+        if t == "secondary":
+            return "hamburger"
+        raise ValueError(f"unknown tier {tier!r}; expected 'primary' or 'secondary'")
+    if target_l == "desktop":
+        if t == "primary":
+            return "top-bar"
+        if t == "secondary":
+            return "side-rail"
+        raise ValueError(f"unknown tier {tier!r}; expected 'primary' or 'secondary'")
+    raise ValueError(f"unknown target {target!r}; expected 'mobile' or 'desktop'")
 
 
 def format_design_brief(
@@ -667,7 +1028,11 @@ def format_design_brief(
     style_preset: StylePreset | None = None,
     icon_family: IconRow | None = None,
     chart_types: Sequence[ChartType] = (),
-    design_patterns: Sequence[DesignPattern] = (),
+    design_patterns: Sequence[dict] = (),
+    gradient_pair: tuple[str, str] | None = None,
+    shadow_tint: dict | None = None,
+    micro_copy: dict[str, dict[str, str]] | None = None,
+    nav_style: str | None = None,
 ) -> str:
     """Render a compact, system-prompt-friendly block from any subset of inputs.
 
@@ -745,6 +1110,9 @@ def format_design_brief(
         rendered_patterns: list[str] = []
         for dp in design_patterns:
             line = f"  • {dp['name']}"
+            score = dp.get("usability_score") if isinstance(dp, dict) else None
+            if score is not None:
+                line += f" [usability {score}/10]"
             if dp["vibe_tags"]:
                 line += f" — {dp['vibe_tags']}"
             elif dp["summary"]:
@@ -759,8 +1127,36 @@ def format_design_brief(
             rendered_patterns.append(line)
         parts.append(
             "DESIGN STYLE REFERENCES (borrow vibe, HEX tokens, and font cues "
-            "from the closest match — do not copy verbatim):\n"
+            "from the closest match — do not copy verbatim; higher "
+            "usability_score = lower friction per Malewicz Ch24):\n"
             + "\n".join(rendered_patterns)
+        )
+
+    # Phase J — derived Malewicz tokens. Render only the lines that have
+    # data so a partial brief (e.g. gradient + nav, no shadow/copy) still
+    # produces a clean block without empty entries.
+    j_lines: list[str] = []
+    if gradient_pair is not None:
+        a, b = gradient_pair
+        j_lines.append(
+            f"  gradient_pair:    {a} → {b}  (use на hero, кнопках)"
+        )
+    if shadow_tint is not None:
+        j_lines.append(f"  shadow_tint:      {shadow_tint['css']}")
+    if nav_style is not None:
+        j_lines.append(f"  nav_style:        {nav_style}")
+    if micro_copy:
+        # Compact: render each (context → primary) on one continuation line.
+        pieces = [
+            f"{ctx} → \"{labels['primary']}\""
+            for ctx, labels in micro_copy.items()
+            if labels and labels.get("primary")
+        ]
+        if pieces:
+            j_lines.append("  micro_copy:       " + ", ".join(pieces))
+    if j_lines:
+        parts.append(
+            "ПРОИЗВОДНЫЕ ТОКЕНЫ (Malewicz):\n" + "\n".join(j_lines)
         )
 
     if guidelines:

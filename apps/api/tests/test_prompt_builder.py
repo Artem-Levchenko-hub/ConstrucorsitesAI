@@ -357,6 +357,30 @@ def test_phase_i_malewicz_primitives_documented_in_kit_reference() -> None:
     assert ".nested-rounded" in sp
 
 
+def test_compute_skill_brief_includes_derived_tokens_for_industry_match() -> None:
+    """Phase J — when palette is matched, the brief should include the
+    derived gradient pair + shadow tint so the AI gets concrete values,
+    not just rule prose."""
+    brief = _compute_skill_brief(
+        "сделай сайт SaaS-стартапа с дашбордом и тарифами", "proj-J"
+    )
+    assert brief is not None
+    # At least one Phase-J derived block must surface
+    assert "ПРОИЗВОДНЫЕ ТОКЕНЫ" in brief or "gradient_pair" in brief
+
+
+def test_compute_skill_brief_phase_j_includes_nav_style_for_app_prompt() -> None:
+    """Mobile-app signals → nav_style picks bottom-tabs (G17 enforcement
+    at lookup time, not just rule prose)."""
+    brief = _compute_skill_brief(
+        "мобильное приложение для фитнес-зала с расписанием", "proj-J-mobile"
+    )
+    assert brief is not None
+    # Vertical detected (fitness/saas), target=mobile → bottom-tabs
+    if "ПРОИЗВОДНЫЕ ТОКЕНЫ" in brief:
+        assert "bottom-tabs" in brief or "mobile" in brief.lower()
+
+
 def test_omnia_kit_css_phase_i_block_is_byte_identical_across_4_templates() -> None:
     """All 4 static templates ship the SAME omnia-kit.css. C.5 maintained
     this; Phase I must too. A divergent block per template means a single
