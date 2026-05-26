@@ -17,13 +17,22 @@ import {
   type AssistantPart,
 } from "@/lib/parse-assistant";
 import { SelectedChips } from "./SelectedChips";
+import { PassProgressBar } from "./PassProgressBar";
 
 export function ChatMessage({
   message,
   streaming,
+  projectId,
 }: {
   message: Message;
   streaming?: boolean;
+  /**
+   * Required for the B.3 multipass progress bar — it subscribes to
+   * `["passes", projectId, message.id]` in React Query cache. Optional
+   * so callers can omit it for non-streaming chat replays / e2e
+   * screenshots, in which case the progress bar simply never renders.
+   */
+  projectId?: string;
 }) {
   const isUser = message.role === "user";
   const parts: AssistantPart[] = isUser
@@ -67,6 +76,10 @@ export function ChatMessage({
         </div>
 
         <div className="text-sm text-fg-primary leading-6 space-y-1.5">
+          {!isUser && streaming && projectId && (
+            <PassProgressBar projectId={projectId} messageId={message.id} />
+          )}
+
           {parts.map((p, i) =>
             p.kind === "text" ? (
               <div

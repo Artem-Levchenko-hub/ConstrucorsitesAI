@@ -22,6 +22,11 @@ def test_static_prompt_includes_style_and_animation_kit() -> None:
     # survives any preset-roster churn.
     assert "ВИЗУАЛЬНЫЙ СТИЛЬ" in sp
     assert "data-reveal-delay" in sp  # _ANIMATION_KIT class API
+    # Phase C.5 — Color grading utilities documented in _KIT_V3_REFERENCE.
+    # Three families, one assert each — catches accidental block removal.
+    assert ".tone-warm" in sp  # image filter family
+    assert ".atmosphere-noir" in sp  # body-overlay family
+    assert ".grain-heavy" in sp  # film-grain family
 
 
 def test_fullstack_prompt_excludes_static_kit() -> None:

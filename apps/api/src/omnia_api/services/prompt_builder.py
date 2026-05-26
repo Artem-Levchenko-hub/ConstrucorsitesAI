@@ -325,6 +325,33 @@ generic AI-лендинг 2023 года; с ними — современный 
   .cursor-trail — JS сам инжектит на desktop, скрывает на touch / reduced-motion.
   data-cursor="link" / "text" — body-атрибут JS ставит автоматом над <a> и <input>.
 
+▸ COLOR GRADING (Phase C.5 — cinematic tone, atmosphere, film grain.
+  Превращает дефолтную фотку и фон в Awwwards-кадр одной строкой):
+
+  Image filters — на <img>, <video>, hero-секцию (cinematic LUT-эквиваленты):
+    .tone-warm        sepia+теплый hue → кофейни, рестораны, autumn brand, food
+    .tone-cool        cold shift → fintech, healthcare, winter, tech-product
+    .tone-monochrome  grayscale+contrast → luxury, photography, editorial, journalism
+
+  Atmosphere — навешивай на <body> (создаёт fixed overlay ::after):
+    .atmosphere-dawn   мягкое тёплое сияние сверху (закат/восход) — wellness, food
+    .atmosphere-night  глубокий синий vignette → cinematic dark, gaming, tech
+    .atmosphere-noir   high-contrast b&w letterbox → film noir, editorial portfolio
+
+  Film grain — три уровня:
+    .grain        тонкий universal (existing, opacity .05) — default editorial polish
+    .film-grain   editorial multiply (existing, multiply mode) — warm vintage feel
+    .grain-heavy  кинематографичный (opacity .14 overlay) — only for moody hero pages
+
+  ПРАВИЛА:
+    • МАКСИМУМ 1 .atmosphere-* на страницу — больше = грязь.
+    • МАКСИМУМ 1 grain-вариант на страницу — наслоение даёт мусор.
+    • Editorial preset = .tone-monochrome + .atmosphere-noir + .grain (light).
+    • Brand-сайт = только .tone-warm/cool на ключевых фото, БЕЗ atmosphere.
+    • Cinematic gaming/tech = .atmosphere-night + .grain-heavy + tone-cool на hero.
+    • НЕ применять .tone-monochrome на цветной фирменный лого/брендовое фото — убьёт identity.
+    • prefers-reduced-motion: grain автоматически скрыт (CSS-guard в kit).
+
 КОГДА ПРИМЕНЯТЬ ЭТИ КЛАССЫ:
   ✓ SaaS, портфолио, агентства, ивенты, e-commerce, lifestyle — да, активно
   ✓ Wellness, медицина с упором на современность — да, осторожно (1-2 приёма)
@@ -1472,12 +1499,19 @@ def _compute_skill_brief(
     if any(sig in lowered for sig in _CHART_SIGNAL_TOKENS):
         chart_types = skill_library.lookup_chart_types(*tokens, limit=2)
 
-    # Always emit 5 high-severity UX guidelines so the model has concrete,
-    # actionable rules to follow even when the palette/font lookups miss.
-    # Seed on project_id so the same project always sees the same rules.
+    # Top-3 design-style references from the curated `design.csv` corpus.
+    # Each pattern compresses to ~150 bytes (name, vibe, 4-6 HEX, font) so
+    # the whole block fits in <600 bytes — cheap models get concrete visual
+    # anchors instead of inventing indigo+violet.
+    design_patterns = skill_library.lookup_design_patterns(*tokens, limit=3)
+
+    # 5 high-severity UX guidelines, scored by keyword overlap against the
+    # prompt and padded with seed-deterministic random picks when nothing
+    # matches. Seed on project_id so the same project always sees the same
+    # rules across re-prompts.
     seed = hash(project_id) if project_id else 0
-    guidelines = skill_library.random_ux_guidelines(
-        severity="High", limit=5, seed=seed
+    guidelines = skill_library.lookup_filtered_ux_guidelines(
+        *tokens, severity="High", limit=5, seed=seed
     )
 
     brief = skill_library.format_design_brief(
@@ -1487,6 +1521,7 @@ def _compute_skill_brief(
         style_preset=style_preset,
         icon_family=icon_family,
         chart_types=chart_types,
+        design_patterns=design_patterns,
         guidelines=guidelines,
     )
     return brief or None

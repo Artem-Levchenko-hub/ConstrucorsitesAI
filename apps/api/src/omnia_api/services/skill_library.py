@@ -1,10 +1,11 @@
 """Loaders for the vendored `ui-ux-pro-max` skill in `apps/api/skills/`.
 
 R-01 (deep module): callers see a small set of helpers — `lookup_palette`,
-`lookup_font_pairing`, `random_ux_guidelines`, `lookup_landing_pattern`,
-`lookup_style_preset`, `lookup_icon_family`, `lookup_chart_types`,
-`format_design_brief`. CSV parsing, in-memory caching, and the path
-layout to `skills/ui-ux-pro-max/` are all private.
+`lookup_font_pairing`, `random_ux_guidelines`, `lookup_filtered_ux_guidelines`,
+`lookup_landing_pattern`, `lookup_style_preset`, `lookup_icon_family`,
+`lookup_chart_types`, `lookup_design_patterns`, `format_design_brief`.
+CSV parsing, in-memory caching, and the path layout to
+`skills/ui-ux-pro-max/` are all private.
 
 R-04 (different code at different layers): this module reads CSVs as the
 source of truth. The data lives at runtime under `apps/api/skills/`; on dev
@@ -24,6 +25,7 @@ from __future__ import annotations
 
 import csv
 import random
+import re
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -148,6 +150,26 @@ class ChartType(TypedDict):
     when_not: str
     color_guidance: str
     library: str
+
+
+class DesignPattern(TypedDict):
+    """One style block parsed out of `design.csv`.
+
+    The file is not strict CSV — it's a hand-written reference document
+    where each style starts with `Name（中文名）` followed by a Chinese
+    summary, use-cases, and an optional `<design-system>` block with
+    English design-token DNA (vibe, HEX palette, font family). We compress
+    each block into ~6 short fields so a top-3 selection costs <600 bytes
+    in the system prompt — but gives the model concrete visual anchors
+    (real HEX, real font) instead of forcing it to invent indigo+violet.
+    """
+
+    name: str            # English style name (e.g. "Bauhaus", "Cyberpunk")
+    summary: str         # One-line philosophy / core concept
+    vibe_tags: str       # Emotional keywords (e.g. "Tactile, Bold, Geometric")
+    color_tokens: str    # Up to 6 HEX values, comma-joined
+    typography: str      # Font family + optional weight hints
+    use_cases: str       # Free-text alias for keyword matching (ru/zh/en)
 
 
 @lru_cache(maxsize=1)
@@ -285,6 +307,96 @@ def _chart_types() -> tuple[ChartType, ...]:
                 )
             )
     return tuple(rows)
+
+
+_STYLE_HEADER_RE = re.compile(r'^"?([A-Z][A-Za-z0-9 /+\-]+)（([^）]+)）"?\s*$')
+_HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}\b")
+_VIBE_LABELS = ("Vibe:", "Emotional Keywords:", "Visual Vibe:")
+_SUMMARY_LABELS = (
+    "Core Concept:",
+    "Core Principle:",
+    "Core Idea:",
+    "Design Philosophy:",
+    "The Pocket",
+    "The mobile",
+)
+_FONT_LABELS = ("Font Family:", "Font:", "Primary Font:")
+
+
+def _strip_bullet(line: str) -> str:
+    """Drop common bullet prefixes used in `design.csv` (`●`, `○`, dashes)."""
+    return line.strip().lstrip("●○•-·　 \t").strip()
+
+
+@lru_cache(maxsize=1)
+def _design_patterns() -> tuple[DesignPattern, ...]:
+    """Parse `design.csv` into one `DesignPattern` per style block.
+
+    Strategy: scan line-by-line for the `Name（中文名）` header pattern;
+    each header opens a block that ends at the next header (or EOF).
+    Inside the block we cherry-pick the vibe line, the first English
+    summary line, the first 6 unique HEX tokens, and the font family.
+
+    Failures are localised — if a block has no HEX or no vibe we still
+    emit a record with whatever we found. The function is wrapped in
+    `lru_cache` so the regex pass runs exactly once per process.
+    """
+    path = _SKILL_DATA / "design.csv"
+    if not path.exists():
+        return ()
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+
+    headers: list[tuple[int, str, str]] = []
+    for i, raw in enumerate(lines):
+        m = _STYLE_HEADER_RE.match(raw)
+        if m:
+            headers.append((i, m.group(1).strip(), m.group(2).strip()))
+
+    patterns: list[DesignPattern] = []
+    for idx, (start, en_name, zh_name) in enumerate(headers):
+        end = headers[idx + 1][0] if idx + 1 < len(headers) else len(lines)
+        block_lines = lines[start:end]
+        block_text = "\n".join(block_lines)
+
+        vibe = ""
+        summary = ""
+        font = ""
+        for raw in block_lines:
+            stripped = _strip_bullet(raw)
+            if not vibe and stripped.startswith(_VIBE_LABELS):
+                vibe = stripped.split(":", 1)[1].strip().rstrip(".")
+            if not summary and stripped.startswith(_SUMMARY_LABELS):
+                if ":" in stripped:
+                    summary = stripped.split(":", 1)[1].strip()
+                else:
+                    summary = stripped
+                summary = summary[:240].rstrip()
+            if not font and stripped.startswith(_FONT_LABELS):
+                font = stripped.split(":", 1)[1].strip().rstrip(".")
+            if vibe and summary and font:
+                break
+
+        hexes: list[str] = []
+        for h in _HEX_RE.findall(block_text):
+            up = h.upper()
+            if up not in hexes:
+                hexes.append(up)
+            if len(hexes) >= 6:
+                break
+
+        patterns.append(
+            DesignPattern(
+                name=en_name,
+                summary=summary,
+                vibe_tags=vibe,
+                color_tokens=", ".join(hexes),
+                typography=font,
+                use_cases=zh_name,
+            )
+        )
+
+    return tuple(patterns)
 
 
 @lru_cache(maxsize=1)
@@ -463,6 +575,89 @@ def random_ux_guidelines(
     return tuple(rng.sample(list(pool), n))
 
 
+def lookup_filtered_ux_guidelines(
+    *keywords: str,
+    severity: str | None = "High",
+    limit: int = 5,
+    seed: int | None = None,
+) -> tuple[UxGuideline, ...]:
+    """Pick UX guidelines relevant to the request rather than random.
+
+    Scores every rule of the requested severity by keyword overlap against
+    `category + issue + description`. When the prompt has no industry/UX
+    signal at all (no scoring hits), falls back to `random_ux_guidelines`
+    so the model still receives `limit` must-follow rules — never zero.
+    When some keywords score but fewer than `limit` rules hit, pads with
+    seed-deterministic random picks so the brief is always exactly `limit`
+    rules wide and stable across re-prompts of the same project.
+    """
+    pool = _ux_guidelines()
+    if severity is not None:
+        pool = tuple(g for g in pool if g["severity"].lower() == severity.lower())
+    if not pool:
+        return ()
+
+    if keywords:
+        scored = [
+            (
+                _score_match(
+                    f"{g['category']} {g['issue']} {g['description']}",
+                    keywords,
+                ),
+                g,
+            )
+            for g in pool
+        ]
+        scored.sort(key=lambda t: t[0], reverse=True)
+        hits = tuple(g for score, g in scored[:limit] if score > 0)
+        if hits:
+            if len(hits) >= limit:
+                return hits
+            seen = {(g["category"], g["issue"]) for g in hits}
+            rest = [g for g in pool if (g["category"], g["issue"]) not in seen]
+            if not rest:
+                return hits
+            rng = random.Random(seed) if seed is not None else random
+            fillers = tuple(rng.sample(rest, min(limit - len(hits), len(rest))))
+            return hits + fillers
+
+    rng = random.Random(seed) if seed is not None else random
+    n = min(limit, len(pool))
+    return tuple(rng.sample(list(pool), n))
+
+
+def lookup_design_patterns(
+    *keywords: str, limit: int = 3
+) -> tuple[DesignPattern, ...]:
+    """Return up to `limit` design styles scored by keyword overlap.
+
+    Matches keywords against `name + vibe_tags + summary + use_cases`. The
+    `use_cases` field carries the Chinese alias from `design.csv` so a
+    direct hit on a Russian/English term that maps to one of those style
+    families still scores. Empty tuple when no signal — caller falls back
+    to the prompt's built-in `_STYLE_KIT`.
+
+    Returns at most `limit` patterns ordered by descending match score.
+    Use this to give the model a *concrete* visual anchor (real HEX,
+    real font) instead of forcing it to invent indigo+violet — especially
+    valuable for cheap models that otherwise default to AI-generic colors.
+    """
+    if not keywords:
+        return ()
+    scored = [
+        (
+            _score_match(
+                f"{dp['name']} {dp['vibe_tags']} {dp['summary']} {dp['use_cases']}",
+                keywords,
+            ),
+            dp,
+        )
+        for dp in _design_patterns()
+    ]
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return tuple(dp for score, dp in scored[:limit] if score > 0)
+
+
 def format_design_brief(
     *,
     palette: Palette | None = None,
@@ -472,6 +667,7 @@ def format_design_brief(
     style_preset: StylePreset | None = None,
     icon_family: IconRow | None = None,
     chart_types: Sequence[ChartType] = (),
+    design_patterns: Sequence[DesignPattern] = (),
 ) -> str:
     """Render a compact, system-prompt-friendly block from any subset of inputs.
 
@@ -543,6 +739,28 @@ def format_design_brief(
                 f"(library: {ct['library']}; use when: {ct['when_to_use'][:90]}…)"
                 for ct in chart_types
             )
+        )
+
+    if design_patterns:
+        rendered_patterns: list[str] = []
+        for dp in design_patterns:
+            line = f"  • {dp['name']}"
+            if dp["vibe_tags"]:
+                line += f" — {dp['vibe_tags']}"
+            elif dp["summary"]:
+                line += f" — {dp['summary'][:120]}"
+            extras: list[str] = []
+            if dp["color_tokens"]:
+                extras.append(f"tokens: {dp['color_tokens']}")
+            if dp["typography"]:
+                extras.append(f"font: {dp['typography']}")
+            if extras:
+                line += "\n      " + " · ".join(extras)
+            rendered_patterns.append(line)
+        parts.append(
+            "DESIGN STYLE REFERENCES (borrow vibe, HEX tokens, and font cues "
+            "from the closest match — do not copy verbatim):\n"
+            + "\n".join(rendered_patterns)
         )
 
     if guidelines:

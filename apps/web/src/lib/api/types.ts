@@ -222,6 +222,27 @@ export type ApiErrorBody = {
   };
 };
 
+/**
+ * Multipass pipeline stage names. Mirrors the constants emitted by
+ * `apps/api/src/omnia_api/services/multipass_generator.py` — keep in sync.
+ */
+export type MultipassStage =
+  | "skeleton"
+  | "content"
+  | "visual"
+  | "assembly";
+
+/**
+ * Client-side aggregate of `llm.pass` events for one assistant message.
+ * Lives in React Query cache under key `["passes", projectId, messageId]`,
+ * so `ChatMessage` re-renders the progress bar reactively without a Zustand
+ * store. Cleared on `llm.done` / `llm.error`.
+ */
+export type PassProgress = {
+  current: MultipassStage | null;
+  completed: MultipassStage[];
+};
+
 /** WebSocket events on /api/ws/projects/:id (server → client). */
 export type WsEvent =
   | { type: "snapshot.created"; data: { snapshot: Snapshot } }
@@ -240,6 +261,18 @@ export type WsEvent =
       };
     }
   | { type: "llm.error"; data: { message_id: Uuid; error: string } }
+  | {
+      // Phase B.3 — multipass progress. Backend (multipass_generator.py)
+      // emits start+end events for each of skeleton/content/visual/assembly
+      // so the chat UI can show "Шаг 2/4: Контент" while the cheap model
+      // crunches through the focused passes.
+      type: "llm.pass";
+      data: {
+        message_id: Uuid;
+        pass: MultipassStage;
+        stage: "start" | "end";
+      };
+    }
   | { type: "wallet.updated"; data: { balance_rub: number } }
   // V2 runtime/deploy events. The api router broadcasts these from the
   // orchestrator (Phase A — only `started` and `progress` may fire for now;

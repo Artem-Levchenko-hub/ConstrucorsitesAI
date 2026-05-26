@@ -403,25 +403,36 @@ async def _process_prompt(
         # ──────────────────────────────────────────────────────────────
         state: dict[str, object] = {"accumulated": "", "usage": None, "error": None}
 
-        # Phase B — feature-flagged multipass for budget models. Operator
-        # opts a model into multipass via env `MULTIPASS_MODELS=claude-haiku-4-5,…`
-        # Empty set (default) ⇒ everyone goes through single-shot path.
-        # See services/multipass_generator.py for the skeleton→assembly flow.
-        multipass_set = get_settings().multipass_models_set
+        # Phase B — multipass for budget models is ON by default.
+        # `effective_multipass_models` = CHEAP_MODELS ∪ env override.
+        # First-time user on Haiku/Nano gets the 4-pass enterprise output
+        # without any env setup. Operator can ADD non-budget models via
+        # `MULTIPASS_MODELS=gpt-5-mini,…` or kill the whole pipeline with
+        # `MULTIPASS_MODELS=off`. See services/multipass_generator.py.
+        multipass_set = get_settings().effective_multipass_models
 
-        async def _run_stream(use_model: str) -> None:
+        async def _run_stream(
+            use_model: str, *, force_multipass: bool = False
+        ) -> None:
             """Drain one stream from the gateway into `state`.
 
-            For models in the multipass set, runs through the multi-pass
+            For models in the multipass set (or when the caller explicitly
+            passes `force_multipass=True`), runs through the multi-pass
             generator (skeleton → assembly) instead of a single shot. Both
             paths yield the same event shape downstream, so the file
             extractor and fallback loop don't care which one ran.
+
+            `force_multipass=True` is the A.5 escape hatch — when a single
+            shot returns junk we retry the *same* model via multipass before
+            switching models, because the failure mode is usually
+            prompt-overwhelm (cheap model loses focus over 28+ KB) rather
+            than the model being incapable.
             """
             state["accumulated"] = ""
             state["usage"] = None
             state["error"] = None
 
-            if use_model in multipass_set:
+            if force_multipass or use_model in multipass_set:
                 source = multipass_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
@@ -524,7 +535,64 @@ async def _process_prompt(
         retried_models: list[str] = []
         effective_model = model_id
         if _looks_truncated(accumulated, files):
+            # A.5 — retry the *same* model via multipass before switching
+            # models. Most "empty response" failures on cheap models are
+            # prompt-overwhelm (Haiku/Nano lose focus on a 28+ KB single
+            # shot); splitting into 4 narrow passes (skeleton → content
+            # → visual → assembly) usually recovers without spending a
+            # second model's quota. Skipped when the single shot already
+            # ran through multipass (then the failure is the model, not
+            # the prompt size — go straight to model-switch fallbacks).
+            already_multipass = model_id in multipass_set
+            if not already_multipass:
+                notice = (
+                    f"\n\n*Модель `{effective_model}` дала пустой ответ "
+                    f"({len(accumulated)} симв.). Пробую тот же "
+                    f"`{effective_model}` в multipass-режиме (4 узких прохода)…*\n\n"
+                )
+                accumulated = accumulated + notice
+                await publish_event(
+                    project_id,
+                    "llm.chunk",
+                    {"message_id": str(assistant_message_id), "delta": notice},
+                )
+                print(
+                    f"[PP] same_model_multipass_retry {effective_model}",
+                    flush=True,
+                )
+                await _run_stream(model_id, force_multipass=True)
+                mp_acc = str(state["accumulated"])
+                mp_usage = state["usage"]
+                mp_err = state["error"]
+                accumulated = accumulated + mp_acc
+                if mp_usage and isinstance(mp_usage, dict):
+                    usage_data = mp_usage  # type: ignore[assignment]
+                retried_models.append(f"{model_id}#multipass")
+                if mp_err:
+                    print(
+                        f"[PP] same_model_multipass_error "
+                        f"{model_id}: {mp_err!r}",
+                        flush=True,
+                    )
+                else:
+                    try:
+                        files, _ = _extract_files_and_edits(
+                            accumulated, current_files
+                        )
+                    except (UnsafePathError, ValueError):
+                        files = {}
+                    # If multipass of the same model recovered the output
+                    # there's nothing left to fall back to — skip the
+                    # model-switch loop entirely.
+                    if not _looks_truncated(mp_acc, files):
+                        if retried_models:
+                            model_id = effective_model
+
             for fb_model in _EMPTY_RESPONSE_FALLBACKS.get(model_id, []):
+                # A.5 — if a prior retry (same-model multipass) already
+                # recovered the output, don't burn another model's quota.
+                if not _looks_truncated(accumulated, files):
+                    break
                 notice = (
                     f"\n\n*Модель `{effective_model}` вернула пустой ответ "
                     f"({len(accumulated)} символов). Переключаюсь на "

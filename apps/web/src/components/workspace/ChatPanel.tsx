@@ -82,6 +82,7 @@ export function ChatPanel({
             key={m.id}
             message={m}
             streaming={m.id === streamingId}
+            projectId={projectId}
           />
         ))}
       </div>
