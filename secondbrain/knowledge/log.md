@@ -2,6 +2,13 @@
 
 > Append-only log of compile/query/lint operations. Latest entries on top.
 
+## [2026-05-26] ingest | Phase B-full + Phase C kit v3 + Phase D-min goldens
+
+- B-full — multipass generator получил полные 4 passes: skeleton → (content || visual параллельно через `asyncio.gather`) → assembly. System prompt идентичен между passes → Anthropic prompt cache бьёт system block начиная со 2-го pass'а (~70% экономия input tokens). Soft-fail на JSON validation между passes — assembly работает даже на сломанном content/visual.
+- C — omnia-kit v3 пропатчен во все 4 templates (blank/blog/landing/portfolio, md5-verified). Pure additions, нулевая backward-incompatibility: `.scroll-fade-up/.scroll-scale-in/.scroll-clip-reveal` (CSS scroll-timeline + IO fallback), `.scroll-parallax/.parallax-layer-{1,2,3}` (--scroll-y driven), `.kinetic-weight/.kinetic-width/.kinetic-slant` (variable-font axes), `.split-chars` (per-char stagger), `.depth-{1,2,3}` (тени), `.atmospheric-blur`, `.cursor-trail` (lagging dot), `[data-cursor=link/text]` (re-shape blob). Всё respects prefers-reduced-motion.
+- D-minimal — 3 JSON golden specs (`apteka.json`, `coffee.json`, `saas-startup.json` + README) в `apps/api/tests/golden/`. Specification-based regression: preset candidates, palette ranges, required sections, forbidden anti-patterns, kit class recommendations. Foundation для future CLIP-similarity test (D.4 deferred).
+- Commits: `f1c189f` (B-full), `1ec19cc` (kit v3), `0dfa0ae` (goldens). Phase E (embeddings) defer'нут — нужна выделенная сессия для +200MB зависимостей.
+
 ## [2026-05-26] ingest | Phase A.1+A.2 + Phase B scaffold
 
 - A.1 — `design_anchor` (palette + skill_brief) перенесён на позицию #2 в system prompt, до `_QUALITY_BAR`. Раньше `skill_brief` сидел в середине ~15K промпта — Haiku 4.5 терял фокус на длинном контексте.
