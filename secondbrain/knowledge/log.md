@@ -2,6 +2,14 @@
 
 > Append-only log of compile/query/lint operations. Latest entries on top.
 
+## [2026-05-26] ingest | generation quality regressions — 4 root causes fixed
+
+- proxyapi.ru cold-start empty-response: warmup loop + in-band retry in `services/warmup.py` and `litellm_router.acompletion`
+- preset classifier missed "Flowapteka"-class brands (industry stem buried inside a latin token) — new `_INDUSTRY_FRAGMENT_TO_PRESET` substring matcher in `preset_classifier.py`
+- Haiku 4.5 with ~1200-line prompt defaults to training indigo+violet — `_format_palette_anchor()` injected right after `_IDENTITY` for visual templates
+- IntersectionObserver doesn't fire initial entry for already-in-viewport `.reveal`-wrapped above-fold counters — `requestAnimationFrame` kick added to `omnia-kit.js` in all 4 static templates
+- See: [[concepts/omniaai-generation-quality-regressions-2026-05-26]]
+
 ## 2026-05-17T17:55:00+03:00 — Initial port from CorporateMessanger
 
 - Created scaffold: `daily/`, `knowledge/{concepts,connections,qa}`, `raw/web`, `scripts/`, `hooks/`, `templates/`
