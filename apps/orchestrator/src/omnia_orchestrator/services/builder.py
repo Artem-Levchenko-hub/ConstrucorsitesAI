@@ -29,6 +29,7 @@ import structlog
 
 from omnia_orchestrator.core import docker_client, postgres_admin
 from omnia_orchestrator.core.errors import OrchestratorError
+from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.services import deploy_state, nginx_writer
 from omnia_orchestrator.services.port_allocator import get_prod_port_allocator
 from omnia_orchestrator.services.provisioner import _template_source_dir
@@ -130,6 +131,9 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
     try:
         log.info("deploy.start", project_id=project_id, slug=slug, dev=dev_name)
         deploy_state.update(project_id, phase="building")
+        await publish_project_event(
+            project_id, "deploy.progress", {"phase": "building", "slug": slug}
+        )
 
         # 1. Seed the build context from the template (Dockerfile.prod + configs).
         template_dir = _template_source_dir(_TEMPLATE)
@@ -180,6 +184,11 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
         tag = f"omnia-app-{slug}:{int(time.time())}"
         await docker_client.build_image(str(build_dir), "Dockerfile.prod", tag)
         deploy_state.update(project_id, image_tag=tag, phase="swapping")
+        await publish_project_event(
+            project_id,
+            "deploy.progress",
+            {"phase": "swapping", "slug": slug, "image_tag": tag},
+        )
 
         # 4. Run the new prod container, replacing any previous one.
         prod_name = f"omnia-app-{slug}"
@@ -235,6 +244,11 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
             finished_at=deploy_state.now_iso(),
         )
         log.info("deploy.done", project_id=project_id, url=prod_url)
+        await publish_project_event(
+            project_id,
+            "deploy.done",
+            {"phase": "done", "slug": slug, "prod_url": prod_url, "image_tag": tag},
+        )
 
         # 7. GC old prod image revisions for this slug. Best-effort: a failure
         # here does NOT roll back the deploy (image accumulation is cosmetic).
@@ -248,6 +262,11 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
         log.warning("deploy.failed", project_id=project_id, err=msg)
         deploy_state.update(
             project_id, phase="failed", error=msg, finished_at=deploy_state.now_iso()
+        )
+        await publish_project_event(
+            project_id,
+            "deploy.failed",
+            {"phase": "failed", "slug": slug, "error": msg},
         )
     finally:
         shutil.rmtree(build_dir, ignore_errors=True)

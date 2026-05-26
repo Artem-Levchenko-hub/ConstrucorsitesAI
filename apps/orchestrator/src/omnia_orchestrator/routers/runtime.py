@@ -28,6 +28,7 @@ from omnia_orchestrator.core.docker_client import (
     write_files,
 )
 from omnia_orchestrator.core.errors import OrchestratorError
+from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.schemas.runtime import (
     DeployRequest,
     DeployResponse,
@@ -117,6 +118,26 @@ async def wake(
     # paused → unpause is near-instant; cold start ~30-60 s for Next.js dev
     # mode (first compile). Caller polls /status for the real readiness.
     ready = 2 if state == "paused" else 45
+
+    # Live UI: the wake button doesn't need a poll-loop anymore — frontend's
+    # runtime.started handler flips the cache on this event. ready_in_seconds
+    # still lets the caller render an estimated wait.
+    derived_slug = name.removeprefix("omnia-dev-")
+    await publish_project_event(
+        str(payload.project_id),
+        "runtime.started",
+        {
+            "runtime": {
+                "project_id": str(payload.project_id),
+                "state": "running",
+                "container_name": name,
+                "dev_url": (
+                    nginx_writer.dev_url(derived_slug) if derived_slug else None
+                ),
+            },
+        },
+    )
+
     return WakeResponse(
         project_id=payload.project_id,
         state="running",
@@ -166,6 +187,23 @@ async def stop(
         )
     await stop_container(name, pause=payload.pause)
     new_state = "paused" if payload.pause else "stopped"
+
+    # Live UI: api → ws_hub forwards this to the project's WebSocket clients,
+    # which flip ["runtime", projectId] cache so the workspace's "Запустить"
+    # button reappears and the iframe gracefully swaps to the startup panel
+    # instead of staring at a dead live URL.
+    await publish_project_event(
+        str(payload.project_id),
+        "runtime.stopped",
+        {
+            "runtime": {
+                "project_id": str(payload.project_id),
+                "state": new_state,
+                "container_name": name,
+            },
+        },
+    )
+
     return WakeResponse(
         project_id=payload.project_id,
         state=new_state,

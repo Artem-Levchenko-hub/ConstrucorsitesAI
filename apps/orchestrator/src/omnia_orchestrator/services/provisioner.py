@@ -32,6 +32,7 @@ from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import ContainerSpec, start_container
 from omnia_orchestrator.core.errors import OrchestratorError
+from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.schemas.runtime import (
     ProvisionRequest,
     ProvisionResponse,
@@ -194,10 +195,30 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         log.warning("provision.nginx_failed", host=host, err=exc.message)
         dev_url = f"http://127.0.0.1:{port}"
 
-    return ProvisionResponse(
+    response = ProvisionResponse(
         project_id=req.project_id,
         container_name=container_name,
         port=port,
         dev_url=dev_url,
         state="running",
     )
+
+    # Live UI: tell the workspace the container is up. Frontend's
+    # `usePromptStream` flips ["runtime", projectId] react-query cache from
+    # state=provisioning → running on this, so the iframe swaps from the
+    # startup spinner to the live dev URL without polling.
+    await publish_project_event(
+        str(req.project_id),
+        "runtime.started",
+        {
+            "runtime": {
+                "project_id": str(req.project_id),
+                "state": "running",
+                "container_name": container_name,
+                "port": port,
+                "dev_url": dev_url,
+            },
+        },
+    )
+
+    return response
