@@ -31,7 +31,11 @@ from collections.abc import Sequence
 from typing import Any
 
 from omnia_api.services import skill_library
-from omnia_api.services.design_presets import AWWWARDS_PRINCIPLES, format_preset_block
+from omnia_api.services.design_presets import (
+    AWWWARDS_PRINCIPLES,
+    PRESETS,
+    format_preset_block,
+)
 
 _IDENTITY = """\
 Ты — Omnia.AI, AI-конструктор сайтов и веб-продуктов для русского рынка.
@@ -1386,6 +1390,50 @@ def _format_skill_brief(brief: str) -> str:
     )
 
 
+def _format_palette_anchor(preset_id: str | None) -> str:
+    """Hard top-of-prompt anchor enforcing the preset's palette + fonts.
+
+    Why this exists: the declarative ``format_preset_block`` lives deep in
+    the prompt (~midway through ~1200 lines). Haiku 4.5 with a long prompt
+    reliably reverts to its training-data default palette (indigo+violet —
+    the SaaS aesthetic of Vercel/Linear/shadcn) regardless of what the
+    preset block downstream says. Injecting palette+fonts at position #2 —
+    right after ``_IDENTITY`` — anchors the model on the correct tokens
+    before it reads the rest. Short and imperative so it survives
+    long-context compression.
+
+    Returns "" when no preset is selected — caller skips the section.
+    """
+    if preset_id is None:
+        return ""
+    preset = PRESETS.get(preset_id)
+    if preset is None:
+        return ""
+
+    p = preset.palette
+    f = preset.fonts
+    return f"""\
+ОБЯЗАТЕЛЬНАЯ ПАЛИТРА И ШРИФТЫ — anchor, читай ПЕРЕД остальным промптом и держи в голове до конца ответа.
+
+ЦВЕТА — ставь ТОЛЬКО эти HEX, никакие другие в Tailwind config / :root не вводи:
+  bg     = {p['bg']}     bg-alt = {p['bg_alt']}
+  fg     = {p['fg']}     muted  = {p['muted']}
+  accent = {p['accent']}     border = {p['border']}
+
+ШРИФТЫ — подключи ИМЕННО эти Google Fonts, без подмен:
+  display: {f['display']}   ·   body: {f['body']}
+  <link rel="stylesheet" href="{f['google_fonts_url']}">
+
+КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНЫ (это твои тренировочные дефолты — здесь они БРАК):
+  • indigo (#4f46e5 / #6366f1 / #818cf8 / indigo-500/600/700)
+  • violet / purple (#7c3aed / #8b5cf6 / #a855f7 / violet-X / purple-X)
+  • градиенты типа from-indigo-* to-violet-*, from-purple-* to-pink-*
+  • дефолтный SaaS-стек Inter + Space Grotesk если он НЕ в палитре выше
+
+Если палитра выше требует тёмной темы — фон bg, текст fg, accent светлее muted.
+Любой цвет/шрифт вне этого блока без явной просьбы пользователя — брак."""
+
+
 # Templates that ship a visual UI (HTML/JSX). These get the full design
 # stack: layout rigor, palette, style preset, visual-richness, image
 # generation toggles. The other two container-backed templates (tgbot/api)
@@ -1430,12 +1478,14 @@ def build_system_prompt(
     для визуальных.
     """
     preset_block = format_preset_block(preset_id) if preset_id else ""
+    palette_anchor = _format_palette_anchor(preset_id)
     skill_block = _format_skill_brief(skill_brief) if skill_brief else ""
     image_block = _IMAGE_GEN_ON if image_gen_enabled else _IMAGE_GEN_OFF
 
     if template == "fullstack":
         sections: tuple[str, ...] = (
             _IDENTITY,
+            *((palette_anchor,) if palette_anchor else ()),
             _QUALITY_BAR,
             _LAYOUT_RIGOR,
             AWWWARDS_PRINCIPLES,
@@ -1452,6 +1502,7 @@ def build_system_prompt(
     elif template == "spa":
         sections = (
             _IDENTITY,
+            *((palette_anchor,) if palette_anchor else ()),
             _QUALITY_BAR,
             _LAYOUT_RIGOR,
             AWWWARDS_PRINCIPLES,
@@ -1486,6 +1537,7 @@ def build_system_prompt(
         # Static V1: blank / landing / portfolio / blog
         sections = (
             _IDENTITY,
+            *((palette_anchor,) if palette_anchor else ()),
             _QUALITY_BAR,
             _LAYOUT_RIGOR,
             AWWWARDS_PRINCIPLES,
