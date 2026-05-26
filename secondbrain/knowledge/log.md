@@ -2,6 +2,14 @@
 
 > Append-only log of compile/query/lint operations. Latest entries on top.
 
+## [2026-05-26] ingest | Phase A.1+A.2 + Phase B scaffold
+
+- A.1 — `design_anchor` (palette + skill_brief) перенесён на позицию #2 в system prompt, до `_QUALITY_BAR`. Раньше `skill_brief` сидел в середине ~15K промпта — Haiku 4.5 терял фокус на длинном контексте.
+- A.2 — `_DESIGN_KIT` стал conditional: инжектится ТОЛЬКО когда нет preset_id И нет skill_brief. Раньше всегда — 3 конкурирующих источника палитры (generic catalog vs matched skill vs preset).
+- A.4 — выяснилось что `_RU_INDUSTRY_KEYWORDS` уже 338 stem'ов (план переоценил «~12»). No change.
+- Phase B — multipass scaffold (`services/multipass_generator.py`): 2-pass pipeline skeleton→assembly за feature-flag `MULTIPASS_MODELS`. Default empty = single-shot для всех. Будущее расширение до 4 passes (skeleton/content/visual/assembly) сохраняет тот же event shape.
+- См.: commits `a1fb189` (Phase A), `09c3a02` (Phase B); концепт остаётся [[concepts/omniaai-generation-quality-regressions-2026-05-26]]
+
 ## [2026-05-26] ingest | generation quality regressions — 4 root causes fixed
 
 - proxyapi.ru cold-start empty-response: warmup loop + in-band retry in `services/warmup.py` and `litellm_router.acompletion`
