@@ -562,6 +562,44 @@ async def build_image(
         ) from exc
 
 
+async def container_logs(
+    name: str, *, tail: int = 200, kind: str = "dev"
+) -> dict[str, str]:
+    """Tail recent stdout+stderr from a container. UTF-8 decoded, no follow.
+
+    Returns ``{"logs": "<text>", "tail": "<n>"}``. The frontend renders this
+    in a scrollable panel; truncating at 200 lines by default keeps the
+    payload under ~50 KB for typical Next.js / FastAPI startup logs.
+
+    Missing container is NOT a hard error — we return empty logs so the UI
+    can show "No logs yet" without surfacing a 404 on freshly-provisioned
+    projects (race between container start and first user log click).
+    """
+    log.info("docker.container_logs", name=name, tail=tail, kind=kind)
+
+    def _do() -> dict[str, str]:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound:
+            return {"logs": "", "tail": str(tail)}
+        try:
+            raw = c.logs(tail=tail, timestamps=False, stdout=True, stderr=True)
+        except docker.errors.APIError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"docker logs failed for {name}: {exc}",
+                status_code=500,
+            ) from exc
+        if isinstance(raw, (bytes, bytearray)):
+            text = raw.decode("utf-8", errors="replace")
+        else:
+            text = str(raw)
+        return {"logs": text, "tail": str(tail)}
+
+    return await asyncio.to_thread(_do)
+
+
 async def prune_old_app_images(slug: str, *, keep: int = 3) -> None:
     """Remove old `omnia-app-<slug>:*` tags, keeping the `keep` most recent.
 

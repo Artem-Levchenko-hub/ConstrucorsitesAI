@@ -172,6 +172,21 @@ async def destroy(project_id: UUID) -> dict[str, Any]:
     return await _request("POST", f"/internal/projects/{project_id}/destroy")
 
 
+async def get_logs(
+    project_id: UUID, *, tail: int = 200, kind: str = "dev"
+) -> dict[str, Any]:
+    """GET /internal/projects/<uuid>/logs — tail container stdout+stderr.
+
+    Returns `{"project_id", "container_name", "tail", "logs": "<text>"}`.
+    `logs` is a single UTF-8 string with newline-separated lines.
+    """
+    return await _request(
+        "GET",
+        f"/internal/projects/{project_id}/logs",
+        params={"tail": tail, "kind": kind},
+    )
+
+
 async def hot_reload(
     project_id: UUID, slug: str, files: dict[str, str]
 ) -> dict[str, Any]:

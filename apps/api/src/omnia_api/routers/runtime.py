@@ -28,6 +28,7 @@ from omnia_api.schemas.project import orchestrator_template
 from omnia_api.schemas.runtime import (
     DeployRequest,
     DeployStatus,
+    RuntimeLogs,
     RuntimeStatus,
     RuntimeStopRequest,
 )
@@ -112,6 +113,35 @@ async def start_runtime(
         tier="free",
     )
     return _to_runtime_status(payload)
+
+
+@router.get("/{project_id}/runtime/logs", response_model=RuntimeLogs)
+async def get_runtime_logs(
+    project_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+    tail: int = 200,
+    kind: str = "dev",
+) -> RuntimeLogs:
+    """Tail recent container stdout/stderr (capped at 5000 lines).
+
+    Proxies to orchestrator's `/internal/projects/<id>/logs`. UI polls this
+    every 3 s for a live feed; the orchestrator currently returns a flat
+    snapshot rather than a stream because docker_client's API is sync and
+    spinning up a follow-mode WebSocket here was deemed YAGNI for MVP.
+    Missing container → empty `logs` with 200 (UI shows "No logs yet").
+    """
+    await _project_owned_by(session, project_id, current_user.id)
+    if tail < 1:
+        tail = 1
+    elif tail > 5000:
+        tail = 5000
+    payload = await orchestrator_client.get_logs(project_id, tail=tail, kind=kind)
+    return RuntimeLogs(
+        container_name=payload.get("container_name"),
+        tail=int(payload.get("tail", tail)),
+        logs=str(payload.get("logs", "")),
+    )
 
 
 @router.post("/{project_id}/runtime/stop", response_model=RuntimeStatus)

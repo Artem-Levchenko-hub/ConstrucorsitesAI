@@ -88,3 +88,10 @@ class DeployResponse(BaseModel):
     error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+
+
+class LogsResponse(BaseModel):
+    project_id: UUID
+    container_name: str | None = None
+    tail: int
+    logs: str  # raw stdout+stderr concatenated, UTF-8, newline-separated

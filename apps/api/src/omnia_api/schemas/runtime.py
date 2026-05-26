@@ -57,3 +57,16 @@ class DeployStatus(BaseModel):
     prod_url: str | None = None
     image_tag: str | None = None
     error: str | None = None
+
+
+class RuntimeLogs(BaseModel):
+    """Recent container stdout+stderr, capped at `tail` lines.
+
+    Returned by GET /api/projects/:id/runtime/logs. `logs` is a single
+    newline-joined string — the frontend renders it in a scrollable mono
+    panel and (optionally) polls every few seconds for live updates.
+    """
+
+    container_name: str | None = None
+    tail: int
+    logs: str

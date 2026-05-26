@@ -17,9 +17,7 @@ from fastapi import APIRouter, Header
 
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import (
-    container_status as docker_container_status,
-)
-from omnia_orchestrator.core.docker_client import (
+    container_logs,
     destroy_container,
     exec_cmd,
     find_project_container,
@@ -27,12 +25,16 @@ from omnia_orchestrator.core.docker_client import (
     wake_container,
     write_files,
 )
+from omnia_orchestrator.core.docker_client import (
+    container_status as docker_container_status,
+)
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.schemas.runtime import (
     DeployRequest,
     DeployResponse,
     HotReloadRequest,
+    LogsResponse,
     ProvisionRequest,
     ProvisionResponse,
     StatusResponse,
@@ -359,6 +361,52 @@ async def status(
         container_name=name,
         port=int(info["port"]) if info["port"] else None,
         dev_url=nginx_writer.dev_url(derived_slug) if derived_slug else None,
+    )
+
+
+@router.get("/{project_id}/logs", response_model=LogsResponse)
+async def logs(
+    project_id: str,
+    slug: str | None = None,
+    tail: int = 200,
+    kind: str = "dev",
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> LogsResponse:
+    """Tail recent stdout/stderr from the project's container.
+
+    Reads via `docker logs --tail N` (`docker_client.container_logs`). No
+    follow stream yet — frontend polls every 3 s for live updates. Caller
+    must pick `kind="dev"` (default) or `"prod"`; we resolve the container
+    name via the same label-lookup pattern used by /status and /stop.
+
+    Missing container returns 200 with empty `logs` — UI shows "No logs"
+    instead of a confusing 404 when the project has been hibernated.
+    """
+    _verify_token(x_internal_token)
+    from uuid import UUID
+
+    name = await find_project_container(project_id, kind=kind)
+    if name is None and slug:
+        name = f"omnia-{kind}-{slug}"
+    if name is None:
+        return LogsResponse(
+            project_id=UUID(project_id),
+            container_name=None,
+            tail=tail,
+            logs="",
+        )
+
+    if tail < 1:
+        tail = 1
+    elif tail > 5000:
+        tail = 5000  # cap to keep payloads bounded
+
+    result = await container_logs(name, tail=tail, kind=kind)
+    return LogsResponse(
+        project_id=UUID(project_id),
+        container_name=name,
+        tail=tail,
+        logs=result["logs"],
     )
 
 
