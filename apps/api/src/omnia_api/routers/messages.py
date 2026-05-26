@@ -14,7 +14,7 @@ from omnia_api.core.db import get_engine
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
-from omnia_api.core.redis import publish_event
+from omnia_api.core.redis import get_redis, publish_event
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
@@ -148,6 +148,16 @@ async def post_prompt(
         model_id=payload.model_id,
         selected_elements=selected_dump,
     )
+
+    # Reset the orchestrator's hibernate timer — a user submitting a new prompt
+    # is the strongest possible "this project is active" signal. The hibernate
+    # loop subscribes to `activity:*` on Redis and resets its in-memory
+    # last_activity[project_id] when this lands. Fire-and-forget — a Redis
+    # hiccup must not kill a live prompt.
+    try:
+        await get_redis().publish(f"activity:{project_id}", "")
+    except Exception:  # noqa: BLE001 — best-effort signal, not load-bearing
+        pass
 
     return PromptResponse(message_id=assistant_msg.id, snapshot_id=None)
 
