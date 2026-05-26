@@ -1513,15 +1513,30 @@ def build_system_prompt(
     skill_block = _format_skill_brief(skill_brief) if skill_brief else ""
     image_block = _IMAGE_GEN_ON if image_gen_enabled else _IMAGE_GEN_OFF
 
+    # Phase A.1 — design_anchor unifies palette_anchor + skill_brief at
+    # position #2 of the prompt. Long context (~14K) creates a "lost in
+    # the middle" problem where Haiku 4.5 routinely ignores guidance
+    # buried after position #5-6. Anchoring BOTH at the top forces the
+    # model to read them before _QUALITY_BAR.
+    design_anchor_parts = [p for p in (palette_anchor, skill_block) if p]
+    design_anchor = "\n\n".join(design_anchor_parts) if design_anchor_parts else ""
+
+    # Phase A.2 — _DESIGN_KIT is the generic catalog of per-industry
+    # palettes. When the project ALREADY has a preset palette and/or a
+    # matched skill brief (both more specific than the catalog), the
+    # catalog becomes a third competing source of truth — the model
+    # randomly picks between them. Suppress the catalog when we have
+    # anchored guidance; keep it as the fallback when we have nothing.
+    include_design_kit = (preset_id is None) and (not skill_block)
+
     if template == "fullstack":
         sections: tuple[str, ...] = (
             _IDENTITY,
-            *((palette_anchor,) if palette_anchor else ()),
+            *((design_anchor,) if design_anchor else ()),
             _QUALITY_BAR,
             _LAYOUT_RIGOR,
             AWWWARDS_PRINCIPLES,
-            _DESIGN_KIT,
-            *((skill_block,) if skill_block else ()),
+            *((_DESIGN_KIT,) if include_design_kit else ()),
             *((preset_block,) if preset_block else ()),
             _VISUAL_RICH_KIT,
             image_block,
@@ -1533,12 +1548,11 @@ def build_system_prompt(
     elif template == "spa":
         sections = (
             _IDENTITY,
-            *((palette_anchor,) if palette_anchor else ()),
+            *((design_anchor,) if design_anchor else ()),
             _QUALITY_BAR,
             _LAYOUT_RIGOR,
             AWWWARDS_PRINCIPLES,
-            _DESIGN_KIT,
-            *((skill_block,) if skill_block else ()),
+            *((_DESIGN_KIT,) if include_design_kit else ()),
             *((preset_block,) if preset_block else ()),
             _VISUAL_RICH_KIT,
             image_block,
@@ -1568,13 +1582,12 @@ def build_system_prompt(
         # Static V1: blank / landing / portfolio / blog
         sections = (
             _IDENTITY,
-            *((palette_anchor,) if palette_anchor else ()),
+            *((design_anchor,) if design_anchor else ()),
             _QUALITY_BAR,
             _LAYOUT_RIGOR,
             AWWWARDS_PRINCIPLES,
             _TASTE,
-            _DESIGN_KIT,
-            *((skill_block,) if skill_block else ()),
+            *((_DESIGN_KIT,) if include_design_kit else ()),
             _STYLE_KIT,
             *((preset_block,) if preset_block else ()),
             _DETAILS_KIT,
