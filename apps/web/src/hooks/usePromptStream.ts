@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { simulatePromptStream } from "@/lib/ws-mock";
 import type {
   Message,
+  PassProgress,
   SelectedElement,
   Snapshot,
   WalletState,
@@ -120,6 +121,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               : m,
           ),
         );
+        // B.3 — done implies all multipass stages finished, drop the
+        // progress entry so the bar disappears at the same instant the
+        // tokens/cost line appears. Removing instead of clearing keeps
+        // the cache lean for long sessions.
+        qc.removeQueries({
+          queryKey: ["passes", projectId, event.data.message_id],
+        });
         // Real backend: re-fetch messages and snapshots to capture
         // server-side state we may have missed during streaming.
         if (!USE_MOCKS) {
@@ -129,6 +137,33 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         }
         streamingRef.current = false;
         fireQueued();
+        return;
+      }
+
+      if (event.type === "llm.pass") {
+        // B.3 — multipass progress. Stage "start" sets `current`; stage
+        // "end" pushes the stage into `completed` and clears `current` so
+        // the UI shows "done" between passes (the next `start` re-fills
+        // `current` immediately). We dedupe `completed` because the
+        // backend re-emits `end` on retries.
+        qc.setQueryData<PassProgress>(
+          ["passes", projectId, event.data.message_id],
+          (prev) => {
+            const base: PassProgress = prev ?? { current: null, completed: [] };
+            const stageName = event.data.pass;
+            if (event.data.stage === "start") {
+              return { ...base, current: stageName };
+            }
+            // stage === "end"
+            const completed = base.completed.includes(stageName)
+              ? base.completed
+              : [...base.completed, stageName];
+            return {
+              current: base.current === stageName ? null : base.current,
+              completed,
+            };
+          },
+        );
         return;
       }
 
@@ -203,6 +238,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               : m,
           ),
         );
+        // B.3 — drop progress so the bar doesn't outlive the error toast.
+        qc.removeQueries({
+          queryKey: ["passes", projectId, event.data.message_id],
+        });
         // Loud surface so the user notices: silent inline-error in the chat
         // tab was getting overlooked while the preview placeholder kept
         // shimmering — they thought generation was still in progress.
@@ -342,18 +381,32 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     //    ChatPanel.isStreaming (читает tokens_out из кэша) сразу разблокировался.
     //    Бэкенд может ещё какое-то время дописывать в БД — это TODO для
     //    отдельного /messages/:id/cancel-эндпоинта; пока best-effort на фронте.
+    let cancelledMessageId: string | null = null;
     qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-      (prev ?? []).map((m, i, arr) =>
-        i === arr.length - 1 && m.role === "assistant" && m.tokens_out === null
-          ? {
-              ...m,
-              content: m.content + "\n\n[Отменено пользователем]",
-              tokens_out: m.tokens_out ?? 0,
-              tokens_in: m.tokens_in ?? 0,
-            }
-          : m,
-      ),
+      (prev ?? []).map((m, i, arr) => {
+        if (
+          i === arr.length - 1 &&
+          m.role === "assistant" &&
+          m.tokens_out === null
+        ) {
+          cancelledMessageId = m.id;
+          return {
+            ...m,
+            content: m.content + "\n\n[Отменено пользователем]",
+            tokens_out: m.tokens_out ?? 0,
+            tokens_in: m.tokens_in ?? 0,
+          };
+        }
+        return m;
+      }),
     );
+    // B.3 — drop the progress entry for the cancelled message so the bar
+    // doesn't keep showing "Шаг 2/4" after the user pressed Стоп.
+    if (cancelledMessageId) {
+      qc.removeQueries({
+        queryKey: ["passes", projectId, cancelledMessageId],
+      });
+    }
 
     // 3) Сбрасываем очередь — Стоп = «всё, прекратить».
     pendingRef.current = null;

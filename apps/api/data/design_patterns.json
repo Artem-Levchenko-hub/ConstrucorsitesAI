@@ -1,0 +1,502 @@
+[
+  {
+    "id": "hero-type-as-hero-editorial",
+    "section_type": "hero",
+    "style_id": "editorial-trust",
+    "name": "Type-as-hero, ч/б monochrome",
+    "description_ru": "Один гигантский заголовок во весь экран, нейтральный фон, одна CTA. Без stock-фото.",
+    "tailwind_classes": ["min-h-[80vh]", "max-w-5xl", "mx-auto", "px-6", "py-32", "text-6xl", "md:text-7xl", "font-bold", "tracking-tight"],
+    "kit_classes": ["display-fill", "reveal", "split-chars"],
+    "anti_patterns": ["No background image", "No two competing CTAs", "No emoji"]
+  },
+  {
+    "id": "hero-asymmetric-split-saas",
+    "section_type": "hero",
+    "style_id": "saas-product",
+    "name": "Asymmetric split — copy + real UI mock",
+    "description_ru": "60/40 split: слева заголовок и CTA, справа реальный UI-скриншот продукта с настоящими суммами.",
+    "tailwind_classes": ["grid", "grid-cols-1", "lg:grid-cols-5", "gap-12", "min-h-[80vh]", "max-w-7xl", "mx-auto", "px-6", "py-24", "items-center"],
+    "kit_classes": ["reveal", "card-soft", "gradient-border"],
+    "anti_patterns": ["No Lorem cifry в моке", "No stock corporate photo right"]
+  },
+  {
+    "id": "hero-video-bg-reel",
+    "section_type": "hero",
+    "style_id": "boutique-reel",
+    "name": "Full-bleed showreel autoplay",
+    "description_ru": "Видео-фон на весь экран, autoplay muted loop. Поверх — крупный логотип/CAPS-заголовок.",
+    "tailwind_classes": ["relative", "min-h-screen", "overflow-hidden", "flex", "items-end", "px-6", "pb-16", "text-white"],
+    "kit_classes": ["display-hero", "display-fill", "shine"],
+    "anti_patterns": ["No light background", "No hover on player", "No autoplay with audio"]
+  },
+  {
+    "id": "hero-kinetic-typography-festival",
+    "section_type": "hero",
+    "style_id": "festival-brutalist",
+    "name": "Kinetic-type manifest",
+    "description_ru": "Бегущая лента названий артистов + манифест-фраза в КАПС на тёмном фоне с неоновым акцентом.",
+    "tailwind_classes": ["min-h-screen", "bg-neutral-950", "text-white", "flex", "flex-col", "justify-between", "px-6", "py-12"],
+    "kit_classes": ["kinetic-marquee", "display-fill", "kinetic-type", "grain", "glow-pulse"],
+    "anti_patterns": ["No light background", "No serif display", "No lifestyle копи"]
+  },
+  {
+    "id": "hero-mosaic-studio",
+    "section_type": "hero",
+    "style_id": "studio-showreel",
+    "name": "Mosaic-grid showreel",
+    "description_ru": "Асимметричная сетка 12-колонок с большими кадрами работ + PLAY REEL CTA под hero-tagline.",
+    "tailwind_classes": ["grid", "grid-cols-12", "gap-4", "min-h-screen", "px-6", "py-12"],
+    "kit_classes": ["img-zoom", "reveal", "marquee"],
+    "anti_patterns": ["No symmetric 3-card", "No stock-abstract photos"]
+  },
+  {
+    "id": "hero-manifest-fullscreen-wellness",
+    "section_type": "hero",
+    "style_id": "wellness-casual",
+    "name": "Provocative problem/solution tagline",
+    "description_ru": "Двухстрочный манифест: проблема короткой фразой → решение. App Store/Play badges под текстом.",
+    "tailwind_classes": ["min-h-[80vh]", "flex", "flex-col", "justify-center", "max-w-3xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["cursor-blob", "blob", "reveal", "magnetic"],
+    "anti_patterns": ["No stock running-people photo", "No «coming soon» badges"]
+  },
+  {
+    "id": "hero-gradient-soft-scandi",
+    "section_type": "hero",
+    "style_id": "scandi-editorial",
+    "name": "Soft single-column intro",
+    "description_ru": "Лаконичная биография автора в одну колонку на off-white фоне. Никаких карточек, никаких хover-теней.",
+    "tailwind_classes": ["min-h-[70vh]", "max-w-3xl", "mx-auto", "px-6", "py-32", "text-2xl", "leading-relaxed"],
+    "kit_classes": ["reveal", "fade-up", "divider-fade"],
+    "anti_patterns": ["No color accents", "No hover-shadow cards", "No carousels"]
+  },
+  {
+    "id": "hero-editorial-magazine",
+    "section_type": "hero",
+    "style_id": "editorial-publication",
+    "name": "Serif-display + film-grain",
+    "description_ru": "Большой serif-заголовок с film-grain поверх hero-фото. Eyebrow в формате «¹ Выпуск 12 · Весна 2026».",
+    "tailwind_classes": ["relative", "min-h-[70vh]", "max-w-4xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["film-grain", "reveal", "justified-prose"],
+    "anti_patterns": ["No grotesque display fonts", "No sticky-CTA", "No gradients"]
+  },
+  {
+    "id": "features-3-card-grid-editorial",
+    "section_type": "features",
+    "style_id": "editorial-trust",
+    "name": "Three numbered features",
+    "description_ru": "Три блока с numerals 0.1/0.2/0.3 над заголовками. Никаких иконок — только цифра + заголовок + одно предложение.",
+    "tailwind_classes": ["grid", "grid-cols-1", "md:grid-cols-3", "gap-12", "max-w-6xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["section-numeral", "reveal", "fade-up"],
+    "anti_patterns": ["No icon dance", "No drop shadows", "No emoji"]
+  },
+  {
+    "id": "features-bento-grid-saas",
+    "section_type": "features",
+    "style_id": "saas-product",
+    "name": "Bento-grid (4-6 cards mixed size)",
+    "description_ru": "Сетка карточек разного размера: одна большая (col-span-2 row-span-2) + 4 маленьких. На каждой реальный UI-мок.",
+    "tailwind_classes": ["grid", "grid-cols-2", "lg:grid-cols-4", "gap-4", "auto-rows-[200px]", "max-w-7xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["card-soft", "hover-lift", "gradient-border", "reveal"],
+    "anti_patterns": ["No identical-size 4-card row", "No lorem in mocks"]
+  },
+  {
+    "id": "features-alternating-rows-saas",
+    "section_type": "features",
+    "style_id": "saas-product",
+    "name": "Alternating rows: copy ↔ screenshot",
+    "description_ru": "Три ряда: чередуем copy слева+скриншот справа, затем skirin справа+copy слева. Каждый ряд — отдельная фича с реальным UI.",
+    "tailwind_classes": ["space-y-32", "max-w-6xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "card-soft", "hover-lift"],
+    "anti_patterns": ["No symmetric grid", "No stock corporate photos"]
+  },
+  {
+    "id": "features-asymmetric-mosaic-studio",
+    "section_type": "features",
+    "style_id": "studio-showreel",
+    "name": "Mosaic services tiles",
+    "description_ru": "Асимметричная сетка тайлов с услугами студии: одни col-span-7, другие col-span-5, чередуется.",
+    "tailwind_classes": ["grid", "grid-cols-12", "gap-4", "max-w-7xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["img-zoom", "reveal", "tilt"],
+    "anti_patterns": ["No identical tile sizes", "No center-aligned text"]
+  },
+  {
+    "id": "features-icon-list-vertical-wellness",
+    "section_type": "features",
+    "style_id": "wellness-casual",
+    "name": "Vertical icon-list with green dots",
+    "description_ru": "Вертикальный список фичей: круглая зелёная точка слева, заголовок справа, одно предложение под ним.",
+    "tailwind_classes": ["space-y-12", "max-w-2xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "fade-up", "card-soft"],
+    "anti_patterns": ["No corporate stock illustrations", "No gradient backgrounds"]
+  },
+  {
+    "id": "features-comparison-table-saas",
+    "section_type": "features",
+    "style_id": "saas-product",
+    "name": "Feature comparison table (us vs competitor)",
+    "description_ru": "Двух-колоночная таблица с галочками: слева — мы, справа — типичный конкурент. Реальные числа (-30%, 4 мин).",
+    "tailwind_classes": ["max-w-4xl", "mx-auto", "px-6", "py-24", "overflow-x-auto"],
+    "kit_classes": ["reveal", "gradient-border", "card-soft"],
+    "anti_patterns": ["No vague claims like «better»", "No 4+ competitor columns"]
+  },
+  {
+    "id": "features-tabs-stack-saas",
+    "section_type": "features",
+    "style_id": "saas-product",
+    "name": "Tabbed product walkthrough",
+    "description_ru": "Горизонтальные табы с названиями функций сверху, под ними меняется скриншот UI и описание. Активный таб — emerald-acid акцент.",
+    "tailwind_classes": ["max-w-6xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "card-soft", "hover-lift"],
+    "anti_patterns": ["No more than 5 tabs", "No icon-only tab labels"]
+  },
+  {
+    "id": "testimonials-quote-grid-trust",
+    "section_type": "testimonials",
+    "style_id": "editorial-trust",
+    "name": "Quote-grid with headshots",
+    "description_ru": "Сетка 2x2 коротких цитат с круглым headshot 96px + имя + должность + компания. Без звёзд.",
+    "tailwind_classes": ["grid", "grid-cols-1", "md:grid-cols-2", "gap-12", "max-w-5xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "fade-up"],
+    "anti_patterns": ["No star ratings", "No anonymous «Happy Customer»"]
+  },
+  {
+    "id": "testimonials-single-large-saas",
+    "section_type": "testimonials",
+    "style_id": "saas-product",
+    "name": "Hero testimonial — single CTO quote",
+    "description_ru": "Одна большая цитата CTO известной компании, headshot 128px, метрика результата под цитатой («-40% сверок»).",
+    "tailwind_classes": ["max-w-4xl", "mx-auto", "px-6", "py-24", "text-2xl", "md:text-3xl", "font-medium", "leading-relaxed"],
+    "kit_classes": ["reveal", "card-soft", "gradient-border"],
+    "anti_patterns": ["No vague metrics", "No stock corporate handshake"]
+  },
+  {
+    "id": "testimonials-marquee-logos-trust",
+    "section_type": "testimonials",
+    "style_id": "editorial-trust",
+    "name": "B&W client-logo marquee",
+    "description_ru": "Бесконечная лента из 8-12 чёрно-белых логотипов клиентов. Никаких цветных лого. Над лентой — eyebrow «Наши клиенты».",
+    "tailwind_classes": ["py-12", "border-y", "border-neutral-200", "overflow-hidden"],
+    "kit_classes": ["marquee", "reveal"],
+    "anti_patterns": ["No colored logos", "No «trusted by» without logos"]
+  },
+  {
+    "id": "testimonials-carousel-avatars-wellness",
+    "section_type": "testimonials",
+    "style_id": "wellness-casual",
+    "name": "Avatar carousel with first-name quotes",
+    "description_ru": "Горизонтальная карусель с круглыми аватарами и короткими цитатами по 2 строки. Только имя (без фамилии), город.",
+    "tailwind_classes": ["max-w-6xl", "mx-auto", "px-6", "py-24", "overflow-hidden"],
+    "kit_classes": ["reveal", "card-soft", "magnetic"],
+    "anti_patterns": ["No corporate testimonials", "No company logos"]
+  },
+  {
+    "id": "testimonials-persona-cards-saas",
+    "section_type": "testimonials",
+    "style_id": "saas-product",
+    "name": "Persona-card row (developer/CTO/PM)",
+    "description_ru": "Три карточки с разными персонами: developer, CTO, PM. У каждой — фото, цитата, метрика, ссылка на case-study.",
+    "tailwind_classes": ["grid", "grid-cols-1", "md:grid-cols-3", "gap-6", "max-w-6xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["card-soft", "hover-lift", "reveal"],
+    "anti_patterns": ["No identical persona faces", "No same-job-title in all 3"]
+  },
+  {
+    "id": "testimonials-video-quote-reel",
+    "section_type": "testimonials",
+    "style_id": "boutique-reel",
+    "name": "Video-testimonial с poster-frame",
+    "description_ru": "Видео-цитата клиента: poster-кадр 16:9 с play-кнопкой, ниже имя клиента и название проекта. Один testimonial, не три.",
+    "tailwind_classes": ["max-w-4xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "shine", "img-zoom"],
+    "anti_patterns": ["No autoplay testimonial", "No grid of 6 video thumbs"]
+  },
+  {
+    "id": "pricing-three-tier-cards-saas",
+    "section_type": "pricing",
+    "style_id": "saas-product",
+    "name": "Three-tier cards (Free/Pro/Enterprise)",
+    "description_ru": "Три карточки тарифов, средняя — выделена gradient-border. Цены в ₽ или €, без скрытых опций. CTA с конкретным результатом.",
+    "tailwind_classes": ["grid", "grid-cols-1", "md:grid-cols-3", "gap-8", "max-w-6xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["card-soft", "gradient-border", "hover-lift", "reveal"],
+    "anti_patterns": ["No «Contact us» as price", "No 5+ tiers"]
+  },
+  {
+    "id": "pricing-two-column-toggle-saas",
+    "section_type": "pricing",
+    "style_id": "saas-product",
+    "name": "Monthly/Yearly toggle with two-column plans",
+    "description_ru": "Toggle сверху (Monthly/Yearly) с -20% Yearly. Под ним два столбца — для индивидуалов и команд. Реальные цены.",
+    "tailwind_classes": ["max-w-4xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "card-soft", "hover-lift"],
+    "anti_patterns": ["No hidden fees", "No fake «50% off» urgency"]
+  },
+  {
+    "id": "pricing-single-plan-features-wellness",
+    "section_type": "pricing",
+    "style_id": "wellness-casual",
+    "name": "Single plan with feature list",
+    "description_ru": "Один большой блок цены с зачёркнутой старой ценой и новой. Список 6-8 фич с зелёной галочкой. Без «Pro/Premium».",
+    "tailwind_classes": ["max-w-2xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "card-soft", "magnetic"],
+    "anti_patterns": ["No fake countdown timers", "No «limited offer»"]
+  },
+  {
+    "id": "pricing-calculator-saas",
+    "section_type": "pricing",
+    "style_id": "saas-product",
+    "name": "ROI calculator with live total",
+    "description_ru": "Слайдеры с числами сотрудников/транзакций, справа live-сумма ₽/мес. Под калькулятором — кнопка «Записаться на демо».",
+    "tailwind_classes": ["max-w-5xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "card-soft", "gradient-border"],
+    "anti_patterns": ["No fixed numbers — slider must be live", "No hidden surcharges"]
+  },
+  {
+    "id": "pricing-custom-quote-form-trust",
+    "section_type": "pricing",
+    "style_id": "editorial-trust",
+    "name": "Custom-quote form (no public price)",
+    "description_ru": "Без публичной цены — форма «Расскажите о задаче, ответим за 24 часа». Имя, email, тип проекта, бюджет range.",
+    "tailwind_classes": ["max-w-2xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "card-soft"],
+    "anti_patterns": ["No 15-field form", "No required fields without asterisks"]
+  },
+  {
+    "id": "cta-full-bleed-bg-festival",
+    "section_type": "cta",
+    "style_id": "festival-brutalist",
+    "name": "Full-bleed CTA на тёмном фоне",
+    "description_ru": "Тёмный фон на всю ширину, КАПС-заголовок (BOOK YOUR PASS), одна неоновая кнопка, дата фестиваля под ней.",
+    "tailwind_classes": ["w-full", "bg-neutral-950", "text-white", "py-32", "px-6", "text-center"],
+    "kit_classes": ["display-fill", "glow-pulse", "reveal"],
+    "anti_patterns": ["No two competing CTAs", "No newsletter form here"]
+  },
+  {
+    "id": "cta-contained-card-saas",
+    "section_type": "cta",
+    "style_id": "saas-product",
+    "name": "Contained card-CTA",
+    "description_ru": "Карточка с gradient-border в центре страницы. Заголовок + один акцент-CTA + одна secondary-ссылка под ней.",
+    "tailwind_classes": ["max-w-3xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["card-soft", "gradient-border", "reveal", "hover-lift"],
+    "anti_patterns": ["No three buttons", "No «may be later» as the secondary"]
+  },
+  {
+    "id": "cta-sticky-footer-trust",
+    "section_type": "cta",
+    "style_id": "editorial-trust",
+    "name": "Sticky footer-CTA bar",
+    "description_ru": "Тонкая bottom-fixed bar с copy «Готовы обсудить?» + кнопкой. Появляется на scroll past 50%. Закрыть через X справа.",
+    "tailwind_classes": ["fixed", "bottom-0", "left-0", "right-0", "bg-white", "border-t", "border-neutral-200", "px-6", "py-4", "z-50"],
+    "kit_classes": ["reveal"],
+    "anti_patterns": ["No popup over content", "No no-close-button bar"]
+  },
+  {
+    "id": "cta-inline-newsletter-magazine",
+    "section_type": "cta",
+    "style_id": "editorial-publication",
+    "name": "Inline newsletter signup",
+    "description_ru": "Простая email-форма в центре статьи с serif-заголовком «Подписаться на еженедельную рассылку». Только email-поле.",
+    "tailwind_classes": ["max-w-xl", "mx-auto", "px-6", "py-16"],
+    "kit_classes": ["reveal", "divider-fade"],
+    "anti_patterns": ["No 5-field form for newsletter", "No «50% off if you sign up»"]
+  },
+  {
+    "id": "cta-two-column-illustration-wellness",
+    "section_type": "cta",
+    "style_id": "wellness-casual",
+    "name": "Two-column with phone mockup",
+    "description_ru": "Слева — заголовок «Скачайте приложение» + App Store/Play badges. Справа — мокап телефона с реальным интерфейсом.",
+    "tailwind_classes": ["grid", "grid-cols-1", "lg:grid-cols-2", "gap-12", "max-w-6xl", "mx-auto", "px-6", "py-24", "items-center"],
+    "kit_classes": ["reveal", "card-soft", "magnetic"],
+    "anti_patterns": ["No «coming soon» badges", "No generic phone outline"]
+  },
+  {
+    "id": "footer-minimal-monogram-studio",
+    "section_type": "footer",
+    "style_id": "studio-showreel",
+    "name": "Minimal monogram footer",
+    "description_ru": "Тонкая граница сверху. Логотип-монограмма слева, разговорный текст «mail us, don't be shy — kafe@studio.ru» справа.",
+    "tailwind_classes": ["border-t", "border-neutral-200", "py-12", "px-6", "flex", "justify-between", "items-center"],
+    "kit_classes": ["divider-fade"],
+    "anti_patterns": ["No 4-column corporate footer", "No social-icon-soup"]
+  },
+  {
+    "id": "footer-multi-column-corporate-trust",
+    "section_type": "footer",
+    "style_id": "editorial-trust",
+    "name": "Four-column corporate footer",
+    "description_ru": "Четыре колонки: Продукт · Решения · Компания · Контакты. Реальный адрес, телефон с кодом города. Без лишних соцсетей.",
+    "tailwind_classes": ["grid", "grid-cols-2", "md:grid-cols-4", "gap-8", "max-w-7xl", "mx-auto", "px-6", "py-16", "border-t", "border-neutral-200"],
+    "kit_classes": ["divider-fade"],
+    "anti_patterns": ["No 10+ social icons", "No fake awards in footer"]
+  },
+  {
+    "id": "footer-newsletter-prominent-magazine",
+    "section_type": "footer",
+    "style_id": "editorial-publication",
+    "name": "Newsletter-first footer",
+    "description_ru": "Большая newsletter-форма (email + кнопка «Подписаться») занимает половину футера. Под ней — тонкий ряд ссылок и copyright.",
+    "tailwind_classes": ["bg-neutral-50", "px-6", "py-16", "border-t", "border-neutral-200"],
+    "kit_classes": ["reveal", "divider-fade"],
+    "anti_patterns": ["No more than one CTA in footer", "No invasive modal subscribe"]
+  },
+  {
+    "id": "footer-social-grid-festival",
+    "section_type": "footer",
+    "style_id": "festival-brutalist",
+    "name": "Social-grid тёмный",
+    "description_ru": "Тёмный фон, сетка иконок соцсетей крупного размера (32px), монограмма фестиваля по центру, copyright + дата.",
+    "tailwind_classes": ["bg-neutral-950", "text-white", "px-6", "py-16", "border-t", "border-neutral-800", "text-center"],
+    "kit_classes": ["grain", "glow-pulse"],
+    "anti_patterns": ["No light footer if site is dark", "No emoji social icons"]
+  },
+  {
+    "id": "footer-sitemap-large-saas",
+    "section_type": "footer",
+    "style_id": "saas-product",
+    "name": "Sitemap-style large footer",
+    "description_ru": "Большой footer 5+ колонок: Product · Solutions · Resources · Company · Legal. Внизу — language switcher и compliance-бейджи.",
+    "tailwind_classes": ["grid", "grid-cols-2", "md:grid-cols-5", "gap-8", "max-w-7xl", "mx-auto", "px-6", "py-16", "border-t", "border-neutral-200"],
+    "kit_classes": ["divider-fade"],
+    "anti_patterns": ["No empty columns to fill space", "No fake certifications"]
+  },
+  {
+    "id": "about-team-grid-trust",
+    "section_type": "about",
+    "style_id": "editorial-trust",
+    "name": "Team grid with bios",
+    "description_ru": "Сетка участников команды 3-4 в ряд. Круглая фотография 128px, имя, должность, одна строка био. Никаких звёздных рейтингов.",
+    "tailwind_classes": ["grid", "grid-cols-2", "md:grid-cols-4", "gap-8", "max-w-6xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "fade-up"],
+    "anti_patterns": ["No stock people photos", "No corporate handshake group photo"]
+  },
+  {
+    "id": "about-single-founder-quote-scandi",
+    "section_type": "about",
+    "style_id": "scandi-editorial",
+    "name": "Single founder quote",
+    "description_ru": "Одна большая цитата основателя на off-white фоне, без фото, только подпись («Иван Петров, основатель»). Минимум воздуха max-w-3xl.",
+    "tailwind_classes": ["max-w-3xl", "mx-auto", "px-6", "py-32", "text-2xl", "leading-relaxed", "italic"],
+    "kit_classes": ["reveal", "fade-up", "divider-fade"],
+    "anti_patterns": ["No corporate generic mission", "No award badges"]
+  },
+  {
+    "id": "about-timeline-trust",
+    "section_type": "about",
+    "style_id": "editorial-trust",
+    "name": "Vertical timeline of milestones",
+    "description_ru": "Вертикальный timeline с годами слева и достижениями справа. Реальные даты, реальные клиенты, цифры (2018 → 12 клиентов).",
+    "tailwind_classes": ["max-w-4xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "section-numeral", "divider-fade"],
+    "anti_patterns": ["No vague «founded years ago»", "No emoji milestones"]
+  },
+  {
+    "id": "about-mission-statement-magazine",
+    "section_type": "about",
+    "style_id": "editorial-publication",
+    "name": "Mission manifesto in justified prose",
+    "description_ru": "Манифест в одной длинной justified-prose колонке. Без буллетов, без подзаголовков. Только текст + film-grain поверх.",
+    "tailwind_classes": ["max-w-3xl", "mx-auto", "px-6", "py-32", "text-lg", "leading-relaxed"],
+    "kit_classes": ["justified-prose", "film-grain", "reveal"],
+    "anti_patterns": ["No bullet-point mission", "No buzzword bingo"]
+  },
+  {
+    "id": "about-photo-essay-studio",
+    "section_type": "about",
+    "style_id": "studio-showreel",
+    "name": "Photo-essay studio life",
+    "description_ru": "Серия 6-8 фотографий из жизни студии (рабочий процесс, команда, кабинет), асимметричная mosaic-сетка. Подписи под каждой.",
+    "tailwind_classes": ["grid", "grid-cols-12", "gap-4", "max-w-7xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["img-zoom", "reveal", "marquee"],
+    "anti_patterns": ["No stock-office photos", "No corporate retreat group photo"]
+  },
+  {
+    "id": "integrations-logo-cloud-marquee-saas",
+    "section_type": "integrations",
+    "style_id": "saas-product",
+    "name": "Logo-cloud marquee",
+    "description_ru": "Бесконечная лента из 12-20 логотипов интеграций (Slack, Notion, Jira, ...). Серые лого — на hover становятся цветными.",
+    "tailwind_classes": ["py-16", "overflow-hidden", "border-y", "border-neutral-200"],
+    "kit_classes": ["marquee", "reveal"],
+    "anti_patterns": ["No fake integrations", "No more than 30 logos"]
+  },
+  {
+    "id": "integrations-grid-categories-saas",
+    "section_type": "integrations",
+    "style_id": "saas-product",
+    "name": "Grid by category (CRM/Chat/Analytics)",
+    "description_ru": "Сетка интеграций сгруппированных по категориям. Карточка для каждой: лого + название + краткое описание + статус (Available/Beta).",
+    "tailwind_classes": ["max-w-6xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["card-soft", "hover-lift", "reveal"],
+    "anti_patterns": ["No category with single integration", "No empty placeholder boxes"]
+  },
+  {
+    "id": "integrations-partner-tiers-trust",
+    "section_type": "integrations",
+    "style_id": "editorial-trust",
+    "name": "Partner tier hierarchy (Premier/Gold/Silver)",
+    "description_ru": "Три tier'а партнёров с убывающим размером логотипов. Premier — крупные, Silver — мелкие. Все ч/б.",
+    "tailwind_classes": ["max-w-5xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "fade-up", "divider-fade"],
+    "anti_patterns": ["No colored partner logos", "No fake tier-names"]
+  },
+  {
+    "id": "integrations-api-code-snippet-saas",
+    "section_type": "integrations",
+    "style_id": "saas-product",
+    "name": "API code-snippet showcase",
+    "description_ru": "Двухколонник: слева — заголовок «4 минуты от интеграции», справа — реальный curl/JavaScript snippet в монospace на тёмном фоне.",
+    "tailwind_classes": ["grid", "grid-cols-1", "lg:grid-cols-2", "gap-8", "max-w-6xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["card-soft", "reveal"],
+    "anti_patterns": ["No fake/incomplete code", "No syntax highlighting in wrong colors"]
+  },
+  {
+    "id": "integrations-plug-and-play-cards-wellness",
+    "section_type": "integrations",
+    "style_id": "wellness-casual",
+    "name": "Plug-and-play app cards",
+    "description_ru": "Сетка карточек с круглыми иконками приложений (Apple Health, Fitbit, ...), под каждой — green-pill «Connected/Setup».",
+    "tailwind_classes": ["grid", "grid-cols-2", "md:grid-cols-4", "gap-6", "max-w-5xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["card-soft", "hover-lift", "reveal", "magnetic"],
+    "anti_patterns": ["No fake app icons", "No emoji as app logo"]
+  },
+  {
+    "id": "faq-accordion-stack-saas",
+    "section_type": "faq",
+    "style_id": "saas-product",
+    "name": "Accordion-stack FAQ",
+    "description_ru": "Вертикальный список вопросов с разворачивающимися ответами. Один открыт по умолчанию. Никаких иконок-эмодзи.",
+    "tailwind_classes": ["max-w-3xl", "mx-auto", "px-6", "py-24", "space-y-4"],
+    "kit_classes": ["reveal", "divider-fade"],
+    "anti_patterns": ["No 30+ questions", "No emoji icons next to questions"]
+  },
+  {
+    "id": "faq-two-column-categories-trust",
+    "section_type": "faq",
+    "style_id": "editorial-trust",
+    "name": "Two-column categorized FAQ",
+    "description_ru": "Две колонки: слева — категории (Биллинг · Доступ · Контракт), справа — вопросы выбранной категории. Без анимаций.",
+    "tailwind_classes": ["grid", "grid-cols-1", "lg:grid-cols-3", "gap-8", "max-w-6xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "divider-fade"],
+    "anti_patterns": ["No tabs that hide content", "No icon dance"]
+  },
+  {
+    "id": "faq-search-suggested-saas",
+    "section_type": "faq",
+    "style_id": "saas-product",
+    "name": "FAQ search with suggested questions",
+    "description_ru": "Поле поиска сверху + список 6-8 популярных вопросов под ним. Реальные вопросы клиентов, не «Что такое наш продукт?».",
+    "tailwind_classes": ["max-w-2xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["card-soft", "reveal", "hover-lift"],
+    "anti_patterns": ["No empty search with no results", "No spammy «contact us»"]
+  },
+  {
+    "id": "faq-video-qa-reel",
+    "section_type": "faq",
+    "style_id": "boutique-reel",
+    "name": "Video Q&A with founder",
+    "description_ru": "Один большой видео-блок с founder отвечающим на 3 главных вопроса. Под видео — текстовые таймкоды (1:20 · 2:45 · 4:10).",
+    "tailwind_classes": ["max-w-4xl", "mx-auto", "px-6", "py-24"],
+    "kit_classes": ["reveal", "shine", "img-zoom"],
+    "anti_patterns": ["No autoplay video", "No fake founder talking head"]
+  }
+]

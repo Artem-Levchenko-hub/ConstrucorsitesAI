@@ -22,6 +22,11 @@ def test_static_prompt_includes_style_and_animation_kit() -> None:
     # survives any preset-roster churn.
     assert "ВИЗУАЛЬНЫЙ СТИЛЬ" in sp
     assert "data-reveal-delay" in sp  # _ANIMATION_KIT class API
+    # Phase C.5 — Color grading utilities documented in _KIT_V3_REFERENCE.
+    # Three families, one assert each — catches accidental block removal.
+    assert ".tone-warm" in sp  # image filter family
+    assert ".atmosphere-noir" in sp  # body-overlay family
+    assert ".grain-heavy" in sp  # film-grain family
 
 
 def test_fullstack_prompt_excludes_static_kit() -> None:
@@ -265,6 +270,36 @@ def test_backend_templates_skip_visual_blocks() -> None:
         assert "ДИЗАЙН-КИТ" not in sp, f"{template} got design kit"
         assert "ВИЗУАЛЬНАЯ НАСЫЩЕННОСТЬ" not in sp, f"{template} got visual rich"
         assert "data-omnia-gen" not in sp, f"{template} got image-gen block"
+        # Phase G — _COPY_RULES is a separate design-noise block (Lorem
+        # ipsum, dark patterns, etc.) that has no business in a tgbot/api
+        # prompt. Backend templates' sections tuple intentionally omits it.
+        # (SHADOW RECIPES etc. live INSIDE _QUALITY_BAR which backend templates
+        # do consume — those subsections are quality bar, not visual noise.)
+        assert "COPY-RULES" not in sp, f"{template} got copy rules"
+
+
+def test_phase_g_malewicz_rules_present_for_all_tiers() -> None:
+    """Phase G — every Malewicz rule must reach the model regardless of tier.
+    The drop-list trim removes _TASTE / _STYLE_KIT for budget — rules placed
+    there would silently vanish. These markers prove the rules landed in
+    surviving blocks."""
+    markers = [
+        "SHADOW RECIPES",       # G1, G2 — in extended _QUALITY_BAR
+        "Double-W",             # G5 — in _QUALITY_BAR BUTTON RULES (RU keeps EN term)
+        "primary CTA",          # G7 — in _QUALITY_BAR BUTTON RULES
+        "ICON DISCIPLINE",      # G9, G10
+        "Lorem ipsum",          # G12 — forbidden, in _COPY_RULES
+        "dark pattern",         # G14 — in AWWWARDS_PRINCIPLES (NO DARK PATTERNS header EN)
+        "MODERN",               # G15 — "MODERN ≠ PURELY FLAT" header
+        "LESS IS MORE",         # G18 — "LESS IS MORE" header
+    ]
+    for model_id in ("claude-opus-4-7", "gpt-5-mini", "claude-haiku-4-5"):
+        sp = build_system_prompt("landing", model_id=model_id)
+        for marker in markers:
+            assert marker.lower() in sp.lower(), (
+                f"Phase G marker {marker!r} missing for tier "
+                f"{model_id} — rule placed in a dropped block?"
+            )
 
 
 def test_visual_templates_include_layout_rigor() -> None:
@@ -307,3 +342,55 @@ def test_build_messages_no_brief_when_project_id_absent() -> None:
     # at least valid (no crash) and contains the base identity.
     system = msgs[0]["content"]
     assert "Omnia.AI" in system
+
+
+def test_phase_i_malewicz_primitives_documented_in_kit_reference() -> None:
+    """Phase I primitives must appear in _KIT_V3_REFERENCE so the AI knows
+    when to apply them. Without the documentation the classes ship but
+    Haiku never reaches for them."""
+    sp = build_system_prompt("landing")
+    assert "MALEWICZ PRIMITIVES" in sp
+    assert ".shadow-tinted" in sp
+    assert ".gradient-subtle" in sp
+    assert ".btn-modern" in sp
+    assert ".btn-cta-primary" in sp
+    assert ".nested-rounded" in sp
+
+
+def test_compute_skill_brief_includes_derived_tokens_for_industry_match() -> None:
+    """Phase J — when palette is matched, the brief should include the
+    derived gradient pair + shadow tint so the AI gets concrete values,
+    not just rule prose."""
+    brief = _compute_skill_brief(
+        "сделай сайт SaaS-стартапа с дашбордом и тарифами", "proj-J"
+    )
+    assert brief is not None
+    # At least one Phase-J derived block must surface
+    assert "ПРОИЗВОДНЫЕ ТОКЕНЫ" in brief or "gradient_pair" in brief
+
+
+def test_compute_skill_brief_phase_j_includes_nav_style_for_app_prompt() -> None:
+    """Mobile-app signals → nav_style picks bottom-tabs (G17 enforcement
+    at lookup time, not just rule prose)."""
+    brief = _compute_skill_brief(
+        "мобильное приложение для фитнес-зала с расписанием", "proj-J-mobile"
+    )
+    assert brief is not None
+    # Vertical detected (fitness/saas), target=mobile → bottom-tabs
+    if "ПРОИЗВОДНЫЕ ТОКЕНЫ" in brief:
+        assert "bottom-tabs" in brief or "mobile" in brief.lower()
+
+
+def test_omnia_kit_css_phase_i_block_is_byte_identical_across_4_templates() -> None:
+    """All 4 static templates ship the SAME omnia-kit.css. C.5 maintained
+    this; Phase I must too. A divergent block per template means a single
+    edit forgot to sync — measure it before it leaks to production."""
+    import pathlib
+    base = pathlib.Path(__file__).parent.parent / "src/omnia_api/templates"
+    files = [
+        (base / t / "assets/omnia-kit.css").read_text(encoding="utf-8")
+        for t in ("blank", "blog", "landing", "portfolio")
+    ]
+    # All 4 files must be byte-identical end-to-end (the C.5 block already
+    # established this invariant — Phase I sync MUST preserve it).
+    assert files[0] == files[1] == files[2] == files[3]

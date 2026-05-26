@@ -1,0 +1,83 @@
+{
+  "id": "dental-portal",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for 'modern dental clinic with online booking' prompt class. Stress-tests wellness-casual preset routing (soft teal/green, тёплый non-corporate тон), booking form как primary CTA, before/after-кейсы, не intimidation tone и не corporate medical blue.",
+
+  "input": {
+    "prompt": "Сделай сайт современной стоматологии 'Смайл Студия' в Москве. Услуги: имплантация, эстетическая стоматология, детская стоматология, ортодонтия. Команда из 6 врачей, стаж от 10 лет. Кейсы до/после, прайс-лист на услуги, форма онлайн-записи, отзывы пациентов.",
+    "project_name": "Смайл Студия",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["wellness-casual"],
+    "preset_id_forbidden": ["festival-brutalist", "boutique-reel", "editorial-trust", "saas-product"],
+
+    "palette_range": {
+      "must_include_any_of": ["#FAFAF7", "#FFFFFF", "#16A34A", "#10B981", "#14B8A6", "#0D9488", "#0F766E", "#5EEAD4"],
+      "must_avoid_any_of": ["#4f46e5", "#6366f1", "#7c3aed", "#8b5cf6", "#a855f7", "#0A2540", "#1E40AF", "#1E293B", "#0F172A"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero",
+      "services_or_procedures",
+      "doctors_team",
+      "before_after_or_cases",
+      "prices_or_packages",
+      "online_booking_form",
+      "reviews_or_testimonials",
+      "contact_or_address",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "saas_tier_pricing_basic_standard_premium",
+      "feature_grid_3_columns_generic_icons",
+      "integrations_section",
+      "menu_or_food_items"
+    ],
+
+    "content_signals_required": [
+      "Москва или конкретный адрес/метро",
+      "цены в ₽ по конкретным процедурам",
+      "имена врачей с фото и стажем",
+      "минимум 3 услуги конкретно (имплантация/эстетика/ортодонтия)",
+      "форма онлайн-записи с выбором даты",
+      "контактный телефон +7 495"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "scroll-fade-up",
+      "card-soft",
+      "hover-lift",
+      "badge",
+      "reveal",
+      "fade-up",
+      "eyebrow",
+      "stars",
+      "avatar",
+      "avatar-stack",
+      "img-zoom",
+      "divider-fade"
+    ],
+    "kit_classes_forbidden": [
+      "kinetic-marquee",
+      "display-fill",
+      "atmosphere-noir",
+      "atmosphere-night",
+      "grain-heavy",
+      "film-grain",
+      "glass-dark",
+      "cursor-trail"
+    ],
+
+    "fonts_must_be_in": [
+      ["Bricolage Grotesque", "DM Sans"],
+      ["Figtree", "DM Sans"],
+      ["Plus Jakarta Sans", "Inter"]
+    ]
+  },
+
+  "notes": "Wellness-casual для стоматологии — мягкий teal/green вместо холодного corporate medical blue. Badge classes ('ICAOI', 'стаж 15 лет') обязательны. Anti-pattern: intimidation tone (зубная боль), dark corporate-blue (#0A2540, #1E40AF), 'professional dental solutions'. Soft trust-сигналы (стаж, сертификаты), реальные имена врачей. Indigo в must_avoid — клиника не SaaS."
+}

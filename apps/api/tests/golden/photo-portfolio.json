@@ -1,0 +1,79 @@
+{
+  "id": "photo-portfolio",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for 'editorial photographer portfolio' prompt class. Stress-tests scandi-editorial preset routing (off-white + ч/б палитра, не цветные акценты), single-column verticality (не grid-of-cards), photo-forward hero (без SaaS-pricing и без 3-feature-grid).",
+
+  "input": {
+    "prompt": "Сделай личный сайт-портфолио фотографа Ивана Петрова из Москвы. Жанры: street, свадебная съёмка, коммерческая. Минималистичный редакционный стиль, акцент на фотографиях, биография, контакты для заказа съёмки.",
+    "project_name": "Иван Петров — фотограф",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["scandi-editorial", "editorial-publication"],
+    "preset_id_forbidden": ["saas-product", "festival-brutalist", "boutique-reel", "wellness-casual"],
+
+    "palette_range": {
+      "must_include_any_of": ["#F7F5F1", "#FFFFFF", "#1A1A1A", "#0A0A0A", "#6B6B6B", "#E0DDD6"],
+      "must_avoid_any_of": ["#4f46e5", "#6366f1", "#7c3aed", "#8b5cf6", "#a855f7", "#16A34A", "#2563EB", "#10B981"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero",
+      "selected_work_or_projects",
+      "about_or_biography",
+      "services_or_genres",
+      "contact_or_booking",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "saas_tier_pricing_basic_standard_premium",
+      "feature_grid_3_columns_icons",
+      "testimonials_corporate_logos",
+      "integrations_section"
+    ],
+
+    "content_signals_required": [
+      "Москва или конкретный район",
+      "годы съёмок (например 2018–2026)",
+      "жанры — street/wedding/commercial",
+      "контакт email или телефон для заказа",
+      "именные кредиты по проектам"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "reveal",
+      "fade-up",
+      "img-zoom",
+      "divider-fade",
+      "scroll-fade-up",
+      "scroll-clip-reveal",
+      "grain",
+      "film-grain",
+      "eyebrow"
+    ],
+    "kit_classes_forbidden": [
+      "kinetic-marquee",
+      "display-fill",
+      "bg-aurora",
+      "bg-mesh",
+      "blob",
+      "glow",
+      "glow-pulse",
+      "gradient-border",
+      "gradient-text",
+      "cursor-blob",
+      "magnetic"
+    ],
+
+    "fonts_must_be_in": [
+      ["Newsreader", "Inter"],
+      ["Fraunces", "Newsreader"],
+      ["Cormorant", "Inter"]
+    ]
+  },
+
+  "notes": "Editorial photographer = single-column, off-white (#F7F5F1) + чёрный, без цветных акцентов. Anti-pattern: hover-карточки с тенями, карусели, 'award-winning' копи. Indigo/violet в must_avoid — это персональный портфолио, ни в каком сценарии Tailwind-default не оправдан."
+}

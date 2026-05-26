@@ -114,6 +114,66 @@ apps/api тут — тонкий прокси на orchestrator. Слой авт
 > - **Interim URL-схема:** dev `https://<slug>-dev.170-168-72-200.sslip.io`, prod `https://<slug>.170-168-72-200.sslip.io` (sslip.io — ноль DNS у регистратора; HTTPS per-host certbot). Переключим на `*.preview/app.omniadevelop.ru` после wildcard DNS. Конфиг — `runtime_host_suffix`.
 > - Раскатка — рестарт процесса `omnia-orchestrator` на VPS, БЕЗ пересборки api/web. Детали: `~/.claude/coordination/omnia-mvp/inbox/2026-05-22-agent-d-deploy-runtime.md`.
 
+### V3: Onboarding + Multi-stack + Linked-deploy
+
+> **Полный design:** `docs/10-v3-multistack-pivot.md`. Разделение работ — `agents/V3-CHAT-{1,2,3}-*.md`.
+> Все эндпоинты ниже **additive, backward-compatible** — V1/V2 потребители не ломаются.
+
+**Onboarding (Chat-2 owner):**
+
+| Метод | Path | Тело | Ответ |
+|---|---|---|---|
+| `POST` | `/api/projects/onboarding/start` | `{brief: string, linked_repo_id?: string}` | `OnboardingSession` (state=`asking-Q`, первый вопрос в `current_question`) |
+| `POST` | `/api/projects/onboarding/:sid/answer` | `{answer: string}` или `{skip: true}` | `OnboardingSession` (state переходит дальше, см. state-diagram в spec) |
+| `POST` | `/api/projects/onboarding/:sid/confirm-stack` | `{stack_id: string}` (из top-3 либо override из каталога) | `OnboardingSession` (state=`recommending-preset`) |
+| `POST` | `/api/projects/onboarding/:sid/confirm-preset` | `{preset_id: string}` (либо `{auto: true}`) | `OnboardingSession` (state=`complete`) + `project_id` |
+| `GET` | `/api/projects/onboarding/:sid` | — | `OnboardingSession` (восстановить state в UI после рефреша) |
+
+**Stack catalog + recommender (Chat-2 owner, dispatches Chat-3 LLM Gateway):**
+
+| Метод | Path | Тело | Ответ |
+|---|---|---|---|
+| `GET` | `/api/stacks` | — | `StackTemplate[]` (весь каталог из `stack_templates` table) |
+| `POST` | `/api/projects/stack/recommend` | `{brief: string, answers?: {question: string, answer: string}[]}` | `{recommendations: StackRecommendation[]}` (top-3) |
+
+**Preset catalog (Chat-2 owner, read freeze):**
+
+| Метод | Path | Query | Ответ |
+|---|---|---|---|
+| `GET` | `/api/presets` | `?category=palette\|font_pair\|pattern\|component\|framework_docs` | `UiKitEntry[]` |
+| `GET` | `/api/presets/:slug/preview` | — | `UiKitEntry & {render_html: string}` (HTML-превью пресета для карусели) |
+
+**Linked-repo + GitHub OAuth (Chat-2 owner):**
+
+| Метод | Path | Тело/Query | Ответ |
+|---|---|---|---|
+| `GET` | `/api/auth/github/init` | `?redirect=<path>` | `302` → `github.com/login/oauth/authorize?...` |
+| `GET` | `/api/auth/github/callback` | `?code=...&state=...` | `302` → `redirect` query (с linked_repo_id в session-cookie) |
+| `POST` | `/api/projects/connect-repo` | `{repo_full_name: string, branch: string, project_id?: string}` | `LinkedRepo` + (если project_id) обновлённый `Project.linked_repo_id` |
+| `GET` | `/api/repos/list` | — | `{name, full_name, default_branch, private}[]` (GitHub list через access_token) |
+| `GET` | `/api/projects/:id/repo` | — | `LinkedRepo \| null` |
+| `DELETE` | `/api/projects/:id/repo` | — | 204 (отвязать, project продолжит жить с native deploy) |
+
+**Deploy-link (V3 — push в GitHub юзера, Chat-2 owner, Chat-3 не участвует):**
+
+| Метод | Path | Тело | Ответ |
+|---|---|---|---|
+| `POST` | `/api/projects/:id/deploy-link` | `{commit_message?: string}` | `DeployLinkStatus` (async через WS) |
+| `GET` | `/api/projects/:id/deploy-link` | — | `DeployLinkStatus` (последний) |
+
+**Native deploy (Chat-3 owner, расширение V2 под multi-stack):** существующий `POST /api/projects/:id/deploy` остаётся, теперь orchestrator выбирает Dockerfile по `project.stack_id`. Контракт не меняется.
+
+### V3 WebSocket-события (поверх V1/V2)
+
+```json
+{ "type": "onboarding.next_question", "data": { "session_id": "uuid", "question": "...", "why": "...", "step": 1, "max_steps": 5 } }
+{ "type": "onboarding.recommending_stack", "data": { "session_id": "uuid", "recommendations": [{"stack_id":"...","score":0.92,"reasoning":"..."}] } }
+{ "type": "onboarding.recommending_preset", "data": { "session_id": "uuid", "preset_id": "...", "preview_html": "..." } }
+{ "type": "onboarding.complete", "data": { "session_id": "uuid", "project_id": "uuid" } }
+{ "type": "deploy.linked.progress", "data": { "project_id": "uuid", "stage": "cloning"|"committing"|"pushing"|"complete"|"failed", "commit_url": null|"..." } }
+{ "type": "repo.connected", "data": { "linked_repo_id": "uuid", "repo_full_name": "owner/name" } }
+```
+
 ## WebSocket: `/api/ws/projects/:id`
 
 **Подключение:** `ws://localhost:8000/api/ws/projects/:id` с cookie `omnia_session` или `?token=<jwt>`.
@@ -157,6 +217,32 @@ Content-Type: application/json
 
 - `GET :8001/v1/models` — `{ "data": [{ "id": "claude-sonnet-4-6", "price_rub_per_1k_in": 0.3, "price_rub_per_1k_out": 1.5, "context_window": 200000 }, ...] }`
 - `GET :8001/health` — `{ "status": "ok" }`
+
+### V3 LLM Gateway endpoints (Chat-3 owner; вызывает apps/api)
+
+```
+POST :8001/v1/onboarding/next_question
+{
+  "brief": "...",
+  "qa_pairs": [{"question":"...","answer":"..."}],
+  "user": "<user_id>"
+}
+→ { "done": false, "question": "...", "why": "..." }  // или { "done": true }
+```
+
+Под капотом — Haiku-4.5 с фиксированным prompt-шаблоном (см. `docs/10-v3-multistack-pivot.md`). Цена ~₽0.05/вызов. Записывает usage в общую `usage` таблицу с `purpose='onboarding_q'`.
+
+```
+POST :8001/v1/stack/recommend
+{
+  "brief": "...",
+  "answers": [{"question":"...","answer":"..."}],
+  "user": "<user_id>"
+}
+→ { "recommendations": [{"stack_id":"...","score":0.92,"reasoning":"..."}, ...3 max] }
+```
+
+Под капотом — Haiku-4.5; закрытый список stack_id отдаётся в system prompt. Цена ~₽0.10/вызов. `purpose='stack_recommend'`.
 
 ## Формат AI-ответа (как агент C просит модель отдавать файлы)
 
@@ -210,6 +296,12 @@ export type Project = {
   prod_url: string | null;   // https://<slug>.app.omniadevelop.ru после первого deploy
   runtime_state: "provisioning" | "running" | "paused" | "stopped" | "failed" | null;
   tier: "free" | "pro" | "business";
+  // V3 fields (null до завершения онбординга или для legacy V1/V2-проектов):
+  stack_id: string | null;              // FK stack_templates.id, e.g. "static-html" | "nextjs-postgres-drizzle" | ...
+  preset_id: string | null;             // FK ui_kit_freeze.slug | legacy design_presets.id
+  onboarding_session_id: string | null; // FK onboarding_sessions.id
+  linked_repo_id: string | null;        // FK linked_repos.id; если null — deploy идёт на наш поддомен
+  estimated_setup_cost_rub: number | null; // справочно для UI, заполняется после онбординга
   created_at: string;
   updated_at: string;
 };
@@ -285,6 +377,80 @@ export type Model = {
   recommended_for: ("fast" | "quality" | "budget")[];
 };
 
+// ───────────────── V3 TYPES (multi-stack + onboarding + linked-repo) ─────────────────
+
+export type StackTemplate = {
+  id: string;                          // "static-html" | "nextjs-postgres-drizzle" | ...
+  display_name: string;                // "Static HTML"
+  description: string;                 // одно предложение что внутри
+  when_to_use: string;                 // LLM-критерий
+  priority: "P0" | "P1" | "P2";        // V3 launch priority
+  template_dir: string;                // путь в apps/orchestrator/templates/<id>/
+  supported_features: string[];        // ["ssr", "db", "auth", "realtime", ...]
+  created_at: string;
+};
+
+export type StackRecommendation = {
+  stack_id: string;                    // FK StackTemplate.id
+  score: number;                       // 0..1
+  reasoning: string;                   // одно предложение почему
+};
+
+export type OnboardingSession = {
+  id: string;
+  user_id: string;
+  state: "asking-Q" | "recommending-stack" | "recommending-preset" | "complete" | "abandoned";
+  brief: string;                       // первое описание идеи юзером
+  step: number;                        // текущий вопрос (1..5)
+  max_steps: number;                   // обычно 5
+  current_question: string | null;     // null когда state != asking-Q
+  why: string | null;                  // обоснование от Haiku — зачем спрашивает
+  qa_pairs: { question: string; answer: string }[]; // история Q+A
+  stack_recommendations: StackRecommendation[] | null; // заполняется при state=recommending-stack
+  chosen_stack_id: string | null;      // выбор юзера на confirm-stack
+  chosen_preset_id: string | null;     // выбор юзера на confirm-preset
+  linked_repo_id: string | null;       // если онбординг начался с connect-repo
+  project_id: string | null;           // заполняется на state=complete
+  created_at: string;
+  updated_at: string;
+};
+
+export type UiKitEntry = {
+  slug: string;                        // "palette-editorial-trust", "font-pair-saas-modern", ...
+  source: "ui-ux-pro-max" | "context7" | "manual" | "design-presets-v2-fallback";
+  category: "palette" | "font_pair" | "pattern" | "component" | "framework_docs";
+  name: string;                        // человекочитаемое
+  payload: Record<string, unknown>;    // формат зависит от category, см. docs/10
+  applicable_stacks: string[];         // ["nextjs-postgres-drizzle", ...] | [] = универсальный
+  applicable_presets: string[];        // legacy preset_ids из docs/09 | []
+  created_at: string;
+  updated_at: string;
+};
+
+export type LinkedRepo = {
+  id: string;
+  user_id: string;
+  provider: "github";                  // V3 только github; gitlab/bitbucket — V4+
+  github_user_id: number;
+  github_username: string;
+  repo_full_name: string | null;       // "owner/name" — null до confirm-repo
+  branch: string;                      // дефолт "omnia/deploy"
+  access_token_encrypted: never;       // НИКОГДА не возвращается клиенту; только серверная колонка
+  connected_at: string;
+  last_push_at: string | null;
+};
+
+export type DeployLinkStatus = {
+  project_id: string;
+  linked_repo_id: string;
+  state: "idle" | "cloning" | "committing" | "pushing" | "complete" | "failed";
+  commit_url: string | null;           // GitHub commit URL после успеха
+  pushed_at: string | null;
+  error: string | null;
+};
+
+// ────────────────────────────────────────────────────────────────────────────────────
+
 export type Charge = {
   id: string;
   message_id: string | null;
@@ -299,7 +465,11 @@ export type ApiError = {
         | "rate_limited" | "wallet_empty" | "model_unavailable" | "internal_error"
         // V2-добавления:
         | "container_failure" | "docker_unavailable" | "postgres_unavailable"
-        | "port_exhausted" | "conflict";
+        | "port_exhausted" | "conflict"
+        // V3-добавления:
+        | "onboarding_invalid_state" | "stack_not_found" | "preset_not_found"
+        | "github_oauth_failed" | "github_repo_inaccessible" | "deploy_link_failed"
+        | "ui_kit_freeze_empty";
     message: string;
     details?: Record<string, unknown>;
   };
@@ -314,6 +484,10 @@ export type ApiError = {
 | `/api/projects/:id/prompt` | 10/мин на user, 100/час |
 | `/api/projects/:id/deploy` | 5/час на user (V2 — деплой ресурсоёмкий) |
 | `/api/projects/:id/runtime/start` | 30/мин на user (V2 — wake может быть частым) |
+| `/api/projects/onboarding/*` (V3) | 30/мин на user (включая Haiku-вызовы под капотом) |
+| `/api/auth/github/*` (V3) | 10/мин на user (OAuth init/callback) |
+| `/api/projects/:id/deploy-link` (V3) | 5/час на user (GitHub API quota) |
+| `/api/projects/stack/recommend` (V3) | 20/мин на user |
 | Остальные | 60/мин на user |
 
 Заголовки: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.

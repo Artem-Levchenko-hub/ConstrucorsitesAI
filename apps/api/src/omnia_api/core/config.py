@@ -67,10 +67,16 @@ class Settings(BaseSettings):
     initial_wallet_balance_rub: float = Field(default=100.0)
 
     # Phase B — multipass design generation for budget models.
-    # Comma-separated list of model IDs routed through the 4-pass pipeline
-    # (skeleton → content → visual → assembly) instead of single-shot.
-    # Default empty = nobody — Phase B stays dark until explicitly enabled.
-    # Recommended initial value once stable: "claude-haiku-4-5,gpt-5-nano".
+    # Env override for the multipass router. By DEFAULT (empty value) every
+    # budget-tier model (CHEAP_MODELS — currently Haiku, Nano) is routed
+    # through the 4-pass pipeline (skeleton → content → visual → assembly)
+    # automatically — that is the "make cheap models look enterprise" path.
+    # Special values:
+    #   ""                            — default ON (= CHEAP_MODELS)
+    #   "off" / "none" / "disabled"   — kill switch, single-shot for everyone
+    #   "<csv-of-model-ids>"          — ADDS these to CHEAP_MODELS (union)
+    # Use a kill switch only for debugging the single-shot path; production
+    # value should stay empty so new budget models get multipass for free.
     multipass_models: str = Field(default="")
 
     @property
@@ -79,9 +85,30 @@ class Settings(BaseSettings):
 
     @property
     def multipass_models_set(self) -> frozenset[str]:
+        """Models EXPLICITLY listed in the env var (no defaults mixed in).
+
+        Kept for diagnostics and tests that want to see the raw operator
+        intent. Production callers should use `effective_multipass_models`
+        which folds in the CHEAP_MODELS default.
+        """
         return frozenset(
             m.strip() for m in self.multipass_models.split(",") if m.strip()
         )
+
+    @property
+    def effective_multipass_models(self) -> frozenset[str]:
+        """Models actually routed through the multipass pipeline.
+
+        Always at least CHEAP_MODELS unless an explicit kill switch is in
+        play. That guarantees a first-time user picking Haiku or Nano gets
+        the multipass enterprise output immediately — no env setup, no
+        "iterative mode" toggle to remember. Adding a new model id to
+        CHEAP_MODELS in MODEL_TIER_MAP is enough to opt it in everywhere.
+        """
+        raw = (self.multipass_models or "").strip().lower()
+        if raw in {"off", "none", "disabled"}:
+            return frozenset()
+        return CHEAP_MODELS | self.multipass_models_set
 
 
 @lru_cache(maxsize=1)

@@ -1,0 +1,79 @@
+{
+  "id": "journalist-blog",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for 'independent journalist personal blog' prompt class. Stress-tests editorial-publication preset routing (Fraunces + Newsreader, film-grain, justified prose, muted muted-red accent #B91C1C), long-form контент, newsletter signup как primary CTA, не SaaS-pricing.",
+
+  "input": {
+    "prompt": "Сделай личный сайт независимого журналиста Анны Соколовой. Долгие репортажи о социальных проблемах, культуре, политике России. Лента статей с превью, биография, форма подписки на email-рассылку, страница поддержки автора (Patreon-стиль донат).",
+    "project_name": "Анна Соколова — журналист",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["editorial-publication", "scandi-editorial"],
+    "preset_id_forbidden": ["saas-product", "festival-brutalist", "boutique-reel", "wellness-casual"],
+
+    "palette_range": {
+      "must_include_any_of": ["#F4F1EC", "#FFFFFF", "#1A1A1A", "#737373", "#B91C1C", "#D6D3D1"],
+      "must_avoid_any_of": ["#4f46e5", "#6366f1", "#7c3aed", "#8b5cf6", "#a855f7", "#00FFB2", "#10B981", "#2563EB"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero_with_recent_article",
+      "articles_list_or_archive",
+      "about_journalist_or_biography",
+      "newsletter_signup",
+      "support_or_donation",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "saas_tier_pricing_basic_standard_premium",
+      "feature_grid_3_columns_icons",
+      "integrations_section",
+      "appointment_booking_calendar",
+      "menu_or_food_items"
+    ],
+
+    "content_signals_required": [
+      "имя автора с фото и кратким био",
+      "минимум 3 заголовка статей с датами",
+      "форма подписки email с конкретной частотой (раз в неделю/месяц)",
+      "способ поддержки — Patreon/Boosty/Tinkoff",
+      "город автора (Москва или другой)"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "justified-prose",
+      "film-grain",
+      "reveal",
+      "fade-up",
+      "divider-fade",
+      "img-zoom",
+      "scroll-fade-up",
+      "eyebrow",
+      "grain"
+    ],
+    "kit_classes_forbidden": [
+      "kinetic-marquee",
+      "display-fill",
+      "bg-aurora",
+      "bg-mesh",
+      "blob",
+      "glow-pulse",
+      "gradient-border",
+      "gradient-text",
+      "cursor-blob",
+      "magnetic"
+    ],
+
+    "fonts_must_be_in": [
+      ["Fraunces", "Newsreader"],
+      ["Newsreader", "Inter"],
+      ["Cormorant", "Newsreader"]
+    ]
+  },
+
+  "notes": "Editorial-publication = serif display + serif body, film-grain поверх hero-фото, footnote-style eyebrows. Newsletter signup tихий — не sticky-CTA. Anti-pattern: grotesque шрифты для display, hover-карточки с тенями, градиенты. Indigo в must_avoid — журналистский сайт никогда не должен выглядеть как SaaS."
+}

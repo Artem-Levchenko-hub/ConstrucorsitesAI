@@ -1,70 +1,80 @@
 @import "tailwindcss";
 
-/*
- * Omnia.AI design tokens — mirror landing.omniadevelop.ru visual identity.
- * Tailwind v4 generates utility classes from --color-* / --font-* / --radius-*:
- *   --color-surface-base   → bg-surface-base, text-surface-base, …
- *   --color-fg-primary     → text-fg-primary, …
- *   --color-border-default → border-border-default
- *   --radius-md            → rounded-md
- */
+/* Apple System Dark — hierarchy via material elevation + 0.5px hairlines, not glow.
+   Tailwind v4 generates utilities from --color-* / --font-* / --radius-* / --shadow-*. */
 
 @theme {
-  /* Surfaces — indigo-tinted dark (mirrors landing --bg / --bg-2 / --bg-3) */
-  --color-surface-base: #0d0d12;
-  --color-surface-raised: #14141b;
-  --color-surface-overlay: #1c1c25;
-  --color-surface-input: #14141b;
-  --color-surface-panel-dark: #08080c;
-  --color-surface-glass: rgb(20 20 27 / 0.55);
+  --color-bg-base: #000000;
+  --color-bg-elevated-1: #1c1c1e;
+  --color-surface: #2c2c2e;
+  --color-surface-2: #3a3a3c;
+  --color-surface-3: #48484a;
 
-  /* Borders */
-  --color-border-subtle: #23232d;
-  --color-border-default: #2c2c38;
-  --color-border-strong: #3a3a4a;
-  --color-border-accent: rgb(124 92 255 / 0.28);
+  --color-separator: rgb(84 84 88 / 0.6);
+  --color-separator-solid: #38383a;
 
-  /* Foreground */
-  --color-fg-primary: #f5f5fa;
-  --color-fg-secondary: #c9c9d6;
-  --color-fg-tertiary: #8a8a99;
-  --color-fg-muted: #54545e;
-  --color-fg-on-accent: #ffffff;
+  --color-label-1: rgb(255 255 255 / 1);
+  --color-label-2: rgb(235 235 245 / 0.6);
+  --color-label-3: rgb(235 235 245 / 0.3);
+  --color-label-4: rgb(235 235 245 / 0.18);
 
-  /* Accent — violet (landing --accent / --accent-2) */
-  --color-accent: #7c5cff;
-  --color-accent-hover: #6647e8;
-  --color-accent-subtle: rgb(124 92 255 / 0.10);
-  --color-accent-secondary: #5cb8ff;
+  --color-accent: #0a84ff;
+  --color-accent-fg: #ffffff;
 
-  /* Semantic */
-  --color-success: #4cd9a4;
-  --color-warning: #ffd166;
-  --color-danger: #ff6b8a;
-  --color-info: #5cb8ff;
+  --color-system-red: #ff453a;
+  --color-system-orange: #ff9f0a;
+  --color-system-yellow: #ffd60a;
+  --color-system-green: #32d74b;
+  --color-system-teal: #5ac8fa;
+  --color-system-indigo: #5e5ce6;
 
-  /* Radii — landing 8/14/22 + pill */
-  --radius-sm: 8px;
+  --material-ultrathin-bg: rgb(28 28 30 / 0.5);
+  --material-thin-bg: rgb(28 28 30 / 0.65);
+  --material-regular-bg: rgb(28 28 30 / 0.78);
+  --material-thick-bg: rgb(28 28 30 / 0.87);
+  --material-ultrathick-bg: rgb(28 28 30 / 0.94);
+
+  --radius-xs: 6px;
+  --radius-sm: 10px;
   --radius-md: 14px;
   --radius-lg: 22px;
+  --radius-xl: 28px;
   --radius-pill: 999px;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 3px rgb(0 0 0 / 0.2);
-  --shadow-md: 0 4px 14px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.25);
-  --shadow-lg: 0 24px 60px -20px rgb(0 0 0 / 0.6), 0 8px 28px -10px rgb(0 0 0 / 0.4);
-  --shadow-glow: 0 0 0 1px rgb(124 92 255 / 0.25), 0 30px 80px -20px rgb(124 92 255 / 0.4);
+  --shadow-edge: 0 0.5px 0 var(--color-separator-solid);
 
-  /* Easings */
-  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-system: cubic-bezier(0.25, 0.1, 0.25, 1);
 
-  /* Fonts — wired to next/font CSS variables in app/layout.tsx */
   --font-sans:
-    var(--font-onest), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    var(--font-inter-tight), system-ui, "Segoe UI", Roboto, sans-serif;
   --font-mono:
-    var(--font-jetbrains), ui-monospace, "Cascadia Code", "Source Code Pro",
+    ui-monospace, "SF Mono", var(--font-jetbrains), "Cascadia Mono",
     Menlo, Monaco, Consolas, monospace;
+
+  /* Legacy aliases — kept until W2 component sweep replaces direct refs. */
+  --color-surface-base: #000000;
+  --color-surface-raised: #1c1c1e;
+  --color-surface-overlay: #2c2c2e;
+  --color-surface-input: #1c1c1e;
+  --color-surface-panel-dark: #000000;
+  --color-surface-glass: rgb(28 28 30 / 0.65);
+  --color-border-subtle: rgb(84 84 88 / 0.6);
+  --color-border-default: rgb(84 84 88 / 0.6);
+  --color-border-strong: #38383a;
+  --color-border-accent: #0a84ff;
+  --color-fg-primary: rgb(255 255 255 / 1);
+  --color-fg-secondary: rgb(235 235 245 / 0.6);
+  --color-fg-tertiary: rgb(235 235 245 / 0.3);
+  --color-fg-muted: rgb(235 235 245 / 0.18);
+  --color-fg-on-accent: #ffffff;
+  --color-accent-hover: #0974e0;
+  --color-accent-subtle: rgb(10 132 255 / 0.12);
+  --color-accent-secondary: #5ac8fa;
+  --color-success: #32d74b;
+  --color-warning: #ff9f0a;
+  --color-danger: #ff453a;
+  --color-info: #5ac8fa;
 }
 
 @layer base {
@@ -76,13 +86,8 @@
   body {
     font-family: var(--font-sans);
     font-feature-settings: "ss01", "cv11";
-    color: var(--color-fg-primary);
-    background:
-      radial-gradient(ellipse 80% 50% at 20% 0%, rgb(124 92 255 / 0.10), transparent 60%),
-      radial-gradient(ellipse 60% 40% at 80% 30%, rgb(92 184 255 / 0.06), transparent 60%),
-      radial-gradient(ellipse 70% 50% at 50% 100%, rgb(236 92 255 / 0.05), transparent 60%),
-      var(--color-surface-base);
-    background-attachment: fixed;
+    color: var(--color-label-1);
+    background: var(--color-bg-base);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -92,10 +97,51 @@
     color: #ffffff;
   }
 
-  /* Design system rule: focus-ring always visible (2px accent, 3px offset). */
   :focus-visible {
     outline: 2px solid var(--color-accent);
-    outline-offset: 3px;
+    outline-offset: 2px;
     border-radius: 4px;
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  .material-ultrathin {
+    background: var(--material-ultrathin-bg);
+    backdrop-filter: blur(30px) saturate(180%);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+  }
+  .material-thin {
+    background: var(--material-thin-bg);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+  }
+  .material-regular {
+    background: var(--material-regular-bg);
+    backdrop-filter: blur(50px) saturate(180%);
+    -webkit-backdrop-filter: blur(50px) saturate(180%);
+  }
+  .material-thick {
+    background: var(--material-thick-bg);
+    backdrop-filter: blur(60px) saturate(180%);
+    -webkit-backdrop-filter: blur(60px) saturate(180%);
+  }
+  .material-ultrathick {
+    background: var(--material-ultrathick-bg);
+    backdrop-filter: blur(70px) saturate(180%);
+    -webkit-backdrop-filter: blur(70px) saturate(180%);
+  }
+
+  .hairline { box-shadow: var(--shadow-edge); }
+  .hairline-top { box-shadow: 0 -0.5px 0 var(--color-separator-solid); }
+
+  .tabular-nums { font-variant-numeric: tabular-nums; }
 }

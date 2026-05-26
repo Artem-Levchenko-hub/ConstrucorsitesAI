@@ -25,6 +25,15 @@ const PROVIDER_LABELS: Record<string, string> = {
   google: "Google",
 };
 
+// Phase F.3 — surface multipass routing. Mirrors `CHEAP_MODELS` in
+// `apps/api/src/omnia_api/core/config.py`; budget-tier models run the
+// 4-pass skeleton→content→visual→assembly pipeline by default. The badge
+// explains why a cheap model takes ~4× longer than a premium single-shot.
+const MULTIPASS_MODEL_IDS = new Set<string>([
+  "claude-haiku-4-5",
+  "gpt-5-nano",
+]);
+
 export function ModelSelector() {
   const selected = useWorkspaceStore((s) => s.selectedModelId);
   const setModel = useWorkspaceStore((s) => s.setModel);
@@ -48,6 +57,15 @@ export function ModelSelector() {
             {PROVIDER_LABELS[current.provider]}
           </span>
           <span>{current.display_name}</span>
+          {MULTIPASS_MODEL_IDS.has(current.id) && (
+            <Badge
+              variant="outline"
+              className="text-[9px] uppercase tracking-wide px-1 py-0 h-4"
+              title="Многопроходная генерация: skeleton → content → visual → assembly"
+            >
+              iterative
+            </Badge>
+          )}
           <ChevronDown className="h-3.5 w-3.5 text-fg-tertiary" />
         </Button>
       </DropdownMenuTrigger>

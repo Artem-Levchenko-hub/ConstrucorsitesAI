@@ -1,0 +1,79 @@
+{
+  "id": "real-estate-agency",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for 'boutique real estate agency' prompt class. Stress-tests editorial-trust preset routing (numerals, BW + один muted, корпоративный доверительный тон), премиум-апартамент категория (не stock-фото, не SaaS-pricing, не cute illustrations).",
+
+  "input": {
+    "prompt": "Сделай сайт бутикового агентства недвижимости 'Нева Премиум' из Санкт-Петербурга. Специализация — премиальные апартаменты в историческом центре. Команда из 6 брокеров, более 200 закрытых сделок с 2015 года. Ипотечный калькулятор, успешные кейсы клиентов.",
+    "project_name": "Нева Премиум",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["editorial-trust"],
+    "preset_id_forbidden": ["festival-brutalist", "wellness-casual", "studio-showreel", "boutique-reel"],
+
+    "palette_range": {
+      "must_include_any_of": ["#FFFFFF", "#F4F4F5", "#0A0A0A", "#6B7280", "#E5E5E5"],
+      "must_avoid_any_of": ["#4f46e5", "#6366f1", "#7c3aed", "#8b5cf6", "#a855f7", "#EC4899", "#00FFB2", "#16A34A"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero",
+      "listings_or_categories",
+      "agent_team_or_brokers",
+      "mortgage_calculator_or_pricing",
+      "success_stories_or_cases",
+      "contact_or_booking",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "saas_tier_pricing_basic_standard_premium",
+      "menu_or_food_items",
+      "cute_illustrations_section",
+      "feature_grid_3_columns_emojis"
+    ],
+
+    "content_signals_required": [
+      "Санкт-Петербург или конкретный район (Центральный/Адмиралтейский)",
+      "цены в ₽ (например от 25 млн ₽)",
+      "год основания агентства",
+      "число закрытых сделок",
+      "имена брокеров с фото",
+      "контактный телефон с кодом +7 812"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "section-numeral",
+      "reveal",
+      "fade-up",
+      "marquee",
+      "divider-fade",
+      "scroll-fade-up",
+      "card-soft",
+      "img-zoom",
+      "eyebrow",
+      "avatar"
+    ],
+    "kit_classes_forbidden": [
+      "kinetic-marquee",
+      "display-fill",
+      "bg-aurora",
+      "blob",
+      "cursor-blob",
+      "glow-pulse",
+      "gradient-text",
+      "stars"
+    ],
+
+    "fonts_must_be_in": [
+      ["Inter Display", "Inter"],
+      ["Inter", "Inter"],
+      ["Space Grotesk", "DM Sans"]
+    ]
+  },
+
+  "notes": "Editorial-trust = ч/б + один muted-серый, numerals (0.1/0.2/0.3) над секциями, headshots брокеров. Anti-pattern: stock-фото офисов, 'Innovative solutions for modern businesses', emoji, цветные градиенты. Indigo строго в must_avoid — это премиум-категория, не SaaS."
+}
