@@ -66,9 +66,22 @@ class Settings(BaseSettings):
 
     initial_wallet_balance_rub: float = Field(default=100.0)
 
+    # Phase B — multipass design generation for budget models.
+    # Comma-separated list of model IDs routed through the 4-pass pipeline
+    # (skeleton → content → visual → assembly) instead of single-shot.
+    # Default empty = nobody — Phase B stays dark until explicitly enabled.
+    # Recommended initial value once stable: "claude-haiku-4-5,gpt-5-nano".
+    multipass_models: str = Field(default="")
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def multipass_models_set(self) -> frozenset[str]:
+        return frozenset(
+            m.strip() for m in self.multipass_models.split(",") if m.strip()
+        )
 
 
 @lru_cache(maxsize=1)

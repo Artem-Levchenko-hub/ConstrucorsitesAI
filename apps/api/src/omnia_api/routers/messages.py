@@ -30,7 +30,9 @@ from omnia_api.services.file_extractor import (
 )
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.link_validator import find_dead_links
+from omnia_api.core.config import get_settings
 from omnia_api.services.llm_client import stream_chat_completion
+from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
 from omnia_api.services.queue import enqueue_preview
@@ -396,18 +398,43 @@ async def _process_prompt(
         # ──────────────────────────────────────────────────────────────
         state: dict[str, object] = {"accumulated": "", "usage": None, "error": None}
 
+        # Phase B — feature-flagged multipass for budget models. Operator
+        # opts a model into multipass via env `MULTIPASS_MODELS=claude-haiku-4-5,…`
+        # Empty set (default) ⇒ everyone goes through single-shot path.
+        # See services/multipass_generator.py for the skeleton→assembly flow.
+        multipass_set = get_settings().multipass_models_set
+
         async def _run_stream(use_model: str) -> None:
-            """Drain one stream from the gateway into `state`."""
+            """Drain one stream from the gateway into `state`.
+
+            For models in the multipass set, runs through the multi-pass
+            generator (skeleton → assembly) instead of a single shot. Both
+            paths yield the same event shape downstream, so the file
+            extractor and fallback loop don't care which one ran.
+            """
             state["accumulated"] = ""
             state["usage"] = None
             state["error"] = None
-            async for event in stream_chat_completion(
-                messages,
-                use_model,
-                str(user_id),
-                str(project_id),
-                str(assistant_message_id),
-            ):
+
+            if use_model in multipass_set:
+                source = multipass_generate(
+                    base_messages=messages,
+                    user_prompt=prompt_text,
+                    model=use_model,
+                    user_id=user_id,
+                    project_id=project_id,
+                    message_id=assistant_message_id,
+                )
+            else:
+                source = stream_chat_completion(
+                    messages,
+                    use_model,
+                    str(user_id),
+                    str(project_id),
+                    str(assistant_message_id),
+                )
+
+            async for event in source:
                 if "delta" in event:
                     state["accumulated"] = str(state["accumulated"]) + event["delta"]
                     await publish_event(
@@ -423,6 +450,26 @@ async def _process_prompt(
                 elif "error" in event:
                     state["error"] = event["error"]
                     return
+                elif "pass" in event:
+                    # B.3 — pass-progress events. Fan out via WS so the
+                    # frontend can show "Шаг 1/2: Структура" / "Шаг 2/2:
+                    # Сборка" indicators. Frontend wiring deferred — this
+                    # publishes the channel today so the UI patch is a
+                    # one-file change later.
+                    await publish_event(
+                        project_id,
+                        "llm.pass",
+                        {
+                            "message_id": str(assistant_message_id),
+                            "pass": event["pass"],
+                            "stage": event["stage"],
+                            **{
+                                k: v
+                                for k, v in event.items()
+                                if k not in ("pass", "stage")
+                            },
+                        },
+                    )
 
         # --- Pass 1: primary model ----------------------------------
         await _run_stream(model_id)
