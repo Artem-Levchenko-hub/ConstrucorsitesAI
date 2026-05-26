@@ -405,7 +405,23 @@ generic AI-лендинг 2023 года; с ними — современный 
   • .kinetic-weight на body-тексте — только на display.
   • Любое из этого если prefers-reduced-motion активен — кит сам всё отключит,
     но НЕ строй макет где смысл несёт ИСКЛЮЧИТЕЛЬНО motion (графика должна
-    работать и в статике)."""
+    работать и в статике).
+
+▸ MALEWICZ PRIMITIVES (Phase I — book-derived). Вешай ОДИН класс — кит делает
+  математику теней/радиусов/градиентов. Эти примитивы — твой ПЕРВЫЙ выбор для
+  shadows/gradients/buttons вместо shadow-X / bg-gradient-to-br Tailwind.
+  Tokens: --blur-1/2/3 (2/8/16px), --radius-friendly/sharp/pill (6/0/9999px).
+  .shadow-tinted   (G1) Брендовая тень: --shadow-color от --brand-primary,
+                   opacity ≤30%, spread -2. Замена shadow-lg/-xl Tailwind.
+  .gradient-subtle (G3) 2-stop linear-gradient(135deg) одной температуры:
+                   --brand-primary → --brand-grad-to (auto-12%-light fallback).
+  .gradient-soft-mesh  4 радиальных в углах = «облачный» фон для hero.
+  .btn-modern      (G15) gradient-subtle + shadow-tinted + radius-friendly.
+                   Базовая современная кнопка (не для primary CTA).
+  .btn-cta-primary (G7) Singleton-маркер главной CTA: ровно ОДНА на страницу,
+                   audit Phase H зафлагает 0 или >1.
+  .nested-rounded  (G8) Родитель-маркер; дети получают auto-shrunk radius
+                   (concentric-radius fix). На карты с inner-элементами."""
 
 
 _FUNCTIONAL_CONTRACT = """\

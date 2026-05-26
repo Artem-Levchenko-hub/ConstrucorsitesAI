@@ -606,3 +606,153 @@
   .grain::before,
   .film-grain::after { display: none; }
 }
+
+/* ───── Phase I — Malewicz primitives ──────────────────────────────────
+ * Book-derived utilities (Refactoring UI / Refactoring UI 2 / Malewicz):
+ * AI вешает ОДИН класс — кит делает математику теней/радиусов/градиентов.
+ * Тока CSS, никаких внешних HTTP; tokens с дефолтами на случай отсутствия
+ * брендовых переменных. prefers-reduced-motion guard на всём, что имеет
+ * transition/transform — matches C.5 pattern (grain-heavy и компания). */
+
+/* I5 — Blur tokens (Ch9 p92). Используй var(--blur-*) вместо magic-чисел
+ * в backdrop-filter / filter / box-shadow. Три ступени = достаточно. */
+:root {
+  --blur-1: 2px;
+  --blur-2: 8px;
+  --blur-3: 16px;
+}
+
+/* I6 — Radius tokens (Ch9 p84). Композируются с Tailwind rounded-md/-lg/-xl.
+ * --radius-friendly = «дружелюбный» 6px дефолт для карточек/кнопок.
+ * --radius-sharp = 0 для брутализма/editorial.
+ * --radius-pill = 9999px для bedge/avatar/CTA-капсул. */
+:root {
+  --radius-friendly: 6px;
+  --radius-sharp: 0px;
+  --radius-pill: 9999px;
+}
+
+/* I1 — Brand-tinted shadow (G1). Тень окрашена в брендовый акцент:
+ * сайт переопределяет --shadow-color (HSB sat-10 brightness-20 от
+ * --brand-primary). Без переменной — нейтральный fallback rgba(0,0,0,.18).
+ * opacity ≤ 30%, spread отрицательный → тень «лежит под» элементом,
+ * не «жирная заливка вокруг». */
+.shadow-tinted {
+  box-shadow: 0 8px 20px -2px var(--shadow-color, rgba(0, 0, 0, .18));
+}
+
+/* I2 — 2-stop linear gradient на одной температуре (G3). Сайт задаёт
+ * --brand-grad-to один раз; без неё кит подставляет 12%-осветлённый
+ * вариант --brand-primary через color-mix (новые браузеры) с фолбэком
+ * на нейтральный градиент для старых. */
+.gradient-subtle {
+  background-image: linear-gradient(
+    135deg,
+    var(--brand-primary, #6366f1),
+    var(--brand-grad-to, color-mix(in srgb, var(--brand-primary, #6366f1) 88%, white))
+  );
+}
+
+/* I3 — Soft mesh из 4 радиальных градиентов (Ch11 p137).
+ * Photoshop-style мягкий «облачный» фон для hero. Tokens по углам,
+ * прозрачная база. Каждый radial — брендовый оттенок с прозрачностью.
+ * Сайт может переопределить --mesh-1..--mesh-4 для своей палитры. */
+.gradient-soft-mesh {
+  background-color: transparent;
+  background-image:
+    radial-gradient(at 14% 18%, var(--mesh-1, rgba(99, 102, 241, .28)), transparent 55%),
+    radial-gradient(at 86% 12%, var(--mesh-2, rgba(236, 72, 153, .22)), transparent 55%),
+    radial-gradient(at 18% 88%, var(--mesh-3, rgba(14, 165, 233, .22)), transparent 55%),
+    radial-gradient(at 82% 86%, var(--mesh-4, rgba(139, 92, 246, .22)), transparent 55%);
+}
+
+/* I4 — Modern button (G15: «Modern ≠ Flat»). Композит: gradient-subtle
+ * фон + shadow-tinted lift + дружелюбный radius + transition. Базовая
+ * современная кнопка; для primary-CTA используй .btn-cta-primary. */
+.btn-modern {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding: .65rem 1.25rem;
+  border: 0;
+  border-radius: var(--radius-friendly);
+  background-image: linear-gradient(
+    135deg,
+    var(--brand-primary, #6366f1),
+    var(--brand-grad-to, color-mix(in srgb, var(--brand-primary, #6366f1) 88%, white))
+  );
+  color: var(--brand-on-primary, #fff);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 20px -2px var(--shadow-color, rgba(0, 0, 0, .18));
+  transition: transform .18s cubic-bezier(.16, 1, .3, 1),
+              box-shadow .25s ease,
+              filter .18s ease;
+}
+@media (hover: hover) {
+  .btn-modern:hover {
+    filter: brightness(1.05);
+    box-shadow: 0 12px 26px -4px var(--shadow-color, rgba(0, 0, 0, .22));
+  }
+}
+.btn-modern:active { transform: translateY(1px); }
+
+/* I8 — Primary CTA (G7: «один primary на страницу»). Усиленная версия
+ * btn-modern: глубже тень, чуть больше padding, scale-on-hover. Audit
+ * (Phase H button_rules) считает .btn-cta-primary singleton-маркером —
+ * если их 0 или >1, аудит флагает страницу. */
+.btn-cta-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding: .85rem 1.65rem;
+  border: 0;
+  border-radius: var(--radius-friendly);
+  background-image: linear-gradient(
+    135deg,
+    var(--brand-primary, #6366f1),
+    var(--brand-grad-to, color-mix(in srgb, var(--brand-primary, #6366f1) 88%, white))
+  );
+  color: var(--brand-on-primary, #fff);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -.005em;
+  cursor: pointer;
+  box-shadow: 0 14px 32px -6px var(--shadow-color, rgba(0, 0, 0, .28));
+  transition: transform .2s cubic-bezier(.16, 1, .3, 1),
+              box-shadow .25s ease,
+              filter .2s ease;
+}
+@media (hover: hover) {
+  .btn-cta-primary:hover {
+    transform: translateY(-2px) scale(1.02);
+    filter: brightness(1.06);
+    box-shadow: 0 22px 44px -10px var(--shadow-color, rgba(0, 0, 0, .34));
+  }
+}
+.btn-cta-primary:active { transform: translateY(0) scale(.99); }
+
+/* I7 — Nested rounded (G8: концентрические радиусы). Родитель-маркер;
+ * прямые дети получают auto-shrunk radius. Решает проблему, когда
+ * inner-element с тем же радиусом, что и parent, даёт «коробку в коробке»
+ * с одинаковым закруглением — глаз ловит как баг. --outer-radius задай
+ * на родителе (дефолт 1rem); --inner-shrink (дефолт 0.5rem) — насколько
+ * уменьшить дочерний радиус. */
+.nested-rounded > * {
+  border-radius: calc(var(--outer-radius, 1rem) - var(--inner-shrink, 0.5rem));
+}
+
+/* Accessibility — отключить любые transitions/transforms на Phase I
+ * композитах для motion-sensitive юзеров (matches C.5 pattern). */
+@media (prefers-reduced-motion: reduce) {
+  .btn-modern,
+  .btn-cta-primary {
+    transition: none;
+  }
+  .btn-modern:hover,
+  .btn-cta-primary:hover {
+    transform: none;
+  }
+}

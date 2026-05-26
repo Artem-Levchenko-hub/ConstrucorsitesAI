@@ -342,3 +342,31 @@ def test_build_messages_no_brief_when_project_id_absent() -> None:
     # at least valid (no crash) and contains the base identity.
     system = msgs[0]["content"]
     assert "Omnia.AI" in system
+
+
+def test_phase_i_malewicz_primitives_documented_in_kit_reference() -> None:
+    """Phase I primitives must appear in _KIT_V3_REFERENCE so the AI knows
+    when to apply them. Without the documentation the classes ship but
+    Haiku never reaches for them."""
+    sp = build_system_prompt("landing")
+    assert "MALEWICZ PRIMITIVES" in sp
+    assert ".shadow-tinted" in sp
+    assert ".gradient-subtle" in sp
+    assert ".btn-modern" in sp
+    assert ".btn-cta-primary" in sp
+    assert ".nested-rounded" in sp
+
+
+def test_omnia_kit_css_phase_i_block_is_byte_identical_across_4_templates() -> None:
+    """All 4 static templates ship the SAME omnia-kit.css. C.5 maintained
+    this; Phase I must too. A divergent block per template means a single
+    edit forgot to sync — measure it before it leaks to production."""
+    import pathlib
+    base = pathlib.Path(__file__).parent.parent / "src/omnia_api/templates"
+    files = [
+        (base / t / "assets/omnia-kit.css").read_text(encoding="utf-8")
+        for t in ("blank", "blog", "landing", "portfolio")
+    ]
+    # All 4 files must be byte-identical end-to-end (the C.5 block already
+    # established this invariant — Phase I sync MUST preserve it).
+    assert files[0] == files[1] == files[2] == files[3]
