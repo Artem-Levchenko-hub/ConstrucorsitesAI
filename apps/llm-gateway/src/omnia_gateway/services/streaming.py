@@ -25,6 +25,7 @@ from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services import litellm_router as router_module
 from omnia_gateway.services.pricing import calculate_cost_rub
+from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 from omnia_gateway.services.token_counter import count_message_tokens, count_text_tokens
 
 log = structlog.get_logger(__name__)
@@ -69,7 +70,11 @@ async def _litellm_stream(
     temperature: float | None,
     max_tokens: int | None,
 ) -> AsyncIterator[tuple[str, str]]:
-    kwargs: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    # Wrap the system prompt in `cache_control: ephemeral` for Anthropic models.
+    # Saves 50-90% of input tokens on the 2nd+ request inside the 5-min TTL.
+    # No-op for non-Anthropic models.
+    cached_messages = apply_anthropic_cache(model, messages)  # type: ignore[arg-type]
+    kwargs: dict[str, Any] = {"model": model, "messages": cached_messages, "stream": True}
     if user_id is not None:
         kwargs["user"] = str(user_id)
     if temperature is not None:
