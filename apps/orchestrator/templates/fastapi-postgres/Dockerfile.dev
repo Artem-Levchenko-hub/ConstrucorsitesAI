@@ -1,0 +1,25 @@
+# Dev image for the FastAPI + asyncpg + SQLAlchemy 2 template.
+# Same Python 3.12-slim base + uv as the telegram-bot template — shared
+# layer cache on the VPS.
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir uv==0.5.13
+
+RUN useradd -m -u 1000 apiuser
+USER apiuser
+
+COPY --chown=apiuser:apiuser pyproject.toml uv.lock* ./
+RUN uv sync --no-dev || uv sync
+
+COPY --chown=apiuser:apiuser . .
+
+EXPOSE 3000
+
+# `--reload` for HMR-like behaviour on source changes (orchestrator
+# bind-mounts /app/src). `--host 0.0.0.0` so the container exposes :3000
+# to host network. Port :3000 matches the orchestrator's container port
+# binding (same as the other templates).
+CMD ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "3000", "--reload"]

@@ -24,6 +24,7 @@ from fastapi import APIRouter, status
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.project import Project
+from omnia_api.schemas.project import orchestrator_template
 from omnia_api.schemas.runtime import (
     DeployRequest,
     DeployStatus,
@@ -96,15 +97,18 @@ async def start_runtime(
     does not change.
     """
     project = await _project_owned_by(session, project_id, current_user.id)
-    # Today there's only one orchestrator template (nextjs-postgres-drizzle),
-    # so every project — fullstack or static — provisions into it when the
-    # user hits Start. That lets a V1 static user opt into "give me a real
-    # backend" without re-creating the project. When a second template lands
-    # this becomes a real switch on `project.template`.
+    # Map api-side `template` to the orchestrator's actual template dir.
+    # Static V1 templates (blank/landing/portfolio/blog) have no orchestrator
+    # image — they ship as plain HTML via /p/<slug>. We default those to
+    # `nextjs-postgres-drizzle` so a V1 user who hits "Start" can still
+    # opt into a full backend (lazy upgrade) without re-creating the project.
+    orch_template = (
+        orchestrator_template(project.template) or "nextjs-postgres-drizzle"
+    )
     payload = await orchestrator_client.provision(
         project_id=project_id,
         slug=project.slug,
-        template="nextjs-postgres-drizzle",
+        template=orch_template,
         tier="free",
     )
     return _to_runtime_status(payload)

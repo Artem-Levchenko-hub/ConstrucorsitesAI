@@ -1,0 +1,29 @@
+# Dev image for the aiogram 3 Telegram bot template.
+# Python 3.12-slim + uv for dependency install. The bot runs in
+# long-polling mode by default — no public webhook needed, works
+# behind any NAT.
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# uv handles deps fast and deterministically. We use the same major as
+# orchestrator-side python tooling for consistency.
+RUN pip install --no-cache-dir uv==0.5.13
+
+# Non-root user matching orchestrator's --user 1000:1000 spec.
+RUN useradd -m -u 1000 botuser
+USER botuser
+
+# Layered install — deps first so source changes don't bust the cache.
+COPY --chown=botuser:botuser pyproject.toml uv.lock* ./
+RUN uv sync --no-dev || uv sync
+
+COPY --chown=botuser:botuser . .
+
+EXPOSE 3000
+
+# Health endpoint (aiohttp on :3000) + long-polling bot in the same
+# process. The :3000 binding satisfies orchestrator's "is the container
+# reachable" check; the actual bot work happens over Telegram's API.
+CMD ["uv", "run", "python", "-m", "bot.main"]

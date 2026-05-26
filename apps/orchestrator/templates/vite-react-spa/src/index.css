@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@layer base {
+  html { color-scheme: dark; }
+  body {
+    background: #0a0a0c;
+    color: #e8e8ec;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
