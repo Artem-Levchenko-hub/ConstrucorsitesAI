@@ -1,0 +1,80 @@
+{
+  "id": "vfx-studio",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for 'boutique VFX post-production studio' prompt class. Stress-tests boutique-reel preset routing (тёмная палитра #0E0E0E + accent #FAFAFA, full-bleed showreel video в hero, caps-monumental тон, двухколонник services/portfolio). Не light bg, не SaaS-pricing.",
+
+  "input": {
+    "prompt": "Сделай сайт бутиковой студии VFX и пост-продакшна 'Volna Post' из Санкт-Петербурга. Работаем над коммерческой рекламой, музыкальными клипами, короткометражками. Команда из 12 человек, шоурил последних проектов, список клиентов, физический адрес офиса.",
+    "project_name": "Volna Post",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["boutique-reel", "studio-showreel"],
+    "preset_id_forbidden": ["saas-product", "wellness-casual", "editorial-publication", "scandi-editorial"],
+
+    "palette_range": {
+      "must_include_any_of": ["#0E0E0E", "#0A0A0A", "#1A1A1A", "#171717", "#FAFAFA", "#FFFFFF", "#A3A3A3", "#262626"],
+      "must_avoid_any_of": ["#4f46e5", "#6366f1", "#7c3aed", "#8b5cf6", "#a855f7", "#16A34A", "#10B981", "#0EA5E9", "#FAFAF7"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero_with_showreel_video",
+      "services_what_we_do",
+      "latest_work_grid_or_portfolio",
+      "clients_marquee_or_logos",
+      "contact_with_physical_address",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "saas_tier_pricing_basic_standard_premium",
+      "appointment_booking_calendar",
+      "menu_or_food_items",
+      "integrations_section",
+      "feature_grid_3_columns_emojis",
+      "newsletter_signup_primary"
+    ],
+
+    "content_signals_required": [
+      "Санкт-Петербург и физический адрес",
+      "контактный телефон с кодом +7 812",
+      "имена клиентов или брендов конкретно",
+      "showreel-видео ссылка (Vimeo/YouTube)",
+      "категории работ (VFX/motion/post)",
+      "email контакта для брифа"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "display-hero",
+      "display-fill",
+      "img-zoom",
+      "reveal",
+      "marquee",
+      "shine",
+      "scroll-fade-up",
+      "scroll-clip-reveal",
+      "scroll-pin",
+      "tone-monochrome",
+      "atmosphere-noir",
+      "kinetic-type"
+    ],
+    "kit_classes_forbidden": [
+      "card-soft",
+      "stars",
+      "hover-lift",
+      "badge",
+      "bg-aurora",
+      "cursor-blob"
+    ],
+
+    "fonts_must_be_in": [
+      ["Archivo", "Inter"],
+      ["Space Grotesk", "DM Sans"],
+      ["Unbounded", "JetBrains Mono"]
+    ]
+  },
+
+  "notes": "Boutique-reel = только dark bg (#0E0E0E), full-bleed video в hero, caps-monumental заголовки. Anti-pattern: светлый фон, stock-фото камеры/clapboard, 'We craft visual stories', hover на видео-плеере. Реальные клиенты как доказательство. Indigo в must_avoid — VFX-студия не SaaS, dark + кинематографичный."
+}

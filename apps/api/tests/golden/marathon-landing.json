@@ -1,0 +1,75 @@
+{
+  "id": "marathon-landing",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for 'city marathon registration' prompt class. Stress-tests energetic/kinetic preset routing (festival-brutalist кандидат), короткая страница (~6 секций), яркая палитра (orange/red), регистрационный CTA как primary, не SaaS-tier pricing.",
+
+  "input": {
+    "prompt": "Сделай сайт-регистрацию для городского марафона 'Сибирский ультрамарафон Новосибирск 2026'. Три дистанции (10/21/42 км), карта маршрута по Академгородку, расписание стартов 14 июня, спонсоры, FAQ для участников, регистрация с тарифами Early Bird / Regular / Late.",
+    "project_name": "Сибирский ультрамарафон 2026",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["festival-brutalist", "studio-showreel"],
+    "preset_id_forbidden": ["editorial-publication", "scandi-editorial", "editorial-trust", "wellness-casual"],
+
+    "palette_range": {
+      "must_include_any_of": ["#EA580C", "#F97316", "#DC2626", "#B91C1C", "#0A0A0A", "#FAFAFA", "#FB923C"],
+      "must_avoid_any_of": ["#4f46e5", "#6366f1", "#7c3aed", "#8b5cf6", "#a855f7", "#16A34A", "#2563EB"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero_with_dates_and_city",
+      "distances_or_categories",
+      "route_map_or_course",
+      "registration_or_pricing_tiers",
+      "sponsors_or_partners",
+      "faq",
+      "contact_or_organizer",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "saas_tier_pricing_basic_standard_premium",
+      "menu_or_food_items",
+      "appointment_booking_calendar",
+      "integrations_section"
+    ],
+
+    "content_signals_required": [
+      "Новосибирск или Академгородок",
+      "конкретная дата старта (14 июня 2026)",
+      "три дистанции — 10 км / 21 км / 42 км",
+      "цены регистрации в ₽ по тарифам",
+      "карта маршрута или элевационный профиль"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "kinetic-marquee",
+      "display-fill",
+      "display-hero",
+      "kinetic-type",
+      "split-chars",
+      "marquee",
+      "scroll-fade-up",
+      "scroll-clip-reveal",
+      "reveal",
+      "glow",
+      "shine"
+    ],
+    "kit_classes_forbidden": [
+      "justified-prose",
+      "film-grain",
+      "cursor-blob"
+    ],
+
+    "fonts_must_be_in": [
+      ["Unbounded", "JetBrains Mono"],
+      ["Space Grotesk", "DM Sans"],
+      ["Archivo", "Inter"]
+    ]
+  },
+
+  "notes": "Marathon = energetic + kinetic — orange/red палитра (как у sport-events Strava/Nike Run), display-fill для дат, kinetic-marquee со списком дистанций. Anti-pattern: серьёзный editorial-tone, indigo SaaS-palette, длинная страница с 10+ секциями. Сохраняем festival-brutalist как primary потому что dark + kinetic дают энергию старта."
+}

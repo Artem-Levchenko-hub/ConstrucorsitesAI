@@ -1,0 +1,82 @@
+{
+  "id": "law-firm",
+  "version": 1,
+  "created": "2026-05-26",
+  "purpose": "Regression seed for 'mid-size law firm' prompt class. Stress-tests editorial-trust preset routing (ч/б палитра + один muted accent, numerals, sober tone), партнёрский тон без emoji/иллюстраций, practice-areas структура (не SaaS-features).",
+
+  "input": {
+    "prompt": "Сделай сайт юридической фирмы 'Иванов и партнёры' из Москвы. Практики: корпоративное право, M&A, налоговые споры, банкротство. Команда из 8 партнёров, более 15 лет на рынке. Кейсы успешных дел, контакты для консультации.",
+    "project_name": "Иванов и партнёры",
+    "template": "landing"
+  },
+
+  "expected": {
+    "preset_id_candidates": ["editorial-trust"],
+    "preset_id_forbidden": ["wellness-casual", "festival-brutalist", "studio-showreel", "boutique-reel"],
+
+    "palette_range": {
+      "must_include_any_of": ["#FFFFFF", "#F4F4F5", "#0A0A0A", "#0F172A", "#1E293B", "#6B7280", "#A16207", "#92400E"],
+      "must_avoid_any_of": ["#4f46e5", "#6366f1", "#7c3aed", "#8b5cf6", "#a855f7", "#EC4899", "#00FFB2", "#16A34A", "#10B981"]
+    },
+
+    "sections_present_min": [
+      "header",
+      "hero",
+      "practice_areas_or_services",
+      "partners_or_team",
+      "case_studies_or_results",
+      "contact_or_consultation",
+      "footer"
+    ],
+    "sections_forbidden": [
+      "saas_tier_pricing_basic_standard_premium",
+      "menu_or_food_items",
+      "appointment_booking_calendar",
+      "cute_illustrations_section",
+      "feature_grid_3_columns_emojis",
+      "integrations_section"
+    ],
+
+    "content_signals_required": [
+      "Москва или конкретный адрес офиса",
+      "год основания фирмы",
+      "имена партнёров с должностями",
+      "конкретные практики (корпоративное/налоговое/банкротство)",
+      "контактный телефон с кодом +7 495",
+      "форма заявки на консультацию"
+    ],
+
+    "kit_classes_recommended_any_of": [
+      "section-numeral",
+      "reveal",
+      "fade-up",
+      "marquee",
+      "divider-fade",
+      "scroll-fade-up",
+      "card-soft",
+      "eyebrow",
+      "avatar",
+      "avatar-stack"
+    ],
+    "kit_classes_forbidden": [
+      "kinetic-marquee",
+      "display-fill",
+      "bg-aurora",
+      "bg-mesh",
+      "blob",
+      "cursor-blob",
+      "glow-pulse",
+      "gradient-text",
+      "stars",
+      "cursor-trail"
+    ],
+
+    "fonts_must_be_in": [
+      ["Inter Display", "Inter"],
+      ["Inter", "Inter"],
+      ["Newsreader", "Inter"]
+    ]
+  },
+
+  "notes": "Editorial-trust = ч/б + muted gold (#A16207/#92400E) или muted navy (#0F172A) как accent. Partners headshots обязательны. Anti-pattern: cute illustrations, emoji, stock-фото 'businessmen shaking hands', цветные градиенты, SaaS-tier pricing. Indigo строго в must_avoid — юрфирма не SaaS-продукт."
+}
