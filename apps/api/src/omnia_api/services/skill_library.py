@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import colorsys
 import csv
+import json
 import random
 import re
 from collections.abc import Sequence
@@ -34,6 +35,10 @@ from typing import TypedDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # apps/api/
 _SKILL_DATA = _REPO_ROOT / "skills" / "ui-ux-pro-max" / "data"
+# Phase D.1' + D.2' — awwwards-corpus reference + design-patterns library.
+# JSON-backed (not CSV) because the corpus entries carry nested palette/
+# fonts/motion_signature dicts that don't flatten cleanly into rows.
+_DATA_DIR = _REPO_ROOT / "data"
 
 
 class Palette(TypedDict):
@@ -1169,3 +1174,127 @@ def format_design_brief(
         )
 
     return "\n\n".join(parts)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Phase D.1' + D.2' — awwwards corpus + design-patterns lookup
+#
+# Two separate JSON files under ``apps/api/data/``:
+#   • awwwards_corpus.json   — 10 reference sites (5 Western + 5 RU
+#     synthesized) with palette/fonts/motion_signature. Stylistic anchor
+#     when palette+vertical match.
+#   • design_patterns.json   — ~50 section snippets (hero/features/CTA…)
+#     with ready-to-paste tailwind class lists + kit-class names.
+#
+# Both loaders are `lru_cache`d so import cost stays zero until the first
+# lookup, and `FileNotFoundError` degrades to `[]` instead of crashing —
+# the prompt builder treats absent data the same as zero matches.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@lru_cache(maxsize=1)
+def _load_awwwards_corpus() -> list[dict]:
+    """Read ``apps/api/data/awwwards_corpus.json``. Lazy + cached so import
+    cost stays zero when the corpus isn't queried.
+
+    Returns an empty list on FileNotFoundError so the prompt builder
+    treats a missing file as "no matches" instead of crashing.
+    """
+    try:
+        return json.loads(
+            (_DATA_DIR / "awwwards_corpus.json").read_text(encoding="utf-8")
+        )
+    except FileNotFoundError:
+        return []
+
+
+def lookup_awwwards_reference(
+    *tokens: str, region: str | None = None, limit: int = 3
+) -> list[dict]:
+    """Surface up-to-`limit` awwwards-tier reference entries matching the
+    prompt tokens (industry_tags + style_id substring match).
+
+    ``region`` ∈ {"western", "russian", None}; ``None`` merges both.
+    Result is ordered by tag-overlap score, then by id (alpha) for
+    deterministic ties. When ``tokens`` is empty the function returns the
+    first `limit` entries from the (optionally region-filtered) corpus —
+    callers asking "give me any X reference" get a stable answer.
+    """
+    corpus = _load_awwwards_corpus()
+    if not corpus:
+        return []
+
+    pool = (
+        [e for e in corpus if e.get("region") == region]
+        if region is not None
+        else list(corpus)
+    )
+    if not pool:
+        return []
+
+    if not tokens:
+        # No tokens → deterministic order by id, take first `limit`.
+        return sorted(pool, key=lambda e: e.get("id", ""))[:limit]
+
+    lowered = [t.lower() for t in tokens]
+
+    def _score(entry: dict) -> int:
+        # Match tokens against industry_tags + style_id. Each tag-token
+        # substring hit = +1; style_id hit = +1.
+        hay = " ".join(entry.get("industry_tags", []) + [entry.get("style_id", "")]).lower()
+        return sum(1 for t in lowered if t and t in hay)
+
+    scored = [(_score(e), e) for e in pool]
+    scored.sort(key=lambda t: (-t[0], t[1].get("id", "")))
+    return [e for score, e in scored[:limit] if score > 0] or [
+        # If no token scored, still return the first `limit` from sorted
+        # pool — never an empty list when the corpus has entries.
+        e for _, e in scored[:limit]
+    ]
+
+
+@lru_cache(maxsize=1)
+def _load_design_patterns() -> list[dict]:
+    """Read ``apps/api/data/design_patterns.json``. Lazy + cached.
+
+    Returns an empty list on FileNotFoundError so callers treat missing
+    data as "no patterns available" instead of crashing.
+    """
+    try:
+        return json.loads(
+            (_DATA_DIR / "design_patterns.json").read_text(encoding="utf-8")
+        )
+    except FileNotFoundError:
+        return []
+
+
+def lookup_design_pattern_snippets(
+    section_type: str, style_id: str | None = None, limit: int = 3
+) -> list[dict]:
+    """Return up-to-`limit` snippet patterns for the given ``section_type``,
+    optionally filtered by ``style_id``.
+
+    Used by the prompt builder to feed the AI concrete tailwind class
+    lists instead of letting it invent hero layouts from scratch.
+
+    Falls back to all ``section_type`` matches across all styles when
+    ``style_id`` is None or no style match exists — caller always gets
+    at least the section_type slice (never an empty list when the
+    section_type exists in the corpus).
+    """
+    patterns = _load_design_patterns()
+    if not patterns:
+        return []
+
+    section_pool = [p for p in patterns if p.get("section_type") == section_type]
+    if not section_pool:
+        return []
+
+    if style_id is not None:
+        matched = [p for p in section_pool if p.get("style_id") == style_id]
+        if matched:
+            return matched[:limit]
+        # Fallback — section matches but no style match. Caller still
+        # wants snippets for THIS section, not silence.
+
+    return section_pool[:limit]
