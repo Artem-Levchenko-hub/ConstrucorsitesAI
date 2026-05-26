@@ -270,6 +270,36 @@ def test_backend_templates_skip_visual_blocks() -> None:
         assert "ДИЗАЙН-КИТ" not in sp, f"{template} got design kit"
         assert "ВИЗУАЛЬНАЯ НАСЫЩЕННОСТЬ" not in sp, f"{template} got visual rich"
         assert "data-omnia-gen" not in sp, f"{template} got image-gen block"
+        # Phase G — _COPY_RULES is a separate design-noise block (Lorem
+        # ipsum, dark patterns, etc.) that has no business in a tgbot/api
+        # prompt. Backend templates' sections tuple intentionally omits it.
+        # (SHADOW RECIPES etc. live INSIDE _QUALITY_BAR which backend templates
+        # do consume — those subsections are quality bar, not visual noise.)
+        assert "COPY-RULES" not in sp, f"{template} got copy rules"
+
+
+def test_phase_g_malewicz_rules_present_for_all_tiers() -> None:
+    """Phase G — every Malewicz rule must reach the model regardless of tier.
+    The drop-list trim removes _TASTE / _STYLE_KIT for budget — rules placed
+    there would silently vanish. These markers prove the rules landed in
+    surviving blocks."""
+    markers = [
+        "SHADOW RECIPES",       # G1, G2 — in extended _QUALITY_BAR
+        "Double-W",             # G5 — in _QUALITY_BAR BUTTON RULES (RU keeps EN term)
+        "primary CTA",          # G7 — in _QUALITY_BAR BUTTON RULES
+        "ICON DISCIPLINE",      # G9, G10
+        "Lorem ipsum",          # G12 — forbidden, in _COPY_RULES
+        "dark pattern",         # G14 — in AWWWARDS_PRINCIPLES (NO DARK PATTERNS header EN)
+        "MODERN",               # G15 — "MODERN ≠ PURELY FLAT" header
+        "LESS IS MORE",         # G18 — "LESS IS MORE" header
+    ]
+    for model_id in ("claude-opus-4-7", "gpt-5-mini", "claude-haiku-4-5"):
+        sp = build_system_prompt("landing", model_id=model_id)
+        for marker in markers:
+            assert marker.lower() in sp.lower(), (
+                f"Phase G marker {marker!r} missing for tier "
+                f"{model_id} — rule placed in a dropped block?"
+            )
 
 
 def test_visual_templates_include_layout_rigor() -> None:
