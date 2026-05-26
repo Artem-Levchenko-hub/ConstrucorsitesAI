@@ -231,6 +231,7 @@ async def acompletion(
     user: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    _skip_empty_retry: bool = False,
     **extra: Any,
 ) -> dict[str, Any]:
     """Unified async completion.
@@ -318,17 +319,22 @@ async def acompletion(
     # caller's empty-content fallback chain fire — saves a redundant
     # fallback call (and double-billing). Warmup loop in services/warmup.py
     # makes this rare; this is the in-band safety net.
-    try:
-        first_text = response.choices[0].message.content or ""
-    except (AttributeError, IndexError, KeyError):
-        first_text = ""
-    if len(first_text) < _MIN_NONEMPTY_RESPONSE_CHARS:
-        log.info(
-            "acompletion.retry_on_empty",
-            model=model,
-            first_len=len(first_text),
-        )
-        await asyncio.sleep(_EMPTY_RETRY_DELAY_S)
-        response = await _attempt()
+    #
+    # _skip_empty_retry: warmup calls explicitly request ≤4 tokens — the
+    # short reply is the intended outcome, not a cold-start artifact.
+    # Retrying there would double proxyapi spend every 240s.
+    if not _skip_empty_retry:
+        try:
+            first_text = response.choices[0].message.content or ""
+        except (AttributeError, IndexError, KeyError):
+            first_text = ""
+        if len(first_text) < _MIN_NONEMPTY_RESPONSE_CHARS:
+            log.info(
+                "acompletion.retry_on_empty",
+                model=model,
+                first_len=len(first_text),
+            )
+            await asyncio.sleep(_EMPTY_RETRY_DELAY_S)
+            response = await _attempt()
 
     return response.model_dump() if hasattr(response, "model_dump") else dict(response)

@@ -17,6 +17,7 @@ timeout is ~5 min).
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import structlog
 
@@ -42,14 +43,27 @@ PERIODIC_INTERVAL_S: float = 240.0
 
 async def _ping(model: str) -> None:
     """Fire one minimal completion. Errors are logged, not raised — the
-    warmup loop must survive every transient upstream failure."""
+    warmup loop must survive every transient upstream failure.
+
+    Model-specific kwargs: gpt-5 family rejects ``temperature=0.0``
+    (only temperature=1 is allowed) and burns a tiny max_tokens budget
+    entirely on hidden reasoning, returning 0 visible chars. Let
+    ``litellm_router.acompletion`` patch sane defaults for those families
+    (it already handles ``reasoning_effort`` + sufficient max_tokens for
+    gpt-5/gemini). For Anthropic (Claude family) the small budget is fine.
+    """
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        # Skip acompletion's retry-on-empty — a tiny intentional reply
+        # is not a cold-start failure for warmup purposes.
+        "_skip_empty_retry": True,
+    }
+    if model.startswith("claude-"):
+        kwargs["max_tokens"] = 4
+        kwargs["temperature"] = 0.0
     try:
-        await litellm_router.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=4,
-            temperature=0.0,
-        )
+        await litellm_router.acompletion(**kwargs)
     except Exception as exc:  # noqa: BLE001 — warmup must never crash
         log.warning("warmup.ping_failed", model=model, error=str(exc))
 
