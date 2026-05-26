@@ -112,6 +112,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
                   ...m,
                   tokens_in: event.data.tokens_in,
                   tokens_out: event.data.tokens_out,
+                  // Client-side annotation: not persisted in the DB row, but
+                  // ChatMessage.tsx surfaces it as "≈ ₽X" so the user sees
+                  // approximate per-prompt cost without opening the wallet.
+                  cost_rub: event.data.cost_rub ?? null,
                 }
               : m,
           ),

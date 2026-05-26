@@ -11,6 +11,22 @@
 import { apiFetch } from "./client";
 import type { DeployStatus, RuntimeStatus, Uuid } from "./types";
 
+export type RuntimeLogs = {
+  container_name: string | null;
+  tail: number;
+  logs: string;
+};
+
+export async function getRuntimeLogs(
+  projectId: Uuid,
+  tail: number = 200,
+  kind: "dev" | "prod" = "dev",
+): Promise<RuntimeLogs> {
+  return apiFetch<RuntimeLogs>(
+    `/api/projects/${projectId}/runtime/logs?tail=${tail}&kind=${kind}`,
+  );
+}
+
 export async function getRuntime(projectId: Uuid): Promise<RuntimeStatus> {
   return apiFetch<RuntimeStatus>(`/api/projects/${projectId}/runtime`);
 }

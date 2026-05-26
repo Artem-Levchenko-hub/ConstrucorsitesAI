@@ -76,6 +76,10 @@ export type SelectedElement = {
   comment?: string | null;
 };
 
+/** Approximate cost in rubles for this assistant message. Filled client-side
+ * by `usePromptStream` from the `llm.done` event payload — not persisted in
+ * the DB row (the wallet charge persists separately). Optional because
+ * historical messages predating this field have no value. */
 export type Message = {
   id: Uuid;
   project_id: Uuid;
@@ -85,6 +89,8 @@ export type Message = {
   model_id: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
+  /** Approximate ruble cost — set client-side from `llm.done` event payload. */
+  cost_rub?: number | null;
   /** Select-mode context attached to a user message (for chat-history chips). */
   selected_elements?: SelectedElement[] | null;
   created_at: IsoDateTime;

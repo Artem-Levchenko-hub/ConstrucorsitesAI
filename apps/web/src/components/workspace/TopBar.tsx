@@ -16,8 +16,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { DesignPresetSelector } from "./DesignPresetSelector";
 import { GithubPushButton } from "./GithubPushButton";
 import { ImageGenToggle } from "./ImageGenToggle";
+import { LogsViewer } from "./LogsViewer";
 import { ModelSelector } from "./ModelSelector";
 import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
@@ -70,6 +72,7 @@ export function TopBar({
         {showProjectControls && (
           <>
             {projectId && <RuntimeButton projectId={projectId} />}
+            {projectId && <LogsViewer projectId={projectId} />}
             {projectId && projectSlug && (
               <GithubPushButton
                 projectId={projectId}
@@ -83,14 +86,12 @@ export function TopBar({
               />
             )}
             <ModelSelector />
-            {designPresetId && designPresetName && (
-              <span
-                title={`Дизайн-пресет: ${designPresetName}. AI выбрал автоматически.`}
-                className="inline-flex items-center gap-1 h-7 px-2.5 rounded-full border border-border-default bg-surface-raised text-xs text-fg-secondary whitespace-nowrap cursor-default select-none"
-              >
-                <span aria-hidden="true">🎨</span>
-                <span className="truncate max-w-[140px]">{designPresetName}</span>
-              </span>
+            {projectId && (
+              <DesignPresetSelector
+                projectId={projectId}
+                initialPresetId={designPresetId}
+                initialPresetName={designPresetName}
+              />
             )}
             <WalletBadge />
           </>

@@ -96,8 +96,18 @@ export function ChatMessage({
         {!isUser &&
           message.tokens_out !== null &&
           message.tokens_in !== null && (
-            <div className="text-[11px] font-mono text-fg-tertiary pt-1">
-              ↑ {message.tokens_in} · ↓ {message.tokens_out} tokens
+            <div className="text-[11px] font-mono text-fg-tertiary pt-1 flex items-center gap-2">
+              <span>
+                ↑ {message.tokens_in} · ↓ {message.tokens_out} tokens
+              </span>
+              {message.cost_rub != null && message.cost_rub > 0 && (
+                <span
+                  title="Списано с кошелька за эту генерацию"
+                  className="text-fg-tertiary"
+                >
+                  · ≈ ₽{message.cost_rub.toFixed(2)}
+                </span>
+              )}
             </div>
           )}
       </div>
