@@ -386,6 +386,11 @@ async def _process_prompt(
             # Stable seed for the `ui-ux-pro-max` UX-guidelines sample —
             # re-prompts inside one project always surface the same rules.
             project_id=str(project_id),
+            # Phase F.2 — flows the model id to the prompt assembler so it
+            # trims detail-polish blocks for budget/balanced tiers. Budget
+            # single-shot (multipass disabled) gets ~6 KB shorter prompt;
+            # balanced gets ~3 KB shorter; premium keeps the full brief.
+            model_id=model_id,
         )
         print(f"[PP] messages_built count={len(messages)}", flush=True)
 

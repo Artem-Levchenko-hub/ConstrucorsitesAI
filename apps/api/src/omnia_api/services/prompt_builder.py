@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from omnia_api.core.config import tier_for_model
 from omnia_api.services import skill_library
 from omnia_api.services.design_presets import (
     AWWWARDS_PRINCIPLES,
@@ -1559,12 +1560,58 @@ _VISUAL_TEMPLATES = {"fullstack", "spa"}
 _BACKEND_TEMPLATES = {"tgbot", "api"}
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Phase F.2 — Per-tier prompt trimming.
+#
+# Premium models (Opus/Sonnet/GPT-5) hold focus on a ~14 K-token prompt
+# fine. Budget models (Haiku/Nano) routinely drop guidance buried past
+# position #5-6 ("lost in the middle"). Balanced (Mini/Yandex/Gigachat)
+# sit between — they read the head and tail well but fade in the body.
+#
+# `_BLOCKS_TO_DROP_BY_TIER` lists which long detail-rich sections we
+# remove when assembling for each tier. The dropped blocks are the
+# inspirational / detail-polish layers — design floor (palette anchor,
+# AWWWARDS_PRINCIPLES, _LAYOUT_RIGOR, _FUNCTIONAL_CONTRACT, _SELF_CHECK,
+# _RESPONSE, _STACK) stays for every tier.
+#
+# Budget tier ALSO routes through `multipass_generate` (Phase B) when
+# `MULTIPASS_MODELS` env-flag is set — this trim path is the fallback
+# single-shot for the same models when multipass is disabled.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _drop_blocks_for_tier(sections: tuple[str, ...], tier: str) -> tuple[str, ...]:
+    """Return `sections` with the per-tier heavy blocks filtered out.
+
+    Filtering uses identity-equality (`is`) because the dropped sentinels
+    are module-level string constants — every `sections` tuple holds the
+    same `_DETAILS_KIT` / `_SIGNATURE_MOVES` / … object, never a copy.
+    """
+    if tier == "premium":
+        return sections
+    drop: set[str]
+    if tier == "budget":
+        # Aggressive trim — cuts ~6 KB out of the ~14 KB prompt so Haiku
+        # 4.5 keeps focus through the head→tail span. The blocks dropped
+        # are the depth-of-taste polish layers; the design floor stays.
+        drop = {_DETAILS_KIT, _SIGNATURE_MOVES, _TASTE, _STYLE_KIT, _VISUAL_RICH_KIT}
+    elif tier == "balanced":
+        # Light trim — keeps the visual richness + style kit, drops only
+        # the deeply prose-y inspirational layers that overflow attention
+        # on mid-tier models.
+        drop = {_DETAILS_KIT, _SIGNATURE_MOVES, _TASTE}
+    else:
+        return sections
+    return tuple(s for s in sections if s not in drop)
+
+
 def build_system_prompt(
     template: str,
     preset_id: str | None = None,
     image_gen_enabled: bool = True,
     *,
     skill_brief: str | None = None,
+    model_id: str | None = None,
 ) -> str:
     """Собрать system prompt под тип проекта.
 
@@ -1686,6 +1733,14 @@ def build_system_prompt(
             _SELF_CHECK,
             _RESPONSE,
         )
+
+    # Phase F.2 — apply per-tier trim. Budget/balanced models drop the
+    # detail-polish layers so the head→tail span fits their attention
+    # budget. Premium-tier and missing-model_id calls keep the full
+    # prompt (the missing-id path covers internal callers like the
+    # preset classifier that don't speak in tier terms).
+    if model_id is not None:
+        sections = _drop_blocks_for_tier(sections, tier_for_model(model_id))
     return "\n\n".join(sections)
 
 
@@ -1734,6 +1789,7 @@ def build_messages(
     preset_id: str | None = None,
     image_gen_enabled: bool = True,
     project_id: str | None = None,
+    model_id: str | None = None,
 ) -> list[dict[str, str]]:
     # Pull a `ui-ux-pro-max` design brief for this specific prompt — palette
     # + font pairing + 5 high-severity UX rules. Skipped silently when the
@@ -1741,6 +1797,9 @@ def build_messages(
     # (`_compute_skill_brief` returns None).
     skill_brief = _compute_skill_brief(user_prompt, project_id)
 
+    # Phase F.2 — `model_id` flows into `build_system_prompt` so the prompt
+    # assembler can trim heavy blocks for budget/balanced tiers. Omitted
+    # by default = premium-tier full prompt (backward-compatible).
     messages: list[dict[str, str]] = [
         {
             "role": "system",
@@ -1749,6 +1808,7 @@ def build_messages(
                 preset_id,
                 image_gen_enabled,
                 skill_brief=skill_brief,
+                model_id=model_id,
             ),
         }
     ]
