@@ -26,6 +26,7 @@ Covers ~80% of landing-page shapes. Extend by adding Pydantic class
 + Jinja template; registry auto-discovers via subclasses.
 """
 
+from omnia_api.sections.defaults import apply_smart_defaults
 from omnia_api.sections.ir import (
     CTA,
     Feature,
@@ -47,5 +48,6 @@ __all__ = [
     "Section",
     "TestimonialQuote",
     "Theme",
+    "apply_smart_defaults",
     "render_page",
 ]

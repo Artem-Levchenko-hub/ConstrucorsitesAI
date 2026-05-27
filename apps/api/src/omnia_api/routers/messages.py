@@ -554,6 +554,14 @@ async def _process_prompt(
             try:
                 ir_dict = _json.loads(raw)
                 ir = PageIR.model_validate(ir_dict)
+                # Phase L8 — Smart Defaults engine: fill weak/null fields
+                # (CTA hrefs → conversion anchor, palette → preset HEX,
+                # pricing featured tier, footer copyright with year,
+                # favicon per industry, dark_mode coercion, anchor dedup).
+                # Pure + idempotent — safe on every IR. preset_id is the
+                # classifier's pinned preset for this project.
+                from omnia_api.sections import apply_smart_defaults
+                ir = apply_smart_defaults(ir, preset_id=project_design_preset_id)
                 # Reuse the existing omnia-kit on disk for the project's template.
                 kit_css = current_files.get("src/assets/omnia-kit.css", "")
                 kit_js = current_files.get("src/assets/omnia-kit.js", "")
@@ -903,6 +911,9 @@ async def _process_prompt(
                             raw_r = raw_r.strip()
                         try:
                             ir_r = _PageIR_r.model_validate(_json_r.loads(raw_r))
+                            # Phase L8 — Smart Defaults on retry IR too.
+                            from omnia_api.sections import apply_smart_defaults as _smart_r
+                            ir_r = _smart_r(ir_r, preset_id=project_design_preset_id)
                             kit_css_r = current_files.get("src/assets/omnia-kit.css", "")
                             kit_js_r = current_files.get("src/assets/omnia-kit.js", "")
                             rendered_r = _render_to_files_r(
