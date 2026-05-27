@@ -1,0 +1,31 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28 bg-{{ theme.neutral }}-50">
+  <div class="max-w-7xl mx-auto px-6">
+    <div class="max-w-3xl mx-auto text-center mb-16">
+      {% if s.eyebrow %}<p class="reveal text-sm uppercase tracking-widest font-semibold mb-4" style="color:var(--omnia-primary)">{{ s.eyebrow }}</p>{% endif %}
+      <h2 class="reveal display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">{{ s.headline }}</h2>
+      {% if s.subheadline %}<p class="reveal mt-5 text-lg text-{{ theme.neutral }}-600 leading-relaxed">{{ s.subheadline }}</p>{% endif %}
+    </div>
+    <div class="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+      {% for t in s.tiers %}
+      <div class="reveal rounded-2xl p-10 {% if t.featured %}btn-primary text-white{% else %}bg-white border border-{{ theme.neutral }}-200{% endif %} card-soft" data-reveal-delay="{{ loop.index }}">
+        <h3 class="font-display text-2xl font-bold {% if t.featured %}text-white{% else %}text-{{ theme.neutral }}-900{% endif %}">{{ t.name }}</h3>
+        <div class="mt-4 flex items-baseline gap-1">
+          <span class="font-display text-5xl font-bold tabular">{{ t.price }}</span>
+          {% if t.period %}<span class="opacity-70">/{{ t.period }}</span>{% endif %}
+        </div>
+        <ul class="mt-8 space-y-3">
+          {% for f in t.features %}
+          <li class="flex gap-3">
+            <svg class="w-5 h-5 flex-none mt-0.5 {% if not t.featured %}text-primary{% endif %}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+            <span>{{ f }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        <a href="{{ t.cta.href }}" class="mt-10 inline-flex w-full items-center justify-center px-6 py-4 rounded-xl font-semibold {% if t.featured %}bg-white text-{{ theme.neutral }}-900{% else %}btn-primary{% endif %} press">
+          {{ t.cta.label }}
+        </a>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>

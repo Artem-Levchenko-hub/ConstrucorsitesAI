@@ -1,0 +1,33 @@
+<section id="{{ anchor_id }}" class="relative py-24 md:py-36 overflow-hidden">
+  <div class="max-w-5xl mx-auto px-6 text-center">
+    {% if s.eyebrow %}
+    <div class="reveal inline-flex items-center gap-2 rounded-full border border-{{ theme.neutral }}-200 px-4 py-1.5 text-sm font-medium text-{{ theme.neutral }}-500 mb-8">
+      <span class="h-2 w-2 rounded-full" style="background:var(--omnia-primary)"></span>
+      {{ s.eyebrow }}
+    </div>
+    {% endif %}
+    <h1 class="reveal display-hero font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">
+      {%- if s.headline_accent and s.headline_accent in s.headline -%}
+        {%- set parts = s.headline.split(s.headline_accent, 1) -%}
+        {{ parts[0] }}<span class="gradient-text-brand">{{ s.headline_accent }}</span>{{ parts[1] }}
+      {%- else -%}
+        {{ s.headline }}
+      {%- endif -%}
+    </h1>
+    {% if s.subheadline %}
+    <p class="reveal mt-8 text-lg md:text-xl text-{{ theme.neutral }}-600 max-w-2xl mx-auto leading-relaxed">
+      {{ s.subheadline }}
+    </p>
+    {% endif %}
+    <div class="reveal mt-12 flex flex-wrap items-center justify-center gap-4">
+      <a href="{{ s.primary_cta.href }}" class="btn-primary inline-flex items-center justify-center px-8 py-4 rounded-xl font-semibold text-base hover-lift press">
+        {{ s.primary_cta.label }}
+      </a>
+      {% if s.secondary_cta %}
+      <a href="{{ s.secondary_cta.href }}" class="inline-flex items-center justify-center px-8 py-4 rounded-xl font-semibold text-{{ theme.neutral }}-700 hover:text-{{ theme.neutral }}-900 border border-{{ theme.neutral }}-200 hover:border-{{ theme.neutral }}-300 transition-colors">
+        {{ s.secondary_cta.label }}
+      </a>
+      {% endif %}
+    </div>
+  </div>
+</section>

@@ -1,0 +1,38 @@
+<section id="{{ anchor_id }}" class="relative py-20 md:py-28 bg-{{ theme.neutral }}-50">
+  <div class="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-12 items-center">
+    <div class="reveal reveal--left">
+      {% if s.eyebrow %}
+      <div class="inline-flex items-center gap-2 rounded-full bg-{{ theme.neutral }}-100 text-{{ theme.neutral }}-700 px-4 py-1.5 text-sm font-medium mb-6">
+        <span class="h-2 w-2 rounded-full" style="background:var(--omnia-accent)"></span>
+        {{ s.eyebrow }}
+      </div>
+      {% endif %}
+      <h1 class="font-display text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.05] text-{{ theme.neutral }}-900 text-balance">
+        {{ s.headline }}
+      </h1>
+      {% if s.subheadline %}
+      <p class="mt-6 text-lg md:text-xl text-{{ theme.neutral }}-600 max-w-xl leading-relaxed">
+        {{ s.subheadline }}
+      </p>
+      {% endif %}
+      <div class="mt-10 flex flex-wrap items-center gap-4">
+        <a href="{{ s.primary_cta.href }}" class="btn-primary inline-flex items-center justify-center px-7 py-4 rounded-xl font-semibold text-base hover-lift press">
+          {{ s.primary_cta.label }}
+          <svg class="ml-2 w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        </a>
+        {% if s.secondary_cta %}
+        <a href="{{ s.secondary_cta.href }}" class="inline-flex items-center justify-center px-7 py-4 rounded-xl font-semibold text-{{ theme.neutral }}-700 hover:text-{{ theme.neutral }}-900 transition-colors">
+          {{ s.secondary_cta.label }}
+        </a>
+        {% endif %}
+      </div>
+    </div>
+    <div class="reveal reveal--right">
+      {% if s.image_url %}
+      <img src="{{ s.image_url }}" alt="{{ s.image_alt or s.headline }}" class="w-full h-auto rounded-2xl card-soft" loading="lazy">
+      {% else %}
+      <div class="aspect-[4/3] rounded-2xl bg-mesh card-soft" aria-hidden="true"></div>
+      {% endif %}
+    </div>
+  </div>
+</section>

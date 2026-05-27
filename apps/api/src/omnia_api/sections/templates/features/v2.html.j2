@@ -1,0 +1,25 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28 bg-{{ theme.neutral }}-50">
+  <div class="max-w-7xl mx-auto px-6">
+    <div class="max-w-3xl mx-auto text-center mb-20">
+      {% if s.eyebrow %}<p class="reveal text-sm uppercase tracking-widest font-semibold mb-4" style="color:var(--omnia-primary)">{{ s.eyebrow }}</p>{% endif %}
+      <h2 class="reveal display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">{{ s.headline }}</h2>
+      {% if s.subheadline %}<p class="reveal mt-5 text-lg text-{{ theme.neutral }}-600 leading-relaxed">{{ s.subheadline }}</p>{% endif %}
+    </div>
+    <div class="space-y-24">
+      {% for item in s.items %}
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div class="reveal {% if loop.index is divisibleby(2) %}lg:order-2{% endif %}">
+          <div class="flex items-center justify-center w-12 h-12 rounded-xl mb-5" style="background:color-mix(in srgb, var(--omnia-primary) 12%, transparent); color:var(--omnia-primary)">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4M20.618 5.984A11.955 11.955 0 0 1 12 2.944a11.955 11.955 0 0 1-8.618 3.04A12.02 12.02 0 0 0 3 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+          </div>
+          <h3 class="font-display text-2xl md:text-3xl font-bold text-{{ theme.neutral }}-900 mb-4">{{ item.title }}</h3>
+          <p class="text-lg text-{{ theme.neutral }}-600 leading-relaxed">{{ item.body }}</p>
+        </div>
+        <div class="reveal {% if loop.index is divisibleby(2) %}reveal--left lg:order-1{% else %}reveal--right{% endif %}">
+          <div class="aspect-[4/3] rounded-2xl bg-mesh card-soft" aria-hidden="true"></div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>

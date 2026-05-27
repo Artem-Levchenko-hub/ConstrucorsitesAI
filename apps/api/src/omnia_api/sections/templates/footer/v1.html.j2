@@ -1,0 +1,31 @@
+<footer id="{{ anchor_id }}" class="bg-{{ theme.neutral }}-900 text-{{ theme.neutral }}-300">
+  <div class="max-w-7xl mx-auto px-6 py-16">
+    <div class="grid md:grid-cols-2 lg:grid-cols-{{ (s.columns|length) + 1 }} gap-10">
+      <div>
+        <div class="font-display text-lg font-bold tracking-tight text-white mb-3">{{ s.brand }}</div>
+        {% if s.tagline %}<p class="text-sm text-{{ theme.neutral }}-400 leading-relaxed max-w-xs">{{ s.tagline }}</p>{% endif %}
+      </div>
+      {% for col in s.columns %}
+      <div>
+        <h3 class="font-display text-sm font-semibold uppercase tracking-wider text-white mb-4">{{ col.heading }}</h3>
+        <ul class="space-y-2">
+          {% for link in col.links %}
+          <li><a href="{{ link.href }}" class="text-sm text-{{ theme.neutral }}-400 hover:text-white transition-colors">{{ link.label }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+    </div>
+    <hr class="divider-fade my-10" style="background:linear-gradient(90deg, transparent, rgba(255,255,255,.12), transparent)">
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 text-sm text-{{ theme.neutral }}-500">
+      <p>{{ s.copyright }}</p>
+      {% if s.social %}
+      <ul class="flex gap-4">
+        {% for link in s.social %}
+        <li><a href="{{ link.href }}" class="hover:text-white transition-colors">{{ link.label }}</a></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </div>
+</footer>

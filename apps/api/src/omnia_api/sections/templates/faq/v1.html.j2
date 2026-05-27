@@ -1,0 +1,19 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28">
+  <div class="max-w-3xl mx-auto px-6">
+    <div class="text-center mb-12">
+      {% if s.eyebrow %}<p class="reveal text-sm uppercase tracking-widest font-semibold mb-4" style="color:var(--omnia-primary)">{{ s.eyebrow }}</p>{% endif %}
+      <h2 class="reveal display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">{{ s.headline }}</h2>
+    </div>
+    <div class="space-y-3">
+      {% for item in s.items %}
+      <details class="faq-item reveal group rounded-xl border border-{{ theme.neutral }}-200 bg-white" data-reveal-delay="{{ loop.index }}">
+        <summary class="faq-question flex items-center justify-between gap-4 p-5 cursor-pointer font-display text-lg font-semibold text-{{ theme.neutral }}-900 list-none">
+          <span>{{ item.question }}</span>
+          <svg class="w-5 h-5 flex-none transition-transform group-open:rotate-45 text-{{ theme.neutral }}-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        </summary>
+        <div class="faq-answer px-5 pb-5 text-{{ theme.neutral }}-600 leading-relaxed">{{ item.answer }}</div>
+      </details>
+      {% endfor %}
+    </div>
+  </div>
+</section>

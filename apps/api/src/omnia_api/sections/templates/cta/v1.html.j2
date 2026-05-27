@@ -1,0 +1,15 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28">
+  <div class="max-w-4xl mx-auto px-6 text-center reveal">
+    <h2 class="display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">
+      {{ s.headline }}
+    </h2>
+    {% if s.subheadline %}
+    <p class="mt-5 text-lg text-{{ theme.neutral }}-600 leading-relaxed max-w-2xl mx-auto">{{ s.subheadline }}</p>
+    {% endif %}
+    <div class="mt-10">
+      <a href="{{ s.primary_cta.href }}" class="btn-primary inline-flex items-center justify-center px-8 py-4 rounded-xl font-semibold text-base hover-lift press">
+        {{ s.primary_cta.label }}
+      </a>
+    </div>
+  </div>
+</section>

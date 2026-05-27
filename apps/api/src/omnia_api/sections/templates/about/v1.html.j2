@@ -1,0 +1,18 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28">
+  <div class="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-12 items-center">
+    <div class="reveal {% if s.reverse %}lg:order-2 reveal--right{% else %}reveal--left{% endif %}">
+      {% if s.eyebrow %}<p class="text-sm uppercase tracking-widest font-semibold mb-4" style="color:var(--omnia-primary)">{{ s.eyebrow }}</p>{% endif %}
+      <h2 class="display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">{{ s.headline }}</h2>
+      <div class="mt-6 space-y-4 text-lg text-{{ theme.neutral }}-600 leading-relaxed">
+        {% for para in s.body.split("\n\n") %}<p>{{ para }}</p>{% endfor %}
+      </div>
+    </div>
+    <div class="reveal {% if s.reverse %}lg:order-1 reveal--left{% else %}reveal--right{% endif %}">
+      {% if s.image_url %}
+      <img src="{{ s.image_url }}" alt="{{ s.image_alt or s.headline }}" class="w-full rounded-2xl card-soft" loading="lazy">
+      {% else %}
+      <div class="aspect-[4/3] rounded-2xl bg-mesh card-soft" aria-hidden="true"></div>
+      {% endif %}
+    </div>
+  </div>
+</section>

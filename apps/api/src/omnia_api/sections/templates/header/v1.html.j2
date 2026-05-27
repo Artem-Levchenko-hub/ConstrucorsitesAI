@@ -1,0 +1,18 @@
+<header id="{{ anchor_id }}" class="sticky top-0 z-40 glass border-b border-{{ theme.neutral }}-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between gap-6">
+    <a href="{{ s.brand_href }}" class="font-display text-lg font-bold tracking-tight text-{{ theme.neutral }}-900">{{ s.brand }}</a>
+    <nav class="hidden md:flex items-center gap-8" aria-label="Главная навигация">
+      {% for link in s.links %}
+      <a href="{{ link.href }}" class="text-sm font-medium text-{{ theme.neutral }}-700 hover:text-{{ theme.neutral }}-900 transition-colors">{{ link.label }}</a>
+      {% endfor %}
+    </nav>
+    <div class="flex items-center gap-3">
+      {% if s.cta %}
+      <a href="{{ s.cta.href }}" class="btn-primary inline-flex items-center justify-center px-5 py-2.5 rounded-lg font-semibold text-sm press">{{ s.cta.label }}</a>
+      {% endif %}
+      <button type="button" class="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-{{ theme.neutral }}-700 hover:bg-{{ theme.neutral }}-100" aria-label="Меню" data-mobile-menu>
+        <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+    </div>
+  </div>
+</header>

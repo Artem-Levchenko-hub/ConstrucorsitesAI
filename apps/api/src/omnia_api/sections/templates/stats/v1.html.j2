@@ -1,0 +1,21 @@
+<section id="{{ anchor_id }}" class="py-16 md:py-20 bg-{{ theme.neutral }}-50">
+  <div class="max-w-7xl mx-auto px-6">
+    {% if s.headline or s.eyebrow %}
+    <div class="text-center mb-12">
+      {% if s.eyebrow %}<p class="reveal text-sm uppercase tracking-widest font-semibold mb-3" style="color:var(--omnia-primary)">{{ s.eyebrow }}</p>{% endif %}
+      {% if s.headline %}<h2 class="reveal display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">{{ s.headline }}</h2>{% endif %}
+    </div>
+    {% endif %}
+    <dl class="grid grid-cols-2 md:grid-cols-{{ s.items|length if s.items|length <= 4 else 3 }} gap-8 text-center">
+      {% for it in s.items %}
+      <div class="reveal" data-reveal-delay="{{ loop.index }}">
+        <dt class="sr-only">{{ it.label }}</dt>
+        <dd>
+          <span class="font-display text-4xl md:text-5xl font-bold tabular gradient-text-brand">{{ it.value }}</span>
+          <p class="mt-2 text-sm text-{{ theme.neutral }}-600">{{ it.label }}</p>
+        </dd>
+      </div>
+      {% endfor %}
+    </dl>
+  </div>
+</section>

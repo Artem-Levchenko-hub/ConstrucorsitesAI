@@ -1,0 +1,27 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28">
+  <div class="max-w-7xl mx-auto px-6">
+    <div class="max-w-3xl mx-auto text-center mb-16">
+      {% if s.eyebrow %}<p class="reveal text-sm uppercase tracking-widest font-semibold mb-4" style="color:var(--omnia-primary)">{{ s.eyebrow }}</p>{% endif %}
+      <h2 class="reveal display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">{{ s.headline }}</h2>
+    </div>
+    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {% for q in s.items %}
+      <figure class="reveal card-soft bg-white p-8" data-reveal-delay="{{ loop.index }}">
+        <svg class="w-8 h-8 mb-4 opacity-60" style="color:var(--omnia-primary)" viewBox="0 0 24 24" fill="currentColor"><path d="M14.017 21v-7.391c0-5.704 3.731-9.57 8.983-10.609l.995 2.151c-2.432.917-3.995 3.638-3.995 5.849h4v10h-9.983zm-14.017 0v-7.391c0-5.704 3.748-9.57 9-10.609l.996 2.151c-2.433.917-3.996 3.638-3.996 5.849h3.983v10h-9.983z"/></svg>
+        <blockquote class="text-{{ theme.neutral }}-700 leading-relaxed mb-6">«{{ q.quote }}»</blockquote>
+        <figcaption class="flex items-center gap-3">
+          {% if q.avatar_url %}
+          <img src="{{ q.avatar_url }}" alt="" class="w-10 h-10 rounded-full object-cover" loading="lazy">
+          {% else %}
+          <div class="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold" style="background:var(--omnia-primary)">{{ q.author[:1] }}</div>
+          {% endif %}
+          <div>
+            <div class="font-semibold text-{{ theme.neutral }}-900">{{ q.author }}</div>
+            {% if q.role %}<div class="text-sm text-{{ theme.neutral }}-500">{{ q.role }}</div>{% endif %}
+          </div>
+        </figcaption>
+      </figure>
+      {% endfor %}
+    </div>
+  </div>
+</section>

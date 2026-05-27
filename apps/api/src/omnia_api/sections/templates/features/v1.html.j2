@@ -1,0 +1,30 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28">
+  <div class="max-w-7xl mx-auto px-6">
+    <div class="max-w-3xl mx-auto text-center mb-16">
+      {% if s.eyebrow %}
+      <p class="reveal text-sm uppercase tracking-widest font-semibold mb-4" style="color:var(--omnia-primary)">{{ s.eyebrow }}</p>
+      {% endif %}
+      <h2 class="reveal display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">
+        {{ s.headline }}
+      </h2>
+      {% if s.subheadline %}
+      <p class="reveal mt-5 text-lg text-{{ theme.neutral }}-600 leading-relaxed">
+        {{ s.subheadline }}
+      </p>
+      {% endif %}
+    </div>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-8">
+      {% for item in s.items %}
+      <div class="reveal" data-reveal-delay="{{ loop.index }}">
+        <div class="flex items-center justify-center w-12 h-12 rounded-xl mb-5" style="background:color-mix(in srgb, var(--omnia-primary) 12%, transparent); color:var(--omnia-primary)">
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2l2.39 7.36H22l-6.31 4.58 2.41 7.42L12 16.9l-6.1 4.46 2.41-7.42L2 9.36h7.61z"/>
+          </svg>
+        </div>
+        <h3 class="font-display text-xl font-semibold text-{{ theme.neutral }}-900 mb-2">{{ item.title }}</h3>
+        <p class="text-{{ theme.neutral }}-600 leading-relaxed">{{ item.body }}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>

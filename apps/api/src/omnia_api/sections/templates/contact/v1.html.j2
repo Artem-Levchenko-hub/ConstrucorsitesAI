@@ -1,0 +1,29 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28">
+  <div class="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-12">
+    <div class="reveal reveal--left">
+      {% if s.eyebrow %}<p class="text-sm uppercase tracking-widest font-semibold mb-4" style="color:var(--omnia-primary)">{{ s.eyebrow }}</p>{% endif %}
+      <h2 class="display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">{{ s.headline }}</h2>
+      {% if s.subheadline %}<p class="mt-5 text-lg text-{{ theme.neutral }}-600 leading-relaxed">{{ s.subheadline }}</p>{% endif %}
+      <dl class="mt-10 space-y-4">
+        {% if s.address %}<div class="flex gap-3"><dt class="text-{{ theme.neutral }}-500 w-24 flex-none">Адрес</dt><dd class="text-{{ theme.neutral }}-900 font-medium">{{ s.address }}</dd></div>{% endif %}
+        {% if s.phone %}<div class="flex gap-3"><dt class="text-{{ theme.neutral }}-500 w-24 flex-none">Телефон</dt><dd><a href="tel:{{ s.phone }}" class="text-{{ theme.neutral }}-900 font-medium hover:text-primary">{{ s.phone }}</a></dd></div>{% endif %}
+        {% if s.email %}<div class="flex gap-3"><dt class="text-{{ theme.neutral }}-500 w-24 flex-none">Email</dt><dd><a href="mailto:{{ s.email }}" class="text-{{ theme.neutral }}-900 font-medium hover:text-primary">{{ s.email }}</a></dd></div>{% endif %}
+      </dl>
+    </div>
+    <form class="reveal reveal--right card-soft bg-white p-8 space-y-5" onsubmit="event.preventDefault(); this.querySelector('button').textContent='✓ Отправлено';">
+      <div>
+        <label class="block text-sm font-semibold text-{{ theme.neutral }}-700 mb-2">Имя</label>
+        <input type="text" required class="w-full px-4 py-3 rounded-lg border border-{{ theme.neutral }}-200 focus:outline-none focus:ring-2" style="--tw-ring-color:var(--omnia-primary)">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-{{ theme.neutral }}-700 mb-2">Email</label>
+        <input type="email" required class="w-full px-4 py-3 rounded-lg border border-{{ theme.neutral }}-200 focus:outline-none focus:ring-2" style="--tw-ring-color:var(--omnia-primary)">
+      </div>
+      <div>
+        <label class="block text-sm font-semibold text-{{ theme.neutral }}-700 mb-2">Сообщение</label>
+        <textarea rows="4" required class="w-full px-4 py-3 rounded-lg border border-{{ theme.neutral }}-200 focus:outline-none focus:ring-2" style="--tw-ring-color:var(--omnia-primary)"></textarea>
+      </div>
+      <button type="submit" class="btn-primary w-full py-3.5 rounded-xl font-semibold press">{{ s.form_cta_label }}</button>
+    </form>
+  </div>
+</section>

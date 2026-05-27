@@ -1,0 +1,23 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28">
+  <div class="max-w-7xl mx-auto px-6">
+    <div class="reveal rounded-3xl p-10 md:p-16 grid lg:grid-cols-2 gap-10 items-center" style="background:linear-gradient(135deg, var(--omnia-primary), var(--omnia-accent))">
+      <div class="text-white">
+        <h2 class="display-xl font-display font-bold tracking-tight text-balance">{{ s.headline }}</h2>
+        {% if s.subheadline %}<p class="mt-4 text-lg opacity-90 leading-relaxed">{{ s.subheadline }}</p>{% endif %}
+        <div class="mt-8 flex flex-wrap gap-4">
+          <a href="{{ s.primary_cta.href }}" class="inline-flex items-center justify-center px-8 py-4 rounded-xl font-semibold bg-white text-{{ theme.neutral }}-900 hover-lift press">{{ s.primary_cta.label }}</a>
+          {% if s.secondary_cta %}
+          <a href="{{ s.secondary_cta.href }}" class="inline-flex items-center justify-center px-8 py-4 rounded-xl font-semibold text-white border border-white/40 hover:border-white/70 transition-colors">{{ s.secondary_cta.label }}</a>
+          {% endif %}
+        </div>
+      </div>
+      <div class="hidden lg:block">
+        {% if s.image_url %}
+        <img src="{{ s.image_url }}" alt="" class="w-full rounded-2xl" loading="lazy">
+        {% else %}
+        <div class="aspect-square rounded-2xl glass" aria-hidden="true"></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
