@@ -2065,6 +2065,95 @@ def _format_selection_block(selected_elements: Sequence[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+_CATALOG_SYSTEM_PROMPT = """\
+Ты — Omnia.AI, AI-конструктор сайтов для русского рынка. Возвращаешь СТРОГО
+один JSON-объект (PageIR), без markdown-обёртки, без префиксного текста.
+Никакого HTML, никаких <file> блоков. Один JSON и всё.
+
+ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА:
+1. <html lang="ru"> подразумевается, контент пиши по-русски.
+2. Палитра: ровно один primary HEX, один accent HEX, neutral ∈ {{slate, zinc,
+   stone, gray, neutral}}. Контраст текста к фону ≥ 4.5:1.
+3. Sticky header (header.v1) обязателен первой секцией. Footer (footer.v1) —
+   последней. Один hero на страницу.
+4. 7-9 секций для лендинга, 5-6 для портфолио. Никаких заглушек.
+5. Реальные числа в ₽, имена, города, услуги — никакого lorem ipsum.
+6. Headline в каждой секции ≥ 4 символов, ≤ 120.
+7. Нет emoji в UI (можно в favicon_emoji через meta).
+8. Используй ТОЛЬКО variant_id из каталога ниже.
+
+{catalog_blurb}
+
+ВЫВОД — РОВНО ОДИН JSON:
+{{{{
+  "meta": {{{{ "title": "...", "description": "...", "lang": "ru", "favicon_emoji": "🚀" }}}},
+  "theme": {{{{ "primary": "#...", "accent": "#...", "neutral": "slate", "background": "#FFFFFF", "text": "#0F172A", "font_display": "Space Grotesk", "font_body": "DM Sans", "dark_mode": false }}}},
+  "sections": [
+    {{{{ "type_variant": "header.v1", ... }}}},
+    {{{{ "type_variant": "hero.v3", ... }}}},
+    ...
+    {{{{ "type_variant": "footer.v1", ... }}}}
+  ]
+}}}}
+
+Палитра HEX в хвосте — НЕ забудь использовать (anti lost-in-middle):
+PRIMARY и ACCENT возьми из дизайн-брифа выше; если брифа нет — выбери под
+индустрию (SaaS=#2563EB+#EA580C; финансы=#0F172A+#0369A1; еда=#DC2626+#A16207;
+бьюти=#EC4899+#8B5CF6; премиум=#1C1917+#A16207; портфолио=#18181B+#2563EB).
+"""
+
+
+def _build_catalog_system_prompt(
+    preset_id: str | None,
+    skill_brief: dict[str, Any] | None,
+) -> str:
+    """Lean system prompt for catalog/IR mode.
+
+    ~2 500 tokens vs the 14K freeform prompt. The LLM emits PageIR JSON;
+    `sections.render_page()` produces HTML deterministically. Adds the
+    preset palette/fonts at the top so the model has industry-matched
+    tokens before it picks variants.
+    """
+    from omnia_api.sections.catalog import CATALOG_BLURB
+    from omnia_api.services.design_presets import PRESETS, format_preset_block
+
+    header = ""
+    if preset_id and preset_id in PRESETS:
+        try:
+            header += format_preset_block(PRESETS[preset_id]) + "\n\n"
+        except Exception:  # noqa: BLE001 — preset formatting must not block IR mode
+            pass
+    if skill_brief:
+        brief_text = skill_brief.get("brief_text") if isinstance(skill_brief, dict) else None
+        if brief_text:
+            header += f"UX-BRIEF:\n{brief_text}\n\n"
+
+    return header + _CATALOG_SYSTEM_PROMPT.format(catalog_blurb=CATALOG_BLURB)
+
+
+def _build_catalog_messages(
+    history: Sequence[dict[str, str]],
+    user_prompt: str,
+    selected_elements: Sequence[dict[str, Any]] | None,
+    preset_id: str | None,
+    project_id: str | None,
+) -> list[dict[str, str]]:
+    """Catalog-mode message builder. Skips `current_files` (the model
+    is generating a fresh PageIR — file-state context is noise here)."""
+    skill_brief = _compute_skill_brief(user_prompt, project_id)
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": _build_catalog_system_prompt(preset_id, skill_brief)},
+    ]
+    for m in list(history)[-HISTORY_LIMIT:]:
+        if m.get("role") in {"user", "assistant"} and m.get("content"):
+            messages.append({"role": m["role"], "content": m["content"]})
+    final_user = user_prompt
+    if selected_elements:
+        final_user = _format_selection_block(selected_elements) + "\n\n" + user_prompt
+    messages.append({"role": "user", "content": final_user})
+    return messages
+
+
 def build_messages(
     current_files: dict[str, str],
     history: Sequence[dict[str, str]],
@@ -2076,6 +2165,20 @@ def build_messages(
     project_id: str | None = None,
     model_id: str | None = None,
 ) -> list[dict[str, str]]:
+    # Phase L3 — when the feature flag is on, route through the lean
+    # catalog/IR prompt builder. Saves ~73% tokens, locks visual ceiling
+    # via the section catalog. Default OFF — old freeform path stays the
+    # safe default until golden eval shows lean ≥ current quality.
+    from omnia_api.core.config import get_settings
+    if get_settings().use_section_catalog:
+        return _build_catalog_messages(
+            history=history,
+            user_prompt=user_prompt,
+            selected_elements=selected_elements,
+            preset_id=preset_id,
+            project_id=project_id,
+        )
+
     # Pull a `ui-ux-pro-max` design brief for this specific prompt — palette
     # + font pairing + 5 high-severity UX rules. Skipped silently when the
     # prompt has no industry-token signal we can match against

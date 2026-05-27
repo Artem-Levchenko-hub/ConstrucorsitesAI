@@ -508,6 +508,52 @@ async def _process_prompt(
 
         print(f"[PP] stream_complete acc_len={len(accumulated)} usage={usage_data}", flush=True)
 
+        # Phase L3 — catalog/IR mode. The LLM emitted a `PageIR` JSON
+        # object (not HTML); convert it to a `<file path="src/index.html">`
+        # block here so the rest of the pipeline keeps working unchanged.
+        # Fail-soft: if the JSON parse / Pydantic validation fails, log
+        # and fall through to the freeform HTML extractor — the model
+        # may have ignored the IR-only instruction and returned HTML
+        # anyway. We'd rather ship an imperfect site than nothing.
+        from omnia_api.core.config import get_settings as _get_settings
+        if _get_settings().use_section_catalog:
+            import json as _json
+            from omnia_api.sections import PageIR, render_page  # noqa: F401
+            from omnia_api.sections.renderer import render_to_files
+            from pydantic import ValidationError as _ValidationError
+            raw = accumulated.strip()
+            # Strip ```json fences the model may have added despite instructions.
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+                raw = raw.strip()
+            try:
+                ir_dict = _json.loads(raw)
+                ir = PageIR.model_validate(ir_dict)
+                # Reuse the existing omnia-kit on disk for the project's template.
+                kit_css = current_files.get("src/assets/omnia-kit.css", "")
+                kit_js = current_files.get("src/assets/omnia-kit.js", "")
+                rendered = render_to_files(ir, kit_css=kit_css, kit_js=kit_js)
+                # Re-pack into the <file path="..."> format the downstream
+                # extractor expects. Order matters: index.html first.
+                blocks = [
+                    f'<file path="{p}">\n{c}\n</file>' for p, c in rendered.items()
+                ]
+                accumulated = "\n".join(blocks)
+                print(
+                    f"[PP] catalog_ir_ok sections={len(ir.sections)} "
+                    f"html_len={len(rendered.get('src/index.html', ''))}",
+                    flush=True,
+                )
+            except (_json.JSONDecodeError, _ValidationError, ValueError) as ir_exc:
+                _log.warning(
+                    "catalog IR parse/validate failed (falling back to freeform "
+                    "HTML extractor): %r",
+                    ir_exc,
+                )
+                print(f"[PP] catalog_ir_fail err={ir_exc!r}", flush=True)
+
         try:
             files, edit_conflicts = _extract_files_and_edits(
                 accumulated, current_files
