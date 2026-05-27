@@ -56,9 +56,7 @@ Serverum, IP `170.168.72.200`, SSH `i48ptgvnis@`). Целевые: `omnia.ai`,
 ```
 ChatPanel.submit
   → POST /api/projects/:id/prompt
-    → routers/messages.py: insert user+assistant rows
     → background task _process_prompt:
-        → prompt_builder.build_messages (system + history + new prompt)
         → llm_client.stream_chat_completion (SSE из llm-gateway)
         → накапливает accumulated, шлёт llm.chunk через WS
         → file_extractor.extract_files (regex `<file path="...">...</file>`)
@@ -130,5 +128,5 @@ ChatPanel.submit
 - [`docs/02-data-model.md`](../../docs/02-data-model.md) — Postgres-схема
 - [`docs/03-design-system.md`](../../docs/03-design-system.md) — палитра, типографика, компоненты
 - [`docs/04-monetization-plan.md`](../../docs/04-monetization-plan.md) — биллинг + цены
-- [`docs/05-platform-experience.md`](../../docs/05-platform-experience.md) — общая UX-философия
+- [`docs/05-platform-experience.md`](../../docs/05/platform-experience.md) — общая UX-философия
 - [`docs/06-session-log.md`](../../docs/06-session-log.md) — лог релизов и инцидентов

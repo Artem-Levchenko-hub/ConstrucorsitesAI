@@ -137,3 +137,7 @@
 - Connections: new=0, updated=0, upserted=0
 - Quality enrichment: enriched=11, touched=2
 
+## [2026-05-27T10:05:29+03:00] context-update | project-context.md
+- Changed files: 3
+- Sections: Ключевые модули
+
