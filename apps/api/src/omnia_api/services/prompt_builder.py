@@ -1789,6 +1789,29 @@ def _format_palette_anchor(preset_id: str | None) -> str:
 Любой цвет/шрифт вне этого блока без явной просьбы пользователя — брак."""
 
 
+# Phase K (2026-05-27) — tail-anchor injected RIGHT BEFORE `_RESPONSE`. The
+# head palette anchor (position #2) is read fine on premium models but
+# cheap models suffer "lost in the middle" on ~14 KB prompts and drift
+# back to their indigo+violet training default by the time they emit the
+# code. Repeating the ban + palette source pointer at the tail uses the
+# model's recency bias to lock the actual output to the intended palette.
+# Independent of preset/brief presence so it always fires for visual
+# templates — costs ~400 chars, prevents the most common regression.
+_PALETTE_TAIL_REMINDER = """\
+ПОСЛЕДНЕЕ НАПОМИНАНИЕ перед ответом — НЕ переключайся в дефолтную training-data палитру:
+  • indigo (#4f46e5 / #6366f1 / #818cf8 / indigo-500/600/700) — БРАК
+  • violet / purple (#7c3aed / #8b5cf6 / #a855f7 / violet-X / purple-X) — БРАК
+  • градиенты from-indigo-* to-violet-*, from-purple-* to-pink-* — БРАК
+  • Inter + Space Grotesk если палитра / бриф их не требует — БРАК
+
+Палитра, которую ты обязан вынести в Tailwind config / :root и использовать в КАЖДОЙ секции:
+  → если в начале промпта стоит ОБЯЗАТЕЛЬНАЯ ПАЛИТРА (preset anchor) — её HEX, ничего более.
+  → если есть ДИЗАЙН-БРИФ — его primary/accent/bg/fg, ничего более.
+  → если ни того ни другого — выбери ОДИН пресет из _DESIGN_KIT по индустрии и держись его HEX.
+
+Любой цвет / шрифт вне выбранного источника = баг и будет переписан."""
+
+
 # Templates that ship a visual UI (HTML/JSX). These get the full design
 # stack: layout rigor, palette, style preset, visual-richness, image
 # generation toggles. The other two container-backed templates (tgbot/api)
@@ -1826,20 +1849,36 @@ def _drop_blocks_for_tier(sections: tuple[str, ...], tier: str) -> tuple[str, ..
     Filtering uses identity-equality (`is`) because the dropped sentinels
     are module-level string constants — every `sections` tuple holds the
     same `_DETAILS_KIT` / `_SIGNATURE_MOVES` / … object, never a copy.
+
+    Phase K (2026-05-27) — INVERTED TRIM. The previous aggressive trim
+    cut `_STYLE_KIT`, `_VISUAL_RICH_KIT`, `_TASTE`, and `_SIGNATURE_MOVES`
+    from budget — the exact blocks that DIFFERENTIATE enterprise output
+    from generic "modern minimal". Result: Haiku reverted to learned
+    indigo+violet despite the palette anchor at position #2.
+
+    New strategy: design-defining blocks (STYLE / VRK / TASTE / SIGNATURE)
+    are PRESERVED for every tier. Only the lowest-signal polish layer
+    (`_DETAILS_KIT` — eyebrow labels, avatars, dividers, badges) is
+    dropped for budget. Modern cheap models (Haiku 4.5 = 200K ctx,
+    Nano = 128K) fit the full ~14 KB prompt easily; the "lost in the
+    middle" risk is mitigated by the tail-anchor (`_PALETTE_TAIL_ANCHOR`)
+    injected before `_RESPONSE`.
     """
     if tier == "premium":
         return sections
     drop: set[str]
     if tier == "budget":
-        # Aggressive trim — cuts ~6 KB out of the ~14 KB prompt so Haiku
-        # 4.5 keeps focus through the head→tail span. The blocks dropped
-        # are the depth-of-taste polish layers; the design floor stays.
-        drop = {_DETAILS_KIT, _SIGNATURE_MOVES, _TASTE, _STYLE_KIT, _VISUAL_RICH_KIT}
+        # Surgical trim — drop only the lowest-signal polish layer. The 10
+        # visual presets (_STYLE_KIT), Awwwards techniques
+        # (_SIGNATURE_MOVES), hero/section decor mandate
+        # (_VISUAL_RICH_KIT), and anti-indigo guard (_TASTE) all stay —
+        # Haiku needs them MORE than premium models, not less. Without
+        # them it falls back to its training-data default.
+        drop = {_DETAILS_KIT}
     elif tier == "balanced":
-        # Light trim — keeps the visual richness + style kit, drops only
-        # the deeply prose-y inspirational layers that overflow attention
-        # on mid-tier models.
-        drop = {_DETAILS_KIT, _SIGNATURE_MOVES, _TASTE}
+        # Balanced tier keeps everything. Mini / Yandex / Gigachat read the
+        # full prompt fine; trimming hurts more than it helps.
+        return sections
     else:
         return sections
     return tuple(s for s in sections if s not in drop)
@@ -1915,6 +1954,7 @@ def build_system_prompt(
             _FUNCTIONAL_CONTRACT,
             _FULLSTACK_STACK,
             _SELF_CHECK,
+            _PALETTE_TAIL_REMINDER,
             _RESPONSE,
         )
     elif template == "spa":
@@ -1933,6 +1973,7 @@ def build_system_prompt(
             _FUNCTIONAL_CONTRACT,
             _SPA_STACK,
             _SELF_CHECK,
+            _PALETTE_TAIL_REMINDER,
             _RESPONSE,
         )
     elif template == "tgbot":
@@ -1974,6 +2015,7 @@ def build_system_prompt(
             _STATIC_STACK,
             _ANIMATION_KIT,
             _SELF_CHECK,
+            _PALETTE_TAIL_REMINDER,
             _RESPONSE,
         )
 

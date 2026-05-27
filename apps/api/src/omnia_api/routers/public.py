@@ -86,6 +86,39 @@ def _inject_inspector(content: bytes) -> bytes:
     return content + _INSPECTOR_TAG
 
 
+def _inject_base_href(content: bytes, slug: str) -> bytes:
+    """Inject ``<base href="/p/{slug}/">`` so the page's relative asset paths
+    resolve to ``/p/{slug}/assets/…`` (which the ``get_file`` route serves)
+    instead of ``/p/assets/…`` (which 404s because the slug-less route does
+    not exist).
+
+    Phase K fix (2026-05-27). Background: ``/p/{slug}`` is served without a
+    trailing slash; browsers resolve relative URLs from the parent
+    ``/p/``, so ``<link href="assets/omnia-kit.css">`` requests
+    ``/p/assets/omnia-kit.css`` which has no matching route. The
+    omnia-kit (.depth-*, .reveal, .cursor-blob, scroll-driven animations)
+    silently never loaded on share links — every generated site looked
+    static / un-animated to the public.
+
+    Idempotent: skips when a ``<base>`` already exists. Bytes in, bytes
+    out so charset is preserved.
+    """
+    head_slice = content[:2048].lower()
+    # Already has a <base>? Don't add a second — browsers honour only the first.
+    if b"<base " in head_slice or b"<base\t" in head_slice or b"<base>" in head_slice:
+        return content
+    base_tag = f'\n<base href="/p/{slug}/">'.encode("utf-8")
+    head_open = content.find(b"<head")
+    if head_open == -1:
+        return content
+    # Insert right after the closing ``>`` of the <head ...> open tag.
+    head_close = content.find(b">", head_open)
+    if head_close == -1:
+        return content
+    ins = head_close + 1
+    return content[:ins] + base_tag + content[ins:]
+
+
 async def _serve_file(project: Project, snapshot: Snapshot, path: str) -> Response:
     content = await asyncio.to_thread(
         repo_svc.read_file, project.id, snapshot.commit_sha, path
@@ -211,6 +244,11 @@ async def get_index(
             repo_svc.read_file, project.id, snap.commit_sha, candidate
         )
         if content is not None:
+            # Rewrite the document base so relative asset URLs
+            # (``assets/omnia-kit.css``, ``./logo.svg``, etc.) resolve to
+            # ``/p/{slug}/…`` instead of ``/p/…``. Without this the
+            # generated omnia-kit never loads on public share links.
+            content = _inject_base_href(content, slug)
             # Workspace preview opts in with ?inspect=1 to enable select-mode.
             if inspect == "1":
                 content = _inject_inspector(content)

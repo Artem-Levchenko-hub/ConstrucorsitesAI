@@ -36,6 +36,7 @@ from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
 from omnia_api.services.queue import enqueue_preview
+from omnia_api.services.ui_audit import audit as ui_audit
 from omnia_api.services.visual_enricher import enrich_files as enrich_visual_files
 
 RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом генерации
@@ -723,6 +724,49 @@ async def _process_prompt(
                 )
             except Exception as enr_exc:
                 print(f"[PP] visual_enricher failed: {enr_exc!r}", flush=True)
+
+        # Phase K (2026-05-27) — objective UI audit. ``ui_audit`` runs the
+        # 10-point Malewicz Ch27 + Phase G rubric (typography/color/button/
+        # accessibility/no-lorem/etc.) on the final HTML pool. We log the
+        # score so we can baseline per-model design quality from prod logs
+        # and emit it over WS so the workspace UI can surface a quality
+        # indicator. NOT a re-generate trigger yet — measurement first,
+        # feedback loop comes in Sprint 2 once we have a baseline score
+        # distribution. Best-effort: any audit failure logs and continues.
+        if files:
+            try:
+                html_pool = {
+                    p: c for p, c in files.items()
+                    if p.endswith(".html") or p.endswith(".htm")
+                }
+                if html_pool:
+                    report = ui_audit(html_pool)
+                    failed_ids = [f.check_id for f in report.failures]
+                    print(
+                        f"[PP] ui_audit score={report.score}/{report.max} "
+                        f"failed={failed_ids}",
+                        flush=True,
+                    )
+                    await publish_event(
+                        project_id,
+                        "llm.audit",
+                        {
+                            "message_id": str(assistant_message_id),
+                            "score": report.score,
+                            "max": report.max,
+                            "failures": [
+                                {
+                                    "id": f.check_id,
+                                    "severity": f.severity,
+                                    "description": f.description,
+                                    "evidence": f.evidence,
+                                }
+                                for f in report.failures
+                            ],
+                        },
+                    )
+            except Exception as audit_exc:
+                print(f"[PP] ui_audit failed: {audit_exc!r}", flush=True)
 
         if files and project_image_gen_enabled:
             try:
