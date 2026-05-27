@@ -2169,9 +2169,15 @@ def build_messages(
     # catalog/IR prompt builder. Saves ~73% tokens, locks visual ceiling
     # via the section catalog. Default OFF — old freeform path stays the
     # safe default until golden eval shows lean ≥ current quality.
+    # Phase L4 — lean prompt now lives in `services/lean_prompt.py` with
+    # XML tags, closed-enum vibes, and a palette tail anchor. The local
+    # `_build_catalog_messages` below is kept as a deprecated shim for
+    # any caller that imports it directly (none currently — internal use
+    # only).
     from omnia_api.core.config import get_settings
     if get_settings().use_section_catalog:
-        return _build_catalog_messages(
+        from omnia_api.services.lean_prompt import build_catalog_messages
+        return build_catalog_messages(
             history=history,
             user_prompt=user_prompt,
             selected_elements=selected_elements,

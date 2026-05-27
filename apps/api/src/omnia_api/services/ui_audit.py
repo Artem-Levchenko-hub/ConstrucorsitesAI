@@ -868,6 +868,40 @@ _CHECK_FUNCS: tuple[tuple[str, _CheckFunc], ...] = (
 )
 
 
+def format_failures_for_retry(report: AuditReport) -> str:
+    """Build a Russian retry-feedback message from a low-score AuditReport.
+
+    Used by Phase L4 (audit-driven retry loop): when the first generation
+    pass produces ``score < threshold``, this string is appended to the
+    next LLM call as a user message so the model knows exactly what to
+    fix in its second attempt.
+
+    Output format is plain-text bullet list — easy for the model to act
+    on without re-reading the system prompt. We deliberately quote
+    ``evidence`` snippets so the model sees the actual offending
+    classes/values, not a generic "your buttons are bad" summary.
+    """
+    if not report.failures:
+        return ""
+
+    lines = [
+        f"Предыдущий ответ не прошёл объективную проверку дизайна "
+        f"(score={report.score}/{report.max}). Конкретные нарушения:",
+    ]
+    severity_emoji = {"critical": "🔴", "major": "🟠", "minor": "🟡"}
+    for f in report.failures:
+        prefix = severity_emoji.get(f.severity, "•")
+        lines.append(f"{prefix} [{f.check_id}] {f.description}")
+        if f.evidence:
+            lines.append(f"   Найдено: {f.evidence[:200]}")
+    lines.append(
+        "\nИсправь только перечисленные проблемы и верни новый PageIR JSON. "
+        "Не меняй секции / структуру / контент которые НЕ упомянуты в "
+        "нарушениях — они корректны."
+    )
+    return "\n".join(lines)
+
+
 def audit(html_files: dict[str, str]) -> AuditReport:
     """Run all 10 checks on the combined HTML+CSS pool.
 

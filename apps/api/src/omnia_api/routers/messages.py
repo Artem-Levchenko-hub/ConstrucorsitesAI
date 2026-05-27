@@ -36,7 +36,7 @@ from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
 from omnia_api.services.queue import enqueue_preview
-from omnia_api.services.ui_audit import audit as ui_audit
+from omnia_api.services.ui_audit import audit as ui_audit, format_failures_for_retry
 from omnia_api.services.visual_enricher import enrich_files as enrich_visual_files
 
 RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом генерации
