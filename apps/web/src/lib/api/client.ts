@@ -23,28 +23,78 @@ export class ApiError extends Error {
 type RequestInitWithJson = Omit<RequestInit, "body"> & {
   /** Object to JSON.stringify; sets Content-Type: application/json. */
   json?: unknown;
+  /**
+   * If set, the request is aborted after this many ms. Combines with any
+   * caller-supplied `signal` via AbortSignal.any() so caller can still
+   * cancel manually. Throws an `ApiError(0, timeout)` so callers don't
+   * see the raw DOMException.
+   */
+  timeoutMs?: number;
 };
 
 /**
  * Narrow API over fetch: takes a path and an init, returns parsed JSON or throws
  * `ApiError` on a non-2xx response. Hides baseURL, credentials cookie, JSON
- * serialization, error envelope parsing, and the 204 quirk.
+ * serialization, error envelope parsing, the 204 quirk, and (when `timeoutMs`
+ * is set) raw fetch hangs.
  */
 export async function apiFetch<T>(
   path: string,
   init: RequestInitWithJson = {},
 ): Promise<T> {
-  const { json, headers, ...rest } = init;
+  const { json, headers, timeoutMs, signal, ...rest } = init;
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...rest,
-    credentials: "include",
-    headers: {
-      ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...headers,
-    },
-    body: json !== undefined ? JSON.stringify(json) : undefined,
-  });
+  // Compose caller's signal with a timeout signal so EITHER aborts the
+  // fetch. Without this, a server that accepts the TCP connection but
+  // never writes the response leaves fetch() hanging forever — and the
+  // user sees a stuck "AI читает контекст" spinner.
+  const signals: AbortSignal[] = [];
+  if (signal) signals.push(signal);
+  if (timeoutMs !== undefined) signals.push(AbortSignal.timeout(timeoutMs));
+  const composedSignal =
+    signals.length === 0
+      ? undefined
+      : signals.length === 1
+        ? signals[0]
+        : AbortSignal.any(signals);
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...rest,
+      credentials: "include",
+      headers: {
+        ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...headers,
+      },
+      body: json !== undefined ? JSON.stringify(json) : undefined,
+      signal: composedSignal,
+    });
+  } catch (e) {
+    // Timeout abort manifests as DOMException name=TimeoutError; caller
+    // abort as name=AbortError. Either way the user wanted "did the
+    // request go through?" — surface a typed ApiError so the chat hook's
+    // try/catch can show a real toast instead of a generic crash.
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new ApiError(0, {
+        code: "internal_error",
+        message: `Request timed out after ${timeoutMs}ms`,
+      });
+    }
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new ApiError(0, {
+        code: "internal_error",
+        message: "Request aborted",
+      });
+    }
+    // Network failure (DNS, offline, TLS) — let the chat hook describe
+    // it via its catch path; just normalise the type so callers can
+    // `instanceof ApiError`.
+    throw new ApiError(0, {
+      code: "internal_error",
+      message: e instanceof Error ? e.message : "Network error",
+    });
+  }
 
   if (response.status === 204) {
     return undefined as T;

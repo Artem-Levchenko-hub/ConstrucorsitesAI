@@ -23,6 +23,13 @@ export async function sendPrompt(
   }
   return apiFetch<PromptResponse>(`/api/projects/${projectId}/prompt`, {
     method: "POST",
+    // 30s wall-clock cap on the POST itself. The backend should respond
+    // with `202 Accepted` and a `message_id` within ~1s — anything longer
+    // means the server is unhealthy (DB down, queue saturated, network
+    // wedged). Without the cap the browser hangs forever and the user
+    // sees "AI читает контекст" with no end. With the cap, the chat hook
+    // catches ApiError(0, "timed out") and shows a real toast within 30s.
+    timeoutMs: 30_000,
     // Omit the field entirely when there are no picks — keeps old behaviour
     // byte-identical and the backend field optional.
     json: {
