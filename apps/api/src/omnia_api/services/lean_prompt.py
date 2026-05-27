@@ -168,6 +168,7 @@ def build_lean_system_prompt(
     *,
     preset_id: str | None,
     skill_brief: dict[str, Any] | None,
+    user_prompt: str | None = None,
 ) -> str:
     """Compose the lean catalog-mode system prompt.
 
@@ -203,6 +204,21 @@ def build_lean_system_prompt(
         brief_text = skill_brief.get("brief_text") if isinstance(skill_brief, dict) else None
         if brief_text:
             parts.append(f"<ux_brief>\n{brief_text}\n</ux_brief>")
+
+    # Phase L5 — inject one top-ranked awwwards reference from the curated
+    # corpus, scored by token overlap with the user prompt. Adds 200-400
+    # chars when a hit exists; the model gets a concrete pattern to
+    # mirror (palette, fonts, motion, "what makes it work", what to
+    # avoid). No hit → block is skipped silently.
+    if user_prompt:
+        try:
+            from omnia_api.services.rag import top_reference_block
+            industry_hint = preset_id or ""
+            ref_block = top_reference_block(user_prompt, industry_hint=industry_hint)
+            if ref_block:
+                parts.append(f"<rag_reference>\n{ref_block}\n</rag_reference>")
+        except Exception:  # noqa: BLE001 — RAG must never block the prompt
+            pass
 
     parts.extend([
         _HARD_RULES,
@@ -240,7 +256,7 @@ def build_catalog_messages(
     skill_brief = _compute_skill_brief(user_prompt, project_id)
     messages: list[dict[str, str]] = [
         {"role": "system", "content": build_lean_system_prompt(
-            preset_id=preset_id, skill_brief=skill_brief,
+            preset_id=preset_id, skill_brief=skill_brief, user_prompt=user_prompt,
         )},
     ]
     for m in list(history)[-HISTORY_LIMIT:]:
