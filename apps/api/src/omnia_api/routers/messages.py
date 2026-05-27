@@ -814,6 +814,138 @@ async def _process_prompt(
             except Exception as audit_exc:
                 print(f"[PP] ui_audit failed: {audit_exc!r}", flush=True)
 
+        # Phase L6 — audit-driven retry loop (1 retry max). Triggers only
+        # when catalog/IR mode is active AND the first audit scored
+        # below the threshold AND we haven't already retried. We append
+        # the prior accumulated response + a concrete failure list as a
+        # user turn and re-stream against the same model. The retry
+        # response goes through the same IR parse → render pipeline; if
+        # it parses, it replaces `files` and downstream (image_resolver
+        # / repo commit) sees the corrected page.
+        _RETRY_SCORE_THRESHOLD = 7  # max=10
+        _retry_done = False
+        try:
+            _settings_for_retry = _get_settings()
+            _last_report = None  # type: ignore[var-annotated]
+            try:
+                _last_report = report  # noqa: F821 — defined in audit block
+            except NameError:
+                _last_report = None
+            if (
+                _settings_for_retry.use_section_catalog
+                and _last_report is not None
+                and getattr(_last_report, "score", 10) < _RETRY_SCORE_THRESHOLD
+                and not _retry_done
+            ):
+                retry_msg = format_failures_for_retry(_last_report)
+                if retry_msg:
+                    print(
+                        f"[PP] retry_triggered score={_last_report.score}/{_last_report.max} "
+                        f"failures={len(_last_report.failures)}",
+                        flush=True,
+                    )
+                    await publish_event(
+                        project_id,
+                        "llm.retry",
+                        {
+                            "message_id": str(assistant_message_id),
+                            "reason": "audit_score_low",
+                            "score": _last_report.score,
+                            "max": _last_report.max,
+                        },
+                    )
+                    # Append prior assistant response + retry feedback to
+                    # the same message list so prompt caching (system) hits.
+                    messages.append({"role": "assistant", "content": accumulated})
+                    messages.append({"role": "user", "content": retry_msg})
+                    await _run_stream(model_id)
+                    retry_accumulated = str(state["accumulated"])
+                    retry_usage = state["usage"]
+                    retry_error = state["error"]
+                    if not retry_error and retry_accumulated:
+                        # Replicate the L3 IR→HTML conversion on the retry
+                        # output. Fail-soft: if it doesn't parse, keep the
+                        # first-pass files unchanged.
+                        import json as _json_r
+                        from omnia_api.sections import PageIR as _PageIR_r
+                        from omnia_api.sections.renderer import (
+                            render_to_files as _render_to_files_r,
+                        )
+                        from pydantic import ValidationError as _VE_r
+                        raw_r = retry_accumulated.strip()
+                        if raw_r.startswith("```"):
+                            raw_r = raw_r.split("\n", 1)[1] if "\n" in raw_r else raw_r[3:]
+                            if raw_r.endswith("```"):
+                                raw_r = raw_r[:-3]
+                            raw_r = raw_r.strip()
+                        try:
+                            ir_r = _PageIR_r.model_validate(_json_r.loads(raw_r))
+                            kit_css_r = current_files.get("src/assets/omnia-kit.css", "")
+                            kit_js_r = current_files.get("src/assets/omnia-kit.js", "")
+                            rendered_r = _render_to_files_r(
+                                ir_r, kit_css=kit_css_r, kit_js=kit_js_r
+                            )
+                            # Replace files for downstream stages.
+                            files = dict(rendered_r)
+                            accumulated = "\n".join(
+                                f'<file path="{p}">\n{c}\n</file>'
+                                for p, c in rendered_r.items()
+                            )
+                            # Merge retry usage onto first-pass usage.
+                            if usage_data is None:
+                                usage_data = retry_usage
+                            elif retry_usage:
+                                usage_data = {
+                                    "tokens_in": (
+                                        int((usage_data or {}).get("tokens_in", 0))
+                                        + int((retry_usage or {}).get("tokens_in", 0))
+                                    ),
+                                    "tokens_out": (
+                                        int((usage_data or {}).get("tokens_out", 0))
+                                        + int((retry_usage or {}).get("tokens_out", 0))
+                                    ),
+                                    "cost_rub": (
+                                        float((usage_data or {}).get("cost_rub", 0.0))
+                                        + float((retry_usage or {}).get("cost_rub", 0.0))
+                                    ),
+                                }
+                            _retry_done = True
+                            # Re-audit so logs show the post-retry score.
+                            try:
+                                html_pool_r = {
+                                    p: c for p, c in files.items()
+                                    if p.endswith(".html") or p.endswith(".htm")
+                                }
+                                if html_pool_r:
+                                    report_r = ui_audit(html_pool_r)
+                                    print(
+                                        f"[PP] ui_audit_retry score={report_r.score}/{report_r.max}",
+                                        flush=True,
+                                    )
+                                    await publish_event(
+                                        project_id,
+                                        "llm.audit",
+                                        {
+                                            "message_id": str(assistant_message_id),
+                                            "score": report_r.score,
+                                            "max": report_r.max,
+                                            "stage": "retry",
+                                        },
+                                    )
+                            except Exception:  # noqa: BLE001
+                                pass
+                        except (_json_r.JSONDecodeError, _VE_r, ValueError) as retry_ir_exc:
+                            _log.warning(
+                                "retry IR parse failed (keeping first-pass files): %r",
+                                retry_ir_exc,
+                            )
+                            print(
+                                f"[PP] retry_ir_fail err={retry_ir_exc!r}",
+                                flush=True,
+                            )
+        except Exception as retry_exc:  # noqa: BLE001
+            print(f"[PP] retry_branch_failed err={retry_exc!r}", flush=True)
+
         if files and project_image_gen_enabled:
             try:
                 files, resolved, total = await resolve_images(files, str(project_id))
