@@ -30,7 +30,8 @@ from omnia_api.services.file_extractor import (
 )
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
-from omnia_api.core.config import get_settings
+from omnia_api.core.config import get_settings, tier_for_model
+from omnia_api.services.director_polish import director_polish_generate
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
@@ -433,7 +434,29 @@ async def _process_prompt(
             state["usage"] = None
             state["error"] = None
 
-            if force_multipass or use_model in multipass_set:
+            # Phase L7 — Director→Polish 2-pass branch. Wins when the
+            # operator has opted into both `USE_SECTION_CATALOG` AND
+            # `USE_DIRECTOR_POLISH`, AND the model is in the premium
+            # tier. Catalog already gives us JSON IR; Director→Polish
+            # splits structural choice and content polish across two
+            # calls of the same model for higher final quality at the
+            # cost of latency × 2 / tokens × 2.
+            _settings = get_settings()
+            _dp_active = (
+                _settings.use_director_polish
+                and _settings.use_section_catalog
+                and tier_for_model(use_model) == "premium"
+            )
+            if _dp_active:
+                source = director_polish_generate(
+                    base_messages=messages,
+                    user_prompt=prompt_text,
+                    model=use_model,
+                    user_id=user_id,
+                    project_id=project_id,
+                    message_id=assistant_message_id,
+                )
+            elif force_multipass or use_model in multipass_set:
                 source = multipass_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,

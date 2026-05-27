@@ -89,6 +89,15 @@ class Settings(BaseSettings):
     # the freeform-HTML path. Toggle in prod: USE_SECTION_CATALOG=true.
     use_section_catalog: bool = Field(default=False)
 
+    # Phase L7 — Director→Polish 2-pass for premium tier (Opus / Sonnet /
+    # GPT-5) on top of catalog mode. Pass 1 ("Director") emits the
+    # structural PageIR with short placeholder headlines; pass 2
+    # ("Polish") takes that IR and rewrites every text field with real
+    # content (full headlines, real numbers in ₽, real names, cities).
+    # Default OFF — adds ~latency × 2 and ~cost × 2 of a single call.
+    # Premium-tier only. Activate via env: USE_DIRECTOR_POLISH=true.
+    use_director_polish: bool = Field(default=False)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
