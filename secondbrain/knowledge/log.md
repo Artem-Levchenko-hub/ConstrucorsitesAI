@@ -117,3 +117,23 @@
 - Backlink repair done. Updated files: 14
 - Structural lint: completed
 
+## [2026-05-26T18:27:01+03:00] compile | 2026-05-19.md
+- Source: daily/2026-05-19.md
+- Counts: concepts_created=1, concepts_updated=0, connections_created=0, connections_updated=0
+- Concepts upserted: [[knowledge/concepts/daily-2026-05-19-summary]]
+- Connections upserted: (none)
+- Mode: fallback
+
+## [2026-05-26T18:27:02+03:00] compile | 2026-05-26.md
+- Source: daily/2026-05-26.md
+- Counts: concepts_created=1, concepts_updated=0, connections_created=0, connections_updated=0
+- Concepts upserted: [[knowledge/concepts/daily-2026-05-26-summary]]
+- Connections upserted: (none)
+- Mode: fallback
+
+## [2026-05-26T18:27:02+03:00] compile | summary
+- Daily files compiled: 2
+- Concepts: new=2, updated=0, upserted=2
+- Connections: new=0, updated=0, upserted=0
+- Quality enrichment: enriched=11, touched=2
+

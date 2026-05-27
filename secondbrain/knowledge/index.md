@@ -11,13 +11,13 @@
 | [[knowledge/concepts/realtime-streaming-preview]] | Долгоживущий iframe + morphdom postMessage DOM-diff: новые top-level элементы получают `data-omnia-new` и fade+slide-up через CSS keyframe. Bootstrap-HTML с Tailwind CDN + morphdom CDN. Дебаунс 150ms. | daily/2026-05-17.md | 2026-05-17 |
 | [[knowledge/concepts/file-extractor-pipeline]] | `apps/api/.../file_extractor.py` regex `<file path="X">...</file>` + path sanitize. `prompt_builder.SYSTEM_PROMPT` мандатирует этот формат. Frontend mirror в `apps/web/.../parse-assistant.ts`. GigaChat почти всегда нарушает → 0 файлов → silent fail (см. zero-files-silent-failure). | daily/2026-05-17.md | 2026-05-17 |
 | [[knowledge/concepts/zero-files-silent-failure]] | До 2026-05-17 backend молча финализировал ответ когда `extract_files` возвращал {} — UI получал только `llm.done` и думал «всё ок», но preview не обновлялся. Fix: явный `llm.error` с подсказкой про Haiku/Sonnet. | daily/2026-05-17.md | 2026-05-17 |
-| [[knowledge/concepts/secondbrain-runtime]] | Core runtime conventions for session capture, docs ingest, compile and query cycles. | daily/2026-05-19.md | 2026-05-19 |
+| [[knowledge/concepts/secondbrain-runtime]] | Core runtime conventions for session capture, docs ingest, compile and query cycles. | daily/2026-05-26.md | 2026-05-26 |
 | [[knowledge/concepts/auto-memory-bridge]] | Bridge между Claude Code auto-memory (`~/.claude/projects/<hash>/memory/`) и SecondBrain: SHA-256 dedup, once-per-UTC-day trigger из session-start, append в daily log с категорией (Feedback/User/Project). | AGENTS.md | 2026-05-17 |
 | [[knowledge/concepts/wiki-taxonomy-and-link-conventions]] | Stable taxonomy: concepts/connections/qa, wikilinks с полным relative path, YAML frontmatter обязателен (title/sources/created/updated), kebab-case имена. | AGENTS.md | 2026-05-17 |
 
 | [[knowledge/concepts/daily-2026-05-17-summary]] | Compiled fallback summary for 2026-05-17.md | daily/2026-05-17.md | 2026-05-18 |
 
-| [[knowledge/concepts/daily-ingestion-process]] | How session and docs events are appended into daily logs before compilation. | daily/2026-05-19.md | 2026-05-19 |
+| [[knowledge/concepts/daily-ingestion-process]] | How session and docs events are appended into daily logs before compilation. | daily/2026-05-26.md | 2026-05-26 |
 
 | [[knowledge/concepts/daily-2026-05-18-summary]] | Compiled fallback summary for 2026-05-18.md | daily/2026-05-18.md | 2026-05-18 |
 
@@ -64,3 +64,7 @@
 | [[knowledge/connections/api-stability-and-performance-directly-impacts-user-experience-and-platform-reliability]] | The fix for the API crash-loop ensures the core backend services are stable and responsive, which is critical for the smooth operation of the workspace and overall user experience, especially when interacting with LLMs. | daily/2026-05-19.md | 2026-05-19 |
 
 | [[knowledge/connections/monorepo-structure-and-agent-briefs-guide-development-and-maintain-consistency]] | The documented monorepo structure and agent briefs (e.g., AGENT-A-FRONTEND, AGENT-B-BACKEND, AGENT-C-LLM-GATEWAY) provide clear boundaries and guidelines, ensuring that changes like Gemini integration or UI polish are... | daily/2026-05-19.md | 2026-05-19 |
+
+| [[knowledge/concepts/daily-2026-05-19-summary]] | Compiled fallback summary for 2026-05-19.md | daily/2026-05-19.md | 2026-05-26 |
+
+| [[knowledge/concepts/daily-2026-05-26-summary]] | Compiled fallback summary for 2026-05-26.md | daily/2026-05-26.md | 2026-05-26 |
