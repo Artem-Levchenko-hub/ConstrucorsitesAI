@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="{{ meta.lang }}"{% if theme.dark_mode %} class="dark"{% endif %}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ meta.title }}</title>
+  <meta name="description" content="{{ meta.description }}">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{ meta.title }}">
+  <meta property="og:description" content="{{ meta.description }}">
+  {% if meta.og_image %}<meta property="og:image" content="{{ meta.og_image }}">{% endif %}
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>{{ meta.favicon_emoji or '🚀' }}</text></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family={{ theme.font_display | replace(' ', '+') }}:wght@500;600;700;800&family={{ theme.font_body | replace(' ', '+') }}:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/omnia-kit.css">
+  <script src="assets/omnia-kit.js" defer></script>
+  <style>
+    :root {
+      --omnia-primary: {{ theme.primary }};
+      --omnia-accent: {{ theme.accent }};
+      --omnia-bg: {{ theme.background }};
+      --omnia-text: {{ theme.text }};
+    }
+    body { background: var(--omnia-bg); color: var(--omnia-text); }
+    .btn-primary { background: var(--omnia-primary); color: #fff; }
+    .btn-primary:hover { filter: brightness(1.08); }
+    .btn-accent { background: var(--omnia-accent); color: #fff; }
+    .text-primary { color: var(--omnia-primary); }
+    .ring-primary { box-shadow: 0 0 0 1px var(--omnia-primary); }
+    .gradient-text-brand {
+      background-image: linear-gradient(90deg, var(--omnia-primary), var(--omnia-accent));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"{{ theme.font_display }}"', 'system-ui', 'sans-serif'],
+            sans:    ['"{{ theme.font_body }}"',    'system-ui', 'sans-serif']
+          }
+        }
+      }
+    };
+  </script>
+</head>
+<body class="font-sans antialiased min-h-screen">
+{{ sections_html | safe }}
+<button id="back-to-top" aria-label="Наверх" class="fixed bottom-6 right-6 w-12 h-12 rounded-full btn-primary shadow-lg flex items-center justify-center z-50">↑</button>
+</body>
+</html>
