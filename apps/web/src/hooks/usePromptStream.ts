@@ -313,12 +313,56 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         cancelRef.current = openRealStream(projectId, apply);
       }
 
-      const { message_id } = await sendPrompt(
-        projectId,
-        promptText,
-        modelId,
-        selections,
-      );
+      // Helper: collapse the optimistic placeholder into an error state so
+      // the user gets an explicit message instead of a stuck "AI читает
+      // контекст" spinner. Called from both the catch block (POST failed)
+      // and the watchdog timer (no WS event for 90s).
+      const _failPrompt = (reason: string, detail?: string) => {
+        qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+          (prev ?? []).map((m) =>
+            m.id === tempAssistantId
+              ? {
+                  ...m,
+                  content: `[Ошибка: ${reason}${detail ? ` — ${detail}` : ""}]`,
+                  tokens_out: 0,
+                  tokens_in: 0,
+                }
+              : m,
+          ),
+        );
+        qc.removeQueries({
+          queryKey: ["passes", projectId, tempAssistantId],
+        });
+        streamingRef.current = false;
+        cancelRef.current?.();
+        cancelRef.current = null;
+        toast.error("Генерация не запустилась", {
+          description: detail
+            ? `${reason}: ${detail.slice(0, 200)}`
+            : reason,
+          duration: 10_000,
+        });
+        fireQueued();
+      };
+
+      let message_id: string;
+      try {
+        const resp = await sendPrompt(
+          projectId,
+          promptText,
+          modelId,
+          selections,
+        );
+        message_id = resp.message_id;
+      } catch (e) {
+        // sendPrompt failed BEFORE the backend even spawned _process_prompt
+        // — network error, 4xx (wallet_empty, not_found), 5xx, timeout.
+        // Surface to user; placeholder turns into an explicit error row.
+        const errMsg =
+          e instanceof Error ? e.message : "не удалось отправить промпт";
+        _failPrompt("POST /prompt не прошёл", errMsg);
+        return;
+      }
 
       // Swap the optimistic assistant row for the real id (so incoming
       // `llm.chunk` events for `event.data.message_id` actually find the row).
@@ -347,6 +391,24 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         });
       }
 
+      // Watchdog: if NO WS event lands on the real message id within
+      // WATCHDOG_MS, surface an error. Catches the "POST accepted, but
+      // _process_prompt died silently and never published anything"
+      // failure mode. The backend now also calls _emergency_error in
+      // _on_done so this is a belt-and-suspenders check — both ends
+      // protect the user from a stuck spinner.
+      const WATCHDOG_MS = 90_000;
+      const watchdog = window.setTimeout(() => {
+        const data = qc.getQueryData<Message[]>(["messages", projectId]);
+        const m = data?.find((x) => x.id === message_id);
+        if (m && m.tokens_out === null) {
+          _failPrompt(
+            "Нет ответа от модели",
+            "превышен таймаут 90с — попробуй ещё раз или сменить модель",
+          );
+        }
+      }, WATCHDOG_MS);
+
       // Mocks set tokens_out on the assistant row when done — keep the
       // existing waiter so the streamingRef releases on llm.done.
       const unsub = qc.getQueryCache().subscribe((evt) => {
@@ -358,6 +420,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           const data = evt.query.state.data as Message[] | undefined;
           const m = data?.find((x) => x.id === message_id);
           if (m && m.tokens_out !== null && m.tokens_out !== undefined) {
+            window.clearTimeout(watchdog);
             streamingRef.current = false;
             unsub();
           }

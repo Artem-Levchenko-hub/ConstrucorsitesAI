@@ -52,16 +52,58 @@ router = APIRouter(prefix="/api/projects", tags=["messages"])
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
+async def _emergency_error(
+    project_id: UUID, assistant_message_id: UUID, err: str
+) -> None:
+    """Last-resort recovery when ``_process_prompt`` dies before it ever
+    published an ``llm.error`` itself.
+
+    Always publishes the WS event (so the frontend's ``apply()`` handler
+    flips ``streamingRef`` and shows a toast) AND finalises the
+    assistant message in DB with a human-readable error body + zero
+    tokens (so the chat row stops looking "still streaming").
+
+    Each step is wrapped — we'd rather log a secondary failure than
+    leave the user staring at a stuck spinner.
+    """
+    import logging as _emerg_log
+    _elog = _emerg_log.getLogger(__name__)
+    try:
+        await publish_event(
+            project_id,
+            "llm.error",
+            {"message_id": str(assistant_message_id), "error": err[:500]},
+        )
+    except Exception as pub_exc:  # noqa: BLE001 — secondary failure, log only
+        _elog.error("emergency publish_event failed: %r", pub_exc)
+    try:
+        factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+        async with factory() as session:
+            msg = await session.get(Message, assistant_message_id)
+            if msg is not None and msg.tokens_out is None:
+                # Keep any partial content the model managed to stream.
+                if not msg.content:
+                    msg.content = f"[Ошибка: {err[:200]}]"
+                msg.tokens_out = 0
+                msg.tokens_in = msg.tokens_in or 0
+                await session.commit()
+    except Exception as db_exc:  # noqa: BLE001 — secondary failure
+        _elog.error("emergency finalize failed: %r", db_exc)
+
+
 def _spawn_process_prompt(**kwargs: object) -> None:
     """Fire-and-forget _process_prompt with a guaranteed strong reference.
 
-    Any exception that escapes the coroutine is logged via the structlog
-    fallback below, so it surfaces in `docker logs` instead of being eaten
-    by `_process_prompt`'s broad except → publish_event(llm.error).
+    Any exception that escapes the coroutine is BOTH logged via structlog
+    fallback AND surfaced to the frontend via ``llm.error`` + DB finalize
+    so the user never sees a stuck "AI читает контекст" spinner — the
+    chat row gets an explicit error body and ``streamingRef`` unlocks.
     """
     import logging
 
     log = logging.getLogger(__name__)
+    project_id: UUID = kwargs["project_id"]  # type: ignore[assignment]
+    assistant_message_id: UUID = kwargs["assistant_message_id"]  # type: ignore[assignment]
     task = asyncio.create_task(_process_prompt(**kwargs))  # type: ignore[arg-type]
     _BACKGROUND_TASKS.add(task)
 
@@ -69,10 +111,24 @@ def _spawn_process_prompt(**kwargs: object) -> None:
         _BACKGROUND_TASKS.discard(t)
         if t.cancelled():
             log.warning("_process_prompt task cancelled")
+            # Cancellation = caller no longer cares; still tell the UI
+            # so the spinner clears instead of hanging.
+            _emerg = asyncio.create_task(_emergency_error(
+                project_id, assistant_message_id, "task cancelled",
+            ))
+            _BACKGROUND_TASKS.add(_emerg)
+            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
             return
         exc = t.exception()
         if exc is not None:
             log.error("_process_prompt failed", exc_info=exc)
+            _emerg = asyncio.create_task(_emergency_error(
+                project_id,
+                assistant_message_id,
+                f"{type(exc).__name__}: {exc}",
+            ))
+            _BACKGROUND_TASKS.add(_emerg)
+            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
 
     task.add_done_callback(_on_done)
 
