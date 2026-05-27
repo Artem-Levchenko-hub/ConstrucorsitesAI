@@ -36,8 +36,27 @@ import logging
 from typing import Any
 
 from omnia_api.sections.ir import PageIR
+from omnia_api.sections.palettes import (
+    CuratedPalette,
+    pick_palette,
+)
 
 log = logging.getLogger(__name__)
+
+
+# preset_id → vibe routing for palette pick. Maps the classifier's
+# preset slugs to one of the eight vibes in `palettes.py`. If the
+# classifier returns an unknown slug, palette completion falls
+# through to the LLM's choice — never crashes.
+_PRESET_TO_VIBE: dict[str, str] = {
+    "editorial-trust":       "swiss-minimal",
+    "studio-showreel":       "brutalist",
+    "saas-product":          "linear-dark",
+    "editorial-publication": "editorial-luxury",
+    "festival-brutalist":    "brutalist",
+    "wellness-casual":       "wellness-casual",
+    "boutique-reel":         "editorial-luxury",
+}
 
 
 # ─── Industry → palette / favicon mapping ────────────────────────────────
@@ -138,9 +157,24 @@ def _existing_anchors(ir: PageIR) -> set[str]:
 
 
 def _rule_palette(ir_dict: dict, preset_id: str | None, log_buf: list[str]) -> None:
+    """Two-layer palette completion.
+
+    Layer 1 (Phase L8): if `primary`/`accent` are still the schema
+    defaults (`#6366f1` / `#ec4899`), patch them from the legacy
+    `_PRESET_PRIMARY/ACCENT` tables — fastest path, no extra context.
+
+    Layer 2 (Phase L10): when the model also left `text` or `bg` at
+    schema defaults, swap in a full curated palette from
+    `palettes.py` so the page ships with vetted WCAG-AA pairs across
+    every surface — not just the brand colours. The selection is
+    driven by `preset_id → vibe` mapping plus the resolved
+    `dark_mode` hint, so palette + vibe stay coherent.
+    """
     if not preset_id:
         return
     theme = ir_dict.get("theme") or {}
+
+    # Layer 1 — legacy primary/accent quick patch.
     if (theme.get("primary") or "").lower() == _SCHEMA_DEFAULT_PRIMARY.lower():
         target = _PRESET_PRIMARY.get(preset_id)
         if target:
@@ -151,6 +185,36 @@ def _rule_palette(ir_dict: dict, preset_id: str | None, log_buf: list[str]) -> N
         if target:
             theme["accent"] = target
             log_buf.append(f"palette_accent→{target}")
+
+    # Layer 2 — full curated palette completion when neutrals look
+    # default-y. We detect "the model didn't actually choose neutrals"
+    # by comparing against the PageIR schema defaults (Theme.bg =
+    # "#FFFFFF", Theme.text = "#0F172A").
+    vibe = _PRESET_TO_VIBE.get(preset_id)
+    neutrals_default = (
+        (theme.get("background", "").upper() == "#FFFFFF")
+        and (theme.get("text", "").upper() == "#0F172A")
+    )
+    if vibe and neutrals_default:
+        try:
+            palette: CuratedPalette = pick_palette(
+                vibe=vibe,
+                dark_mode=bool(theme.get("dark_mode", False)),
+                industry_hint=preset_id,
+            )
+        except Exception:  # noqa: BLE001 — palette pick must not crash defaults
+            palette = None  # type: ignore[assignment]
+        if palette is not None:
+            theme["background"] = palette.bg
+            theme["text"] = palette.text
+            # Only override primary/accent when the model still has
+            # *schema-default* values — never stomp on a real choice.
+            if (theme.get("primary") or "").lower() == _SCHEMA_DEFAULT_PRIMARY.lower():
+                theme["primary"] = palette.primary
+            if (theme.get("accent") or "").lower() == _SCHEMA_DEFAULT_ACCENT.lower():
+                theme["accent"] = palette.accent
+            log_buf.append(f"palette_curated→{palette.id}")
+
     ir_dict["theme"] = theme
 
 
