@@ -79,6 +79,16 @@ class Settings(BaseSettings):
     # value should stay empty so new budget models get multipass for free.
     multipass_models: str = Field(default="")
 
+    # Phase L3 — JSON IR + Section catalog feature flag.
+    # When True, the multipass pipeline replaces `pass_assembly` (full LLM
+    # HTML rewrite) with `sections.render_page(ir)` — deterministic Jinja
+    # rendering of validated `PageIR`. The model only emits JSON; the
+    # renderer turns it into HTML. Saves ~50% tokens per generation +
+    # eliminates omnia-kit class hallucination + locks visual ceiling.
+    # Default OFF — opt-in until we have golden-comparison telemetry vs
+    # the freeform-HTML path. Toggle in prod: USE_SECTION_CATALOG=true.
+    use_section_catalog: bool = Field(default=False)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
