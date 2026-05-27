@@ -2174,8 +2174,18 @@ def build_messages(
     # `_build_catalog_messages` below is kept as a deprecated shim for
     # any caller that imports it directly (none currently — internal use
     # only).
-    from omnia_api.core.config import get_settings
-    if get_settings().use_section_catalog:
+    # Catalog mode ONLY for premium tier (Opus/Sonnet/GPT-5/Gemini-Pro).
+    # Cheap models (Haiku/Nano) keep their existing multipass freeform
+    # path — they're already routed through `multipass_generator`'s 4-pass
+    # pipeline which doesn't understand JSON IR. Mixing the two would
+    # cause the model to receive lean-JSON instructions but emit HTML
+    # via multipass's pass_assembly, then fail catalog parse and waste
+    # ~4 LLM calls before the fallback kicks in.
+    from omnia_api.core.config import get_settings, tier_for_model
+    if (
+        get_settings().use_section_catalog
+        and tier_for_model(model_id) == "premium"
+    ):
         from omnia_api.services.lean_prompt import build_catalog_messages
         return build_catalog_messages(
             history=history,

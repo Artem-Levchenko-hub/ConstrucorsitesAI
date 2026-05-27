@@ -538,8 +538,13 @@ async def _process_prompt(
         # and fall through to the freeform HTML extractor — the model
         # may have ignored the IR-only instruction and returned HTML
         # anyway. We'd rather ship an imperfect site than nothing.
-        from omnia_api.core.config import get_settings as _get_settings
-        if _get_settings().use_section_catalog:
+        #
+        # Tier guard: only premium models go through IR conversion.
+        # Cheap models (Haiku/Nano) are routed through multipass which
+        # emits HTML — parsing that as JSON would always fail and just
+        # log noise.
+        from omnia_api.core.config import get_settings as _get_settings, tier_for_model as _tier_for_model
+        if _get_settings().use_section_catalog and _tier_for_model(model_id) == "premium":
             import json as _json
             from omnia_api.sections import PageIR, render_page  # noqa: F401
             from omnia_api.sections.renderer import render_to_files
@@ -864,6 +869,7 @@ async def _process_prompt(
                 _last_report = None
             if (
                 _settings_for_retry.use_section_catalog
+                and _tier_for_model(model_id) == "premium"
                 and _last_report is not None
                 and getattr(_last_report, "score", 10) < _RETRY_SCORE_THRESHOLD
                 and not _retry_done
