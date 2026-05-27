@@ -346,5 +346,175 @@
       document.addEventListener("pointerover", contextOver, { passive: true });
       document.addEventListener("pointerout", contextOut, { passive: true });
     }
+
+    // ───────────────────────────────────────────────────────────────
+    // 15. Anime-style helpers (Phase L9). Native Web Animations API
+    //     — no external dep. Selector-driven so generated sites can
+    //     opt-in by adding attributes:
+    //       .anime-hero-reveal        — split text, stagger letters/words
+    //       [data-anime="fade-up"]    — fade+translate on viewport enter
+    //       [data-anime-counter]      — 0→N number tween (value in textContent)
+    //       [data-anime-magnetic]     — button follows cursor within radius
+    //     Respects prefers-reduced-motion: all anims downgrade to fade-only.
+    // ───────────────────────────────────────────────────────────────
+    var reduceMotion = window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    // 15a. Hero text reveal — split into spans, stagger reveal.
+    document.querySelectorAll(".anime-hero-reveal").forEach(function (el) {
+      if (el.dataset.animeReady) return;
+      el.dataset.animeReady = "1";
+      var mode = el.dataset.animeSplit || "word"; // "word" | "letter"
+      var text = el.textContent || "";
+      el.textContent = "";
+      var parts = mode === "letter" ? text.split("") : text.split(/(\s+)/);
+      var spans = [];
+      parts.forEach(function (p) {
+        if (p === "") return;
+        var span = document.createElement("span");
+        span.textContent = p;
+        span.style.display = "inline-block";
+        span.style.whiteSpace = p.match(/^\s+$/) ? "pre" : "";
+        span.style.opacity = "0";
+        span.style.transform = reduceMotion ? "" : "translateY(0.4em)";
+        el.appendChild(span);
+        if (!p.match(/^\s+$/)) spans.push(span);
+      });
+      spans.forEach(function (span, i) {
+        span.animate(
+          reduceMotion
+            ? [{ opacity: 0 }, { opacity: 1 }]
+            : [
+                { opacity: 0, transform: "translateY(0.4em)" },
+                { opacity: 1, transform: "translateY(0)" },
+              ],
+          {
+            duration: reduceMotion ? 300 : 700,
+            delay: i * (reduceMotion ? 20 : 45),
+            easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+            fill: "forwards",
+          }
+        );
+      });
+    });
+
+    // 15b. Scroll fade-up — IntersectionObserver per element.
+    var fadeObserver = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          var el = entry.target;
+          el.animate(
+            reduceMotion
+              ? [{ opacity: 0 }, { opacity: 1 }]
+              : [
+                  { opacity: 0, transform: "translateY(24px)" },
+                  { opacity: 1, transform: "translateY(0)" },
+                ],
+            {
+              duration: reduceMotion ? 300 : 800,
+              easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+              fill: "forwards",
+            }
+          );
+          fadeObserver.unobserve(el);
+        });
+      },
+      { threshold: 0.15, rootMargin: "0px 0px -10% 0px" }
+    );
+    document
+      .querySelectorAll('[data-anime="fade-up"]')
+      .forEach(function (el) {
+        el.style.opacity = "0";
+        fadeObserver.observe(el);
+      });
+
+    // 15c. Number counter — 0 → N on enter viewport.
+    var counterObserver = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          var el = entry.target;
+          var raw = (el.textContent || "0").trim();
+          var match = raw.match(/^(\D*)([\d\s.,]+)(\D*)$/);
+          if (!match) {
+            counterObserver.unobserve(el);
+            return;
+          }
+          var prefix = match[1] || "";
+          var suffix = match[3] || "";
+          var target = parseFloat(
+            match[2].replace(/\s/g, "").replace(",", ".")
+          );
+          if (isNaN(target)) {
+            counterObserver.unobserve(el);
+            return;
+          }
+          var duration = reduceMotion ? 300 : 1400;
+          var start = performance.now();
+          var step = function (now) {
+            var t = Math.min(1, (now - start) / duration);
+            var eased = 1 - Math.pow(1 - t, 3);
+            var current = target * eased;
+            var rounded =
+              target >= 100
+                ? Math.round(current).toLocaleString("ru-RU")
+                : current.toFixed(target % 1 === 0 ? 0 : 1);
+            el.textContent = prefix + rounded + suffix;
+            if (t < 1) requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+          counterObserver.unobserve(el);
+        });
+      },
+      { threshold: 0.5 }
+    );
+    document
+      .querySelectorAll("[data-anime-counter]")
+      .forEach(function (el) {
+        counterObserver.observe(el);
+      });
+
+    // 15d. Magnetic CTA — button follows pointer within radius.
+    if (!reduceMotion) {
+      document
+        .querySelectorAll("[data-anime-magnetic]")
+        .forEach(function (btn) {
+          var radius = parseInt(btn.dataset.animeMagneticRadius, 10) || 80;
+          var strength = parseFloat(btn.dataset.animeMagneticStrength) || 0.35;
+          var rect;
+          var update = function (ev) {
+            if (!rect) rect = btn.getBoundingClientRect();
+            var cx = rect.left + rect.width / 2;
+            var cy = rect.top + rect.height / 2;
+            var dx = ev.clientX - cx;
+            var dy = ev.clientY - cy;
+            var dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > radius) {
+              btn.style.transform = "";
+              return;
+            }
+            btn.style.transform =
+              "translate(" +
+              (dx * strength).toFixed(1) +
+              "px," +
+              (dy * strength).toFixed(1) +
+              "px)";
+          };
+          document.addEventListener("pointermove", update, { passive: true });
+          btn.addEventListener("pointerleave", function () {
+            btn.style.transform = "";
+            rect = null;
+          });
+          window.addEventListener(
+            "resize",
+            function () {
+              rect = null;
+            },
+            { passive: true }
+          );
+          btn.style.transition = "transform 0.3s cubic-bezier(0.22,1,0.36,1)";
+        });
+    }
   });
 })();
