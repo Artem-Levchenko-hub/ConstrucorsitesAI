@@ -38,6 +38,7 @@ from omnia_api.core.config import (
     tier_for_model,
 )
 from omnia_api.services.director_polish import director_polish_generate
+from omnia_api.services.intent_triage import ORCHESTRATE, decide_intent
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
@@ -188,22 +189,32 @@ async def post_prompt(
         if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
             raise ApiError("wallet_empty", "insufficient balance", 402)
 
-    # Model choice is server-side — the user does NOT pick a model. The pipeline
-    # orchestrates per-role models (core/config.ROLE_MODEL_MAP). `force_model` is
-    # the hidden admin/debug override (env OMNIA_FORCE_MODEL); empty → role mix.
-    # `routing_model` (the director/Opus by default) drives prompt-routing
-    # (premium → Director→Polish) and the empty-response fallback lookups.
-    force_model = get_settings().force_model or None
-    routing_model = force_model or model_for_role("director")
-
-    # Select-mode: элементы, выделенные в превью, с комментариями. Сериализуем в
-    # list[dict] для JSONB-колонки и для передачи в фоновую _process_prompt
-    # (сервис prompt_builder не знает про Pydantic-схему — R-07).
+    # Select-mode picks (serialized for JSONB + the background task). Computed
+    # first because the triage below needs the count of picked elements.
     selected_dump = (
         [el.model_dump() for el in payload.selected_elements]
         if payload.selected_elements
         else None
     )
+
+    # Smart triage — the server decides whether this prompt earns the full
+    # Director(Opus)→Polish→Audit orchestration or a single cheap model. First
+    # build, structural/backend/redesign change, or a batch of edits at once →
+    # orchestrate; a lone cosmetic touch-up → cheap. Keeps Opus off "recolour
+    # the login button" work so the client pays pennies for the long tail.
+    intent = decide_intent(
+        payload.prompt,
+        is_first_prompt=project.current_snapshot_id is None,
+        selected_count=len(selected_dump or []),
+    )
+    orchestrate = intent == ORCHESTRATE
+
+    # Model choice is server-side — the user never picks. `force_model` is the
+    # hidden admin override (env FORCE_MODEL). Otherwise the triage decides:
+    # orchestrate → director (Opus) drives prompt-routing + Director→Polish;
+    # cheap → a single reliable Haiku shot (role `edit`).
+    force_model = get_settings().force_model or None
+    routing_model = force_model or model_for_role("director" if orchestrate else "edit")
 
     user_msg = Message(
         project_id=project_id,
@@ -216,7 +227,8 @@ async def post_prompt(
         project_id=project_id,
         role="assistant",
         content="",
-        model_id=force_model or ORCHESTRATION_LABEL,
+        # Orchestrated runs carry the mix label; cheap runs log the real model.
+        model_id=force_model or (ORCHESTRATION_LABEL if orchestrate else routing_model),
     )
     session.add_all([user_msg, assistant_msg])
     await session.commit()
@@ -233,6 +245,7 @@ async def post_prompt(
         model_id=routing_model,
         force_model=force_model,
         is_free=is_free,
+        orchestrate=orchestrate,
         selected_elements=selected_dump,
     )
 
@@ -385,6 +398,7 @@ async def _process_prompt(
     model_id: str,
     force_model: str | None = None,
     is_free: bool = False,
+    orchestrate: bool = True,
     selected_elements: list[dict[str, Any]] | None = None,
 ) -> None:
     import logging as _log_mod
@@ -543,8 +557,13 @@ async def _process_prompt(
             # admin override or an empty-response fallback forces ONE model across
             # every pass. The premium gate still holds: the routing model is the
             # director (Opus).
+            # `orchestrate` is the triage verdict (closure from _process_prompt).
+            # When False (a cheap targeted edit) we skip BOTH Director→Polish AND
+            # the 4-pass multipass and run a single reliable shot — so "recolour
+            # the button" never spins up the premium pipeline and burns budget.
             _dp_active = (
-                _settings.use_director_polish
+                orchestrate
+                and _settings.use_director_polish
                 and _settings.use_section_catalog
                 and tier_for_model(use_model) == "premium"
             )
@@ -558,7 +577,7 @@ async def _process_prompt(
                     project_id=project_id,
                     message_id=assistant_message_id,
                 )
-            elif force_multipass or use_model in multipass_set:
+            elif orchestrate and (force_multipass or use_model in multipass_set):
                 source = multipass_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
@@ -681,7 +700,7 @@ async def _process_prompt(
                 accumulated = "\n".join(blocks)
                 print(
                     f"[PP] catalog_ir_ok sections={len(ir.sections)} "
-                    f"html_len={len(rendered.get('src/index.html', ''))}",
+                    f"html_len={len(rendered.get('index.html', ''))}",
                     flush=True,
                 )
             except (_json.JSONDecodeError, _ValidationError, ValueError) as ir_exc:

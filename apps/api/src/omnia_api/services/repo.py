@@ -122,7 +122,10 @@ def commit_files(
                     full.unlink()
                 try:
                     index.remove(path)
-                except KeyError:
+                except (KeyError, OSError):
+                    # Not in the index (pygit2 raises KeyError or, depending on
+                    # build, OSError "index does not contain <path> at stage 0").
+                    # Nothing to delete — a no-op, never fatal to the commit.
                     pass
                 continue
             full.parent.mkdir(parents=True, exist_ok=True)

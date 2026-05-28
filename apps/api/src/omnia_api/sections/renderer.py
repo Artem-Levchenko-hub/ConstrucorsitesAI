@@ -18,9 +18,12 @@ Conventions:
   producing blank HTML. Pairs with ``extra="forbid"`` in the IR.
 
 Files emitted:
-* ``src/index.html`` — the actual landing page.
-* ``src/assets/omnia-kit.css`` / ``omnia-kit.js`` — copied verbatim from
-  the ``blank`` template (already on disk, never edited by the LLM).
+* ``index.html`` — the actual landing page (root path, matching the static
+  scaffold and the ``/p/<slug>`` preview serving).
+
+The omnia-kit (``assets/omnia-kit.{css,js}``) is scaffolded into the project
+once and is Omnia-managed — it is left untouched on regeneration, never
+re-emitted here.
 
 The caller (``multipass_generator``) wraps these into ``<file>`` blocks
 that ``routers/messages.py::_extract_files_and_edits`` already knows how
@@ -116,20 +119,23 @@ def render_page(ir: PageIR) -> str:
     )
 
 
-def render_to_files(ir: PageIR, *, kit_css: str, kit_js: str) -> dict[str, str]:
-    """Return the full set of files to commit for this page.
+def render_to_files(ir: PageIR, *, kit_css: str = "", kit_js: str = "") -> dict[str, str]:
+    """Return the files to commit for this page.
 
-    ``kit_css`` / ``kit_js`` should be the verbatim contents of
-    ``templates/blank/assets/omnia-kit.{css,js}`` — passed in rather
-    than read here to keep the renderer pure and easy to unit-test.
+    Only ``index.html`` (root) is emitted — matching the static scaffold and the
+    ``/p/<slug>`` serving. The omnia-kit is scaffolded into the project once and
+    is Omnia-managed, so ``commit_files`` preserves it untouched (it only mutates
+    the files it is given). ``kit_css`` / ``kit_js`` are accepted for back-compat
+    and re-committed ONLY when a non-empty value is explicitly passed — emitting
+    an empty kit previously deleted it / crashed the commit on a missing path.
     """
 
-    html = render_page(ir)
-    return {
-        "src/index.html": html,
-        "src/assets/omnia-kit.css": kit_css,
-        "src/assets/omnia-kit.js": kit_js,
-    }
+    files: dict[str, str] = {"index.html": render_page(ir)}
+    if kit_css:
+        files["assets/omnia-kit.css"] = kit_css
+    if kit_js:
+        files["assets/omnia-kit.js"] = kit_js
+    return files
 
 
 __all__ = ["render_page", "render_to_files"]
