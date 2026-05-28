@@ -128,6 +128,10 @@ export type Charge = {
 export type WalletState = {
   balance_rub: number;
   recent_charges: Charge[];
+  // First-N free generations remaining (wow-effect onboarding). Optional so a
+  // stale backend response without the fields doesn't break the type.
+  free_generations_left?: number;
+  free_generation_limit?: number;
 };
 
 export type PromptResponse = {

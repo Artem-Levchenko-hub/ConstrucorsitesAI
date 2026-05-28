@@ -23,12 +23,15 @@ import logging
 import re
 import uuid
 
+from omnia_api.core.config import model_for_role
 from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.llm_client import stream_chat_completion
 
 log = logging.getLogger(__name__)
 
 DEFAULT_PRESET_ID = "editorial-trust"
+# Reference default only — the live model is resolved at call time via
+# model_for_role("classify") (see _llm_classify). Mirrors ROLE_MODEL_MAP.
 CLASSIFIER_MODEL = "claude-haiku-4-5"
 MIN_HEURISTIC_SCORE = 1  # минимум совпавших keyword-стемов
 HEURISTIC_LEAD = 1  # лидер должен опережать второго на это число matches
@@ -211,7 +214,7 @@ async def _llm_classify(project_name: str, template: str, first_prompt: str | No
         try:
             async for event in stream_chat_completion(
                 messages=messages,
-                model=CLASSIFIER_MODEL,
+                model=model_for_role("classify"),
                 user_id=_CLASSIFIER_USER_ID,
                 project_id=_CLASSIFIER_PROJECT_ID,
                 message_id=str(uuid.uuid4()),

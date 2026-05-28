@@ -36,6 +36,10 @@ class ChatMessage(BaseModel):
 class ChatMetadata(BaseModel):
     project_id: UUID | None = None
     message_id: UUID | None = None
+    # First-N free generations: skip balance precheck + wallet debit. Usage is
+    # still logged so we can measure the real cost of the free tier. The API
+    # backend (apps/api) decides who is free and counts the quota.
+    free: bool = False
 
 
 class ChatCompletionRequest(BaseModel):
@@ -80,7 +84,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
 
     if req.stream:
         # Pre-check balance before opening the SSE generator (cheap reject).
-        if req.user is not None:
+        # Free generations skip the floor check entirely.
+        if req.user is not None and not meta.free:
             try:
                 await billing.precheck_balance(
                     req.user, _estimate_cost(req.model, filtered_messages)
@@ -101,6 +106,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 message_id=meta.message_id,
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
+                free=meta.free,
             )
         )
 
@@ -134,8 +140,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
             log.exception("cache_hit.file_log_failed")
         return cached
 
-    # Cache miss — pre-check balance.
-    if req.user is not None:
+    # Cache miss — pre-check balance (free generations skip the floor check).
+    if req.user is not None and not meta.free:
         try:
             await billing.precheck_balance(req.user, _estimate_cost(req.model, filtered_messages))
         except WalletEmptyError as exc:
@@ -175,6 +181,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 tokens_out=tokens_out,
                 cost_rub=cost_rub,
                 description=f"Completion via {actual_model}",
+                free=meta.free,
             )
         except WalletEmptyError as exc:
             raise _gateway_error_to_http(exc) from exc

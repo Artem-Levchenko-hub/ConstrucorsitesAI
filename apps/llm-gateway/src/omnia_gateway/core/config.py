@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # OpenAI-compatible surface on proxyapi: GPT-5 family + GPT-4o family.
     # LiteLLM's openai provider expects the `/v1` suffix already on the base.
     proxyapi_openai_base_url: str = "https://api.proxyapi.ru/openai/v1"
+    # DeepSeek (deepseek-chat = V3, deepseek-reasoner = R1) via proxyapi's
+    # OpenAI-compatible surface — same key + balance as Anthropic/OpenAI above.
+    # LiteLLM's openai provider appends the path itself, so the base carries /v1.
+    # Verify the exact path against the proxyapi dashboard before prod billing.
+    proxyapi_deepseek_base_url: str = "https://api.proxyapi.ru/deepseek/v1"
 
     # Sber GigaChat — auth key is base64(client_id:client_secret) from Sber developer cabinet.
     # Sber's API uses the Russian Trusted Root CA, which most Python builds don't trust by

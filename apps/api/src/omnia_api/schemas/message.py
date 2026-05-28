@@ -39,7 +39,10 @@ class MessagePublic(BaseModel):
 
 class PromptRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=10_000)
-    model_id: str = Field(min_length=1)
+    # Deprecated / ignored: the server orchestrates per-role models (no user
+    # model picker). Kept optional so a stale frontend that still sends it
+    # doesn't 422. Honoured only as an admin override via env OMNIA_FORCE_MODEL.
+    model_id: str | None = Field(default=None)
     selected_elements: list[SelectedElement] | None = Field(default=None, max_length=12)
 
 

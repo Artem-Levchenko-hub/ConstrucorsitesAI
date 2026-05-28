@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -13,6 +14,21 @@ import httpx
 from omnia_api.core.config import get_settings
 
 log = logging.getLogger(__name__)
+
+
+# Free-generation flag for the current generation, set by routers/messages.py
+# before the pipeline runs. Threading a `free=` param through every generator
+# (director_polish, multipass, _run_pass) would be noisy; a contextvar rides the
+# same async task tree (asyncio.gather children inherit it). The gateway reads
+# metadata.free to skip the wallet debit while still logging Usage.
+_free_generation: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "omnia_free_generation", default=False
+)
+
+
+def set_free_generation(value: bool) -> None:
+    """Mark the current async context as a free (non-billed) generation."""
+    _free_generation.set(value)
 
 
 class LLMError(Exception):
@@ -43,7 +59,11 @@ async def stream_chat_completion(
         "messages": messages,
         "stream": True,
         "user": user_id,
-        "metadata": {"project_id": project_id, "message_id": message_id},
+        "metadata": {
+            "project_id": project_id,
+            "message_id": message_id,
+            "free": _free_generation.get(),
+        },
     }
     timeout = httpx.Timeout(120.0, connect=5.0, read=120.0)
     print(f"[LLM] start url={url} model={model} msgs={len(messages)}", flush=True)

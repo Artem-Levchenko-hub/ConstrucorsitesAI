@@ -58,6 +58,7 @@ async def charge(
     tokens_out: int,
     cost_rub: Decimal,
     description: str,
+    free: bool = False,
 ) -> UUID:
     """Atomic debit + audit trail.
 
@@ -66,41 +67,47 @@ async def charge(
       2. INSERT wallet_charges (negative amount = debit).
       3. INSERT usage.
     Returns the wallet_charges row id.
+
+    ``free=True`` (first-N free generations) skips steps 1–2 entirely: the
+    wallet is NOT debited and no wallet_charges row is written, but the
+    ``usage`` row is still inserted with the real ``cost_rub`` so analytics
+    can measure what the free tier actually costs us.
     """
     pool = get_pool()
     charge_id = uuid4()
     usage_id = uuid4()
     async with pool.acquire() as conn, conn.transaction():
-        updated = await conn.execute(
-            """
-            UPDATE wallets
-               SET balance_rub = balance_rub - $1,
-                   updated_at = now()
-             WHERE user_id = $2 AND balance_rub >= $1
-            """,
-            cost_rub,
-            user_id,
-        )
-        # asyncpg returns "UPDATE N" — extract N.
-        affected = int(updated.rsplit(" ", 1)[-1]) if updated else 0
-        if affected == 0:
-            raise WalletEmptyError(
-                "Wallet balance went negative mid-charge",
-                details={"user_id": str(user_id), "cost_rub": str(cost_rub)},
+        if not free:
+            updated = await conn.execute(
+                """
+                UPDATE wallets
+                   SET balance_rub = balance_rub - $1,
+                       updated_at = now()
+                 WHERE user_id = $2 AND balance_rub >= $1
+                """,
+                cost_rub,
+                user_id,
             )
+            # asyncpg returns "UPDATE N" — extract N.
+            affected = int(updated.rsplit(" ", 1)[-1]) if updated else 0
+            if affected == 0:
+                raise WalletEmptyError(
+                    "Wallet balance went negative mid-charge",
+                    details={"user_id": str(user_id), "cost_rub": str(cost_rub)},
+                )
 
-        await conn.execute(
-            """
-            INSERT INTO wallet_charges
-                (id, user_id, message_id, amount_rub, description)
-            VALUES ($1, $2, $3, $4, $5)
-            """,
-            charge_id,
-            user_id,
-            message_id,
-            -cost_rub,  # negative = debit per data-model.md convention
-            description,
-        )
+            await conn.execute(
+                """
+                INSERT INTO wallet_charges
+                    (id, user_id, message_id, amount_rub, description)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                charge_id,
+                user_id,
+                message_id,
+                -cost_rub,  # negative = debit per data-model.md convention
+                description,
+            )
         await conn.execute(
             """
             INSERT INTO usage
@@ -126,5 +133,6 @@ async def charge(
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         cost_rub=str(cost_rub),
+        free=free,
     )
     return charge_id

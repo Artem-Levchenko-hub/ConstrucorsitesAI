@@ -42,6 +42,13 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     "gpt-5-nano": ModelPrice(Decimal("0.01"), Decimal("0.05")),
     "yandexgpt-5": ModelPrice(Decimal("0.10"), Decimal("0.40")),
     "qwen-3-coder": ModelPrice(Decimal("0.05"), Decimal("0.20")),
+    # DeepSeek via proxyapi.ru (same key/balance as Haiku/GPT-5). DeepSeek list
+    # prices (May 2026, USD → RUB at ~100 + 20% markup):
+    #   deepseek-chat     (V3): $0.27 / $1.10 per 1M  → 0.03 / 0.13 ₽ per 1k
+    #   deepseek-reasoner (R1): $0.55 / $2.19 per 1M  → 0.07 / 0.26 ₽ per 1k
+    # Approximate — recheck the proxyapi price page before billing real users.
+    "deepseek-chat": ModelPrice(Decimal("0.03"), Decimal("0.13")),
+    "deepseek-reasoner": ModelPrice(Decimal("0.07"), Decimal("0.26")),
     # Sber GigaChat — RUB-native, no FX conversion. Numbers approximate Sber's
     # public price list (May 2026); adjust against the official table before bumping
     # markup. Output is priced same as input on Sber's tariffs.
@@ -94,6 +101,8 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
     "gpt-5-nano": _ModelMeta("GPT-5 Nano", "openai", 128_000, ("fast", "budget")),
     "yandexgpt-5": _ModelMeta("YandexGPT 5", "yandex", 32_000, ("budget",)),
     "qwen-3-coder": _ModelMeta("Qwen 3 Coder", "alibaba", 128_000, ("budget", "fast")),
+    "deepseek-chat": _ModelMeta("DeepSeek V3", "deepseek", 128_000, ("quality", "budget")),
+    "deepseek-reasoner": _ModelMeta("DeepSeek R1", "deepseek", 128_000, ("quality",)),
     "gigachat-2": _ModelMeta("GigaChat 2", "sber", 32_000, ("fast", "budget")),
     "gigachat-2-pro": _ModelMeta("GigaChat 2 Pro", "sber", 128_000, ("quality",)),
     "gigachat-2-max": _ModelMeta("GigaChat 2 Max", "sber", 128_000, ("quality",)),

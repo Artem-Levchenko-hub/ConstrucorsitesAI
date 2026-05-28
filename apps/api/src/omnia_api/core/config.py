@@ -85,22 +85,49 @@ class Settings(BaseSettings):
     # rendering of validated `PageIR`. The model only emits JSON; the
     # renderer turns it into HTML. Saves ~50% tokens per generation +
     # eliminates omnia-kit class hallucination + locks visual ceiling.
-    # Default OFF — opt-in until we have golden-comparison telemetry vs
-    # the freeform-HTML path. Toggle in prod: USE_SECTION_CATALOG=true.
-    use_section_catalog: bool = Field(default=False)
+    # Default ON — catalog/IR is now the standard generation path for everyone
+    # (role-orchestration era). The model emits validated JSON; the renderer
+    # turns it into HTML deterministically. Kill switch: USE_SECTION_CATALOG=false.
+    use_section_catalog: bool = Field(default=True)
 
     # Phase L7 — Director→Polish 2-pass for premium tier (Opus / Sonnet /
     # GPT-5) on top of catalog mode. Pass 1 ("Director") emits the
     # structural PageIR with short placeholder headlines; pass 2
     # ("Polish") takes that IR and rewrites every text field with real
     # content (full headlines, real numbers in ₽, real names, cities).
-    # Default OFF — adds ~latency × 2 and ~cost × 2 of a single call.
-    # Premium-tier only. Activate via env: USE_DIRECTOR_POLISH=true.
-    use_director_polish: bool = Field(default=False)
+    # Default ON — Director→Polish is the standard catalog path. Director
+    # (role `director`, model Opus) picks structure; Polish (role `polish`,
+    # model DeepSeek) writes the real content. Per-role models come from
+    # ROLE_MODEL_MAP, not the user. Kill switch: USE_DIRECTOR_POLISH=false.
+    use_director_polish: bool = Field(default=True)
+
+    # Phase M — per-role model override. Empty = use ROLE_MODEL_MAP (topmix-v1)
+    # below. CSV of `role=model_id` pairs, e.g.
+    # "director=claude-opus-4-7,polish=deepseek-chat,audit=claude-sonnet-4-6".
+    # Lets ops retune the price/quality mix per-role without a code deploy.
+    role_models: str = Field(default="")
+
+    # Hidden admin/debug override. When set (non-empty), forces THIS model id on
+    # every pipeline role for every generation. Leave empty in prod — the role
+    # orchestration (ROLE_MODEL_MAP) drives model choice. Users never see a
+    # model picker; this env knob is the only manual override.
+    force_model: str = Field(default="")
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def role_models_map(self) -> dict[str, str]:
+        """Parse `role_models` CSV into a {role: model_id} dict."""
+        out: dict[str, str] = {}
+        for pair in self.role_models.split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                if k.strip() and v.strip():
+                    out[k.strip()] = v.strip()
+        return out
 
     @property
     def multipass_models_set(self) -> frozenset[str]:
@@ -190,3 +217,53 @@ def tier_for_model(model_id: str | None) -> str:
     if not model_id:
         return DEFAULT_TIER
     return MODEL_TIER_MAP.get(model_id, DEFAULT_TIER)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Phase M — role→model orchestration map ("topmix-v1").
+#
+# The user no longer picks a model. Each task/pass in the generation pipeline
+# has a ROLE, and each role is assigned the cheapest model that reliably does
+# that job (Prompt Engineering for LLMs, ch. 9: "tasks don't have to all use
+# the same LLM"). Hard structural reasoning → Opus; bulk Russian copy →
+# DeepSeek; trivial mechanical steps → Haiku; final HTML assembly → no LLM
+# (deterministic Jinja). Retune per-role at runtime via Settings.role_models
+# (env ROLE_MODELS) without a code change.
+# ──────────────────────────────────────────────────────────────────────────
+
+ROLE_MODEL_MAP: dict[str, str] = {
+    "classify":     "claude-haiku-4-5",   # pick 1 of N presets, ~150 tokens
+    "director":     "claude-opus-4-7",    # HARD: structure / section choice
+    "polish":       "deepseek-chat",      # real Russian content, best ₽/quality
+    "audit":        "claude-sonnet-4-6",  # LLM-as-judge rubric scoring
+    "audit_retry":  "claude-opus-4-7",    # re-roll on audit fail = director-grade
+    "skeleton":     "claude-haiku-4-5",   # multipass fallback — structure only
+    "content":      "deepseek-chat",      # multipass fallback — copy
+    "visual":       "claude-haiku-4-5",   # multipass fallback — style tokens
+    "link_repair":  "claude-haiku-4-5",   # rewrite dead hrefs
+    "image_prompt": "claude-haiku-4-5",   # short image-gen prompt
+    "single_shot":  "claude-opus-4-7",    # non-catalog freeform fallback path
+}
+
+# Any role not in the map (or pointing at a later-retired model) resolves here
+# — Haiku is the cheapest universally-routable model.
+DEFAULT_ROLE_MODEL = "claude-haiku-4-5"
+
+# First-N free "wow-effect" generations per user before wallet billing starts.
+# Counter lives on User.free_generations_used; the gate is in routers/messages.py
+# and the wallet-skip is in the LLM gateway (metadata.free=true).
+FREE_GENERATION_LIMIT = 3
+
+
+def model_for_role(role: str, override: str | None = None) -> str:
+    """Resolve a pipeline role to the model id that should execute it.
+
+    Precedence: explicit ``override`` (admin force-model) > Settings.role_models
+    (ops env override) > ROLE_MODEL_MAP (topmix-v1 default) > DEFAULT_ROLE_MODEL.
+    """
+    if override:
+        return override
+    env_map = get_settings().role_models_map
+    if role in env_map:
+        return env_map[role]
+    return ROLE_MODEL_MAP.get(role, DEFAULT_ROLE_MODEL)

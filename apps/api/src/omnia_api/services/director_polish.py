@@ -17,13 +17,14 @@ into two passes the same model executes back-to-back:
   gets a real, concrete Russian rewrite (real numbers in ₽, real
   names, real cities, real services). NO structural changes allowed.
 
-Both passes run against the **same model** so the user's billing
-stays in the picked tier. Net latency ≈ 2× single-shot. Net token
-cost ≈ 2× input + 1.3× output (Polish reads Director's IR but emits
-roughly the same JSON shape).
+Each pass runs against its OWN model (role-orchestration era): Director uses
+role ``director`` (Opus — hard structural reasoning), Polish uses role
+``polish`` (DeepSeek — cheap, strong Russian copy). Net latency ≈ 2×
+single-shot. Token cost is dominated by the Director's input, so the Director
+should see a lean prompt to keep that cheap.
 
-Activated by ``Settings.use_director_polish=True`` AND model is in
-the premium tier (Opus / Sonnet / GPT-5) AND catalog mode is on.
+Activated by ``Settings.use_director_polish=True`` AND catalog mode is on.
+Per-pass models come from ``model_for_role`` (not the user).
 
 The async-generator event contract matches
 ``services.llm_client.stream_chat_completion``:
@@ -39,6 +40,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
+from omnia_api.core.config import model_for_role
 from omnia_api.services.llm_client import stream_chat_completion
 
 
@@ -146,25 +148,32 @@ async def director_polish_generate(
     *,
     base_messages: list[dict[str, str]],
     user_prompt: str,
-    model: str,
+    director_model: str | None = None,
+    polish_model: str | None = None,
     user_id: UUID,
     project_id: UUID,
     message_id: UUID,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run Director → Polish.
+    """Run Director → Polish with a different model per pass.
 
-    Pass 1 streams silently (intermediate JSON noise); Pass 2 streams
-    its chunks to the caller as the FINAL output. Caller treats the
-    yielded events identically to ``stream_chat_completion``.
+    Pass 1 (Director, role ``director`` → Opus) streams silently and decides
+    the page structure. Pass 2 (Polish, role ``polish`` → DeepSeek) streams its
+    chunks to the caller as the FINAL output and writes the real content. The
+    per-pass models default from ``model_for_role`` but can be forced (admin
+    override). Caller treats the yielded events identically to
+    ``stream_chat_completion``.
     """
+    director_model = director_model or model_for_role("director")
+    polish_model = polish_model or model_for_role("polish")
+
     # ─── Pass 1: Director ────────────────────────────────────────────
-    yield {"pass": "director", "stage": "start"}
+    yield {"pass": "director", "stage": "start", "model": director_model}
     director_msgs = _build_director_messages(base_messages, user_prompt)
     director_parts: list[str] = []
     director_usage: dict[str, Any] | None = None
     async for event in stream_chat_completion(
         director_msgs,
-        model,
+        director_model,
         str(user_id),
         str(project_id),
         str(message_id),
@@ -185,12 +194,12 @@ async def director_polish_generate(
     yield {"pass": "director", "stage": "end", "chars": len(director_acc)}
 
     # ─── Pass 2: Polish (streams to user) ────────────────────────────
-    yield {"pass": "polish", "stage": "start"}
+    yield {"pass": "polish", "stage": "start", "model": polish_model}
     polish_msgs = _build_polish_messages(base_messages, user_prompt, director_acc)
     polish_usage: dict[str, Any] | None = None
     async for event in stream_chat_completion(
         polish_msgs,
-        model,
+        polish_model,
         str(user_id),
         str(project_id),
         str(message_id),

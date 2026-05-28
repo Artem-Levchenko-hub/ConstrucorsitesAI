@@ -18,6 +18,7 @@ from omnia_api.core.redis import get_redis, publish_event
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
 from omnia_api.services import orchestrator_client
@@ -30,9 +31,14 @@ from omnia_api.services.file_extractor import (
 )
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
-from omnia_api.core.config import get_settings, tier_for_model
+from omnia_api.core.config import (
+    FREE_GENERATION_LIMIT,
+    get_settings,
+    model_for_role,
+    tier_for_model,
+)
 from omnia_api.services.director_polish import director_polish_generate
-from omnia_api.services.llm_client import stream_chat_completion
+from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
@@ -41,6 +47,12 @@ from omnia_api.services.ui_audit import audit as ui_audit, format_failures_for_r
 from omnia_api.services.visual_enricher import enrich_files as enrich_visual_files
 
 RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом генерации
+
+# Snapshot/Message.model_id label for the orchestrated (role-mix) path. The real
+# per-pass models (Opus director, DeepSeek polish, …) are logged per-call in the
+# gateway's `usage` table; this label just marks the snapshot as orchestrated
+# rather than a single user-picked model.
+ORCHESTRATION_LABEL = "topmix-v1"
 
 router = APIRouter(prefix="/api/projects", tags=["messages"])
 
@@ -167,9 +179,22 @@ async def post_prompt(
 ) -> PromptResponse:
     project = await _ensure_owner(session, project_id, current_user.id)
 
-    wallet = await session.get(Wallet, current_user.id)
-    if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
-        raise ApiError("wallet_empty", "insufficient balance", 402)
+    # Free-tier gate: the first FREE_GENERATION_LIMIT generations per user are
+    # free (wow-effect onboarding) and skip the wallet floor check; the gateway
+    # also skips the debit (metadata.free=true). After that, normal balance rules.
+    is_free = (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
+    if not is_free:
+        wallet = await session.get(Wallet, current_user.id)
+        if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
+            raise ApiError("wallet_empty", "insufficient balance", 402)
+
+    # Model choice is server-side — the user does NOT pick a model. The pipeline
+    # orchestrates per-role models (core/config.ROLE_MODEL_MAP). `force_model` is
+    # the hidden admin/debug override (env OMNIA_FORCE_MODEL); empty → role mix.
+    # `routing_model` (the director/Opus by default) drives prompt-routing
+    # (premium → Director→Polish) and the empty-response fallback lookups.
+    force_model = get_settings().force_model or None
+    routing_model = force_model or model_for_role("director")
 
     # Select-mode: элементы, выделенные в превью, с комментариями. Сериализуем в
     # list[dict] для JSONB-колонки и для передачи в фоновую _process_prompt
@@ -184,14 +209,14 @@ async def post_prompt(
         project_id=project_id,
         role="user",
         content=payload.prompt,
-        model_id=payload.model_id,
+        model_id=None,  # user turns have no model
         selected_elements=selected_dump,
     )
     assistant_msg = Message(
         project_id=project_id,
         role="assistant",
         content="",
-        model_id=payload.model_id,
+        model_id=force_model or ORCHESTRATION_LABEL,
     )
     session.add_all([user_msg, assistant_msg])
     await session.commit()
@@ -205,7 +230,9 @@ async def post_prompt(
         assistant_message_id=assistant_msg.id,
         current_snapshot_id=project.current_snapshot_id,
         prompt_text=payload.prompt,
-        model_id=payload.model_id,
+        model_id=routing_model,
+        force_model=force_model,
+        is_free=is_free,
         selected_elements=selected_dump,
     )
 
@@ -356,11 +383,20 @@ async def _process_prompt(
     current_snapshot_id: UUID | None,
     prompt_text: str,
     model_id: str,
+    force_model: str | None = None,
+    is_free: bool = False,
     selected_elements: list[dict[str, Any]] | None = None,
 ) -> None:
     import logging as _log_mod
     _log = _log_mod.getLogger(__name__)
-    print(f"[PP] start project={project_id} asst_msg={assistant_message_id} model={model_id}", flush=True)
+    # Mark this async context free (gateway skips wallet debit) for the whole
+    # generation — the contextvar rides every stream_chat_completion call below.
+    set_free_generation(is_free)
+    # `model_id` is the routing model; it gets reassigned to the effective model
+    # when an empty-response fallback fires. Keep the original for the snapshot
+    # label decision (orchestrated vs forced-model run).
+    routing_model = model_id
+    print(f"[PP] start project={project_id} asst_msg={assistant_message_id} model={model_id} free={is_free} force={force_model}", flush=True)
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     accumulated = ""
@@ -470,7 +506,10 @@ async def _process_prompt(
         multipass_set = get_settings().effective_multipass_models
 
         async def _run_stream(
-            use_model: str, *, force_multipass: bool = False
+            use_model: str,
+            *,
+            force_multipass: bool = False,
+            force_all: str | None = None,
         ) -> None:
             """Drain one stream from the gateway into `state`.
 
@@ -498,6 +537,12 @@ async def _process_prompt(
             # calls of the same model for higher final quality at the
             # cost of latency × 2 / tokens × 2.
             _settings = get_settings()
+            # Director→Polish is the standard catalog path. `force_all` is None on
+            # the orchestrated first pass (each pass uses its role model — Opus
+            # director, DeepSeek polish) and is set to a single model id when an
+            # admin override or an empty-response fallback forces ONE model across
+            # every pass. The premium gate still holds: the routing model is the
+            # director (Opus).
             _dp_active = (
                 _settings.use_director_polish
                 and _settings.use_section_catalog
@@ -507,7 +552,8 @@ async def _process_prompt(
                 source = director_polish_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
-                    model=use_model,
+                    director_model=force_all,
+                    polish_model=force_all,
                     user_id=user_id,
                     project_id=project_id,
                     message_id=assistant_message_id,
@@ -516,7 +562,7 @@ async def _process_prompt(
                 source = multipass_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
-                    model=use_model,
+                    model=force_all,
                     user_id=user_id,
                     project_id=project_id,
                     message_id=assistant_message_id,
@@ -524,7 +570,7 @@ async def _process_prompt(
             else:
                 source = stream_chat_completion(
                     messages,
-                    use_model,
+                    force_all or use_model,
                     str(user_id),
                     str(project_id),
                     str(assistant_message_id),
@@ -567,8 +613,8 @@ async def _process_prompt(
                         },
                     )
 
-        # --- Pass 1: primary model ----------------------------------
-        await _run_stream(model_id)
+        # --- Pass 1: primary model (role-orchestrated unless admin-forced) ---
+        await _run_stream(model_id, force_all=force_model)
         accumulated = str(state["accumulated"])
         usage_data = state["usage"]  # type: ignore[assignment]
         stream_error = state["error"]
@@ -699,7 +745,7 @@ async def _process_prompt(
                     f"[PP] same_model_multipass_retry {effective_model}",
                     flush=True,
                 )
-                await _run_stream(model_id, force_multipass=True)
+                await _run_stream(model_id, force_multipass=True, force_all=force_model)
                 mp_acc = str(state["accumulated"])
                 mp_usage = state["usage"]
                 mp_err = state["error"]
@@ -745,7 +791,7 @@ async def _process_prompt(
                     {"message_id": str(assistant_message_id), "delta": notice},
                 )
                 print(f"[PP] empty_fallback {effective_model} -> {fb_model}", flush=True)
-                await _run_stream(fb_model)
+                await _run_stream(fb_model, force_all=fb_model)
                 fb_acc = str(state["accumulated"])
                 fb_usage = state["usage"]
                 fb_err = state["error"]
@@ -951,7 +997,7 @@ async def _process_prompt(
                     # the same message list so prompt caching (system) hits.
                     messages.append({"role": "assistant", "content": accumulated})
                     messages.append({"role": "user", "content": retry_msg})
-                    await _run_stream(model_id)
+                    await _run_stream(model_id, force_all=force_model)
                     retry_accumulated = str(state["accumulated"])
                     retry_usage = state["usage"]
                     retry_error = state["error"]
@@ -1075,11 +1121,19 @@ async def _process_prompt(
                 current_sha,
             )
             async with factory() as session:
+                # Orchestrated runs record the "topmix-v1" label; a fired
+                # fallback records the model that actually produced the output;
+                # an admin-forced run records the forced model.
+                snapshot_model_id = (
+                    model_id
+                    if model_id != routing_model
+                    else (force_model or ORCHESTRATION_LABEL)
+                )
                 snapshot = Snapshot(
                     project_id=project_id,
                     commit_sha=new_sha,
                     prompt_text=prompt_text,
-                    model_id=model_id,
+                    model_id=snapshot_model_id,
                     parent_id=current_snapshot_id,
                 )
                 session.add(snapshot)
@@ -1097,6 +1151,16 @@ async def _process_prompt(
                     if usage_data:
                         msg.tokens_in = int(usage_data.get("tokens_in") or 0)
                         msg.tokens_out = int(usage_data.get("tokens_out") or 0)
+
+                # Burn one free generation — only on a successful free run (we're
+                # inside `if files:`, so a snapshot was committed). Counted here,
+                # not in the gateway, because the API owns the user row.
+                if is_free:
+                    user_row = await session.get(User, user_id)
+                    if user_row is not None:
+                        user_row.free_generations_used = (
+                            user_row.free_generations_used or 0
+                        ) + 1
 
                 # Billing is the LLM Gateway's responsibility — it already
                 # wrote `wallet_charges` + `usage` + decremented `wallets`

@@ -126,8 +126,13 @@ async def stream_completion(
     message_id: UUID | None,
     temperature: float | None,
     max_tokens: int | None,
+    free: bool = False,
 ) -> AsyncIterator[str]:
-    """Generate the SSE stream + bill at end."""
+    """Generate the SSE stream + bill at end.
+
+    ``free=True`` routes the end-of-stream charge through ``billing.charge(free=True)``
+    — Usage is logged with the real cost, but the wallet is not debited.
+    """
     response_id = f"chatcmpl-{uuid4()}"
     created = int(time.time())
 
@@ -252,6 +257,7 @@ async def stream_completion(
                     tokens_out=tokens_out_final,
                     cost_rub=cost_rub_final,
                     description=f"Streamed completion via {actual_model}",
+                    free=free,
                 )
             except Exception:
                 log.exception("stream.charge_failed", user_id=str(user_id), model=actual_model)

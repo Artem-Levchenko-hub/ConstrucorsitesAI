@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Text, func
+from sqlalchemy import DateTime, Integer, Text, func
 from sqlalchemy.dialects.postgresql import CITEXT, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,6 +32,13 @@ class User(Base):
     github_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
     github_connected_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # First-N free generations (wow-effect onboarding). Incremented after each
+    # successful free generation; once it reaches FREE_GENERATION_LIMIT
+    # (core/config.py) the user is billed from their wallet like everyone else.
+    free_generations_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
     )
 
     wallet: Mapped["Wallet"] = relationship(

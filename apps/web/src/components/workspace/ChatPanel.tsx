@@ -6,7 +6,6 @@ import { listMessages } from "@/lib/api/messages";
 import { ChatMessage } from "./ChatMessage";
 import { PromptInput } from "./PromptInput";
 import { usePromptStream } from "@/hooks/usePromptStream";
-import { useWorkspaceStore } from "@/store/workspace";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export function ChatPanel({
@@ -16,7 +15,10 @@ export function ChatPanel({
   projectId: string;
   projectSlug: string;
 }) {
-  const modelId = useWorkspaceStore((s) => s.selectedModelId);
+  // Server orchestrates per-role models (Opus director, DeepSeek polish, …).
+  // The client no longer picks a model; this label is just sent through for
+  // the optimistic chat row and is ignored by the backend.
+  const modelId = "topmix-v1";
   const { submit, cancel, cancelPending, pendingPrompt } = usePromptStream(
     projectId,
     projectSlug,

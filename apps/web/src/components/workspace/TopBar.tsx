@@ -20,7 +20,6 @@ import { DesignPresetSelector } from "./DesignPresetSelector";
 import { GithubPushButton } from "./GithubPushButton";
 import { ImageGenToggle } from "./ImageGenToggle";
 import { LogsViewer } from "./LogsViewer";
-import { ModelSelector } from "./ModelSelector";
 import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
 
@@ -85,7 +84,6 @@ export function TopBar({
                 imageGenEnabled={imageGenEnabled ?? true}
               />
             )}
-            <ModelSelector />
             {projectId && (
               <DesignPresetSelector
                 projectId={projectId}

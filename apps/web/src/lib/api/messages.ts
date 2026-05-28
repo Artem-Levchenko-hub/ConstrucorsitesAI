@@ -30,11 +30,13 @@ export async function sendPrompt(
     // sees "AI читает контекст" with no end. With the cap, the chat hook
     // catches ApiError(0, "timed out") and shows a real toast within 30s.
     timeoutMs: 30_000,
-    // Omit the field entirely when there are no picks — keeps old behaviour
-    // byte-identical and the backend field optional.
+    // model_id is intentionally NOT sent — the server orchestrates per-role
+    // models (no user model picker). `modelId` is kept in the signature only
+    // for the mock path / optimistic chat row.
+    // Omit selected_elements entirely when there are no picks — keeps old
+    // behaviour byte-identical and the backend field optional.
     json: {
       prompt,
-      model_id: modelId,
       ...(selectedElements && selectedElements.length
         ? { selected_elements: selectedElements }
         : {}),

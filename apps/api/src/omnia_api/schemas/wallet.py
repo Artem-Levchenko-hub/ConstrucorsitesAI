@@ -18,6 +18,9 @@ class ChargePublic(BaseModel):
 class WalletPublic(BaseModel):
     balance_rub: Decimal
     recent_charges: list[ChargePublic]
+    # First-N free generations remaining for this user (wow-effect onboarding).
+    free_generations_left: int = 0
+    free_generation_limit: int = 0
 
 
 class TopupRequest(BaseModel):

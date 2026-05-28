@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from fastapi import APIRouter
 
+from omnia_api.core.config import FREE_GENERATION_LIMIT
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.redis import publish_event
@@ -32,7 +33,13 @@ async def get_wallet(session: SessionDep, current_user: CurrentUserDep) -> Walle
         .limit(20)
     )
     charges = [ChargePublic.model_validate(c) for c in res.scalars().all()]
-    return WalletPublic(balance_rub=wallet.balance_rub, recent_charges=charges)
+    used = current_user.free_generations_used or 0
+    return WalletPublic(
+        balance_rub=wallet.balance_rub,
+        recent_charges=charges,
+        free_generations_left=max(0, FREE_GENERATION_LIMIT - used),
+        free_generation_limit=FREE_GENERATION_LIMIT,
+    )
 
 
 @router.post("/topup", response_model=TopupResponse)

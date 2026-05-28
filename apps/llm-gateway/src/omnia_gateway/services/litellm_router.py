@@ -66,6 +66,11 @@ _LITELLM_MODEL_SLUG: dict[str, str] = {
     "gpt-5": "openai/gpt-5",
     "gpt-5-nano": "openai/gpt-5-nano",
     "qwen-3-coder": "openrouter/qwen/qwen3-coder",
+    # DeepSeek via proxyapi.ru OpenAI-compatible surface. LiteLLM treats it as a
+    # plain OpenAI endpoint once we pass `api_base` (declared in _PROXY_ROUTES).
+    # Slugs MUST match the model names proxyapi proxies through to DeepSeek.
+    "deepseek-chat": "openai/deepseek-chat",
+    "deepseek-reasoner": "openai/deepseek-reasoner",
     # Google Gemini via AI Studio (not Vertex AI). LiteLLM reads the key from
     # GEMINI_API_KEY or whatever is passed explicitly in the model_list below.
     # Same key works for both free and paid tier on AI Studio.
@@ -95,6 +100,23 @@ _PROXY_ROUTES: dict[str, _ProxyRoute] = {
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_base_url,
     ),
+    # Opus 4.7 via proxyapi.ru native-Anthropic endpoint — same balance as
+    # Haiku/Sonnet. Without this it would fall through to the (empty on prod)
+    # anthropic_api_key channel and 503. Opus is the Director role's model.
+    "claude-opus-4-7": _ProxyRoute(
+        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
+        api_base=lambda s: s.proxyapi_base_url,
+    ),
+    # DeepSeek V3 / R1 via proxyapi.ru OpenAI-compatible surface. deepseek-chat
+    # is the Polish/content role's model (best ₽/quality on Russian copy).
+    "deepseek-chat": _ProxyRoute(
+        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
+        api_base=lambda s: s.proxyapi_deepseek_base_url,
+    ),
+    "deepseek-reasoner": _ProxyRoute(
+        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
+        api_base=lambda s: s.proxyapi_deepseek_base_url,
+    ),
     "gpt-5": _ProxyRoute(
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_openai_base_url,
@@ -115,6 +137,10 @@ _FALLBACKS: list[dict[str, list[str]]] = [
     {"claude-opus-4-7": ["claude-sonnet-4-6", "claude-haiku-4-5"]},
     {"claude-sonnet-4-6": ["claude-haiku-4-5"]},
     {"claude-haiku-4-5": ["gpt-5-nano", "gigachat-2-pro"]},
+    # DeepSeek chains terminate on proxyapi-backed Anthropic models (reliable
+    # bottom-of-stack). deepseek-chat → Haiku; deepseek-reasoner → Opus → Sonnet.
+    {"deepseek-chat": ["claude-haiku-4-5"]},
+    {"deepseek-reasoner": ["claude-opus-4-7", "claude-sonnet-4-6"]},
     {"gpt-4.1": ["gpt-5", "claude-haiku-4-5"]},
     {"gpt-5-mini": ["gpt-5-nano", "claude-haiku-4-5"]},
     {"gpt-5": ["claude-haiku-4-5", "gpt-5-nano"]},

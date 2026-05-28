@@ -53,6 +53,7 @@ from collections.abc import AsyncIterator
 from typing import Any, TypedDict
 from uuid import UUID
 
+from omnia_api.core.config import model_for_role
 from omnia_api.services.llm_client import stream_chat_completion
 
 
@@ -438,7 +439,7 @@ async def multipass_generate(
     *,
     base_messages: list[dict[str, str]],
     user_prompt: str,
-    model: str,
+    model: str | None = None,
     user_id: UUID,
     project_id: UUID,
     message_id: UUID,
@@ -459,13 +460,24 @@ async def multipass_generate(
     since both consume skeleton and produce independent outputs. Net
     latency ≈ pass1 + max(pass2, pass3) + pass4 ≈ 3× single pass time
     instead of 4×.
+
+    Per-pass models come from ``model_for_role`` (skeleton/visual → Haiku,
+    content → DeepSeek). An explicit ``model`` (admin override) forces all
+    four passes onto that one model.
     """
+    skeleton_model = model or model_for_role("skeleton")
+    content_model = model or model_for_role("content")
+    visual_model = model or model_for_role("visual")
+    # Multipass assembly stitches the 3 intermediates into freeform HTML — a
+    # mechanical, structured job → cheap content-tier model is plenty.
+    assembly_model = model or model_for_role("content")
+
     # ─── Pass 1: SKELETON ────────────────────────────────────────────
     yield {"pass": "skeleton", "stage": "start"}
     skeleton_msgs = _build_skeleton_messages(base_messages, user_prompt)
     skeleton_raw, sk_usage, sk_err = await _run_pass(
         messages=skeleton_msgs,
-        model=model,
+        model=skeleton_model,
         user_id=user_id,
         project_id=project_id,
         message_id=message_id,
@@ -502,7 +514,7 @@ async def multipass_generate(
 
     content_task = _run_pass(
         messages=content_msgs,
-        model=model,
+        model=content_model,
         user_id=user_id,
         project_id=project_id,
         message_id=message_id,
@@ -510,7 +522,7 @@ async def multipass_generate(
     )
     visual_task = _run_pass(
         messages=visual_msgs,
-        model=model,
+        model=visual_model,
         user_id=user_id,
         project_id=project_id,
         message_id=message_id,
@@ -559,7 +571,7 @@ async def multipass_generate(
     asm_err: str | None = None
     async for event in stream_chat_completion(
         messages=assembly_msgs,
-        model=model,
+        model=assembly_model,
         user_id=str(user_id),
         project_id=str(project_id),
         message_id=str(message_id),

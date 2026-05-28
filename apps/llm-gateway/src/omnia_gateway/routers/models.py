@@ -38,6 +38,10 @@ _MODEL_KEY_OVERRIDE = {
     # `available: false` simultaneously, which is what users should see.
     "gpt-5": lambda s: _has(s.proxyapi_api_key),
     "gpt-5-nano": lambda s: _has(s.proxyapi_api_key),
+    # Opus 4.7 + DeepSeek (V3/R1) share the same proxyapi balance as Haiku.
+    "claude-opus-4-7": lambda s: _has(s.proxyapi_api_key),
+    "deepseek-chat": lambda s: _has(s.proxyapi_api_key),
+    "deepseek-reasoner": lambda s: _has(s.proxyapi_api_key),
 }
 
 
