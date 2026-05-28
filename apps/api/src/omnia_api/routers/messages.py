@@ -721,7 +721,12 @@ async def _process_prompt(
                     _ir2 = PageIR.model_validate(_json.loads(_raw2))
                     from omnia_api.sections import apply_smart_defaults as _asd
                     _ir2 = _asd(_ir2, preset_id=project_design_preset_id)
-                    _rendered2 = render_to_files(_ir2, kit_css=kit_css, kit_js=kit_js)
+                    # NB: kit_css/kit_js are assigned in the try-block AFTER the
+                    # validate that just failed, so they're unbound here — fetch
+                    # them fresh from current_files (always in scope).
+                    _kit_css = current_files.get("src/assets/omnia-kit.css", "")
+                    _kit_js = current_files.get("src/assets/omnia-kit.js", "")
+                    _rendered2 = render_to_files(_ir2, kit_css=_kit_css, kit_js=_kit_js)
                     accumulated = "\n".join(
                         f'<file path="{p}">\n{c}\n</file>' for p, c in _rendered2.items()
                     )
