@@ -234,15 +234,17 @@ def tier_for_model(model_id: str | None) -> str:
 ROLE_MODEL_MAP: dict[str, str] = {
     "classify":     "claude-haiku-4-5",   # pick 1 of N presets, ~150 tokens
     "director":     "claude-opus-4-7",    # HARD: structure / section choice
-    # polish writes the final PageIR/content. DeepSeek is NOT reachable on
-    # proxyapi.ru (no /deepseek endpoint → 404), so we use gpt-5-nano via the
-    # proxyapi OpenAI surface (cheap). If nano can't hold the strict PageIR
-    # schema, messages.py retries the IR once with the director (Opus).
-    "polish":       "gpt-5-nano",         # cheap content; Opus retry on IR-fail
+    # polish writes the final PageIR/content. DeepSeek is NOT on proxyapi.ru
+    # (/deepseek → 404) and gpt-5-nano returns EMPTY (reasoning burns the output
+    # budget — proven in prod logs: first_len=0). So polish uses gemini-2.5-flash:
+    # separate Google key (does NOT drain the proxyapi balance Opus needs), cheap,
+    # returns real content, decent schema discipline. If Flash still mis-formats
+    # the strict PageIR, messages.py retries the IR once with the director (Opus).
+    "polish":       "gemini-2.5-flash",   # cheap content; Opus retry on IR-fail
     "audit":        "claude-sonnet-4-6",  # LLM-as-judge rubric scoring
     "audit_retry":  "claude-opus-4-7",    # re-roll on audit fail = director-grade
     "skeleton":     "claude-haiku-4-5",   # multipass fallback — structure only
-    "content":      "gpt-5-nano",         # multipass fallback — copy
+    "content":      "gemini-2.5-flash",   # multipass fallback — copy
     "visual":       "claude-haiku-4-5",   # multipass fallback — style tokens
     "link_repair":  "claude-haiku-4-5",   # rewrite dead hrefs
     "image_prompt": "claude-haiku-4-5",   # short image-gen prompt
