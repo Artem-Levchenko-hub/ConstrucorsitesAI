@@ -686,11 +686,55 @@ async def _process_prompt(
                 )
             except (_json.JSONDecodeError, _ValidationError, ValueError) as ir_exc:
                 _log.warning(
-                    "catalog IR parse/validate failed (falling back to freeform "
-                    "HTML extractor): %r",
+                    "catalog IR parse/validate failed; retrying IR once with the "
+                    "director model before falling back to freeform: %r",
                     ir_exc,
                 )
                 print(f"[PP] catalog_ir_fail err={ir_exc!r}", flush=True)
+                # HARDENING (Phase M) — the polish model (cheap, gpt-5-nano) emitted
+                # schema-invalid PageIR. Retry the IR ONCE with the strong director
+                # model (Opus reliably holds the strict schema). Not streamed to the
+                # user (no raw JSON in chat); on success we swap `accumulated` for the
+                # rendered <file> blocks so a real site always ships. The free-gen
+                # contextvar rides along, so this retry is not billed on a free gen.
+                from omnia_api.core.config import model_for_role as _model_for_role
+                try:
+                    _retry_parts: list[str] = []
+                    _retry_usage: dict | None = None
+                    async for _rev in stream_chat_completion(
+                        messages,
+                        _model_for_role("director"),
+                        str(user_id),
+                        str(project_id),
+                        str(assistant_message_id),
+                    ):
+                        if "delta" in _rev:
+                            _retry_parts.append(str(_rev["delta"]))
+                        elif "usage" in _rev:
+                            _retry_usage = _rev["usage"]  # type: ignore[assignment]
+                    _raw2 = "".join(_retry_parts).strip()
+                    if _raw2.startswith("```"):
+                        _raw2 = _raw2.split("\n", 1)[1] if "\n" in _raw2 else _raw2[3:]
+                        if _raw2.endswith("```"):
+                            _raw2 = _raw2[:-3]
+                        _raw2 = _raw2.strip()
+                    _ir2 = PageIR.model_validate(_json.loads(_raw2))
+                    from omnia_api.sections import apply_smart_defaults as _asd
+                    _ir2 = _asd(_ir2, preset_id=project_design_preset_id)
+                    _rendered2 = render_to_files(_ir2, kit_css=kit_css, kit_js=kit_js)
+                    accumulated = "\n".join(
+                        f'<file path="{p}">\n{c}\n</file>' for p, c in _rendered2.items()
+                    )
+                    if _retry_usage:
+                        usage_data = _retry_usage  # type: ignore[assignment]
+                    print(
+                        f"[PP] catalog_ir_recovered_via_director sections={len(_ir2.sections)}",
+                        flush=True,
+                    )
+                except Exception as _ir_exc2:  # noqa: BLE001 — last-resort safety net
+                    print(f"[PP] catalog_ir_retry_failed err={_ir_exc2!r}", flush=True)
+                    # Fall through: the empty-content retry machinery (multipass /
+                    # model-switch) downstream is the final fallback.
 
         try:
             files, edit_conflicts = _extract_files_and_edits(

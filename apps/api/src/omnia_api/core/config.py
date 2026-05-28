@@ -234,11 +234,15 @@ def tier_for_model(model_id: str | None) -> str:
 ROLE_MODEL_MAP: dict[str, str] = {
     "classify":     "claude-haiku-4-5",   # pick 1 of N presets, ~150 tokens
     "director":     "claude-opus-4-7",    # HARD: structure / section choice
-    "polish":       "deepseek-chat",      # real Russian content, best ₽/quality
+    # polish writes the final PageIR/content. DeepSeek is NOT reachable on
+    # proxyapi.ru (no /deepseek endpoint → 404), so we use gpt-5-nano via the
+    # proxyapi OpenAI surface (cheap). If nano can't hold the strict PageIR
+    # schema, messages.py retries the IR once with the director (Opus).
+    "polish":       "gpt-5-nano",         # cheap content; Opus retry on IR-fail
     "audit":        "claude-sonnet-4-6",  # LLM-as-judge rubric scoring
     "audit_retry":  "claude-opus-4-7",    # re-roll on audit fail = director-grade
     "skeleton":     "claude-haiku-4-5",   # multipass fallback — structure only
-    "content":      "deepseek-chat",      # multipass fallback — copy
+    "content":      "gpt-5-nano",         # multipass fallback — copy
     "visual":       "claude-haiku-4-5",   # multipass fallback — style tokens
     "link_repair":  "claude-haiku-4-5",   # rewrite dead hrefs
     "image_prompt": "claude-haiku-4-5",   # short image-gen prompt
