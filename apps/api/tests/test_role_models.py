@@ -18,9 +18,16 @@ from omnia_api.core.config import (  # noqa: E402
 
 def test_role_map_topmix_defaults() -> None:
     assert model_for_role("director") == "claude-opus-4-7"
-    assert model_for_role("polish") == "gemini-2.5-flash"
+    assert model_for_role("polish") == "claude-haiku-4-5"
     assert model_for_role("classify") == "claude-haiku-4-5"
     assert model_for_role("audit") == "claude-sonnet-4-6"
+    assert model_for_role("edit") == "claude-haiku-4-5"
+
+
+def test_no_role_uses_flaky_gemini() -> None:
+    # gemini-2.5-flash streaming is unreliable behind the RU egress proxy
+    # (incomplete chunked read ~50%). It must not back any pipeline role.
+    assert "gemini-2.5-flash" not in ROLE_MODEL_MAP.values()
 
 
 def test_override_takes_precedence() -> None:

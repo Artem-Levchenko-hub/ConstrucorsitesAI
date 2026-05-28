@@ -234,21 +234,25 @@ def tier_for_model(model_id: str | None) -> str:
 ROLE_MODEL_MAP: dict[str, str] = {
     "classify":     "claude-haiku-4-5",   # pick 1 of N presets, ~150 tokens
     "director":     "claude-opus-4-7",    # HARD: structure / section choice
-    # polish writes the final PageIR/content. DeepSeek is NOT on proxyapi.ru
-    # (/deepseek → 404) and gpt-5-nano returns EMPTY (reasoning burns the output
-    # budget — proven in prod logs: first_len=0). So polish uses gemini-2.5-flash:
-    # separate Google key (does NOT drain the proxyapi balance Opus needs), cheap,
-    # returns real content, decent schema discipline. If Flash still mis-formats
-    # the strict PageIR, messages.py retries the IR once with the director (Opus).
-    "polish":       "gemini-2.5-flash",   # cheap content; Opus retry on IR-fail
+    # polish writes the final PageIR/content. Model history: DeepSeek (404 on
+    # proxyapi.ru) → gpt-5-nano (empty: reasoning burns the output budget) →
+    # gemini-2.5-flash. Flash was dropped because its STREAMING is flaky behind
+    # the RU egress proxy — ~50% of stream calls die mid-body with "incomplete
+    # chunked read" (httpx.RemoteProtocolError), emitting an empty PageIR that
+    # cascades into IR-fail → multipass → wasted spend on a mediocre result.
+    # Haiku rides the SAME reliable proxyapi.ru route as Opus/Sonnet, is cheap,
+    # and streams without dropping. Schema slips still fall back to the director
+    # (Opus) IR-retry in messages.py.
+    "polish":       "claude-haiku-4-5",   # cheap content, reliable proxyapi stream
     "audit":        "claude-sonnet-4-6",  # LLM-as-judge rubric scoring
     "audit_retry":  "claude-opus-4-7",    # re-roll on audit fail = director-grade
     "skeleton":     "claude-haiku-4-5",   # multipass fallback — structure only
-    "content":      "gemini-2.5-flash",   # multipass fallback — copy
+    "content":      "claude-haiku-4-5",   # multipass fallback — copy (ex-gemini)
     "visual":       "claude-haiku-4-5",   # multipass fallback — style tokens
     "link_repair":  "claude-haiku-4-5",   # rewrite dead hrefs
     "image_prompt": "claude-haiku-4-5",   # short image-gen prompt
     "single_shot":  "claude-opus-4-7",    # non-catalog freeform fallback path
+    "edit":         "claude-haiku-4-5",   # triage=cheap: single-shot targeted edit
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here
