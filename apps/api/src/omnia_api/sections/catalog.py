@@ -80,46 +80,56 @@ CLASS_FOR: dict[str, type["BaseModel"]] = {vid: cls for vid, (cls, _) in REGISTR
 
 CATALOG_BLURB: str = """\
 КАТАЛОГ СЕКЦИЙ. Выбирай ровно из этого списка — никаких «своих» секций.
-Формат вывода — JSON, одна секция = объект с обязательным полем
-"type_variant".
+Одна секция = JSON-объект с обязательным полем "type_variant". Имена полей —
+СТРОГО как ниже (схема жёсткая: лишнее или переименованное поле = invalid → retry).
 
-# header
-header.v1   — sticky top-nav: бренд | links (2-7) | CTA?
+ОБЩИЕ ПРАВИЛА ПОЛЕЙ (частые ошибки — НЕ повторяй):
+• Любая ссылка/навигация/соцсеть = объект {"label","href"}. НЕ "url", НЕ "platform", НЕ "name", НЕ "title".
+• Кнопка (CTA) = {"label","href","style"}, style ∈ primary|ghost|outline.
+• header: имя бренда = строка "brand". НЕ "logo", НЕ "logo_text".
+• footer.columns[*]: заголовок колонки = "heading". НЕ "title". footer.social[*] = {"label","href"}.
+• contact: плоские поля "address"/"phone"/"email" (строки). НЕ объект "contact_info".
+• "background" секции = РОВНО один из: canvas|muted|mesh|aurora|dark|grain. НЕ tailwind-класс ("bg-white"/"bg-zinc-50" = invalid). Цвета фона страницы задаются в theme.background (HEX), а не тут.
+• Опционально у ЛЮБОЙ секции: "id" (a-z0-9-), "background" (enum выше), "motion" ∈ reveal|reveal-blur|fade-up|none.
+• Поле с "?" — опциональное; без "?" — обязательное. НЕ добавляй полей вне списка секции.
 
-# hero  (один на страницу, всегда первый после header)
-hero.v1     — split: copy слева, картинка справа. CTA primary + secondary?
-hero.v2     — centered, гигантская типографика, gradient-text акцент в headline
-hero.v3     — full-bleed mesh / aurora / dark, glow CTA, опц. pill_label
+# header (первая секция)
+header.v1   {brand, brand_href?, links:[{label,href}] ×2-7, cta?:{label,href,style}}
+
+# hero (один, сразу после header)
+hero.v1     {eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?, image_url?, image_alt?}
+hero.v2     {eyebrow?, headline, headline_accent?, subheadline?, primary_cta:{label,href,style}, secondary_cta?}
+hero.v3     {background:mesh|aurora|dark, eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?, pill_label?}
 
 # proof
-stats.v1    — 3-6 KPI чисел (value + label)
+stats.v1    {eyebrow?, headline?, items:[{value,label}] ×3-6}
 
 # features
-features.v1 — 3-кол. icon-grid, 3-6 items
-features.v2 — alternating rows text↔image, 2-4 items
+features.v1 {eyebrow?, headline, subheadline?, items:[{icon,title,body}] ×3-6}   (icon = heroicons-имя, напр. "wrench")
+features.v2 {eyebrow?, headline, subheadline?, items:[{icon,title,body}] ×2-4}
 
 # narrative
-about.v1    — split text + image, опц. reverse=true
+about.v1    {eyebrow?, headline, body, image_url?, image_alt?, reverse?}
 
 # social
-testimonials.v1 — 3-кол. quote cards, 2-6 quotes
+testimonials.v1 {eyebrow?, headline, items:[{quote,author,role?,avatar_url?}] ×2-6}
 
 # commerce
-pricing.v1  — 3-tier cards (2-4 tier), middle = featured
-pricing.v2  — 2-tier comparison side-by-side
+pricing.v1  {eyebrow?, headline, subheadline?, tiers:[{name,price,period?,features:[строки] ×2-10,cta:{label,href,style},featured?}] ×2-4}
+pricing.v2  {eyebrow?, headline, subheadline?, tiers:[…как pricing.v1…] ровно 2}
 
 # объяснения
-faq.v1      — аккордеон, 3-10 вопросов
+faq.v1      {eyebrow?, headline, items:[{question,answer}] ×3-10}
 
 # close
-cta.v1      — centered band, 1 primary CTA
-cta.v2      — split-card с двумя CTA + опц. visual
+cta.v1      {headline, subheadline?, primary_cta:{label,href,style}}
+cta.v2      {headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?, image_url?}
 
 # action
-contact.v1  — split: форма + адрес/телефон/email
+contact.v1  {eyebrow?, headline, subheadline?, address?, phone?, email?, form_cta_label}
 
-# footer (последний)
-footer.v1   — 1-4 колонки links + social? + copyright
+# footer (последняя)
+footer.v1   {brand, tagline?, columns:[{heading, links:[{label,href}]}] ×1-4, social?:[{label,href}], copyright}
 """
 
 
