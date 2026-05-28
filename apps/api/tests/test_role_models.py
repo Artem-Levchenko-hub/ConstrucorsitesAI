@@ -18,7 +18,7 @@ from omnia_api.core.config import (  # noqa: E402
 
 def test_role_map_topmix_defaults() -> None:
     assert model_for_role("director") == "claude-opus-4-7"
-    assert model_for_role("polish") == "deepseek-chat"
+    assert model_for_role("polish") == "gemini-2.5-flash"
     assert model_for_role("classify") == "claude-haiku-4-5"
     assert model_for_role("audit") == "claude-sonnet-4-6"
 

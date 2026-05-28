@@ -19,7 +19,7 @@ into two passes the same model executes back-to-back:
 
 Each pass runs against its OWN model (role-orchestration era): Director uses
 role ``director`` (Opus — hard structural reasoning), Polish uses role
-``polish`` (DeepSeek — cheap, strong Russian copy). Net latency ≈ 2×
+``polish`` (Gemini Flash — cheap, strong Russian copy). Net latency ≈ 2×
 single-shot. Token cost is dominated by the Director's input, so the Director
 should see a lean prompt to keep that cheap.
 
