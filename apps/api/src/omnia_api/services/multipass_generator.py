@@ -55,6 +55,7 @@ from uuid import UUID
 
 from omnia_api.core.config import model_for_role
 from omnia_api.services.llm_client import stream_chat_completion
+from omnia_api.services.vendor_profiles import vendor_directive
 
 
 class SectionSpec(TypedDict):
@@ -339,18 +340,22 @@ async def _run_pass(
 def _build_skeleton_messages(
     base_messages: list[dict[str, str]],
     user_prompt: str,
+    model_id: str | None = None,
 ) -> list[dict[str, str]]:
     """Skeleton pass uses the same system prompt as single-shot (so it gets
     palette + skill brief + AWWWARDS_PRINCIPLES) but adds an explicit
     instruction at the end of the user turn telling it to return JSON
-    only. We keep the original system prompt to preserve prompt-caching
+    only, plus the per-vendor block for ``model_id`` (json_strict — skeleton
+    emits JSON). We keep the original system prompt to preserve prompt-caching
     cache hit on Anthropic — only the last user message differs across
     passes."""
+    directive = vendor_directive(model_id, json_strict=True)
+    suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])  # everything except the original user turn
     msgs.append(
         {
             "role": "user",
-            "content": f"{user_prompt}\n\n{_SKELETON_INSTRUCTIONS}",
+            "content": f"{user_prompt}\n\n{_SKELETON_INSTRUCTIONS}{suffix}",
         }
     )
     return msgs
@@ -360,9 +365,13 @@ def _build_content_messages(
     base_messages: list[dict[str, str]],
     user_prompt: str,
     skeleton_json: str,
+    model_id: str | None = None,
 ) -> list[dict[str, str]]:
     """Content pass — base system prompt + skeleton JSON + content
-    instructions. System prompt unchanged → Anthropic prompt cache hits."""
+    instructions + per-vendor block (json_strict). System prompt unchanged →
+    Anthropic prompt cache hits."""
+    directive = vendor_directive(model_id, json_strict=True)
+    suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
     msgs.append(
         {
@@ -371,7 +380,7 @@ def _build_content_messages(
                 f"{user_prompt}\n\n"
                 f"SKELETON (структура зафиксирована):\n"
                 f"```json\n{skeleton_json}\n```\n\n"
-                f"{_CONTENT_INSTRUCTIONS}"
+                f"{_CONTENT_INSTRUCTIONS}{suffix}"
             ),
         }
     )
@@ -382,8 +391,12 @@ def _build_visual_messages(
     base_messages: list[dict[str, str]],
     user_prompt: str,
     skeleton_json: str,
+    model_id: str | None = None,
 ) -> list[dict[str, str]]:
-    """Visual pass — base system prompt + skeleton JSON + visual instructions."""
+    """Visual pass — base system prompt + skeleton JSON + visual instructions
+    + per-vendor block (json_strict)."""
+    directive = vendor_directive(model_id, json_strict=True)
+    suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
     msgs.append(
         {
@@ -392,7 +405,7 @@ def _build_visual_messages(
                 f"{user_prompt}\n\n"
                 f"SKELETON (структура зафиксирована):\n"
                 f"```json\n{skeleton_json}\n```\n\n"
-                f"{_VISUAL_INSTRUCTIONS}"
+                f"{_VISUAL_INSTRUCTIONS}{suffix}"
             ),
         }
     )
@@ -405,10 +418,14 @@ def _build_assembly_messages(
     skeleton_json: str,
     content_json: str,
     visual_json: str,
+    model_id: str | None = None,
 ) -> list[dict[str, str]]:
     """Assembly pass — base system prompt + all 3 intermediates + final HTML
-    instruction. Cache-friendly: system prompt unchanged so Anthropic
-    ephemeral cache hits the system block across all 4 passes."""
+    instruction + per-vendor block. ``json_strict=False`` here: assembly emits
+    an HTML ``<file>`` block, not JSON. Cache-friendly: system prompt unchanged
+    so Anthropic ephemeral cache hits the system block across all 4 passes."""
+    directive = vendor_directive(model_id, json_strict=False)
+    suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
     msgs.append(
         {
@@ -418,7 +435,7 @@ def _build_assembly_messages(
                 f"SKELETON:\n```json\n{skeleton_json}\n```\n\n"
                 f"CONTENT:\n```json\n{content_json}\n```\n\n"
                 f"VISUAL:\n```json\n{visual_json}\n```\n\n"
-                f"{_ASSEMBLY_INSTRUCTIONS}"
+                f"{_ASSEMBLY_INSTRUCTIONS}{suffix}"
             ),
         }
     )
@@ -474,7 +491,7 @@ async def multipass_generate(
 
     # ─── Pass 1: SKELETON ────────────────────────────────────────────
     yield {"pass": "skeleton", "stage": "start"}
-    skeleton_msgs = _build_skeleton_messages(base_messages, user_prompt)
+    skeleton_msgs = _build_skeleton_messages(base_messages, user_prompt, skeleton_model)
     skeleton_raw, sk_usage, sk_err = await _run_pass(
         messages=skeleton_msgs,
         model=skeleton_model,
@@ -509,8 +526,8 @@ async def multipass_generate(
     yield {"pass": "content", "stage": "start"}
     yield {"pass": "visual", "stage": "start"}
 
-    content_msgs = _build_content_messages(base_messages, user_prompt, skeleton_clean)
-    visual_msgs = _build_visual_messages(base_messages, user_prompt, skeleton_clean)
+    content_msgs = _build_content_messages(base_messages, user_prompt, skeleton_clean, content_model)
+    visual_msgs = _build_visual_messages(base_messages, user_prompt, skeleton_clean, visual_model)
 
     content_task = _run_pass(
         messages=content_msgs,
@@ -565,7 +582,7 @@ async def multipass_generate(
     # ─── Pass 4: ASSEMBLY (streams to UI) ───────────────────────────
     yield {"pass": "assembly", "stage": "start"}
     assembly_msgs = _build_assembly_messages(
-        base_messages, user_prompt, skeleton_clean, content_clean, visual_clean
+        base_messages, user_prompt, skeleton_clean, content_clean, visual_clean, assembly_model
     )
     asm_usage: dict[str, Any] | None = None
     asm_err: str | None = None

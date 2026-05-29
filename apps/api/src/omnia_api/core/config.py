@@ -101,6 +101,16 @@ class Settings(BaseSettings):
     # ROLE_MODEL_MAP, not the user. Kill switch: USE_DIRECTOR_POLISH=false.
     use_director_polish: bool = Field(default=True)
 
+    # Phase N+ — optional image-prompt enrichment. When True, a SHORT/weak
+    # `data-omnia-gen` prompt (under IMAGE_PROMPT_MIN_WORDS words) is expanded
+    # into a detailed photo brief by the `image_prompt` role (cheap Haiku)
+    # before hitting gpt-image-1. Detailed prompts (the common case — the
+    # generator is instructed to write "subject, scene, style, lighting,
+    # angle, lens") skip enrichment, so this rarely fires. Fail-soft: any
+    # enrichment error falls back to the original prompt. Kill switch:
+    # USE_IMAGE_PROMPT_ENRICHMENT=false.
+    use_image_prompt_enrichment: bool = Field(default=True)
+
     # Phase M — per-role model override. Empty = use ROLE_MODEL_MAP (topmix-v1)
     # below. CSV of `role=model_id` pairs, e.g.
     # "director=claude-opus-4-7,polish=deepseek-chat,audit=claude-sonnet-4-6".

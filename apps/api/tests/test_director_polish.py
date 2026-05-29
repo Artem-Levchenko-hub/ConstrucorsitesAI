@@ -73,7 +73,8 @@ async def test_director_polish_emits_pass_markers(monkeypatch: pytest.MonkeyPatc
             {"role": "user", "content": "user"},
         ],
         user_prompt="Сайт для кофейни",
-        model="claude-opus-4-7",
+        director_model="claude-opus-4-7",
+        polish_model="claude-opus-4-7",
         user_id=uuid4(),
         project_id=uuid4(),
         message_id=uuid4(),
@@ -81,13 +82,17 @@ async def test_director_polish_emits_pass_markers(monkeypatch: pytest.MonkeyPatc
         events.append(event)
 
     # Two passes, four progress markers (start+end each), final usage.
+    # Markers may carry extra keys (e.g. "model") — assert on pass/stage only.
     pass_markers = [e for e in events if "pass" in e and "stage" in e]
     assert len(pass_markers) == 4
-    assert pass_markers[0] == {"pass": "director", "stage": "start"}
+    assert pass_markers[0]["pass"] == "director"
+    assert pass_markers[0]["stage"] == "start"
     assert pass_markers[1]["pass"] == "director"
     assert pass_markers[1]["stage"] == "end"
-    assert pass_markers[2] == {"pass": "polish", "stage": "start"}
-    assert pass_markers[3] == {"pass": "polish", "stage": "end"}
+    assert pass_markers[2]["pass"] == "polish"
+    assert pass_markers[2]["stage"] == "start"
+    assert pass_markers[3]["pass"] == "polish"
+    assert pass_markers[3]["stage"] == "end"
 
 
 @pytest.mark.asyncio
@@ -106,7 +111,8 @@ async def test_only_polish_deltas_are_yielded(monkeypatch: pytest.MonkeyPatch) -
             {"role": "user", "content": "user"},
         ],
         user_prompt="x",
-        model="claude-opus-4-7",
+        director_model="claude-opus-4-7",
+        polish_model="claude-opus-4-7",
         user_id=uuid4(),
         project_id=uuid4(),
         message_id=uuid4(),
@@ -135,7 +141,8 @@ async def test_usage_is_summed_across_passes(monkeypatch: pytest.MonkeyPatch) ->
     async for event in director_polish.director_polish_generate(
         base_messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
         user_prompt="x",
-        model="claude-opus-4-7",
+        director_model="claude-opus-4-7",
+        polish_model="claude-opus-4-7",
         user_id=uuid4(),
         project_id=uuid4(),
         message_id=uuid4(),
@@ -162,7 +169,8 @@ async def test_director_error_propagates(monkeypatch: pytest.MonkeyPatch) -> Non
     async for event in director_polish.director_polish_generate(
         base_messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
         user_prompt="x",
-        model="claude-opus-4-7",
+        director_model="claude-opus-4-7",
+        polish_model="claude-opus-4-7",
         user_id=uuid4(),
         project_id=uuid4(),
         message_id=uuid4(),
@@ -186,7 +194,8 @@ async def test_polish_messages_include_director_ir(monkeypatch: pytest.MonkeyPat
     async for _ in director_polish.director_polish_generate(
         base_messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
         user_prompt="промпт",
-        model="claude-opus-4-7",
+        director_model="claude-opus-4-7",
+        polish_model="claude-opus-4-7",
         user_id=uuid4(),
         project_id=uuid4(),
         message_id=uuid4(),
@@ -213,7 +222,8 @@ async def test_empty_director_output_yields_error(monkeypatch: pytest.MonkeyPatc
     async for event in director_polish.director_polish_generate(
         base_messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
         user_prompt="x",
-        model="claude-opus-4-7",
+        director_model="claude-opus-4-7",
+        polish_model="claude-opus-4-7",
         user_id=uuid4(),
         project_id=uuid4(),
         message_id=uuid4(),

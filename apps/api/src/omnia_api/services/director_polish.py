@@ -42,6 +42,7 @@ from uuid import UUID
 
 from omnia_api.core.config import model_for_role
 from omnia_api.services.llm_client import stream_chat_completion
+from omnia_api.services.vendor_profiles import vendor_directive
 
 
 # Director sees a single appended user-turn instruction to keep its
@@ -103,14 +104,18 @@ markdown, без префикса, без комментариев. Структ
 def _build_director_messages(
     base_messages: list[dict[str, str]],
     user_prompt: str,
+    model_id: str | None = None,
 ) -> list[dict[str, str]]:
     """Director pass: same system prompt as base catalog, last user turn
-    appends the Director directive. System message stays identical →
-    Anthropic prompt-cache hit on the second pass."""
+    appends the Director directive + the per-vendor block for ``model_id``
+    (json_strict — Director emits structural PageIR JSON). System message
+    stays identical → Anthropic prompt-cache hit on the second pass."""
+    directive = vendor_directive(model_id, json_strict=True)
+    suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
     msgs.append({
         "role": "user",
-        "content": f"{user_prompt}\n\n{_DIRECTOR_INSTRUCTION}",
+        "content": f"{user_prompt}\n\n{_DIRECTOR_INSTRUCTION}{suffix}",
     })
     return msgs
 
@@ -119,16 +124,21 @@ def _build_polish_messages(
     base_messages: list[dict[str, str]],
     user_prompt: str,
     director_ir: str,
+    model_id: str | None = None,
 ) -> list[dict[str, str]]:
     """Polish pass: same system + Director's IR injected into the last
-    user turn. System is byte-identical to Director's → prompt-cache
-    hits on Anthropic for the entire system block."""
+    user turn + the per-vendor block for ``model_id`` (json_strict — Polish
+    also emits PageIR JSON). System is byte-identical to Director's →
+    prompt-cache hits on Anthropic for the entire system block."""
+    directive = vendor_directive(model_id, json_strict=True)
+    suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
     msgs.append({
         "role": "user",
         "content": (
             f"{user_prompt}\n\n"
             f"{_POLISH_INSTRUCTION_TEMPLATE.format(director_ir=director_ir)}"
+            f"{suffix}"
         ),
     })
     return msgs
@@ -168,7 +178,7 @@ async def director_polish_generate(
 
     # ─── Pass 1: Director ────────────────────────────────────────────
     yield {"pass": "director", "stage": "start", "model": director_model}
-    director_msgs = _build_director_messages(base_messages, user_prompt)
+    director_msgs = _build_director_messages(base_messages, user_prompt, director_model)
     director_parts: list[str] = []
     director_usage: dict[str, Any] | None = None
     async for event in stream_chat_completion(
@@ -195,7 +205,7 @@ async def director_polish_generate(
 
     # ─── Pass 2: Polish (streams to user) ────────────────────────────
     yield {"pass": "polish", "stage": "start", "model": polish_model}
-    polish_msgs = _build_polish_messages(base_messages, user_prompt, director_acc)
+    polish_msgs = _build_polish_messages(base_messages, user_prompt, director_acc, polish_model)
     polish_usage: dict[str, Any] | None = None
     async for event in stream_chat_completion(
         polish_msgs,

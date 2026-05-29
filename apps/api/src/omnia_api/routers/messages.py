@@ -45,6 +45,7 @@ from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
 from omnia_api.services.queue import enqueue_preview
 from omnia_api.services.ui_audit import audit as ui_audit, format_failures_for_retry
+from omnia_api.services.vendor_profiles import vendor_directive
 from omnia_api.services.visual_enricher import enrich_files as enrich_visual_files
 
 RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом генерации
@@ -388,6 +389,93 @@ def _ensure_kit_linked(files: dict[str, str]) -> dict[str, str]:
     return out
 
 
+def _with_vendor_directive(
+    messages: list[dict[str, str]], model_id: str, *, json_strict: bool
+) -> list[dict[str, str]]:
+    """Return a copy of ``messages`` with the per-vendor block appended to the
+    LAST user turn. The system turn stays byte-identical → Anthropic prompt
+    cache still hits. No-op (returns the same list) for GENERIC/uncalibrated
+    models so there's zero regression on models we haven't tuned.
+
+    Used by the single-shot / freeform path; the catalog Director→Polish and
+    multipass paths inject the directive in their own message builders.
+    """
+    directive = vendor_directive(model_id, json_strict=json_strict)
+    if not directive:
+        return messages
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if out[i].get("role") == "user":
+            turn = dict(out[i])
+            turn["content"] = f"{turn['content']}\n\n{directive}"
+            out[i] = turn
+            break
+    return out
+
+
+# B3 — LLM-as-judge audit. Runs ONLY on a borderline rubric score (the band
+# where the deterministic 10-point check is least decisive); clear-cut scores
+# skip it so we don't pay Sonnet on every generation.
+_AUDIT_JUDGE_LOW = 6
+_AUDIT_JUDGE_HIGH = 7
+_AUDIT_JUDGE_SYSTEM = (
+    "Ты — придирчивый арт-директор Omnia.AI. Тебе дают объективный аудит "
+    "лендинга (балл из 10 + список нарушений) и его HTML. Реши, годится ли "
+    "страница в продакшен или нужна перегенерация. Ответь РОВНО одним словом: "
+    "PASS или RETRY. Без пояснений."
+)
+
+
+async def _audit_judge_wants_retry(
+    *,
+    html: str,
+    report: Any,
+    model: str,
+    user_id: UUID,
+    project_id: UUID,
+    message_id: UUID,
+) -> bool | None:
+    """LLM second opinion (role ``audit``, Sonnet) on a BORDERLINE rubric score.
+
+    Returns True (re-roll), False (ship as-is), or None when the judge errored
+    or gave no clear verdict — the caller then keeps the deterministic rubric
+    decision. Best-effort: never raises, never streamed to the user.
+    """
+    failed = "; ".join(f.check_id for f in report.failures) or "—"
+    judge_messages = [
+        {"role": "system", "content": _AUDIT_JUDGE_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                f"Объективный аудит: {report.score}/{report.max}. "
+                f"Нарушения: {failed}.\n\nHTML:\n{html[:6000]}\n\n"
+                "Вердикт одним словом: PASS или RETRY."
+            ),
+        },
+    ]
+    parts: list[str] = []
+    try:
+        async for ev in stream_chat_completion(
+            judge_messages,
+            model,
+            str(user_id),
+            str(project_id),
+            str(message_id),
+        ):
+            if "delta" in ev:
+                parts.append(str(ev["delta"]))
+            elif "error" in ev:
+                return None
+    except Exception:  # noqa: BLE001 — judge must never break the pipeline
+        return None
+    verdict = "".join(parts).strip().upper()
+    if "RETRY" in verdict:
+        return True
+    if "PASS" in verdict:
+        return False
+    return None
+
+
 async def _process_prompt(
     project_id: UUID,
     user_id: UUID,
@@ -523,6 +611,7 @@ async def _process_prompt(
             use_model: str,
             *,
             force_multipass: bool = False,
+            force_single_shot: bool = False,
             force_all: str | None = None,
         ) -> None:
             """Drain one stream from the gateway into `state`.
@@ -538,6 +627,11 @@ async def _process_prompt(
             switching models, because the failure mode is usually
             prompt-overwhelm (cheap model loses focus over 28+ KB) rather
             than the model being incapable.
+
+            `force_single_shot=True` pins the plain single-shot path even for
+            a cheap model that would otherwise be in the multipass set. Used
+            by targeted fix passes (dead-link repair) that must edit the
+            existing files, not regenerate the whole page via multipass.
             """
             state["accumulated"] = ""
             state["usage"] = None
@@ -562,7 +656,8 @@ async def _process_prompt(
             # the 4-pass multipass and run a single reliable shot — so "recolour
             # the button" never spins up the premium pipeline and burns budget.
             _dp_active = (
-                orchestrate
+                not force_single_shot
+                and orchestrate
                 and _settings.use_director_polish
                 and _settings.use_section_catalog
                 and tier_for_model(use_model) == "premium"
@@ -577,7 +672,11 @@ async def _process_prompt(
                     project_id=project_id,
                     message_id=assistant_message_id,
                 )
-            elif orchestrate and (force_multipass or use_model in multipass_set):
+            elif (
+                not force_single_shot
+                and orchestrate
+                and (force_multipass or use_model in multipass_set)
+            ):
                 source = multipass_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
@@ -587,9 +686,32 @@ async def _process_prompt(
                     message_id=assistant_message_id,
                 )
             else:
+                # B2 — the `single_shot` role (Opus) owns the non-catalog
+                # freeform fallback: with catalog/IR OFF an orchestrated build
+                # still needs one strong model. With catalog ON (prod default)
+                # this branch only runs for cheap targeted edits / forced
+                # single-shot fixes, which keep their own model — single_shot
+                # must never drag a "recolour the button" tweak onto Opus.
+                if (
+                    not force_all
+                    and not force_single_shot
+                    and orchestrate
+                    and not _settings.use_section_catalog
+                ):
+                    _ss_model = model_for_role("single_shot", override=force_model)
+                else:
+                    _ss_model = force_all or use_model
+                # Per-vendor directive on the freeform/single-shot path. IR JSON
+                # is expected ONLY on premium + catalog mode; otherwise the model
+                # emits freeform HTML, so json_strict must stay False (a "JSON
+                # only" nudge would corrupt an HTML response).
+                _expects_ir = (
+                    _settings.use_section_catalog
+                    and tier_for_model(_ss_model) == "premium"
+                )
                 source = stream_chat_completion(
-                    messages,
-                    force_all or use_model,
+                    _with_vendor_directive(messages, _ss_model, json_strict=_expects_ir),
+                    _ss_model,
                     str(user_id),
                     str(project_id),
                     str(assistant_message_id),
@@ -934,7 +1056,13 @@ async def _process_prompt(
                 )
                 messages.append({"role": "assistant", "content": prior_answer})
                 messages.append({"role": "user", "content": repair_request})
-                await _run_stream(effective_model)
+                # B2 — dead-link repair is the `link_repair` role's job (cheap
+                # Haiku). force_single_shot so a budget model in the multipass
+                # set edits the existing files instead of regenerating the page.
+                await _run_stream(
+                    model_for_role("link_repair", override=force_model),
+                    force_single_shot=True,
+                )
                 repaired_acc = str(state["accumulated"])
                 try:
                     repaired_files, _ = _extract_files_and_edits(
@@ -1037,13 +1165,40 @@ async def _process_prompt(
                 _last_report = report  # noqa: F821 — defined in audit block
             except NameError:
                 _last_report = None
-            if (
+            # B3 — deterministic rubric verdict, refined by the optional LLM
+            # judge (role `audit`, Sonnet) ONLY in the borderline 6–7/10 band
+            # where the rubric is least decisive. The judge can both *promote*
+            # a 7 to a re-roll and *spare* a 6 that's actually fine, so it owns
+            # the close calls; clear-cut scores never pay for it.
+            _score = int(getattr(_last_report, "score", 10)) if _last_report else 10
+            _wants_retry = _score < _RETRY_SCORE_THRESHOLD
+            _retry_eligible = (
                 _settings_for_retry.use_section_catalog
                 and _tier_for_model(model_id) == "premium"
                 and _last_report is not None
-                and getattr(_last_report, "score", 10) < _RETRY_SCORE_THRESHOLD
                 and not _retry_done
-            ):
+            )
+            if _retry_eligible and _AUDIT_JUDGE_LOW <= _score <= _AUDIT_JUDGE_HIGH:
+                _judge_html = "\n".join(
+                    c for p, c in files.items()
+                    if p.endswith(".html") or p.endswith(".htm")
+                )
+                _verdict = await _audit_judge_wants_retry(
+                    html=_judge_html,
+                    report=_last_report,
+                    model=model_for_role("audit", override=force_model),
+                    user_id=user_id,
+                    project_id=project_id,
+                    message_id=assistant_message_id,
+                )
+                if _verdict is not None:
+                    print(
+                        f"[PP] audit_judge verdict={'RETRY' if _verdict else 'PASS'} "
+                        f"score={_score}",
+                        flush=True,
+                    )
+                    _wants_retry = _verdict
+            if _retry_eligible and _wants_retry:
                 retry_msg = format_failures_for_retry(_last_report)
                 if retry_msg:
                     print(
@@ -1065,7 +1220,11 @@ async def _process_prompt(
                     # the same message list so prompt caching (system) hits.
                     messages.append({"role": "assistant", "content": accumulated})
                     messages.append({"role": "user", "content": retry_msg})
-                    await _run_stream(model_id, force_all=force_model)
+                    # B3 — the re-roll is the `audit_retry` role's job (Opus,
+                    # director-grade). force_all pins every pass onto it so the
+                    # second attempt is uniformly strong, not the original mix.
+                    _retry_model = model_for_role("audit_retry", override=force_model)
+                    await _run_stream(_retry_model, force_all=_retry_model)
                     retry_accumulated = str(state["accumulated"])
                     retry_usage = state["usage"]
                     retry_error = state["error"]

@@ -29,10 +29,23 @@ from io import BytesIO
 import httpx
 from minio.error import S3Error
 
-from omnia_api.core.config import get_settings
+from omnia_api.core.config import get_settings, model_for_role
 from omnia_api.core.minio import get_minio_client
 
 log = logging.getLogger(__name__)
+
+# Image-prompt enrichment (Phase N+, role `image_prompt`). Prompts with at
+# least this many words are already detailed (the generator is told to write
+# "subject, scene, style, lighting, angle, lens") and skip enrichment — only
+# short/weak prompts get expanded. Keeps the role honest without taxing the
+# common case.
+_ENRICH_MIN_WORDS = 8
+_ENRICH_SYSTEM = (
+    "You are an image-prompt engineer for a photo generator. Expand the short "
+    "description into ONE detailed English prompt covering subject, scene, "
+    "style, lighting, angle and lens. Return ONLY the prompt text — no quotes, "
+    "no preamble, no commentary."
+)
 
 # Hard ceiling per generation. Beyond this we log a warning and leave extra
 # tags untouched (they render as broken images — visible signal to the user
@@ -176,6 +189,38 @@ async def _fetch_one(prompt: str) -> bytes | None:
     return None
 
 
+async def _enrich_prompt(prompt: str) -> str:
+    """Expand a short/weak prompt into a detailed photo brief via the
+    ``image_prompt`` role. Fail-soft: returns the ORIGINAL prompt on any
+    error, empty reply, or non-2xx — enrichment must never block a generation.
+    """
+    settings = get_settings()
+    url = f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions"
+    payload = {
+        "model": model_for_role("image_prompt"),
+        "messages": [
+            {"role": "system", "content": _ENRICH_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 220,
+        "stream": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload)
+        if resp.status_code >= 400:
+            return prompt
+        body = resp.json()
+        text = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        text = (text or "").strip()
+        return text or prompt
+    except Exception as exc:  # noqa: BLE001 — never break a resolve over enrichment
+        log.warning(
+            "image_resolver: prompt enrich failed prompt=%.40s err=%r", prompt, exc
+        )
+        return prompt
+
+
 def _ensure_bucket(client, bucket: str) -> bool:
     """Idempotent bucket creation. Returns True on success or already-exists,
     False on permission/transport error (we then skip uploads gracefully)."""
@@ -243,16 +288,38 @@ async def resolve_images(
     if not tags:
         return files, 0, 0
 
+    settings = get_settings()
     unique_prompts = list({t.prompt for t in tags})
     sem = asyncio.Semaphore(_CONCURRENCY)
 
-    async def _resolve(prompt: str) -> tuple[str, str | None]:
+    # Phase N+ — enrich short/weak prompts via the `image_prompt` role before
+    # generation. Detailed prompts (>= _ENRICH_MIN_WORDS words) pass through
+    # untouched; the kill switch turns the whole step into identity.
+    if settings.use_image_prompt_enrichment:
+
+        async def _maybe_enrich(p: str) -> tuple[str, str]:
+            if len(p.split()) >= _ENRICH_MIN_WORDS:
+                return p, p
+            async with sem:
+                return p, await _enrich_prompt(p)
+
+        enrich_pairs = await asyncio.gather(
+            *[_maybe_enrich(p) for p in unique_prompts]
+        )
+        gen_prompt_for = {orig: gen for orig, gen in enrich_pairs}
+    else:
+        gen_prompt_for = {p: p for p in unique_prompts}
+
+    async def _resolve(orig_prompt: str) -> tuple[str, str | None]:
+        # Generate + content-address by the (possibly enriched) gen prompt, but
+        # key the result by the ORIGINAL prompt so tag replacement still matches.
+        gen_prompt = gen_prompt_for.get(orig_prompt, orig_prompt)
         async with sem:
-            img = await _fetch_one(prompt)
+            img = await _fetch_one(gen_prompt)
             if img is None:
-                return prompt, None
-            url = await asyncio.to_thread(_upload_image, img, project_id, prompt)
-            return prompt, url
+                return orig_prompt, None
+            url = await asyncio.to_thread(_upload_image, img, project_id, gen_prompt)
+            return orig_prompt, url
 
     pairs = await asyncio.gather(*[_resolve(p) for p in unique_prompts])
     prompt_to_url = {p: u for p, u in pairs if u}
