@@ -183,6 +183,13 @@ services:
       WEB_BASE_URL: ${WEB_BASE_URL:-https://constructor.lead-generator.ru}
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
+      # Phase 11 — freeform generation + acceptance gate (all OFF by default;
+      # flip in .env to roll out, catalog/IR stays the safe fallback).
+      USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
+      USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
+      USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
+      ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
+      ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
     ports:
       - "${API_HOST_PORT:-8200}:8000"
     restart: unless-stopped
@@ -219,6 +226,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
+      # Phase 11 — freeform generation + acceptance gate (all OFF by default).
+      USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
+      USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
+      USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
+      ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
+      ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
     restart: unless-stopped
     networks:
       - omnia-prod
