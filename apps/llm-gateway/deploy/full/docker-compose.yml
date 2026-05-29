@@ -181,6 +181,8 @@ services:
       GITHUB_CALLBACK_URL: ${GITHUB_CALLBACK_URL:-}
       GITHUB_OAUTH_SCOPE: ${GITHUB_OAUTH_SCOPE:-repo}
       WEB_BASE_URL: ${WEB_BASE_URL:-https://constructor.lead-generator.ru}
+      USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
+      USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
     ports:
       - "${API_HOST_PORT:-8200}:8000"
     restart: unless-stopped
@@ -215,6 +217,8 @@ services:
       MINIO_BUCKET_PROJECTS: ${MINIO_BUCKET_PROJECTS:-projects}
       MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
+      USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
     restart: unless-stopped
     networks:
       - omnia-prod
