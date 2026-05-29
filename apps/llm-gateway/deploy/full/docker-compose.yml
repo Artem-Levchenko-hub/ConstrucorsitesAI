@@ -112,6 +112,8 @@ services:
       YANDEX_API_KEY: ${YANDEX_API_KEY:-}
       YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      VSEGPT_API_KEY: ${VSEGPT_API_KEY:-}
+      VSEGPT_BASE_URL: ${VSEGPT_BASE_URL:-https://api.vsegpt.ru/v1}
       PROXYAPI_API_KEY: ${PROXYAPI_API_KEY:-}
       PROXYAPI_BASE_URL: ${PROXYAPI_BASE_URL:-https://api.proxyapi.ru/anthropic}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     # the same key transparently bills the paid tier once a billing project is attached.
     gemini_api_key: SecretStr | None = None
 
+    # VseGPT (vsegpt.ru) — Russian OpenAI-compatible aggregator. Keys look like
+    # `sk-or-vv-…`. Fronts many models incl. deepseek/deepseek-v4-flash-thinking;
+    # routed as an OpenAI endpoint via _PROXY_ROUTES in litellm_router.
+    vsegpt_api_key: SecretStr | None = None
+    vsegpt_base_url: str = "https://api.vsegpt.ru/v1"
+
     # proxyapi.ru — Russian proxy that fronts both Anthropic Messages API and
     # OpenAI's chat-completions surface. The same key + same balance cover
     # every proxyapi-routed model (Claude Haiku, GPT-5 family, etc.) —

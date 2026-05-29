@@ -71,6 +71,10 @@ _LITELLM_MODEL_SLUG: dict[str, str] = {
     # Slugs MUST match the model names proxyapi proxies through to DeepSeek.
     "deepseek-chat": "openai/deepseek-chat",
     "deepseek-reasoner": "openai/deepseek-reasoner",
+    # DeepSeek V4 Flash (Thinking) via vsegpt.ru OpenAI-compatible surface.
+    # Key/base live in _PROXY_ROUTES below; LiteLLM strips the `openai/` prefix
+    # and sends `deepseek/deepseek-v4-flash-thinking` to the vsegpt base.
+    "deepseek-v4-flash-thinking": "openai/deepseek/deepseek-v4-flash-thinking",
     # Google Gemini via AI Studio (not Vertex AI). LiteLLM reads the key from
     # GEMINI_API_KEY or whatever is passed explicitly in the model_list below.
     # Same key works for both free and paid tier on AI Studio.
@@ -117,6 +121,11 @@ _PROXY_ROUTES: dict[str, _ProxyRoute] = {
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_deepseek_base_url,
     ),
+    # vsegpt.ru — separate key/balance from proxyapi (the sk-or-vv-… key).
+    "deepseek-v4-flash-thinking": _ProxyRoute(
+        api_key=lambda s: s.vsegpt_api_key.get_secret_value() if s.vsegpt_api_key else None,
+        api_base=lambda s: s.vsegpt_base_url,
+    ),
     "gpt-5": _ProxyRoute(
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_openai_base_url,
@@ -141,6 +150,8 @@ _FALLBACKS: list[dict[str, list[str]]] = [
     # bottom-of-stack). deepseek-chat → Haiku; deepseek-reasoner → Opus → Sonnet.
     {"deepseek-chat": ["claude-haiku-4-5"]},
     {"deepseek-reasoner": ["claude-opus-4-7", "claude-sonnet-4-6"]},
+    # vsegpt thinking model → reliable proxyapi-backed Haiku if vsegpt is down.
+    {"deepseek-v4-flash-thinking": ["claude-haiku-4-5"]},
     {"gpt-4.1": ["gpt-5", "claude-haiku-4-5"]},
     {"gpt-5-mini": ["gpt-5-nano", "claude-haiku-4-5"]},
     {"gpt-5": ["claude-haiku-4-5", "gpt-5-nano"]},
@@ -325,6 +336,11 @@ async def acompletion(
     elif model in ("gpt-5", "gpt-5-nano"):
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "minimal")
+    elif model == "deepseek-v4-flash-thinking":
+        # Thinking model — reasoning comes back in a separate field but still
+        # counts toward the token budget; give the visible answer headroom so a
+        # long chain-of-thought can't truncate the actual output.
+        kwargs.setdefault("max_tokens", 16384)
 
     async def _attempt() -> Any:
         try:

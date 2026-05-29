@@ -49,6 +49,9 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     # Approximate — recheck the proxyapi price page before billing real users.
     "deepseek-chat": ModelPrice(Decimal("0.03"), Decimal("0.13")),
     "deepseek-reasoner": ModelPrice(Decimal("0.07"), Decimal("0.26")),
+    # DeepSeek V4 Flash (Thinking) via vsegpt.ru. vsegpt list price ≈ 0.036 in /
+    # 0.072 out ₽ per 1k; padded to a round, profitable floor below.
+    "deepseek-v4-flash-thinking": ModelPrice(Decimal("0.05"), Decimal("0.10")),
     # Sber GigaChat — RUB-native, no FX conversion. Numbers approximate Sber's
     # public price list (May 2026); adjust against the official table before bumping
     # markup. Output is priced same as input on Sber's tariffs.
@@ -103,6 +106,9 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
     "qwen-3-coder": _ModelMeta("Qwen 3 Coder", "alibaba", 128_000, ("budget", "fast")),
     "deepseek-chat": _ModelMeta("DeepSeek V3", "deepseek", 128_000, ("quality", "budget")),
     "deepseek-reasoner": _ModelMeta("DeepSeek R1", "deepseek", 128_000, ("quality",)),
+    "deepseek-v4-flash-thinking": _ModelMeta(
+        "DeepSeek V4 Flash (Thinking)", "deepseek", 1_000_000, ("budget", "fast")
+    ),
     "gigachat-2": _ModelMeta("GigaChat 2", "sber", 32_000, ("fast", "budget")),
     "gigachat-2-pro": _ModelMeta("GigaChat 2 Pro", "sber", 128_000, ("quality",)),
     "gigachat-2-max": _ModelMeta("GigaChat 2 Max", "sber", 128_000, ("quality",)),

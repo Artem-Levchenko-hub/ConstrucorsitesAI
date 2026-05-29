@@ -239,6 +239,7 @@ MODEL_TIER_MAP: dict[str, str] = {
     # Budget — destined for the multi-pass pipeline (Phase B).
     "claude-haiku-4-5":  "budget",
     "gpt-5-nano":        "budget",
+    "deepseek-v4-flash-thinking": "budget",  # vsegpt cheap thinking model
 }
 
 # `budget` tier IS the cheap-model set; CHEAP_MODELS stays as the
