@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 
 from omnia_api.core.config import get_settings
-from omnia_api.services import vision_audit
+from omnia_api.services import originality, vision_audit
 from omnia_api.services.link_validator import find_dead_links
 from omnia_api.services.ui_audit import audit as ui_audit
 
@@ -45,6 +45,8 @@ class AcceptanceResult:
     vision_ran: bool
     issues: tuple[str, ...] = ()
     feedback: str = ""
+    # dHash of the accepted page (Sprint 4) — caller stores it in the pool.
+    fingerprint: int | None = None
 
 
 def _html_pool(files: dict[str, str]) -> dict[str, str]:
@@ -93,9 +95,12 @@ def _build_feedback(
     overflow_widths: list[int],
     advisory: list[str],
     vision: vision_audit.VisionVerdict,
+    originality: list[str] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.extend(structural)
+    if originality:
+        lines.extend(originality)
     for w in overflow_widths:
         lines.append(
             f"[адаптив] при ширине {w}px появляется горизонтальный скролл — "
@@ -125,6 +130,7 @@ async def evaluate(
     run_vision: bool | None = None,
     min_score: int | None = None,
     widths: tuple[int, ...] | None = None,
+    run_originality: bool | None = None,
 ) -> AcceptanceResult:
     """Run the gate over `files` and return a pass/fail verdict + feedback.
 
@@ -137,6 +143,8 @@ async def evaluate(
         run_vision = settings.use_vision_audit
     if min_score is None:
         min_score = settings.acceptance_min_score
+    if run_originality is None:
+        run_originality = settings.use_originality
 
     html_pool = _html_pool(files)
     if not html_pool or "index.html" not in files:
@@ -193,18 +201,42 @@ async def evaluate(
     vision_ok = (not vision_ran) or (
         verdict.verdict != "broken" and verdict.score >= min_score
     )
-    passed = structural_ok and responsive_ok and vision_ok
+
+    # ── 5. originality (optional, fail-soft) — Sprint 4 anti-generic ──────
+    orig_fp: int | None = None
+    orig_issue: str | None = None
+    if run_originality and screenshots:
+        widest = max(screenshots)
+        orig_fp, orig_issue = await originality.originality_issue(
+            project_id,
+            screenshots[widest],
+            max_distance=settings.originality_max_distance,
+        )
+    originality_ok = orig_issue is None
+
+    passed = structural_ok and responsive_ok and vision_ok and originality_ok
 
     feedback = "" if passed else _build_feedback(
-        structural, overflow_widths, advisory, verdict
+        structural,
+        overflow_widths,
+        advisory,
+        verdict,
+        originality=[orig_issue] if orig_issue else [],
     )
     issues = tuple(
         structural
         + [f"overflow@{w}px" for w in overflow_widths]
+        + ([orig_issue] if orig_issue else [])
         + list(verdict.issues)
     )
     final_verdict = (
-        "ok" if passed else (verdict.verdict if vision_ran else "structural")
+        "ok"
+        if passed
+        else (
+            verdict.verdict
+            if vision_ran
+            else ("generic" if orig_issue else "structural")
+        )
     )
     return AcceptanceResult(
         passed=passed,
@@ -215,6 +247,7 @@ async def evaluate(
         vision_ran=vision_ran,
         issues=issues,
         feedback=feedback,
+        fingerprint=orig_fp,
     )
 
 

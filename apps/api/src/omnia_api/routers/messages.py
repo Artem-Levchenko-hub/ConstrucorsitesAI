@@ -44,7 +44,8 @@ from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
 from omnia_api.services.queue import enqueue_preview
-from omnia_api.services.ui_audit import audit as ui_audit, format_failures_for_retry
+from omnia_api.services.ui_audit import audit as ui_audit
+from omnia_api.services.ui_audit import format_failures_for_retry
 from omnia_api.services.vendor_profiles import vendor_directive
 from omnia_api.services.visual_enricher import enrich_files as enrich_visual_files
 
@@ -466,7 +467,7 @@ async def _audit_judge_wants_retry(
                 parts.append(str(ev["delta"]))
             elif "error" in ev:
                 return None
-    except Exception:  # noqa: BLE001 — judge must never break the pipeline
+    except Exception:
         return None
     verdict = "".join(parts).strip().upper()
     if "RETRY" in verdict:
@@ -661,7 +662,7 @@ async def _process_prompt(
         # answer below never disagree. The empty-response fallback may switch
         # the model later, but the mode is fixed by the first pass's prompt.
         from omnia_api.core.config import generation_mode as _generation_mode
-        _gen_mode = _generation_mode(model_id)
+        _gen_mode = _generation_mode(model_id, str(project_id))
         print(f"[PP] gen_mode={_gen_mode}", flush=True)
 
         # ──────────────────────────────────────────────────────────────
@@ -1241,7 +1242,6 @@ async def _process_prompt(
         _RETRY_SCORE_THRESHOLD = 7  # max=10
         _retry_done = False
         try:
-            _settings_for_retry = _get_settings()
             _last_report = None  # type: ignore[var-annotated]
             try:
                 _last_report = report
@@ -1255,11 +1255,9 @@ async def _process_prompt(
             _score = int(getattr(_last_report, "score", 10)) if _last_report else 10
             _wants_retry = _score < _RETRY_SCORE_THRESHOLD
             _retry_eligible = (
-                _settings_for_retry.use_section_catalog
-                and _tier_for_model(model_id) == "premium"
-                # Phase 11 — freeform uses the acceptance gate, not this catalog
-                # IR re-roll; keep the rubric retry catalog-only.
-                and _gen_mode != "freeform"
+                # Catalog-only retry (re-rolls the IR). Freeform quality is
+                # handled by the Phase 11 acceptance gate, not here.
+                _gen_mode == "catalog"
                 and _last_report is not None
                 and not _retry_done
             )
@@ -1432,6 +1430,7 @@ async def _process_prompt(
         # valid page). Runs after image-resolve so screenshots carry real
         # images. All best-effort — any gate error ships the current files.
         _acc_settings = _get_settings()
+        _acc_fingerprint: int | None = None
         if (
             files
             and project_template not in ("fullstack", "tgbot", "api")
@@ -1448,6 +1447,9 @@ async def _process_prompt(
                         project_id=str(project_id),
                         prompt_context=prompt_text,
                         user_id=str(user_id),
+                        # Originality (anti-generic) only for freeform — catalog
+                        # pages are template-based and intentionally alike.
+                        run_originality=(_gen_mode == "freeform"),
                     )
                     print(
                         f"[PP] acceptance attempt={_acc_attempt} passed={_verdict.passed} "
@@ -1506,6 +1508,11 @@ async def _process_prompt(
                             pass
                     files = _repaired
                     accumulated = accumulated + _repair_acc
+
+                # Remember an accepted freeform page's fingerprint (Sprint 4)
+                # so later generations can be nudged off near-duplicates.
+                if _verdict is not None and _verdict.passed:
+                    _acc_fingerprint = _verdict.fingerprint
 
                 # Freeform exhausted its retries and still fails → regenerate
                 # once via the catalog/IR path (guaranteed valid page).
@@ -1613,6 +1620,15 @@ async def _process_prompt(
                 "snapshot.created",
                 {"snapshot": _snapshot_payload(snapshot)},
             )
+
+            # Sprint 4 — fingerprint the shipped freeform page into the global
+            # pool (cross-project dedup signal for next time). Fail-soft.
+            if _gen_mode == "freeform" and _acc_fingerprint is not None:
+                try:
+                    from omnia_api.services import originality as _originality
+                    await _originality.remember(str(project_id), _acc_fingerprint)
+                except Exception as _fp_exc:
+                    print(f"[PP] originality remember failed: {_fp_exc!r}", flush=True)
 
             # Fullstack projects: push the same files into the live dev
             # container so the user sees the new code immediately via HMR.

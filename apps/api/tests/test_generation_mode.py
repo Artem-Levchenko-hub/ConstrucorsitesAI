@@ -1,4 +1,4 @@
-"""generation_mode() — the single freeform/catalog/plain switch (Phase 11)."""
+"""generation_mode() — freeform/catalog/plain switch + rollout % (Phase 11)."""
 
 import pytest
 
@@ -6,9 +6,10 @@ from omnia_api.core import config
 
 
 class _Settings:
-    def __init__(self, freeform: bool, catalog: bool) -> None:
+    def __init__(self, freeform: bool, catalog: bool, pct: int = 100) -> None:
         self.use_freeform_render = freeform
         self.use_section_catalog = catalog
+        self.freeform_traffic_pct = pct
 
 
 @pytest.mark.parametrize(
@@ -30,4 +31,35 @@ class _Settings:
 )
 def test_generation_mode(monkeypatch, freeform, catalog, model, expected):
     monkeypatch.setattr(config, "get_settings", lambda: _Settings(freeform, catalog))
-    assert config.generation_mode(model) == expected
+    assert config.generation_mode(model, "proj-1") == expected
+
+
+def test_rollout_zero_pct_falls_back_to_catalog(monkeypatch):
+    monkeypatch.setattr(config, "get_settings", lambda: _Settings(True, True, pct=0))
+    # Freeform flag on but 0% rollout → premium gets catalog, not freeform.
+    assert config.generation_mode("claude-opus-4-7", "proj-1") == "catalog"
+
+
+def test_rollout_zero_pct_without_catalog_is_plain(monkeypatch):
+    monkeypatch.setattr(config, "get_settings", lambda: _Settings(True, False, pct=0))
+    assert config.generation_mode("claude-opus-4-7", "proj-1") == "plain"
+
+
+def test_rollout_full_pct_is_freeform(monkeypatch):
+    monkeypatch.setattr(config, "get_settings", lambda: _Settings(True, True, pct=100))
+    assert config.generation_mode("claude-opus-4-7", "proj-xyz") == "freeform"
+
+
+def test_rollout_partial_is_deterministic(monkeypatch):
+    monkeypatch.setattr(config, "get_settings", lambda: _Settings(True, True, pct=50))
+    a = config.generation_mode("claude-opus-4-7", "proj-stable")
+    b = config.generation_mode("claude-opus-4-7", "proj-stable")
+    assert a == b  # same project → same bucket every time
+    assert a in ("freeform", "catalog")
+
+
+def test_rollout_partial_splits_projects(monkeypatch):
+    monkeypatch.setattr(config, "get_settings", lambda: _Settings(True, True, pct=50))
+    modes = {config.generation_mode("claude-opus-4-7", f"p{i}") for i in range(40)}
+    # At 50% across 40 projects both buckets must appear (not all-or-nothing).
+    assert modes == {"freeform", "catalog"}

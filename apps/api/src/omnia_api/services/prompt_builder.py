@@ -2197,7 +2197,7 @@ def build_messages(
     #   freeform → premium writes full HTML freely + project-seeded design tokens
     #   plain    → budget/balanced freeform-HTML + multipass (unchanged)
     from omnia_api.core.config import generation_mode
-    mode = generation_mode(model_id)
+    mode = generation_mode(model_id, project_id)
     if mode == "catalog":
         from omnia_api.services.lean_prompt import build_catalog_messages
         return build_catalog_messages(

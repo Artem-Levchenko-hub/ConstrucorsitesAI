@@ -190,6 +190,10 @@ services:
       USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
       ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
       ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
+      # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.
+      USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
+      ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}
+      FREEFORM_TRAFFIC_PCT: ${FREEFORM_TRAFFIC_PCT:-100}
     ports:
       - "${API_HOST_PORT:-8200}:8000"
     restart: unless-stopped
@@ -232,6 +236,10 @@ services:
       USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
       ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
       ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
+      # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.
+      USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
+      ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}
+      FREEFORM_TRAFFIC_PCT: ${FREEFORM_TRAFFIC_PCT:-100}
     restart: unless-stopped
     networks:
       - omnia-prod

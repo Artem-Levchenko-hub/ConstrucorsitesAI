@@ -1,3 +1,4 @@
+import hashlib
 from functools import lru_cache
 
 from pydantic import Field, SecretStr
@@ -144,6 +145,20 @@ class Settings(BaseSettings):
     # Vision score (0..10) at or above which a page passes the gate.
     acceptance_min_score: int = Field(default=7)
 
+    # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
+    # Originality: fingerprint each accepted freeform page and penalise the
+    # next one that comes out near-identical to a DIFFERENT project's page
+    # (the "every AI site looks the same" failure). Default OFF.
+    use_originality: bool = Field(default=False)
+    # Hamming distance (0..64 over a 64-bit dHash) at/below which two pages are
+    # "too similar". Lower = stricter. ~10 catches near-duplicates without
+    # flagging merely same-vibe pages.
+    originality_max_distance: int = Field(default=10)
+    # Gradual rollout: freeform applies to this % of projects (deterministic
+    # bucket by project_id). 100 = everyone (when USE_FREEFORM_RENDER is on);
+    # the rest fall back to catalog/IR. Lets ops ramp 10→50→100 via .env.
+    freeform_traffic_pct: int = Field(default=100)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -260,18 +275,41 @@ def tier_for_model(model_id: str | None) -> str:
 GenerationMode = str  # Literal["freeform", "catalog", "plain"] — kept loose for callers
 
 
-def generation_mode(model_id: str | None) -> GenerationMode:
+def _in_freeform_rollout(project_id: str | None, pct: int) -> bool:
+    """Deterministic per-project rollout bucket for freeform (Sprint 5).
+
+    Same project always lands in or out of the rollout (stable look across
+    re-prompts). `pct>=100` → everyone; `pct<=0` → nobody; a missing
+    project_id is never excluded (internal callers without a project).
+    """
+    if pct >= 100:
+        return True
+    if pct <= 0:
+        return False
+    if not project_id:
+        return True
+    bucket = int.from_bytes(
+        hashlib.sha256(str(project_id).encode()).digest()[:4], "big"
+    ) % 100
+    return bucket < pct
+
+
+def generation_mode(
+    model_id: str | None, project_id: str | None = None
+) -> GenerationMode:
     """Decide the generation mode for a routing model.
 
-    Freeform wins over catalog for premium models when the flag is on; that
-    is the Phase 11 path. Budget/balanced models always run "plain" (the
-    existing freeform-HTML + multipass pipeline) — catalog/IR never applied
-    to them. Keeping this in ONE place means the prompt builder and the
-    response parser can never drift apart (R-02).
+    Freeform wins over catalog for premium models when the flag is on AND the
+    project is inside the rollout bucket (Sprint 5); otherwise catalog/IR.
+    Budget/balanced models always run "plain" (freeform-HTML + multipass) —
+    catalog/IR never applies to them. Keeping this in ONE place means the
+    prompt builder and the response parser can never drift apart (R-02).
     """
     settings = get_settings()
     if tier_for_model(model_id) == "premium":
-        if settings.use_freeform_render:
+        if settings.use_freeform_render and _in_freeform_rollout(
+            project_id, settings.freeform_traffic_pct
+        ):
             return "freeform"
         if settings.use_section_catalog:
             return "catalog"
