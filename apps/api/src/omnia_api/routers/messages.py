@@ -10,6 +10,12 @@ from fastapi import APIRouter, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from omnia_api.core.config import (
+    FREE_GENERATION_LIMIT,
+    get_settings,
+    model_for_role,
+    tier_for_model,
+)
 from omnia_api.core.db import get_engine
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
@@ -23,6 +29,7 @@ from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.director_polish import director_polish_generate
 from omnia_api.services.file_extractor import (
     UnsafePathError,
     apply_edits,
@@ -30,15 +37,8 @@ from omnia_api.services.file_extractor import (
     extract_files,
 )
 from omnia_api.services.image_resolver import resolve_images
-from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
-from omnia_api.core.config import (
-    FREE_GENERATION_LIMIT,
-    get_settings,
-    model_for_role,
-    tier_for_model,
-)
-from omnia_api.services.director_polish import director_polish_generate
 from omnia_api.services.intent_triage import ORCHESTRATE, decide_intent
+from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
@@ -88,7 +88,7 @@ async def _emergency_error(
             "llm.error",
             {"message_id": str(assistant_message_id), "error": err[:500]},
         )
-    except Exception as pub_exc:  # noqa: BLE001 — secondary failure, log only
+    except Exception as pub_exc:
         _elog.error("emergency publish_event failed: %r", pub_exc)
     try:
         factory = async_sessionmaker(get_engine(), expire_on_commit=False)
@@ -101,7 +101,7 @@ async def _emergency_error(
                 msg.tokens_out = 0
                 msg.tokens_in = msg.tokens_in or 0
                 await session.commit()
-    except Exception as db_exc:  # noqa: BLE001 — secondary failure
+    except Exception as db_exc:
         _elog.error("emergency finalize failed: %r", db_exc)
 
 
@@ -257,7 +257,7 @@ async def post_prompt(
     # hiccup must not kill a live prompt.
     try:
         await get_redis().publish(f"activity:{project_id}", "")
-    except Exception:  # noqa: BLE001 — best-effort signal, not load-bearing
+    except Exception:
         pass
 
     return PromptResponse(message_id=assistant_msg.id, snapshot_id=None)
@@ -476,6 +476,72 @@ async def _audit_judge_wants_retry(
     return None
 
 
+async def _catalog_fallback_generate(
+    *,
+    history: list[dict[str, str]],
+    prompt_text: str,
+    selected_elements: list[dict[str, Any]] | None,
+    preset_id: str | None,
+    project_id: UUID,
+    user_id: UUID,
+    assistant_message_id: UUID,
+    current_files: dict[str, str],
+) -> dict[str, str] | None:
+    """Acceptance fallback — regenerate a page via the catalog/IR path.
+
+    Freeform output that fails the acceptance gate after its retries falls
+    here: the catalog path emits validated PageIR JSON that renders to a
+    structurally guaranteed page (the director model holds the strict schema).
+    Returns rendered files, or None on any failure — the caller then keeps the
+    freeform attempt rather than shipping nothing (R-10 fail-soft).
+    """
+    import json as _json
+
+    from pydantic import ValidationError as _VE
+
+    from omnia_api.core.config import model_for_role as _mfr
+    from omnia_api.sections import PageIR as _PageIR
+    from omnia_api.sections import apply_smart_defaults as _asd
+    from omnia_api.sections.renderer import render_to_files as _rtf
+    from omnia_api.services.lean_prompt import build_catalog_messages as _bcm
+
+    try:
+        cat_messages = _bcm(
+            history=history,
+            user_prompt=prompt_text,
+            selected_elements=selected_elements,
+            preset_id=preset_id,
+            project_id=str(project_id),
+        )
+        parts: list[str] = []
+        async for ev in stream_chat_completion(
+            cat_messages,
+            _mfr("director"),
+            str(user_id),
+            str(project_id),
+            str(assistant_message_id),
+        ):
+            if "delta" in ev:
+                parts.append(str(ev["delta"]))
+        raw = "".join(parts).strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
+        ir = _PageIR.model_validate(_json.loads(raw))
+        ir = _asd(ir, preset_id=preset_id)
+        kit_css = current_files.get("src/assets/omnia-kit.css", "")
+        kit_js = current_files.get("src/assets/omnia-kit.js", "")
+        return dict(_rtf(ir, kit_css=kit_css, kit_js=kit_js))
+    except (_json.JSONDecodeError, _VE, ValueError, KeyError) as exc:
+        print(f"[PP] catalog_fallback_parse_failed err={exc!r}", flush=True)
+        return None
+    except Exception as exc:
+        print(f"[PP] catalog_fallback_failed err={exc!r}", flush=True)
+        return None
+
+
 async def _process_prompt(
     project_id: UUID,
     user_id: UUID,
@@ -590,6 +656,14 @@ async def _process_prompt(
         )
         print(f"[PP] messages_built count={len(messages)}", flush=True)
 
+        # Phase 11 — resolve the generation mode ONCE from the routing model so
+        # the prompt we built (freeform vs catalog) and the way we parse the
+        # answer below never disagree. The empty-response fallback may switch
+        # the model later, but the mode is fixed by the first pass's prompt.
+        from omnia_api.core.config import generation_mode as _generation_mode
+        _gen_mode = _generation_mode(model_id)
+        print(f"[PP] gen_mode={_gen_mode}", flush=True)
+
         # ──────────────────────────────────────────────────────────────
         # Inner stream loop, extracted so we can retry the whole thing
         # against a fallback model when the primary returns junk.
@@ -661,6 +735,10 @@ async def _process_prompt(
                 and _settings.use_director_polish
                 and _settings.use_section_catalog
                 and tier_for_model(use_model) == "premium"
+                # Freeform mode writes HTML directly — no Director→Polish 2-pass
+                # (that path is a catalog/IR enhancement). The acceptance gate
+                # is freeform's quality mechanism instead.
+                and _gen_mode != "freeform"
             )
             if _dp_active:
                 source = director_polish_generate(
@@ -786,12 +864,16 @@ async def _process_prompt(
         # Cheap models (Haiku/Nano) are routed through multipass which
         # emits HTML — parsing that as JSON would always fail and just
         # log noise.
-        from omnia_api.core.config import get_settings as _get_settings, tier_for_model as _tier_for_model
-        if _get_settings().use_section_catalog and _tier_for_model(model_id) == "premium":
+        from omnia_api.core.config import get_settings as _get_settings
+        # Only catalog mode parses the answer as PageIR JSON. Freeform/plain
+        # emit HTML in <file> blocks and fall straight through to the extractor.
+        if _gen_mode == "catalog":
             import json as _json
+
+            from pydantic import ValidationError as _ValidationError
+
             from omnia_api.sections import PageIR, render_page  # noqa: F401
             from omnia_api.sections.renderer import render_to_files
-            from pydantic import ValidationError as _ValidationError
             raw = accumulated.strip()
             # Strip ```json fences the model may have added despite instructions.
             if raw.startswith("```"):
@@ -877,7 +959,7 @@ async def _process_prompt(
                         f"[PP] catalog_ir_recovered_via_director sections={len(_ir2.sections)}",
                         flush=True,
                     )
-                except Exception as _ir_exc2:  # noqa: BLE001 — last-resort safety net
+                except Exception as _ir_exc2:
                     print(f"[PP] catalog_ir_retry_failed err={_ir_exc2!r}", flush=True)
                     # Fall through: the empty-content retry machinery (multipass /
                     # model-switch) downstream is the final fallback.
@@ -1162,7 +1244,7 @@ async def _process_prompt(
             _settings_for_retry = _get_settings()
             _last_report = None  # type: ignore[var-annotated]
             try:
-                _last_report = report  # noqa: F821 — defined in audit block
+                _last_report = report
             except NameError:
                 _last_report = None
             # B3 — deterministic rubric verdict, refined by the optional LLM
@@ -1175,6 +1257,9 @@ async def _process_prompt(
             _retry_eligible = (
                 _settings_for_retry.use_section_catalog
                 and _tier_for_model(model_id) == "premium"
+                # Phase 11 — freeform uses the acceptance gate, not this catalog
+                # IR re-roll; keep the rubric retry catalog-only.
+                and _gen_mode != "freeform"
                 and _last_report is not None
                 and not _retry_done
             )
@@ -1233,11 +1318,13 @@ async def _process_prompt(
                         # output. Fail-soft: if it doesn't parse, keep the
                         # first-pass files unchanged.
                         import json as _json_r
+
+                        from pydantic import ValidationError as _VE_r
+
                         from omnia_api.sections import PageIR as _PageIR_r
                         from omnia_api.sections.renderer import (
                             render_to_files as _render_to_files_r,
                         )
-                        from pydantic import ValidationError as _VE_r
                         raw_r = retry_accumulated.strip()
                         if raw_r.startswith("```"):
                             raw_r = raw_r.split("\n", 1)[1] if "\n" in raw_r else raw_r[3:]
@@ -1301,7 +1388,7 @@ async def _process_prompt(
                                             "stage": "retry",
                                         },
                                     )
-                            except Exception:  # noqa: BLE001
+                            except Exception:
                                 pass
                         except (_json_r.JSONDecodeError, _VE_r, ValueError) as retry_ir_exc:
                             _log.warning(
@@ -1312,7 +1399,7 @@ async def _process_prompt(
                                 f"[PP] retry_ir_fail err={retry_ir_exc!r}",
                                 flush=True,
                             )
-        except Exception as retry_exc:  # noqa: BLE001
+        except Exception as retry_exc:
             print(f"[PP] retry_branch_failed err={retry_exc!r}", flush=True)
 
         if files and project_image_gen_enabled:
@@ -1337,6 +1424,124 @@ async def _process_prompt(
                     )
             except Exception as img_exc:
                 print(f"[PP] image_resolver failed: {img_exc!r}", flush=True)
+
+        # ── Phase 11 — acceptance gate (freeform safety net) ──────────────
+        # Render → check structure + responsiveness (+ optional vision). If it
+        # fails, re-roll with concrete feedback up to ACCEPTANCE_MAX_RETRIES.
+        # If freeform still fails, fall back to the catalog/IR path (guaranteed
+        # valid page). Runs after image-resolve so screenshots carry real
+        # images. All best-effort — any gate error ships the current files.
+        _acc_settings = _get_settings()
+        if (
+            files
+            and project_template not in ("fullstack", "tgbot", "api")
+            and _acc_settings.use_acceptance_gate
+            and _gen_mode in ("freeform", "catalog")
+        ):
+            from omnia_api.services import acceptance as _acceptance
+            _max_acc = max(0, int(_acc_settings.acceptance_max_retries))
+            _verdict = None
+            try:
+                for _acc_attempt in range(_max_acc + 1):
+                    _verdict = await _acceptance.evaluate(
+                        files,
+                        project_id=str(project_id),
+                        prompt_context=prompt_text,
+                        user_id=str(user_id),
+                    )
+                    print(
+                        f"[PP] acceptance attempt={_acc_attempt} passed={_verdict.passed} "
+                        f"verdict={_verdict.verdict} score={_verdict.score} "
+                        f"struct={_verdict.structural_ok} resp={_verdict.responsive_ok} "
+                        f"vision={_verdict.vision_ran}",
+                        flush=True,
+                    )
+                    await publish_event(
+                        project_id,
+                        "llm.audit",
+                        {
+                            "message_id": str(assistant_message_id),
+                            "stage": "acceptance",
+                            "passed": _verdict.passed,
+                            "verdict": _verdict.verdict,
+                            "score": _verdict.score,
+                        },
+                    )
+                    if _verdict.passed or not _verdict.feedback or _acc_attempt >= _max_acc:
+                        break
+                    notice = (
+                        f"\n\n*Приёмка {_acc_attempt + 1}/{_max_acc}: правлю вёрстку "
+                        f"({_verdict.verdict})…*\n\n"
+                    )
+                    accumulated = accumulated + notice
+                    await publish_event(
+                        project_id,
+                        "llm.chunk",
+                        {"message_id": str(assistant_message_id), "delta": notice},
+                    )
+                    messages.append({"role": "assistant", "content": accumulated})
+                    messages.append({"role": "user", "content": _verdict.feedback})
+                    await _run_stream(effective_model, force_all=force_model)
+                    if state["error"] or not str(state["accumulated"]).strip():
+                        print(f"[PP] acceptance_repair_empty err={state['error']!r}", flush=True)
+                        break
+                    _repair_acc = str(state["accumulated"])
+                    try:
+                        _repaired, _ = _extract_files_and_edits(_repair_acc, current_files)
+                    except (UnsafePathError, ValueError):
+                        _repaired = {}
+                    if not _repaired:
+                        print("[PP] acceptance_repair_no_files", flush=True)
+                        break
+                    _repaired = {p: c for p, c in _repaired.items() if p not in KIT_FILES}
+                    _repaired = _ensure_kit_linked(_repaired)
+                    try:
+                        _repaired, _, _ = enrich_visual_files(_repaired)
+                    except Exception:
+                        pass
+                    if project_image_gen_enabled:
+                        try:
+                            _repaired, _, _ = await resolve_images(_repaired, str(project_id))
+                        except Exception:
+                            pass
+                    files = _repaired
+                    accumulated = accumulated + _repair_acc
+
+                # Freeform exhausted its retries and still fails → regenerate
+                # once via the catalog/IR path (guaranteed valid page).
+                if (
+                    _verdict is not None
+                    and not _verdict.passed
+                    and _gen_mode == "freeform"
+                    and _acc_settings.use_section_catalog
+                ):
+                    print("[PP] acceptance->catalog fallback", flush=True)
+                    _fb_files = await _catalog_fallback_generate(
+                        history=history_serialized,
+                        prompt_text=prompt_text,
+                        selected_elements=selected_elements,
+                        preset_id=project_design_preset_id,
+                        project_id=project_id,
+                        user_id=user_id,
+                        assistant_message_id=assistant_message_id,
+                        current_files=current_files,
+                    )
+                    if _fb_files:
+                        _fb_files = {p: c for p, c in _fb_files.items() if p not in KIT_FILES}
+                        _fb_files = _ensure_kit_linked(_fb_files)
+                        files = _fb_files
+                        notice = (
+                            "\n\n*Свободная вёрстка не прошла приёмку — собрал "
+                            "через надёжный каталог.*\n\n"
+                        )
+                        accumulated = accumulated + notice
+                        await publish_event(
+                            project_id,
+                            "llm.chunk",
+                            {"message_id": str(assistant_message_id), "delta": notice},
+                        )
+            except Exception as _acc_exc:
+                print(f"[PP] acceptance_gate_failed err={_acc_exc!r}", flush=True)
 
         new_snapshot_id: UUID | None = None
         if files:

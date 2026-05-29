@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
@@ -21,6 +23,82 @@ from omnia_api.services import repo as repo_svc
 
 VIEWPORT = {"width": 1280, "height": 800}
 GOTO_TIMEOUT_MS = 15_000
+
+# Acceptance-gate render harness (Phase 11, Sprint 1.2).
+DEFAULT_CAPTURE_WIDTHS: tuple[int, ...] = (375, 768, 1440)
+# Sub-pixel rounding means scrollWidth can exceed the viewport by ~1px even on
+# a perfectly-fitting page; only flag real horizontal overflow above this.
+_OVERFLOW_TOLERANCE_PX = 2
+
+
+@dataclass(frozen=True)
+class CaptureResult:
+    """One rendered viewport: the PNG plus its overflow measurement."""
+
+    png: bytes
+    viewport_width: int
+    scroll_width: int
+    has_overflow: bool
+
+
+async def capture(
+    files: dict[str, str],
+    widths: Sequence[int] = DEFAULT_CAPTURE_WIDTHS,
+    *,
+    height: int = 900,
+    full_page: bool = False,
+) -> dict[int, CaptureResult]:
+    """Render ``files`` at each width and return PNG bytes + overflow flag.
+
+    The acceptance gate uses this to (1) screenshot a freeform page for the
+    vision audit and (2) detect horizontal scroll / broken responsiveness
+    (``scroll_width > viewport`` means content spills sideways). One browser,
+    one page per width. Screenshot returns **bytes** (no `path=`) so callers
+    can pipe it straight into a vision message or MinIO.
+
+    Raises ``ValueError`` if there is no root ``index.html`` to load.
+    """
+    if "index.html" not in files:
+        raise ValueError("capture() requires an index.html at the repo root")
+
+    out: dict[int, CaptureResult] = {}
+    with tempfile.TemporaryDirectory(prefix="omnia-capture-") as tmp:
+        workdir = Path(tmp)
+        for path, content in files.items():
+            full = workdir / path
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(content, encoding="utf-8")
+        index_uri = (workdir / "index.html").as_uri()
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                for w in widths:
+                    page = await browser.new_page(
+                        viewport={"width": int(w), "height": height}
+                    )
+                    try:
+                        await page.goto(
+                            index_uri,
+                            wait_until="networkidle",
+                            timeout=GOTO_TIMEOUT_MS,
+                        )
+                        scroll_width = await page.evaluate(
+                            "() => document.documentElement.scrollWidth"
+                        )
+                        png = await page.screenshot(full_page=full_page)
+                    finally:
+                        await page.close()
+                    sw = int(scroll_width or w)
+                    out[int(w)] = CaptureResult(
+                        png=png,
+                        viewport_width=int(w),
+                        scroll_width=sw,
+                        has_overflow=sw > int(w) + _OVERFLOW_TOLERANCE_PX,
+                    )
+            finally:
+                await browser.close()
+    return out
 
 
 async def _render_async(snapshot_id: str) -> None:

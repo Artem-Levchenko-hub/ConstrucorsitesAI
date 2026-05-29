@@ -129,6 +129,55 @@ async def stream_chat_completion(
     )
 
 
+async def complete_chat(
+    messages: list[dict[str, Any]],
+    model: str,
+    *,
+    user_id: str | None = None,
+    project_id: str | None = None,
+    max_tokens: int = 1024,
+    temperature: float | None = 0.0,
+) -> str:
+    """Non-streaming completion → assistant text (``""`` on mock/empty).
+
+    The acceptance gate's vision audit needs a single structured verdict, not
+    a token stream — so it calls this instead of `stream_chat_completion`.
+    `messages` may carry multimodal content (a `content` that is a list of
+    text/image_url blocks); the gateway forwards it to a vision model.
+
+    Mock mode returns ``""`` so callers skip cleanly (no fabricated verdicts).
+    Raises `LLMError` on a gateway 4xx/5xx so the caller can fail-soft.
+    """
+    settings = get_settings()
+    if settings.mock_llm:
+        return ""
+
+    url = f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions"
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "user": user_id,
+        "metadata": {"project_id": project_id, "free": _free_generation.get()},
+        "max_tokens": max_tokens,
+    }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    timeout = httpx.Timeout(90.0, connect=5.0, read=90.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                raise LLMError(f"gateway {resp.status_code}: {body[:300]!r}")
+            data = resp.json()
+    except httpx.HTTPError as exc:
+        raise LLMError(f"http: {exc}") from exc
+    return (
+        data.get("choices", [{}])[0].get("message", {}).get("content") or ""
+    )
+
+
 async def _mock_stream(messages: list[dict[str, str]]) -> AsyncIterator[dict[str, Any]]:
     user_text = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"),

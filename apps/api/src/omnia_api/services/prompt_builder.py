@@ -1891,6 +1891,7 @@ def build_system_prompt(
     *,
     skill_brief: str | None = None,
     model_id: str | None = None,
+    design_tokens_block: str | None = None,
 ) -> str:
     """Собрать system prompt под тип проекта.
 
@@ -1917,8 +1918,16 @@ def build_system_prompt(
     ``skill_brief`` (keyword-only) — design brief from ui-ux-pro-max. Только
     для визуальных.
     """
-    preset_block = format_preset_block(preset_id) if preset_id else ""
-    palette_anchor = _format_palette_anchor(preset_id)
+    # Phase 11 — seeded design tokens (freeform mode) are the authoritative
+    # palette+font source and SUPPRESS the competing fixed-preset blocks
+    # (preset palette, palette anchor) so the model can't drift between three
+    # palettes. Without tokens, behaviour is byte-for-byte unchanged.
+    if design_tokens_block:
+        preset_block = ""
+        palette_anchor = design_tokens_block
+    else:
+        preset_block = format_preset_block(preset_id) if preset_id else ""
+        palette_anchor = _format_palette_anchor(preset_id)
     skill_block = _format_skill_brief(skill_brief) if skill_brief else ""
     image_block = _IMAGE_GEN_ON if image_gen_enabled else _IMAGE_GEN_OFF
 
@@ -1931,12 +1940,14 @@ def build_system_prompt(
     design_anchor = "\n\n".join(design_anchor_parts) if design_anchor_parts else ""
 
     # Phase A.2 — _DESIGN_KIT is the generic catalog of per-industry
-    # palettes. When the project ALREADY has a preset palette and/or a
-    # matched skill brief (both more specific than the catalog), the
-    # catalog becomes a third competing source of truth — the model
-    # randomly picks between them. Suppress the catalog when we have
-    # anchored guidance; keep it as the fallback when we have nothing.
-    include_design_kit = (preset_id is None) and (not skill_block)
+    # palettes. When the project ALREADY has a preset palette, a matched
+    # skill brief, or seeded design tokens (all more specific than the
+    # catalog), the catalog becomes a competing source of truth — the model
+    # randomly picks between them. Suppress the catalog when we have anchored
+    # guidance; keep it as the fallback when we have nothing.
+    include_design_kit = (
+        (preset_id is None) and (not skill_block) and (not design_tokens_block)
+    )
 
     if template == "fullstack":
         sections: tuple[str, ...] = (
@@ -2121,7 +2132,7 @@ def _build_catalog_system_prompt(
     if preset_id and preset_id in PRESETS:
         try:
             header += format_preset_block(PRESETS[preset_id]) + "\n\n"
-        except Exception:  # noqa: BLE001 — preset formatting must not block IR mode
+        except Exception:
             pass
     if skill_brief:
         brief_text = skill_brief.get("brief_text") if isinstance(skill_brief, dict) else None
@@ -2181,11 +2192,13 @@ def build_messages(
     # cause the model to receive lean-JSON instructions but emit HTML
     # via multipass's pass_assembly, then fail catalog parse and waste
     # ~4 LLM calls before the fallback kicks in.
-    from omnia_api.core.config import get_settings, tier_for_model
-    if (
-        get_settings().use_section_catalog
-        and tier_for_model(model_id) == "premium"
-    ):
+    # Phase 11 — generation mode is the single switch (config.generation_mode):
+    #   catalog  → premium emits PageIR JSON (lean prompt, deterministic render)
+    #   freeform → premium writes full HTML freely + project-seeded design tokens
+    #   plain    → budget/balanced freeform-HTML + multipass (unchanged)
+    from omnia_api.core.config import generation_mode
+    mode = generation_mode(model_id)
+    if mode == "catalog":
         from omnia_api.services.lean_prompt import build_catalog_messages
         return build_catalog_messages(
             history=history,
@@ -2195,11 +2208,27 @@ def build_messages(
             project_id=project_id,
         )
 
+    # Freeform: hand the model project-seeded design tokens (palette+fonts) so
+    # two projects don't collapse onto the same preset palette. Fail-soft —
+    # token resolution must never block generation.
+    design_tokens_block: str | None = None
+    if mode == "freeform" and project_id:
+        try:
+            from omnia_api.services.design_tokens import tokens_for_project
+            design_tokens_block = tokens_for_project(
+                project_id, industry_hint=preset_id
+            ).prompt_block()
+        except Exception:
+            design_tokens_block = None
+
     # Pull a `ui-ux-pro-max` design brief for this specific prompt — palette
     # + font pairing + 5 high-severity UX rules. Skipped silently when the
     # prompt has no industry-token signal we can match against
-    # (`_compute_skill_brief` returns None).
-    skill_brief = _compute_skill_brief(user_prompt, project_id)
+    # (`_compute_skill_brief` returns None). In freeform mode the seeded
+    # design tokens are authoritative, so skip the brief's competing palette.
+    skill_brief = (
+        None if design_tokens_block else _compute_skill_brief(user_prompt, project_id)
+    )
 
     # Phase F.2 — `model_id` flows into `build_system_prompt` so the prompt
     # assembler can trim heavy blocks for budget/balanced tiers. Omitted
@@ -2213,6 +2242,7 @@ def build_messages(
                 image_gen_enabled,
                 skill_brief=skill_brief,
                 model_id=model_id,
+                design_tokens_block=design_tokens_block,
             ),
         }
     ]

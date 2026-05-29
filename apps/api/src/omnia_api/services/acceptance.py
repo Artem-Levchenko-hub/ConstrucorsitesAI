@@ -1,0 +1,221 @@
+"""Acceptance gate for freeform generation (Phase 11, Sprint 2.2).
+
+The single orchestrator that decides whether a generated page is good enough
+to ship, and — when it isn't — produces concrete feedback the model can act
+on. Three layers, cheapest first:
+
+  1. structure  — deterministic hard checks (no dead links, exactly one <h1>).
+                  `ui_audit` design-rubric failures are surfaced as *advice*,
+                  not blockers: freeform deliberately bends discipline rules,
+                  so only true brokenness blocks here.
+  2. responsive — render at 375 / 768 / 1440 and reject horizontal overflow.
+  3. vision     — (optional) screenshot → vision model "broken/generic/beautiful".
+
+This is "rigidity in acceptance, freedom in composition": we don't constrain
+*how* the page is built, we verify the result and feed back what to fix. All
+layers fail SOFT — a render or vision error never hard-fails generation, it
+just drops that layer's signal (R-10).
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+
+from omnia_api.core.config import get_settings
+from omnia_api.services import vision_audit
+from omnia_api.services.link_validator import find_dead_links
+from omnia_api.services.ui_audit import audit as ui_audit
+
+log = logging.getLogger(__name__)
+
+_H1_OPEN_RE = re.compile(r"<h1[\s>]", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class AcceptanceResult:
+    """Verdict of one acceptance pass."""
+
+    passed: bool
+    score: int  # vision score, or 10 when vision didn't run
+    verdict: str  # vision verdict or "structural" / "ok"
+    structural_ok: bool
+    responsive_ok: bool
+    vision_ran: bool
+    issues: tuple[str, ...] = ()
+    feedback: str = ""
+
+
+def _html_pool(files: dict[str, str]) -> dict[str, str]:
+    return {
+        p: c for p, c in files.items() if p.endswith((".html", ".htm"))
+    }
+
+
+def _structural_issues(files: dict[str, str]) -> list[str]:
+    """Hard, deterministic brokenness — the things that make a page unusable.
+
+    Kept narrow on purpose: dead links and a missing/duplicated <h1>. Design
+    discipline (fonts, colours, buttons) is `ui_audit`'s job and is advisory
+    here so freeform creativity isn't punished as "broken".
+    """
+    issues: list[str] = []
+
+    dead = find_dead_links(files)
+    if dead:
+        issues.extend(f"[ссылка] {d}" for d in dead[:8])
+
+    index = files.get("index.html", "")
+    h1_count = len(_H1_OPEN_RE.findall(index))
+    if h1_count == 0:
+        issues.append("[структура] на странице нет ни одного <h1> — добавь один заголовок H1.")
+    elif h1_count > 1:
+        issues.append(
+            f"[структура] на странице {h1_count} тегов <h1> — оставь ровно один, "
+            "остальные сделай <h2>."
+        )
+    return issues
+
+
+def _advisory_issues(html_pool: dict[str, str]) -> list[str]:
+    """Soft `ui_audit` findings — fed to the model as advice, never blocking."""
+    try:
+        report = ui_audit(html_pool)
+    except Exception as exc:
+        log.warning("acceptance: ui_audit failed (ignored): %r", exc)
+        return []
+    return [f"[дизайн] {f.description}" for f in report.failures[:6]]
+
+
+def _build_feedback(
+    structural: list[str],
+    overflow_widths: list[int],
+    advisory: list[str],
+    vision: vision_audit.VisionVerdict,
+) -> str:
+    lines: list[str] = []
+    lines.extend(structural)
+    for w in overflow_widths:
+        lines.append(
+            f"[адаптив] при ширине {w}px появляется горизонтальный скролл — "
+            "контент шире экрана. Сделай секции/картинки адаптивными (max-w-full, "
+            "грид с переносом, без фиксированных широких блоков)."
+        )
+    if vision.verdict in {"broken", "generic"} and vision.issues:
+        lines.append(f"[дизайн/vision: {vision.verdict}, score {vision.score}/10]")
+        lines.extend(f"  • {i}" for i in vision.issues)
+    # Advisory ui_audit findings go last — least important.
+    lines.extend(advisory)
+    if not lines:
+        return ""
+    return (
+        "Приёмка страницы не пройдена. Исправь перечисленное и верни ПОЛНЫЕ файлы "
+        "целиком в тех же <file>-блоках (ничего лишнего не меняй):\n"
+        + "\n".join(f"— {ln}" if not ln.startswith("  ") else ln for ln in lines)
+    )
+
+
+async def evaluate(
+    files: dict[str, str],
+    *,
+    project_id: str,
+    prompt_context: str = "",
+    user_id: str | None = None,
+    run_vision: bool | None = None,
+    min_score: int | None = None,
+    widths: tuple[int, ...] | None = None,
+) -> AcceptanceResult:
+    """Run the gate over `files` and return a pass/fail verdict + feedback.
+
+    `run_vision` / `min_score` default to settings (`USE_VISION_AUDIT`,
+    `ACCEPTANCE_MIN_SCORE`). Renders ONCE and reuses the screenshots for both
+    the overflow check and the vision audit.
+    """
+    settings = get_settings()
+    if run_vision is None:
+        run_vision = settings.use_vision_audit
+    if min_score is None:
+        min_score = settings.acceptance_min_score
+
+    html_pool = _html_pool(files)
+    if not html_pool or "index.html" not in files:
+        return AcceptanceResult(
+            passed=False,
+            score=0,
+            verdict="broken",
+            structural_ok=False,
+            responsive_ok=False,
+            vision_ran=False,
+            issues=("нет index.html для проверки",),
+            feedback=(
+                "Не найден index.html — верни полноценную страницу "
+                'в <file path="index.html">.'
+            ),
+        )
+
+    # ── 1. structure (hard) + advisory ───────────────────────────────────
+    structural = _structural_issues(files)
+    advisory = _advisory_issues(html_pool)
+    structural_ok = not structural
+
+    # ── 2. render once (overflow) + 3. reuse shots for vision ─────────────
+    overflow_widths: list[int] = []
+    screenshots: dict[int, bytes] = {}
+    responsive_ok = True
+    try:
+        # Imported lazily: pulls Playwright into the process only when the
+        # gate actually runs (keeps the flag-off path import-light, R-07).
+        from omnia_api.workers.preview import DEFAULT_CAPTURE_WIDTHS, capture
+
+        shots = await capture(files, widths=widths or DEFAULT_CAPTURE_WIDTHS)
+        for w, res in shots.items():
+            screenshots[w] = res.png
+            if res.has_overflow:
+                overflow_widths.append(w)
+        overflow_widths.sort()
+        responsive_ok = not overflow_widths
+    except Exception as exc:
+        log.warning("acceptance: render harness failed (responsive skipped): %r", exc)
+
+    # ── 4. vision (optional, fail-soft) ───────────────────────────────────
+    verdict = vision_audit.VisionVerdict(verdict="ok", score=10, issues=(), skipped=True)
+    vision_ran = False
+    if run_vision and screenshots:
+        verdict = await vision_audit.audit_screenshots(
+            screenshots,
+            prompt_context=prompt_context,
+            user_id=user_id,
+            project_id=project_id,
+        )
+        vision_ran = not verdict.skipped
+
+    vision_ok = (not vision_ran) or (
+        verdict.verdict != "broken" and verdict.score >= min_score
+    )
+    passed = structural_ok and responsive_ok and vision_ok
+
+    feedback = "" if passed else _build_feedback(
+        structural, overflow_widths, advisory, verdict
+    )
+    issues = tuple(
+        structural
+        + [f"overflow@{w}px" for w in overflow_widths]
+        + list(verdict.issues)
+    )
+    final_verdict = (
+        "ok" if passed else (verdict.verdict if vision_ran else "structural")
+    )
+    return AcceptanceResult(
+        passed=passed,
+        score=verdict.score,
+        verdict=final_verdict,
+        structural_ok=structural_ok,
+        responsive_ok=responsive_ok,
+        vision_ran=vision_ran,
+        issues=issues,
+        feedback=feedback,
+    )
+
+
+__all__ = ["AcceptanceResult", "evaluate"]

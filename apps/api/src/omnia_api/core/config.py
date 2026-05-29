@@ -123,6 +123,27 @@ class Settings(BaseSettings):
     # model picker; this env knob is the only manual override.
     force_model: str = Field(default="")
 
+    # ── Phase 11 — freeform generation + acceptance gate ──────────────────
+    # Plan: docs/plans/11-freeform-generation.md. Premium models write HTML
+    # FREELY (no fixed Jinja templates); reliability comes from an acceptance
+    # gate (render → check → self-repair) instead of locking the output shape.
+    # All three flags default OFF so a deploy is a no-op until ops opts in;
+    # the catalog/IR path stays the safe fallback. Flip per-env in .env.
+    #
+    #   use_freeform_render  — premium tier writes free HTML (else catalog/IR)
+    #   use_acceptance_gate  — run structure+responsive (+vision) check & repair
+    #   use_vision_audit     — let the gate screenshot → vision model for a
+    #                          "broken / generic / beautiful" verdict (needs
+    #                          gateway multimodal support; best-effort, fail-soft)
+    use_freeform_render: bool = Field(default=False)
+    use_acceptance_gate: bool = Field(default=False)
+    use_vision_audit: bool = Field(default=False)
+    # Max self-repair re-rolls before the gate gives up (and freeform falls
+    # back to catalog). Each retry is one extra LLM call — keep small.
+    acceptance_max_retries: int = Field(default=2)
+    # Vision score (0..10) at or above which a page passes the gate.
+    acceptance_min_score: int = Field(default=7)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -227,6 +248,34 @@ def tier_for_model(model_id: str | None) -> str:
     if not model_id:
         return DEFAULT_TIER
     return MODEL_TIER_MAP.get(model_id, DEFAULT_TIER)
+
+
+# Generation modes — the single switch that decides HOW a model produces a
+# site. `routers/messages.py` and `services/prompt_builder.py` both read this
+# so the prompt we build and the way we parse the answer never disagree.
+#   "freeform" — premium tier writes full HTML directly (Phase 11). Skip the
+#                IR-JSON parse; run the acceptance gate.
+#   "catalog"  — premium tier emits PageIR JSON → deterministic Jinja render.
+#   "plain"    — budget/balanced tier; the freeform system prompt + multipass.
+GenerationMode = str  # Literal["freeform", "catalog", "plain"] — kept loose for callers
+
+
+def generation_mode(model_id: str | None) -> GenerationMode:
+    """Decide the generation mode for a routing model.
+
+    Freeform wins over catalog for premium models when the flag is on; that
+    is the Phase 11 path. Budget/balanced models always run "plain" (the
+    existing freeform-HTML + multipass pipeline) — catalog/IR never applied
+    to them. Keeping this in ONE place means the prompt builder and the
+    response parser can never drift apart (R-02).
+    """
+    settings = get_settings()
+    if tier_for_model(model_id) == "premium":
+        if settings.use_freeform_render:
+            return "freeform"
+        if settings.use_section_catalog:
+            return "catalog"
+    return "plain"
 
 
 # ──────────────────────────────────────────────────────────────────────────

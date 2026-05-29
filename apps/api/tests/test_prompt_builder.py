@@ -105,9 +105,15 @@ def test_build_system_prompt_injects_skill_brief_when_provided() -> None:
 
 
 def test_build_system_prompt_no_brief_when_none() -> None:
-    """Default path: no `skill_brief` argument → no `ДИЗАЙН-БРИФ` block."""
-    assert "ДИЗАЙН-БРИФ" not in build_system_prompt("landing")
-    assert "ДИЗАЙН-БРИФ" not in build_system_prompt("fullstack")
+    """Default path: no `skill_brief` argument → no injected brief BLOCK.
+
+    The Phase-K palette tail reminder legitimately mentions the words
+    "ДИЗАЙН-БРИФ" as a conditional instruction ("если есть ДИЗАЙН-БРИФ…"), so
+    the absence check targets the auto-matched brief *header* that
+    `_format_skill_brief` emits — that is what "no brief" actually means.
+    """
+    assert "ДИЗАЙН-БРИФ (auto-matched" not in build_system_prompt("landing")
+    assert "ДИЗАЙН-БРИФ (auto-matched" not in build_system_prompt("fullstack")
 
 
 def test_build_messages_threads_skill_brief_for_industry_prompt() -> None:

@@ -32,7 +32,27 @@ def count_text_tokens(model_id: str, text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def count_message_tokens(model_id: str, messages: list[dict[str, str]]) -> int:
+def _content_text(content: object) -> str:
+    """Flatten chat-message content to plain text for token estimation.
+
+    Multimodal content is a list of blocks ({"type":"text","text":...} /
+    {"type":"image_url",...}). We count only the text parts; image bytes are
+    billed separately by the provider, so ignoring them here keeps the
+    pre-flight estimate from crashing on list content (Phase 11 vision audit).
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        return " ".join(parts)
+    return str(content)
+
+
+def count_message_tokens(model_id: str, messages: list[dict[str, object]]) -> int:
     """Approx total input tokens for a chat completion request.
 
     Adds a small per-message overhead (4 tokens) consistent with OpenAI's
@@ -40,5 +60,5 @@ def count_message_tokens(model_id: str, messages: list[dict[str, str]]) -> int:
     """
     total = 0
     for m in messages:
-        total += count_text_tokens(model_id, m.get("content", "")) + 4
+        total += count_text_tokens(model_id, _content_text(m.get("content", ""))) + 4
     return total + 2  # priming overhead per OpenAI spec

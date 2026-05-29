@@ -50,7 +50,15 @@ def sanitize_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
         if m.get("role") != "user":
             out.append(m)
             continue
-        cleaned, triggered = sanitize(m.get("content", ""))
+        content = m.get("content", "")
+        # Multimodal content (list of text/image blocks) is not a string the
+        # regex can scan, and sanitize() would TypeError on it. Image bytes are
+        # not a prompt-injection vector for these patterns — pass through
+        # untouched (Phase 11 vision audit sends image_url blocks here).
+        if not isinstance(content, str):
+            out.append(m)
+            continue
+        cleaned, triggered = sanitize(content)
         if triggered:
             log.warning("safety.injection_detected", patterns=triggered)
         out.append({**m, "content": cleaned})

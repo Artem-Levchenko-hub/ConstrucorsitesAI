@@ -30,7 +30,12 @@ log = structlog.get_logger(__name__)
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
-    content: str
+    # `str` for plain text; `list[dict]` for multimodal content — a list of
+    # OpenAI-style blocks ({"type":"text",...} / {"type":"image_url",...}).
+    # LiteLLM forwards the blocks to Anthropic/OpenAI vision models as-is.
+    # Phase 11 acceptance gate uses this to send a screenshot for a quality
+    # verdict. Downstream string ops (safety, token counter) guard the type.
+    content: str | list[dict[str, Any]]
 
 
 class ChatMetadata(BaseModel):
