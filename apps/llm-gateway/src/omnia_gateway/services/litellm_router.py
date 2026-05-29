@@ -38,6 +38,11 @@ log = structlog.get_logger(__name__)
 # discarded by the caller anyway.
 _MIN_NONEMPTY_RESPONSE_CHARS = 50
 _EMPTY_RETRY_DELAY_S = 0.2
+# Thinking models legitimately return SHORT final answers (the chain-of-thought
+# lives in a separate `reasoning` field) and are slow. Skip the cold-start
+# empty-retry for them — otherwise a valid short reply is thrown away on a
+# wasteful, often-flaky second call that then falls back to another model.
+_NO_EMPTY_RETRY_MODELS = {"deepseek-v4-flash-thinking"}
 from omnia_gateway.providers import sber as sber_provider
 from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services.pricing import PRICE_TABLE
@@ -339,8 +344,12 @@ async def acompletion(
     elif model == "deepseek-v4-flash-thinking":
         # Thinking model — reasoning comes back in a separate field but still
         # counts toward the token budget; give the visible answer headroom so a
-        # long chain-of-thought can't truncate the actual output.
+        # long chain-of-thought can't truncate the actual output. It is also
+        # SLOW (chain-of-thought latency), so widen the per-call timeout well
+        # past the 60s Router default — otherwise real prompts time out and the
+        # Router silently falls back to another model.
         kwargs.setdefault("max_tokens", 16384)
+        kwargs.setdefault("timeout", 180)
 
     async def _attempt() -> Any:
         try:
@@ -365,7 +374,7 @@ async def acompletion(
     # _skip_empty_retry: warmup calls explicitly request ≤4 tokens — the
     # short reply is the intended outcome, not a cold-start artifact.
     # Retrying there would double proxyapi spend every 240s.
-    if not _skip_empty_retry:
+    if not _skip_empty_retry and model not in _NO_EMPTY_RETRY_MODELS:
         try:
             first_text = response.choices[0].message.content or ""
         except (AttributeError, IndexError, KeyError):
