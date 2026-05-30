@@ -1,8 +1,10 @@
 """Single entry point for chat completions.
 
 Dispatches by model ID:
-- Yandex models → custom httpx wrapper (`providers.yandex`).
-- Everything else → LiteLLM Router (Anthropic, OpenAI, OpenRouter).
+- Yandex / Sber / vsegpt(DeepSeek) → custom httpx wrappers in `providers.*`
+  (each fronts a RU endpoint LiteLLM can't route reliably from the prod VPS).
+- Everything else → LiteLLM Router (Anthropic via proxyapi, OpenAI, OpenRouter,
+  Gemini).
 
 R-01 (deep module): callers see one async function (`acompletion`) regardless
 of provider. Routing, fallback config, and error translation are hidden here.
@@ -38,12 +40,13 @@ log = structlog.get_logger(__name__)
 # discarded by the caller anyway.
 _MIN_NONEMPTY_RESPONSE_CHARS = 50
 _EMPTY_RETRY_DELAY_S = 0.2
-# Thinking models legitimately return SHORT final answers (the chain-of-thought
-# lives in a separate `reasoning` field) and are slow. Skip the cold-start
-# empty-retry for them — otherwise a valid short reply is thrown away on a
-# wasteful, often-flaky second call that then falls back to another model.
-_NO_EMPTY_RETRY_MODELS = {"deepseek-v4-flash-thinking"}
+# Models that opt OUT of the cold-start empty-retry below. Currently empty: the
+# only member (deepseek-v4-flash-thinking) moved to the direct vsegpt provider,
+# which never reaches this LiteLLM path. Kept as a seam for future thinking
+# models routed through the Router.
+_NO_EMPTY_RETRY_MODELS: frozenset[str] = frozenset()
 from omnia_gateway.providers import sber as sber_provider
+from omnia_gateway.providers import vsegpt as vsegpt_provider
 from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services.pricing import PRICE_TABLE
 
@@ -76,10 +79,8 @@ _LITELLM_MODEL_SLUG: dict[str, str] = {
     # Slugs MUST match the model names proxyapi proxies through to DeepSeek.
     "deepseek-chat": "openai/deepseek-chat",
     "deepseek-reasoner": "openai/deepseek-reasoner",
-    # DeepSeek V4 Flash (Thinking) via vsegpt.ru OpenAI-compatible surface.
-    # Key/base live in _PROXY_ROUTES below; LiteLLM strips the `openai/` prefix
-    # and sends `deepseek/deepseek-v4-flash-thinking` to the vsegpt base.
-    "deepseek-v4-flash-thinking": "openai/deepseek/deepseek-v4-flash-thinking",
+    # NOTE: deepseek-v4-flash-thinking is NOT here — it's served by the direct
+    # vsegpt provider (providers/vsegpt.py), dispatched before the Router path.
     # Google Gemini via AI Studio (not Vertex AI). LiteLLM reads the key from
     # GEMINI_API_KEY or whatever is passed explicitly in the model_list below.
     # Same key works for both free and paid tier on AI Studio.
@@ -126,11 +127,7 @@ _PROXY_ROUTES: dict[str, _ProxyRoute] = {
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_deepseek_base_url,
     ),
-    # vsegpt.ru — separate key/balance from proxyapi (the sk-or-vv-… key).
-    "deepseek-v4-flash-thinking": _ProxyRoute(
-        api_key=lambda s: s.vsegpt_api_key.get_secret_value() if s.vsegpt_api_key else None,
-        api_base=lambda s: s.vsegpt_base_url,
-    ),
+    # vsegpt.ru DeepSeek is handled by the direct provider, not this Router map.
     "gpt-5": _ProxyRoute(
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_openai_base_url,
@@ -155,8 +152,8 @@ _FALLBACKS: list[dict[str, list[str]]] = [
     # bottom-of-stack). deepseek-chat → Haiku; deepseek-reasoner → Opus → Sonnet.
     {"deepseek-chat": ["claude-haiku-4-5"]},
     {"deepseek-reasoner": ["claude-opus-4-7", "claude-sonnet-4-6"]},
-    # vsegpt thinking model → reliable proxyapi-backed Haiku if vsegpt is down.
-    {"deepseek-v4-flash-thinking": ["claude-haiku-4-5"]},
+    # deepseek-v4-flash-thinking (vsegpt) bypasses the Router, so its fallback
+    # lives at the app layer (_EMPTY_RESPONSE_FALLBACKS in apps/api messages.py).
     {"gpt-4.1": ["gpt-5", "claude-haiku-4-5"]},
     {"gpt-5-mini": ["gpt-5-nano", "claude-haiku-4-5"]},
     {"gpt-5": ["claude-haiku-4-5", "gpt-5-nano"]},
@@ -305,6 +302,16 @@ async def acompletion(
             max_tokens=2000 if max_tokens is None else max_tokens,
         )
 
+    # vsegpt.ru models (DeepSeek) bypass the LiteLLM Router entirely — see
+    # providers/vsegpt.py for why (proxy leak + AsyncClient TLS stall on prod).
+    if vsegpt_provider.is_vsegpt_model(model):
+        return await vsegpt_provider.acompletion(
+            model=model,
+            messages=messages,
+            temperature=0.5 if temperature is None else temperature,
+            max_tokens=16384 if max_tokens is None else max_tokens,
+        )
+
     if model not in _LITELLM_MODEL_SLUG:
         # Pricing knows it but routing doesn't — defensive guard.
         raise ModelNotFoundError(f"Model not routable: {model}")
@@ -341,15 +348,6 @@ async def acompletion(
     elif model in ("gpt-5", "gpt-5-nano"):
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "minimal")
-    elif model == "deepseek-v4-flash-thinking":
-        # Thinking model — reasoning comes back in a separate field but still
-        # counts toward the token budget; give the visible answer headroom so a
-        # long chain-of-thought can't truncate the actual output. It is also
-        # SLOW (chain-of-thought latency), so widen the per-call timeout well
-        # past the 60s Router default — otherwise real prompts time out and the
-        # Router silently falls back to another model.
-        kwargs.setdefault("max_tokens", 16384)
-        kwargs.setdefault("timeout", 180)
 
     async def _attempt() -> Any:
         try:

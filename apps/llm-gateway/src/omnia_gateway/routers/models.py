@@ -42,6 +42,9 @@ _MODEL_KEY_OVERRIDE = {
     "claude-opus-4-7": lambda s: _has(s.proxyapi_api_key),
     "deepseek-chat": lambda s: _has(s.proxyapi_api_key),
     "deepseek-reasoner": lambda s: _has(s.proxyapi_api_key),
+    # DeepSeek V4 Flash (Thinking) via vsegpt.ru — separate key/balance from
+    # proxyapi; served by the direct vsegpt provider, not LiteLLM.
+    "deepseek-v4-flash-thinking": lambda s: _has(s.vsegpt_api_key),
 }
 
 

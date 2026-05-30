@@ -185,6 +185,12 @@ services:
       WEB_BASE_URL: ${WEB_BASE_URL:-https://constructor.lead-generator.ru}
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
+      # Per-role model orchestration overrides. Empty = code ROLE_MODEL_MAP
+      # (director=Opus, workers=DeepSeek). ROLE_MODELS = CSV of role=model_id
+      # (e.g. "audit=deepseek-v4-flash-thinking"); FORCE_MODEL pins one model on
+      # every role. Lets ops retune the mix without a code deploy.
+      ROLE_MODELS: ${ROLE_MODELS:-}
+      FORCE_MODEL: ${FORCE_MODEL:-}
       # Phase 11 — freeform generation + acceptance gate (all OFF by default;
       # flip in .env to roll out, catalog/IR stays the safe fallback).
       USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
@@ -232,6 +238,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
+      # Per-role model orchestration overrides (empty = code ROLE_MODEL_MAP).
+      ROLE_MODELS: ${ROLE_MODELS:-}
+      FORCE_MODEL: ${FORCE_MODEL:-}
       # Phase 11 — freeform generation + acceptance gate (all OFF by default).
       USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
       USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}

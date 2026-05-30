@@ -16,12 +16,17 @@ from omnia_api.core.config import (  # noqa: E402
 )
 
 
-def test_role_map_topmix_defaults() -> None:
+def test_role_map_orchestrator_opus_workers_deepseek() -> None:
+    # Owner directive (2026-05-30): orchestrator = Opus, every worker/developer
+    # role = DeepSeek (vsegpt). audit (vision judge) + audit_retry (escalation)
+    # stay premium on purpose — see ROLE_MODEL_MAP comment.
     assert model_for_role("director") == "claude-opus-4-7"
-    assert model_for_role("polish") == "claude-haiku-4-5"
-    assert model_for_role("classify") == "claude-haiku-4-5"
+    assert model_for_role("polish") == "deepseek-v4-flash-thinking"
+    assert model_for_role("classify") == "deepseek-v4-flash-thinking"
+    assert model_for_role("edit") == "deepseek-v4-flash-thinking"
+    assert model_for_role("single_shot") == "deepseek-v4-flash-thinking"
     assert model_for_role("audit") == "claude-sonnet-4-6"
-    assert model_for_role("edit") == "claude-haiku-4-5"
+    assert model_for_role("audit_retry") == "claude-opus-4-7"
 
 
 def test_no_role_uses_flaky_gemini() -> None:

@@ -330,31 +330,33 @@ def generation_mode(
 # ──────────────────────────────────────────────────────────────────────────
 
 ROLE_MODEL_MAP: dict[str, str] = {
-    "classify":     "claude-haiku-4-5",   # pick 1 of N presets, ~150 tokens
-    "director":     "claude-opus-4-7",    # HARD: structure / section choice
-    # polish writes the final PageIR/content. Model history: DeepSeek (404 on
-    # proxyapi.ru) → gpt-5-nano (empty: reasoning burns the output budget) →
-    # gemini-2.5-flash. Flash was dropped because its STREAMING is flaky behind
-    # the RU egress proxy — ~50% of stream calls die mid-body with "incomplete
-    # chunked read" (httpx.RemoteProtocolError), emitting an empty PageIR that
-    # cascades into IR-fail → multipass → wasted spend on a mediocre result.
-    # Haiku rides the SAME reliable proxyapi.ru route as Opus/Sonnet, is cheap,
-    # and streams without dropping. Schema slips still fall back to the director
-    # (Opus) IR-retry in messages.py.
-    "polish":       "claude-haiku-4-5",   # cheap content, reliable proxyapi stream
-    "audit":        "claude-sonnet-4-6",  # LLM-as-judge rubric scoring
-    "audit_retry":  "claude-opus-4-7",    # re-roll on audit fail = director-grade
-    "skeleton":     "claude-haiku-4-5",   # multipass fallback — structure only
-    "content":      "claude-haiku-4-5",   # multipass fallback — copy (ex-gemini)
-    "visual":       "claude-haiku-4-5",   # multipass fallback — style tokens
-    "link_repair":  "claude-haiku-4-5",   # rewrite dead hrefs
-    "image_prompt": "claude-haiku-4-5",   # short image-gen prompt
-    "single_shot":  "claude-opus-4-7",    # non-catalog freeform fallback path
-    "edit":         "claude-haiku-4-5",   # triage=cheap: single-shot targeted edit
+    # Owner directive (2026-05-30): ONE strong orchestrator (Opus) decides
+    # structure; every worker/developer role runs on DeepSeek. DeepSeek is
+    # served by the direct vsegpt provider — proxyapi's DeepSeek surface 404s,
+    # vsegpt is the only working route (apps/llm-gateway providers/vsegpt.py).
+    "classify":     "deepseek-v4-flash-thinking",  # pick 1 of N presets
+    "director":     "claude-opus-4-7",             # ORCHESTRATOR — structure / section choice
+    "polish":       "deepseek-v4-flash-thinking",  # writes the real PageIR content (RU copy)
+    # audit + audit_retry stay premium ON PURPOSE and are DORMANT unless the
+    # acceptance gate is enabled (USE_ACCEPTANCE_GATE / USE_VISION_AUDIT — both
+    # OFF). audit is the vision judge: it scores a screenshot, so it needs a
+    # MULTIMODAL model (DeepSeek is text-only and can't see). audit_retry is the
+    # escalation that regenerates a failed page Opus-grade. To put these on
+    # DeepSeek too, set ROLE_MODELS env (e.g. "audit=deepseek-v4-flash-thinking").
+    "audit":        "claude-sonnet-4-6",           # vision/LLM-judge — needs eyes
+    "audit_retry":  "claude-opus-4-7",             # escalation re-roll — orchestrator-grade
+    "skeleton":     "deepseek-v4-flash-thinking",  # multipass fallback — structure
+    "content":      "deepseek-v4-flash-thinking",  # multipass fallback — copy
+    "visual":       "deepseek-v4-flash-thinking",  # multipass fallback — style tokens
+    "link_repair":  "deepseek-v4-flash-thinking",  # rewrite dead hrefs
+    "image_prompt": "deepseek-v4-flash-thinking",  # short image-gen prompt
+    "single_shot":  "deepseek-v4-flash-thinking",  # non-catalog freeform fallback path
+    "edit":         "deepseek-v4-flash-thinking",  # cheap-path targeted edit
 }
 
-# Any role not in the map (or pointing at a later-retired model) resolves here
-# — Haiku is the cheapest universally-routable model.
+# Any role not in the map (or pointing at a later-retired model) resolves here.
+# Haiku (reliable proxyapi.ru route) is the safe bottom — if vsegpt/DeepSeek is
+# down, an unmapped role still completes instead of hard-failing (R-10).
 DEFAULT_ROLE_MODEL = "claude-haiku-4-5"
 
 # First-N free "wow-effect" generations per user before wallet billing starts.

@@ -21,6 +21,7 @@ from fastapi import Request
 
 from omnia_gateway.core.errors import GatewayError, UpstreamProviderError
 from omnia_gateway.providers import sber as sber_provider
+from omnia_gateway.providers import vsegpt as vsegpt_provider
 from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services import litellm_router as router_module
@@ -49,13 +50,21 @@ async def _custom_provider_pseudo_stream(
     temperature: float | None,
     max_tokens: int | None,
     default_temperature: float,
+    default_max_tokens: int = 2000,
 ) -> AsyncIterator[tuple[str, str]]:
-    """For providers without native streaming (Yandex, Sber): full response → word chunks."""
+    """For providers without native streaming (Yandex, Sber, vsegpt): one blocking
+    call → word chunks. ``default_max_tokens`` lets a thinking model (vsegpt
+    DeepSeek) reserve enough budget that chain-of-thought can't truncate the
+    visible answer — 2000 is fine for the non-reasoning RU models.
+
+    sse_starlette sends `: ping` keep-alives (~15 s) on its own task while this
+    awaits, so the single long call won't trip nginx/httpx read timeouts.
+    """
     full = await provider_acompletion(
         model=model,
         messages=messages,
         temperature=default_temperature if temperature is None else temperature,
-        max_tokens=2000 if max_tokens is None else max_tokens,
+        max_tokens=default_max_tokens if max_tokens is None else max_tokens,
     )
     text = full["choices"][0]["message"]["content"]
     # Coarse word-boundary chunking — better UX than char-by-char on a slow link.
@@ -150,6 +159,12 @@ async def stream_completion(
     elif sber_provider.is_sber_model(model):
         source = _custom_provider_pseudo_stream(
             sber_provider.acompletion, model, messages, temperature, max_tokens, 0.7
+        )
+    elif vsegpt_provider.is_vsegpt_model(model):
+        # Thinking model — give it a 16k visible-answer budget (default_max_tokens)
+        # so the chain-of-thought can't eat the real output.
+        source = _custom_provider_pseudo_stream(
+            vsegpt_provider.acompletion, model, messages, temperature, max_tokens, 0.5, 16384
         )
     else:
         source = _litellm_stream(model, messages, user_id, temperature, max_tokens)
