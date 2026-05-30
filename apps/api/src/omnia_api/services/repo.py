@@ -141,7 +141,13 @@ def commit_files(
             parents = [repo.head.target]
         else:
             parents = []
-        commit_oid = repo.create_commit("HEAD", sig, sig, message, tree_oid, parents)
+        # ref=None creates a detached commit object without moving HEAD. The
+        # app tracks state by commit_sha (oid), never via HEAD — so this is
+        # safe, AND it avoids pygit2's "current tip is not the first parent"
+        # error when two generations on the same project commit concurrently
+        # off the same parent (e.g. user fires a second prompt before the first
+        # finishes; freeform's render+vision widens that window).
+        commit_oid = repo.create_commit(None, sig, sig, message, tree_oid, parents)
         _upload(project_id, workdir)
         return str(commit_oid)
 
