@@ -334,9 +334,9 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # structure; every worker/developer role runs on DeepSeek. DeepSeek is
     # served by the direct vsegpt provider — proxyapi's DeepSeek surface 404s,
     # vsegpt is the only working route (apps/llm-gateway providers/vsegpt.py).
-    "classify":     "deepseek-v4-flash-thinking",  # pick 1 of N presets
+    "classify":     "deepseek-chat",  # pick 1 of N presets
     "director":     "claude-opus-4-7",             # ORCHESTRATOR — structure / section choice
-    "polish":       "deepseek-v4-flash-thinking",  # writes the real PageIR content (RU copy)
+    "polish":       "deepseek-chat",  # writes the real PageIR content (RU copy)
     # audit + audit_retry stay premium ON PURPOSE and are DORMANT unless the
     # acceptance gate is enabled (USE_ACCEPTANCE_GATE / USE_VISION_AUDIT — both
     # OFF). audit is the vision judge: it scores a screenshot, so it needs a
@@ -345,13 +345,13 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # DeepSeek too, set ROLE_MODELS env (e.g. "audit=deepseek-v4-flash-thinking").
     "audit":        "claude-sonnet-4-6",           # vision/LLM-judge — needs eyes
     "audit_retry":  "claude-opus-4-7",             # escalation re-roll — orchestrator-grade
-    "skeleton":     "deepseek-v4-flash-thinking",  # multipass fallback — structure
-    "content":      "deepseek-v4-flash-thinking",  # multipass fallback — copy
-    "visual":       "deepseek-v4-flash-thinking",  # multipass fallback — style tokens
-    "link_repair":  "deepseek-v4-flash-thinking",  # rewrite dead hrefs
-    "image_prompt": "deepseek-v4-flash-thinking",  # short image-gen prompt
-    "single_shot":  "deepseek-v4-flash-thinking",  # non-catalog freeform fallback path
-    "edit":         "deepseek-v4-flash-thinking",  # cheap-path targeted edit
+    "skeleton":     "deepseek-chat",  # multipass fallback — structure
+    "content":      "deepseek-chat",  # multipass fallback — copy
+    "visual":       "deepseek-chat",  # multipass fallback — style tokens
+    "link_repair":  "deepseek-chat",  # rewrite dead hrefs
+    "image_prompt": "deepseek-chat",  # short image-gen prompt
+    "single_shot":  "deepseek-chat",  # non-catalog freeform fallback path
+    "edit":         "deepseek-chat",  # cheap-path targeted edit
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.

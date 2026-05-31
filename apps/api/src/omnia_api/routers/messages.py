@@ -299,6 +299,7 @@ _EMPTY_RESPONSE_FALLBACKS: dict[str, list[str]] = {
     # DeepSeek (vsegpt) is the worker-role default now. A vsegpt hiccup, or an
     # over-long chain-of-thought that truncates the visible answer, degrades to
     # the reliable proxyapi route (Haiku → Sonnet) instead of an empty preview.
+    "deepseek-chat": ["claude-haiku-4-5", "claude-sonnet-4-6"],
     "deepseek-v4-flash-thinking": ["claude-haiku-4-5", "claude-sonnet-4-6"],
     # GPT-5 family are reasoning models and may shadow-drop output even with
     # reasoning_effort=minimal; fall back to Haiku (same proxyapi key).
