@@ -43,6 +43,12 @@ from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedErr
 # vsegpt is an OpenAI-compatible aggregator; the slug is sent verbatim as the
 # `model` field. Add a row here to expose another vsegpt-fronted model.
 _VSEGPT_MODEL_SLUG: dict[str, str] = {
+    # DeepSeek V3 (≈128K context) — the worker model for generation. Its big
+    # context fits the ~32K polish prompt PLUS the output; the V4-flash-thinking
+    # endpoint caps at 16384 TOTAL tokens, so a real page prompt 400s with
+    # context_length_exceeded (that's why DeepSeek "didn't run" in orchestration
+    # and the IR fell back to the director / Haiku).
+    "deepseek-chat": "deepseek/deepseek-chat",
     "deepseek-v4-flash-thinking": "deepseek/deepseek-v4-flash-thinking",
 }
 

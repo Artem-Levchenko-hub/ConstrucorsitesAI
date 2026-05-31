@@ -40,7 +40,7 @@ _MODEL_KEY_OVERRIDE = {
     "gpt-5-nano": lambda s: _has(s.proxyapi_api_key),
     # Opus 4.7 + DeepSeek (V3/R1) share the same proxyapi balance as Haiku.
     "claude-opus-4-7": lambda s: _has(s.proxyapi_api_key),
-    "deepseek-chat": lambda s: _has(s.proxyapi_api_key),
+    "deepseek-chat": lambda s: _has(s.vsegpt_api_key),  # served via vsegpt provider now
     "deepseek-reasoner": lambda s: _has(s.proxyapi_api_key),
     # DeepSeek V4 Flash (Thinking) via vsegpt.ru — separate key/balance from
     # proxyapi; served by the direct vsegpt provider, not LiteLLM.
