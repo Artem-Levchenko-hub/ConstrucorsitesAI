@@ -55,7 +55,7 @@ RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом
 # per-pass models (Opus director, DeepSeek polish, …) are logged per-call in the
 # gateway's `usage` table; this label just marks the snapshot as orchestrated
 # rather than a single user-picked model.
-ORCHESTRATION_LABEL = "topmix-v1"
+ORCHESTRATION_LABEL = "Оркестратор Opus+DeepSeek"
 
 router = APIRouter(prefix="/api/projects", tags=["messages"])
 

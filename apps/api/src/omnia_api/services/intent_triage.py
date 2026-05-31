@@ -35,6 +35,12 @@ _COMPLEX_KEYWORDS: frozenset[str] = frozenset(
         # big rework
         "редизайн", "redesign", "переделай", "пересоздай", "с нуля", "заново",
         "перестрой", "переработай",
+        # build / creation intent — "make me X" is real work even when the
+        # prompt is short ("Создай дизайн ресторана" is 57 chars and was wrongly
+        # caught by the very-short -> CHEAP rule). Owner: builds must orchestrate.
+        "созда", "дизайн", "design", "разработ", "построй", "свёрст",
+        "сверст", "сгенерир", "генерир", "нарисуй", "придумай", "запили",
+        "make", "build", "create", "generate",
     }
 )
 
