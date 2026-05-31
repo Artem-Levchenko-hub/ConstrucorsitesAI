@@ -790,14 +790,31 @@ async def _process_prompt(
                     and not _settings.use_section_catalog
                 ):
                     _ss_model = model_for_role("single_shot", override=force_model)
+                elif (
+                    not force_all
+                    and not force_single_shot
+                    and orchestrate
+                    and _gen_mode == "freeform"
+                ):
+                    # The leap: premium freeform writes the whole page as bespoke
+                    # HTML — the design-critical pass — so it runs on the strongest
+                    # model via the `freeform_writer` role (Opus), not whatever the
+                    # route resolved. Same guards as single_shot above: a cheap
+                    # targeted edit (force_* / not orchestrate) never lands here, so
+                    # a small tweak can't drag onto Opus.
+                    _ss_model = model_for_role("freeform_writer", override=force_model)
                 else:
                     _ss_model = force_all or use_model
                 # Per-vendor directive on the freeform/single-shot path. IR JSON
                 # is expected ONLY on premium + catalog mode; otherwise the model
                 # emits freeform HTML, so json_strict must stay False (a "JSON
                 # only" nudge would corrupt an HTML response).
+                # IR JSON is expected ONLY on premium + catalog mode. Freeform
+                # emits HTML, so a "JSON only" vendor nudge would corrupt the
+                # response — never set json_strict in freeform mode.
                 _expects_ir = (
                     _settings.use_section_catalog
+                    and _gen_mode != "freeform"
                     and tier_for_model(_ss_model) == "premium"
                 )
                 source = stream_chat_completion(

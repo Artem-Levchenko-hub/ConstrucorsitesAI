@@ -371,6 +371,11 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "link_repair":  "deepseek-chat",  # rewrite dead hrefs
     "image_prompt": "deepseek-chat",  # short image-gen prompt
     "single_shot":  "deepseek-chat",  # non-catalog freeform fallback path
+    # The leap (2026-05): premium freeform writes the WHOLE page as bespoke HTML
+    # — the design-critical pass — so it runs on the strongest model. Opus 4.7 is
+    # the gateway's top tier (proxyapi → anthropic/claude-opus-4-5). Only the
+    # premium freeform path resolves this role; cheap edits never touch it.
+    "freeform_writer": "claude-opus-4-7",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
 }
 
