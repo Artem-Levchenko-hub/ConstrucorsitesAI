@@ -33,6 +33,46 @@ _INSPECTOR_TAG = (
     b'<script id="omnia-inspector">' + _INSPECTOR_JS.encode("utf-8") + b"</script>"
 )
 
+# Canonical kit assets served slug-independently at /api/kit/<file> so the
+# streaming-preview iframe (apps/web) can load the SAME omnia-kit.css the
+# committed /p/<slug> page uses — styling parity while the AI is still typing
+# (the streaming iframe has no project slug yet, esp. on the first prompt).
+# Mounted under /api (nginx already proxies that to this service). Read once at
+# import; filenames whitelisted (no path traversal). The JS is exposed too for
+# future use, but the streaming bootstrap loads ONLY the CSS — the kit's
+# DOM-mutating JS animations conflict with morphdom's live patching.
+_KIT_ASSETS_DIR = (
+    Path(__file__).resolve().parent.parent / "templates" / "blank" / "assets"
+)
+_KIT_ASSET_MIME = {
+    "omnia-kit.css": "text/css; charset=utf-8",
+    "omnia-kit.js": "application/javascript; charset=utf-8",
+    "anime.min.js": "application/javascript; charset=utf-8",
+}
+_KIT_ASSETS: dict[str, bytes] = {
+    name: (_KIT_ASSETS_DIR / name).read_bytes() for name in _KIT_ASSET_MIME
+}
+
+kit_router = APIRouter(prefix="/api/kit", tags=["kit"], include_in_schema=False)
+
+
+@kit_router.get("/{file}", response_class=Response)
+async def get_kit_asset(file: str) -> Response:
+    """Serve a whitelisted Omnia-kit asset for the streaming preview."""
+    data = _KIT_ASSETS.get(file)
+    if data is None:
+        raise ApiError(
+            "not_found", f"kit asset {file} not found", status.HTTP_404_NOT_FOUND
+        )
+    return Response(
+        content=data,
+        media_type=_KIT_ASSET_MIME[file],
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
 
 async def _resolve_snapshot(
     session: SessionDep,

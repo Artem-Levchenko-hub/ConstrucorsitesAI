@@ -68,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(models_router.router)
     app.include_router(design_presets_router.router)
     app.include_router(public_router.router)
+    app.include_router(public_router.kit_router)
     app.include_router(ws_router.router)
 
     @app.get("/health", tags=["meta"])

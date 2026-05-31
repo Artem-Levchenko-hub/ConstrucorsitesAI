@@ -189,3 +189,24 @@ export const BOOTSTRAP_HTML = `<!doctype html>
 </script>
 </body>
 </html>`;
+
+/**
+ * Bootstrap HTML with the canonical omnia-kit.css linked from the API origin
+ * (`/api/kit/omnia-kit.css`). This gives the streaming preview the SAME styling
+ * the committed `/p/<slug>` page uses (cards, gradients, .display-fill, etc.)
+ * instead of unstyled kit classes that "snap" correct only after generation.
+ *
+ * CSS only — NOT the kit JS: its animations split/replace DOM nodes, which
+ * would fight morphdom's live patching during the stream. `.reveal` stays
+ * visible (its hidden start-state is gated on a class only the kit JS adds),
+ * so loading the CSS never hides streaming content. Empty `apiOrigin` → no
+ * link (graceful: falls back to the plain bootstrap).
+ */
+export function buildBootstrap(apiOrigin: string): string {
+  if (!apiOrigin) return BOOTSTRAP_HTML;
+  const kitLink = `<link rel="stylesheet" href="${apiOrigin.replace(/\/$/, "")}/api/kit/omnia-kit.css">\n`;
+  return BOOTSTRAP_HTML.replace(
+    '<style id="omnia-css"></style>',
+    kitLink + '<style id="omnia-css"></style>',
+  );
+}

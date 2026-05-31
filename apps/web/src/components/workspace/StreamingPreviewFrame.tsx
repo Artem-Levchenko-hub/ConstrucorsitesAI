@@ -6,7 +6,7 @@ import {
   collectStreamingFilesPartial,
   extractStreamingBody,
 } from "@/lib/parse-assistant";
-import { BOOTSTRAP_HTML } from "@/lib/streaming-preview-bootstrap";
+import { buildBootstrap } from "@/lib/streaming-preview-bootstrap";
 
 export type StreamingDevice = "mobile" | "tablet" | "desktop";
 
@@ -35,6 +35,15 @@ export function StreamingPreviewFrame({
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [ready, setReady] = useState(false);
+
+  // Bootstrap srcDoc with the canonical omnia-kit.css linked from the API
+  // origin (styling parity with the committed /p/<slug>). Memoised empty-dep
+  // so srcDoc stays STABLE — the iframe is long-lived; a changing srcDoc would
+  // reload it and kill the in-flight morphdom session.
+  const bootstrap = useMemo(
+    () => buildBootstrap(process.env.NEXT_PUBLIC_API_URL ?? ""),
+    [],
+  );
 
   const { bodyHtml, cssText } = useMemo(() => {
     const body = extractStreamingBody(content) ?? "";
@@ -105,7 +114,7 @@ export function StreamingPreviewFrame({
     <motion.iframe
       ref={iframeRef}
       key="streaming"
-      srcDoc={BOOTSTRAP_HTML}
+      srcDoc={bootstrap}
       title="Preview (streaming)"
       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock"
       initial={{ opacity: 0 }}
