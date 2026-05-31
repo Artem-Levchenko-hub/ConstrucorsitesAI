@@ -353,7 +353,7 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # escalation that regenerates a failed page Opus-grade. To put these on
     # DeepSeek too, set ROLE_MODELS env (e.g. "audit=deepseek-v4-flash-thinking").
     "audit":        "claude-sonnet-4-6",           # vision/LLM-judge — needs eyes
-    "audit_retry":  "claude-opus-4-7",             # escalation re-roll — orchestrator-grade
+    "audit_retry":  "claude-sonnet-4-6",           # escalation re-roll (Sonnet — match the Sonnet orchestrator, keep cost down)
     "skeleton":     "deepseek-chat",  # multipass fallback — structure
     "content":      "deepseek-chat",  # multipass fallback — copy
     "visual":       "deepseek-chat",  # multipass fallback — style tokens
