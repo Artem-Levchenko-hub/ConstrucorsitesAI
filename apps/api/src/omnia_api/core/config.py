@@ -1,5 +1,6 @@
 import hashlib
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,6 +32,16 @@ class Settings(BaseSettings):
     # on first image upload — see services/image_resolver.py:_ensure_bucket().
     minio_bucket_images: str = Field(default="omnia-images")
     minio_public_url: str = Field(default="http://localhost:9000")
+
+    # Stock photography for `<img data-omnia-photo="keywords">` tags — real
+    # thematic photos, not only gpt-image-1. "off" (default) leaves the feature
+    # dormant: the resolver strips unresolved photo tags so the section's flat /
+    # mesh fallback shows (no broken images). "pexels" resolves via the Pexels
+    # API and caches each result into `minio_bucket_photos` — one Pexels hit per
+    # unique keyword, never per render. Needs PEXELS_API_KEY (free; pexels.com/api).
+    photo_source: Literal["off", "pexels"] = Field(default="off")
+    pexels_api_key: SecretStr | None = Field(default=None)
+    minio_bucket_photos: str = Field(default="omnia-photos")
 
     jwt_secret: SecretStr
     jwt_algorithm: str = Field(default="HS256")

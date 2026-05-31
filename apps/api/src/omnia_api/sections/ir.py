@@ -216,6 +216,25 @@ class HeroV5(_SectionBase):
     secondary_cta: CTA | None = None
 
 
+class HeroV6(_SectionBase):
+    """Full-bleed photo hero — a real thematic photograph (Pexels, via
+    ``bg_photo`` keywords) behind the headline, with a dark overlay + text
+    shadow so copy stays legible whatever photo lands. Falls back to a mesh
+    background when the photo source is off."""
+
+    type_variant: Literal["hero.v6"] = "hero.v6"
+    bg_photo: str = Field(
+        min_length=2, max_length=80,
+        description="Pexels search keywords, e.g. 'sushi restaurant interior'",
+    )
+    overlay: Literal["dark", "darker", "gradient"] = "dark"
+    eyebrow: str | None = Field(default=None, max_length=60)
+    headline: str = Field(min_length=4, max_length=120)
+    subheadline: str | None = Field(default=None, max_length=300)
+    primary_cta: CTA
+    secondary_cta: CTA | None = None
+
+
 # ─── Features ────────────────────────────────────────────────────────────
 
 class FeaturesV1(_SectionBase):
@@ -413,7 +432,7 @@ class BandV1(_SectionBase):
 # ─── Discriminated union ─────────────────────────────────────────────────
 
 Section = Annotated[
-    HeroV1 | HeroV2 | HeroV3 | HeroV4 | HeroV5
+    HeroV1 | HeroV2 | HeroV3 | HeroV4 | HeroV5 | HeroV6
     | FeaturesV1 | FeaturesV2 | FeaturesV3
     | PricingV1 | PricingV2
     | CTAV1 | CTAV2

@@ -84,6 +84,18 @@ _TAG_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Stock-photo tag — sibling of data-omnia-gen. The "prompt" here is a short
+# keyword phrase ("sushi restaurant interior") searched against Pexels.
+_TAG_RE_PHOTO = re.compile(
+    r'<img\b([^>]*?)\bdata-omnia-photo\s*=\s*"([^"]+)"([^>]*?)/?\s*>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Pexels search endpoint. Landscape orientation suits full-bleed section
+# backgrounds; per_page gives a small deterministic pick-pool per keyword.
+_PEXELS_SEARCH_URL = "https://api.pexels.com/v1/search"
+_PEXELS_PER_PAGE = 15
+
 
 @dataclass(frozen=True)
 class ImgTag:
@@ -260,6 +272,95 @@ def _upload_image(image_bytes: bytes, project_id: str, prompt: str) -> str | Non
     return f"{base}/{bucket}/{key}"
 
 
+def _extract_photo_tags(files: dict[str, str]) -> list[ImgTag]:
+    """Find every ``data-omnia-photo`` tag (capped like the gen path)."""
+    out: list[ImgTag] = []
+    for path, content in files.items():
+        if not path.lower().endswith(_SCAN_EXTS):
+            continue
+        for m in _TAG_RE_PHOTO.finditer(content):
+            out.append(
+                ImgTag(
+                    file_path=path,
+                    full_match=m.group(0),
+                    prompt=m.group(2).strip(),
+                    pre_attrs=m.group(1),
+                    post_attrs=m.group(3),
+                )
+            )
+            if len(out) >= MAX_IMAGES_PER_RESOLVE:
+                return out
+    return out
+
+
+async def _fetch_photo(keywords: str, project_id: str) -> bytes | None:
+    """Search Pexels for ``keywords`` and download one photo. Deterministic
+    pick by (project_id, keywords) so the same project re-renders the same
+    photo, while different projects get different shots for the same keyword.
+    Returns bytes or None on any failure (never raises — fail-soft)."""
+    settings = get_settings()
+    key = settings.pexels_api_key
+    if settings.photo_source != "pexels" or key is None:
+        return None
+    headers = {"Authorization": key.get_secret_value()}
+    params = {"query": keywords, "per_page": _PEXELS_PER_PAGE, "orientation": "landscape"}
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+            resp = await client.get(_PEXELS_SEARCH_URL, params=params, headers=headers)
+    except Exception as exc:  # noqa: BLE001 — never break a resolve over one tag
+        log.warning("image_resolver: pexels transport error kw=%.40s err=%r", keywords, exc)
+        return None
+    if resp.status_code >= 400:
+        log.warning("image_resolver: pexels %d kw=%.40s", resp.status_code, keywords)
+        return None
+    try:
+        photos = resp.json().get("photos") or []
+    except ValueError:
+        return None
+    if not photos:
+        return None
+    pick = int(
+        hashlib.sha256(f"{project_id}|{keywords}".encode("utf-8")).hexdigest(), 16
+    ) % len(photos)
+    src = photos[pick].get("src") or {}
+    img_url = src.get("large2x") or src.get("large") or src.get("original")
+    if not img_url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as c:
+            img_resp = await c.get(img_url)
+        if img_resp.status_code == 200:
+            return img_resp.content
+        log.warning("image_resolver: pexels img-fetch %d", img_resp.status_code)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("image_resolver: pexels img-fetch transport err=%r", exc)
+    return None
+
+
+def _upload_photo(image_bytes: bytes, project_id: str, keywords: str) -> str | None:
+    """Cache a Pexels photo in MinIO, content-addressed by (project_id,
+    keywords) so the same keyword in one project costs one fetch + one object."""
+    settings = get_settings()
+    client = get_minio_client()
+    bucket = settings.minio_bucket_photos
+    if not _ensure_bucket(client, bucket):
+        return None
+    sha = hashlib.sha256(
+        f"pexels|{project_id}|{keywords}".encode("utf-8")
+    ).hexdigest()[:32]
+    key = f"{project_id}/{sha}.jpg"
+    try:
+        client.put_object(
+            bucket, key, BytesIO(image_bytes), length=len(image_bytes),
+            content_type="image/jpeg",
+        )
+    except S3Error as exc:
+        log.warning("image_resolver: photo upload failed key=%s err=%r", key, exc)
+        return None
+    base = settings.minio_public_url.rstrip("/")
+    return f"{base}/{bucket}/{key}"
+
+
 def _replace_tag(content: str, tag: ImgTag, url: str) -> str:
     """Substitute ``tag.full_match`` with ``<img src="<url>" {attrs} />``.
 
@@ -285,7 +386,8 @@ async def resolve_images(
     place so subsequent passes (or the next prompt) can retry.
     """
     tags = extract_image_tags(files)
-    if not tags:
+    photo_tags = _extract_photo_tags(files)
+    if not tags and not photo_tags:
         return files, 0, 0
 
     settings = get_settings()
@@ -335,4 +437,37 @@ async def resolve_images(
         )
         resolved += 1
 
-    return new_files, resolved, len(tags)
+    # ── Pexels stock photos ──────────────────────────────────────────────
+    # Disabled / no key / fetch fail → STRIP the tag so the section's flat
+    # or mesh fallback shows, never a broken <img> (the bg layer sits behind).
+    if photo_tags:
+        photo_on = (
+            settings.photo_source == "pexels" and settings.pexels_api_key is not None
+        )
+        kw_to_url: dict[str, str] = {}
+        if photo_on:
+            unique_kw = list({t.prompt for t in photo_tags})
+
+            async def _resolve_photo(kw: str) -> tuple[str, str | None]:
+                async with sem:
+                    img = await _fetch_photo(kw, project_id)
+                if img is None:
+                    return kw, None
+                url = await asyncio.to_thread(_upload_photo, img, project_id, kw)
+                return kw, url
+
+            ph_pairs = await asyncio.gather(*[_resolve_photo(k) for k in unique_kw])
+            kw_to_url = {k: u for k, u in ph_pairs if u}
+        for tag in photo_tags:
+            url = kw_to_url.get(tag.prompt)
+            if url:
+                new_files[tag.file_path] = _replace_tag(
+                    new_files[tag.file_path], tag, url
+                )
+                resolved += 1
+            else:
+                new_files[tag.file_path] = new_files[tag.file_path].replace(
+                    tag.full_match, "", 1
+                )
+
+    return new_files, resolved, len(tags) + len(photo_tags)

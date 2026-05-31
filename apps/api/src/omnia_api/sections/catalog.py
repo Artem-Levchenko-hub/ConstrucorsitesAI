@@ -34,6 +34,7 @@ from omnia_api.sections.ir import (
     HeroV3,
     HeroV4,
     HeroV5,
+    HeroV6,
     PricingV1,
     PricingV2,
     StatsV1,
@@ -58,6 +59,7 @@ REGISTRY: dict[str, tuple[type["BaseModel"], str]] = {
     "hero.v3":           (HeroV3,              "hero/v3.html.j2"),
     "hero.v4":           (HeroV4,              "hero/v4.html.j2"),
     "hero.v5":           (HeroV5,              "hero/v5.html.j2"),
+    "hero.v6":           (HeroV6,              "hero/v6.html.j2"),
     "stats.v1":          (StatsV1,             "stats/v1.html.j2"),
     "features.v1":       (FeaturesV1,          "features/v1.html.j2"),
     "features.v2":       (FeaturesV2,          "features/v2.html.j2"),
@@ -111,6 +113,7 @@ hero.v2     {eyebrow?, headline, headline_accent?, subheadline?, primary_cta:{la
 hero.v3     {background:mesh|aurora|dark, eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?, pill_label?}
 hero.v4     {panel_side?:left|right, eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?, image_url?, image_alt?}   (сплит-экран: копия | визуал во всю высоту)
 hero.v5     {eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?}   (огромная типографика во весь экран, без картинки)
+hero.v6     {bg_photo, overlay?:dark|darker|gradient, eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?}   (фон — РЕАЛЬНОЕ фото по теме; bg_photo = англ. ключевики, напр. "sushi restaurant interior")
 
 # proof
 stats.v1    {eyebrow?, headline?, items:[{value,label}] ×3-6}

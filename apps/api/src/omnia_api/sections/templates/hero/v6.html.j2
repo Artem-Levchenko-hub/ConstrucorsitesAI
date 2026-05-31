@@ -1,0 +1,26 @@
+<section id="{{ anchor_id }}" class="relative min-h-[88vh] flex items-center overflow-hidden">
+  <div class="absolute inset-0 bg-mesh" aria-hidden="true"></div>
+  <img data-omnia-photo="{{ s.bg_photo }}" alt="" class="absolute inset-0 w-full h-full object-cover" loading="lazy">
+  <div class="absolute inset-0 {% if s.overlay == 'gradient' %}bg-gradient-to-t from-black/80 via-black/45 to-black/30{% elif s.overlay == 'darker' %}bg-black/70{% else %}bg-black/55{% endif %}" aria-hidden="true"></div>
+  <div class="relative w-full max-w-5xl mx-auto px-6 text-center text-protect">
+    {% if s.eyebrow %}
+    <p class="reveal text-sm uppercase tracking-[0.2em] font-semibold text-white/80 mb-6">{{ s.eyebrow }}</p>
+    {% endif %}
+    <h1 data-anime="hero-stagger" class="display-hero font-display font-bold tracking-tight text-white text-balance">
+      {{ s.headline }}
+    </h1>
+    {% if s.subheadline %}
+    <p class="reveal mt-8 text-lg md:text-xl text-white/85 max-w-2xl mx-auto leading-relaxed">{{ s.subheadline }}</p>
+    {% endif %}
+    <div class="reveal mt-12 flex flex-wrap items-center justify-center gap-4">
+      <a href="{{ s.primary_cta.href }}" class="btn-primary inline-flex items-center justify-center px-8 py-4 rounded-xl font-semibold text-base hover-lift press">
+        {{ s.primary_cta.label }}
+      </a>
+      {% if s.secondary_cta %}
+      <a href="{{ s.secondary_cta.href }}" class="inline-flex items-center justify-center px-8 py-4 rounded-xl font-semibold text-white border border-white/30 hover:border-white/60 transition-colors">
+        {{ s.secondary_cta.label }}
+      </a>
+      {% endif %}
+    </div>
+  </div>
+</section>
