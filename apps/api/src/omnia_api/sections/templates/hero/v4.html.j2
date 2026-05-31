@@ -1,0 +1,36 @@
+<section id="{{ anchor_id }}" class="relative grid lg:grid-cols-2 min-h-[88vh] overflow-hidden">
+  <div class="reveal {% if s.panel_side == 'right' %}lg:order-2 reveal--right{% else %}reveal--left{% endif %} flex items-center bg-{{ theme.neutral }}-50">
+    <div class="w-full max-w-xl mx-auto px-6 py-20 lg:px-16">
+      {% if s.eyebrow %}
+      <div class="inline-flex items-center gap-2 rounded-full bg-{{ theme.neutral }}-100 text-{{ theme.neutral }}-700 px-4 py-1.5 text-sm font-medium mb-6">
+        <span class="h-2 w-2 rounded-full" style="background:var(--omnia-accent)"></span>
+        {{ s.eyebrow }}
+      </div>
+      {% endif %}
+      <h1 data-anime="hero-stagger" class="font-display text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.05] text-{{ theme.neutral }}-900 text-balance">
+        {{ s.headline }}
+      </h1>
+      {% if s.subheadline %}
+      <p class="mt-6 text-lg text-{{ theme.neutral }}-600 max-w-md leading-relaxed">{{ s.subheadline }}</p>
+      {% endif %}
+      <div class="mt-10 flex flex-wrap items-center gap-4">
+        <a href="{{ s.primary_cta.href }}" class="btn-primary inline-flex items-center justify-center px-7 py-4 rounded-xl font-semibold text-base hover-lift press">
+          {{ s.primary_cta.label }}
+        </a>
+        {% if s.secondary_cta %}
+        <a href="{{ s.secondary_cta.href }}" class="inline-flex items-center justify-center px-7 py-4 rounded-xl font-semibold text-{{ theme.neutral }}-700 hover:text-{{ theme.neutral }}-900 transition-colors">
+          {{ s.secondary_cta.label }}
+        </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="relative {% if s.panel_side == 'right' %}lg:order-1{% endif %} min-h-[42vh] lg:min-h-0 overflow-hidden">
+    {% if s.image_url %}
+    <img src="{{ s.image_url }}" alt="{{ s.image_alt or s.headline }}" class="absolute inset-0 w-full h-full object-cover" loading="lazy">
+    {% else %}
+    <div class="absolute inset-0 bg-aurora" aria-hidden="true" style="--a1:var(--omnia-primary);--a2:var(--omnia-accent);--a3:var(--omnia-primary)"></div>
+    <div class="absolute inset-0 grain opacity-40" aria-hidden="true"></div>
+    {% endif %}
+  </div>
+</section>

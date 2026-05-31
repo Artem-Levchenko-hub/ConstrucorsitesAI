@@ -1,0 +1,22 @@
+{%- set bg_class = {'dark':'', 'mesh':'bg-mesh', 'aurora':'bg-aurora'}[s.background] -%}
+<section id="{{ anchor_id }}" class="relative py-24 md:py-32 overflow-hidden {{ bg_class }}"{% if s.background == 'dark' %} style="background:#0A0A0A"{% endif %}>
+  <div class="absolute inset-0 pointer-events-none opacity-25" style="background-image:radial-gradient(circle at 15% 20%, var(--omnia-primary) 0%, transparent 42%), radial-gradient(circle at 85% 80%, var(--omnia-accent) 0%, transparent 46%);"></div>
+  <div class="relative max-w-6xl mx-auto px-6">
+    {% if s.eyebrow %}
+    <p class="reveal text-sm uppercase tracking-[0.2em] font-semibold mb-6" style="color:var(--omnia-accent)">{{ s.eyebrow }}</p>
+    {% endif %}
+    <div class="grid lg:grid-cols-12 gap-8 lg:items-end">
+      <h2 class="reveal lg:col-span-8 display-fill font-display font-bold tracking-tight text-white text-balance">{{ s.headline }}</h2>
+      <div class="lg:col-span-4">
+        {% if s.subheadline %}
+        <p class="reveal text-lg text-white/70 leading-relaxed">{{ s.subheadline }}</p>
+        {% endif %}
+        {% if s.primary_cta %}
+        <a href="{{ s.primary_cta.href }}" class="reveal mt-6 btn-primary glow inline-flex items-center justify-center px-7 py-4 rounded-xl font-semibold text-base hover-lift press">
+          {{ s.primary_cta.label }}
+        </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>

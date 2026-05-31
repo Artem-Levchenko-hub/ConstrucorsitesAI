@@ -188,6 +188,34 @@ class HeroV3(_SectionBase):
     )
 
 
+class HeroV4(_SectionBase):
+    """Split-screen: full-height copy panel beside a full-bleed visual.
+    Asymmetric, editorial. ``panel_side`` puts the copy left (default) or
+    right; without an image the visual half renders an animated aurora."""
+
+    type_variant: Literal["hero.v4"] = "hero.v4"
+    panel_side: Literal["left", "right"] = "left"
+    eyebrow: str | None = Field(default=None, max_length=60)
+    headline: str = Field(min_length=4, max_length=120)
+    subheadline: str | None = Field(default=None, max_length=300)
+    primary_cta: CTA
+    secondary_cta: CTA | None = None
+    image_url: str | None = None
+    image_alt: str | None = Field(default=None, max_length=200)
+
+
+class HeroV5(_SectionBase):
+    """Big-type editorial hero: a viewport-scale headline carries the page,
+    no image. Type *is* the hero (Awwwards 'type-as-hero')."""
+
+    type_variant: Literal["hero.v5"] = "hero.v5"
+    eyebrow: str | None = Field(default=None, max_length=60)
+    headline: str = Field(min_length=4, max_length=120)
+    subheadline: str | None = Field(default=None, max_length=300)
+    primary_cta: CTA
+    secondary_cta: CTA | None = None
+
+
 # ─── Features ────────────────────────────────────────────────────────────
 
 class FeaturesV1(_SectionBase):
@@ -208,6 +236,31 @@ class FeaturesV2(_SectionBase):
     headline: str = Field(min_length=4, max_length=120)
     subheadline: str | None = Field(default=None, max_length=300)
     items: list[Feature] = Field(min_length=2, max_length=4)
+
+
+class BentoCell(BaseModel):
+    """One cell of a bento grid. ``size`` controls the span so the mosaic
+    stays asymmetric: s = 1 col, m = 2 cols, l = 2 cols × 2 rows."""
+
+    model_config = ConfigDict(extra="forbid")
+    icon: str = Field(
+        min_length=1, max_length=40,
+        description="heroicons name or omnia-kit svg slug",
+    )
+    title: str = Field(min_length=1, max_length=80)
+    body: str = Field(min_length=1, max_length=400)
+    size: Literal["s", "m", "l"] = "m"
+
+
+class FeaturesV3(_SectionBase):
+    """Bento grid — mixed-size cells in an asymmetric mosaic. Some cells
+    invert to a dark surface for rhythm. Most modern of the features layouts."""
+
+    type_variant: Literal["features.v3"] = "features.v3"
+    eyebrow: str | None = Field(default=None, max_length=60)
+    headline: str = Field(min_length=4, max_length=120)
+    subheadline: str | None = Field(default=None, max_length=300)
+    items: list[BentoCell] = Field(min_length=3, max_length=6)
 
 
 # ─── Pricing ─────────────────────────────────────────────────────────────
@@ -341,11 +394,27 @@ class AboutV1(_SectionBase):
     reverse: bool = False
 
 
+# ─── Band ────────────────────────────────────────────────────────────────
+
+class BandV1(_SectionBase):
+    """Full-bleed inverted statement band — a rhythm-breaking editorial
+    divider with an oversized headline and optional CTA. Defaults to a dark
+    surface; alternate light↔dark down the page for the 'frameless inversion'
+    signature move."""
+
+    type_variant: Literal["band.v1"] = "band.v1"
+    background: Literal["dark", "mesh", "aurora"] = "dark"
+    eyebrow: str | None = Field(default=None, max_length=60)
+    headline: str = Field(min_length=4, max_length=160)
+    subheadline: str | None = Field(default=None, max_length=300)
+    primary_cta: CTA | None = None
+
+
 # ─── Discriminated union ─────────────────────────────────────────────────
 
 Section = Annotated[
-    HeroV1 | HeroV2 | HeroV3
-    | FeaturesV1 | FeaturesV2
+    HeroV1 | HeroV2 | HeroV3 | HeroV4 | HeroV5
+    | FeaturesV1 | FeaturesV2 | FeaturesV3
     | PricingV1 | PricingV2
     | CTAV1 | CTAV2
     | TestimonialsV1
@@ -354,7 +423,8 @@ Section = Annotated[
     | FooterV1
     | ContactV1
     | StatsV1
-    | AboutV1,
+    | AboutV1
+    | BandV1,
     Field(discriminator="type_variant"),
 ]
 

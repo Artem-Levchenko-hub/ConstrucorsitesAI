@@ -19,17 +19,21 @@ from typing import TYPE_CHECKING
 
 from omnia_api.sections.ir import (
     AboutV1,
+    BandV1,
     ContactV1,
     CTAV1,
     CTAV2,
     FAQV1,
     FeaturesV1,
     FeaturesV2,
+    FeaturesV3,
     FooterV1,
     HeaderV1,
     HeroV1,
     HeroV2,
     HeroV3,
+    HeroV4,
+    HeroV5,
     PricingV1,
     PricingV2,
     StatsV1,
@@ -52,10 +56,14 @@ REGISTRY: dict[str, tuple[type["BaseModel"], str]] = {
     "hero.v1":           (HeroV1,              "hero/v1.html.j2"),
     "hero.v2":           (HeroV2,              "hero/v2.html.j2"),
     "hero.v3":           (HeroV3,              "hero/v3.html.j2"),
+    "hero.v4":           (HeroV4,              "hero/v4.html.j2"),
+    "hero.v5":           (HeroV5,              "hero/v5.html.j2"),
     "stats.v1":          (StatsV1,             "stats/v1.html.j2"),
     "features.v1":       (FeaturesV1,          "features/v1.html.j2"),
     "features.v2":       (FeaturesV2,          "features/v2.html.j2"),
+    "features.v3":       (FeaturesV3,          "features/v3.html.j2"),
     "about.v1":          (AboutV1,             "about/v1.html.j2"),
+    "band.v1":           (BandV1,              "band/v1.html.j2"),
     "testimonials.v1":   (TestimonialsV1,      "testimonials/v1.html.j2"),
     "pricing.v1":        (PricingV1,           "pricing/v1.html.j2"),
     "pricing.v2":        (PricingV2,           "pricing/v2.html.j2"),
@@ -92,6 +100,7 @@ CATALOG_BLURB: str = """\
 • "background" секции = РОВНО один из: canvas|muted|mesh|aurora|dark|grain. НЕ tailwind-класс ("bg-white"/"bg-zinc-50" = invalid). Цвета фона страницы задаются в theme.background (HEX), а не тут.
 • Опционально у ЛЮБОЙ секции: "id" (a-z0-9-), "background" (enum выше), "motion" ∈ reveal|reveal-blur|fade-up|none.
 • Поле с "?" — опциональное; без "?" — обязательное. НЕ добавляй полей вне списка секции.
+• РАЗНООБРАЗЬ РАСКЛАДКУ (иначе «шаблонно»): не лепи hero.v1+features.v1 на каждом сайте. Для нестандартного вида бери hero.v4 (сплит-экран) / hero.v5 (крупная типографика), features.v3 (бенто), band.v1 (тёмная полоса-ритм между светлыми секциями). Под индустрию/референс подбирай форму, а не дефолт.
 
 # header (первая секция)
 header.v1   {brand, brand_href?, links:[{label,href}] ×2-7, cta?:{label,href,style}}
@@ -100,6 +109,8 @@ header.v1   {brand, brand_href?, links:[{label,href}] ×2-7, cta?:{label,href,st
 hero.v1     {eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?, image_url?, image_alt?}
 hero.v2     {eyebrow?, headline, headline_accent?, subheadline?, primary_cta:{label,href,style}, secondary_cta?}
 hero.v3     {background:mesh|aurora|dark, eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?, pill_label?}
+hero.v4     {panel_side?:left|right, eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?, image_url?, image_alt?}   (сплит-экран: копия | визуал во всю высоту)
+hero.v5     {eyebrow?, headline, subheadline?, primary_cta:{label,href,style}, secondary_cta?}   (огромная типографика во весь экран, без картинки)
 
 # proof
 stats.v1    {eyebrow?, headline?, items:[{value,label}] ×3-6}
@@ -107,9 +118,11 @@ stats.v1    {eyebrow?, headline?, items:[{value,label}] ×3-6}
 # features
 features.v1 {eyebrow?, headline, subheadline?, items:[{icon,title,body}] ×3-6}   (icon = heroicons-имя, напр. "wrench")
 features.v2 {eyebrow?, headline, subheadline?, items:[{icon,title,body}] ×2-4}
+features.v3 {eyebrow?, headline, subheadline?, items:[{icon,title,body,size?:s|m|l}] ×3-6}   (бенто-сетка разнокалиберных ячеек, часть — тёмные)
 
 # narrative
 about.v1    {eyebrow?, headline, body, image_url?, image_alt?, reverse?}
+band.v1     {background?:dark|mesh|aurora, eyebrow?, headline, subheadline?, primary_cta?}   (полноэкранная инверт-полоса-заявление; чередуй светлые/тёмные секции для ритма)
 
 # social
 testimonials.v1 {eyebrow?, headline, items:[{quote,author,role?,avatar_url?}] ×2-6}

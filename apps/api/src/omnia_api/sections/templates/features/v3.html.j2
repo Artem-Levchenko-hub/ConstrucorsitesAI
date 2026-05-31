@@ -1,0 +1,29 @@
+<section id="{{ anchor_id }}" class="py-20 md:py-28">
+  <div class="max-w-7xl mx-auto px-6">
+    <div class="max-w-3xl mb-14">
+      {% if s.eyebrow %}
+      <p class="reveal text-sm uppercase tracking-widest font-semibold mb-4" style="color:var(--omnia-primary)">{{ s.eyebrow }}</p>
+      {% endif %}
+      <h2 class="reveal display-xl font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">{{ s.headline }}</h2>
+      {% if s.subheadline %}
+      <p class="reveal mt-5 text-lg text-{{ theme.neutral }}-600 leading-relaxed">{{ s.subheadline }}</p>
+      {% endif %}
+    </div>
+    <div data-anime="reveal-stagger" class="grid grid-cols-2 lg:grid-cols-4 gap-5 auto-rows-[minmax(170px,1fr)]">
+      {% for item in s.items %}
+      {% set dark = loop.index0 % 3 == 0 %}
+      <div class="depth-2 hover-lift rounded-2xl p-7 flex flex-col justify-between {% if item.size == 'l' %}col-span-2 row-span-2{% elif item.size == 'm' %}col-span-2{% else %}col-span-1{% endif %} {% if dark %}bg-{{ theme.neutral }}-900 text-white{% else %}bg-{{ theme.neutral }}-50{% endif %}">
+        <div class="flex items-center justify-center w-11 h-11 rounded-xl {% if dark %}bg-white/10{% endif %}" {% if not dark %}style="background:color-mix(in srgb, var(--omnia-primary) 16%, transparent); color:var(--omnia-primary)"{% else %}style="color:var(--omnia-accent)"{% endif %}>
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2l2.39 7.36H22l-6.31 4.58 2.41 7.42L12 16.9l-6.1 4.46 2.41-7.42L2 9.36h7.61z"/>
+          </svg>
+        </div>
+        <div class="mt-5">
+          <h3 class="font-display text-lg font-semibold mb-2 {% if not dark %}text-{{ theme.neutral }}-900{% endif %}">{{ item.title }}</h3>
+          <p class="text-sm leading-relaxed {% if dark %}text-white/70{% else %}text-{{ theme.neutral }}-600{% endif %}">{{ item.body }}</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
