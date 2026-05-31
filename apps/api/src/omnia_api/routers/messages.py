@@ -1179,11 +1179,12 @@ async def _process_prompt(
         # hot_reload pushes the rewritten files into the dev container, so HMR
         # picks up the real images automatically. Per-project opt-out via
         # projects.image_gen_enabled (TopBar toggle).
-        # Visual enricher — гарантируем декор в каждом <section> голого HTML
-        # ДО image_resolver, чтобы добавленные нами SVG-теги не считались
-        # «уже есть SVG» при последующих pass'ах. Запускаем безусловно (декор
-        # нужен независимо от toggle картинок).
-        if files:
+        # Visual enricher — DORMANT by default (USE_VISUAL_ENRICHER, off).
+        # Раньше лепил декор в каждый <section> голого HTML безусловно, но
+        # циклил dot-grid / diagonal-lines / mesh по ВСЕМ секциям механически —
+        # output читался как generative AI-slop («полоски/точки»). Owner-call
+        # 2026-05-31: выкл совсем. Re-enable per-env via USE_VISUAL_ENRICHER=true.
+        if files and get_settings().use_visual_enricher:
             try:
                 files, enr_count, enr_total = enrich_visual_files(files)
                 print(
@@ -1502,10 +1503,11 @@ async def _process_prompt(
                         break
                     _repaired = {p: c for p, c in _repaired.items() if p not in KIT_FILES}
                     _repaired = _ensure_kit_linked(_repaired)
-                    try:
-                        _repaired, _, _ = enrich_visual_files(_repaired)
-                    except Exception:
-                        pass
+                    if _acc_settings.use_visual_enricher:
+                        try:
+                            _repaired, _, _ = enrich_visual_files(_repaired)
+                        except Exception:
+                            pass
                     if project_image_gen_enabled:
                         try:
                             _repaired, _, _ = await resolve_images(_repaired, str(project_id))

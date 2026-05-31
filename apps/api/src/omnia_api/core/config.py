@@ -112,6 +112,15 @@ class Settings(BaseSettings):
     # USE_IMAGE_PROMPT_ENRICHMENT=false.
     use_image_prompt_enrichment: bool = Field(default=True)
 
+    # Visual enricher — post-process pass that injected decorative layers
+    # (mesh / blob / SVG dot-grid / diagonal-lines / waves) into every bare
+    # <section>. Built as a Haiku-era crutch against "flat AI sites", but it
+    # cycled the variants mechanically across ALL sections, so the output read
+    # as generative AI-slop (owner 2026-05-31: «откуда полоски/точки … ужасно»).
+    # Owner-call: off completely. OFF by default so a lost prod-.env line cannot
+    # silently revive the patterns; set USE_VISUAL_ENRICHER=true to re-enable.
+    use_visual_enricher: bool = Field(default=False)
+
     # Phase M — per-role model override. Empty = use ROLE_MODEL_MAP (topmix-v1)
     # below. CSV of `role=model_id` pairs, e.g.
     # "director=claude-opus-4-7,polish=deepseek-chat,audit=claude-sonnet-4-6".
