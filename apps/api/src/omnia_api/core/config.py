@@ -344,7 +344,7 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # served by the direct vsegpt provider — proxyapi's DeepSeek surface 404s,
     # vsegpt is the only working route (apps/llm-gateway providers/vsegpt.py).
     "classify":     "deepseek-chat",  # pick 1 of N presets
-    "director":     "claude-opus-4-7",             # ORCHESTRATOR — structure / section choice
+    "director":     "claude-sonnet-4-6",           # ORCHESTRATOR — structure (Sonnet: ~5x cheaper than Opus, near-equal layout)
     "polish":       "deepseek-chat",  # writes the real PageIR content (RU copy)
     # audit + audit_retry stay premium ON PURPOSE and are DORMANT unless the
     # acceptance gate is enabled (USE_ACCEPTANCE_GATE / USE_VISION_AUDIT — both
