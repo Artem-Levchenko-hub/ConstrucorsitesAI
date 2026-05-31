@@ -52,10 +52,10 @@ from omnia_api.services.visual_enricher import enrich_files as enrich_visual_fil
 RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом генерации
 
 # Snapshot/Message.model_id label for the orchestrated (role-mix) path. The real
-# per-pass models (Opus director, DeepSeek polish, …) are logged per-call in the
+# per-pass models (Sonnet director, DeepSeek polish, …) are logged per-call in the
 # gateway's `usage` table; this label just marks the snapshot as orchestrated
 # rather than a single user-picked model.
-ORCHESTRATION_LABEL = "Оркестратор Opus+DeepSeek"
+ORCHESTRATION_LABEL = "Оркестратор Sonnet+DeepSeek"
 
 router = APIRouter(prefix="/api/projects", tags=["messages"])
 
