@@ -28,7 +28,7 @@
 
   ready(function () {
     // 1. Scroll reveal
-    var reveals = [].slice.call(document.querySelectorAll(".reveal"));
+    var reveals = [].slice.call(document.querySelectorAll(".reveal, .line-rise"));
     if (reduce || !("IntersectionObserver" in window)) {
       reveals.forEach(function (el) { el.classList.add("is-visible"); });
     } else {
@@ -78,6 +78,7 @@
     document.addEventListener("click", function (e) {
       var a = e.target.closest('a[href^="#"]');
       if (!a) return;
+      if (window.__omniaLenis) return; // Lenis (anchors:true) owns in-page scroll
       var href = a.getAttribute("href");
       if (!href || href.length < 2) return;
       var target = document.querySelector(href);
@@ -93,6 +94,7 @@
       sync();
       window.addEventListener("scroll", sync, { passive: true });
       btt.addEventListener("click", function () {
+        if (window.__omniaLenis) { window.__omniaLenis.scrollTo(0); return; }
         window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
       });
     }
@@ -525,5 +527,204 @@
 
     window.__omniaKitScan = function () { try { omniaScanAnime(document); } catch (e) {} };
     omniaScanAnime(document);
+
+    // ─── Omnia-kit v4 — «Живой» слой: shader / lenis / scramble / pointer ─────
+    //     Self-bootstrapping deps (Lenis via CDN; shader is inline WebGL, zero
+    //     external HTTP). Every feature floors to plain markup: blocked CDN /
+    //     no-WebGL / reduced-motion never strand content. Idempotent via
+    //     per-element data-*-bound markers.
+
+    function omniaLoadScript(src, cb) {
+      var ex = document.querySelector('script[data-omnia-lib="' + src + '"]');
+      if (ex) {
+        if (ex.getAttribute("data-loaded") === "1") { if (cb) cb(); }
+        else ex.addEventListener("load", function () { if (cb) cb(); });
+        return;
+      }
+      var s = document.createElement("script");
+      s.src = src; s.async = true; s.setAttribute("data-omnia-lib", src);
+      s.addEventListener("load", function () { s.setAttribute("data-loaded", "1"); if (cb) cb(); });
+      s.addEventListener("error", function () {}); // floor: silently skip
+      document.head.appendChild(s);
+    }
+
+    // 16. Lenis inertial smooth-scroll. Floor = native scroll. Reduce → skip.
+    if (!reduce && !window.__omniaLenis) {
+      omniaLoadScript("https://unpkg.com/lenis@1.3.23/dist/lenis.min.js", function () {
+        if (!window.Lenis || window.__omniaLenis) return;
+        try {
+          var lenis = new window.Lenis({ lerp: 0.1, smoothWheel: true, anchors: true });
+          window.__omniaLenis = lenis;
+          var lraf = function (t) { lenis.raf(t); requestAnimationFrame(lraf); };
+          requestAnimationFrame(lraf);
+        } catch (e) {}
+      });
+    }
+
+    // 17. WebGL shader atmosphere — [data-omnia-shader]. Self-contained flowing
+    //     mesh-gradient; colors from data-omnia-colors (comma hex) or CSS
+    //     --sh1..--sh4. reduce/no-WebGL → CSS floor stays. IO-paused offscreen.
+    //     [data-omnia-pointer]/.omnia-pointer host → cursor warps the field.
+    function omniaHexToRGB(hex) {
+      hex = (hex || "").trim().replace("#", "");
+      if (hex.length === 3) hex = hex.charAt(0) + hex.charAt(0) + hex.charAt(1) + hex.charAt(1) + hex.charAt(2) + hex.charAt(2);
+      if (hex.length !== 6) return null;
+      var n = parseInt(hex, 16);
+      if (isNaN(n)) return null;
+      return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+    }
+    function omniaShaderColors(host) {
+      var out = [];
+      var attr = host.getAttribute("data-omnia-colors");
+      if (attr) attr.split(",").forEach(function (h) { var c = omniaHexToRGB(h); if (c) out.push(c); });
+      if (out.length < 2) {
+        var cs = getComputedStyle(host);
+        ["--sh1", "--sh2", "--sh3", "--sh4"].forEach(function (v) {
+          var c = omniaHexToRGB(cs.getPropertyValue(v)); if (c) out.push(c);
+        });
+      }
+      while (out.length < 4) out.push(out[out.length - 1] || [0.04, 0.05, 0.1]);
+      return out.slice(0, 4);
+    }
+    function omniaMountShader(host) {
+      if (host.getAttribute("data-omnia-shader-bound") === "1") return;
+      host.setAttribute("data-omnia-shader-bound", "1");
+      var canvas = document.createElement("canvas");
+      canvas.setAttribute("aria-hidden", "true");
+      var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+      if (!gl) return; // floor: CSS background stays
+      var FS = [
+        "#ifdef GL_FRAGMENT_PRECISION_HIGH",
+        "precision highp float;",
+        "#else",
+        "precision mediump float;",
+        "#endif",
+        "uniform float u_time;uniform vec2 u_res;uniform vec2 u_mouse;",
+        "uniform vec3 u_c1,u_c2,u_c3,u_c4;",
+        "float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}",
+        "float noise(vec2 p){vec2 i=floor(p),f=fract(p);float a=hash(i),b=hash(i+vec2(1.,0.)),c=hash(i+vec2(0.,1.)),d=hash(i+vec2(1.,1.));vec2 u=f*f*(3.-2.*f);return mix(mix(a,b,u.x),mix(c,d,u.x),u.y);}",
+        "float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*noise(p);p=p*2.+vec2(1.7,9.2);a*=.5;}return v;}",
+        "void main(){vec2 uv=gl_FragCoord.xy/u_res.xy;float asp=u_res.x/u_res.y;vec2 p=vec2(uv.x*asp,uv.y)*1.3;float t=u_time*0.15;vec2 mo=(u_mouse-0.5)*0.6;vec2 q=vec2(fbm(p+mo+t),fbm(p+vec2(5.2,1.3)-t*0.8));float f=fbm(p+1.7*q+t*0.5);vec3 col=mix(u_c1,u_c2,smoothstep(0.05,0.65,f));col=mix(col,u_c3,smoothstep(0.35,0.95,f+q.x*0.5));col=mix(col,u_c4,clamp(length(q)*0.9,0.,1.));col*=1.0-0.16*length(uv-0.5);float g=hash(uv*u_res.xy+t)*0.035-0.0175;gl_FragColor=vec4(col+g,1.0);}"
+      ].join("\n");
+      var VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}";
+      function compile(type, src) { var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; }
+      var prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return; // floor
+      gl.useProgram(prog);
+      host.appendChild(canvas);
+      var buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(prog, "p");
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      var uTime = gl.getUniformLocation(prog, "u_time");
+      var uRes = gl.getUniformLocation(prog, "u_res");
+      var uMouse = gl.getUniformLocation(prog, "u_mouse");
+      var cols = omniaShaderColors(host);
+      ["u_c1", "u_c2", "u_c3", "u_c4"].forEach(function (nm, i) {
+        gl.uniform3fv(gl.getUniformLocation(prog, nm), cols[i]);
+      });
+      var dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+      function resize() {
+        var w = host.clientWidth || 1, h = host.clientHeight || 1;
+        canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+      }
+      resize();
+      window.addEventListener("resize", resize, { passive: true });
+      var mq = [0.5, 0.5], mo = [0.5, 0.5];
+      if (host.hasAttribute("data-omnia-pointer") || host.classList.contains("omnia-pointer")) {
+        host.addEventListener("pointermove", function (e) {
+          var r = host.getBoundingClientRect();
+          mq = [(e.clientX - r.left) / r.width, 1 - (e.clientY - r.top) / r.height];
+        }, { passive: true });
+      }
+      var speed = parseFloat(host.getAttribute("data-omnia-speed"));
+      if (isNaN(speed)) speed = 1;
+      var start = 0, raf = 0, live = false;
+      function frame(ts) {
+        if (!start) start = ts;
+        mo[0] += (mq[0] - mo[0]) * 0.06; mo[1] += (mq[1] - mo[1]) * 0.06;
+        gl.uniform1f(uTime, ((ts - start) / 1000) * speed);
+        gl.uniform2f(uRes, canvas.width, canvas.height);
+        gl.uniform2f(uMouse, mo[0], mo[1]);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        if (!live) { live = true; canvas.classList.add("is-live"); }
+        raf = requestAnimationFrame(frame);
+      }
+      if ("IntersectionObserver" in window) {
+        new IntersectionObserver(function (es) {
+          es.forEach(function (e) {
+            if (e.isIntersecting) { if (!raf) raf = requestAnimationFrame(frame); }
+            else if (raf) { cancelAnimationFrame(raf); raf = 0; }
+          });
+        }, { threshold: 0 }).observe(host);
+      } else {
+        raf = requestAnimationFrame(frame);
+      }
+    }
+    if (!reduce && "WebGLRenderingContext" in window) {
+      [].slice.call(document.querySelectorAll("[data-omnia-shader]")).forEach(omniaMountShader);
+    }
+
+    // 18. Headline scramble — [data-omnia-scramble] decodes text on entry.
+    //     Skipped if the element has child elements (don't nuke gradient spans).
+    if (!reduce) {
+      [].slice.call(document.querySelectorAll("[data-omnia-scramble]")).forEach(function (el) {
+        if (el.getAttribute("data-omnia-scramble-bound") === "1") return;
+        for (var n = 0; n < el.childNodes.length; n++) {
+          if (el.childNodes[n].nodeType === 1) return; // has element child → leave as-is
+        }
+        el.setAttribute("data-omnia-scramble-bound", "1");
+        var finalText = el.textContent || "";
+        var glyphs = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&@";
+        omniaObserveOnce(el, function () {
+          var len = finalText.length, reveal = 0, steps = Math.max(18, Math.min(54, len));
+          var tick = function () {
+            var out = "";
+            for (var i = 0; i < len; i++) {
+              var ch = finalText.charAt(i);
+              if (ch === " " || i < Math.floor(reveal)) out += ch;
+              else out += glyphs.charAt(Math.floor(Math.random() * glyphs.length));
+            }
+            el.textContent = out;
+            reveal += len / steps;
+            if (reveal < len) requestAnimationFrame(tick);
+            else el.textContent = finalText;
+          };
+          requestAnimationFrame(tick);
+        });
+      });
+    }
+
+    // 19. Pointer-reactive — [data-omnia-pointer] writes --mx/--my (-1..1);
+    //     [data-omnia-spotlight] writes --spot-x/--spot-y (%). Desktop + motion.
+    if (!reduce && canHover) {
+      [].slice.call(document.querySelectorAll("[data-omnia-pointer],.omnia-pointer")).forEach(function (el) {
+        if (el.getAttribute("data-omnia-pointer-bound") === "1") return;
+        el.setAttribute("data-omnia-pointer-bound", "1");
+        el.addEventListener("pointermove", function (e) {
+          var r = el.getBoundingClientRect();
+          el.style.setProperty("--mx", (((e.clientX - r.left) / r.width) * 2 - 1).toFixed(3));
+          el.style.setProperty("--my", (((e.clientY - r.top) / r.height) * 2 - 1).toFixed(3));
+        }, { passive: true });
+        el.addEventListener("pointerleave", function () {
+          el.style.setProperty("--mx", "0"); el.style.setProperty("--my", "0");
+        });
+      });
+      [].slice.call(document.querySelectorAll("[data-omnia-spotlight],.omnia-spotlight")).forEach(function (el) {
+        if (el.getAttribute("data-omnia-spot-bound") === "1") return;
+        el.setAttribute("data-omnia-spot-bound", "1");
+        el.addEventListener("pointermove", function (e) {
+          var r = el.getBoundingClientRect();
+          el.style.setProperty("--spot-x", (((e.clientX - r.left) / r.width) * 100).toFixed(1) + "%");
+          el.style.setProperty("--spot-y", (((e.clientY - r.top) / r.height) * 100).toFixed(1) + "%");
+        }, { passive: true });
+      });
+    }
   });
 })();

@@ -756,3 +756,87 @@
     transform: none;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  v4.0 — «Живой» слой: WebGL-шейдер-атмосфера, кинетик-вход, pointer-reactive,
+ *  инерц-скролл. Added 2026-05-31. ЧИСТО ДОБАВЛЕНИЯ. У каждой фичи есть
+ *  CSS/markup-флор: заблокированный CDN, no-WebGL или reduced-motion НИКОГДА
+ *  не оставляют пустой экран. omnia-kit.js сам подгружает зависимости по
+ *  факту наличия хука (Lenis с CDN; шейдер — инлайн WebGL, без внешних HTTP).
+ *  Палитры здесь СОЗНАТЕЛЬНО не индиго/розовые — старый generic-AI-дефолт мёртв.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* V4.1 — Шейдер-атмосфера. Ставь первым ребёнком position:relative героя/секции;
+ * заполняет родителя ПОД контентом (z-0). CSS-градиент ниже — это ФЛОР: без
+ * WebGL/JS посетитель всё равно видит насыщенный mesh. Кит монтирует <canvas>
+ * поверх, когда может. Цвета: переопредели --sh1..--sh4 инлайн под палитру
+ * сайта ИЛИ data-omnia-colors на хосте (их читает JS для самого шейдера). */
+.omnia-shader {
+  position: absolute; inset: 0; z-index: 0; overflow: hidden;
+  --sh1: #0a0e1a; --sh2: #0e7490; --sh3: #b45309; --sh4: #be123c; /* ink·teal·amber·crimson */
+  background-color: var(--sh1);
+  background-image:
+    radial-gradient(at 16% 22%, var(--sh2), transparent 56%),
+    radial-gradient(at 84% 14%, var(--sh3), transparent 52%),
+    radial-gradient(at 26% 90%, var(--sh4), transparent 50%),
+    radial-gradient(at 80% 84%, var(--sh2), transparent 55%);
+}
+.omnia-shader > canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+  opacity: 0; transition: opacity .8s ease;
+}
+.omnia-shader > canvas.is-live { opacity: 1; }
+/* Контент поверх шейдера — оборачивай в .omnia-shader-over (z-1, relative). */
+.omnia-shader-over { position: relative; z-index: 1; }
+
+/* V4.2 — Кинетический заголовок. data-omnia-scramble «дешифрует» текст на входе
+ * (JS, по словам/буквам). Флор: текст полностью в markup, JS лишь переигрывает —
+ * заблокированный/выключенный JS оставляет читаемый заголовок. */
+.omnia-scramble { will-change: contents; }
+.omnia-scramble [data-omnia-glyph] { display: inline-block; }
+
+/* V4.3 — Pointer-reactive поверхности. data-omnia-pointer заставляет кит писать
+ * --mx/--my (диапазон -1..1) на элементе от курсора; data-omnia-spotlight —
+ * --spot-x/--spot-y (в %). Используй в transform или для офсета шейдера. */
+.omnia-pointer { --mx: 0; --my: 0; }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .omnia-pointer-parallax {
+    transform: translate3d(calc(var(--mx) * var(--pdx, 16px)), calc(var(--my) * var(--pdy, 16px)), 0);
+    transition: transform .3s cubic-bezier(.16, 1, .3, 1);
+    will-change: transform;
+  }
+}
+.omnia-spotlight { position: relative; isolation: isolate; }
+.omnia-spotlight::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+  background: radial-gradient(var(--spot-size, 460px) circle at var(--spot-x, 50%) var(--spot-y, 50%),
+    var(--spot-color, rgba(255, 255, 255, .10)), transparent 62%);
+  opacity: 0; transition: opacity .35s ease;
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .omnia-spotlight:hover::before { opacity: 1; }
+}
+
+/* V4.4 — Кинетик-вход строк (на входе в вьюпорт, более «дорогой» reveal, чем
+ * .reveal): clip + rise по маске. Флор без motion/JS — текст виден сразу. */
+@media (prefers-reduced-motion: no-preference) {
+  html.omnia-anim .line-rise { overflow: hidden; }
+  html.omnia-anim .line-rise > * {
+    display: inline-block;
+    transform: translateY(105%);
+    transition: transform .8s cubic-bezier(.16, 1, .3, 1);
+  }
+  html.omnia-anim .line-rise.is-visible > * { transform: translateY(0); }
+  html.omnia-anim .line-rise[data-reveal-delay="1"] > * { transition-delay: .08s; }
+  html.omnia-anim .line-rise[data-reveal-delay="2"] > * { transition-delay: .16s; }
+  html.omnia-anim .line-rise[data-reveal-delay="3"] > * { transition-delay: .24s; }
+  html.omnia-anim .line-rise[data-reveal-delay="4"] > * { transition-delay: .32s; }
+}
+
+/* V4.5 — Lenis core CSS (инлайн, чтобы не зависеть от 2-го CDN-запроса).
+ * Активны только когда JS навесил html.lenis (иначе нативный скролл — флор). */
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+.lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
+.lenis.lenis-stopped { overflow: hidden; }
+.lenis.lenis-smooth iframe { pointer-events: none; }
