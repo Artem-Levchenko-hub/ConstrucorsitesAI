@@ -6,7 +6,7 @@
       {{ s.eyebrow }}
     </div>
     {% endif %}
-    <h1 class="reveal display-hero font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">
+    <h1 data-anime="hero-stagger" class="display-hero font-display font-bold tracking-tight text-{{ theme.neutral }}-900 text-balance">
       {%- if s.headline_accent and s.headline_accent in s.headline -%}
         {%- set parts = s.headline.split(s.headline_accent, 1) -%}
         {{ parts[0] }}<span class="gradient-text-brand">{{ s.headline_accent }}</span>{{ parts[1] }}

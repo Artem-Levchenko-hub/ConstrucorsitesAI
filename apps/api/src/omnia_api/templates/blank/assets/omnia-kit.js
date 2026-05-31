@@ -348,173 +348,182 @@
     }
 
     // ───────────────────────────────────────────────────────────────
-    // 15. Anime-style helpers (Phase L9). Native Web Animations API
-    //     — no external dep. Selector-driven so generated sites can
-    //     opt-in by adding attributes:
-    //       .anime-hero-reveal        — split text, stagger letters/words
-    //       [data-anime="fade-up"]    — fade+translate on viewport enter
-    //       [data-anime-counter]      — 0→N number tween (value in textContent)
-    //       [data-anime-magnetic]     — button follows cursor within radius
-    //     Respects prefers-reduced-motion: all anims downgrade to fade-only.
+    // 15. anime.js-powered accents (Phase L10). Drives the data-anime
+    //     hooks through anime.js (window.anime, vendored at
+    //     assets/anime.min.js) for richer stagger / easing / number
+    //     tweens. Progressive enhancement: if anime.min.js failed to
+    //     load OR reduced-motion is on, we NEVER hide anything — content
+    //     stays visible exactly as rendered (the markup is the floor).
+    //     An element is hidden only in the same synchronous step that
+    //     animates it, so a missing/blocked lib can't strand content.
+    //     Idempotent per element via data-omnia-bound; re-runnable via
+    //     window.__omniaKitScan() (the streaming preview calls it after
+    //     each DOM patch). Vocabulary, set by templates / freeform HTML:
+    //       data-anime="hero-stagger"    split headline, stagger words in
+    //       data-anime="reveal-stagger"  cascade direct children on scroll
+    //       data-anime="fade-up"         fade+rise one element on scroll
+    //       data-anime="count-up" | [data-anime-counter]   0->N tween
+    //       [data-anime-magnetic]        CTA follows pointer (desktop)
+    //     Anti-slop caps: <=8 animated elements/page, one hero-stagger.
     // ───────────────────────────────────────────────────────────────
-    var reduceMotion = window.matchMedia &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var animeOK = typeof window.anime === "function" && !reduce;
+    var ANIME_MAX = 8;        // hard ceiling on data-anime elements per page
+    var animeBound = 0;       // bound so far (persists across re-scans)
+    var heroStaggerDone = false;
 
-    // 15a. Hero text reveal — split into spans, stagger reveal.
-    document.querySelectorAll(".anime-hero-reveal").forEach(function (el) {
-      if (el.dataset.animeReady) return;
-      el.dataset.animeReady = "1";
-      var mode = el.dataset.animeSplit || "word"; // "word" | "letter"
+    function omniaObserveOnce(el, cb, opts) {
+      // Run cb() once when el enters the viewport (or immediately if it is
+      // already in view — IO doesn't always fire synchronously for above-fold
+      // nodes). No IO support → run now.
+      if (!("IntersectionObserver" in window)) { cb(); return; }
+      var io = new IntersectionObserver(function (entries) {
+        for (var n = 0; n < entries.length; n++) {
+          if (entries[n].isIntersecting) { io.disconnect(); cb(); return; }
+        }
+      }, opts || { threshold: 0.2, rootMargin: "0px 0px -8% 0px" });
+      io.observe(el);
+      var r = el.getBoundingClientRect();
+      if (r.top < window.innerHeight * 0.85 && r.bottom > 0) { io.disconnect(); cb(); }
+    }
+
+    function omniaSplitWords(el, mode) {
+      // Split el's text into inline-block spans. If el already has element
+      // children (e.g. a gradient <span> inside the headline) we DON'T
+      // destroy them — animate el as one unit instead. Returns stagger targets.
+      for (var n = 0; n < el.childNodes.length; n++) {
+        if (el.childNodes[n].nodeType === 1) return [el];
+      }
       var text = el.textContent || "";
       el.textContent = "";
+      var frag = document.createDocumentFragment();
+      var targets = [];
       var parts = mode === "letter" ? text.split("") : text.split(/(\s+)/);
-      var spans = [];
       parts.forEach(function (p) {
         if (p === "") return;
         var span = document.createElement("span");
         span.textContent = p;
         span.style.display = "inline-block";
-        span.style.whiteSpace = p.match(/^\s+$/) ? "pre" : "";
-        span.style.opacity = "0";
-        span.style.transform = reduceMotion ? "" : "translateY(0.4em)";
-        el.appendChild(span);
-        if (!p.match(/^\s+$/)) spans.push(span);
+        if (/^\s+$/.test(p)) span.style.whiteSpace = "pre";
+        else targets.push(span);
+        frag.appendChild(span);
       });
-      spans.forEach(function (span, i) {
-        span.animate(
-          reduceMotion
-            ? [{ opacity: 0 }, { opacity: 1 }]
-            : [
-                { opacity: 0, transform: "translateY(0.4em)" },
-                { opacity: 1, transform: "translateY(0)" },
-              ],
-          {
-            duration: reduceMotion ? 300 : 700,
-            delay: i * (reduceMotion ? 20 : 45),
-            easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-            fill: "forwards",
-          }
-        );
-      });
-    });
-
-    // 15b. Scroll fade-up — IntersectionObserver per element.
-    var fadeObserver = new IntersectionObserver(
-      function (entries) {
-        entries.forEach(function (entry) {
-          if (!entry.isIntersecting) return;
-          var el = entry.target;
-          el.animate(
-            reduceMotion
-              ? [{ opacity: 0 }, { opacity: 1 }]
-              : [
-                  { opacity: 0, transform: "translateY(24px)" },
-                  { opacity: 1, transform: "translateY(0)" },
-                ],
-            {
-              duration: reduceMotion ? 300 : 800,
-              easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-              fill: "forwards",
-            }
-          );
-          fadeObserver.unobserve(el);
-        });
-      },
-      { threshold: 0.15, rootMargin: "0px 0px -10% 0px" }
-    );
-    document
-      .querySelectorAll('[data-anime="fade-up"]')
-      .forEach(function (el) {
-        el.style.opacity = "0";
-        fadeObserver.observe(el);
-      });
-
-    // 15c. Number counter — 0 → N on enter viewport.
-    var counterObserver = new IntersectionObserver(
-      function (entries) {
-        entries.forEach(function (entry) {
-          if (!entry.isIntersecting) return;
-          var el = entry.target;
-          var raw = (el.textContent || "0").trim();
-          var match = raw.match(/^(\D*)([\d\s.,]+)(\D*)$/);
-          if (!match) {
-            counterObserver.unobserve(el);
-            return;
-          }
-          var prefix = match[1] || "";
-          var suffix = match[3] || "";
-          var target = parseFloat(
-            match[2].replace(/\s/g, "").replace(",", ".")
-          );
-          if (isNaN(target)) {
-            counterObserver.unobserve(el);
-            return;
-          }
-          var duration = reduceMotion ? 300 : 1400;
-          var start = performance.now();
-          var step = function (now) {
-            var t = Math.min(1, (now - start) / duration);
-            var eased = 1 - Math.pow(1 - t, 3);
-            var current = target * eased;
-            var rounded =
-              target >= 100
-                ? Math.round(current).toLocaleString("ru-RU")
-                : current.toFixed(target % 1 === 0 ? 0 : 1);
-            el.textContent = prefix + rounded + suffix;
-            if (t < 1) requestAnimationFrame(step);
-          };
-          requestAnimationFrame(step);
-          counterObserver.unobserve(el);
-        });
-      },
-      { threshold: 0.5 }
-    );
-    document
-      .querySelectorAll("[data-anime-counter]")
-      .forEach(function (el) {
-        counterObserver.observe(el);
-      });
-
-    // 15d. Magnetic CTA — button follows pointer within radius.
-    if (!reduceMotion) {
-      document
-        .querySelectorAll("[data-anime-magnetic]")
-        .forEach(function (btn) {
-          var radius = parseInt(btn.dataset.animeMagneticRadius, 10) || 80;
-          var strength = parseFloat(btn.dataset.animeMagneticStrength) || 0.35;
-          var rect;
-          var update = function (ev) {
-            if (!rect) rect = btn.getBoundingClientRect();
-            var cx = rect.left + rect.width / 2;
-            var cy = rect.top + rect.height / 2;
-            var dx = ev.clientX - cx;
-            var dy = ev.clientY - cy;
-            var dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > radius) {
-              btn.style.transform = "";
-              return;
-            }
-            btn.style.transform =
-              "translate(" +
-              (dx * strength).toFixed(1) +
-              "px," +
-              (dy * strength).toFixed(1) +
-              "px)";
-          };
-          document.addEventListener("pointermove", update, { passive: true });
-          btn.addEventListener("pointerleave", function () {
-            btn.style.transform = "";
-            rect = null;
-          });
-          window.addEventListener(
-            "resize",
-            function () {
-              rect = null;
-            },
-            { passive: true }
-          );
-          btn.style.transition = "transform 0.3s cubic-bezier(0.22,1,0.36,1)";
-        });
+      el.appendChild(frag);
+      return targets;
     }
+
+    function omniaHeroStagger(el) {
+      if (heroStaggerDone) return;          // one signature hero per page
+      heroStaggerDone = true;
+      var mode = el.dataset.animeSplit === "letter" ? "letter" : "word";
+      var targets = omniaSplitWords(el, mode);
+      var per = parseInt(el.dataset.animeStagger, 10);
+      if (isNaN(per)) per = targets.length > 1
+        ? Math.min(60, Math.max(16, Math.round(900 / targets.length))) : 0;
+      window.anime({
+        targets: targets,
+        opacity: [0, 1],
+        translateY: ["0.5em", "0em"],
+        duration: 780,
+        delay: window.anime.stagger(per),
+        easing: "easeOutQuint",
+      });
+    }
+
+    function omniaRevealStagger(el) {
+      var kids = [].slice.call(el.children);
+      if (!kids.length) return;
+      kids.forEach(function (k) { k.style.opacity = "0"; });
+      omniaObserveOnce(el, function () {
+        window.anime({
+          targets: kids,
+          opacity: [0, 1],
+          translateY: [26, 0],
+          duration: 720,
+          delay: window.anime.stagger(Math.min(110, Math.max(40, 700 / kids.length))),
+          easing: "easeOutCubic",
+        });
+      });
+    }
+
+    function omniaFadeUp(el) {
+      el.style.opacity = "0";
+      omniaObserveOnce(el, function () {
+        window.anime({
+          targets: el, opacity: [0, 1], translateY: [24, 0],
+          duration: 760, easing: "easeOutQuint",
+        });
+      });
+    }
+
+    function omniaCountUp(el) {
+      var raw = (el.textContent || "0").trim();
+      var m = raw.match(/^(\D*)([\d\s.,]+)(\D*)$/);
+      if (!m) return;
+      var prefix = m[1] || "", suffix = m[3] || "";
+      var target = parseFloat(m[2].replace(/\s/g, "").replace(",", "."));
+      if (isNaN(target)) return;
+      var decimals = target % 1 === 0 ? 0 : 1;
+      var obj = { v: 0 };
+      omniaObserveOnce(el, function () {
+        window.anime({
+          targets: obj, v: target, duration: 1500, easing: "easeOutExpo",
+          update: function () {
+            el.textContent = prefix + (target >= 1000
+              ? Math.round(obj.v).toLocaleString("ru-RU")
+              : obj.v.toFixed(decimals)) + suffix;
+          },
+        });
+      }, { threshold: 0.4 });
+    }
+
+    function omniaMagnetic(el) {
+      if (!canHover) return;
+      var radius = parseInt(el.dataset.animeMagneticRadius, 10) || 80;
+      var strength = parseFloat(el.dataset.animeMagneticStrength) || 0.35;
+      var rect = null;
+      el.style.transition = "transform .3s cubic-bezier(.22,1,.36,1)";
+      document.addEventListener("pointermove", function (ev) {
+        if (!rect) rect = el.getBoundingClientRect();
+        var dx = ev.clientX - (rect.left + rect.width / 2);
+        var dy = ev.clientY - (rect.top + rect.height / 2);
+        if (Math.sqrt(dx * dx + dy * dy) > radius) { el.style.transform = ""; return; }
+        el.style.transform = "translate(" + (dx * strength).toFixed(1) + "px," +
+          (dy * strength).toFixed(1) + "px)";
+      }, { passive: true });
+      el.addEventListener("pointerleave", function () { el.style.transform = ""; rect = null; });
+      window.addEventListener("resize", function () { rect = null; }, { passive: true });
+    }
+
+    function omniaScanAnime(scope) {
+      scope = scope || document;
+      var els = [].slice.call(scope.querySelectorAll(
+        '[data-anime],[data-anime-counter],[data-anime-magnetic],.anime-hero-reveal'
+      ));
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.getAttribute("data-omnia-bound") === "1") continue;
+        el.setAttribute("data-omnia-bound", "1");
+        if (animeBound >= ANIME_MAX) continue;   // cap → element stays at floor
+        var kind = el.getAttribute("data-anime") || "";
+        // Magnetic is pure transform — works without anime.js (motion only).
+        if (el.hasAttribute("data-anime-magnetic")) {
+          if (!reduce) { omniaMagnetic(el); animeBound++; }
+          continue;
+        }
+        if (!animeOK) continue;   // floor: leave content visible, do not bind
+        if (kind === "hero-stagger" || el.classList.contains("anime-hero-reveal")) {
+          omniaHeroStagger(el); animeBound++;
+        } else if (kind === "reveal-stagger") {
+          omniaRevealStagger(el); animeBound++;
+        } else if (kind === "count-up" || el.hasAttribute("data-anime-counter")) {
+          omniaCountUp(el); animeBound++;
+        } else if (kind === "fade-up") {
+          omniaFadeUp(el); animeBound++;
+        }
+      }
+    }
+
+    window.__omniaKitScan = function () { try { omniaScanAnime(document); } catch (e) {} };
+    omniaScanAnime(document);
   });
 })();

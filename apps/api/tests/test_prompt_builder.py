@@ -22,6 +22,8 @@ def test_static_prompt_includes_style_and_animation_kit() -> None:
     # survives any preset-roster churn.
     assert "ВИЗУАЛЬНЫЙ СТИЛЬ" in sp
     assert "data-reveal-delay" in sp  # _ANIMATION_KIT class API
+    assert "hero-stagger" in sp  # anime.js data-anime vocabulary taught
+    assert "assets/anime.min.js" in sp  # anime.js lib in head includes
     # Phase C.5 — Color grading utilities documented in _KIT_V3_REFERENCE.
     # Three families, one assert each — catches accidental block removal.
     assert ".tone-warm" in sp  # image filter family
@@ -38,20 +40,26 @@ def test_fullstack_prompt_excludes_static_kit() -> None:
 
 
 def test_kit_files_constant() -> None:
-    assert KIT_FILES == frozenset({"assets/omnia-kit.css", "assets/omnia-kit.js"})
+    assert KIT_FILES == frozenset(
+        {"assets/omnia-kit.css", "assets/omnia-kit.js", "assets/anime.min.js"}
+    )
 
 
 def test_ensure_kit_linked_injects_when_missing() -> None:
     html = "<html><head><title>x</title></head><body></body></html>"
     out = _ensure_kit_linked({"index.html": html})["index.html"]
     assert "assets/omnia-kit.css" in out
+    assert "assets/anime.min.js" in out
     assert "assets/omnia-kit.js" in out
     assert out.index("omnia-kit.css") < out.index("</head>")  # injected before </head>
+    # anime.min.js must precede omnia-kit.js (kit reads window.anime on load).
+    assert out.index("anime.min.js") < out.index("omnia-kit.js")
 
 
 def test_ensure_kit_linked_idempotent_when_present() -> None:
     html = (
         '<html><head><link rel="stylesheet" href="assets/omnia-kit.css">'
+        '<script src="assets/anime.min.js" defer></script>'
         '<script src="assets/omnia-kit.js" defer></script></head><body></body></html>'
     )
     assert _ensure_kit_linked({"index.html": html})["index.html"] == html
@@ -400,3 +408,17 @@ def test_omnia_kit_css_phase_i_block_is_byte_identical_across_4_templates() -> N
     # All 4 files must be byte-identical end-to-end (the C.5 block already
     # established this invariant — Phase I sync MUST preserve it).
     assert files[0] == files[1] == files[2] == files[3]
+
+
+def test_anime_and_kit_js_byte_identical_across_4_templates() -> None:
+    """Vendored anime.min.js + omnia-kit.js must be byte-identical across all
+    4 static templates. The kit-edit-then-copy workflow silently forgets a dir
+    otherwise, and KIT_FILES protection assumes one canonical copy per asset."""
+    import pathlib
+    base = pathlib.Path(__file__).parent.parent / "src/omnia_api/templates"
+    for asset in ("assets/anime.min.js", "assets/omnia-kit.js"):
+        files = [
+            (base / t / asset).read_text(encoding="utf-8")
+            for t in ("blank", "blog", "landing", "portfolio")
+        ]
+        assert files[0] == files[1] == files[2] == files[3], asset

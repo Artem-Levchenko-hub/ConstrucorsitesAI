@@ -561,6 +561,7 @@ prefers-reduced-motion. Твоя задача — подключить его и
 
 ОБЯЗАТЕЛЬНО в <head> КАЖДОЙ HTML-страницы (включая about.html и пр.):
   <link rel="stylesheet" href="assets/omnia-kit.css">
+  <script src="assets/anime.min.js" defer></script>
   <script src="assets/omnia-kit.js" defer></script>
 
 CSS-классы (ставь на элементы):
@@ -614,6 +615,22 @@ JS-хуки (просто проставь id/классы/атрибуты — 
 из этого списка. Если их нет — сайт выглядит как 2023-год AI-template. Подробное
 описание когда что применять — в блоке «KIT v3 — ДОПОЛНИТЕЛЬНЫЕ КЛАССЫ» в начале
 промпта.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✨ ANIME.JS-АКЦЕНТЫ (data-anime) — «вкусная» микро-анимация поверх кита
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+В ките подключён anime.js (assets/anime.min.js). Ставь атрибут data-anime — кит
+сам построит таймлайн (свой JS/keyframes для этого НЕ пиши). Словарь:
+• data-anime="hero-stagger" — на ОДИН <h1> героя: слова влетают по очереди.
+• data-anime="reveal-stagger" — на контейнер-сетку: прямые дети каскадом при скролле.
+• data-anime="count-up" (или data-anime-counter) — на <span> с числом («120», «99.9%», «1 200»): 0→N при появлении.
+• data-anime-magnetic — на ОДНУ ключевую CTA-кнопку: тянется к курсору (только desktop).
+Доп. атрибуты: data-anime-split="letter|word", data-anime-stagger="40".
+
+ПРАВИЛО МЕРЫ (иначе AI-слоп): на страницу максимум ОДИН hero-stagger, ОДНА
+reveal-stagger-сетка, один-два count-up, ОДНА magnetic-кнопка. На одном элементе —
+ЛИБО motion-класс кита (.reveal/.scroll-fade-up), ЛИБО data-anime, не оба сразу.
+Всё уважает prefers-reduced-motion и тихо деградирует, если anime.js не загрузился.
 
 ЖЕЛЕЗНОЕ ПРАВИЛО: НИКОГДА не возвращай и не переписывай assets/omnia-kit.css или
 assets/omnia-kit.js — они управляются Omnia и НЕ входят в твой ответ. Анимаций — в
@@ -1055,7 +1072,9 @@ STATIC_TEMPLATES = frozenset({"blank", "landing", "portfolio", "blog"})
 # Файлы встроенного design+animation кита: лежат в каждом статическом шаблоне,
 # подключаются генерацией, но управляются Omnia — модель их не переписывает, а
 # messages.py фильтрует их из контекста и из возвращённых файлов (защита).
-KIT_FILES = frozenset({"assets/omnia-kit.css", "assets/omnia-kit.js"})
+KIT_FILES = frozenset(
+    {"assets/omnia-kit.css", "assets/omnia-kit.js", "assets/anime.min.js"}
+)
 
 HISTORY_LIMIT = 6
 

@@ -334,6 +334,10 @@ def _looks_truncated(accumulated: str, files: dict[str, str]) -> bool:
 
 
 _KIT_LINK = '<link rel="stylesheet" href="assets/omnia-kit.css">'
+# anime.min.js must load BEFORE omnia-kit.js — the kit's defer callback reads
+# window.anime at DOMContentLoaded. Both are KIT_FILES (stripped from model
+# output + re-injected here), so the order is guaranteed regardless of the model.
+_ANIME_SCRIPT = '<script src="assets/anime.min.js" defer></script>'
 _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 
 
@@ -379,12 +383,15 @@ def _ensure_kit_linked(files: dict[str, str]) -> dict[str, str]:
         if not path.lower().endswith((".html", ".htm")):
             continue
         has_css = "assets/omnia-kit.css" in content
+        has_anime = "assets/anime.min.js" in content
         has_js = "assets/omnia-kit.js" in content
-        if has_css and has_js:
+        if has_css and has_anime and has_js:
             continue
         inject = ""
         if not has_css:
             inject += "  " + _KIT_LINK + "\n"
+        if not has_anime:
+            inject += "  " + _ANIME_SCRIPT + "\n"
         if not has_js:
             inject += "  " + _KIT_SCRIPT + "\n"
         if "</head>" in content:
