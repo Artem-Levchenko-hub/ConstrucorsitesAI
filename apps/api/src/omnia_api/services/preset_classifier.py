@@ -143,6 +143,69 @@ _INDUSTRY_FRAGMENT_TO_PRESET: dict[str, str] = {
     # Studio / portfolio → studio-showreel
     "портфол": "studio-showreel",
     "portfolio": "studio-showreel",
+    # ── Wave 3 (добор вертикалей) ──────────────────────────────────────
+    # Авто (бар «авто» НЕ кладём — ⊂ «автосервис»→local). Конкретные стемы.
+    "автосалон": "auto-showroom",
+    "детейлинг": "auto-showroom",
+    "автомойк": "auto-showroom",
+    "каршеринг": "auto-showroom",
+    "автодилер": "auto-showroom",
+    # Фэшн-бренды (бутик/lookbook → эдиториал, не масс-маркет retail)
+    "lookbook": "fashion-runway",
+    "couture": "fashion-runway",
+    "модный дом": "fashion-runway",
+    "бутик": "fashion-runway",
+    # Фитнес-залы (gym-специфичные; «фитнес» как app остаётся → wellness)
+    "тренажёрн": "fitness-power",
+    "кроссфит": "fitness-power",
+    "crossfit": "fitness-power",
+    "качалк": "fitness-power",
+    "единоборств": "fitness-power",
+    # Детское (после медицины: «детская стоматология» уже поймана «стомат»)
+    "детск": "kids-playful",
+    "садик": "kids-playful",
+    "развивашк": "kids-playful",
+    "монтессори": "kids-playful",
+    # Свадьбы / ивенты
+    "свадьб": "event-celebration",
+    "банкет": "event-celebration",
+    "юбилей": "event-celebration",
+    "ивент": "event-celebration",
+    "торжеств": "event-celebration",
+    # Крипто / web3
+    "крипт": "crypto-web3",
+    "блокчейн": "crypto-web3",
+    "blockchain": "crypto-web3",
+    "стейкинг": "crypto-web3",
+    # Гейминг / киберспорт
+    "киберспорт": "gaming-arena",
+    "esports": "gaming-arena",
+    "геймдев": "gaming-arena",
+    # НКО / благотворительность
+    "благотворительн": "nonprofit-cause",
+    "волонт": "nonprofit-cause",
+    "пожертв": "nonprofit-cause",
+    # Стройка / ремонт под ключ (крупный, не мелкий мастер)
+    "строительств": "construction-solid",
+    "стройк": "construction-solid",
+    "прораб": "construction-solid",
+    "ремонт под ключ": "construction-solid",
+    "фасад": "construction-solid",
+    "кровл": "construction-solid",
+    # Маркетинг / рекламные агентства (НЕ «маркетплейс»: «маркетинг» ⊄ него)
+    "маркетинг": "agency-bold",
+    "брендинг": "agency-bold",
+    "диджитал": "agency-bold",
+    # Коворкинг / офисы
+    "коворкинг": "workspace-clean",
+    "бизнес-центр": "workspace-clean",
+    "аренда офис": "workspace-clean",
+    # Ветеринария / зоо
+    "ветеринар": "pet-care",
+    "ветклиник": "pet-care",
+    "зоомагазин": "pet-care",
+    "груминг": "pet-care",
+    "зоосалон": "pet-care",
 }
 
 # Синтетические UUID для атрибуции телеметрии classifier-вызовов в LLM-gateway.
