@@ -293,6 +293,18 @@ def _extract_photo_tags(files: dict[str, str]) -> list[ImgTag]:
     return out
 
 
+def _pexels_client_kwargs() -> dict:
+    """httpx.AsyncClient kwargs for Pexels calls — routes through the egress
+    proxy when ``settings.pexels_proxy`` is set (pexels.com is unreliable from
+    the RU prod egress). Pexels only; the gpt-image path (``_fetch_one``) is
+    untouched. httpx 0.28 uses the singular ``proxy=`` argument."""
+    kw: dict = {"timeout": _REQUEST_TIMEOUT}
+    proxy = get_settings().pexels_proxy
+    if proxy:
+        kw["proxy"] = proxy
+    return kw
+
+
 async def _fetch_photo(keywords: str, project_id: str) -> bytes | None:
     """Search Pexels for ``keywords`` and download one photo. Deterministic
     pick by (project_id, keywords) so the same project re-renders the same
@@ -305,7 +317,7 @@ async def _fetch_photo(keywords: str, project_id: str) -> bytes | None:
     headers = {"Authorization": key.get_secret_value()}
     params = {"query": keywords, "per_page": _PEXELS_PER_PAGE, "orientation": "landscape"}
     try:
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+        async with httpx.AsyncClient(**_pexels_client_kwargs()) as client:
             resp = await client.get(_PEXELS_SEARCH_URL, params=params, headers=headers)
     except Exception as exc:  # noqa: BLE001 — never break a resolve over one tag
         log.warning("image_resolver: pexels transport error kw=%.40s err=%r", keywords, exc)
@@ -327,7 +339,7 @@ async def _fetch_photo(keywords: str, project_id: str) -> bytes | None:
     if not img_url:
         return None
     try:
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as c:
+        async with httpx.AsyncClient(**_pexels_client_kwargs()) as c:
             img_resp = await c.get(img_url)
         if img_resp.status_code == 200:
             return img_resp.content

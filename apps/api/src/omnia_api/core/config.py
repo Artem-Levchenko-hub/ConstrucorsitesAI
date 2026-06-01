@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # unique keyword, never per render. Needs PEXELS_API_KEY (free; pexels.com/api).
     photo_source: Literal["off", "pexels"] = Field(default="off")
     pexels_api_key: SecretStr | None = Field(default=None)
+    # Outbound proxy for Pexels calls only. pexels.com is unreliable / blocked
+    # from the RU prod egress, so the api container reaches it via this proxy
+    # (e.g. "http://user:pass@host:port"). Empty = direct. Applies ONLY to the
+    # image_resolver Pexels client, never to the gateway / gpt-image path.
+    pexels_proxy: str | None = Field(default=None)
     minio_bucket_photos: str = Field(default="omnia-photos")
 
     jwt_secret: SecretStr

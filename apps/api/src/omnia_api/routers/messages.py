@@ -37,6 +37,7 @@ from omnia_api.services.file_extractor import (
     extract_files,
 )
 from omnia_api.services.image_resolver import resolve_images
+from omnia_api.services.contrast_guard import enforce_contrast
 from omnia_api.services.intent_triage import ORCHESTRATE, decide_intent
 from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
@@ -1580,6 +1581,14 @@ async def _process_prompt(
                         )
             except Exception as _acc_exc:
                 print(f"[PP] acceptance_gate_failed err={_acc_exc!r}", flush=True)
+
+        # Phase 12 — deterministic contrast guard. The freeform writer (any
+        # model) can ship unreadable body text on its own background; nothing
+        # above repairs colours on the FINAL HTML (ui_audit only scores it).
+        # Repair here, right before commit, so the snapshot / GitHub export /
+        # rollback all carry the readable page. Pure + idempotent + fail-soft.
+        if files:
+            files = enforce_contrast(files)
 
         new_snapshot_id: UUID | None = None
         if files:
