@@ -175,6 +175,7 @@ services:
       # =pexels + PEXELS_API_KEY in .env turn it on; off => tags stripped to mesh.
       PHOTO_SOURCE: ${PHOTO_SOURCE:-off}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PEXELS_PROXY: ${PEXELS_PROXY:-}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       JWT_COOKIE_SECURE: "true"
       LLM_GATEWAY_URL: http://gateway:8001
@@ -243,6 +244,7 @@ services:
       MINIO_BUCKET_PHOTOS: ${MINIO_BUCKET_PHOTOS:-omnia-photos}
       PHOTO_SOURCE: ${PHOTO_SOURCE:-off}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PEXELS_PROXY: ${PEXELS_PROXY:-}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
