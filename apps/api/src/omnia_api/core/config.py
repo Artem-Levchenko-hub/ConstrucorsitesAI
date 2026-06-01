@@ -184,6 +184,14 @@ class Settings(BaseSettings):
     # the rest fall back to catalog/IR. Lets ops ramp 10→50→100 via .env.
     freeform_traffic_pct: int = Field(default=100)
 
+    # ── Testing escape hatch — remove ALL generation gating ───────────────
+    # When true: every generation is treated as free (is_free=True), so the
+    # api wallet-floor check is skipped AND the gateway debit is skipped
+    # (metadata.free=true). Owner directive 2026-06-01: during design testing
+    # neither the 3-free-gen limit nor the wallet balance may block a
+    # generation. Flip UNLIMITED_GENERATIONS=false to restore normal billing.
+    unlimited_generations: bool = Field(default=False)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

@@ -186,7 +186,11 @@ async def post_prompt(
     # Free-tier gate: the first FREE_GENERATION_LIMIT generations per user are
     # free (wow-effect onboarding) and skip the wallet floor check; the gateway
     # also skips the debit (metadata.free=true). After that, normal balance rules.
-    is_free = (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
+    # `UNLIMITED_GENERATIONS=true` (testing escape hatch) forces every gen to be
+    # free → skips this wallet-floor check AND the gateway debit (metadata.free).
+    is_free = get_settings().unlimited_generations or (
+        (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
+    )
     if not is_free:
         wallet = await session.get(Wallet, current_user.id)
         if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
@@ -1582,12 +1586,24 @@ async def _process_prompt(
             except Exception as _acc_exc:
                 print(f"[PP] acceptance_gate_failed err={_acc_exc!r}", flush=True)
 
-        # Phase 12 — deterministic contrast guard. The freeform writer (any
-        # model) can ship unreadable body text on its own background; nothing
-        # above repairs colours on the FINAL HTML (ui_audit only scores it).
-        # Repair here, right before commit, so the snapshot / GitHub export /
-        # rollback all carry the readable page. Pure + idempotent + fail-soft.
+        # Phase 12 — deterministic design guards on the FINAL HTML, right before
+        # commit (so snapshot / GitHub export / rollback all carry the fixed
+        # page). The freeform writer (any model) drifts off the seeded palette
+        # and can ship unreadable text; nothing above enforces it (ui_audit only
+        # scores). Order matters: palette FIRST (snap colours to the project's
+        # curated palette), THEN contrast (guarantee body readability against the
+        # snapped palette). Both pure + idempotent + fail-soft.
         if files:
+            try:
+                from omnia_api.services.design_tokens import tokens_for_project
+                from omnia_api.services.palette_guard import enforce_palette
+
+                _palette = tokens_for_project(
+                    str(project_id), industry_hint=project_design_preset_id
+                ).palette
+                files = enforce_palette(files, _palette)
+            except Exception as _pg_exc:  # noqa: BLE001 — never block the build
+                print(f"[PP] palette_guard skipped err={_pg_exc!r}", flush=True)
             files = enforce_contrast(files)
 
         new_snapshot_id: UUID | None = None

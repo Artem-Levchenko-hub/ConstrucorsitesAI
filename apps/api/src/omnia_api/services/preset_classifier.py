@@ -54,50 +54,95 @@ STEM_LEN = 5  # длина префикса для матчинга русски
 # напрямую, минуя scoring. Это сокращает дорогу к правильному ответу для
 # самых «громких» вертикалей.
 _INDUSTRY_FRAGMENT_TO_PRESET: dict[str, str] = {
-    # Медицина / аптека / стоматология — лучший имеющийся preset для
-    # медицинской вертикали = wellness-casual (light + green palette,
-    # health-related keywords). Не идеален (он про fitness-apps), но
-    # сильно лучше «editorial-trust» дефолта.
-    "аптек": "wellness-casual",
-    "aptek": "wellness-casual",  # latin: "Apteka" / "Flowapteka" / "Apteki"
-    "pharm": "wellness-casual",
-    "drugst": "wellness-casual",
-    "клиник": "wellness-casual",
-    "clinic": "wellness-casual",
-    "стомат": "wellness-casual",
-    "dental": "wellness-casual",
-    "медцентр": "wellness-casual",
-    "поликлин": "wellness-casual",
-    # B2B / consulting / real estate
+    # Еда / общепит → restaurant-warm (тёплая палитра + фото блюд).
+    # Короткие «кафе»/«суши» (<5) НЕ кладём (false-positive: «сушилка»,
+    # «кафедра») — их ловит keyword-эвристика по стему.
+    "ресторан": "restaurant-warm",
+    "restaur": "restaurant-warm",
+    "пиццер": "restaurant-warm",
+    "кофейн": "restaurant-warm",
+    "бистро": "restaurant-warm",
+    "пекарн": "restaurant-warm",
+    "бургер": "restaurant-warm",
+    "sushi": "restaurant-warm",
+    # Ретейл / магазины → retail-product
+    "магаз": "retail-product",
+    "ретейл": "retail-product",
+    "ритейл": "retail-product",
+    "ecommerce": "retail-product",
+    "маркетплейс": "retail-product",
+    # Бьюти / салоны → beauty-elegant (без бесплого «салон» — ⊂ «автосалон»)
+    "барбершоп": "beauty-elegant",
+    "космет": "beauty-elegant",
+    "маникюр": "beauty-elegant",
+    "парикмах": "beauty-elegant",
+    # Медицина / стоматология / аптека → medical-clinic (спокойный teal,
+    # НЕ fitness-wellness как раньше — это была чужая зелень).
+    "клиник": "medical-clinic",
+    "clinic": "medical-clinic",
+    "стомат": "medical-clinic",
+    "dental": "medical-clinic",
+    "медцентр": "medical-clinic",
+    "поликлин": "medical-clinic",
+    "аптек": "medical-clinic",
+    "aptek": "medical-clinic",
+    "pharm": "medical-clinic",
+    "drugst": "medical-clinic",
+    # Недвижимость → realestate-premium (раньше уезжала в B2B-консалтинг)
+    "недвиж": "realestate-premium",
+    "realestate": "realestate-premium",
+    "новострой": "realestate-premium",
+    "застройщ": "realestate-premium",
+    "девелопер": "realestate-premium",
+    # Отели / базы отдыха / тревел → hospitality-escape
+    "отель": "hospitality-escape",
+    "гостиниц": "hospitality-escape",
+    "глэмпинг": "hospitality-escape",
+    "glamping": "hospitality-escape",
+    "санатори": "hospitality-escape",
+    "курорт": "hospitality-escape",
+    # Образование / курсы → education-bright
+    "репетит": "education-bright",
+    "автошкол": "education-bright",
+    "образован": "education-bright",
+    # Локальные услуги (ремонт/клининг/мастер) → local-services
+    "клининг": "local-services",
+    "сантехник": "local-services",
+    "электрик": "local-services",
+    "автосервис": "local-services",
+    "грузопере": "local-services",
+    "эвакуатор": "local-services",
+    # Юр-фирмы / адвокаты → law-authority (своя, не editorial-trust)
+    "юрист": "law-authority",
+    "юридическ": "law-authority",
+    "адвокат": "law-authority",
+    "нотариус": "law-authority",
+    "арбитраж": "law-authority",
+    # B2B / consulting → editorial-trust
     "консалт": "editorial-trust",
     "consult": "editorial-trust",
-    "недвиж": "editorial-trust",
-    "realestate": "editorial-trust",
-    # Magazines / publications
+    # Magazines / publications → editorial-publication
     "журнал": "editorial-publication",
     "magazin": "editorial-publication",
     "publicat": "editorial-publication",
-    # SaaS / IT
+    # SaaS / IT → saas-product
     "saas": "saas-product",
     "стартап": "saas-product",
     "startup": "saas-product",
-    # Wellness / fitness
+    # Wellness / fitness (apps) → wellness-casual
     "fitness": "wellness-casual",
     "фитнес": "wellness-casual",
     "yoga": "wellness-casual",
     "йога": "wellness-casual",
     "медитац": "wellness-casual",
-    # VFX / video production
+    # VFX / video production → boutique-reel
     "продакш": "boutique-reel",
-    "produc": "boutique-reel",
-    # Events / festivals / brutalist
+    # Events / festivals → festival-brutalist
     "фестивал": "festival-brutalist",
     "festiv": "festival-brutalist",
-    "concert": "festival-brutalist",
-    # Studio / agency portfolios
-    "агентств": "studio-showreel",
-    "portfolio": "studio-showreel",
+    # Studio / portfolio → studio-showreel
     "портфол": "studio-showreel",
+    "portfolio": "studio-showreel",
 }
 
 # Синтетические UUID для атрибуции телеметрии classifier-вызовов в LLM-gateway.
