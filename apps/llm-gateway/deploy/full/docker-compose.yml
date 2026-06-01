@@ -81,6 +81,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-omnia-minio-secret-please-change}
       MINIO_BUCKET_PROJECTS: ${MINIO_BUCKET_PROJECTS:-projects}
       MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
+      MINIO_BUCKET_PHOTOS: ${MINIO_BUCKET_PHOTOS:-omnia-photos}
     entrypoint:
       - /bin/sh
       - -c
@@ -89,7 +90,11 @@ services:
         mc alias set m http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
         mc mb --ignore-existing "m/$$MINIO_BUCKET_PROJECTS"
         mc mb --ignore-existing "m/$$MINIO_BUCKET_PREVIEWS"
+        mc mb --ignore-existing "m/$$MINIO_BUCKET_PHOTOS"
+        mc mb --ignore-existing "m/omnia-images"
         mc anonymous set download "m/$$MINIO_BUCKET_PREVIEWS"
+        mc anonymous set download "m/$$MINIO_BUCKET_PHOTOS"
+        mc anonymous set download "m/omnia-images"
         echo "MinIO buckets ready"
     restart: "no"
     networks:
