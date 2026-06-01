@@ -184,6 +184,17 @@ class Settings(BaseSettings):
     # the rest fall back to catalog/IR. Lets ops ramp 10→50→100 via .env.
     freeform_traffic_pct: int = Field(default=100)
 
+    # ── Art-Director → Writer 2-pass (owner directive 2026-06-01) ─────────
+    # The FIXED build orchestration: a strong model (role `art_director`,
+    # Opus) writes an ULTRA-DETAILED design brief (the reasoning + per-section
+    # spec — NOT code), then a cheap model (role `freeform_writer`, DeepSeek)
+    # writes the whole HTML by EXECUTING that brief. The expensive tokens buy
+    # a compact senior-grade brief; the bulk HTML tokens run on the cheap
+    # model — high design quality at low spend. Runs for every orchestrated
+    # build regardless of model tier (no plain/catalog downgrade). Kill switch
+    # for instant rollback to the prior single-shot freeform path (R-10).
+    use_art_director_freeform: bool = Field(default=True)
+
     # ── Testing escape hatch — remove ALL generation gating ───────────────
     # When true: every generation is treated as free (is_free=True), so the
     # api wallet-floor check is skipped AND the gateway debit is skipped
@@ -384,11 +395,19 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "link_repair":  "deepseek-chat",  # rewrite dead hrefs
     "image_prompt": "deepseek-chat",  # short image-gen prompt
     "single_shot":  "deepseek-chat",  # non-catalog freeform fallback path
-    # The leap (2026-05): premium freeform writes the WHOLE page as bespoke HTML
-    # — the design-critical pass — so it runs on the strongest model. Opus 4.7 is
-    # the gateway's top tier (proxyapi → anthropic/claude-opus-4-5). Only the
-    # premium freeform path resolves this role; cheap edits never touch it.
-    "freeform_writer": "claude-opus-4-7",
+    # Art-Director → Writer 2-pass (owner directive 2026-06-01). The DESIGN
+    # BRAIN — feeling→idea→system + ultra-detailed per-section spec — runs on
+    # the strongest model the gateway serves. `claude-opus-4-7` IS the top Opus
+    # registered in the gateway (litellm_router → anthropic/claude-opus-4-5);
+    # `claude-opus-4-8` is NOT in /v1/models yet, so wiring it here would 404.
+    # Bump via ROLE_MODELS env ("art_director=claude-opus-4-8") the moment the
+    # gateway registers it — no code change needed (model_for_role reads env
+    # first). This pass emits a BRIEF, not code, so its Opus tokens stay small.
+    "art_director": "claude-opus-4-7",
+    # The WRITER executes the art-director's brief into the full HTML. This is
+    # the bulk-token pass, so it runs on the cheap worker model (DeepSeek): the
+    # brief carries the design intelligence, the writer just realises it.
+    "freeform_writer": "deepseek-chat",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
 }
 

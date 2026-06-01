@@ -31,6 +31,16 @@ def test_role_map_orchestrator_sonnet_workers_deepseek() -> None:
     assert model_for_role("audit_retry") == "claude-sonnet-4-6"
 
 
+def test_art_director_writer_split() -> None:
+    # Owner directive (2026-06-01): the design BRAIN (art-director — feeling →
+    # idea → system + ultra-detailed brief) runs on the strongest Opus the
+    # gateway serves; the bulk HTML WRITER executes that brief on cheap DeepSeek.
+    # `claude-opus-4-8` is not in the gateway's /v1/models yet — bump via
+    # ROLE_MODELS env when it lands (no code change).
+    assert model_for_role("art_director") == "claude-opus-4-7"
+    assert model_for_role("freeform_writer") == "deepseek-chat"
+
+
 def test_no_role_uses_flaky_gemini() -> None:
     # gemini-2.5-flash streaming is unreliable behind the RU egress proxy
     # (incomplete chunked read ~50%). It must not back any pipeline role.

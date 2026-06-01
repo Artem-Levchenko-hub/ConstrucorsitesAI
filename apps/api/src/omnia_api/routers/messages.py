@@ -29,6 +29,7 @@ from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.art_director_writer import art_director_writer_generate
 from omnia_api.services.director_polish import director_polish_generate
 from omnia_api.services.file_extractor import (
     UnsafePathError,
@@ -209,9 +210,20 @@ async def post_prompt(
     # build, structural/backend/redesign change, or a batch of edits at once →
     # orchestrate; a lone cosmetic touch-up → cheap. Keeps Opus off "recolour
     # the login button" work so the client pays pennies for the long tail.
+    # "First build" = the project has no real generation yet. A new project is
+    # seeded with a STARTER snapshot (routers/projects.py — prompt_text=None), so
+    # keying off `current_snapshot_id is None` mislabels EVERY first real prompt
+    # as a follow-up and drops it to the cheap path. Treat "current snapshot is
+    # the starter" (no prompt_text) as the first build instead.
+    _cur_snapshot = (
+        await session.get(Snapshot, project.current_snapshot_id)
+        if project.current_snapshot_id is not None
+        else None
+    )
+    is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
     intent = decide_intent(
         payload.prompt,
-        is_first_prompt=project.current_snapshot_id is None,
+        is_first_prompt=is_first_build,
         selected_count=len(selected_dump or []),
     )
     orchestrate = intent == ORCHESTRATE
@@ -705,6 +717,7 @@ async def _process_prompt(
             force_multipass: bool = False,
             force_single_shot: bool = False,
             force_all: str | None = None,
+            allow_art_director: bool = True,
         ) -> None:
             """Drain one stream from the gateway into `state`.
 
@@ -747,6 +760,25 @@ async def _process_prompt(
             # When False (a cheap targeted edit) we skip BOTH Director→Polish AND
             # the 4-pass multipass and run a single reliable shot — so "recolour
             # the button" never spins up the premium pipeline and burns budget.
+            # FIXED build orchestration (owner 2026-06-01): Art-Director (Opus)
+            # writes the ultra-detailed brief, Writer (DeepSeek) executes it into
+            # HTML. Wins for EVERY orchestrated build when the flag is on —
+            # independent of model tier, so the design pipeline is never silently
+            # downgraded to plain/catalog. A forced single model (admin override /
+            # empty-response fallback → force_all) or a cheap targeted edit
+            # (orchestrate=False) skips it and keeps its own single model.
+            _adw_active = (
+                allow_art_director
+                and not force_single_shot
+                and not force_all
+                and orchestrate
+                and _settings.use_art_director_freeform
+                # The writer emits freeform HTML, so only run when the pipeline
+                # parses HTML (freeform). On prod freeform = 100%, so this is
+                # always-on for builds; it just avoids feeding HTML to the
+                # catalog/plain JSON parser if freeform is ever switched off.
+                and _gen_mode == "freeform"
+            )
             _dp_active = (
                 not force_single_shot
                 and orchestrate
@@ -758,7 +790,17 @@ async def _process_prompt(
                 # is freeform's quality mechanism instead.
                 and _gen_mode != "freeform"
             )
-            if _dp_active:
+            if _adw_active:
+                source = art_director_writer_generate(
+                    base_messages=messages,
+                    user_prompt=prompt_text,
+                    art_director_model=model_for_role("art_director", override=force_model),
+                    writer_model=model_for_role("freeform_writer", override=force_model),
+                    user_id=user_id,
+                    project_id=project_id,
+                    message_id=assistant_message_id,
+                )
+            elif _dp_active:
                 source = director_polish_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
@@ -1052,7 +1094,10 @@ async def _process_prompt(
                     f"[PP] same_model_multipass_retry {effective_model}",
                     flush=True,
                 )
-                await _run_stream(model_id, force_multipass=True, force_all=force_model)
+                await _run_stream(
+                    model_id, force_multipass=True, force_all=force_model,
+                    allow_art_director=False,
+                )
                 mp_acc = str(state["accumulated"])
                 mp_usage = state["usage"]
                 mp_err = state["error"]
@@ -1518,7 +1563,10 @@ async def _process_prompt(
                     )
                     messages.append({"role": "assistant", "content": accumulated})
                     messages.append({"role": "user", "content": _verdict.feedback})
-                    await _run_stream(effective_model, force_all=force_model)
+                    await _run_stream(
+                        effective_model, force_all=force_model,
+                        allow_art_director=False,
+                    )
                     if state["error"] or not str(state["accumulated"]).strip():
                         print(f"[PP] acceptance_repair_empty err={state['error']!r}", flush=True)
                         break
