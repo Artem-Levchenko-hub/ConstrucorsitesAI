@@ -161,9 +161,14 @@ class Settings(BaseSettings):
     # still fails. This is the "awwwards-from-first-prompt" path. The recent
     # art-director / designer-brain freeform brief (prompt_builder.py) only runs
     # when this is on — it was built but left dormant before this flip.
-    # `use_vision_audit` stays OFF until the gateway multimodal path is confirmed
-    # live (the gate's structure+responsive layers already block broken pages
-    # without it). Override any flag per-env in .env.
+    # `use_vision_audit` is ON (owner directive 2026-06-02): the gateway DOES
+    # accept OpenAI-style multimodal image_url blocks (routers/chat.py +
+    # services/safety.py pass them through untouched — "vision audit sends
+    # image_url blocks here"), and the `audit` role is Sonnet (vision-capable
+    # via LiteLLM→Anthropic). The vision layer screenshots the page and judges
+    # broken/generic/beautiful → feeds the repair loop (stronger anti-generic).
+    # Fail-soft: any gateway/parse error degrades to a skipped verdict (score
+    # 10) that never blocks the page. Override any flag per-env in .env.
     #
     #   use_freeform_render  — premium tier writes free HTML (else catalog/IR)
     #   use_acceptance_gate  — run structure+responsive (+vision) check & repair
@@ -172,7 +177,7 @@ class Settings(BaseSettings):
     #                          gateway multimodal support; best-effort, fail-soft)
     use_freeform_render: bool = Field(default=True)
     use_acceptance_gate: bool = Field(default=True)
-    use_vision_audit: bool = Field(default=False)
+    use_vision_audit: bool = Field(default=True)
     # Max self-repair re-rolls before the gate gives up (and freeform falls
     # back to catalog). Each retry is one extra LLM call — keep small.
     acceptance_max_retries: int = Field(default=2)
