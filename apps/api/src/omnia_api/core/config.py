@@ -309,7 +309,8 @@ MODEL_TIER_MAP: dict[str, str] = {
     "claude-opus-4-7":   "premium",
     "claude-opus-4-8":   "premium",
     "gemini-3.5-flash-high": "premium",  # orchestrator (art_director)
-    "deepseek-v4-pro-thinking": "premium",  # orchestrator + coder (owner 06-02)
+    "deepseek-v4-pro-thinking": "premium",  # orchestrator (owner 06-02)
+    "deepseek-v4-pro": "premium",  # coder (non-thinking, owner 06-02)
     "claude-opus-4-6":   "premium",
     "claude-sonnet-4-6": "premium",
     "gpt-5":             "premium",
@@ -434,15 +435,14 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "link_repair":  "deepseek-chat",  # rewrite dead hrefs
     "image_prompt": "deepseek-chat",  # short image-gen prompt
     "single_shot":  "deepseek-chat",  # non-catalog freeform fallback path
-    # Art-Director → Writer 2-pass. Owner directive 2026-06-02: ONE strong
-    # thinking model for BOTH the ORCHESTRATOR (design-brain → ultra-detailed
-    # brief) and the DEVELOPER (writes the HTML) — deepseek-v4-pro-thinking via
-    # the vsegpt provider (VSEGPT_API_KEY). 1M context (no 16K-cap truncation),
-    # reasoning in a separate field so `content` stays clean. Swap at runtime via
-    # ROLE_MODELS env (e.g. "art_director=gemini-3.5-flash-high,freeform_writer=
-    # minimax-m2.7") — no code change.
+    # Art-Director → Writer 2-pass, ALL DeepSeek (owner 2026-06-02: «везде дипсик,
+    # чтобы точно отрабатывал»). ORCHESTRATOR (design-brain → brief) =
+    # deepseek-v4-pro-thinking (reasoning helps design, separate reasoning field →
+    # clean content). DEVELOPER (writes the HTML) = deepseek-v4-pro NON-thinking
+    # (no reasoning overhead → faster, clean HTML). Both 1M context, both vsegpt.
+    # Swap at runtime via ROLE_MODELS env — no code change.
     "art_director": "deepseek-v4-pro-thinking",
-    "freeform_writer": "deepseek-v4-pro-thinking",
+    "freeform_writer": "deepseek-v4-pro",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
 }
 

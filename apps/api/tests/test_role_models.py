@@ -34,11 +34,11 @@ def test_role_map_all_vsegpt_no_proxyapi() -> None:
 
 
 def test_art_director_writer_split() -> None:
-    # Owner directive (2026-06-02): ONE strong thinking model for BOTH the
-    # orchestrator (art-director) and the developer (writes the HTML) —
-    # deepseek-v4-pro-thinking via the vsegpt provider. Swap via ROLE_MODELS env.
+    # Owner directive (2026-06-02): all-DeepSeek. Orchestrator (art-director) =
+    # deepseek-v4-pro-thinking (brief, reasoning); developer (HTML) =
+    # deepseek-v4-pro NON-thinking (fast, clean). Both vsegpt. Swap via ROLE_MODELS.
     assert model_for_role("art_director") == "deepseek-v4-pro-thinking"
-    assert model_for_role("freeform_writer") == "deepseek-v4-pro-thinking"
+    assert model_for_role("freeform_writer") == "deepseek-v4-pro"
 
 
 def test_no_role_uses_flaky_gemini() -> None:

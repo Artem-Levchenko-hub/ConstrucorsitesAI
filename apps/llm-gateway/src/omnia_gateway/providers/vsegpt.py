@@ -67,6 +67,10 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
     # coder. 1M context (no 16K-cap orchestration break like v4-flash-thinking);
     # reasoning lands in a separate field, so `content` stays clean HTML/brief.
     "deepseek-v4-pro-thinking": "deepseek/deepseek-v4-pro-thinking",
+    # Owner pick 2026-06-02: deepseek-v4-pro (NON-thinking) as the coder — same
+    # 1M-context family, no reasoning overhead → faster, clean HTML. "Deepseek
+    # everywhere" for reliability.
+    "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
 }
 
 # Default ceiling for a thinking model: chain-of-thought shares the token budget
