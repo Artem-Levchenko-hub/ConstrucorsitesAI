@@ -161,11 +161,13 @@ async def stream_completion(
             sber_provider.acompletion, model, messages, temperature, max_tokens, 0.7
         )
     elif vsegpt_provider.is_vsegpt_model(model):
-        # Thinking model — give it a 16k visible-answer budget (default_max_tokens)
-        # so the chain-of-thought can't eat the real output.
-        source = _custom_provider_pseudo_stream(
-            vsegpt_provider.acompletion, model, messages, temperature, max_tokens, 0.5, 16384
-        )
+        # TRUE token streaming — the page builds LIVE in the preview as the coder
+        # writes (no more 3-6 min spinner then a flush). astream defaults to a
+        # wide max_tokens so a thinking model's CoT can't truncate the output.
+        _vkw: dict[str, Any] = {"temperature": 0.5 if temperature is None else temperature}
+        if max_tokens is not None:
+            _vkw["max_tokens"] = max_tokens
+        source = vsegpt_provider.astream(model, messages, **_vkw)
     else:
         source = _litellm_stream(model, messages, user_id, temperature, max_tokens)
 

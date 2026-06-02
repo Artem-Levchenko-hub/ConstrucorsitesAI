@@ -29,8 +29,11 @@ parse (director/polish emit PageIR JSON).
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import threading
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
@@ -38,6 +41,15 @@ import httpx
 
 from omnia_gateway.core.config import get_settings
 from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+
+# Transient transport faults worth one retry (vsegpt's TLS handshake to
+# api.vsegpt.ru intermittently stalls inside a long-lived process).
+_TRANSIENT = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+)
 
 # Omnia model ID → the model name vsegpt.ru proxies through to DeepSeek.
 # vsegpt is an OpenAI-compatible aggregator; the slug is sent verbatim as the
@@ -150,6 +162,113 @@ def _to_vsegpt_messages(
 def _approx_tokens(text: str) -> int:
     """~4 chars/token — coarse fallback when vsegpt omits usage."""
     return max(1, len(text) // 4)
+
+
+async def astream(
+    model: str,
+    messages: list[dict[str, Any]],
+    *,
+    temperature: float = 0.5,
+    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    timeout: float = _DEFAULT_TIMEOUT_S,
+) -> AsyncIterator[tuple[str, str]]:
+    """TRUE token streaming from vsegpt.ru — the page builds live in the preview.
+
+    Same constraints as acompletion (AsyncClient TLS-stalls in the uvicorn loop →
+    sync httpx.Client on a worker thread, trust_env=False + no-op mounts), but the
+    thread reads the SSE INCREMENTALLY and bridges each delta to the async caller
+    through an asyncio.Queue. Yields ``(delta, omnia_id)``. Retries once on a
+    transient fault that hits BEFORE the first delta; mid-stream faults propagate.
+    """
+    slug = _VSEGPT_MODEL_SLUG.get(model)
+    if slug is None:
+        raise ValidationFailedError(f"unsupported vsegpt model: {model}")
+    settings = get_settings()
+    if not settings.vsegpt_api_key:
+        raise UpstreamProviderError("VSEGPT_API_KEY not configured")
+
+    url = f"{settings.vsegpt_base_url.rstrip('/')}/chat/completions"
+    payload: dict[str, Any] = {
+        "model": slug,
+        "messages": _to_vsegpt_messages(messages, vision=_is_vision(model)),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.vsegpt_api_key.get_secret_value()}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    _DONE = object()
+
+    def _produce() -> None:
+        emitted = False
+        for attempt in range(2):
+            try:
+                with httpx.Client(
+                    timeout=httpx.Timeout(timeout, connect=30.0),
+                    trust_env=False,
+                    mounts={"all://": httpx.HTTPTransport()},
+                ) as client:
+                    with client.stream("POST", url, json=payload, headers=headers) as r:
+                        if r.status_code >= 400:
+                            body = r.read().decode("utf-8", "replace")[:300]
+                            loop.call_soon_threadsafe(
+                                queue.put_nowait, ("err", f"vsegpt HTTP {r.status_code}: {body}")
+                            )
+                            loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                            return
+                        for raw in r.iter_lines():
+                            if not raw or not raw.startswith("data:"):
+                                continue
+                            data = raw[5:].strip()
+                            if data == "[DONE]":
+                                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                                return
+                            try:
+                                delta = (
+                                    json.loads(data)["choices"][0]
+                                    .get("delta", {})
+                                    .get("content", "")
+                                )
+                            except (KeyError, IndexError, ValueError, TypeError):
+                                continue
+                            if delta:
+                                emitted = True
+                                loop.call_soon_threadsafe(queue.put_nowait, ("delta", delta))
+                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                return
+            except _TRANSIENT as exc:
+                if not emitted and attempt == 0:
+                    time.sleep(0.5)
+                    continue
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    ("err", f"vsegpt stream transport: {type(exc).__name__}: {exc}"),
+                )
+                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                return
+            except Exception as exc:  # noqa: BLE001 — surface as a clean error event
+                loop.call_soon_threadsafe(
+                    queue.put_nowait, ("err", f"vsegpt stream error: {type(exc).__name__}: {exc}")
+                )
+                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                return
+
+    threading.Thread(target=_produce, daemon=True).start()
+
+    while True:
+        item = await queue.get()
+        if item is _DONE:
+            break
+        kind, val = item
+        if kind == "err":
+            raise UpstreamProviderError(val)
+        yield val, model
 
 
 async def acompletion(
