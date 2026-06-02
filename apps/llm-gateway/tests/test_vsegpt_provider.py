@@ -103,6 +103,29 @@ def test_is_vsegpt_model() -> None:
     assert vsegpt.is_vsegpt_model("minimax-m2.7") is True
     assert vsegpt.is_vsegpt_model("deepseek-v4-pro-thinking") is True
     assert vsegpt.is_vsegpt_model("deepseek-v4-pro") is True
+    assert vsegpt.is_vsegpt_model("gemini-3-flash-vision") is True
+
+
+def test_vision_model_keeps_image_blocks() -> None:
+    # `vis-` models PASS the OpenAI multimodal array (text + image_url) so the
+    # screenshot reaches the judge; text-only models flatten it away.
+    assert vsegpt._is_vision("gemini-3-flash-vision") is True
+    assert vsegpt._is_vision("deepseek-chat") is False
+    msgs = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "judge this"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ],
+        }
+    ]
+    vis = vsegpt._to_vsegpt_messages(msgs, vision=True)
+    assert isinstance(vis[0]["content"], list)
+    assert any(b.get("type") == "image_url" for b in vis[0]["content"])
+    txt = vsegpt._to_vsegpt_messages(msgs, vision=False)
+    assert isinstance(txt[0]["content"], str)
+    assert "judge this" in txt[0]["content"]
     # Opus 4.7 stays a proxyapi/Router model — not dispatched to vsegpt.
     assert vsegpt.is_vsegpt_model("claude-opus-4-7") is False
     assert vsegpt.is_vsegpt_model("gpt-5") is False

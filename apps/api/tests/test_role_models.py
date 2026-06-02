@@ -26,8 +26,8 @@ def test_role_map_all_vsegpt_no_proxyapi() -> None:
     assert model_for_role("classify") == "deepseek-chat"
     assert model_for_role("edit") == "deepseek-chat"
     assert model_for_role("single_shot") == "deepseek-chat"
-    assert model_for_role("audit") == "deepseek-chat"
-    assert model_for_role("audit_retry") == "deepseek-chat"
+    assert model_for_role("audit") == "gemini-3-flash-vision"
+    assert model_for_role("audit_retry") == "gemini-3-flash-vision"
     # No proxyapi-backed Anthropic model may back any role.
     for m in ROLE_MODEL_MAP.values():
         assert m not in {"claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-7"}

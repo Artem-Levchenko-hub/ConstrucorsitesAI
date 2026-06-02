@@ -71,7 +71,19 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
     # 1M-context family, no reasoning overhead → faster, clean HTML. "Deepseek
     # everywhere" for reliability.
     "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+    # Vision judge for the acceptance gate (owner pick 2026-06-02: Gemini 3 Flash
+    # Preview). vsegpt `vis-` prefix = multimodal — the provider PASSES image_url
+    # blocks for these (see `_is_vision` + _to_vsegpt_messages) instead of
+    # flattening, so the screenshot actually reaches the model. DeepSeek has no
+    # vision model, so the judge is Gemini via vsegpt.
+    "gemini-3-flash-vision": "vis-google/gemini-3-flash-pre",
 }
+
+
+def _is_vision(model_id: str) -> bool:
+    """A vsegpt vision (multimodal) model — its slug carries the `vis-` prefix.
+    These keep image_url blocks; text-only models get content flattened."""
+    return _VSEGPT_MODEL_SLUG.get(model_id, "").startswith("vis-")
 
 # Default ceiling for a thinking model: chain-of-thought shares the token budget
 # with the visible answer, so a small cap silently truncates the real output.
@@ -119,13 +131,19 @@ def _flatten_content(content: Any) -> str:
     return str(content)
 
 
-def _to_vsegpt_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
+def _to_vsegpt_messages(
+    messages: list[dict[str, Any]], *, vision: bool = False
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     for m in messages:
         role = m.get("role")
         if role not in ("system", "user", "assistant"):
             raise ValidationFailedError(f"unsupported role: {role}")
-        out.append({"role": role, "content": _flatten_content(m.get("content", ""))})
+        raw = m.get("content", "")
+        # Vision models keep the OpenAI multimodal array (text + image_url blocks)
+        # so the screenshot reaches the judge; text-only models flatten images away.
+        content = raw if vision else _flatten_content(raw)
+        out.append({"role": role, "content": content})
     return out
 
 
@@ -159,7 +177,7 @@ async def acompletion(
     url = f"{settings.vsegpt_base_url.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
         "model": slug,
-        "messages": _to_vsegpt_messages(messages),
+        "messages": _to_vsegpt_messages(messages, vision=_is_vision(model)),
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": False,

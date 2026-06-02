@@ -421,13 +421,12 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "classify":     "deepseek-chat",  # pick 1 of N presets
     "director":     "deepseek-v4-pro-thinking",    # catalog ORCHESTRATOR (dormant in freeform) — was Sonnet/proxyapi, now vsegpt
     "polish":       "deepseek-chat",  # writes the real PageIR content (RU copy)
-    # proxyapi.ru FULLY RETIRED (owner 2026-06-02: «работает плохо»). audit +
-    # audit_retry were the last proxyapi consumers (Sonnet vision judge). Moved
-    # to vsegpt AND vision-audit is OFF — the vsegpt provider flattens image
-    # blocks to text, so a screenshot judge can't run through it anyway. Mapped to
-    # a vsegpt model purely so NOTHING references proxyapi.
-    "audit":        "deepseek-chat",  # vision judge — DISABLED (USE_VISION_AUDIT=false; vsegpt can't send images)
-    "audit_retry":  "deepseek-chat",  # escalation re-roll — vsegpt (proxyapi retired)
+    # proxyapi.ru FULLY RETIRED (owner 2026-06-02). The acceptance-gate VISION
+    # judge now runs on Gemini 3 Flash Preview via vsegpt (DeepSeek has no vision
+    # model). The vsegpt provider was taught to PASS image_url blocks for `vis-`
+    # models, so the screenshot reaches the judge. Enable with USE_VISION_AUDIT=true.
+    "audit":        "gemini-3-flash-vision",  # acceptance-gate screenshot judge
+    "audit_retry":  "gemini-3-flash-vision",  # escalation re-roll judge
     "skeleton":     "deepseek-chat",  # multipass fallback — structure
     "content":      "deepseek-chat",  # multipass fallback — copy
     "visual":       "deepseek-chat",  # multipass fallback — style tokens

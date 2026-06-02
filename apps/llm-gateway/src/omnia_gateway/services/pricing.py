@@ -35,6 +35,7 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     "minimax-m2.7": ModelPrice(Decimal("0.05"), Decimal("0.25")),
     "deepseek-v4-pro-thinking": ModelPrice(Decimal("0.10"), Decimal("0.40")),
     "deepseek-v4-pro": ModelPrice(Decimal("0.10"), Decimal("0.40")),
+    "gemini-3-flash-vision": ModelPrice(Decimal("0.05"), Decimal("0.30")),  # acceptance-gate vision judge
     # Haiku 4.5 via proxyapi.ru (sk- key, OpenAI-compat). Anthropic list price
     # ~$1/$5 per 1M; converted at the same factor as Sonnet (0.30/1.50 ≈ $3/$15)
     # then padded ~25% for proxyapi markup → 0.15/0.75 ₽ per 1k. Recheck the
@@ -112,6 +113,7 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
     "minimax-m2.7": _ModelMeta("MiniMax M2.7", "minimax", 200_000, ("quality", "budget")),
     "deepseek-v4-pro-thinking": _ModelMeta("DeepSeek V4 Pro (Thinking)", "deepseek", 1_000_000, ("quality",)),
     "deepseek-v4-pro": _ModelMeta("DeepSeek V4 Pro", "deepseek", 1_000_000, ("quality",)),
+    "gemini-3-flash-vision": _ModelMeta("Gemini 3 Flash (Vision)", "google", 1_000_000, ("quality",)),
     "claude-haiku-4-5": _ModelMeta("Claude Haiku 4.5", "anthropic", 200_000, ("fast", "budget")),
     "gpt-4.1": _ModelMeta("GPT-4.1", "openai", 128_000, ("quality",)),
     "gpt-5-mini": _ModelMeta("GPT-5 Mini", "openai", 128_000, ("fast", "budget")),
