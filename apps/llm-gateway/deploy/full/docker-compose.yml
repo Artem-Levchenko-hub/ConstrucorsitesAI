@@ -212,7 +212,7 @@ services:
       # dead, so builds don't stall on per-image timeouts (image_resolver strips
       # data-omnia-gen tags fast and the CSS/mesh fallback shows instead).
       USE_IMAGE_GEN: ${USE_IMAGE_GEN:-true}
-      IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-img-flux/flux-2-klein-4b}
+      IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-img-flux/flux-2-pro}
       ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
       ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
       # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.
@@ -271,7 +271,7 @@ services:
       # dead, so builds don't stall on per-image timeouts (image_resolver strips
       # data-omnia-gen tags fast and the CSS/mesh fallback shows instead).
       USE_IMAGE_GEN: ${USE_IMAGE_GEN:-true}
-      IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-img-flux/flux-2-klein-4b}
+      IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-img-flux/flux-2-pro}
       ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
       ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
       # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.

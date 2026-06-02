@@ -41,16 +41,22 @@ log = logging.getLogger(__name__)
 # common case.
 _ENRICH_MIN_WORDS = 8
 _ENRICH_SYSTEM = (
-    "You are an image-prompt engineer for a photo generator. Expand the short "
-    "description into ONE detailed English prompt covering subject, scene, "
-    "style, lighting, angle and lens. Return ONLY the prompt text — no quotes, "
-    "no preamble, no commentary."
+    "You are a senior art-buyer writing prompts for a premium image generator. "
+    "Expand the short description into ONE vivid English prompt for a high-end, "
+    "photorealistic, editorial-grade image: name the subject, scene, composition, "
+    "lighting, mood, lens and color grade. Favor cinematic, magazine-quality, "
+    "razor-sharp results with depth and intentional negative space (it will sit "
+    "behind UI). No text, no logos, no watermarks. Return ONLY the prompt text — "
+    "no quotes, no preamble, no commentary."
 )
 
 # Hard ceiling per generation. Beyond this we log a warning and leave extra
 # tags untouched (they render as broken images — visible signal to the user
 # without burning the wallet).
-MAX_IMAGES_PER_RESOLVE = 12
+# Quality-over-quantity: flux-2-pro is ~13s/image, so cap at a hero + a handful
+# of section backgrounds. Fewer, gorgeous, fully-rendered images beat a dozen
+# half-stripped at the budget. Raise if you switch to a faster model.
+MAX_IMAGES_PER_RESOLVE = 8
 
 # Concurrent gateway calls. The vsegpt image key rate-limits to ~1 request/sec,
 # so fan-out bursts 429. Serial (=1) keeps us under the limit — each gen takes
@@ -68,7 +74,7 @@ _REQUEST_TIMEOUT = 75.0
 # remaining tags so the build always ships (R-10: bound every wait, fail fast).
 # Sized for serial real gens (≤12 imgs × ~10-15s); stragglers past it are
 # stripped, never hung. A dead upstream still can't block longer than this.
-_IMAGE_RESOLVE_BUDGET_S = 150.0
+_IMAGE_RESOLVE_BUDGET_S = 180.0
 
 # File types we scan. JSX/TSX cover Next.js fullstack templates; html/htm
 # covers static templates.
