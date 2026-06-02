@@ -1518,7 +1518,13 @@ async def _process_prompt(
             and _gen_mode in ("freeform", "catalog")
         ):
             from omnia_api.services import acceptance as _acceptance
-            _max_acc = max(0, int(_acc_settings.acceptance_max_retries))
+            # Score-only: run the gate ONCE (compute + publish the verdict) but
+            # ship the freeform first attempt — no repair re-rolls.
+            _max_acc = (
+                0
+                if _acc_settings.acceptance_score_only
+                else max(0, int(_acc_settings.acceptance_max_retries))
+            )
             _verdict = None
             try:
                 for _acc_attempt in range(_max_acc + 1):
@@ -1605,6 +1611,7 @@ async def _process_prompt(
                     and not _verdict.passed
                     and _gen_mode == "freeform"
                     and _acc_settings.use_section_catalog
+                    and not _acc_settings.acceptance_score_only
                 ):
                     print("[PP] acceptance->catalog fallback", flush=True)
                     _fb_files = await _catalog_fallback_generate(

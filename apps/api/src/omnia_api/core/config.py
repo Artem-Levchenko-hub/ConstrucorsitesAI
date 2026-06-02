@@ -204,6 +204,13 @@ class Settings(BaseSettings):
     acceptance_max_retries: int = Field(default=2)
     # Vision score (0..10) at or above which a page passes the gate.
     acceptance_min_score: int = Field(default=7)
+    # SCORE-ONLY mode (owner 2026-06-02): run the gate to COMPUTE + publish the
+    # vision verdict (visibility), but SHIP the freeform first attempt regardless
+    # — no repair re-rolls, no catalog fallback. Repairs via the coder don't
+    # escape "generic", and the catalog fallback ships a WORSE template than the
+    # rich freeform page; this keeps the freeform page + the score, and makes
+    # builds fast. Flip ACCEPTANCE_SCORE_ONLY=true to enable.
+    acceptance_score_only: bool = Field(default=False)
 
     # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
     # Originality: fingerprint each accepted freeform page and penalise the
