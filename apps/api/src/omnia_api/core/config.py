@@ -142,13 +142,12 @@ class Settings(BaseSettings):
 
     # Which image model the resolver requests from the gateway for
     # `data-omnia-gen` tags. Served via the vsegpt provider (same key as the
-    # chat models). Owner directive 2026-06-02 «графика крутая»: img-flux/flux-2-pro
-    # — the best image model that clears the vsegpt per-query price limit out of
-    # the box (full Flux 2, ~13s/img, editorial quality — a big step over the
-    # klein-4b distill). Top tier (img-google/nano-banana-pro ~30₽, imagen4-ultra
-    # ~20₽) needs the vsegpt per-query limit raised first, then flip
-    # IMAGE_GEN_MODEL — no code change.
-    image_gen_model: str = Field(default="img-flux/flux-2-pro")
+    # chat models). Owner pick 2026-06-02: img-flux/flux-2-klein-4b — fast (~6s),
+    # cheap, clears the vsegpt per-query limit. Graphic richness comes from the
+    # art-director prompt (themed photo backgrounds + designed graphic layers per
+    # section), not the image tier. Switch to flux-2-pro / nano-banana-pro (needs
+    # a higher vsegpt per-query limit) via IMAGE_GEN_MODEL env — no code change.
+    image_gen_model: str = Field(default="img-flux/flux-2-klein-4b")
 
     # Visual enricher — post-process pass that injected decorative layers
     # (mesh / blob / SVG dot-grid / diagonal-lines / waves) into every bare
