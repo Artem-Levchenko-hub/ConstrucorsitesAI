@@ -23,6 +23,16 @@ from omnia_api.services import repo as repo_svc
 
 VIEWPORT = {"width": 1280, "height": 800}
 GOTO_TIMEOUT_MS = 15_000
+# After `networkidle` the page is loaded but two things still settle async:
+# (1) the Tailwind Play-CDN JIT compiles utility classes, (2) web-fonts paint.
+# We ALSO force `reduced_motion="reduce"` on every capture page so omnia-kit's
+# reveal / scroll-reveal animations — all gated behind
+# `@media (prefers-reduced-motion: no-preference)` — render in their FINAL
+# visible state instead of their opacity:0 start. Without it the screenshot
+# catches an empty / half-built hero (the "съехавшая вёрстка" in the timeline
+# thumbnail even when the live page is fine). This settle is the belt to that
+# suspenders: fonts + Tailwind JIT have a beat to apply before we shoot.
+_RENDER_SETTLE_MS = 400
 
 # Acceptance-gate render harness (Phase 11, Sprint 1.2).
 DEFAULT_CAPTURE_WIDTHS: tuple[int, ...] = (375, 768, 1440)
@@ -75,7 +85,8 @@ async def capture(
             try:
                 for w in widths:
                     page = await browser.new_page(
-                        viewport={"width": int(w), "height": height}
+                        viewport={"width": int(w), "height": height},
+                        reduced_motion="reduce",
                     )
                     try:
                         await page.goto(
@@ -83,6 +94,13 @@ async def capture(
                             wait_until="networkidle",
                             timeout=GOTO_TIMEOUT_MS,
                         )
+                        # Let web-fonts finish + the Tailwind CDN JIT apply
+                        # before measuring overflow / screenshotting.
+                        try:
+                            await page.evaluate("() => document.fonts.ready")
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(_RENDER_SETTLE_MS)
                         scroll_width = await page.evaluate(
                             "() => document.documentElement.scrollWidth"
                         )
@@ -131,12 +149,21 @@ async def _render_async(snapshot_id: str) -> None:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 try:
-                    page = await browser.new_page(viewport=VIEWPORT)
+                    page = await browser.new_page(
+                        viewport=VIEWPORT, reduced_motion="reduce"
+                    )
                     await page.goto(
                         (workdir / "index.html").as_uri(),
                         wait_until="networkidle",
                         timeout=GOTO_TIMEOUT_MS,
                     )
+                    # Same settle as capture(): fonts + Tailwind-CDN JIT, and
+                    # reduced_motion so reveal-animated content isn't opacity:0.
+                    try:
+                        await page.evaluate("() => document.fonts.ready")
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(_RENDER_SETTLE_MS)
                     await page.screenshot(path=str(png_path), full_page=False)
                 finally:
                     await browser.close()

@@ -153,16 +153,25 @@ class Settings(BaseSettings):
     # Plan: docs/plans/11-freeform-generation.md. Premium models write HTML
     # FREELY (no fixed Jinja templates); reliability comes from an acceptance
     # gate (render → check → self-repair) instead of locking the output shape.
-    # All three flags default OFF so a deploy is a no-op until ops opts in;
-    # the catalog/IR path stays the safe fallback. Flip per-env in .env.
+    # Owner-call 2026-06-02: freeform + acceptance gate are the PRODUCT DEFAULT
+    # now. Premium first-builds write bespoke HTML via Opus (role
+    # `freeform_writer`) — the design-critical pass — and the acceptance gate
+    # guarantees the page isn't broken (structure + no horizontal overflow),
+    # repairs it, and falls back to the deterministic catalog/IR path if it
+    # still fails. This is the "awwwards-from-first-prompt" path. The recent
+    # art-director / designer-brain freeform brief (prompt_builder.py) only runs
+    # when this is on — it was built but left dormant before this flip.
+    # `use_vision_audit` stays OFF until the gateway multimodal path is confirmed
+    # live (the gate's structure+responsive layers already block broken pages
+    # without it). Override any flag per-env in .env.
     #
     #   use_freeform_render  — premium tier writes free HTML (else catalog/IR)
     #   use_acceptance_gate  — run structure+responsive (+vision) check & repair
     #   use_vision_audit     — let the gate screenshot → vision model for a
     #                          "broken / generic / beautiful" verdict (needs
     #                          gateway multimodal support; best-effort, fail-soft)
-    use_freeform_render: bool = Field(default=False)
-    use_acceptance_gate: bool = Field(default=False)
+    use_freeform_render: bool = Field(default=True)
+    use_acceptance_gate: bool = Field(default=True)
     use_vision_audit: bool = Field(default=False)
     # Max self-repair re-rolls before the gate gives up (and freeform falls
     # back to catalog). Each retry is one extra LLM call — keep small.
@@ -173,8 +182,9 @@ class Settings(BaseSettings):
     # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
     # Originality: fingerprint each accepted freeform page and penalise the
     # next one that comes out near-identical to a DIFFERENT project's page
-    # (the "every AI site looks the same" failure). Default OFF.
-    use_originality: bool = Field(default=False)
+    # (the "every AI site looks the same" failure). Default ON (anti-generic) —
+    # only active for freeform pages; catalog pages are intentionally alike.
+    use_originality: bool = Field(default=True)
     # Hamming distance (0..64 over a 64-bit dHash) at/below which two pages are
     # "too similar". Lower = stricter. ~10 catches near-duplicates without
     # flagging merely same-vibe pages.
