@@ -65,7 +65,11 @@ async def stream_chat_completion(
             "free": _free_generation.get(),
         },
     }
-    timeout = httpx.Timeout(120.0, connect=5.0, read=120.0)
+    # read=300s: the art_director Opus pass (vsegpt, non-streaming) can take
+    # ~150s+; the old 120s cut it off so the brief was dropped and the writer ran
+    # alone. Headroom over the gateway/vsegpt 240s provider timeout so a real
+    # upstream failure surfaces as an error, not a client-side socket teardown.
+    timeout = httpx.Timeout(300.0, connect=5.0, read=300.0)
     print(f"[LLM] start url={url} model={model} msgs={len(messages)}", flush=True)
     line_count = 0
     delta_count = 0

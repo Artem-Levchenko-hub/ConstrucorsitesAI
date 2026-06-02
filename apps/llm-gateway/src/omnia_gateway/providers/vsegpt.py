@@ -64,10 +64,13 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
 # Default ceiling for a thinking model: chain-of-thought shares the token budget
 # with the visible answer, so a small cap silently truncates the real output.
 _DEFAULT_MAX_TOKENS = 16384
-# Below the API client's 120 s read timeout (apps/api llm_client) so we fail
-# first and surface a clean error the caller can fall back on, rather than the
-# client tearing down the socket mid-flight.
-_DEFAULT_TIMEOUT_S = 115.0
+# The art_director (Opus 4.8) writes a long, detailed brief — ~150s of
+# non-streaming inference is normal. The old 115s read timeout cut it off, the
+# gateway raised ReadTimeout, and the brief was DROPPED (writer ran alone, Opus
+# spend wasted). 240s clears Opus while still bounding a genuine hang, and stays
+# under the API client's 300 s read timeout (apps/api llm_client) so a real
+# upstream failure surfaces as a clean error, not a client socket teardown.
+_DEFAULT_TIMEOUT_S = 240.0
 
 # Strip a leaked chain-of-thought. vsegpt normally returns reasoning in a
 # separate field, but some upstreams inline `<think>…</think>` in the content —

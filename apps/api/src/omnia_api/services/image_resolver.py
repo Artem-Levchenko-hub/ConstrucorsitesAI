@@ -60,6 +60,13 @@ _CONCURRENCY = 4
 # so client-side aborts come from us, not from the upstream.
 _REQUEST_TIMEOUT = 75.0
 
+# Overall wall-clock budget for the AI image-gen phase. Even with the per-image
+# timeout above, N unresolved tags × 75s serialised behind _CONCURRENCY would
+# stall the whole build for minutes (no snapshot → the preview loads forever).
+# When this budget is hit we cancel the in-flight gen calls and strip the
+# remaining tags so the build always ships (R-10: bound every wait, fail fast).
+_IMAGE_RESOLVE_BUDGET_S = 40.0
+
 # File types we scan. JSX/TSX cover Next.js fullstack templates; html/htm
 # covers static templates.
 _SCAN_EXTS = (
@@ -406,37 +413,58 @@ async def resolve_images(
     unique_prompts = list({t.prompt for t in tags})
     sem = asyncio.Semaphore(_CONCURRENCY)
 
-    # Phase N+ — enrich short/weak prompts via the `image_prompt` role before
-    # generation. Detailed prompts (>= _ENRICH_MIN_WORDS words) pass through
-    # untouched; the kill switch turns the whole step into identity.
-    if settings.use_image_prompt_enrichment:
+    # AI image generation is GATED and TIME-BOXED. When the gpt-image upstream is
+    # down (proxyapi dry / OpenAI unreachable from the RU egress) each _fetch_one
+    # burns its full 75s timeout; N tags × that stalls the whole build for
+    # minutes before any snapshot — the preview "loads forever". The kill switch
+    # skips generation outright; the deadline bounds it even when enabled.
+    # Unresolved tags are stripped below, so the section's CSS/mesh fallback
+    # shows instead of a broken <img> (R-10: explicit timeout, degrade fast).
+    prompt_to_url: dict[str, str] = {}
+    if tags and settings.use_image_gen:
+        # Phase N+ — enrich short/weak prompts via the `image_prompt` role before
+        # generation. Detailed prompts (>= _ENRICH_MIN_WORDS words) pass through
+        # untouched; the kill switch turns the whole step into identity.
+        if settings.use_image_prompt_enrichment:
 
-        async def _maybe_enrich(p: str) -> tuple[str, str]:
-            if len(p.split()) >= _ENRICH_MIN_WORDS:
-                return p, p
+            async def _maybe_enrich(p: str) -> tuple[str, str]:
+                if len(p.split()) >= _ENRICH_MIN_WORDS:
+                    return p, p
+                async with sem:
+                    return p, await _enrich_prompt(p)
+
+            enrich_pairs = await asyncio.gather(
+                *[_maybe_enrich(p) for p in unique_prompts]
+            )
+            gen_prompt_for = {orig: gen for orig, gen in enrich_pairs}
+        else:
+            gen_prompt_for = {p: p for p in unique_prompts}
+
+        async def _resolve(orig_prompt: str) -> tuple[str, str | None]:
+            # Generate + content-address by the (possibly enriched) gen prompt,
+            # but key the result by the ORIGINAL prompt so tag replacement matches.
+            gen_prompt = gen_prompt_for.get(orig_prompt, orig_prompt)
             async with sem:
-                return p, await _enrich_prompt(p)
+                img = await _fetch_one(gen_prompt)
+                if img is None:
+                    return orig_prompt, None
+                url = await asyncio.to_thread(_upload_image, img, project_id, gen_prompt)
+                return orig_prompt, url
 
-        enrich_pairs = await asyncio.gather(
-            *[_maybe_enrich(p) for p in unique_prompts]
-        )
-        gen_prompt_for = {orig: gen for orig, gen in enrich_pairs}
-    else:
-        gen_prompt_for = {p: p for p in unique_prompts}
-
-    async def _resolve(orig_prompt: str) -> tuple[str, str | None]:
-        # Generate + content-address by the (possibly enriched) gen prompt, but
-        # key the result by the ORIGINAL prompt so tag replacement still matches.
-        gen_prompt = gen_prompt_for.get(orig_prompt, orig_prompt)
-        async with sem:
-            img = await _fetch_one(gen_prompt)
-            if img is None:
-                return orig_prompt, None
-            url = await asyncio.to_thread(_upload_image, img, project_id, gen_prompt)
-            return orig_prompt, url
-
-    pairs = await asyncio.gather(*[_resolve(p) for p in unique_prompts])
-    prompt_to_url = {p: u for p, u in pairs if u}
+        try:
+            pairs = await asyncio.wait_for(
+                asyncio.gather(*[_resolve(p) for p in unique_prompts]),
+                timeout=_IMAGE_RESOLVE_BUDGET_S,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            log.warning(
+                "image_resolver: gen budget %.0fs exceeded (%d prompts) — "
+                "stripping unresolved tags so the build ships",
+                _IMAGE_RESOLVE_BUDGET_S,
+                len(unique_prompts),
+            )
+            pairs = []
+        prompt_to_url = {p: u for p, u in pairs if u}
 
     new_files = dict(files)
     resolved = 0

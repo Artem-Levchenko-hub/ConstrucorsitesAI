@@ -128,6 +128,18 @@ class Settings(BaseSettings):
     # USE_IMAGE_PROMPT_ENRICHMENT=false.
     use_image_prompt_enrichment: bool = Field(default=True)
 
+    # Kill switch for AI image generation (data-omnia-gen → gpt-image via the
+    # gateway → MinIO). When the gpt-image upstream is down (proxyapi balance dry
+    # / OpenAI unreachable from the RU egress) every image call burns its full
+    # per-image timeout, and a page with many image tags stalls the WHOLE build
+    # for minutes before any snapshot is created — the preview "loads forever".
+    # Turn OFF on prod while image-gen is dead: the resolver then strips
+    # data-omnia-gen tags immediately and the section's CSS/mesh background shows
+    # instead of a broken <img>. Flip back to true once the gpt-image route is
+    # funded/reachable. Belt-and-suspenders: image_resolver also enforces an
+    # overall deadline even when this is True.
+    use_image_gen: bool = Field(default=True)
+
     # Visual enricher — post-process pass that injected decorative layers
     # (mesh / blob / SVG dot-grid / diagonal-lines / waves) into every bare
     # <section>. Built as a Haiku-era crutch against "flat AI sites", but it
