@@ -419,16 +419,15 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # served by the direct vsegpt provider — proxyapi's DeepSeek surface 404s,
     # vsegpt is the only working route (apps/llm-gateway providers/vsegpt.py).
     "classify":     "deepseek-chat",  # pick 1 of N presets
-    "director":     "claude-sonnet-4-6",           # ORCHESTRATOR — structure (Sonnet: ~5x cheaper than Opus, near-equal layout)
+    "director":     "deepseek-v4-pro-thinking",    # catalog ORCHESTRATOR (dormant in freeform) — was Sonnet/proxyapi, now vsegpt
     "polish":       "deepseek-chat",  # writes the real PageIR content (RU copy)
-    # audit + audit_retry stay premium ON PURPOSE and are DORMANT unless the
-    # acceptance gate is enabled (USE_ACCEPTANCE_GATE / USE_VISION_AUDIT — both
-    # OFF). audit is the vision judge: it scores a screenshot, so it needs a
-    # MULTIMODAL model (DeepSeek is text-only and can't see). audit_retry is the
-    # escalation that regenerates a failed page Opus-grade. To put these on
-    # DeepSeek too, set ROLE_MODELS env (e.g. "audit=deepseek-v4-flash-thinking").
-    "audit":        "claude-sonnet-4-6",           # vision/LLM-judge — needs eyes
-    "audit_retry":  "claude-sonnet-4-6",           # escalation re-roll (Sonnet — match the Sonnet orchestrator, keep cost down)
+    # proxyapi.ru FULLY RETIRED (owner 2026-06-02: «работает плохо»). audit +
+    # audit_retry were the last proxyapi consumers (Sonnet vision judge). Moved
+    # to vsegpt AND vision-audit is OFF — the vsegpt provider flattens image
+    # blocks to text, so a screenshot judge can't run through it anyway. Mapped to
+    # a vsegpt model purely so NOTHING references proxyapi.
+    "audit":        "deepseek-chat",  # vision judge — DISABLED (USE_VISION_AUDIT=false; vsegpt can't send images)
+    "audit_retry":  "deepseek-chat",  # escalation re-roll — vsegpt (proxyapi retired)
     "skeleton":     "deepseek-chat",  # multipass fallback — structure
     "content":      "deepseek-chat",  # multipass fallback — copy
     "visual":       "deepseek-chat",  # multipass fallback — style tokens
@@ -448,9 +447,9 @@ ROLE_MODEL_MAP: dict[str, str] = {
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.
-# Haiku (reliable proxyapi.ru route) is the safe bottom — if vsegpt/DeepSeek is
-# down, an unmapped role still completes instead of hard-failing (R-10).
-DEFAULT_ROLE_MODEL = "claude-haiku-4-5"
+# vsegpt deepseek-chat is the safe bottom — proxyapi.ru is RETIRED (owner
+# 2026-06-02), so Haiku-via-proxyapi can no longer be the fallback.
+DEFAULT_ROLE_MODEL = "deepseek-chat"
 
 # First-N free "wow-effect" generations per user before wallet billing starts.
 # Counter lives on User.free_generations_used; the gate is in routers/messages.py

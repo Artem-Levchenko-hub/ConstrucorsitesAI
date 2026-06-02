@@ -16,19 +16,21 @@ from omnia_api.core.config import (  # noqa: E402
 )
 
 
-def test_role_map_orchestrator_sonnet_workers_deepseek() -> None:
-    # Owner directive (2026-05-31): orchestrator (director) = Sonnet 4.6
-    # (~5x cheaper than Opus, near-equal layout); every worker/developer role =
-    # DeepSeek (deepseek-chat via vsegpt — v4-flash-thinking's 16K cap broke
-    # orchestration). audit + audit_retry stay on Sonnet (vision judge needs
-    # eyes; escalation matches the Sonnet orchestrator) — see ROLE_MODEL_MAP.
-    assert model_for_role("director") == "claude-sonnet-4-6"
+def test_role_map_all_vsegpt_no_proxyapi() -> None:
+    # Owner directive (2026-06-02): proxyapi.ru fully retired. EVERY role routes
+    # via vsegpt — no claude-*-via-proxyapi anywhere. director → vsegpt thinking
+    # model; audit/audit_retry → vsegpt (vision-audit disabled, vsegpt can't send
+    # images); workers → deepseek-chat.
+    assert model_for_role("director") == "deepseek-v4-pro-thinking"
     assert model_for_role("polish") == "deepseek-chat"
     assert model_for_role("classify") == "deepseek-chat"
     assert model_for_role("edit") == "deepseek-chat"
     assert model_for_role("single_shot") == "deepseek-chat"
-    assert model_for_role("audit") == "claude-sonnet-4-6"
-    assert model_for_role("audit_retry") == "claude-sonnet-4-6"
+    assert model_for_role("audit") == "deepseek-chat"
+    assert model_for_role("audit_retry") == "deepseek-chat"
+    # No proxyapi-backed Anthropic model may back any role.
+    for m in ROLE_MODEL_MAP.values():
+        assert m not in {"claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-7"}
 
 
 def test_art_director_writer_split() -> None:
