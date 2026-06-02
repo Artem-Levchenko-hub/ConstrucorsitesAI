@@ -17,6 +17,7 @@ At ~100₽/USD + 20% markup we charge `_PRICE_PER_IMAGE_RUB` per call.
 from __future__ import annotations
 
 import asyncio
+import time
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -144,15 +145,37 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
     # uvicorn loop intermittently hangs the TLS handshake to api.vsegpt.ru. A
     # sync client on a fresh thread connects in ~300ms; a direct gen is ~4-6s.
     # proxyapi stays on the shared async client (it's whitelisted in NO_PROXY).
+    # vsegpt's TLS handshake to api.vsegpt.ru INTERMITTENTLY stalls inside a
+    # long-lived process (the standalone call connects in ~300ms, the in-loop one
+    # sometimes hangs — same flake providers/vsegpt.py documents). Retry transient
+    # transport faults with a fresh client, and use a tight connect timeout so a
+    # stalled handshake fails in ~15s and re-tries instead of burning the ceiling.
+    _TRANSIENT = (
+        httpx.ConnectError,
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+        httpx.RemoteProtocolError,
+    )
+
     def _vsegpt_post() -> httpx.Response:
-        with httpx.Client(
-            timeout=_IMAGE_TIMEOUT_SECONDS,
-            trust_env=False,
-            mounts={"all://": httpx.HTTPTransport()},
-        ) as c:
-            r = c.post(url, json=payload, headers=headers)
-            r.read()  # buffer the body before the client closes
-            return r
+        last: Exception | None = None
+        for attempt in range(3):
+            try:
+                with httpx.Client(
+                    timeout=httpx.Timeout(_IMAGE_TIMEOUT_SECONDS, connect=15.0),
+                    trust_env=False,
+                    mounts={"all://": httpx.HTTPTransport()},
+                ) as c:
+                    r = c.post(url, json=payload, headers=headers)
+                    r.read()  # buffer the body before the client closes
+                    return r
+            except _TRANSIENT as exc:
+                last = exc
+                if attempt < 2:
+                    time.sleep(0.6)
+                    continue
+                raise
+        raise last  # type: ignore[misc]  # unreachable — loop returns or raises
 
     async def _post() -> httpx.Response:
         if provider == "vsegpt":
