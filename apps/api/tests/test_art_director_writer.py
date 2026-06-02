@@ -27,7 +27,12 @@ def _make_fake_stream(*, fail_brief: bool = False):
     DeepSeek (writer) call — told apart by 'opus' in the model id."""
 
     async def fake(msgs, model, *a, **k):
-        if "opus" in model:  # art-director pass
+        # Tell the passes apart by the instruction marker, not the model id —
+        # the art_director model is retunable (Opus → Gemini → …) and the writer
+        # is too, so keying on a model substring is brittle. "проход 1 из 2"
+        # appears only in the art-director directive.
+        last = msgs[-1]["content"] if msgs else ""
+        if "проход 1 из 2" in last:  # art-director pass
             if fail_brief:
                 yield {"error": "boom"}
                 return
