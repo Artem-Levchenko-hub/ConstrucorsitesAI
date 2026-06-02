@@ -137,21 +137,27 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
 
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    # vsegpt.ru MUST be hit direct: the gateway container's HTTPS_PROXY (a UK
-    # egress used only to geo-bypass Google for Gemini) otherwise tunnels this RU
-    # endpoint and stalls the TLS handshake until the timeout — the exact trap
-    # providers/vsegpt.py avoids with trust_env=False. A direct gen is ~4-6s; the
-    # proxied one hangs to 60s+. proxyapi stays on the shared pooled client (it's
-    # whitelisted in NO_PROXY). The vsegpt client is closed in `finally`.
-    vsegpt_client = (
-        httpx.AsyncClient(trust_env=False, timeout=_IMAGE_TIMEOUT_SECONDS)
-        if provider == "vsegpt"
-        else None
-    )
-    client = vsegpt_client or get_http()
+    # vsegpt.ru needs a SYNC httpx.Client on a worker thread with trust_env=False
+    # + an explicit no-op mounts transport. Two failure modes otherwise (see
+    # providers/vsegpt.py docstring): (1) the container HTTPS_PROXY (Gemini
+    # geo-bypass) tunnels this RU endpoint, and (2) httpx.AsyncClient inside the
+    # uvicorn loop intermittently hangs the TLS handshake to api.vsegpt.ru. A
+    # sync client on a fresh thread connects in ~300ms; a direct gen is ~4-6s.
+    # proxyapi stays on the shared async client (it's whitelisted in NO_PROXY).
+    def _vsegpt_post() -> httpx.Response:
+        with httpx.Client(
+            timeout=_IMAGE_TIMEOUT_SECONDS,
+            trust_env=False,
+            mounts={"all://": httpx.HTTPTransport()},
+        ) as c:
+            r = c.post(url, json=payload, headers=headers)
+            r.read()  # buffer the body before the client closes
+            return r
 
     async def _post() -> httpx.Response:
-        return await client.post(
+        if provider == "vsegpt":
+            return await asyncio.to_thread(_vsegpt_post)
+        return await get_http().post(
             url, json=payload, headers=headers, timeout=_IMAGE_TIMEOUT_SECONDS
         )
 
@@ -170,9 +176,6 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         raise _gateway_error_to_http(
             UpstreamProviderError(f"Image generation transport error: {exc}")
         ) from exc
-    finally:
-        if vsegpt_client is not None:
-            await vsegpt_client.aclose()
 
     if resp.status_code in (401, 403):
         raise _gateway_error_to_http(
