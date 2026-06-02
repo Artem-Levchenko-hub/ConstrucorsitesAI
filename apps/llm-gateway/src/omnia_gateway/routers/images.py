@@ -58,9 +58,9 @@ _IMAGE_MODELS: dict[str, tuple[str, str]] = {
 # enforces a 30-image-per-prompt cap so the worst case is ~₽45 per generation.
 _PRICE_PER_IMAGE_RUB = Decimal("1.50")
 
-# Hard timeout for one image call. proxyapi typically returns in 6-15s; give
-# a generous ceiling so legitimate slow generations don't get killed.
-_IMAGE_TIMEOUT_SECONDS = 60.0
+# Hard timeout for one image call. Direct vsegpt flux gens are ~4-6s warm;
+# leave headroom for an occasional cold model-load on the provider side.
+_IMAGE_TIMEOUT_SECONDS = 90.0
 
 
 class ImageGenerationRequest(BaseModel):
@@ -135,14 +135,24 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
     if provider == "vsegpt":
         payload["response_format"] = "b64_json"
 
-    client = get_http()
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    # vsegpt.ru MUST be hit direct: the gateway container's HTTPS_PROXY (a UK
+    # egress used only to geo-bypass Google for Gemini) otherwise tunnels this RU
+    # endpoint and stalls the TLS handshake until the timeout — the exact trap
+    # providers/vsegpt.py avoids with trust_env=False. A direct gen is ~4-6s; the
+    # proxied one hangs to 60s+. proxyapi stays on the shared pooled client (it's
+    # whitelisted in NO_PROXY). The vsegpt client is closed in `finally`.
+    vsegpt_client = (
+        httpx.AsyncClient(trust_env=False, timeout=_IMAGE_TIMEOUT_SECONDS)
+        if provider == "vsegpt"
+        else None
+    )
+    client = vsegpt_client or get_http()
 
     async def _post() -> httpx.Response:
         return await client.post(
-            url,
-            json=payload,
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=_IMAGE_TIMEOUT_SECONDS,
+            url, json=payload, headers=headers, timeout=_IMAGE_TIMEOUT_SECONDS
         )
 
     try:
@@ -160,6 +170,9 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         raise _gateway_error_to_http(
             UpstreamProviderError(f"Image generation transport error: {exc}")
         ) from exc
+    finally:
+        if vsegpt_client is not None:
+            await vsegpt_client.aclose()
 
     if resp.status_code in (401, 403):
         raise _gateway_error_to_http(
