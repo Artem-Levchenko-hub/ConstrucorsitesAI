@@ -443,6 +443,14 @@ async def resolve_images(
     for tag in tags:
         url = prompt_to_url.get(tag.prompt)
         if not url:
+            # Generation failed (gateway 502 / gpt-image timeout). STRIP the
+            # unresolved tag so a broken <img> (raw alt-text in an empty box)
+            # never ships — mirrors the photo path below. The section's
+            # background/layout shows instead. (Owner screenshot 2026-06-02:
+            # a failed hero gen rendered "alt" text inside a monochrome box.)
+            new_files[tag.file_path] = new_files[tag.file_path].replace(
+                tag.full_match, "", 1
+            )
             continue
         new_files[tag.file_path] = _replace_tag(
             new_files[tag.file_path], tag, url

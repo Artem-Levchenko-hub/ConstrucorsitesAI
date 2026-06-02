@@ -23,7 +23,10 @@ from omnia_api.services import repo as repo_svc
 
 VIEWPORT = {"width": 1280, "height": 800}
 GOTO_TIMEOUT_MS = 15_000
-# After `networkidle` the page is loaded but two things still settle async:
+# `domcontentloaded` (NOT networkidle): broken images + the Tailwind Play-CDN keep
+# the network busy, so networkidle never settles and Page.goto times out at 15s —
+# which made the acceptance gate SKIP responsive+vision and ship junk as passed=True.
+# domcontentloaded fires reliably; we then settle async for two things:
 # (1) the Tailwind Play-CDN JIT compiles utility classes, (2) web-fonts paint.
 # We ALSO force `reduced_motion="reduce"` on every capture page so omnia-kit's
 # reveal / scroll-reveal animations — all gated behind
@@ -32,7 +35,7 @@ GOTO_TIMEOUT_MS = 15_000
 # catches an empty / half-built hero (the "съехавшая вёрстка" in the timeline
 # thumbnail even when the live page is fine). This settle is the belt to that
 # suspenders: fonts + Tailwind JIT have a beat to apply before we shoot.
-_RENDER_SETTLE_MS = 400
+_RENDER_SETTLE_MS = 600
 
 # Acceptance-gate render harness (Phase 11, Sprint 1.2).
 DEFAULT_CAPTURE_WIDTHS: tuple[int, ...] = (375, 768, 1440)
@@ -91,7 +94,7 @@ async def capture(
                     try:
                         await page.goto(
                             index_uri,
-                            wait_until="networkidle",
+                            wait_until="domcontentloaded",
                             timeout=GOTO_TIMEOUT_MS,
                         )
                         # Let web-fonts finish + the Tailwind CDN JIT apply
@@ -154,7 +157,7 @@ async def _render_async(snapshot_id: str) -> None:
                     )
                     await page.goto(
                         (workdir / "index.html").as_uri(),
-                        wait_until="networkidle",
+                        wait_until="domcontentloaded",
                         timeout=GOTO_TIMEOUT_MS,
                     )
                     # Same settle as capture(): fonts + Tailwind-CDN JIT, and
