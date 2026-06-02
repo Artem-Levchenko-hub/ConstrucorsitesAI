@@ -42,6 +42,9 @@ _MODEL_KEY_OVERRIDE = {
     "claude-opus-4-7": lambda s: _has(s.proxyapi_api_key),
     # Opus 4.8 served via the vsegpt provider — same key as the DeepSeek workers.
     "claude-opus-4-8": lambda s: _has(s.vsegpt_api_key),
+    # Orchestrator + developer served via the vsegpt provider (same key).
+    "gemini-3.5-flash-high": lambda s: _has(s.vsegpt_api_key),
+    "minimax-m2.7": lambda s: _has(s.vsegpt_api_key),
     "deepseek-chat": lambda s: _has(s.vsegpt_api_key),  # served via vsegpt provider now
     "deepseek-reasoner": lambda s: _has(s.proxyapi_api_key),
     # DeepSeek V4 Flash (Thinking) via vsegpt.ru — separate key/balance from

@@ -16,6 +16,7 @@ At ~100₽/USD + 20% markup we charge `_PRICE_PER_IMAGE_RUB` per call.
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -39,9 +40,17 @@ from omnia_gateway.services import billing, file_logger
 router = APIRouter(prefix="/v1", tags=["images"])
 log = structlog.get_logger(__name__)
 
-# Models we expose. Maps Omnia ID → upstream model name on proxyapi/openai.
-_IMAGE_MODELS: dict[str, str] = {
-    "gpt-image-1": "gpt-image-1",
+# Image model registry: exposed id → (provider, upstream model id).
+#   proxyapi — OpenAI gpt-image via proxyapi.ru/openai (dead while balance dry).
+#   vsegpt   — flux / nano-banana / imagen via api.vsegpt.ru, OpenAI-compatible
+#              /images/generations on the SAME key as the chat models.
+_IMAGE_MODELS: dict[str, tuple[str, str]] = {
+    "gpt-image-1": ("proxyapi", "gpt-image-1"),
+    "img-flux/flux-2-klein-4b": ("vsegpt", "img-flux/flux-2-klein-4b"),
+    "img-flux/flux-2-pro": ("vsegpt", "img-flux/flux-2-pro"),
+    "img-google/nano-banana-2": ("vsegpt", "img-google/nano-banana-2"),
+    "img-google/nano-banana-pro": ("vsegpt", "img-google/nano-banana-pro"),
+    "img-google/imagen4-preview": ("vsegpt", "img-google/imagen4-preview"),
 }
 
 # Per-image price (RUB), low quality 1024x1024. Conservative ceiling — actual
@@ -84,10 +93,21 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         )
 
     settings = get_settings()
-    if settings.proxyapi_api_key is None:
-        raise _gateway_error_to_http(
-            ModelUnavailableError("proxyapi_api_key not configured for image generation")
-        )
+    provider, upstream_model = _IMAGE_MODELS[req.model]
+    if provider == "vsegpt":
+        if settings.vsegpt_api_key is None:
+            raise _gateway_error_to_http(
+                ModelUnavailableError("vsegpt_api_key not configured for image generation")
+            )
+        api_key = settings.vsegpt_api_key.get_secret_value()
+        base_url = settings.vsegpt_base_url.rstrip("/")
+    else:  # proxyapi (OpenAI gpt-image)
+        if settings.proxyapi_api_key is None:
+            raise _gateway_error_to_http(
+                ModelUnavailableError("proxyapi_api_key not configured for image generation")
+            )
+        api_key = settings.proxyapi_api_key.get_secret_value()
+        base_url = settings.proxyapi_openai_base_url.rstrip("/")
 
     estimated_cost = _PRICE_PER_IMAGE_RUB * req.n
     if req.user is not None:
@@ -98,28 +118,35 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         except Exception:
             log.exception("images.precheck_failed", user=str(req.user))
 
-    upstream_model = _IMAGE_MODELS[req.model]
-    api_key = settings.proxyapi_api_key.get_secret_value()
-    base_url = settings.proxyapi_openai_base_url.rstrip("/")
     url = f"{base_url}/images/generations"
-
     payload: dict[str, Any] = {
         "model": upstream_model,
         "prompt": req.prompt,
         "n": req.n,
         "size": req.size,
     }
-    if req.quality != "auto":
+    # `quality` is an OpenAI gpt-image knob; vsegpt flux/nano reject unknown
+    # fields, so only send it on the proxyapi path.
+    if provider == "proxyapi" and req.quality != "auto":
         payload["quality"] = req.quality
 
     client = get_http()
-    try:
-        resp = await client.post(
+
+    async def _post() -> httpx.Response:
+        return await client.post(
             url,
             json=payload,
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=_IMAGE_TIMEOUT_SECONDS,
         )
+
+    try:
+        resp = await _post()
+        # vsegpt rate-limits ~1 req/sec → 429. The api resolver serialises, but
+        # retry once after a beat so a burst (or a co-tenant) doesn't lose a tile.
+        if resp.status_code == 429:
+            await asyncio.sleep(1.5)
+            resp = await _post()
     except httpx.TimeoutException as exc:
         raise _gateway_error_to_http(
             UpstreamProviderError(f"Image generation timed out: {exc}")

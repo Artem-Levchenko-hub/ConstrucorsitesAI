@@ -50,11 +50,12 @@ _ENRICH_SYSTEM = (
 # Hard ceiling per generation. Beyond this we log a warning and leave extra
 # tags untouched (they render as broken images — visible signal to the user
 # without burning the wallet).
-MAX_IMAGES_PER_RESOLVE = 30
+MAX_IMAGES_PER_RESOLVE = 12
 
-# Concurrent gateway calls. proxyapi tolerates moderate parallelism; pick a
-# conservative ceiling so one fat prompt doesn't saturate the gateway.
-_CONCURRENCY = 4
+# Concurrent gateway calls. The vsegpt image key rate-limits to ~1 request/sec,
+# so fan-out bursts 429. Serial (=1) keeps us under the limit — each gen takes
+# ~10-30s anyway, so requests are naturally spaced well over 1s apart.
+_CONCURRENCY = 1
 
 # Per-image timeout (sec) — slightly over the gateway's internal 60s ceiling
 # so client-side aborts come from us, not from the upstream.
@@ -65,7 +66,9 @@ _REQUEST_TIMEOUT = 75.0
 # stall the whole build for minutes (no snapshot → the preview loads forever).
 # When this budget is hit we cancel the in-flight gen calls and strip the
 # remaining tags so the build always ships (R-10: bound every wait, fail fast).
-_IMAGE_RESOLVE_BUDGET_S = 40.0
+# Sized for serial real gens (≤12 imgs × ~10-15s); stragglers past it are
+# stripped, never hung. A dead upstream still can't block longer than this.
+_IMAGE_RESOLVE_BUDGET_S = 150.0
 
 # File types we scan. JSX/TSX cover Next.js fullstack templates; html/htm
 # covers static templates.
@@ -150,7 +153,7 @@ async def _fetch_one(prompt: str) -> bytes | None:
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/images/generations"
     payload = {
-        "model": "gpt-image-1",
+        "model": settings.image_gen_model,
         "prompt": prompt,
         "n": 1,
         "size": "1024x1024",

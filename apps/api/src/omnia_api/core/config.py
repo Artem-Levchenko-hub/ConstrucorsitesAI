@@ -140,6 +140,15 @@ class Settings(BaseSettings):
     # overall deadline even when this is True.
     use_image_gen: bool = Field(default=True)
 
+    # Which image model the resolver requests from the gateway for
+    # `data-omnia-gen` tags. Served via the vsegpt provider (same key as the
+    # chat models). Owner pick 2026-06-02: img-flux/flux-2-klein-4b — cheap,
+    # passes the vsegpt per-query price limit out of the box, real photos
+    # instead of cheap gradients. Switch to img-google/nano-banana-2 (higher
+    # quality, ~20₽/img — needs the vsegpt per-query limit raised) via
+    # IMAGE_GEN_MODEL env, no code change.
+    image_gen_model: str = Field(default="img-flux/flux-2-klein-4b")
+
     # Visual enricher — post-process pass that injected decorative layers
     # (mesh / blob / SVG dot-grid / diagonal-lines / waves) into every bare
     # <section>. Built as a Haiku-era crutch against "flat AI sites", but it
@@ -298,6 +307,7 @@ MODEL_TIER_MAP: dict[str, str] = {
     # Premium — full single-shot prompt, no decomposition.
     "claude-opus-4-7":   "premium",
     "claude-opus-4-8":   "premium",
+    "gemini-3.5-flash-high": "premium",  # orchestrator (art_director)
     "claude-opus-4-6":   "premium",
     "claude-sonnet-4-6": "premium",
     "gpt-5":             "premium",
@@ -423,20 +433,15 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "link_repair":  "deepseek-chat",  # rewrite dead hrefs
     "image_prompt": "deepseek-chat",  # short image-gen prompt
     "single_shot":  "deepseek-chat",  # non-catalog freeform fallback path
-    # Art-Director → Writer 2-pass (owner directive 2026-06-01 / 06-02). The
-    # DESIGN BRAIN — feeling→idea→system + ultra-detailed per-section spec — runs
-    # on real Opus 4.8, served by the vsegpt provider (anthropic/claude-opus-4.8)
-    # on the SAME funded key as the DeepSeek workers (VSEGPT_API_KEY). proxyapi.ru
-    # went balance-dry and the OpenRouter detour needed a separate key, so vsegpt
-    # is the live Opus route. NOTE: the vsegpt account's plan must include
-    # Anthropic models or the call 400s ("not available on your subscription
-    # plan") and the writer carries the page alone (R-10 fail-soft). Retune at
-    # runtime via ROLE_MODELS env. This pass emits a BRIEF, so its tokens stay few.
-    "art_director": "claude-opus-4-8",
-    # The WRITER executes the art-director's brief into the full HTML. This is
-    # the bulk-token pass, so it runs on the cheap worker model (DeepSeek): the
-    # brief carries the design intelligence, the writer just realises it.
-    "freeform_writer": "deepseek-chat",
+    # Art-Director → Writer 2-pass. The ORCHESTRATOR / design-brain — feeling→
+    # idea→system + ultra-detailed per-section spec — and the DEVELOPER that
+    # writes the HTML. Owner directive 2026-06-02: orchestrator = Gemini 3.5
+    # Flash (High), developer = MiniMax M2.7 — both via the vsegpt provider on
+    # VSEGPT_API_KEY. Swap at runtime via ROLE_MODELS env (e.g.
+    # "art_director=claude-opus-4-8") — no code change. The brief is short prose
+    # (few tokens); the writer is the bulk-token pass.
+    "art_director": "gemini-3.5-flash-high",
+    "freeform_writer": "minimax-m2.7",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
 }
 

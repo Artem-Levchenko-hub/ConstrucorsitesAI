@@ -32,12 +32,11 @@ def test_role_map_orchestrator_sonnet_workers_deepseek() -> None:
 
 
 def test_art_director_writer_split() -> None:
-    # Owner directive (2026-06-02): the design BRAIN (art-director — feeling →
-    # idea → system + ultra-detailed brief) runs on real Opus 4.8, served by the
-    # vsegpt provider (anthropic/claude-opus-4.8) on the same key as the DeepSeek
-    # workers; the bulk HTML WRITER executes that brief on cheap DeepSeek.
-    assert model_for_role("art_director") == "claude-opus-4-8"
-    assert model_for_role("freeform_writer") == "deepseek-chat"
+    # Owner directive (2026-06-02): orchestrator (art-director / design-brain) =
+    # Gemini 3.5 Flash (High); developer (writes the HTML) = MiniMax M2.7 — both
+    # served via the vsegpt provider on the same key. Swap via ROLE_MODELS env.
+    assert model_for_role("art_director") == "gemini-3.5-flash-high"
+    assert model_for_role("freeform_writer") == "minimax-m2.7"
 
 
 def test_no_role_uses_flaky_gemini() -> None:

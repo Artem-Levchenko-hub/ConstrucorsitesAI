@@ -59,6 +59,10 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
     # vsegpt plan to include Anthropic models — else vsegpt 400s "not available on
     # your subscription plan" and the writer carries the page alone (R-10).
     "claude-opus-4-8": "anthropic/claude-opus-4.8",
+    # Orchestrator (art_director / design-brain) — owner pick 2026-06-02.
+    "gemini-3.5-flash-high": "google/gemini-3.5-flash-high",
+    # Developer (freeform_writer — writes the HTML) — owner pick 2026-06-02.
+    "minimax-m2.7": "minimax/minimax-m2.7",
 }
 
 # Default ceiling for a thinking model: chain-of-thought shares the token budget
