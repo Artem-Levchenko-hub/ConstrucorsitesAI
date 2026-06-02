@@ -32,11 +32,11 @@ def test_role_map_orchestrator_sonnet_workers_deepseek() -> None:
 
 
 def test_art_director_writer_split() -> None:
-    # Owner directive (2026-06-02): orchestrator (art-director / design-brain) =
-    # Gemini 3.5 Flash (High); developer (writes the HTML) = MiniMax M2.7 — both
-    # served via the vsegpt provider on the same key. Swap via ROLE_MODELS env.
-    assert model_for_role("art_director") == "gemini-3.5-flash-high"
-    assert model_for_role("freeform_writer") == "minimax-m2.7"
+    # Owner directive (2026-06-02): ONE strong thinking model for BOTH the
+    # orchestrator (art-director) and the developer (writes the HTML) —
+    # deepseek-v4-pro-thinking via the vsegpt provider. Swap via ROLE_MODELS env.
+    assert model_for_role("art_director") == "deepseek-v4-pro-thinking"
+    assert model_for_role("freeform_writer") == "deepseek-v4-pro-thinking"
 
 
 def test_no_role_uses_flaky_gemini() -> None:

@@ -63,11 +63,18 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
     "gemini-3.5-flash-high": "google/gemini-3.5-flash-high",
     # Developer (freeform_writer — writes the HTML) — owner pick 2026-06-02.
     "minimax-m2.7": "minimax/minimax-m2.7",
+    # Owner pick 2026-06-02: ONE strong thinking model for BOTH orchestrator and
+    # coder. 1M context (no 16K-cap orchestration break like v4-flash-thinking);
+    # reasoning lands in a separate field, so `content` stays clean HTML/brief.
+    "deepseek-v4-pro-thinking": "deepseek/deepseek-v4-pro-thinking",
 }
 
 # Default ceiling for a thinking model: chain-of-thought shares the token budget
 # with the visible answer, so a small cap silently truncates the real output.
-_DEFAULT_MAX_TOKENS = 16384
+# 32768 leaves room for a thinking model's reasoning PLUS a full landing page —
+# the writer pass can emit a large HTML doc and the deepseek-v4-pro-thinking
+# coder spends extra tokens reasoning first (1M context, so this is cheap headroom).
+_DEFAULT_MAX_TOKENS = 32768
 # The art_director (Opus 4.8) writes a long, detailed brief — ~150s of
 # non-streaming inference is normal. The old 115s read timeout cut it off, the
 # gateway raised ReadTimeout, and the brief was DROPPED (writer ran alone, Opus

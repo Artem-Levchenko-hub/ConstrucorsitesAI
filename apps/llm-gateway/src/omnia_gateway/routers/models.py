@@ -45,6 +45,7 @@ _MODEL_KEY_OVERRIDE = {
     # Orchestrator + developer served via the vsegpt provider (same key).
     "gemini-3.5-flash-high": lambda s: _has(s.vsegpt_api_key),
     "minimax-m2.7": lambda s: _has(s.vsegpt_api_key),
+    "deepseek-v4-pro-thinking": lambda s: _has(s.vsegpt_api_key),
     "deepseek-chat": lambda s: _has(s.vsegpt_api_key),  # served via vsegpt provider now
     "deepseek-reasoner": lambda s: _has(s.proxyapi_api_key),
     # DeepSeek V4 Flash (Thinking) via vsegpt.ru — separate key/balance from

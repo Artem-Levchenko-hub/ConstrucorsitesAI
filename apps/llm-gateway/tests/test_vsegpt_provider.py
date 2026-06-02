@@ -101,6 +101,7 @@ def test_is_vsegpt_model() -> None:
     assert vsegpt.is_vsegpt_model("claude-opus-4-8") is True
     assert vsegpt.is_vsegpt_model("gemini-3.5-flash-high") is True
     assert vsegpt.is_vsegpt_model("minimax-m2.7") is True
+    assert vsegpt.is_vsegpt_model("deepseek-v4-pro-thinking") is True
     # Opus 4.7 stays a proxyapi/Router model — not dispatched to vsegpt.
     assert vsegpt.is_vsegpt_model("claude-opus-4-7") is False
     assert vsegpt.is_vsegpt_model("gpt-5") is False
@@ -162,8 +163,9 @@ async def test_strips_think_block(monkeypatch: pytest.MonkeyPatch, _with_key) ->
 async def test_default_max_tokens_sent(monkeypatch: pytest.MonkeyPatch, _with_key) -> None:
     _install_fake(monkeypatch, _FakeResponse(_canned("ok")))
     await vsegpt.acompletion(model=_MODEL, messages=[{"role": "user", "content": "x"}])
-    # Thinking model gets a wide budget by default so CoT can't truncate output.
-    assert _FakeClient.captured["payload"]["max_tokens"] == 16384
+    # Thinking model gets a wide budget by default so CoT can't truncate output
+    # (32768 leaves room for reasoning + a full landing page).
+    assert _FakeClient.captured["payload"]["max_tokens"] == 32768
 
 
 @pytest.mark.asyncio
