@@ -129,6 +129,11 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
     # fields, so only send it on the proxyapi path.
     if provider == "proxyapi" and req.quality != "auto":
         payload["quality"] = req.quality
+    # vsegpt flux/nano return base64 ONLY and require it be requested explicitly
+    # — otherwise "Only response_format = b64_json is supported" (400). The api
+    # resolver already decodes b64_json.
+    if provider == "vsegpt":
+        payload["response_format"] = "b64_json"
 
     client = get_http()
 
