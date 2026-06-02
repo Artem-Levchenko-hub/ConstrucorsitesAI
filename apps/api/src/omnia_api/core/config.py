@@ -285,6 +285,7 @@ def get_settings() -> Settings:
 MODEL_TIER_MAP: dict[str, str] = {
     # Premium — full single-shot prompt, no decomposition.
     "claude-opus-4-7":   "premium",
+    "claude-opus-4-8":   "premium",
     "claude-opus-4-6":   "premium",
     "claude-sonnet-4-6": "premium",
     "gpt-5":             "premium",
@@ -410,15 +411,16 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "link_repair":  "deepseek-chat",  # rewrite dead hrefs
     "image_prompt": "deepseek-chat",  # short image-gen prompt
     "single_shot":  "deepseek-chat",  # non-catalog freeform fallback path
-    # Art-Director → Writer 2-pass (owner directive 2026-06-01). The DESIGN
-    # BRAIN — feeling→idea→system + ultra-detailed per-section spec — runs on
-    # the strongest model the gateway serves. `claude-opus-4-7` IS the top Opus
-    # registered in the gateway (litellm_router → anthropic/claude-opus-4-5);
-    # `claude-opus-4-8` is NOT in /v1/models yet, so wiring it here would 404.
-    # Bump via ROLE_MODELS env ("art_director=claude-opus-4-8") the moment the
-    # gateway registers it — no code change needed (model_for_role reads env
-    # first). This pass emits a BRIEF, not code, so its Opus tokens stay small.
-    "art_director": "claude-opus-4-7",
+    # Art-Director → Writer 2-pass (owner directive 2026-06-01 / 06-02). The
+    # DESIGN BRAIN — feeling→idea→system + ultra-detailed per-section spec — runs
+    # on real Opus 4.8, served by the vsegpt provider (anthropic/claude-opus-4.8)
+    # on the SAME funded key as the DeepSeek workers (VSEGPT_API_KEY). proxyapi.ru
+    # went balance-dry and the OpenRouter detour needed a separate key, so vsegpt
+    # is the live Opus route. NOTE: the vsegpt account's plan must include
+    # Anthropic models or the call 400s ("not available on your subscription
+    # plan") and the writer carries the page alone (R-10 fail-soft). Retune at
+    # runtime via ROLE_MODELS env. This pass emits a BRIEF, so its tokens stay few.
+    "art_director": "claude-opus-4-8",
     # The WRITER executes the art-director's brief into the full HTML. This is
     # the bulk-token pass, so it runs on the cheap worker model (DeepSeek): the
     # brief carries the design intelligence, the writer just realises it.

@@ -32,12 +32,11 @@ def test_role_map_orchestrator_sonnet_workers_deepseek() -> None:
 
 
 def test_art_director_writer_split() -> None:
-    # Owner directive (2026-06-01): the design BRAIN (art-director — feeling →
-    # idea → system + ultra-detailed brief) runs on the strongest Opus the
-    # gateway serves; the bulk HTML WRITER executes that brief on cheap DeepSeek.
-    # `claude-opus-4-8` is not in the gateway's /v1/models yet — bump via
-    # ROLE_MODELS env when it lands (no code change).
-    assert model_for_role("art_director") == "claude-opus-4-7"
+    # Owner directive (2026-06-02): the design BRAIN (art-director — feeling →
+    # idea → system + ultra-detailed brief) runs on real Opus 4.8, served by the
+    # vsegpt provider (anthropic/claude-opus-4.8) on the same key as the DeepSeek
+    # workers; the bulk HTML WRITER executes that brief on cheap DeepSeek.
+    assert model_for_role("art_director") == "claude-opus-4-8"
     assert model_for_role("freeform_writer") == "deepseek-chat"
 
 

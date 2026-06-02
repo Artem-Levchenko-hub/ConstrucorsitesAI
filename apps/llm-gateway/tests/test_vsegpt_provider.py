@@ -95,8 +95,12 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, response: _FakeResponse) -> N
 
 def test_is_vsegpt_model() -> None:
     assert vsegpt.is_vsegpt_model(_MODEL) is True
+    # Both the DeepSeek workers and the Opus 4.8 art_director ride vsegpt now.
+    assert vsegpt.is_vsegpt_model("deepseek-chat") is True
+    assert vsegpt.is_vsegpt_model("claude-opus-4-8") is True
+    # Opus 4.7 stays a proxyapi/Router model — not dispatched to vsegpt.
     assert vsegpt.is_vsegpt_model("claude-opus-4-7") is False
-    assert vsegpt.is_vsegpt_model("deepseek-chat") is False
+    assert vsegpt.is_vsegpt_model("gpt-5") is False
 
 
 @pytest.mark.asyncio

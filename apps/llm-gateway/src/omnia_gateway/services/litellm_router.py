@@ -59,13 +59,13 @@ litellm.suppress_debug_info = True
 # anthropic/claude-sonnet-4-5 until a 4.6 alias ships).
 _LITELLM_MODEL_SLUG: dict[str, str] = {
     "claude-sonnet-4-6": "anthropic/claude-sonnet-4-5",
-    # Opus routed via OpenRouter (owner 2026-06-02): proxyapi.ru balance ran dry
-    # ("Insufficient balance to run this request"), which silently killed the
-    # art_director (Opus) role and degraded every premium build to DeepSeek-alone.
-    # OpenRouter has its own funded balance and serves the Opus thinking model.
-    # Key comes from OPENROUTER_API_KEY via _api_key_for() (openrouter/ prefix);
-    # opus is removed from _PROXY_ROUTES below so it no longer hits proxyapi.
-    "claude-opus-4-7": "openrouter/anthropic/claude-opus-4.8-thinking",
+    # Opus 4.7 via proxyapi.ru native-Anthropic endpoint (key/base in _PROXY_ROUTES
+    # below). Kept only as a fallback target — the LIVE art_director model is now
+    # claude-opus-4-8 via the vsegpt provider (providers/vsegpt.py), dispatched
+    # before this Router. The 2026-06-02 OpenRouter detour was reverted: the key
+    # on prod is a vsegpt key (sk-or-vv-), not an OpenRouter key (sk-or-v1-), and
+    # OpenRouter rejected it. This route needs proxyapi.ru topped up to work.
+    "claude-opus-4-7": "anthropic/claude-opus-4-5",
     # Haiku 4.5 routed via proxyapi.ru native-Anthropic endpoint (the proxyapi
     # /openai/v1 surface doesn't carry Claude models — they live under
     # /anthropic/v1 in raw Anthropic Messages format). The proxy key flows in
@@ -116,12 +116,13 @@ _PROXY_ROUTES: dict[str, _ProxyRoute] = {
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_base_url,
     ),
-    # Opus 4.7 is NO LONGER here — routed via OpenRouter (see _LITELLM_MODEL_SLUG
-    # above). proxyapi.ru ran out of balance, so forcing Opus onto it returned
-    # "Insufficient balance" and killed the art_director role. OpenRouter has its
-    # own funded balance; the openrouter/ slug pulls OPENROUTER_API_KEY in
-    # _api_key_for(). To move Opus back to proxyapi: restore this _ProxyRoute and
-    # revert the slug to anthropic/claude-opus-4-5.
+    # Opus 4.7 via proxyapi.ru native-Anthropic endpoint — same balance as
+    # Haiku/Sonnet. Fallback target only; the live art_director Opus is 4.8 via
+    # the vsegpt provider. Needs proxyapi.ru balance to be non-zero.
+    "claude-opus-4-7": _ProxyRoute(
+        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
+        api_base=lambda s: s.proxyapi_base_url,
+    ),
     # DeepSeek V3 / R1 via proxyapi.ru OpenAI-compatible surface. deepseek-chat
     # is the Polish/content role's model (best ₽/quality on Russian copy).
     "deepseek-chat": _ProxyRoute(

@@ -50,6 +50,15 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
     # and the IR fell back to the director / Haiku).
     "deepseek-chat": "deepseek/deepseek-chat",
     "deepseek-v4-flash-thinking": "deepseek/deepseek-v4-flash-thinking",
+    # Opus 4.8 — the art_director (design-brain) model. proxyapi.ru ran dry and
+    # the OpenRouter detour needed a separate key, so Opus rides vsegpt.ru on the
+    # SAME funded key already used for the DeepSeek workers (VSEGPT_API_KEY).
+    # Dispatched here (before the LiteLLM Router) so the dead openrouter/ slug is
+    # never used. The brief is short prose, so the non-thinking variant is enough
+    # and keeps the response clean (no <think> field to strip). Requires the
+    # vsegpt plan to include Anthropic models — else vsegpt 400s "not available on
+    # your subscription plan" and the writer carries the page alone (R-10).
+    "claude-opus-4-8": "anthropic/claude-opus-4.8",
 }
 
 # Default ceiling for a thinking model: chain-of-thought shares the token budget
