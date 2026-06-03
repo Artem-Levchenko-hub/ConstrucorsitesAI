@@ -178,9 +178,13 @@ def _inject_brand_vars(html: str, palette: CuratedPalette) -> tuple[str, bool]:
     if _BRAND_STYLE_ID in html:
         return html, False
     p, a = palette.primary, palette.accent
+    # --brand-primary drives the PRIMARY CTA fill. The CTA is the page's accent
+    # pop (owner: "акцент дозой — CTA"), NOT the dark dominant — so map it to the
+    # palette ACCENT, else a dark-primary CTA renders flat (owner 2026-06-03:
+    # "кнопки плоские"). The kit auto-lightens it tone-in-tone for the gradient.
     style = (
         f'<style id="{_BRAND_STYLE_ID}">:root{{'
-        f"--brand-primary:{p};--ring:{a};"
+        f"--brand-primary:{a};--ring:{a};"
         f"--shadow-color:{_rgba(p, 0.24)};--sel-bg:{_rgba(a, 0.18)};"
         f"--tint:{_rgba(a, 0.28)};--glow:{_rgba(a, 0.36)};"
         f"--cursor-blob-color:{a};"
@@ -191,6 +195,46 @@ def _inject_brand_vars(html: str, palette: CuratedPalette) -> tuple[str, bool]:
     if _BODY_CLOSE_RE.search(html):
         return _BODY_CLOSE_RE.sub(style + "</body>", html, count=1), True
     return style + html, True
+
+
+_OMNIA_COLORS_RE = re.compile(
+    r'<[^>]*\bdata-omnia-colors\s*=\s*"([^"]+)"[^>]*>', re.IGNORECASE
+)
+
+
+def _sync_shader_colors(html: str) -> tuple[str, bool]:
+    """Copy `data-omnia-colors="a,b,c,d"` into inline `--sh1..--sh4` on the SAME
+    element, so .omnia-shader's CSS floor uses the brief's tone-in-tone hues.
+
+    The kit JS only binds `[data-omnia-shader]` AND is skipped under
+    reduced-motion (which the acceptance capture forces), so a page that uses the
+    `.omnia-shader` class + `data-omnia-colors` (what the brief writes) never gets
+    `--sh1..4` set → the CSS floor leaks the kit's default teal/amber/crimson mesh
+    (owner 2026-06-03: "градиент не очень" — a multi-hue rainbow). This pins the
+    floor to the specified hues, no JS needed. Idempotent.
+    """
+    changed = False
+
+    def repl(m: re.Match[str]) -> str:
+        nonlocal changed
+        tag = m.group(0)
+        if "--sh1" in tag:
+            return tag  # already synced
+        cols = [c.strip() for c in m.group(1).split(",") if c.strip()]
+        if len(cols) < 4:
+            return tag
+        decl = "".join(f"--sh{i + 1}:{cols[i]};" for i in range(4))
+        sm = re.search(r'style\s*=\s*"([^"]*)"', tag, re.IGNORECASE)
+        if sm:
+            new_tag = tag[: sm.start(1)] + decl + sm.group(1) + tag[sm.end(1) :]
+        elif tag.rstrip().endswith("/>"):
+            new_tag = tag.rstrip()[:-2].rstrip() + f' style="{decl}"/>'
+        else:
+            new_tag = tag.rstrip()[:-1].rstrip() + f' style="{decl}">'
+        changed = True
+        return new_tag
+
+    return _OMNIA_COLORS_RE.sub(repl, html), changed
 
 
 def repair_html(html: str, palette: CuratedPalette) -> tuple[str, bool]:
@@ -216,6 +260,11 @@ def repair_html(html: str, palette: CuratedPalette) -> tuple[str, bool]:
     if "<" in out and "</" in out:
         out, brand_changed = _inject_brand_vars(out, palette)
         changed = changed or brand_changed
+
+    # 4) Sync .omnia-shader data-omnia-colors → inline --sh1..4 so the CSS floor
+    #    shows the brief's tone-in-tone hues, not the kit's default rainbow.
+    out, shader_changed = _sync_shader_colors(out)
+    changed = changed or shader_changed
 
     return out, changed
 
