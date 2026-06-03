@@ -148,6 +148,51 @@ def _strip_banned(html: str, palette: CuratedPalette) -> tuple[str, bool]:
     return _HEX_TOKEN_RE.sub(repl, html), changed
 
 
+# omnia-kit reads these custom-props to colour its CTA / focus-ring / glow /
+# selection / tinted-shadow. If the page never sets them, the kit falls back to
+# its baked indigo default (`var(--brand-primary, #6366f1)`) — the exact violet
+# button the owner flagged 2026-06-03. _snap_root only rewrites vars the page
+# ALREADY declared, so a page that omits them leaks indigo. This block force-sets
+# them from the curated palette, appended LAST so it wins regardless of the kit.
+_BRAND_STYLE_ID = "omnia-brand-vars"
+_HEAD_CLOSE_RE = re.compile(r"</head\s*>", re.IGNORECASE)
+_BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
+
+
+def _rgba(hex_str: str, alpha: float) -> str:
+    """#rrggbb → `rgba(r, g, b, alpha)`. Falls back to a neutral on a bad hex."""
+    h = _expand_hex(hex_str.strip()).lstrip("#")
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except (ValueError, IndexError):
+        return f"rgba(15, 23, 42, {alpha})"
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+def _inject_brand_vars(html: str, palette: CuratedPalette) -> tuple[str, bool]:
+    """Append a final `:root{}` that pins omnia-kit's brand custom-props to the
+    palette, so the CTA / ring / glow can never default to the kit's indigo.
+    Idempotent (skips if already injected). `--brand-grad-to` is left unset so
+    the kit auto-lightens `--brand-primary` tone-in-tone (no 2nd hue on the CTA).
+    """
+    if _BRAND_STYLE_ID in html:
+        return html, False
+    p, a = palette.primary, palette.accent
+    style = (
+        f'<style id="{_BRAND_STYLE_ID}">:root{{'
+        f"--brand-primary:{p};--ring:{a};"
+        f"--shadow-color:{_rgba(p, 0.24)};--sel-bg:{_rgba(a, 0.18)};"
+        f"--tint:{_rgba(a, 0.28)};--glow:{_rgba(a, 0.36)};"
+        f"--cursor-blob-color:{a};"
+        f"}}</style>"
+    )
+    if _HEAD_CLOSE_RE.search(html):
+        return _HEAD_CLOSE_RE.sub(style + "</head>", html, count=1), True
+    if _BODY_CLOSE_RE.search(html):
+        return _BODY_CLOSE_RE.sub(style + "</body>", html, count=1), True
+    return style + html, True
+
+
 def repair_html(html: str, palette: CuratedPalette) -> tuple[str, bool]:
     """Snap one HTML string to the curated palette. Returns (html, changed)."""
     out = html
@@ -165,6 +210,12 @@ def repair_html(html: str, palette: CuratedPalette) -> tuple[str, bool]:
     #    written as arbitrary values like bg-[#6366f1]).
     out, banned_changed = _strip_banned(out, palette)
     changed = changed or banned_changed
+
+    # 3) Force-set omnia-kit brand vars from the palette (kills the kit's indigo
+    #    fallback on pages that never declared --brand-primary). HTML files only.
+    if "<" in out and "</" in out:
+        out, brand_changed = _inject_brand_vars(out, palette)
+        changed = changed or brand_changed
 
     return out, changed
 
