@@ -89,6 +89,14 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
     # flattening, so the screenshot actually reaches the model. DeepSeek has no
     # vision model, so the judge is Gemini via vsegpt.
     "gemini-3-flash-vision": "vis-google/gemini-3-flash-pre",
+    # Kimi K2.6 (thinking) — Moonshot 1T/32B MoE, NATIVE multimodal + strong
+    # design taste. The design-brain DeepSeek can't be: no vision, weaker
+    # aesthetics → generic/monotone output. art_director (brief author) model.
+    # Confirmed served by vsegpt on the SAME VSEGPT_API_KEY (2026-06-03 live
+    # test → real completion + separate `reasoning` field). Thinking ⇒ ~150-200s
+    # for the brief, inside _DEFAULT_TIMEOUT_S=240s. Reasoning is a separate
+    # field, so `content` stays clean (no inline <think> to strip).
+    "kimi-k2.6-thinking": "moonshotai/kimi-k2.6-thinking",
 }
 
 

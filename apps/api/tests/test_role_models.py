@@ -34,10 +34,11 @@ def test_role_map_all_vsegpt_no_proxyapi() -> None:
 
 
 def test_art_director_writer_split() -> None:
-    # Owner directive (2026-06-02): all-DeepSeek. Orchestrator (art-director) =
-    # deepseek-v4-pro-thinking (brief, reasoning); developer (HTML) =
-    # deepseek-v4-pro NON-thinking (fast, clean). Both vsegpt. Swap via ROLE_MODELS.
-    assert model_for_role("art_director") == "deepseek-v4-pro-thinking"
+    # Owner directive (2026-06-03): Kimi K2.6 thinking is the design-brain
+    # (art_director) — native multimodal + stronger taste than DeepSeek; the
+    # developer (freeform_writer, writes HTML) stays deepseek-v4-pro NON-thinking.
+    # Brain=Kimi, hands=DeepSeek. Both vsegpt. Swap via ROLE_MODELS.
+    assert model_for_role("art_director") == "kimi-k2.6-thinking"
     assert model_for_role("freeform_writer") == "deepseek-v4-pro"
 
 
