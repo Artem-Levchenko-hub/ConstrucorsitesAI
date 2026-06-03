@@ -221,6 +221,13 @@ services:
       # image-less template pages. WITHOUT this passthrough line the .env value is
       # ignored (compose only injects keys listed here) and score-only never armed.
       ACCEPTANCE_SCORE_ONLY: ${ACCEPTANCE_SCORE_ONLY:-false}
+      # PIPELINE DEBUG (owner 2026-06-03, temporary forensics): when DUMP=true,
+      # write each pass's RAW output (system prompt, art-director brief, writer
+      # HTML, vision verdict) to PIPELINE_DEBUG_DIR/<project>/<message>/ so we can
+      # read what every model actually emitted. Default OFF — must be listed here
+      # or the .env value is ignored (compose injects only declared keys).
+      PIPELINE_DEBUG_DUMP: ${PIPELINE_DEBUG_DUMP:-false}
+      PIPELINE_DEBUG_DIR: ${PIPELINE_DEBUG_DIR:-/tmp/omnia-pp}
       # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.
       USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
       ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}
@@ -286,6 +293,13 @@ services:
       # image-less template pages. WITHOUT this passthrough line the .env value is
       # ignored (compose only injects keys listed here) and score-only never armed.
       ACCEPTANCE_SCORE_ONLY: ${ACCEPTANCE_SCORE_ONLY:-false}
+      # PIPELINE DEBUG (owner 2026-06-03, temporary forensics): when DUMP=true,
+      # write each pass's RAW output (system prompt, art-director brief, writer
+      # HTML, vision verdict) to PIPELINE_DEBUG_DIR/<project>/<message>/ so we can
+      # read what every model actually emitted. Default OFF — must be listed here
+      # or the .env value is ignored (compose injects only declared keys).
+      PIPELINE_DEBUG_DUMP: ${PIPELINE_DEBUG_DUMP:-false}
+      PIPELINE_DEBUG_DIR: ${PIPELINE_DEBUG_DIR:-/tmp/omnia-pp}
       # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.
       USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
       ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}

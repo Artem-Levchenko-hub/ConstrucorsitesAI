@@ -1544,6 +1544,18 @@ async def _process_prompt(
                         f"vision={_verdict.vision_ran}",
                         flush=True,
                     )
+                    pipeline_debug.dump(
+                        project_id,
+                        assistant_message_id,
+                        f"04_vision_attempt{_acc_attempt}.md",
+                        f"verdict={_verdict.verdict} score={_verdict.score} "
+                        f"passed={_verdict.passed} struct={_verdict.structural_ok} "
+                        f"resp={_verdict.responsive_ok} vision_ran={_verdict.vision_ran}\n\n"
+                        f"ISSUES ({len(_verdict.issues)}):\n"
+                        + "\n".join(f"- {_i}" for _i in _verdict.issues)
+                        + "\n\nFEEDBACK:\n"
+                        + (_verdict.feedback or "(none)"),
+                    )
                     await publish_event(
                         project_id,
                         "llm.audit",

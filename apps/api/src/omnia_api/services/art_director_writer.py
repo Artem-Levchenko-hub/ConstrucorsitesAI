@@ -40,6 +40,7 @@ from typing import Any
 from uuid import UUID
 
 from omnia_api.core.config import model_for_role
+from omnia_api.services import pipeline_debug
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.vendor_profiles import vendor_directive
 
@@ -199,6 +200,10 @@ async def art_director_writer_generate(
     # ─── Pass 1: Art-Director (silent — accumulate the brief) ────────────
     yield {"pass": "art_director", "stage": "start", "model": art_director_model}
     ad_msgs = _build_art_director_messages(base_messages, user_prompt, art_director_model)
+    if pipeline_debug.enabled():
+        _sys = next((m["content"] for m in base_messages if m.get("role") == "system"), "")
+        pipeline_debug.dump(project_id, message_id, "00_system_prompt.md", _sys)
+        pipeline_debug.dump(project_id, message_id, "01_art_director_input.md", ad_msgs[-1]["content"])
     brief_parts: list[str] = []
     ad_usage: dict[str, Any] | None = None
     async for event in stream_chat_completion(
@@ -219,12 +224,16 @@ async def art_director_writer_generate(
             break
 
     brief = "".join(brief_parts).strip()
+    pipeline_debug.dump(project_id, message_id, "02_brief.md", brief)
     yield {"pass": "art_director", "stage": "end", "chars": len(brief)}
 
     # ─── Pass 2: Writer (streams the HTML to the caller) ─────────────────
     yield {"pass": "writer", "stage": "start", "model": writer_model}
     writer_msgs = _build_writer_messages(base_messages, user_prompt, brief, writer_model)
+    if pipeline_debug.enabled():
+        pipeline_debug.dump(project_id, message_id, "01b_writer_input.md", writer_msgs[-1]["content"])
     writer_usage: dict[str, Any] | None = None
+    writer_parts: list[str] = []
     async for event in stream_chat_completion(
         writer_msgs,
         writer_model,
@@ -233,6 +242,7 @@ async def art_director_writer_generate(
         str(message_id),
     ):
         if delta := event.get("delta"):
+            writer_parts.append(delta)
             yield {"delta": delta}
         if u := event.get("usage"):
             writer_usage = u
@@ -240,6 +250,7 @@ async def art_director_writer_generate(
             yield {"error": f"writer pass failed: {err}"}
             return
 
+    pipeline_debug.dump(project_id, message_id, "03_writer_raw.html", "".join(writer_parts))
     yield {"pass": "writer", "stage": "end"}
     yield {"usage": _aggregate_usage(ad_usage, writer_usage)}
 
