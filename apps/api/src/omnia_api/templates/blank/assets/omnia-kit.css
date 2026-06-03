@@ -840,3 +840,123 @@ html.lenis, html.lenis body { height: auto; }
 .lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
 .lenis.lenis-stopped { overflow: hidden; }
 .lenis.lenis-smooth iframe { pointer-events: none; }
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  v5.0 — «WOW»-фоны студийного уровня (порт лучших Aceternity-эффектов в
+ *  vanilla CSS). Added 2026-06-03. ЧИСТО ДОБАВЛЕНИЯ. Каждый — CSS-only (без
+ *  JS), палитра через --vars, gated `prefers-reduced-motion`, capture-safe.
+ *  ПРАВИЛО ВКУСА: одна сигнатура на секцию, ДОЗОЙ, ТОН-В-ТОН (одна хью-семья,
+ *  низкая насыщенность). НЕ радуга, НЕ неон-цирк. Ставь первым ребёнком
+ *  `relative overflow-hidden` секции (z-0 ПОД контентом); контент оборачивай
+ *  в `.omnia-shader-over` (z-1). Дефолты — нейтрально-тёплые, сайт
+ *  переопределяет --vars под свою палитру.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+@property --omnia-ang { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+
+/* V5.1 — Beams: мягкие вертикальные колонны света, медленно дрейфуют.
+ * Тёмные hero/секции. --beam = цвет луча (полупрозрачный светлый/акцент). */
+.fx-beams {
+  --beam: rgba(255, 255, 255, .06);
+  position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+  background-image:
+    linear-gradient(90deg, transparent 18%, var(--beam) 20%, transparent 23%),
+    linear-gradient(90deg, transparent 46%, var(--beam) 50%, transparent 54%),
+    linear-gradient(90deg, transparent 76%, var(--beam) 80%, transparent 83%);
+  background-size: 220% 100%;
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent 92%);
+  mask-image: linear-gradient(180deg, #000, transparent 92%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fx-beams { animation: omnia-beams 24s ease-in-out infinite alternate; }
+  @keyframes omnia-beams { from { background-position: 0 0; } to { background-position: 70% 0; } }
+}
+
+/* V5.2 — Meteors: 2 диагональных штриха-метеора (дозой, тёмный hero).
+ * Для большего числа добавь дочерние span'ы со своим --mx. */
+.fx-meteors { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.fx-meteors::before, .fx-meteors::after {
+  content: ""; position: absolute; top: -12%; left: var(--mx, 22%);
+  width: 2px; height: 92px;
+  background: linear-gradient(180deg, var(--meteor, rgba(255, 255, 255, .55)), transparent);
+  filter: drop-shadow(0 0 6px var(--meteor, rgba(255, 255, 255, .35)));
+  opacity: 0;
+}
+.fx-meteors::after { left: 68%; }
+@media (prefers-reduced-motion: no-preference) {
+  .fx-meteors::before { animation: omnia-meteor 5.5s linear infinite; }
+  .fx-meteors::after  { animation: omnia-meteor 7s linear 1.4s infinite; }
+  @keyframes omnia-meteor {
+    0%   { opacity: 0; transform: translate(0, -20%) rotate(34deg); }
+    8%   { opacity: 1; }
+    72%  { opacity: 1; }
+    100% { opacity: 0; transform: translate(260px, 118vh) rotate(34deg); }
+  }
+}
+
+/* V5.3 — Grid-glow: тонкая сетка, проявленная мягкой radial-маской (editorial). */
+.fx-grid-glow {
+  --grid: rgba(255, 255, 255, .08);
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 48px 48px;
+  -webkit-mask-image: radial-gradient(ellipse 62% 52% at 50% 40%, #000 8%, transparent 76%);
+  mask-image: radial-gradient(ellipse 62% 52% at 50% 40%, #000 8%, transparent 76%);
+}
+
+/* V5.4 — Waves: текучие линии-волны (органик/фуд/эко/wellness вайбы).
+ * SVG-маска + заливка --wave → палитра-тюнится; медленный горизонт-дрейф. */
+.fx-waves {
+  --wave: rgba(255, 255, 255, .12);
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background-color: var(--wave);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='200'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cpath d='M0 60 C 120 20, 240 100, 480 60'/%3E%3Cpath d='M0 110 C 120 70, 240 150, 480 110'/%3E%3Cpath d='M0 160 C 120 120, 240 200, 480 160'/%3E%3C/g%3E%3C/svg%3E") repeat-x center;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='200'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cpath d='M0 60 C 120 20, 240 100, 480 60'/%3E%3Cpath d='M0 110 C 120 70, 240 150, 480 110'/%3E%3Cpath d='M0 160 C 120 120, 240 200, 480 160'/%3E%3C/g%3E%3C/svg%3E") repeat-x center;
+  -webkit-mask-size: 480px auto; mask-size: 480px auto;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fx-waves { animation: omnia-waves 16s linear infinite; }
+  @keyframes omnia-waves { to { -webkit-mask-position: 480px center; mask-position: 480px center; } }
+}
+
+/* V5.5 — Aurora-soft: богатая ТОН-В-ТОН аврора (одна хью-семья, низкая
+ * насыщенность — НЕ радуга). Дефолт тёплый нейтраль; переопредели --au1..3. */
+.fx-aurora-soft {
+  --au1: rgba(120, 92, 60, .40); --au2: rgba(80, 64, 48, .34); --au3: rgba(40, 34, 28, .40);
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    radial-gradient(ellipse 60% 50% at 22% 30%, var(--au1), transparent 60%),
+    radial-gradient(ellipse 55% 45% at 80% 18%, var(--au2), transparent 60%),
+    radial-gradient(ellipse 72% 60% at 50% 92%, var(--au3), transparent 66%);
+  background-size: 170% 170%;
+  filter: blur(18px);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fx-aurora-soft { animation: omnia-aurora-soft 22s ease-in-out infinite alternate; }
+  @keyframes omnia-aurora-soft { from { background-position: 0% 0%; } to { background-position: 100% 100%; } }
+}
+
+/* V5.6 — Trace: бегущий по бордеру луч (карточки/CTA, ДОЗОЙ — 1 акцент-блок).
+ * Ставь на элемент с border-radius; --trace = цвет луча. */
+.fx-trace { position: relative; }
+.fx-trace::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+  pointer-events: none;
+  background: conic-gradient(from var(--omnia-ang),
+    transparent 68%, var(--trace, rgba(255, 255, 255, .7)) 84%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fx-trace::after { animation: omnia-trace 4.5s linear infinite; }
+  @keyframes omnia-trace { to { --omnia-ang: 360deg; } }
+}
+
+/* A11y — статичный флор для motion-sensitive: эффекты видны, но не движутся. */
+@media (prefers-reduced-motion: reduce) {
+  .fx-beams, .fx-meteors::before, .fx-meteors::after,
+  .fx-waves, .fx-aurora-soft, .fx-trace::after { animation: none; }
+}
