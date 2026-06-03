@@ -215,6 +215,12 @@ services:
       IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-img-flux/flux-2-pro}
       ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
       ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
+      # SCORE-ONLY (owner 2026-06-02): ship the rich freeform page + publish the
+      # vision verdict, but NEVER discard it for the worse catalog fallback. The
+      # catalog path emits no data-omnia-gen images, so the fallback shipped
+      # image-less template pages. WITHOUT this passthrough line the .env value is
+      # ignored (compose only injects keys listed here) and score-only never armed.
+      ACCEPTANCE_SCORE_ONLY: ${ACCEPTANCE_SCORE_ONLY:-false}
       # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.
       USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
       ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}
@@ -274,6 +280,12 @@ services:
       IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-img-flux/flux-2-pro}
       ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
       ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
+      # SCORE-ONLY (owner 2026-06-02): ship the rich freeform page + publish the
+      # vision verdict, but NEVER discard it for the worse catalog fallback. The
+      # catalog path emits no data-omnia-gen images, so the fallback shipped
+      # image-less template pages. WITHOUT this passthrough line the .env value is
+      # ignored (compose only injects keys listed here) and score-only never armed.
+      ACCEPTANCE_SCORE_ONLY: ${ACCEPTANCE_SCORE_ONLY:-false}
       # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.
       USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
       ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}
