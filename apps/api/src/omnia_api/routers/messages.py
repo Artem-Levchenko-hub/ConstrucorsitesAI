@@ -29,6 +29,7 @@ from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services import pipeline_debug
 from omnia_api.services.art_director_writer import art_director_writer_generate
 from omnia_api.services.director_polish import director_polish_generate
 from omnia_api.services.file_extractor import (
