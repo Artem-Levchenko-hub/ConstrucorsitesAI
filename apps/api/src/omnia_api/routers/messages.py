@@ -319,6 +319,16 @@ _EMPTY_RESPONSE_FALLBACKS: dict[str, list[str]] = {
     # the reliable proxyapi route (Haiku → Sonnet) instead of an empty preview.
     "deepseek-chat": ["claude-haiku-4-5", "claude-sonnet-4-6"],
     "deepseek-v4-flash-thinking": ["claude-haiku-4-5", "claude-sonnet-4-6"],
+    # The freeform WRITER (`deepseek-v4-pro`) and the route model
+    # (`deepseek-v4-pro-thinking`) can shadow-drop the whole page — 0 chars, the
+    # reasoning field eats the token budget and the visible answer is empty.
+    # Neither had a fallback, so an empty writer shipped a BLANK build (owner
+    # trace 2026-06-03, msg 9c83ada4: writer_raw chars=0 → same-model multipass
+    # retry → `non-JSON content` → dead). Switch to a DIFFERENT live model: Kimi
+    # (the art_director brain — already loaded every build, writes HTML well),
+    # then the cheap deepseek-chat. Stays on vsegpt (proxyapi is gone).
+    "deepseek-v4-pro": ["kimi-k2.6-thinking", "deepseek-chat"],
+    "deepseek-v4-pro-thinking": ["kimi-k2.6-thinking", "deepseek-chat"],
     # GPT-5 family are reasoning models and may shadow-drop output even with
     # reasoning_effort=minimal; fall back to Haiku (same proxyapi key).
     "gpt-5": ["claude-haiku-4-5", "gpt-5-nano"],

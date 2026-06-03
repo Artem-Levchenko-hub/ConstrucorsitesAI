@@ -182,14 +182,15 @@ class Settings(BaseSettings):
     # still fails. This is the "awwwards-from-first-prompt" path. The recent
     # art-director / designer-brain freeform brief (prompt_builder.py) only runs
     # when this is on — it was built but left dormant before this flip.
-    # `use_vision_audit` is ON (owner directive 2026-06-02): the gateway DOES
-    # accept OpenAI-style multimodal image_url blocks (routers/chat.py +
-    # services/safety.py pass them through untouched — "vision audit sends
-    # image_url blocks here"), and the `audit` role is Sonnet (vision-capable
-    # via LiteLLM→Anthropic). The vision layer screenshots the page and judges
-    # broken/generic/beautiful → feeds the repair loop (stronger anti-generic).
-    # Fail-soft: any gateway/parse error degrades to a skipped verdict (score
-    # 10) that never blocks the page. Override any flag per-env in .env.
+    # `use_vision_audit` is OFF (owner directive 2026-06-03, reverses 06-02): in
+    # SCORE-ONLY mode the vision pass never gated anything — it only spent a paid
+    # gateway vision call to label the page, AND it judged the acceptance-capture
+    # screenshot, which is shot at `domcontentloaded` + 600ms and never waits for
+    # the resolved (remote MinIO) images to paint → it saw gray placeholders and
+    # cried "generic" on pages that look fine live. Net: paid noise. Killed; we
+    # maximise brief-adherence at the WRITER instead (art_director_writer.py).
+    # Fail-soft remains: if ever re-enabled, any error degrades to skipped (10).
+    # Override any flag per-env in .env.
     #
     #   use_freeform_render  — premium tier writes free HTML (else catalog/IR)
     #   use_acceptance_gate  — run structure+responsive (+vision) check & repair
@@ -198,7 +199,7 @@ class Settings(BaseSettings):
     #                          gateway multimodal support; best-effort, fail-soft)
     use_freeform_render: bool = Field(default=True)
     use_acceptance_gate: bool = Field(default=True)
-    use_vision_audit: bool = Field(default=True)
+    use_vision_audit: bool = Field(default=False)
     # Max self-repair re-rolls before the gate gives up (and freeform falls
     # back to catalog). Each retry is one extra LLM call — keep small.
     acceptance_max_retries: int = Field(default=2)
@@ -217,7 +218,10 @@ class Settings(BaseSettings):
     # next one that comes out near-identical to a DIFFERENT project's page
     # (the "every AI site looks the same" failure). Default ON (anti-generic) —
     # only active for freeform pages; catalog pages are intentionally alike.
-    use_originality: bool = Field(default=True)
+    # OFF (owner 2026-06-03): like vision it fingerprints the acceptance-capture
+    # screenshot — unreliable when remote images haven't painted — and in
+    # score-only mode only labels, never blocks. Dead weight; killed with vision.
+    use_originality: bool = Field(default=False)
     # Hamming distance (0..64 over a 64-bit dHash) at/below which two pages are
     # "too similar". Lower = stricter. ~10 catches near-duplicates without
     # flagging merely same-vibe pages.
