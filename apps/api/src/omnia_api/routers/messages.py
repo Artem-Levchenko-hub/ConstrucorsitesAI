@@ -693,6 +693,29 @@ async def _process_prompt(
         from omnia_api.core.config import generation_mode as _generation_mode
         _gen_mode = _generation_mode(model_id, str(project_id))
         print(f"[PP] gen_mode={_gen_mode}", flush=True)
+        if pipeline_debug.enabled():
+            try:
+                _s = get_settings()
+                pipeline_debug.dump(
+                    project_id,
+                    assistant_message_id,
+                    "_route.md",
+                    f"preset_id={project_design_preset_id}\n"
+                    f"gen_mode={_gen_mode}\n"
+                    f"model_id={model_id}\n"
+                    f"template={project_template}\n"
+                    f"image_gen_enabled={project_image_gen_enabled}\n"
+                    f"use_art_director_freeform={_s.use_art_director_freeform}\n"
+                    f"use_visual_enricher={_s.use_visual_enricher}\n"
+                    f"use_acceptance_gate={_s.use_acceptance_gate}\n"
+                    f"acceptance_score_only={_s.acceptance_score_only}\n"
+                    f"acceptance_min_score={_s.acceptance_min_score}\n"
+                    f"use_section_catalog={_s.use_section_catalog}\n"
+                    f"use_originality={_s.use_originality}\n"
+                    f"use_vision_audit={_s.use_vision_audit}\n",
+                )
+            except Exception as _rt_exc:
+                print(f"[PP] debug_route_failed {_rt_exc!r}", flush=True)
 
         # ──────────────────────────────────────────────────────────────
         # Inner stream loop, extracted so we can retry the whole thing
@@ -1290,6 +1313,18 @@ async def _process_prompt(
                         f"failed={failed_ids}",
                         flush=True,
                     )
+                    if pipeline_debug.enabled():
+                        pipeline_debug.dump(
+                            project_id,
+                            assistant_message_id,
+                            "06_ui_audit.md",
+                            f"score={report.score}/{report.max}\n\n"
+                            + "\n".join(
+                                f"- [{f.severity}] {f.check_id}: "
+                                f"{f.description} | {f.evidence}"
+                                for f in report.failures
+                            ),
+                        )
                     await publish_event(
                         project_id,
                         "llm.audit",
@@ -1661,6 +1696,11 @@ async def _process_prompt(
         # curated palette), THEN contrast (guarantee body readability against the
         # snapped palette). Both pure + idempotent + fail-soft.
         if files:
+            if pipeline_debug.enabled():
+                pipeline_debug.dump(
+                    project_id, assistant_message_id,
+                    "07_pre_palette_guard.html", files.get("index.html", ""),
+                )
             try:
                 from omnia_api.services.design_tokens import tokens_for_project
                 from omnia_api.services.palette_guard import enforce_palette
@@ -1668,10 +1708,20 @@ async def _process_prompt(
                 _palette = tokens_for_project(
                     str(project_id), industry_hint=project_design_preset_id
                 ).palette
+                if pipeline_debug.enabled():
+                    pipeline_debug.dump(
+                        project_id, assistant_message_id,
+                        "07b_forced_palette.md", repr(_palette),
+                    )
                 files = enforce_palette(files, _palette)
             except Exception as _pg_exc:  # noqa: BLE001 — never block the build
                 print(f"[PP] palette_guard skipped err={_pg_exc!r}", flush=True)
             files = enforce_contrast(files)
+            if pipeline_debug.enabled():
+                pipeline_debug.dump(
+                    project_id, assistant_message_id,
+                    "08_post_palette_guard.html", files.get("index.html", ""),
+                )
 
         new_snapshot_id: UUID | None = None
         if files:
