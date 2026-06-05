@@ -176,7 +176,14 @@ async def evaluate(
         # gate actually runs (keeps the flag-off path import-light, R-07).
         from omnia_api.workers.preview import DEFAULT_CAPTURE_WIDTHS, capture
 
-        shots = await capture(files, widths=widths or DEFAULT_CAPTURE_WIDTHS)
+        # full_page=True: the vision/design judge must see the WHOLE landing, not
+        # only the first viewport. A minimal/airy hero (type-as-hero + whitespace,
+        # exactly what the brief asks for) read as "empty / loading screen / no
+        # CTA" when only the top screen was shot → false "broken" → destructive
+        # repair. Overflow detection is unaffected (it uses scroll_width).
+        shots = await capture(
+            files, widths=widths or DEFAULT_CAPTURE_WIDTHS, full_page=True
+        )
         for w, res in shots.items():
             screenshots[w] = res.png
             if res.has_overflow:

@@ -1594,6 +1594,11 @@ async def _process_prompt(
                 else max(0, int(_acc_settings.acceptance_max_retries))
             )
             _verdict = None
+            # Best-so-far guard: the design-judge repair can REGRESS (re-add dead
+            # links → struct fails, or strip wow-features). Track the best-ranked
+            # attempt and ship THAT — never a repair worse than what we had.
+            _best_files = files
+            _best_rank: tuple[int, int, int] | None = None
             try:
                 for _acc_attempt in range(_max_acc + 1):
                     _verdict = await _acceptance.evaluate(
@@ -1602,13 +1607,23 @@ async def _process_prompt(
                         prompt_context=prompt_text,
                         user_id=str(user_id),
                         # Design judge forces the vision-critic ON (else follow the
-                        # use_vision_audit setting). It now judges an images-painted
-                        # screenshot (preview._await_paint), so no more gray boxes.
+                        # use_vision_audit setting). It now judges a FULL-PAGE,
+                        # images-painted screenshot — no more "empty hero" misreads.
                         run_vision=(True if _design_judge else None),
-                        # Originality (anti-generic) only for freeform — catalog
-                        # pages are template-based and intentionally alike.
-                        run_originality=(_gen_mode == "freeform"),
+                        # Originality: respect the setting (owner left it OFF — it
+                        # fingerprinted unreliable shots and false-flagged minimal
+                        # heroes as near-duplicates). Freeform-only when enabled.
+                        run_originality=(
+                            _acc_settings.use_originality and _gen_mode == "freeform"
+                        ),
                     )
+                    _rank = (
+                        1 if _verdict.structural_ok else 0,
+                        1 if _verdict.responsive_ok else 0,
+                        int(_verdict.score or 0),
+                    )
+                    if _best_rank is None or _rank > _best_rank:
+                        _best_rank, _best_files = _rank, files
                     print(
                         f"[PP] acceptance attempt={_acc_attempt} passed={_verdict.passed} "
                         f"verdict={_verdict.verdict} score={_verdict.score} "
@@ -1687,6 +1702,13 @@ async def _process_prompt(
                             pass
                     files = _repaired
                     accumulated = accumulated + _repair_acc
+
+                # Best-so-far: if every repair ranked below an earlier attempt,
+                # ship the best one — never regress (e.g. attempt0 struct-OK but
+                # vision-flagged → attempt1 re-added dead links → struct broken).
+                if _best_files is not files:
+                    print(f"[PP] acceptance_best_so_far revert rank={_best_rank}", flush=True)
+                    files = _best_files
 
                 # Remember an accepted freeform page's fingerprint (Sprint 4)
                 # so later generations can be nudged off near-duplicates.
