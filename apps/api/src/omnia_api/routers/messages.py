@@ -40,6 +40,7 @@ from omnia_api.services.file_extractor import (
 )
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.contrast_guard import enforce_contrast
+from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.intent_triage import ORCHESTRATE, decide_intent
 from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
@@ -154,6 +155,64 @@ def _spawn_process_prompt(**kwargs: object) -> None:
     task.add_done_callback(_on_done)
 
 
+async def _run_clarify(
+    project_id: UUID, assistant_message_id: UUID, prompt: str
+) -> None:
+    """Pre-generation clarify turn: stream 3–4 questions into the assistant
+    message, persist them, finalize. NO files, NO snapshot, NO generation — the
+    user's answers (next message) drive the real build via history."""
+    text = await generate_clarify_questions(prompt)
+    await publish_event(
+        project_id,
+        "llm.chunk",
+        {"message_id": str(assistant_message_id), "delta": text},
+    )
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        msg = await session.get(Message, assistant_message_id)
+        if msg is not None:
+            msg.content = text
+            msg.tokens_in = 0
+            msg.tokens_out = 0
+            await session.commit()
+    await publish_event(
+        project_id,
+        "llm.done",
+        {"message_id": str(assistant_message_id), "snapshot_id": None},
+    )
+
+
+def _spawn_clarify(
+    project_id: UUID, assistant_message_id: UUID, prompt: str
+) -> None:
+    """Fire-and-forget _run_clarify with a strong ref + error finalize (mirrors
+    _spawn_process_prompt, so a clarify failure never hangs the UI spinner)."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    task = asyncio.create_task(
+        _run_clarify(project_id, assistant_message_id, prompt)
+    )
+    _BACKGROUND_TASKS.add(task)
+
+    def _on_done(t: asyncio.Task[None]) -> None:
+        _BACKGROUND_TASKS.discard(t)
+        exc = None if t.cancelled() else t.exception()
+        if exc is not None:
+            log.error("_run_clarify failed", exc_info=exc)
+            _emerg = asyncio.create_task(
+                _emergency_error(
+                    project_id,
+                    assistant_message_id,
+                    f"{type(exc).__name__}: {exc}",
+                )
+            )
+            _BACKGROUND_TASKS.add(_emerg)
+            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
+
+    task.add_done_callback(_on_done)
+
+
 def _snapshot_payload(s: Snapshot) -> dict[str, object]:
     return {
         "id": str(s.id),
@@ -225,6 +284,20 @@ async def post_prompt(
         else None
     )
     is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
+    # Clarify interview: on the VERY FIRST message of a fresh project, ask 3–4
+    # business-specific questions before building (precise brief → точечнее сайт).
+    # Fires only with zero prior messages (so the answers — the NEXT message —
+    # generate normally) and no real snapshot. User can reply "генерируй" to skip.
+    do_clarify = False
+    if get_settings().use_clarify_interview and is_first_build:
+        _has_prior_msg = (
+            await session.execute(
+                select(Message.id)
+                .where(Message.project_id == project_id)
+                .limit(1)
+            )
+        ).first() is not None
+        do_clarify = not _has_prior_msg
     intent = decide_intent(
         payload.prompt,
         is_first_prompt=is_first_build,
@@ -258,19 +331,24 @@ async def post_prompt(
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
 
-    _spawn_process_prompt(
-        project_id=project_id,
-        user_id=current_user.id,
-        user_message_id=user_msg.id,
-        assistant_message_id=assistant_msg.id,
-        current_snapshot_id=project.current_snapshot_id,
-        prompt_text=payload.prompt,
-        model_id=routing_model,
-        force_model=force_model,
-        is_free=is_free,
-        orchestrate=orchestrate,
-        selected_elements=selected_dump,
-    )
+    if do_clarify:
+        # Ask first — no generation this turn. The user's answers (next message)
+        # flow into the real build via chat history.
+        _spawn_clarify(project_id, assistant_msg.id, payload.prompt)
+    else:
+        _spawn_process_prompt(
+            project_id=project_id,
+            user_id=current_user.id,
+            user_message_id=user_msg.id,
+            assistant_message_id=assistant_msg.id,
+            current_snapshot_id=project.current_snapshot_id,
+            prompt_text=payload.prompt,
+            model_id=routing_model,
+            force_model=force_model,
+            is_free=is_free,
+            orchestrate=orchestrate,
+            selected_elements=selected_dump,
+        )
 
     # Reset the orchestrator's hibernate timer — a user submitting a new prompt
     # is the strongest possible "this project is active" signal. The hibernate

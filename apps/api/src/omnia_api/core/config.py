@@ -227,6 +227,14 @@ class Settings(BaseSettings):
     # gray placeholders that made the PRIOR vision judge useless. Kill per-env:
     # USE_DESIGN_JUDGE=false.
     use_design_judge: bool = Field(default=True)
+
+    # Clarify interview (2026-06-05) — on the FIRST message of a brand-new
+    # project, ask the user 3–4 short business-specific questions BEFORE building
+    # (precise brief → точечнее сайт). Their answers (next message) drive the
+    # real build via history. Fires only when the project has zero prior messages
+    # and no real snapshot yet; the user can reply "генерируй" to skip. ON by
+    # default. Kill per-env: USE_CLARIFY_INTERVIEW=false.
+    use_clarify_interview: bool = Field(default=True)
     # Max self-repair re-rolls before the gate gives up (and freeform falls
     # back to catalog). Each retry is one extra LLM call — keep small.
     acceptance_max_retries: int = Field(default=2)
