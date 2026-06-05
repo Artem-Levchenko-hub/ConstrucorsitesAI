@@ -149,6 +149,14 @@ class Settings(BaseSettings):
     # a higher vsegpt per-query limit) via IMAGE_GEN_MODEL env — no code change.
     image_gen_model: str = Field(default="img-flux/flux-2-klein-4b")
 
+    # Cost control (2026-06-05) — max UNIQUE AI image generations per build.
+    # Repeated cards (menu / product / portfolio tiles) sharing a
+    # data-omnia-gen-group collapse to ONE generation; concept/hero images keep
+    # generating uniquely. Effective prompts beyond this budget REUSE an
+    # already-made image (never generate more, never ship broken). Lower it to
+    # spend less. Env: IMAGE_GEN_MAX_UNIQUE.
+    image_gen_max_unique: int = Field(default=8)
+
     # Visual enricher — post-process pass that injected decorative layers
     # (mesh / blob / SVG dot-grid / diagonal-lines / waves) into every bare
     # <section>. Built as a Haiku-era crutch against "flat AI sites", but it

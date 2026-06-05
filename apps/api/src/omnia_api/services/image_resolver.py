@@ -107,6 +107,11 @@ _TAG_RE_PHOTO = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Optional sibling of data-omnia-gen. Every tag carrying the SAME group value
+# collapses to ONE generation (the group's first prompt), reused across all of
+# them — product / menu / portfolio cards cost one image instead of N.
+_GROUP_RE = re.compile(r'data-omnia-gen-group\s*=\s*"([^"]+)"', re.IGNORECASE)
+
 # Pexels search endpoint. Landscape orientation suits full-bleed section
 # backgrounds; per_page gives a small deterministic pick-pool per keyword.
 _PEXELS_SEARCH_URL = "https://api.pexels.com/v1/search"
@@ -120,20 +125,26 @@ class ImgTag:
     prompt: str
     pre_attrs: str
     post_attrs: str
+    # Optional data-omnia-gen-group value. Tags sharing a group collapse to ONE
+    # generation (the group's first prompt) — cards reuse one image (cost cut).
+    group: str | None = None
 
 
 def extract_image_tags(files: dict[str, str]) -> list[ImgTag]:
     """Find every ``data-omnia-gen`` tag across the given files.
 
-    Caps the result at ``MAX_IMAGES_PER_RESOLVE`` — extras stay in the source
-    untouched. Files outside ``_SCAN_EXTS`` are skipped (saves a regex run on
-    css/json/md).
+    Extracts ALL tags (the budget now caps GENERATIONS, not extraction, so
+    over-budget tags reuse an already-made image instead of shipping a broken
+    ``<img>``). Each tag's optional ``data-omnia-gen-group`` is captured so a
+    group of cards collapses to one generation downstream. Files outside
+    ``_SCAN_EXTS`` are skipped (saves a regex run on css/json/md).
     """
     out: list[ImgTag] = []
     for path, content in files.items():
         if not path.lower().endswith(_SCAN_EXTS):
             continue
         for m in _TAG_RE.finditer(content):
+            gm = _GROUP_RE.search(f"{m.group(1)} {m.group(3)}")
             out.append(
                 ImgTag(
                     file_path=path,
@@ -141,15 +152,9 @@ def extract_image_tags(files: dict[str, str]) -> list[ImgTag]:
                     prompt=m.group(2).strip(),
                     pre_attrs=m.group(1),
                     post_attrs=m.group(3),
+                    group=gm.group(1).strip() if gm else None,
                 )
             )
-            if len(out) >= MAX_IMAGES_PER_RESOLVE:
-                log.warning(
-                    "image_resolver: tag cap %d hit (next tag in %s) — extras left as-is",
-                    MAX_IMAGES_PER_RESOLVE,
-                    path,
-                )
-                return out
     return out
 
 
@@ -396,6 +401,7 @@ def _replace_tag(content: str, tag: ImgTag, url: str) -> str:
     consumed). Collapses runs of whitespace inside the tag for tidiness.
     """
     attrs = f"{tag.pre_attrs} {tag.post_attrs}".strip()
+    attrs = _GROUP_RE.sub("", attrs).strip()  # drop the consumed group marker
     if attrs:
         replacement = f'<img src="{url}" {attrs} />'
     else:
@@ -419,8 +425,35 @@ async def resolve_images(
         return files, 0, 0
 
     settings = get_settings()
-    unique_prompts = list({t.prompt for t in tags})
     sem = asyncio.Semaphore(_CONCURRENCY)
+
+    # Group dedup (cost control): tags sharing a data-omnia-gen-group collapse to
+    # ONE generation — the group's FIRST prompt — and every member reuses that
+    # image. Product / menu / gallery cards thus cost ONE image, not N; concept
+    # and hero tags (no group) still generate uniquely. `_eff` maps a tag to the
+    # prompt actually generated for it.
+    _group_rep: dict[str, str] = {}
+    for _t in tags:
+        if _t.group and _t.group not in _group_rep:
+            _group_rep[_t.group] = _t.prompt
+
+    def _eff(t: ImgTag) -> str:
+        return _group_rep[t.group] if (t.group and t.group in _group_rep) else t.prompt
+
+    # Unique effective prompts in document order. Generation is capped at the
+    # per-page budget; effective prompts BEYOND it are not generated — their tags
+    # reuse an already-made image below, so cost is bounded and nothing ships
+    # broken.
+    _seen: set[str] = set()
+    unique_eff: list[str] = []
+    for _t in tags:
+        _e = _eff(_t)
+        if _e not in _seen:
+            _seen.add(_e)
+            unique_eff.append(_e)
+    _budget = max(1, int(settings.image_gen_max_unique))
+    gen_prompts = unique_eff[:_budget]
+    overflow_eff = set(unique_eff[_budget:])
 
     # AI image generation is GATED and TIME-BOXED. When the gpt-image upstream is
     # down (proxyapi dry / OpenAI unreachable from the RU egress) each _fetch_one
@@ -443,11 +476,11 @@ async def resolve_images(
                     return p, await _enrich_prompt(p)
 
             enrich_pairs = await asyncio.gather(
-                *[_maybe_enrich(p) for p in unique_prompts]
+                *[_maybe_enrich(p) for p in gen_prompts]
             )
             gen_prompt_for = {orig: gen for orig, gen in enrich_pairs}
         else:
-            gen_prompt_for = {p: p for p in unique_prompts}
+            gen_prompt_for = {p: p for p in gen_prompts}
 
         async def _resolve(orig_prompt: str) -> tuple[str, str | None]:
             # Generate + content-address by the (possibly enriched) gen prompt,
@@ -462,7 +495,7 @@ async def resolve_images(
 
         try:
             pairs = await asyncio.wait_for(
-                asyncio.gather(*[_resolve(p) for p in unique_prompts]),
+                asyncio.gather(*[_resolve(p) for p in gen_prompts]),
                 timeout=_IMAGE_RESOLVE_BUDGET_S,
             )
         except (asyncio.TimeoutError, TimeoutError):
@@ -470,21 +503,27 @@ async def resolve_images(
                 "image_resolver: gen budget %.0fs exceeded (%d prompts) — "
                 "stripping unresolved tags so the build ships",
                 _IMAGE_RESOLVE_BUDGET_S,
-                len(unique_prompts),
+                len(gen_prompts),
             )
             pairs = []
         prompt_to_url = {p: u for p, u in pairs if u}
 
+    # Any successfully generated image — reused for over-budget card tags so the
+    # page never ships a broken <img> and never spends on extra generations.
+    reuse_url = next(iter(prompt_to_url.values()), None)
     new_files = dict(files)
     resolved = 0
     for tag in tags:
-        url = prompt_to_url.get(tag.prompt)
+        eff = _eff(tag)
+        url = prompt_to_url.get(eff)
+        if url is None and eff in overflow_eff:
+            url = reuse_url  # over-budget → reuse a generated image, no new spend
         if not url:
-            # Generation failed (gateway 502 / gpt-image timeout). STRIP the
-            # unresolved tag so a broken <img> (raw alt-text in an empty box)
-            # never ships — mirrors the photo path below. The section's
-            # background/layout shows instead. (Owner screenshot 2026-06-02:
-            # a failed hero gen rendered "alt" text inside a monochrome box.)
+            # Attempted-but-failed gen (gateway 502 / timeout), or nothing
+            # generated at all. STRIP the unresolved tag so a broken <img> (raw
+            # alt-text in an empty box) never ships — mirrors the photo path
+            # below. The section's background/layout shows instead. (Owner
+            # screenshot 2026-06-02: a failed hero gen rendered "alt" in a box.)
             new_files[tag.file_path] = new_files[tag.file_path].replace(
                 tag.full_match, "", 1
             )
