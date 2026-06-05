@@ -213,11 +213,12 @@ class Settings(BaseSettings):
     # vision-critic pass + at most ONE repair re-roll (cost-bounded — owner
     # directive: judge must NOT loop many times), then ship. When on, forces the
     # vision pass and lets the DESIGN verdict drive exactly one re-roll even in
-    # score-only mode. OFF by default (premium-only — never blanket-cost every
-    # build). Prereq fixed here: capture now waits for images to paint
-    # (preview.py) so the judge sees real photos, not the gray placeholders that
-    # made the PRIOR vision judge useless. Enable per-env: USE_DESIGN_JUDGE=true.
-    use_design_judge: bool = Field(default=False)
+    # score-only mode. ON by default (owner 2026-06-05: judge EVERY build — the
+    # 1-iteration cap keeps cost bounded). Prereq fixed here: capture now waits
+    # for images to paint (preview.py) so the judge sees real photos, not the
+    # gray placeholders that made the PRIOR vision judge useless. Kill per-env:
+    # USE_DESIGN_JUDGE=false.
+    use_design_judge: bool = Field(default=True)
     # Max self-repair re-rolls before the gate gives up (and freeform falls
     # back to catalog). Each retry is one extra LLM call — keep small.
     acceptance_max_retries: int = Field(default=2)
