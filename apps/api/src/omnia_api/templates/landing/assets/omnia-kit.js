@@ -726,5 +726,57 @@
         }, { passive: true });
       });
     }
+
+    // 20. Pin-stage scrollytelling — [data-pin-stage]. The visual column pins
+    //     (sticky) while text steps scroll; the .pin-layer matching the step at
+    //     viewport center cross-fades in. Desktop + motion only — kit adds
+    //     `.pin-ready` then (CSS also gates on min-width:768px + omnia-anim).
+    //     Mobile / reduced-motion / no-JS keep the floor (stacked visual+text,
+    //     nothing hidden). Idempotent via data-pin-bound.
+    if (!reduce) {
+      var pinWide = !window.matchMedia || window.matchMedia("(min-width: 768px)").matches;
+      [].slice.call(document.querySelectorAll("[data-pin-stage]")).forEach(function (stage) {
+        if (stage.getAttribute("data-pin-bound") === "1") return;
+        stage.setAttribute("data-pin-bound", "1");
+        var steps = [].slice.call(stage.querySelectorAll(".pin-step"));
+        var layers = [].slice.call(stage.querySelectorAll(".pin-layer"));
+        if (steps.length < 2 || !pinWide) return;   // floor: keep stacked
+        stage.classList.add("pin-ready");
+        var setActive = function (idx) {
+          for (var i = 0; i < steps.length; i++) steps[i].classList.toggle("is-active", i === idx);
+          for (var j = 0; j < layers.length; j++) layers[j].classList.toggle("is-active", j === idx);
+        };
+        setActive(0);
+        if (!("IntersectionObserver" in window)) return;  // ready + first active is enough
+        var pinIO = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (!e.isIntersecting) return;
+            var idx = parseInt(e.target.getAttribute("data-pin-step"), 10);
+            if (isNaN(idx)) idx = steps.indexOf(e.target);
+            if (idx >= 0) setActive(idx);
+          });
+        }, { rootMargin: "-48% 0px -48% 0px", threshold: 0 });
+        steps.forEach(function (s) { pinIO.observe(s); });
+      });
+    }
+
+    // 21. Before/After compare — [data-compare]. The full-bleed invisible range
+    //     drives --compare-pos; CSS clip-path reveals the "before" layer. Floor:
+    //     no JS → static 50% split (both states visible + labeled). Works under
+    //     reduced-motion (pure position, no animation); touch via the range.
+    //     Idempotent via data-compare-bound.
+    [].slice.call(document.querySelectorAll("[data-compare]")).forEach(function (el) {
+      if (el.getAttribute("data-compare-bound") === "1") return;
+      el.setAttribute("data-compare-bound", "1");
+      var range = el.querySelector(".compare-range");
+      if (!range) return;
+      var apply = function (v) {
+        var n = parseFloat(v);
+        if (isNaN(n)) n = 50;
+        el.style.setProperty("--compare-pos", Math.max(0, Math.min(100, n)) + "%");
+      };
+      apply(range.value);
+      range.addEventListener("input", function () { apply(range.value); }, { passive: true });
+    });
   });
 })();

@@ -990,3 +990,125 @@ html.lenis, html.lenis body { height: auto; }
   @keyframes omnia-intro-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 }
 @media (prefers-reduced-motion: reduce) { .omnia-intro { display: none; } }
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  v7.0 — «Продуктовые» сигнатурные моменты: scrollytelling pin-stage +
+ *  before/after compare. Added 2026-06-05. ЧИСТО ДОБАВЛЕНИЯ. У каждой фичи
+ *  есть markup-флор: без JS / reduced-motion / mobile НИКОГДА не оставляют
+ *  пустой или сломанный экран — разметка читается как обычная секция.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* V7.1 — Pin-stage scrollytelling (подпись Apple/Linear/Stripe). Визуал
+ * «пинится» (sticky), текст-шаги скроллятся рядом; на пересечении центра
+ * вьюпорта omnia-kit.js свапает активный шаг → активный визуал-слой (cross-fade).
+ * Структура:
+ *   <div class="pin-stage" data-pin-stage>
+ *     <div class="pin-stage-track">
+ *       <div class="pin-stage-visual">
+ *         <figure class="pin-layer" data-pin-layer="0">…</figure>
+ *         <figure class="pin-layer" data-pin-layer="1">…</figure>
+ *       </div>
+ *       <div class="pin-stage-steps">
+ *         <div class="pin-step" data-pin-step="0">…</div>
+ *         <div class="pin-step" data-pin-step="1">…</div>
+ *       </div>
+ *     </div>
+ *   </div>
+ * ФЛОР: без .pin-ready (нет JS / mobile / reduced-motion) — обычная вертикаль:
+ * визуалы стопкой, под ними шаги. Всё видно, ничего не спрятано. omnia-kit.js
+ * вешает .pin-ready ТОЛЬКО на desktop при живом motion → pin + cross-fade. */
+.pin-layer { position: relative; }
+@media (min-width: 768px) and (prefers-reduced-motion: no-preference) {
+  html.omnia-anim .pin-stage.pin-ready .pin-stage-track {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: start;
+  }
+  html.omnia-anim .pin-stage.pin-ready .pin-stage-visual {
+    position: sticky; top: 12vh; height: 76vh;
+    border-radius: inherit; overflow: hidden;
+  }
+  html.omnia-anim .pin-stage.pin-ready .pin-layer {
+    position: absolute; inset: 0; opacity: 0;
+    transition: opacity .6s cubic-bezier(.16, 1, .3, 1);
+    will-change: opacity;
+  }
+  html.omnia-anim .pin-stage.pin-ready .pin-layer > img,
+  html.omnia-anim .pin-stage.pin-ready .pin-layer > picture > img,
+  html.omnia-anim .pin-stage.pin-ready .pin-layer > video {
+    width: 100%; height: 100%; object-fit: cover;
+  }
+  html.omnia-anim .pin-stage.pin-ready .pin-layer.is-active { opacity: 1; }
+  html.omnia-anim .pin-stage.pin-ready .pin-step {
+    min-height: 72vh; display: flex; flex-direction: column; justify-content: center;
+    opacity: .38; transition: opacity .45s ease;
+  }
+  html.omnia-anim .pin-stage.pin-ready .pin-step.is-active { opacity: 1; }
+}
+
+/* V7.2 — Before/After compare (перетаскиваемое сравнение «до/после»).
+ * Убийца для услуг: ремонт, стоматология, бьюти, клининг, детейлинг, фитнес.
+ * Структура:
+ *   <div class="compare" data-compare>
+ *     <img class="compare-after" src="…" alt="после">
+ *     <div class="compare-before"><img src="…" alt="до"></div>
+ *     <span class="compare-label compare-label-before">До</span>
+ *     <span class="compare-label compare-label-after">После</span>
+ *     <div class="compare-handle" aria-hidden="true"></div>
+ *     <input class="compare-range" type="range" min="0" max="100" value="50"
+ *            aria-label="Сравнить до и после">
+ *   </div>
+ * ФЛОР: без JS ползунок стоит на 50% — обе половины видны и подписаны (читаемо,
+ * не сломано). С JS: full-bleed range двигает --compare-pos, clip-path
+ * открывает слой «до». Reduced-motion-safe (без анимаций, только позиция). */
+.compare {
+  position: relative; overflow: hidden; isolation: isolate;
+  border-radius: inherit; touch-action: pan-y;
+  -webkit-user-select: none; user-select: none;
+  --compare-pos: 50%;
+}
+.compare-after { display: block; width: 100%; height: auto; }
+.compare-before {
+  position: absolute; inset: 0;
+  clip-path: inset(0 calc(100% - var(--compare-pos, 50%)) 0 0);
+  will-change: clip-path;
+}
+.compare-before > img,
+.compare-before > picture > img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.compare-handle {
+  position: absolute; top: 0; bottom: 0; left: var(--compare-pos, 50%);
+  width: 2px; transform: translateX(-1px); z-index: 2; pointer-events: none;
+  background: var(--compare-line, #fff);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, .15);
+}
+.compare-handle::before {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 2.75rem; height: 2.75rem; transform: translate(-50%, -50%);
+  border-radius: 9999px; background: var(--compare-line, #fff);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .28);
+}
+.compare-handle::after {
+  content: "⇆"; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%); font-size: 1.05rem; font-weight: 700;
+  color: var(--compare-knob-fg, #0f172a);
+}
+.compare-range {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+  opacity: 0; cursor: ew-resize; z-index: 3;
+}
+.compare-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 48px; height: 100%; cursor: ew-resize;
+}
+.compare-range::-moz-range-thumb {
+  width: 48px; height: 100%; border: 0; background: transparent; cursor: ew-resize;
+}
+.compare-label {
+  position: absolute; top: .75rem; z-index: 2; pointer-events: none;
+  font-size: .68rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  padding: .25rem .6rem; border-radius: 9999px;
+  background: rgba(15, 23, 42, .58); color: #fff;
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+}
+.compare-label-before { left: .75rem; }
+.compare-label-after { right: .75rem; }
