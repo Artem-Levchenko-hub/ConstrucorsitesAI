@@ -778,5 +778,58 @@
       apply(range.value);
       range.addEventListener("input", function () { apply(range.value); }, { passive: true });
     });
+
+    // 22. Scroll-progress bar — .omnia-progress. Writes --omnia-scroll (0..1) on
+    //     the bar so CSS scaleX shows reading progress. Floor: no JS → scaleX(0).
+    var progressBar = document.querySelector(".omnia-progress");
+    if (progressBar) {
+      var pTick = false;
+      var pUpd = function () {
+        var h = document.documentElement;
+        var max = (h.scrollHeight - h.clientHeight) || 1;
+        var v = Math.max(0, Math.min(1, (window.scrollY || h.scrollTop || 0) / max));
+        progressBar.style.setProperty("--omnia-scroll", v.toFixed(4));
+        pTick = false;
+      };
+      var pOn = function () { if (!pTick) { pTick = true; requestAnimationFrame(pUpd); } };
+      pUpd();
+      window.addEventListener("scroll", pOn, { passive: true });
+      window.addEventListener("resize", pOn, { passive: true });
+    }
+
+    // 23. Sticky CTA bar — [data-sticky-cta]/.omnia-sticky-cta. Reveals once the
+    //     user scrolls past ~the first viewport. Floor: no JS → stays hidden
+    //     (the page's in-flow CTAs still work). Works under reduced-motion.
+    var stickyCta = document.querySelector("[data-sticky-cta], .omnia-sticky-cta");
+    if (stickyCta) {
+      var scSync = function () {
+        var y = window.scrollY || document.documentElement.scrollTop || 0;
+        stickyCta.classList.toggle("is-visible", y > window.innerHeight * 0.9);
+      };
+      scSync();
+      window.addEventListener("scroll", scSync, { passive: true });
+      window.addEventListener("resize", scSync, { passive: true });
+    }
+
+    // 24. Line-draw on scroll — .omnia-draw. Measures each path/line/polyline
+    //     length, arms the dash, then draws (offset→0) on viewport entry. Floor:
+    //     no JS / reduced-motion → path stays fully drawn (no dash). Idempotent.
+    if (!reduce) {
+      [].slice.call(document.querySelectorAll(".omnia-draw")).forEach(function (svg) {
+        if (svg.getAttribute("data-omnia-draw-bound") === "1") return;
+        svg.setAttribute("data-omnia-draw-bound", "1");
+        var paths = [].slice.call(svg.querySelectorAll("path,line,polyline"));
+        if (!paths.length) return;
+        var armed = false;
+        paths.forEach(function (pth) {
+          var len = 0;
+          try { len = pth.getTotalLength ? pth.getTotalLength() : 0; } catch (e) { len = 0; }
+          if (len > 0) { pth.style.setProperty("--omnia-len", Math.ceil(len)); armed = true; }
+        });
+        if (!armed) return;
+        svg.classList.add("omnia-draw-armed");
+        omniaObserveOnce(svg, function () { svg.classList.add("is-drawn"); });
+      });
+    }
   });
 })();

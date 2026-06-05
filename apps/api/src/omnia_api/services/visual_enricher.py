@@ -168,3 +168,57 @@ def enrich_files(files: dict[str, str]) -> tuple[dict[str, str], int, int]:
         total_enriched += enriched
         total_sections += total
     return new_files, total_enriched, total_sections
+
+
+# ── Signature-moment floor (Phase v8, 2026-06-05) ──────────────────────────
+# Owner doctrine: every build must carry ONE "expensive" scroll moment, the way
+# the intro is mandatory — «всегда вау», не «иногда вау». The art-director is
+# contracted to add one (.pin-stage / .compare / .omnia-draw / .scroll-clip-
+# reveal); THIS is the post-process SAFETY NET for the rare build where it's
+# missing. Unlike the disabled per-section enricher (which carpeted EVERY
+# section → AI-slop), this is surgical: at most ONE content-free .omnia-draw
+# line-art divider, injected after the first </section>, palette-agnostic
+# (currentColor, low opacity) so it can't clash. Fail-soft.
+_SIGNATURE_MARKERS = re.compile(
+    r"(data-pin-stage|data-compare|omnia-draw|scroll-clip-reveal)",
+    re.IGNORECASE,
+)
+_FIRST_SECTION_CLOSE = re.compile(r"</section\s*>", re.IGNORECASE)
+_SIGNATURE_DIVIDER = (
+    '\n<div aria-hidden="true" class="flex justify-center py-10 opacity-30">\n'
+    '  <svg class="omnia-draw" width="280" height="36" viewBox="0 0 280 36" '
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">\n'
+    '    <path d="M6 26 C 70 6, 140 6, 210 20 S 262 28, 274 12"/>\n'
+    "  </svg>\n</div>\n"
+)
+
+
+def ensure_signature_floor(files: dict[str, str]) -> tuple[dict[str, str], int]:
+    """Guarantee ≥1 signature scroll moment per HTML page (owner doctrine).
+
+    If a page already carries a ``.pin-stage`` / ``.compare`` / ``.omnia-draw``
+    / ``.scroll-clip-reveal`` marker it is left untouched. Otherwise a single
+    content-free ``.omnia-draw`` line-art divider is injected after the first
+    ``</section>``. JSX/TSX (fullstack) is skipped — only ``.html``/``.htm``.
+    Never raises — on any error the file is returned unchanged.
+
+    Returns ``(new_files, injected_count)``.
+    """
+    new_files = dict(files)
+    injected = 0
+    for path, content in files.items():
+        low = path.lower()
+        if not (low.endswith(".html") or low.endswith(".htm")):
+            continue
+        try:
+            if _SIGNATURE_MARKERS.search(content):
+                continue  # page already has a signature scroll moment
+            m = _FIRST_SECTION_CLOSE.search(content)
+            if not m:
+                continue  # no section to anchor to — don't risk mangling markup
+            cut = m.end()
+            new_files[path] = content[:cut] + _SIGNATURE_DIVIDER + content[cut:]
+            injected += 1
+        except Exception:  # noqa: BLE001 — floor must never break the pipeline
+            log.exception("ensure_signature_floor failed for %s; leaving as-is", path)
+    return new_files, injected

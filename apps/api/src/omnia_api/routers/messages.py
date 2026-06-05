@@ -50,7 +50,10 @@ from omnia_api.services.queue import enqueue_preview
 from omnia_api.services.ui_audit import audit as ui_audit
 from omnia_api.services.ui_audit import format_failures_for_retry
 from omnia_api.services.vendor_profiles import vendor_directive
-from omnia_api.services.visual_enricher import enrich_files as enrich_visual_files
+from omnia_api.services.visual_enricher import (
+    enrich_files as enrich_visual_files,
+    ensure_signature_floor,
+)
 
 RESERVED_BALANCE = Decimal("5.0000")  # минимум перед стартом генерации
 
@@ -1302,6 +1305,19 @@ async def _process_prompt(
             except Exception as enr_exc:
                 print(f"[PP] visual_enricher failed: {enr_exc!r}", flush=True)
 
+        # Signature-moment floor — guarantee ONE "expensive" scroll moment per
+        # build (owner doctrine «всегда вау»). Surgical: injects a single
+        # .omnia-draw line-art divider ONLY when the page carries no
+        # .pin-stage/.compare/.omnia-draw/.scroll-clip-reveal. ON by default
+        # (USE_SIGNATURE_FLOOR); fail-soft (.html only, never raises).
+        if files and get_settings().use_signature_floor:
+            try:
+                files, _sig_n = ensure_signature_floor(files)
+                if _sig_n:
+                    print(f"[PP] signature_floor injected={_sig_n}", flush=True)
+            except Exception as _sig_exc:
+                print(f"[PP] signature_floor failed: {_sig_exc!r}", flush=True)
+
         # Phase K (2026-05-27) — objective UI audit. ``ui_audit`` runs the
         # 10-point Malewicz Ch27 + Phase G rubric (typography/color/button/
         # accessibility/no-lorem/etc.) on the final HTML pool. We log the
@@ -1647,6 +1663,11 @@ async def _process_prompt(
                     if _acc_settings.use_visual_enricher:
                         try:
                             _repaired, _, _ = enrich_visual_files(_repaired)
+                        except Exception:
+                            pass
+                    if _acc_settings.use_signature_floor:
+                        try:
+                            _repaired, _ = ensure_signature_floor(_repaired)
                         except Exception:
                             pass
                     if project_image_gen_enabled:

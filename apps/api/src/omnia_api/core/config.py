@@ -158,6 +158,15 @@ class Settings(BaseSettings):
     # silently revive the patterns; set USE_VISUAL_ENRICHER=true to re-enable.
     use_visual_enricher: bool = Field(default=False)
 
+    # Signature-moment floor (2026-06-05) — post-process SAFETY NET that
+    # guarantees every static build carries ONE "expensive" scroll moment
+    # (.pin-stage / .compare / .omnia-draw / .scroll-clip-reveal). The
+    # art-director is contracted to add one; this injects a single content-free
+    # .omnia-draw line-art divider ONLY when the page has none. Surgical and
+    # palette-agnostic (unlike the disabled per-section enricher above) → ON by
+    # default. Kill per-env with USE_SIGNATURE_FLOOR=false.
+    use_signature_floor: bool = Field(default=True)
+
     # Phase M — per-role model override. Empty = use ROLE_MODEL_MAP (topmix-v1)
     # below. CSV of `role=model_id` pairs, e.g.
     # "director=claude-opus-4-7,polish=deepseek-chat,audit=claude-sonnet-4-6".
