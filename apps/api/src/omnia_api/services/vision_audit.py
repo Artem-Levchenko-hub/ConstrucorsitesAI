@@ -40,7 +40,7 @@ _SKIPPED = VisionVerdict(verdict="skipped", score=10, issues=(), skipped=True)
 
 # Cap how many viewports we ship to the model — one wide + one narrow is enough
 # to judge composition and mobile, and keeps the multimodal payload small.
-_VISION_WIDTHS = (1440, 375)
+_VISION_WIDTHS = (1440, 360)
 
 _RUBRIC = """\
 Ты — член жюри Awwwards. Тебе дают скриншот(ы) сгенерированного лендинга (десктоп +

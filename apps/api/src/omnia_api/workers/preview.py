@@ -38,7 +38,7 @@ GOTO_TIMEOUT_MS = 15_000
 _RENDER_SETTLE_MS = 600
 
 # Acceptance-gate render harness (Phase 11, Sprint 1.2).
-DEFAULT_CAPTURE_WIDTHS: tuple[int, ...] = (375, 768, 1440)
+DEFAULT_CAPTURE_WIDTHS: tuple[int, ...] = (360, 768, 1440)
 # Sub-pixel rounding means scrollWidth can exceed the viewport by ~1px even on
 # a perfectly-fitting page; only flag real horizontal overflow above this.
 _OVERFLOW_TOLERANCE_PX = 2

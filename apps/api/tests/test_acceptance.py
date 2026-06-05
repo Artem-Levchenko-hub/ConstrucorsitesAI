@@ -65,13 +65,13 @@ async def test_evaluate_passes_clean(monkeypatch):
 async def test_evaluate_fails_on_overflow(monkeypatch):
     from omnia_api.workers import preview
 
-    monkeypatch.setattr(preview, "capture", _capture_stub(overflow_widths={375}))
+    monkeypatch.setattr(preview, "capture", _capture_stub(overflow_widths={360}))
     res = await acceptance.evaluate(
         {"index.html": _GOOD}, project_id="p", run_vision=False
     )
     assert not res.passed
     assert not res.responsive_ok
-    assert "375px" in res.feedback
+    assert "360px" in res.feedback
 
 
 async def test_evaluate_fails_on_dead_link(monkeypatch):
