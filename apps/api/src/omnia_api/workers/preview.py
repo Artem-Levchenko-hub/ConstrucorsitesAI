@@ -54,6 +54,41 @@ class CaptureResult:
     has_overflow: bool
 
 
+# Wait budget for remote <img> (MinIO) to paint before screenshotting. Without
+# it the shot lands on the gradient placeholders behind data-omnia-gen images →
+# the design judge saw gray boxes (the documented reason the prior vision judge
+# was useless) and the timeline thumbnail looked empty. Bounded so a slow or
+# broken image can never hang the capture.
+_IMAGE_WAIT_MS = 3000
+
+
+async def _await_paint(page) -> None:
+    """Settle a freshly-loaded page before the screenshot: web-fonts ready,
+    remote images painted (bounded by ``_IMAGE_WAIT_MS``), then a short
+    Tailwind-JIT / paint beat. Every step is best-effort — a failure (or a slow
+    image) never blocks the shot, it just falls through to the timeout."""
+    try:
+        await page.evaluate("() => document.fonts.ready")
+    except Exception:
+        pass
+    try:
+        await page.evaluate(
+            "(ms) => Promise.race(["
+            "  Promise.all(Array.from(document.images).map(function (i) {"
+            "    return i.complete ? 1 : new Promise(function (r) {"
+            "      i.addEventListener('load', r, { once: true });"
+            "      i.addEventListener('error', r, { once: true });"
+            "    });"
+            "  })),"
+            "  new Promise(function (r) { setTimeout(r, ms); })"
+            "])",
+            _IMAGE_WAIT_MS,
+        )
+    except Exception:
+        pass
+    await page.wait_for_timeout(_RENDER_SETTLE_MS)
+
+
 async def capture(
     files: dict[str, str],
     widths: Sequence[int] = DEFAULT_CAPTURE_WIDTHS,
@@ -97,13 +132,9 @@ async def capture(
                             wait_until="domcontentloaded",
                             timeout=GOTO_TIMEOUT_MS,
                         )
-                        # Let web-fonts finish + the Tailwind CDN JIT apply
-                        # before measuring overflow / screenshotting.
-                        try:
-                            await page.evaluate("() => document.fonts.ready")
-                        except Exception:
-                            pass
-                        await page.wait_for_timeout(_RENDER_SETTLE_MS)
+                        # Web-fonts ready + remote images painted + Tailwind-JIT
+                        # beat before measuring overflow / screenshotting.
+                        await _await_paint(page)
                         scroll_width = await page.evaluate(
                             "() => document.documentElement.scrollWidth"
                         )
@@ -160,13 +191,9 @@ async def _render_async(snapshot_id: str) -> None:
                         wait_until="domcontentloaded",
                         timeout=GOTO_TIMEOUT_MS,
                     )
-                    # Same settle as capture(): fonts + Tailwind-CDN JIT, and
-                    # reduced_motion so reveal-animated content isn't opacity:0.
-                    try:
-                        await page.evaluate("() => document.fonts.ready")
-                    except Exception:
-                        pass
-                    await page.wait_for_timeout(_RENDER_SETTLE_MS)
+                    # Same settle as capture(): fonts + images painted + JIT beat,
+                    # and reduced_motion so reveal-animated content isn't opacity:0.
+                    await _await_paint(page)
                     await page.screenshot(path=str(png_path), full_page=False)
                 finally:
                     await browser.close()

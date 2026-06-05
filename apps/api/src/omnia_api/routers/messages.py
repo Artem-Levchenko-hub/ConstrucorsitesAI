@@ -726,7 +726,8 @@ async def _process_prompt(
                     f"acceptance_min_score={_s.acceptance_min_score}\n"
                     f"use_section_catalog={_s.use_section_catalog}\n"
                     f"use_originality={_s.use_originality}\n"
-                    f"use_vision_audit={_s.use_vision_audit}\n",
+                    f"use_vision_audit={_s.use_vision_audit}\n"
+                    f"use_design_judge={_s.use_design_judge}\n",
                 )
             except Exception as _rt_exc:
                 print(f"[PP] debug_route_failed {_rt_exc!r}", flush=True)
@@ -1580,10 +1581,15 @@ async def _process_prompt(
             and _gen_mode in ("freeform", "catalog")
         ):
             from omnia_api.services import acceptance as _acceptance
-            # Score-only: run the gate ONCE (compute + publish the verdict) but
-            # ship the freeform first attempt — no repair re-rolls.
+            # Design judge (premium / on-button): force the Awwwards vision-critic
+            # and allow EXACTLY ONE repair re-roll even in score-only mode (owner:
+            # the judge must NOT loop many times — 1 iteration is the whole point).
+            # Otherwise keep score-only (0 repairs) / max-retries as before.
+            _design_judge = _acc_settings.use_design_judge
             _max_acc = (
-                0
+                1
+                if _design_judge
+                else 0
                 if _acc_settings.acceptance_score_only
                 else max(0, int(_acc_settings.acceptance_max_retries))
             )
@@ -1595,6 +1601,10 @@ async def _process_prompt(
                         project_id=str(project_id),
                         prompt_context=prompt_text,
                         user_id=str(user_id),
+                        # Design judge forces the vision-critic ON (else follow the
+                        # use_vision_audit setting). It now judges an images-painted
+                        # screenshot (preview._await_paint), so no more gray boxes.
+                        run_vision=(True if _design_judge else None),
                         # Originality (anti-generic) only for freeform — catalog
                         # pages are template-based and intentionally alike.
                         run_originality=(_gen_mode == "freeform"),
