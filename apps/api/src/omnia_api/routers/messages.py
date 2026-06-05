@@ -1623,7 +1623,13 @@ async def _process_prompt(
 
         if files and project_image_gen_enabled:
             try:
-                files, resolved, total = await resolve_images(files, str(project_id))
+                # Hard cap: a broken image upstream (flux 501 / pexels timeout)
+                # must NEVER hang the build — on timeout we ship the page as-is so
+                # it still reaches commit (no lost work). 75s over the resolver's
+                # own per-image deadline.
+                files, resolved, total = await asyncio.wait_for(
+                    resolve_images(files, str(project_id)), timeout=75
+                )
                 print(
                     f"[PP] image_resolver resolved={resolved} total={total}",
                     flush=True,
@@ -1679,21 +1685,28 @@ async def _process_prompt(
             _best_rank: tuple[int, int, int] | None = None
             try:
                 for _acc_attempt in range(_max_acc + 1):
-                    _verdict = await _acceptance.evaluate(
-                        files,
-                        project_id=str(project_id),
-                        prompt_context=prompt_text,
-                        user_id=str(user_id),
-                        # Design judge forces the vision-critic ON (else follow the
-                        # use_vision_audit setting). It now judges a FULL-PAGE,
-                        # images-painted screenshot — no more "empty hero" misreads.
-                        run_vision=(True if _design_judge else None),
-                        # Originality: respect the setting (owner left it OFF — it
-                        # fingerprinted unreliable shots and false-flagged minimal
-                        # heroes as near-duplicates). Freeform-only when enabled.
-                        run_originality=(
-                            _acc_settings.use_originality and _gen_mode == "freeform"
+                    # Hard cap: the design-judge (full-page screenshot + vision
+                    # model) must NEVER hang the build. On timeout → TimeoutError
+                    # bubbles to the gate's except → we ship the current page and
+                    # still reach commit (no lost work).
+                    _verdict = await asyncio.wait_for(
+                        _acceptance.evaluate(
+                            files,
+                            project_id=str(project_id),
+                            prompt_context=prompt_text,
+                            user_id=str(user_id),
+                            # Design judge forces the vision-critic ON (else follow the
+                            # use_vision_audit setting). It now judges a FULL-PAGE,
+                            # images-painted screenshot — no more "empty hero" misreads.
+                            run_vision=(True if _design_judge else None),
+                            # Originality: respect the setting (owner left it OFF — it
+                            # fingerprinted unreliable shots and false-flagged minimal
+                            # heroes as near-duplicates). Freeform-only when enabled.
+                            run_originality=(
+                                _acc_settings.use_originality and _gen_mode == "freeform"
+                            ),
                         ),
+                        timeout=90,
                     )
                     _rank = (
                         1 if _verdict.structural_ok else 0,
@@ -1746,9 +1759,14 @@ async def _process_prompt(
                     )
                     messages.append({"role": "assistant", "content": accumulated})
                     messages.append({"role": "user", "content": _verdict.feedback})
-                    await _run_stream(
-                        effective_model, force_all=force_model,
-                        allow_art_director=False,
+                    # Hard cap: a stuck repair re-roll must not hang the build —
+                    # on timeout we ship the pre-repair page and reach commit.
+                    await asyncio.wait_for(
+                        _run_stream(
+                            effective_model, force_all=force_model,
+                            allow_art_director=False,
+                        ),
+                        timeout=120,
                     )
                     if state["error"] or not str(state["accumulated"]).strip():
                         print(f"[PP] acceptance_repair_empty err={state['error']!r}", flush=True)
@@ -1775,7 +1793,9 @@ async def _process_prompt(
                             pass
                     if project_image_gen_enabled:
                         try:
-                            _repaired, _, _ = await resolve_images(_repaired, str(project_id))
+                            _repaired, _, _ = await asyncio.wait_for(
+                                resolve_images(_repaired, str(project_id)), timeout=75
+                            )
                         except Exception:
                             pass
                     files = _repaired

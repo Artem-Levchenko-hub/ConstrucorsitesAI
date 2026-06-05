@@ -397,17 +397,22 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // failure mode. The backend now also calls _emergency_error in
       // _on_done so this is a belt-and-suspenders check — both ends
       // protect the user from a stuck spinner.
-      const WATCHDOG_MS = 90_000;
-      const watchdog = window.setTimeout(() => {
+      // Watchdog measures SILENCE, not total elapsed time: a long build
+      // (brief → writer → images → design-judge) is fine as long as events
+      // keep arriving. Reset on every update for this message; fire only
+      // after WATCHDOG_MS of true silence (a dead/stuck task).
+      const WATCHDOG_MS = 180_000;
+      const fireWatchdog = () => {
         const data = qc.getQueryData<Message[]>(["messages", projectId]);
         const m = data?.find((x) => x.id === message_id);
         if (m && m.tokens_out === null) {
           _failPrompt(
             "Нет ответа от модели",
-            "превышен таймаут 90с — попробуй ещё раз или сменить модель",
+            "слишком долго без ответа — попробуй ещё раз или сменить модель",
           );
         }
-      }, WATCHDOG_MS);
+      };
+      let watchdog = window.setTimeout(fireWatchdog, WATCHDOG_MS);
 
       // Mocks set tokens_out on the assistant row when done — keep the
       // existing waiter so the streamingRef releases on llm.done.
@@ -423,6 +428,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             window.clearTimeout(watchdog);
             streamingRef.current = false;
             unsub();
+          } else if (m) {
+            // Still working — any chunk/notice resets the silence timer.
+            window.clearTimeout(watchdog);
+            watchdog = window.setTimeout(fireWatchdog, WATCHDOG_MS);
           }
         }
       });
