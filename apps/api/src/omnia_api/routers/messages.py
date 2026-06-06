@@ -1214,15 +1214,33 @@ async def _process_prompt(
                     assistant_message_id,
                 )
                 _new_img_tag = image_edit.rebuild_img_with_gen(_old_img_tag, _gp)
+                _sr_pairs: list[tuple[str, str]] = [(_old_img_tag, _new_img_tag)]
+                _bg = image_edit.is_fullbleed_bg(_old_img_tag)
+                if _bg:
+                    # A full-bleed bg image stays invisible behind the heavy dark
+                    # overlay — lighten the masking gradient(s) in the same zone so
+                    # the regenerated image is actually seen (text stays readable).
+                    _sr_pairs.extend(image_edit.lighten_overlay_edits(_scope))
+                _blocks = "".join(
+                    f"<<<<<<< SEARCH\n{_s}\n=======\n{_r}\n>>>>>>> REPLACE\n"
+                    for _s, _r in _sr_pairs
+                )
                 _direct_image_edit = (
-                    "Генерирую новое изображение для выделенной зоны.\n"
-                    '<edit path="index.html">\n'
-                    f"<<<<<<< SEARCH\n{_old_img_tag}\n=======\n"
-                    f"{_new_img_tag}\n>>>>>>> REPLACE\n</edit>\n"
+                    (
+                        "Генерирую новое фоновое изображение и осветляю затемнение, "
+                        "чтобы оно было видно.\n"
+                        if _bg
+                        else "Генерирую новое изображение для выделенной зоны.\n"
+                    )
+                    + f'<edit path="index.html">\n{_blocks}</edit>\n'
                 )
                 if _gp_usage:
                     usage_data = _gp_usage  # type: ignore[assignment]
-                print(f"[PP] direct_image edit built gp={_gp[:70]!r}", flush=True)
+                print(
+                    f"[PP] direct_image edit built bg={_bg} pairs={len(_sr_pairs)} "
+                    f"gp={_gp[:60]!r}",
+                    flush=True,
+                )
 
         # --- Pass 1: primary model (or the server-built image edit) ---
         if _direct_image_edit is not None:

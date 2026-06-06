@@ -209,6 +209,24 @@ def test_apply_edits_content_mismatch_still_refused() -> None:
     assert len(conflicts) == 1
 
 
+def test_apply_edits_one_bad_pair_does_not_drop_the_good_ones() -> None:
+    """A multi-pair edit (e.g. image swap + overlay tweak): if a later pair's
+    SEARCH misses, the pairs that DID match must still be committed — one miss
+    must not throw away the whole edit."""
+    base = {"index.html": "<img src='a.jpg'>\n<div class='keep'>x</div>"}
+    edits = {
+        "index.html": [
+            ("<img src='a.jpg'>", "<img src='b.jpg'>"),  # applies
+            ("NO-SUCH-ANCHOR-HERE", "y"),  # misses
+        ]
+    }
+    updated, conflicts = apply_edits(edits, base)
+    assert "b.jpg" in updated["index.html"]  # the good pair landed
+    assert "a.jpg" not in updated["index.html"]
+    assert "<div class='keep'>x</div>" in updated["index.html"]  # rest intact
+    assert len(conflicts) == 1  # the miss was still reported
+
+
 def test_apply_edits_missing_file_records_conflict() -> None:
     edits = {"nope.html": [("foo", "bar")]}
     updated, conflicts = apply_edits(edits, BASE)

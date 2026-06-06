@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from omnia_api.services.image_edit import (
     find_first_img,
+    is_fullbleed_bg,
     is_image_request,
+    lighten_overlay_edits,
     rebuild_img_with_gen,
 )
 
@@ -50,3 +52,31 @@ def test_rebuild_escapes_quotes_in_prompt() -> None:
     out = rebuild_img_with_gen('<img src="x" alt="a">', 'a "fancy" shot')
     # double quotes in the prompt must not break the attribute
     assert 'data-omnia-gen="a \'fancy\' shot"' in out
+
+
+def test_is_fullbleed_bg() -> None:
+    assert is_fullbleed_bg(
+        '<img src="x.jpg" class="absolute inset-0 w-full h-full object-cover opacity-100" />'
+    )
+    # a framed foreground photo is NOT a full-bleed background
+    assert not is_fullbleed_bg(
+        '<img src="x.jpg" class="w-full aspect-square object-cover rounded-full" />'
+    )
+
+
+def test_lighten_overlay_edits_softens_dark_keeps_accent() -> None:
+    zone = (
+        '<div class="absolute inset-0 bg-gradient-to-b from-[#0C0A09]/70 '
+        'via-[#0C0A09]/50 to-[#0C0A09]/90"></div>'
+        '<div class="absolute inset-0 bg-gradient-to-r from-transparent '
+        'via-[#A16207]/5 to-transparent"></div>'
+    )
+    edits = lighten_overlay_edits(zone)
+    assert len(edits) == 1  # only the heavy dark gradient; the gold /5 accent untouched
+    old, new = edits[0]
+    assert "/70" in old and "/50" in old and "/90" in old
+    # 70*.6=42, 50*.6=30, 90*.6=54
+    assert "/42" in new and "/30" in new and "/54" in new
+    assert "/70" not in new and "/90" not in new
+    # the colour HEXes are preserved
+    assert new.count("#0C0A09") == old.count("#0C0A09")

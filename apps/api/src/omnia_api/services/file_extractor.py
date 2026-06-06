@@ -262,6 +262,7 @@ def apply_edits(
             )
             continue
         content = base_files[path]
+        applied = 0
         for i, (search, replace) in enumerate(pairs, 1):
             span = _match_span(content, search)
             if span is None:
@@ -276,13 +277,16 @@ def apply_edits(
                         f"{path} #{i}: SEARCH-блок не найден уникально "
                         f"(первые 60 chars: {search[:60]!r})"
                     )
-                # Прекращаем дальнейшие правки этого файла — последующие
-                # SEARCH могут зависеть от предыдущего REPLACE, который не
-                # применился, и тогда будут ещё больше промахов.
-                break
+                # Пропускаем ТОЛЬКО эту пару, остальные применяем. Одна
+                # непопавшая пара не должна ронять весь edit: напр. свап фоновой
+                # картинки + осветление тёмного оверлея — если якорь оверлея
+                # промахнулся, картинка всё равно обязана замениться. Зависимая
+                # пара (её SEARCH = результат предыдущего REPLACE) просто не
+                # найдётся и тоже пропустится — корректная деградация.
+                continue
             start, end = span
             content = content[:start] + replace + content[end:]
-        else:
-            # for-else: цикл прошёл без break → все пары применились
+            applied += 1
+        if applied:
             updated[path] = content
     return updated, conflicts

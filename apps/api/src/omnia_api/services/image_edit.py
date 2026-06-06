@@ -66,4 +66,47 @@ def alt_of(img_tag: str) -> str:
     return m.group(1) if m else ""
 
 
-__all__ = ["alt_of", "find_first_img", "is_image_request", "rebuild_img_with_gen"]
+def is_fullbleed_bg(img_tag: str) -> bool:
+    """True when the ``<img>`` is a full-bleed BACKGROUND layer (covers the whole
+    section), i.e. ``absolute inset-0 … object-cover`` — as opposed to a framed
+    foreground photo. A full-bleed bg is usually masked by a dark overlay we must
+    lighten so a regenerated image is actually visible."""
+    cls_m = _CLASS_RE.search(img_tag)
+    cls = cls_m.group(1) if cls_m else ""
+    return "absolute" in cls and "inset-0" in cls and "object-cover" in cls
+
+
+_GRADIENT_DIV_RE = re.compile(r"<div\b[^>]*\bbg-gradient[^>]*>", re.IGNORECASE)
+_OPACITY_SUFFIX_RE = re.compile(r"/(\d{2,3})\b")
+
+
+def _reduce_opacity(m: "re.Match[str]") -> str:
+    n = int(m.group(1))
+    # Only soften the HEAVY dark stops (≥50). The subtle accent stops (e.g. a
+    # gold /5) are single-digit and never match this 2–3 digit pattern anyway.
+    return "/" + str(max(30, round(n * 0.6))) if n >= 50 else m.group(0)
+
+
+def lighten_overlay_edits(zone_html: str) -> list[tuple[str, str]]:
+    """``(old_div, new_div)`` SEARCH/REPLACE pairs that LIGHTEN the dark gradient
+    overlay(s) in a zone (e.g. ``from-[#0C0A09]/70 … to-[#0C0A09]/90`` → ``…/42 …
+    …/54``) so a full-bleed background image shows through while text stays
+    readable. Touches only Tailwind ``bg-gradient`` divs; the colour HEXes,
+    structure and low-opacity accents are preserved."""
+    edits: list[tuple[str, str]] = []
+    for m in _GRADIENT_DIV_RE.finditer(zone_html):
+        old = m.group(0)
+        new = _OPACITY_SUFFIX_RE.sub(_reduce_opacity, old)
+        if new != old:
+            edits.append((old, new))
+    return edits
+
+
+__all__ = [
+    "alt_of",
+    "find_first_img",
+    "is_fullbleed_bg",
+    "is_image_request",
+    "lighten_overlay_edits",
+    "rebuild_img_with_gen",
+]
