@@ -5,6 +5,7 @@ from __future__ import annotations
 from omnia_api.services.image_edit import (
     dim_shader_edits,
     find_first_img,
+    is_background_request,
     is_fullbleed_bg,
     is_image_request,
     lighten_overlay_edits,
@@ -53,6 +54,19 @@ def test_rebuild_escapes_quotes_in_prompt() -> None:
     out = rebuild_img_with_gen('<img src="x" alt="a">', 'a "fancy" shot')
     # double quotes in the prompt must not break the attribute
     assert 'data-omnia-gen="a \'fancy\' shot"' in out
+
+
+def test_is_background_request() -> None:
+    # "new background", no colour named → a background-image request
+    assert is_background_request("сделай новый фон")
+    assert is_background_request("поменяй фон")
+    assert is_background_request("замени фон на странице")
+    # a NAMED colour → it's a colour edit, not a bg image
+    assert not is_background_request("поменяй фон на тёмно-зелёный")
+    assert not is_background_request("сделай фон #0C0A09")
+    assert not is_background_request("поменяй фон на чёрный")
+    # no background noun at all
+    assert not is_background_request("поменяй текст кнопки")
 
 
 def test_is_fullbleed_bg() -> None:

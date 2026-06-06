@@ -41,6 +41,30 @@ def is_image_request(prompt: str | None) -> bool:
     return bool(_IMG_NOUN_RE.search(t) and _CHANGE_VERB_RE.search(t))
 
 
+_BG_NOUN_RE = re.compile(r"\bфон\b|фонов|background|задник|подложк", re.IGNORECASE)
+# A named colour means "поменяй фон на <цвет>" — a colour edit, NOT a bg image.
+_COLOR_WORD_RE = re.compile(
+    r"#[0-9a-f]{3,8}|цвет|зелён|зелен|син[ийеёяю]|красн|чёрн|черн|бел[ыоає]|"
+    r"жёлт|желт|оранж|фиолет|розов|голуб|сер[ыоа]|бирюз|изумруд|бордов|графит|"
+    r"emerald|navy|crimson|green|blue|red|black|white|gray|grey",
+    re.IGNORECASE,
+)
+
+
+def is_background_request(prompt: str | None) -> bool:
+    """True when the user wants a NEW BACKGROUND ("сделай новый фон", "поменяй
+    фон") WITHOUT naming a colour. The caller only acts on it when the clicked
+    zone has a real full-bleed bg image to regenerate; a named colour falls
+    through to the normal colour edit."""
+    t = prompt or ""
+    if _COLOR_WORD_RE.search(t):
+        return False
+    return bool(
+        _BG_NOUN_RE.search(t)
+        and (_CHANGE_VERB_RE.search(t) or _STRONG_GEN_RE.search(t))
+    )
+
+
 def find_first_img(block: str) -> tuple[int, int, str] | None:
     """``(start, end, tag)`` of the first ``<img>`` in ``block``, or ``None``."""
     m = _IMG_TAG_RE.search(block)
@@ -133,6 +157,7 @@ __all__ = [
     "alt_of",
     "dim_shader_edits",
     "find_first_img",
+    "is_background_request",
     "is_fullbleed_bg",
     "is_image_request",
     "lighten_overlay_edits",

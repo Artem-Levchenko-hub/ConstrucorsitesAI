@@ -1189,12 +1189,19 @@ async def _process_prompt(
         # photo. The only LLM is a cheap image-prompt craft — no HTML rewrite,
         # no risk of the text model mangling the edit.
         _direct_image_edit: str | None = None
+        _img_req = image_edit.is_image_request(prompt_text)
+        # A "new background" request ("сделай новый фон" / "поменяй фон", no named
+        # colour) also routes here — IF the clicked zone actually has a full-bleed
+        # bg image to regenerate. The deterministic server-built <edit> avoids the
+        # text model reconstructing the (already-changed) hero and missing every
+        # SEARCH — exactly the "ничего не сделал" the owner hit on "сделай новый фон".
+        _bg_req = image_edit.is_background_request(prompt_text)
         if (
             surgical
             and selected_elements
             and project_image_gen_enabled
             and current_files.get("index.html")
-            and image_edit.is_image_request(prompt_text)
+            and (_img_req or _bg_req)
         ):
             _idx_src = current_files["index.html"]
             _z = zone_edit.find_enclosing_block(
@@ -1202,7 +1209,11 @@ async def _process_prompt(
             )
             _scope = _idx_src[_z[0] : _z[1]] if _z else _idx_src
             _img_hit = image_edit.find_first_img(_scope)
-            if _img_hit is not None:
+            _bg = _img_hit is not None and image_edit.is_fullbleed_bg(_img_hit[2])
+            # A pure background request only takes this path when the target really
+            # is a full-bleed bg image; otherwise "поменяй фон" is a colour edit and
+            # belongs on the normal edit path.
+            if _img_hit is not None and (_img_req or _bg):
                 _old_img_tag = _img_hit[2]
                 _gp, _gp_usage = await _craft_image_prompt(
                     prompt_text,
@@ -1215,7 +1226,6 @@ async def _process_prompt(
                 )
                 _new_img_tag = image_edit.rebuild_img_with_gen(_old_img_tag, _gp)
                 _sr_pairs: list[tuple[str, str]] = [(_old_img_tag, _new_img_tag)]
-                _bg = image_edit.is_fullbleed_bg(_old_img_tag)
                 if _bg:
                     # A full-bleed bg image stays invisible behind the heavy dark
                     # overlay AND the WebGL shader — lighten the masking gradient(s)
