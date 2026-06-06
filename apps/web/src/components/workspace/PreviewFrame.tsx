@@ -30,6 +30,7 @@ import type { Project, Snapshot } from "@/lib/api/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shortSha, cn, formatRelativeTime } from "@/lib/utils";
 import { StreamingPreviewFrame } from "./StreamingPreviewFrame";
+import { StreamingCodeView } from "./StreamingCodeView";
 import { CodeView } from "./CodeView";
 
 type Device = "mobile" | "tablet" | "desktop";
@@ -261,6 +262,10 @@ export function PreviewFrame({ project }: { project: Project }) {
   // index.html body). Full-stack projects render via the live dev container
   // (HMR), so we never show the morph frame for them.
   const showStreaming = isStreaming && !selectedSnapshotId && !isFullstack;
+  // Fullstack/React can't morph-render mid-build (needs a compile step), so the
+  // preview area would otherwise sit frozen on the old static page. Show the
+  // live code streaming in instead — "building before your eyes" on every stack.
+  const showStreamingCode = isStreaming && !selectedSnapshotId && isFullstack;
 
   return (
     <div className="flex flex-col h-full bg-surface-base">
@@ -386,8 +391,16 @@ export function PreviewFrame({ project }: { project: Project }) {
 
       <div className="flex-1 p-2 overflow-hidden">
         <div className="h-full w-full rounded-lg border border-border-default bg-surface-raised overflow-hidden flex flex-col">
-          {viewMode === "code" && visible ? (
-            <CodeView projectId={project.id} snapshotId={visible.id} />
+          {viewMode === "code" ? (
+            isStreaming ? (
+              <StreamingCodeView content={last?.content ?? ""} />
+            ) : visible ? (
+              <CodeView projectId={project.id} snapshotId={visible.id} />
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-fg-tertiary">
+                Нет кода для показа
+              </div>
+            )
           ) : (
             <>
               <div className="h-9 flex items-center gap-1.5 px-3 shrink-0">
@@ -448,6 +461,17 @@ export function PreviewFrame({ project }: { project: Project }) {
                       projectId={project.id}
                       messageId={last?.id ?? ""}
                     />
+                  ) : showStreamingCode ? (
+                    <motion.div
+                      key="streaming-code"
+                      className="w-full h-full"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <StreamingCodeView content={last?.content ?? ""} />
+                    </motion.div>
                   ) : fullstackLive ? (
                     <motion.iframe
                       key={`live-${iframeKey}`}
