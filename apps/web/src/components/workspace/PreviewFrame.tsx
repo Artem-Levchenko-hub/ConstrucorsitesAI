@@ -406,7 +406,7 @@ export function PreviewFrame({ project }: { project: Project }) {
 
                 {/* Device size — свойство превьюемого сайта, поэтому живёт в
                     браузер-баре, а не в инструментах сверху. */}
-                <div className="flex items-center rounded-full border border-border-subtle bg-surface-raised p-0.5 shrink-0">
+                <div className="flex items-center gap-0.5 shrink-0">
                   {(
                     [
                       ["mobile", Smartphone],
@@ -420,13 +420,13 @@ export function PreviewFrame({ project }: { project: Project }) {
                       onClick={() => setDevice(d)}
                       title={d}
                       className={cn(
-                        "p-1 rounded-full transition-all",
+                        "p-1.5 rounded-md transition-colors",
                         device === d
-                          ? "bg-accent-subtle text-accent ring-1 ring-inset ring-[rgba(124,92,255,0.25)]"
+                          ? "bg-accent-subtle text-accent"
                           : "text-fg-tertiary hover:text-fg-secondary",
                       )}
                     >
-                      <Icon className="h-3.5 w-3.5" />
+                      <Icon className="h-4 w-4" />
                     </button>
                   ))}
                 </div>
