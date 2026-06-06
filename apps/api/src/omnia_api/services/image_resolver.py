@@ -293,6 +293,28 @@ def _upload_image(image_bytes: bytes, project_id: str, prompt: str) -> str | Non
     return f"{base}/{bucket}/{key}"
 
 
+def _cached_image_url(project_id: str, prompt: str) -> str | None:
+    """Public URL of an ALREADY-generated image for (project_id, prompt), or
+    None. Same content-addressed key as ``_upload_image``. Lets an
+    acceptance/design-judge repair re-roll — and a re-generation of the same
+    site — REUSE the existing MinIO object instead of paying vsegpt for an
+    identical image again (the main image-cost leak). Fail-soft: any error or a
+    missing object → None, so the caller just generates as before."""
+    settings = get_settings()
+    try:
+        client = get_minio_client()
+        bucket = settings.minio_bucket_images
+        sha = hashlib.sha256(
+            f"{project_id}|{prompt}".encode("utf-8")
+        ).hexdigest()[:32]
+        key = f"{project_id}/{sha}.png"
+        client.stat_object(bucket, key)  # raises if the object is absent
+    except Exception:  # noqa: BLE001 — absent/transport error → regenerate
+        return None
+    base = settings.minio_public_url.rstrip("/")
+    return f"{base}/{bucket}/{key}"
+
+
 def _extract_photo_tags(files: dict[str, str]) -> list[ImgTag]:
     """Find every ``data-omnia-photo`` tag (capped like the gen path)."""
     out: list[ImgTag] = []
@@ -486,6 +508,12 @@ async def resolve_images(
             # Generate + content-address by the (possibly enriched) gen prompt,
             # but key the result by the ORIGINAL prompt so tag replacement matches.
             gen_prompt = gen_prompt_for.get(orig_prompt, orig_prompt)
+            # Cost control: reuse an already-generated image for this exact
+            # (project, prompt) instead of paying for an identical gen again.
+            # Kills the repair-reroll / re-generation doubling.
+            cached = await asyncio.to_thread(_cached_image_url, project_id, gen_prompt)
+            if cached:
+                return orig_prompt, cached
             async with sem:
                 img = await _fetch_one(gen_prompt)
                 if img is None:
