@@ -433,6 +433,29 @@ def _replace_tag(content: str, tag: ImgTag, url: str) -> str:
     return content.replace(tag.full_match, replacement, 1)
 
 
+_UNRESOLVED_IMG_RE = re.compile(
+    r"<img\b[^>]*\bdata-omnia-(?:gen|photo)\b[^>]*>", re.IGNORECASE
+)
+
+
+def strip_unresolved_tags(files: dict[str, str]) -> tuple[dict[str, str], int]:
+    """Remove any ``<img data-omnia-gen|photo …>`` tags still unresolved after
+    ``resolve_images`` (e.g. the image budget ran out, or it timed out before it
+    could strip them itself). Returns ``(files, removed_count)``. Dropping the tag
+    lets the section's drawn/graphic background show instead of shipping a broken
+    image box. No-op when every image already resolved."""
+    out: dict[str, str] = {}
+    removed = 0
+    for path, content in files.items():
+        if path.lower().endswith((".html", ".htm")):
+            new, n = _UNRESOLVED_IMG_RE.subn("", content)
+            removed += n
+            out[path] = new
+        else:
+            out[path] = content
+    return out, removed
+
+
 async def resolve_images(
     files: dict[str, str],
     project_id: str,

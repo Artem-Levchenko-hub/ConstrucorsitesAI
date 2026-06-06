@@ -2143,6 +2143,21 @@ async def _process_prompt(
             except Exception as img_exc:
                 print(f"[PP] image_resolver failed: {img_exc!r}", flush=True)
 
+        # Belt-and-suspenders: if image-gen failed (budget exhausted / timeout),
+        # the resolver leaves the data-omnia-gen tags in place → a BROKEN <img>
+        # box ships (the dark "alt text" rectangle the owner saw). Strip any
+        # leftover unresolved tags so the section's drawn/graphic background shows
+        # instead. No-op when everything resolved. Runs for builds AND edits.
+        if files:
+            try:
+                from omnia_api.services.image_resolver import strip_unresolved_tags
+
+                files, _stripped = strip_unresolved_tags(files)
+                if _stripped:
+                    print(f"[PP] stripped_unresolved_img_tags={_stripped}", flush=True)
+            except Exception as _strip_exc:
+                print(f"[PP] strip_unresolved skipped: {_strip_exc!r}", flush=True)
+
         # ── Phase 11 — acceptance gate (freeform safety net) ──────────────
         # Render → check structure + responsiveness (+ optional vision). If it
         # fails, re-roll with concrete feedback up to ACCEPTANCE_MAX_RETRIES.

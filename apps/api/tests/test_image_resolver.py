@@ -29,3 +29,32 @@ def test_no_tags_passthrough() -> None:
     out, resolved, total = asyncio.run(resolve_images(files, "p"))
     assert out == files
     assert (resolved, total) == (0, 0)
+
+
+def test_strip_unresolved_tags_removes_broken_imgs() -> None:
+    from omnia_api.services.image_resolver import strip_unresolved_tags
+
+    files = {
+        "index.html": (
+            '<section><div class="omnia-shader"></div>'
+            '<img data-omnia-gen="coffee" alt="x" class="absolute inset-0">'
+            "<h1>Hi</h1></section>"
+        ),
+        "style.css": "body{}",
+    }
+    out, n = strip_unresolved_tags(files)
+    assert n == 1
+    assert "data-omnia-gen" not in out["index.html"]
+    assert "<img" not in out["index.html"]  # the broken tag is gone
+    assert '<div class="omnia-shader"></div>' in out["index.html"]  # drawn bg kept
+    assert "<h1>Hi</h1>" in out["index.html"]
+    assert out["style.css"] == "body{}"  # non-html untouched
+
+
+def test_strip_unresolved_tags_noop_when_resolved() -> None:
+    from omnia_api.services.image_resolver import strip_unresolved_tags
+
+    files = {"index.html": '<img src="https://cdn/x.png" alt="ok">'}
+    out, n = strip_unresolved_tags(files)
+    assert n == 0
+    assert out == files
