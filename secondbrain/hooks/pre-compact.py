@@ -32,7 +32,7 @@ def _spawn_flush(payload_file: Path, payload: dict) -> None:
         env["CURSOR_TRANSCRIPT_PATH"] = str(tp)
     kwargs: dict = {"cwd": str(ROOT_DIR), "env": env}
     if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     else:
         kwargs["start_new_session"] = True
     log_dir = SCRIPTS_DIR / "tmp"
