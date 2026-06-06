@@ -33,9 +33,11 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
+from omnia_api.services import image_edit
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services import pipeline_debug
+from omnia_api.services import zone_edit
 from omnia_api.services.art_director_writer import art_director_writer_generate
 from omnia_api.services.director_polish import director_polish_generate
 from omnia_api.services.file_extractor import (
@@ -727,6 +729,60 @@ async def _catalog_fallback_generate(
         return None
 
 
+_IMG_PROMPT_SYSTEM = (
+    "Ты пишешь КОРОТКИЙ детальный промпт НА АНГЛИЙСКОМ для модели генерации фото "
+    "(flux) под премиум-бренд. По запросу пользователя и контексту бренда верни "
+    "ОДНУ строку 20–40 слов: subject/scene, lighting, angle, lens, mood, palette. "
+    "БЕЗ текста и логотипов в кадре, без кавычек, без префиксов, только сам промпт."
+)
+
+
+async def _craft_image_prompt(
+    user_request: str,
+    preset_id: str | None,
+    old_img_tag: str,
+    force_model: str | None,
+    user_id: UUID,
+    project_id: UUID,
+    message_id: UUID,
+) -> tuple[str, dict[str, Any] | None]:
+    """Turn a (often vague, Russian) image request into a detailed EN flux prompt
+    via the cheap ``image_prompt`` role — the only LLM on the direct-image path.
+    Fail-soft: returns a sensible template prompt if the call errors/empties."""
+    _alt = image_edit.alt_of(old_img_tag)
+    ctx = (
+        f"Бренд/пресет: {preset_id or 'премиум, тёмная элегантная эстетика'}. "
+        f"Текущая картинка (alt): {_alt or '—'}. "
+        f"Запрос пользователя: {user_request}"
+    )
+    parts: list[str] = []
+    usage: dict[str, Any] | None = None
+    try:
+        async for ev in stream_chat_completion(
+            [
+                {"role": "system", "content": _IMG_PROMPT_SYSTEM},
+                {"role": "user", "content": ctx},
+            ],
+            model_for_role("image_prompt", override=force_model),
+            str(user_id),
+            str(project_id),
+            str(message_id),
+        ):
+            if "delta" in ev:
+                parts.append(str(ev["delta"]))
+            elif "usage" in ev:
+                usage = ev["usage"]  # type: ignore[assignment]
+    except Exception as exc:  # noqa: BLE001 — fail-soft to a template
+        print(f"[PP] craft_image_prompt failed {exc!r}", flush=True)
+    prompt = " ".join("".join(parts).split()).strip().strip('"')[:600]
+    if len(prompt) < 12:
+        prompt = (
+            f"atmospheric premium brand photograph, {user_request}, moody elegant "
+            "lighting, dark refined palette, shallow depth of field, 85mm"
+        )
+    return prompt, usage
+
+
 async def _process_prompt(
     project_id: UUID,
     user_id: UUID,
@@ -1125,11 +1181,66 @@ async def _process_prompt(
                         },
                     )
 
-        # --- Pass 1: primary model (role-orchestrated unless admin-forced) ---
-        await _run_stream(model_id, force_all=force_model)
-        accumulated = str(state["accumulated"])
-        usage_data = state["usage"]  # type: ignore[assignment]
-        stream_error = state["error"]
+        # ── Direct image generation — call the GRAPHICS model, not the text LLM.
+        # When the user points at a zone and asks for a picture, build a
+        # guaranteed-matching <edit> server-side: SEARCH is the EXACT <img> from
+        # source (so it always applies), REPLACE swaps it for a fresh
+        # data-omnia-gen tag. image_resolver below turns it into a real flux
+        # photo. The only LLM is a cheap image-prompt craft — no HTML rewrite,
+        # no risk of the text model mangling the edit.
+        _direct_image_edit: str | None = None
+        if (
+            surgical
+            and selected_elements
+            and project_image_gen_enabled
+            and current_files.get("index.html")
+            and image_edit.is_image_request(prompt_text)
+        ):
+            _idx_src = current_files["index.html"]
+            _z = zone_edit.find_enclosing_block(
+                _idx_src, zone_edit.distinctive_anchors(selected_elements)
+            )
+            _scope = _idx_src[_z[0] : _z[1]] if _z else _idx_src
+            _img_hit = image_edit.find_first_img(_scope)
+            if _img_hit is not None:
+                _old_img_tag = _img_hit[2]
+                _gp, _gp_usage = await _craft_image_prompt(
+                    prompt_text,
+                    project_design_preset_id,
+                    _old_img_tag,
+                    force_model,
+                    user_id,
+                    project_id,
+                    assistant_message_id,
+                )
+                _new_img_tag = image_edit.rebuild_img_with_gen(_old_img_tag, _gp)
+                _direct_image_edit = (
+                    "Генерирую новое изображение для выделенной зоны.\n"
+                    '<edit path="index.html">\n'
+                    f"<<<<<<< SEARCH\n{_old_img_tag}\n=======\n"
+                    f"{_new_img_tag}\n>>>>>>> REPLACE\n</edit>\n"
+                )
+                if _gp_usage:
+                    usage_data = _gp_usage  # type: ignore[assignment]
+                print(f"[PP] direct_image edit built gp={_gp[:70]!r}", flush=True)
+
+        # --- Pass 1: primary model (or the server-built image edit) ---
+        if _direct_image_edit is not None:
+            accumulated = _direct_image_edit
+            stream_error = None
+            await publish_event(
+                project_id,
+                "llm.chunk",
+                {
+                    "message_id": str(assistant_message_id),
+                    "delta": "*Генерирую изображение для выделенной зоны…*\n\n",
+                },
+            )
+        else:
+            await _run_stream(model_id, force_all=force_model)
+            accumulated = str(state["accumulated"])
+            usage_data = state["usage"]  # type: ignore[assignment]
+            stream_error = state["error"]
 
         if stream_error:
             print(f"[PP] stream_error err={stream_error!r}", flush=True)
