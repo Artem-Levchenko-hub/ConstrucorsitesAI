@@ -25,11 +25,12 @@ def test_distinctive_anchors_skips_generic() -> None:
     anchors = distinctive_anchors(
         [{"selector": "div.omnia-shader-over.relative.z-10", "text": "PREMIUM SUSHI"}]
     )
-    # generic classes dropped; the overlay class is intentionally generic too
+    # generic utility classes dropped
     assert "relative" not in anchors
     assert "z-10" not in anchors
-    assert "omnia-shader-over" not in anchors  # in the generic skip-set
-    # the visible text survives as an anchor
+    # but a distinctive class IS kept as a zone locator
+    assert "omnia-shader-over" in anchors
+    # and the visible text survives as an anchor too
     assert "PREMIUM SUSHI" in anchors
 
 
@@ -44,6 +45,20 @@ def test_find_enclosing_block_picks_the_hero_section() -> None:
     # the OTHER section + header/footer are NOT inside
     assert "О нас" not in block
     assert "Logo" not in block
+
+
+def test_click_overlay_locates_whole_hero_section() -> None:
+    """Real scenario: the user clicks div.omnia-shader-over (the content overlay)
+    inside the hero. We must scope to the WHOLE <section id="hero"> so the actual
+    background layer (its sibling .omnia-shader) can be changed."""
+    anchors = distinctive_anchors(
+        [{"selector": "div.omnia-shader-over.relative.z-10", "text": ""}]
+    )
+    span = find_enclosing_block(PAGE, anchors)
+    assert span is not None
+    block = PAGE[span[0] : span[1]]
+    assert block.startswith('<section id="hero"')
+    assert "omnia-shader" in block  # the real bg layer is in scope
 
 
 def test_find_enclosing_block_by_text_anchor() -> None:

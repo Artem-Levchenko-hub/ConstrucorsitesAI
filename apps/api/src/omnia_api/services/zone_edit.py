@@ -32,9 +32,11 @@ _GENERIC_CLASSES = frozenset(
         "container", "mx-auto", "w-full", "h-full", "min-h-screen",
         "inset-0", "z-0", "z-10", "z-20", "z-30", "z-40", "z-50",
         "overflow-hidden", "items-center", "justify-center", "text-center",
-        "omnia-shader-over",  # the transparent overlay — not a zone identifier
     }
 )
+# NB: `omnia-shader-over` is deliberately NOT skipped — it's a great zone LOCATOR
+# (appears once, inside the hero). We scope to the whole enclosing section anyway,
+# so clicking the overlay correctly targets the hero (incl. its real bg layer).
 
 _ID_RE = re.compile(r'\bid\s*=\s*"([^"]+)"')
 
