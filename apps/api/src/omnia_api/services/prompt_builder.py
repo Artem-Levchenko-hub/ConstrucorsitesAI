@@ -2394,6 +2394,125 @@ def _build_catalog_messages(
     return messages
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# SURGICAL EDIT mode (owner directive 2026-06-06).
+#
+# A LEAN, edit-only system prompt for follow-up tweaks on an existing page.
+# Deliberately EXCLUDES every "build a complete designed site" block
+# (_QUALITY_BAR / _DESIGN_KIT / _STYLE_KIT / _TASTE / _VISUAL_RICH_KIT /
+# _ART_DIRECTOR / _SIGNATURE_MOVES / _SELF_CHECK / palette anchors). Those are
+# what pushed a cheap model to regenerate the whole index.html and re-roll the
+# palette when the user only asked to "add an intro". Here the single rule is:
+# change ONLY what was asked, preserve everything else byte-for-byte, and emit a
+# surgical <edit> patch. Routed to a cheap model by the triage (CHEAP).
+# ──────────────────────────────────────────────────────────────────────────
+
+_EDIT_IDENTITY = """\
+Ты — Omnia.AI в режиме ТОЧЕЧНОЙ ПРАВКИ. Пользователь уже собрал страницу и просит
+изменить В НЕЙ конкретную вещь. Твоя ЕДИНСТВЕННАЯ задача — внести РОВНО запрошенное
+изменение и НИЧЕГО больше. Ты НЕ пересобираешь сайт, НЕ передизайниваешь, НЕ
+«улучшаешь» соседние блоки по своей инициативе.
+
+ЖЕЛЕЗНЫЕ ПРАВИЛА СОХРАНЕНИЯ (любое нарушение = брак):
+• Меняй ТОЛЬКО то, что попросил пользователь (и выделенные элементы, если они
+  переданы). Всё прочее — вёрстку, тексты, секции, классы, скрипты — оставь
+  ПОБАЙТНО как есть.
+• НЕ трогай палитру, фон, цвета, шрифты и общую раскладку, если об этом НЕ просят
+  прямым текстом. Никакой «свежей» палитры, никакого нового фона, никакого
+  переката дизайна. Если просят изменить цвет ОДНОГО элемента — меняешь только его.
+• Добавляешь элемент или секцию — возьми цвета, шрифты, отступы и стиль-классы ИЗ
+  ТЕКУЩЕЙ страницы (она ниже в контексте), чтобы новое сидело в одном стиле со
+  старым. НЕ выдумывай новую дизайн-систему и НЕ объявляй новые CSS-переменные.
+• Не добавляй секции/блоки/эффекты, которых не просили. Просят одно — делаешь одно."""
+
+_EDIT_KIT_HINT = """\
+Если ДОБАВЛЯЕШЬ элемент — переиспользуй уже подключённый omnia-kit (его классы уже
+есть в проекте, ничего подключать не надо): .reveal / .scroll-fade-up (мягкое
+появление при скролле), .card-soft / .depth-2 (карточки), .badge, .eyebrow
+(мелкий капс-лейбл над заголовком). Главная кнопка .btn-cta-primary на странице
+ОДНА — не добавляй вторую. Иконки — инлайновый SVG (Heroicons/Lucide), НЕ эмодзи.
+Не подключай новые библиотеки и шрифты — бери те, что уже на странице."""
+
+_EDIT_RESPONSE = """\
+ФОРМАТ ОТВЕТА — ТОЛЬКО точечные правки через <edit> с SEARCH/REPLACE. Никаких
+полных пересборок.
+
+<edit path="index.html">
+<<<<<<< SEARCH
+<точный фрагмент, СКОПИРОВАННЫЙ из текущего файла побайтно>
+=======
+<новый фрагмент>
+>>>>>>> REPLACE
+</edit>
+
+ПРАВИЛА SEARCH/REPLACE:
+• SEARCH совпадает с файлом ПОБАЙТНО (пробелы, переводы строк, кавычки). Копируй из
+  показанного «текущего состояния», НЕ «по памяти».
+• SEARCH встречается в файле РОВНО ОДИН раз. Если фрагмент неуникален — добавь
+  соседние строки (заголовок секции, id, комментарий), чтобы он стал уникальным.
+• Чтобы ДОБАВИТЬ секцию/элемент — найди уникальный якорь рядом с местом вставки
+  (открывающий тег нужной секции, её id, или <body>) и в REPLACE верни этот якорь
+  + новый блок. Ставь в логичное место: интро/прелоадер — сразу после <body>,
+  новую секцию — между подходящими соседними секциями, отзыв — в секцию отзывов.
+• Несколько правок — несколько SEARCH/REPLACE-секций (в одном <edit> на файл) или
+  несколько <edit> (на разные файлы). Применяются по порядку.
+• Пустой REPLACE = удалить фрагмент.
+
+ЗАПРЕЩЕНО:
+• Возвращать весь главный файл страницы (обычно index.html) через <file>. Полный
+  <file> допустим ТОЛЬКО когда ты создаёшь НОВЫЙ отдельный файл (например, новую
+  страницу about.html), который просили добавить.
+• Упоминать неизменённые файлы — их в ответе быть не должно.
+• href="#" без якоря, пустой href, кнопка-обманка. Новые ссылки/кнопки ведут на
+  существующий якорь (#contacts/#pricing), tel:, mailto: или реальный URL.
+
+СТИЛЬ ОТВЕТА: одно короткое предложение с планом → <edit>-блок(и) → одна строка
+(«готово, посмотри в превью»). Контент — по-русски. Без длинных summary."""
+
+
+def _build_edit_messages(
+    current_files: dict[str, str],
+    history: Sequence[dict[str, str]],
+    user_prompt: str,
+    selected_elements: Sequence[dict[str, Any]] | None,
+) -> list[dict[str, str]]:
+    """Lean message list for a SURGICAL EDIT (CHEAP intent).
+
+    System prompt = preserve-everything identity + kit-reuse hint + <edit>-only
+    response format. The current file state is fed verbatim (the model needs it
+    to write byte-exact SEARCH blocks), framed as "patch this, don't rewrite".
+    No build kit, no palette anchor, no self-check — so the cheap model can't be
+    pushed into regenerating the page or re-rolling the palette.
+    """
+    system = "\n\n".join((_EDIT_IDENTITY, _EDIT_KIT_HINT, _EDIT_RESPONSE))
+    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+
+    if current_files:
+        files_block = "\n\n".join(
+            f'<file path="{path}">\n{content}\n</file>'
+            for path, content in current_files.items()
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Текущее состояние страницы — правь его ТОЧЕЧНО через <edit>, "
+                    "не переписывай целиком:\n" + files_block
+                ),
+            }
+        )
+
+    for m in list(history)[-HISTORY_LIMIT:]:
+        if m.get("role") in {"user", "assistant"} and m.get("content"):
+            messages.append({"role": m["role"], "content": m["content"]})
+
+    final_user = user_prompt
+    if selected_elements:
+        final_user = _format_selection_block(selected_elements) + "\n\n" + user_prompt
+    messages.append({"role": "user", "content": final_user})
+    return messages
+
+
 def build_messages(
     current_files: dict[str, str],
     history: Sequence[dict[str, str]],
@@ -2404,7 +2523,16 @@ def build_messages(
     image_gen_enabled: bool = True,
     project_id: str | None = None,
     model_id: str | None = None,
+    edit_mode: bool = False,
 ) -> list[dict[str, str]]:
+    # Surgical EDIT mode (CHEAP intent on an existing project): a lean,
+    # edit-only prompt that forbids rewriting the page or re-rolling the palette.
+    # Bypasses the catalog/freeform/plain build branching entirely.
+    if edit_mode:
+        return _build_edit_messages(
+            current_files, history, user_prompt, selected_elements
+        )
+
     # Phase L3 — when the feature flag is on, route through the lean
     # catalog/IR prompt builder. Saves ~73% tokens, locks visual ceiling
     # via the section catalog. Default OFF — old freeform path stays the

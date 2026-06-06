@@ -177,9 +177,18 @@ export type WalletState = {
   free_generation_limit?: number;
 };
 
+// How the server will handle a prompt turn (mirrors api PromptResponse.mode):
+//   "build"   — full (re)generation of the page
+//   "edit"    — surgical, scoped change (preserves the rest of the page)
+//   "clarify" — no generation this turn; the server is asking questions first
+export type TurnMode = "build" | "edit" | "clarify";
+
 export type PromptResponse = {
   message_id: Uuid;
   snapshot_id: Uuid | null;
+  // Optional so a stale frontend reading an older API still type-checks; the
+  // hook defaults a missing value to "build".
+  mode?: TurnMode;
 };
 
 export type ApiErrorCode =

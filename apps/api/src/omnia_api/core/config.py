@@ -285,6 +285,19 @@ class Settings(BaseSettings):
     # for instant rollback to the prior single-shot freeform path (R-10).
     use_art_director_freeform: bool = Field(default=True)
 
+    # ── Surgical edit mode (owner directive 2026-06-06) ───────────────────
+    # After the first build, a follow-up that changes ONE thing (a selected
+    # element, a recolour, a text swap, "add an intro section") is routed by the
+    # triage to a single cheap model that emits a SURGICAL <edit> patch and is
+    # forbidden — by a lean edit-only prompt AND by skipping the full-build
+    # guards (palette/contrast/signature-floor/acceptance) — from touching the
+    # rest of the page. Fixes the owner's two complaints: a small edit no longer
+    # spins up the Art-Director→Writer premium pipeline (cost), and no longer
+    # re-rolls the palette / regenerates other sections ("всё потерялось").
+    # When False, edits fall back to the prior behaviour (full build prompt +
+    # guards) for instant rollback (R-10). Kill per-env: USE_SURGICAL_EDIT=false.
+    use_surgical_edit: bool = Field(default=True)
+
     # ── Testing escape hatch — remove ALL generation gating ───────────────
     # When true: every generation is treated as free (is_free=True), so the
     # api wallet-floor check is skipped AND the gateway debit is skipped

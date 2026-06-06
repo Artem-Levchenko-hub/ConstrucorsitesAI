@@ -369,7 +369,13 @@ async def post_prompt(
     except Exception:
         pass
 
-    return PromptResponse(message_id=assistant_msg.id, snapshot_id=None)
+    # Tell the workspace how this turn will be handled so it can set the right
+    # expectation instantly: a surgical edit keeps the current preview and shows
+    # "точечная правка" copy; a build shows the full-generation experience.
+    turn_mode = "clarify" if do_clarify else ("build" if orchestrate else "edit")
+    return PromptResponse(
+        message_id=assistant_msg.id, snapshot_id=None, mode=turn_mode
+    )
 
 
 @router.get("/{project_id}/messages", response_model=list[MessagePublic])
@@ -695,7 +701,15 @@ async def _process_prompt(
     # when an empty-response fallback fires. Keep the original for the snapshot
     # label decision (orchestrated vs forced-model run).
     routing_model = model_id
-    print(f"[PP] start project={project_id} asst_msg={assistant_message_id} model={model_id} free={is_free} force={force_model}", flush=True)
+    # Surgical EDIT mode — a cheap, scoped <edit> patch that must NOT regenerate
+    # the page or re-roll the palette. The triage's CHEAP verdict (orchestrate=
+    # False) on an existing project means "edit just this thing"; the flag is the
+    # R-10 kill switch back to the old full-build-prompt behaviour. When on, we
+    # build a lean edit-only prompt AND skip the full-build guards below
+    # (palette / contrast / signature-floor / acceptance / dead-link re-roll) so
+    # nothing outside the requested change can drift.
+    surgical = (not orchestrate) and get_settings().use_surgical_edit
+    print(f"[PP] start project={project_id} asst_msg={assistant_message_id} model={model_id} free={is_free} force={force_model} surgical={surgical}", flush=True)
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     accumulated = ""
@@ -790,8 +804,11 @@ async def _process_prompt(
             # single-shot (multipass disabled) gets ~6 KB shorter prompt;
             # balanced gets ~3 KB shorter; premium keeps the full brief.
             model_id=model_id,
+            # Lean edit-only prompt (preserve everything, surgical <edit>) when
+            # the triage routed this to a cheap targeted edit.
+            edit_mode=surgical,
         )
-        print(f"[PP] messages_built count={len(messages)}", flush=True)
+        print(f"[PP] messages_built count={len(messages)} surgical={surgical}", flush=True)
 
         # Phase 11 — resolve the generation mode ONCE from the routing model so
         # the prompt we built (freeform vs catalog) and the way we parse the
@@ -1211,6 +1228,39 @@ async def _process_prompt(
             )
             return
 
+        # --- Surgical retry: edit produced no applicable patch ----------
+        # In edit mode the model returns <edit> SEARCH/REPLACE. If the SEARCH
+        # didn't match the file byte-for-byte (or the markers were dropped),
+        # `files` is empty even though `accumulated` is long (so the truncation
+        # fallback below won't fire). Re-ask ONCE with a "copy exact bytes" nudge
+        # before giving up — cheaper and far less surprising than shipping a full
+        # rewrite. Stays single-shot on the same cheap model.
+        if surgical and not files and accumulated.strip():
+            retry_note = (
+                "Правка не применилась: SEARCH-блок не совпал с файлом побайтно "
+                "или не нашёлся уникально. Повтори ответ — найди нужный фрагмент в "
+                "показанном текущем файле, скопируй его в SEARCH ТОЧНО как есть (те "
+                "же пробелы, переводы строк, кавычки) и добавь 1–2 соседние строки "
+                "для уникальности. Только <edit>, меняй ровно запрошенное, остальное "
+                "не трогай."
+            )
+            messages.append({"role": "assistant", "content": accumulated})
+            messages.append({"role": "user", "content": retry_note})
+            print("[PP] surgical_retry (no patch applied) -> re-ask", flush=True)
+            await _run_stream(
+                model_id, force_single_shot=True, force_all=force_model
+            )
+            _retry_acc = str(state["accumulated"])
+            if _retry_acc.strip():
+                accumulated = accumulated + "\n" + _retry_acc
+                if state["usage"] and isinstance(state["usage"], dict):
+                    usage_data = state["usage"]  # type: ignore[assignment]
+                try:
+                    files, _ = _extract_files_and_edits(_retry_acc, current_files)
+                except (UnsafePathError, ValueError):
+                    files = {}
+            print(f"[PP] surgical_retry applied files={len(files)}", flush=True)
+
         # --- Pass 2..N: empty-content fallback ----------------------
         # If we got nothing usable back AND the primary model has known
         # fallbacks, transparently re-run against them. The user sees a
@@ -1332,7 +1382,10 @@ async def _process_prompt(
         #      user a full second generation per project. Now reserved for
         #      severely broken output the inline fixer can't salvage.
         _DEAD_LINK_LLM_THRESHOLD = 3
-        if files and project_template != "fullstack":
+        # Skip on surgical edits: rewriting a PRE-EXISTING dead link the user
+        # didn't mention violates "change only what was asked". The edit prompt
+        # already forbids dead links in any element the edit adds.
+        if files and not surgical and project_template != "fullstack":
             initial_dead = find_dead_links(files)
             if initial_dead:
                 files = repair_dead_links_inline(files)
@@ -1424,7 +1477,7 @@ async def _process_prompt(
         # .omnia-draw line-art divider ONLY when the page carries no
         # .pin-stage/.compare/.omnia-draw/.scroll-clip-reveal. ON by default
         # (USE_SIGNATURE_FLOOR); fail-soft (.html only, never raises).
-        if files and get_settings().use_signature_floor:
+        if files and not surgical and get_settings().use_signature_floor:
             try:
                 files, _sig_n = ensure_signature_floor(files)
                 if _sig_n:
@@ -1713,6 +1766,7 @@ async def _process_prompt(
         _acc_fingerprint: int | None = None
         if (
             files
+            and not surgical
             and project_template not in ("fullstack", "tgbot", "api")
             and _acc_settings.use_acceptance_gate
             and _gen_mode in ("freeform", "catalog")
@@ -1910,7 +1964,13 @@ async def _process_prompt(
         # scores). Order matters: palette FIRST (snap colours to the project's
         # curated palette), THEN contrast (guarantee body readability against the
         # snapped palette). Both pure + idempotent + fail-soft.
-        if files:
+        # Skip on surgical edits: enforce_palette re-snaps :root/body colours to
+        # the project's deterministic palette on EVERY commit — on an edit that
+        # silently changes the background even though the model preserved it
+        # (a model-independent source of "поменял фон на ужасный цвет"). The
+        # existing page is the source of truth for an edit; only a full build
+        # earns the guards.
+        if files and not surgical:
             if pipeline_debug.enabled():
                 pipeline_debug.dump(
                     project_id, assistant_message_id,
@@ -1967,7 +2027,10 @@ async def _process_prompt(
                 snapshot_model_id = (
                     model_id
                     if model_id != routing_model
-                    else (force_model or ORCHESTRATION_LABEL)
+                    else (
+                        force_model
+                        or (ORCHESTRATION_LABEL if orchestrate else routing_model)
+                    )
                 )
                 snapshot = Snapshot(
                     project_id=project_id,

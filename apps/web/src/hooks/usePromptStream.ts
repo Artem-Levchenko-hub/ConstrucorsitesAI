@@ -222,6 +222,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         qc.removeQueries({
           queryKey: ["stream-images", projectId, event.data.message_id],
         });
+        qc.removeQueries({
+          queryKey: ["turn-mode", projectId, event.data.message_id],
+        });
         // Real backend: re-fetch messages and snapshots to capture
         // server-side state we may have missed during streaming.
         if (!USE_MOCKS) {
@@ -553,6 +556,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           opts,
         );
         message_id = resp.message_id;
+        // Record how the server will handle this turn ("edit" = surgical, keep
+        // the current preview; "build" = full (re)generation). PreviewFrame reads
+        // this cache to avoid morphing a diff-stream into a blanked preview.
+        qc.setQueryData(
+          ["turn-mode", projectId, message_id],
+          resp.mode ?? "build",
+        );
       } catch (e) {
         // sendPrompt failed BEFORE the backend even spawned _process_prompt
         // — network error, 4xx (wallet_empty, not_found), 5xx, timeout.

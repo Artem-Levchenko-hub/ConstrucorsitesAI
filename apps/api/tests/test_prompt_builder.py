@@ -410,6 +410,104 @@ def test_omnia_kit_css_phase_i_block_is_byte_identical_across_4_templates() -> N
     assert files[0] == files[1] == files[2] == files[3]
 
 
+# ---------------------------------------------------------------------------
+# Surgical EDIT mode (owner directive 2026-06-06) — a lean, edit-only prompt
+# that must NOT carry the "build a complete designed site" blocks, so a cheap
+# model can't be pushed into regenerating the page / re-rolling the palette.
+# ---------------------------------------------------------------------------
+
+# Unique headers of the build-only blocks that caused the drift. None may leak
+# into the edit prompt.
+_BUILD_ONLY_MARKERS = (
+    "СТАНДАРТ КАЧЕСТВА",        # _QUALITY_BAR
+    "ВИЗУАЛЬНАЯ НАСЫЩЕННОСТЬ",  # _VISUAL_RICH_KIT
+    "ВИЗУАЛЬНЫЙ СТИЛЬ",         # _STYLE_KIT
+    "ДИЗАЙН-КИТ",               # _DESIGN_KIT
+    "АРТ-ДИРЕКТОР",             # _ART_DIRECTOR
+    "ФИНАЛЬНАЯ САМОПРОВЕРКА",   # _SELF_CHECK
+)
+
+
+def _edit_system(**kw) -> str:
+    kw.setdefault("model_id", "deepseek-chat")
+    msgs = build_messages(
+        current_files={"index.html": "<html><body><h1>Кафе «Утро»</h1></body></html>"},
+        history=[],
+        user_prompt="добавь интро к сайту",
+        template="landing",
+        project_id="proj-edit",
+        edit_mode=True,
+        **kw,
+    )
+    return msgs[0]["content"]
+
+
+def test_edit_mode_uses_lean_preserve_prompt() -> None:
+    system = _edit_system()
+    # The edit identity + surgical <edit> format are present...
+    assert "ТОЧЕЧНОЙ ПРАВКИ" in system
+    assert "ПРАВИЛА СОХРАНЕНИЯ" in system
+    assert "<edit path=" in system
+    assert "SEARCH" in system and "REPLACE" in system
+    # ...and every "build a full designed site" block is GONE (that pressure is
+    # exactly what re-rolled the palette on a small edit).
+    for marker in _BUILD_ONLY_MARKERS:
+        assert marker not in system, f"edit prompt leaked build block: {marker}"
+
+
+def test_edit_mode_includes_current_files_to_patch() -> None:
+    """The model needs the current file verbatim to write byte-exact SEARCH."""
+    msgs = build_messages(
+        current_files={"index.html": "<h1>УНИКАЛЬНЫЙ-МАРКЕР-123</h1>"},
+        history=[],
+        user_prompt="поменяй заголовок",
+        template="landing",
+        model_id="deepseek-chat",
+        edit_mode=True,
+    )
+    joined = "\n".join(m["content"] for m in msgs)
+    assert "УНИКАЛЬНЫЙ-МАРКЕР-123" in joined
+
+
+def test_edit_mode_threads_selection_block() -> None:
+    msgs = build_messages(
+        current_files={"index.html": "<button class='cta'>Купить</button>"},
+        history=[],
+        user_prompt="сделай её крупнее",
+        template="landing",
+        selected_elements=[{"selector": "button.cta", "text": "Купить"}],
+        model_id="deepseek-chat",
+        edit_mode=True,
+    )
+    last_user = msgs[-1]["content"]
+    assert "button.cta" in last_user
+    assert "ТОЧЕЧНАЯ правка" in last_user  # _format_selection_block instruction
+
+
+def test_edit_mode_independent_of_model_tier() -> None:
+    """Edit mode short-circuits before catalog/freeform routing — a premium
+    model id must still get the lean edit prompt, not the build prompt."""
+    for mid in ("deepseek-chat", "claude-opus-4-7", "deepseek-v4-pro"):
+        system = _edit_system(model_id=mid)
+        assert "ТОЧЕЧНОЙ ПРАВКИ" in system
+        assert "СТАНДАРТ КАЧЕСТВА" not in system
+
+
+def test_build_mode_still_carries_full_prompt() -> None:
+    """Regression guard: with edit_mode off (default), a landing build still
+    gets the full design blocks — we only stripped them from edit mode."""
+    msgs = build_messages(
+        current_files={},
+        history=[],
+        user_prompt="сделай лендинг кофейни",
+        template="landing",
+        project_id="proj-build",
+        model_id="deepseek-chat",
+    )
+    system = msgs[0]["content"]
+    assert "ВИЗУАЛЬНЫЙ СТИЛЬ" in system  # _STYLE_KIT present in build mode
+
+
 def test_anime_and_kit_js_byte_identical_across_4_templates() -> None:
     """Vendored anime.min.js + omnia-kit.js must be byte-identical across all
     4 static templates. The kit-edit-then-copy workflow silently forgets a dir

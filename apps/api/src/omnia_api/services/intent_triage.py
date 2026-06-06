@@ -1,65 +1,72 @@
-"""Intent triage — decide per prompt whether to run the full orchestration or
-a single cheap model (Phase N).
+"""Intent triage — decide per prompt whether to run the full BUILD orchestration
+or a cheap SURGICAL EDIT (Phase N, reworked 2026-06-06 per owner directive).
 
-The user never picks a model; the server routes by TASK, not by model. Real
-work — the first build, structural / backend / redesign changes, or a batch of
-edits at once — earns the expensive Director(Opus)→Polish→Audit pipeline. A
-trivial touch-up (recolour a button, swap a word, one selected element) gets a
-single cheap reliable model, so Opus never burns budget colouring a login
-button and the client pays pennies for the long tail of small edits.
+The user never picks a model; the server routes by TASK, not by model. There are
+two regimes:
 
-Deterministic by design: a signal/keyword heuristic, no LLM call on the hot
-path — no extra latency, cost, or failure mode to make "железно" harder. The
-narrow public surface (`decide_intent`) hides the rule set so callers stay
-trivial (R-01); an LLM tie-breaker can be slotted in later without touching any
-caller.
+* **BUILD** (``ORCHESTRATE``) — make or replace a whole page. Earned by the FIRST
+  prompt of a project, an explicit "rebuild from scratch / full redesign", or a
+  genuinely structural addition (backend, auth, payments, catalog). Runs the
+  expensive Art-Director → Writer pipeline that regenerates the page.
+
+* **EDIT** (``CHEAP``) — change ONE thing IN an existing page: a selected element,
+  a recolour, a text swap, "добавь интро". Routed to a single cheap model that
+  emits a surgical ``<edit>`` patch and is forbidden (by a lean edit-only prompt
+  AND by skipped guards) from touching the rest of the page.
+
+EDIT is the DEFAULT for follow-ups. Once the site exists, almost every prompt is
+an edit; the old heuristic treated build-noun words ("сайт", "раздел", "интро")
+as real work and ran a full rebuild for "добавь интро к сайту" — which both cost
+a premium pipeline AND re-rolled the palette, so "всё терялось". The fix: on an
+existing project, only an EXPLICIT rebuild or a structural addition leaves the
+edit path.
+
+Deterministic by design: a signal/keyword heuristic, no LLM on the hot path — no
+extra latency, cost, or failure mode. The narrow public surface (``decide_intent``)
+hides the rule set so callers stay trivial (R-01); an LLM tie-breaker can be
+slotted in later without touching any caller.
 """
 
 from __future__ import annotations
 
-ORCHESTRATE = "orchestrate"
-CHEAP = "cheap"
+ORCHESTRATE = "orchestrate"  # BUILD — regenerate the whole page
+CHEAP = "cheap"              # EDIT — surgical patch, preserve everything else
 
-# The prompt is real work → full orchestration. Russian + English stems matched
-# as substrings, so падежи / plurals are covered ("раздел" ⊂ "раздела").
-_COMPLEX_KEYWORDS: frozenset[str] = frozenset(
+# Explicit "throw the page away and rebuild" intent — forces BUILD even on a
+# project that already has a page. Kept deliberately TIGHT: a bare "переделай"
+# is NOT here, because "переделай кнопку" / "переделай заголовок" is an edit, not
+# a rebuild. We only match phrases that unambiguously mean the WHOLE page.
+# Russian stems matched as substrings, so падежи are covered.
+_REBUILD_KEYWORDS: frozenset[str] = frozenset(
     {
-        # structure / scope
-        "лендинг", "landing", "сайт", "страниц", "раздел", "секци", "section",
-        "блок", "hero", "экран", "многостранич", "структур",
-        # backend / data / auth
-        "бэкенд", "backend", "сервер", "api", "база", "database", "бд",
-        "авториз", "регистрац", "логин", "login", "auth", "аккаунт",
-        "интеграц", "оплат", "платёж", "платеж", "payment", "корзин",
-        "каталог", "форм", "заявк", "crm", "дашборд", "dashboard",
-        # big rework
-        "редизайн", "redesign", "переделай", "пересоздай", "с нуля", "заново",
-        "перестрой", "переработай",
-        # build / creation intent — "make me X" is real work even when the
-        # prompt is short ("Создай дизайн ресторана" is 57 chars and was wrongly
-        # caught by the very-short -> CHEAP rule). Owner: builds must orchestrate.
-        "созда", "дизайн", "design", "разработ", "построй", "свёрст",
-        "сверст", "сгенерир", "генерир", "нарисуй", "придумай", "запили",
-        "make", "build", "create", "generate",
+        "с нуля", "заново", "пересоздай", "пересобери",
+        "переделай сайт", "переделай страниц", "переделай весь",
+        "переделай всё", "переделай все", "переделай лендинг",
+        "редизайн", "redesign", "rebuild", "from scratch",
+        "другой сайт", "новый дизайн", "смени дизайн", "сменить дизайн",
+        "поменяй дизайн", "перестрой", "полностью переделай",
+        "полностью обнови", "совершенно друг",
     }
 )
 
-# The prompt is a trivial touch-up → single cheap model.
-_TRIVIAL_KEYWORDS: frozenset[str] = frozenset(
+# Genuinely structural / full-stack work — a follow-up that needs the whole
+# orchestrated build because it changes the project's ARCHITECTURE, not one
+# block. Kept DELIBERATELY MINIMAL: the owner's complaint is over-orchestration,
+# so we bias hard toward EDIT. Section-ish asks ("добавь корзину/каталог/форму
+# оплаты/раздел отзывов") are NOT here — a cheap surgical insert handles them and
+# inherits the page's design. Only unambiguous "build me a backend/full app"
+# signals stay. Stems chosen to be distinctive (bare "api"/"бд" excluded — they
+# hit inside ordinary words like "капитал"⊃"апи", "обдумай"⊃"бд"; "оплат"/
+# "авториз"/"логин" excluded — they fire on a simple "кнопка оплатить"/"форма
+# входа" edit).
+_STRUCTURAL_KEYWORDS: frozenset[str] = frozenset(
     {
-        "цвет", "покрас", "перекрас", "colou", "color",
-        "текст", "надпис", "слово", "опечат", "typo", "заголов",
-        "шрифт", "font", "размер", "size", "отступ", "padding", "margin",
-        "подвинь", "сдвинь", "вырав", "align", "поменяй", "замен",
-        "иконк", "icon", "кнопк", "button", "ссылк",
+        "бэкенд", "backend", "fullstack", "full-stack", "фуллстек",
+        "серверн",  # серверная часть/логика — distinct from "сервис"
+        "база данных", "базу данных", "базы данных", "базой данных",
+        "многостраничн", "много страниц",
     }
 )
-
-# Tunables — keep the thresholds named so the rule reads like prose.
-_MANY_EDITS_SELECTED = 3   # this many picked elements = a batch → orchestrate
-_LONG_PROMPT = 200         # chars; a long detailed brief = real work → orchestrate
-_TARGETED_EDIT_MAX = 140   # chars; short prompt + a picked element = tweak → cheap
-_SHORT_PROMPT = 60         # chars; a very short follow-up = trivial tweak → cheap
 
 
 def _has_any(text: str, keywords: frozenset[str]) -> bool:
@@ -72,35 +79,32 @@ def decide_intent(
     is_first_prompt: bool,
     selected_count: int = 0,
 ) -> str:
-    """Return ``ORCHESTRATE`` or ``CHEAP`` for a single prompt.
+    """Return ``ORCHESTRATE`` (BUILD) or ``CHEAP`` (surgical EDIT).
 
     First match wins:
     1. first prompt in the project   → ORCHESTRATE (the initial build)
-    2. ``≥ _MANY_EDITS_SELECTED`` picks → ORCHESTRATE (a batch of changes)
-    3. long detailed prompt           → ORCHESTRATE
-    4. complexity keyword             → ORCHESTRATE (structure / backend / rework)
-    5. trivial keyword                → CHEAP (recolour / retext / resize …)
-    6. short prompt on a single pick  → CHEAP (targeted tweak)
-    7. very short prompt              → CHEAP
-    8. otherwise                      → ORCHESTRATE (favour quality when unsure)
+    2. explicit rebuild / redesign   → ORCHESTRATE (replace the whole page)
+    3. structural / full-stack add   → ORCHESTRATE (changes architecture)
+    4. otherwise (existing project)  → CHEAP (the edit default — surgical patch)
+
+    ``selected_count`` is accepted for caller compatibility and as documentation:
+    a pointed element is the strongest possible "edit just this" signal, and it
+    falls through to the CHEAP default — we never special-case it into a rebuild.
     """
     if is_first_prompt:
         return ORCHESTRATE
-    if selected_count >= _MANY_EDITS_SELECTED:
-        return ORCHESTRATE
 
     text = (prompt or "").strip().lower()
-    if len(text) > _LONG_PROMPT:
+    if _has_any(text, _REBUILD_KEYWORDS):
         return ORCHESTRATE
-    if _has_any(text, _COMPLEX_KEYWORDS):
+    if _has_any(text, _STRUCTURAL_KEYWORDS):
         return ORCHESTRATE
-    if _has_any(text, _TRIVIAL_KEYWORDS):
-        return CHEAP
-    if selected_count >= 1 and len(text) <= _TARGETED_EDIT_MAX:
-        return CHEAP
-    if len(text) < _SHORT_PROMPT:
-        return CHEAP
-    return ORCHESTRATE
+
+    # Existing project, no rebuild/structural signal → it's an edit. Cheap,
+    # surgical, preserves the rest. This is the key change: build-noun words
+    # ("сайт", "раздел", "интро", "секция") no longer drag a follow-up into a
+    # full rebuild that re-rolls the palette.
+    return CHEAP
 
 
-__all__ = ["decide_intent", "ORCHESTRATE", "CHEAP"]
+__all__ = ["CHEAP", "ORCHESTRATE", "decide_intent"]

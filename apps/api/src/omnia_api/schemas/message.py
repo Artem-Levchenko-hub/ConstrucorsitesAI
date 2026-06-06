@@ -55,3 +55,9 @@ class PromptRequest(BaseModel):
 class PromptResponse(BaseModel):
     message_id: UUID
     snapshot_id: UUID | None = None
+    # How the server will handle this turn, so the workspace can set the right
+    # expectation immediately (before any WS event):
+    #   "build"   — full (re)generation of the page (first prompt / rebuild)
+    #   "edit"    — surgical, scoped change (cheap, preserves the rest of the page)
+    #   "clarify" — no generation this turn; the server is asking questions first
+    mode: Literal["build", "edit", "clarify"] = "build"

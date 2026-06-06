@@ -28,7 +28,7 @@ import { useWorkspaceStore } from "@/store/workspace";
 import { useInspectorStore } from "@/store/inspector";
 import { useStyleEditStore } from "@/store/styleEdit";
 import { toast } from "sonner";
-import type { Project, Snapshot } from "@/lib/api/types";
+import type { Project, Snapshot, TurnMode } from "@/lib/api/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shortSha, cn, formatRelativeTime } from "@/lib/utils";
 import { StreamingPreviewFrame } from "./StreamingPreviewFrame";
@@ -303,14 +303,28 @@ export function PreviewFrame({ project }: { project: Project }) {
   // committed-снапшота (бэкенд `/p/<slug>`).
   const last = messages?.[messages.length - 1];
   const isStreaming = last?.role === "assistant" && last.tokens_out === null;
+  // Turn mode for the in-flight message (set by usePromptStream from the POST
+  // response). A surgical EDIT streams an <edit> SEARCH/REPLACE diff — NOT HTML
+  // — so morphing it would blank the preview with garbage. For an edit we keep
+  // the current committed preview visible; it swaps to the new snapshot when
+  // snapshot.created arrives. Reactive read of the cache (enabled:false).
+  const turnMode = useQuery<TurnMode>({
+    queryKey: ["turn-mode", project.id, last?.id ?? ""],
+    queryFn: (): TurnMode => "build",
+    enabled: false,
+  }).data;
+  const isEditTurn = isStreaming && turnMode === "edit";
   // Streaming morphdom preview only applies to static HTML (it patches the
   // index.html body). Full-stack projects render via the live dev container
-  // (HMR), so we never show the morph frame for them.
-  const showStreaming = isStreaming && !selectedSnapshotId && !isFullstack;
+  // (HMR), so we never show the morph frame for them. Edits keep the current
+  // preview (see above), so they opt out of both streaming views.
+  const showStreaming =
+    isStreaming && !selectedSnapshotId && !isFullstack && !isEditTurn;
   // Fullstack/React can't morph-render mid-build (needs a compile step), so the
   // preview area would otherwise sit frozen on the old static page. Show the
   // live code streaming in instead — "building before your eyes" on every stack.
-  const showStreamingCode = isStreaming && !selectedSnapshotId && isFullstack;
+  const showStreamingCode =
+    isStreaming && !selectedSnapshotId && isFullstack && !isEditTurn;
 
   return (
     <div className="flex flex-col h-full bg-surface-base">
@@ -511,6 +525,16 @@ export function PreviewFrame({ project }: { project: Project }) {
                 {isPending && (
                   <div className="absolute inset-0 p-4">
                     <Skeleton className="w-full h-full" />
+                  </div>
+                )}
+
+                {/* Surgical edit in flight — the current preview stays visible
+                    (no rebuild, no blank); a quiet chip confirms work is happening
+                    and that only the requested bit will change. */}
+                {isEditTurn && (
+                  <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 rounded-full border border-border-subtle bg-surface-raised/90 px-3 py-1.5 text-xs text-fg-secondary shadow-sm backdrop-blur">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Точечная правка…
                   </div>
                 )}
 
