@@ -10,6 +10,7 @@ from omnia_api.services.image_edit import (
     is_image_request,
     lighten_overlay_edits,
     rebuild_img_with_gen,
+    unmask_hero_bg,
 )
 
 
@@ -114,3 +115,30 @@ def test_dim_shader_edits() -> None:
 def test_dim_shader_skips_already_dimmed() -> None:
     zone = '<div class="omnia-shader opacity-40" data-omnia-colors="#111"></div>'
     assert dim_shader_edits(zone) == []
+
+
+def test_unmask_hero_bg_lightens_first_bg_section_only() -> None:
+    html = (
+        "<header>nav</header>"
+        '<section id="hero" class="relative">'
+        '<img src="x.jpg" class="absolute inset-0 w-full h-full object-cover" />'
+        '<div class="absolute inset-0 bg-gradient-to-b from-[#0C0A09]/70 '
+        'via-[#0C0A09]/50 to-[#0C0A09]/90"></div>'
+        '<div class="omnia-shader" data-omnia-colors="#111"></div>'
+        "<h1>x</h1></section>"
+        '<section id="about"><p>about us</p></section>'
+    )
+    out, changed = unmask_hero_bg(html)
+    assert changed
+    assert "/42" in out and "/30" in out and "/54" in out  # overlay lightened
+    assert "/70" not in out and "/90" not in out
+    assert 'class="omnia-shader opacity-40"' in out  # shader dimmed
+    assert '<section id="about"><p>about us</p></section>' in out  # rest intact
+
+
+def test_unmask_hero_bg_noop_without_fullbleed_bg() -> None:
+    # a hero with only a framed foreground photo (no full-bleed bg) is untouched
+    html = '<section><img src="x" class="w-32 aspect-square rounded-full"><h1>x</h1></section>'
+    out, changed = unmask_hero_bg(html)
+    assert not changed
+    assert out == html

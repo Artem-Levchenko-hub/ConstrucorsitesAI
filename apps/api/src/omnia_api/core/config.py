@@ -298,6 +298,14 @@ class Settings(BaseSettings):
     # guards) for instant rollback (R-10). Kill per-env: USE_SURGICAL_EDIT=false.
     use_surgical_edit: bool = Field(default=True)
 
+    # Hero background visibility (owner directive 2026-06-06) — on every fresh
+    # BUILD, guarantee the main screen shows its photo/graphic background instead
+    # of a flat dark wash. The writer often buries the hero's full-bleed image
+    # under a /70-/90 black overlay; this post-process deterministically lightens
+    # that overlay + dims the WebGL shader so the on-theme image/graphic is
+    # actually seen. Kill per-env: USE_HERO_BG_VISIBLE=false.
+    use_hero_bg_visible: bool = Field(default=True)
+
     # ── Testing escape hatch — remove ALL generation gating ───────────────
     # When true: every generation is treated as free (is_free=True), so the
     # api wallet-floor check is skipped AND the gateway debit is skipped

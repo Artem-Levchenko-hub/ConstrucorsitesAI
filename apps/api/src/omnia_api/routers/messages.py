@@ -1856,6 +1856,22 @@ async def _process_prompt(
             except Exception as _sig_exc:
                 print(f"[PP] signature_floor failed: {_sig_exc!r}", flush=True)
 
+        # Hero background visible — owner: «главный экран генерится с фоткой/
+        # нарисованным фоном, в тему». The writer buries the hero's full-bleed
+        # photo/graphic under a /70-/90 black wash → flat monotone screen. Lighten
+        # that overlay + dim the shader so the on-theme image/graphic actually
+        # shows. Build-only, deterministic, fail-soft.
+        if files and not surgical and get_settings().use_hero_bg_visible:
+            try:
+                _idx_html = files.get("index.html")
+                if _idx_html:
+                    _unmasked, _hb_changed = image_edit.unmask_hero_bg(_idx_html)
+                    if _hb_changed:
+                        files["index.html"] = _unmasked
+                        print("[PP] hero_bg_unmasked", flush=True)
+            except Exception as _hb_exc:
+                print(f"[PP] hero_bg_visible skipped: {_hb_exc!r}", flush=True)
+
         # Phase K (2026-05-27) — objective UI audit. ``ui_audit`` runs the
         # 10-point Malewicz Ch27 + Phase G rubric (typography/color/button/
         # accessibility/no-lorem/etc.) on the final HTML pool. We log the

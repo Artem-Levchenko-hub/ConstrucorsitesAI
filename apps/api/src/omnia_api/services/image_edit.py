@@ -153,6 +153,35 @@ def dim_shader_edits(zone_html: str) -> list[tuple[str, str]]:
     return edits
 
 
+_SECTION_OPEN_RE = re.compile(r"<section\b[^>]*>", re.IGNORECASE)
+
+
+def unmask_hero_bg(html: str) -> tuple[str, bool]:
+    """Make the hero's photo/graphic background VISIBLE on a fresh build.
+
+    Finds the FIRST ``<section>`` carrying a full-bleed bg ``<img>`` (the hero)
+    and lightens its heavy dark gradient overlay(s) + dims its WebGL shader, so
+    the generated image/graphic isn't buried under a /70-/90 black wash (which
+    reads as a flat monotone screen). Returns ``(html, changed)``; a no-op when
+    no such hero exists or its overlay is already light. Pure string ops — the
+    rest of the page stays byte-identical."""
+    for m in _SECTION_OPEN_RE.finditer(html):
+        close = html.find("</section>", m.end())
+        if close == -1:
+            continue
+        s, e = m.start(), close + len("</section>")
+        sec = html[s:e]
+        if not any(is_fullbleed_bg(t) for t in _IMG_TAG_RE.findall(sec)):
+            continue  # not the hero (no full-bleed bg image here)
+        new = sec
+        for old, repl in lighten_overlay_edits(sec):
+            new = new.replace(old, repl, 1)
+        for old, repl in dim_shader_edits(sec):
+            new = new.replace(old, repl, 1)
+        return (html[:s] + new + html[e:], new != sec)
+    return (html, False)
+
+
 __all__ = [
     "alt_of",
     "dim_shader_edits",
@@ -162,4 +191,5 @@ __all__ = [
     "is_image_request",
     "lighten_overlay_edits",
     "rebuild_img_with_gen",
+    "unmask_hero_bg",
 ]
