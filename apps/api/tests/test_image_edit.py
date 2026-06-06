@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from omnia_api.services.image_edit import (
+    dim_shader_edits,
     find_first_img,
     is_fullbleed_bg,
     is_image_request,
@@ -80,3 +81,22 @@ def test_lighten_overlay_edits_softens_dark_keeps_accent() -> None:
     assert "/70" not in new and "/90" not in new
     # the colour HEXes are preserved
     assert new.count("#0C0A09") == old.count("#0C0A09")
+
+
+def test_dim_shader_edits() -> None:
+    zone = (
+        '<div class="omnia-shader" data-omnia-colors="#1C1917,#292524"></div>'
+        '<div class="omnia-shader-over relative z-10"><h1>x</h1></div>'
+    )
+    edits = dim_shader_edits(zone)
+    assert len(edits) == 1  # only the backdrop shader, NOT the content overlay
+    old, new = edits[0]
+    assert 'class="omnia-shader"' in old
+    assert 'class="omnia-shader opacity-40"' in new
+    # the content overlay (.omnia-shader-over) must be untouched
+    assert "omnia-shader-over" not in old
+
+
+def test_dim_shader_skips_already_dimmed() -> None:
+    zone = '<div class="omnia-shader opacity-40" data-omnia-colors="#111"></div>'
+    assert dim_shader_edits(zone) == []

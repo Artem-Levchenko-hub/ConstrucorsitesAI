@@ -1218,9 +1218,11 @@ async def _process_prompt(
                 _bg = image_edit.is_fullbleed_bg(_old_img_tag)
                 if _bg:
                     # A full-bleed bg image stays invisible behind the heavy dark
-                    # overlay — lighten the masking gradient(s) in the same zone so
-                    # the regenerated image is actually seen (text stays readable).
+                    # overlay AND the WebGL shader — lighten the masking gradient(s)
+                    # and dim the shader in the same zone so the regenerated image
+                    # is actually seen (text stays readable).
                     _sr_pairs.extend(image_edit.lighten_overlay_edits(_scope))
+                    _sr_pairs.extend(image_edit.dim_shader_edits(_scope))
                 _blocks = "".join(
                     f"<<<<<<< SEARCH\n{_s}\n=======\n{_r}\n>>>>>>> REPLACE\n"
                     for _s, _r in _sr_pairs

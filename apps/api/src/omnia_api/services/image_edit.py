@@ -102,8 +102,36 @@ def lighten_overlay_edits(zone_html: str) -> list[tuple[str, str]]:
     return edits
 
 
+_SHADER_DIV_RE = re.compile(
+    r'<div\b[^>]*\bclass="[^"]*\bomnia-shader\b[^"]*"[^>]*>', re.IGNORECASE
+)
+
+
+def dim_shader_edits(zone_html: str) -> list[tuple[str, str]]:
+    """``(old, new)`` pairs that DIM the WebGL ``.omnia-shader`` backdrop (add
+    ``opacity-40``) so a full-bleed background image isn't darkened by the
+    animated shader on top of it. Targets ONLY the shader backdrop — never the
+    ``.omnia-shader-over`` content layer — and skips an already-dimmed shader."""
+    edits: list[tuple[str, str]] = []
+    for m in _SHADER_DIV_RE.finditer(zone_html):
+        old = m.group(0)
+        cls_m = _CLASS_RE.search(old)
+        cls = cls_m.group(1) if cls_m else ""
+        toks = cls.split()
+        # exact-token check excludes "omnia-shader-over" (a different single token)
+        if "omnia-shader" not in toks:
+            continue
+        if any(t.startswith("opacity-") for t in toks):
+            continue
+        new = old.replace(f'class="{cls}"', f'class="{cls} opacity-40"', 1)
+        if new != old:
+            edits.append((old, new))
+    return edits
+
+
 __all__ = [
     "alt_of",
+    "dim_shader_edits",
     "find_first_img",
     "is_fullbleed_bg",
     "is_image_request",
