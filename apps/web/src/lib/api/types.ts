@@ -254,7 +254,22 @@ export type WsEvent =
       type: "preview.ready";
       data: { snapshot_id: Uuid; preview_url: string };
     }
-  | { type: "llm.chunk"; data: { message_id: Uuid; delta: string } }
+  | {
+      type: "llm.chunk";
+      // `seq` — monotonic per-message counter (added for the resumable stream).
+      // Lets the client dedup buffered vs live deltas and detect gaps after a
+      // reconnect. Optional: pre-resumable backends omit it (treated as a plain
+      // append, same as before).
+      data: { message_id: Uuid; delta: string; seq?: number };
+    }
+  | {
+      // Resumable stream: on (re)connect the server replays the cumulative
+      // content of an in-flight generation as one frame, so a page refresh
+      // mid-build no longer freezes the preview. Client replaces content and
+      // resumes appending live deltas from `seq` onward (see usePromptStream).
+      type: "stream.sync";
+      data: { message_id: Uuid; content: string; seq: number };
+    }
   | {
       type: "llm.done";
       data: {

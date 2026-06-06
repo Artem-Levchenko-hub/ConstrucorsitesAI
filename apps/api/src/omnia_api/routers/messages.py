@@ -20,7 +20,12 @@ from omnia_api.core.db import get_engine
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
-from omnia_api.core.redis import get_redis, publish_event
+from omnia_api.core.redis import (
+    clear_stream_state,
+    get_redis,
+    publish_event,
+    set_stream_state,
+)
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
@@ -690,6 +695,12 @@ async def _process_prompt(
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     accumulated = ""
+    # Resumable-stream accumulator. `_run_stream` resets its per-pass
+    # `state["accumulated"]` on every fallback re-run, but the CLIENT's content
+    # is the concatenation of every delta ever published for this message — so
+    # the Redis buffer (used to resync a reconnecting client) must mirror THAT,
+    # not the per-pass slice. `seq` is monotonic across the whole message life.
+    pub: dict[str, object] = {"seq": 0, "content": ""}
     usage_data: dict[str, float | int] | None = None
     current_sha: str | None = None
     current_files: dict[str, str] = {}
@@ -991,14 +1002,34 @@ async def _process_prompt(
             async for event in source:
                 if "delta" in event:
                     state["accumulated"] = str(state["accumulated"]) + event["delta"]
+                    pub["seq"] = int(pub["seq"]) + 1
+                    pub["content"] = str(pub["content"]) + event["delta"]
                     await publish_event(
                         project_id,
                         "llm.chunk",
                         {
                             "message_id": str(assistant_message_id),
                             "delta": event["delta"],
+                            # Monotonic per-message counter — lets a reconnecting
+                            # client dedup buffered vs live deltas and detect gaps.
+                            "seq": int(pub["seq"]),
                         },
                     )
+                    # Mirror the cumulative client-visible content into Redis on
+                    # every delta so a reconnect (F5) resyncs to the exact current
+                    # state — no hole between the buffer and live deltas. Same-host
+                    # Redis: a ≤tens-of-KB SET at stream rate is cheap. Best-effort:
+                    # the buffer is only a reconnect aid, so a write hiccup must
+                    # never abort a stream that's otherwise delivering fine.
+                    try:
+                        await set_stream_state(
+                            project_id,
+                            assistant_message_id,
+                            str(pub["content"]),
+                            int(pub["seq"]),
+                        )
+                    except Exception:
+                        pass
                 elif "usage" in event:
                     state["usage"] = event["usage"]
                 elif "error" in event:
@@ -2065,6 +2096,14 @@ async def _process_prompt(
             "llm.error",
             {"message_id": str(assistant_message_id), "error": str(e)},
         )
+    finally:
+        # Стрим завершён (done / error / отмена / краш) — снимаем горячее
+        # состояние, чтобы reconnect после конца не пытался досматривать
+        # мёртвый поток. Best-effort: ошибка Redis тут не должна валить ответ.
+        try:
+            await clear_stream_state(project_id, assistant_message_id)
+        except Exception:
+            pass
 
 
 async def _finalize_message(

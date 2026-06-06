@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { simulatePromptStream } from "@/lib/ws-mock";
 import type {
@@ -23,24 +23,35 @@ import { useWorkspaceStore } from "@/store/workspace";
  * The session JWT cookie travels automatically on the WS handshake (browsers
  * include cookies). No extra auth wiring needed here.
  */
+type StreamHandle = {
+  /** Intentional close — suppresses the auto-reconnect (onclose is nulled). */
+  cancel: () => void;
+  /** Send a client→server control frame (e.g. `{type:"resync"}`). No-op if closed. */
+  send: (msg: unknown) => void;
+};
+
+/**
+ * Opens a real WebSocket to /api/ws/projects/:id and routes server events
+ * through `apply`. Returns a handle to close the socket and to send control
+ * frames (resync). The session JWT cookie travels automatically on the WS
+ * handshake (browsers include cookies). No extra auth wiring needed here.
+ *
+ * `onOpen`/`onClose` let the caller drive bounded auto-reconnect: an
+ * UNEXPECTED drop (nginx, flaky network) while a generation is still in flight
+ * should reconnect; an intentional close (cancel) must not — so `cancel` nulls
+ * `onclose` before closing.
+ */
 function openRealStream(
   projectId: string,
   apply: (event: WsEvent) => void,
-): () => void {
+  opts?: { onOpen?: () => void; onClose?: () => void },
+): StreamHandle {
   const wsBase =
     process.env.NEXT_PUBLIC_WS_URL ??
     (typeof window !== "undefined"
       ? `wss://${window.location.host}`
       : "wss://constructor.lead-generator.ru");
   const ws = new WebSocket(`${wsBase}/api/ws/projects/${projectId}`);
-
-  ws.onmessage = (ev) => {
-    try {
-      apply(JSON.parse(ev.data) as WsEvent);
-    } catch {
-      // ignore malformed frames
-    }
-  };
 
   // Keep-alive ping — many proxies (and our nginx) close idle WS at 60s.
   const pingInt = setInterval(() => {
@@ -49,8 +60,27 @@ function openRealStream(
     }
   }, 25_000);
 
-  return () => {
+  ws.onopen = () => opts?.onOpen?.();
+  ws.onmessage = (ev) => {
+    try {
+      apply(JSON.parse(ev.data) as WsEvent);
+    } catch {
+      // ignore malformed frames
+    }
+  };
+  ws.onclose = () => {
     clearInterval(pingInt);
+    opts?.onClose?.();
+  };
+
+  const send = (msg: unknown) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  };
+
+  const cancel = () => {
+    clearInterval(pingInt);
+    // Null onclose so an intentional close never triggers the reconnect path.
+    ws.onclose = null;
     if (
       ws.readyState === WebSocket.OPEN ||
       ws.readyState === WebSocket.CONNECTING
@@ -58,12 +88,25 @@ function openRealStream(
       ws.close();
     }
   };
+
+  return { cancel, send };
 }
 
 export function usePromptStream(projectId: string, projectSlug: string) {
   const qc = useQueryClient();
   const cancelRef = useRef<(() => void) | null>(null);
   const streamingRef = useRef(false);
+  // Resumable-stream bookkeeping. `sendRef` lets `apply` ask the server to
+  // replay the buffer (resync) when it spots a seq-gap. `streamMetaRef` holds
+  // per-message {lastSeq, resyncing} so we dedup buffered deltas and drop live
+  // ones while a resync is pending. `connectRef` breaks the self-reference in
+  // the reconnect closure; `reconnectAttemptsRef` bounds backoff retries.
+  const sendRef = useRef<((msg: unknown) => void) | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const connectRef = useRef<() => void>(() => {});
+  const streamMetaRef = useRef<
+    Record<string, { lastSeq: number; resyncing: boolean }>
+  >({});
   // Очередь — один слот. Если юзер кидает второй промпт, пока стримит первый,
   // он сюда попадает и автоматом стартует на llm.done/llm.error. Если новый
   // промпт прилетает поверх — заменяет предыдущий (предсказуемее, чем стек).
@@ -94,12 +137,51 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
   const apply = useCallback(
     (event: WsEvent) => {
-      if (event.type === "llm.chunk") {
+      if (event.type === "stream.sync") {
+        // (Re)connect replay: replace the in-flight message's content with the
+        // server's cumulative buffer and reset our seq cursor. This is what
+        // unfreezes the preview after a page refresh mid-build.
+        const mid = event.data.message_id;
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>
-            m.id === event.data.message_id
-              ? { ...m, content: m.content + event.data.delta }
-              : m,
+            m.id === mid ? { ...m, content: event.data.content } : m,
+          ),
+        );
+        streamMetaRef.current[mid] = {
+          lastSeq: event.data.seq,
+          resyncing: false,
+        };
+        return;
+      }
+
+      if (event.type === "llm.chunk") {
+        const mid = event.data.message_id;
+        const seq = event.data.seq;
+        if (typeof seq === "number") {
+          const meta = streamMetaRef.current[mid] ?? {
+            lastSeq: 0,
+            resyncing: false,
+          };
+          // Waiting on a resync after a detected gap — drop live deltas; the
+          // pending stream.sync carries the full content that supersedes them.
+          if (meta.resyncing) return;
+          // Already applied (was included in a prior sync buffer).
+          if (seq <= meta.lastSeq) return;
+          if (seq > meta.lastSeq + 1) {
+            // Missed delta(s): appending now would leave a hole in the HTML.
+            // Ask the server to replay the full buffer; ignore live deltas
+            // until it arrives. Self-heals reconnect-window gaps.
+            meta.resyncing = true;
+            streamMetaRef.current[mid] = meta;
+            sendRef.current?.({ type: "resync" });
+            return;
+          }
+          meta.lastSeq = seq;
+          streamMetaRef.current[mid] = meta;
+        }
+        qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+          (prev ?? []).map((m) =>
+            m.id === mid ? { ...m, content: m.content + event.data.delta } : m,
           ),
         );
         return;
@@ -135,6 +217,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
           qc.invalidateQueries({ queryKey: ["wallet"] });
         }
+        delete streamMetaRef.current[event.data.message_id];
         streamingRef.current = false;
         fireQueued();
         return;
@@ -249,12 +332,98 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           description: event.data.error.slice(0, 240),
           duration: 8_000,
         });
+        delete streamMetaRef.current[event.data.message_id];
         streamingRef.current = false;
         fireQueued();
       }
     },
     [qc, projectId, fireQueued, selectSnapshot],
   );
+
+  // Silence watchdog: fires `onSilence` if the message gets no update for
+  // WATCHDOG_MS while still streaming (tokens_out === null). Re-arms on every
+  // update; self-removes once the message completes. Shared by submit and the
+  // reconnect effect so the "stuck spinner" guard works in both paths.
+  const watchMessage = useCallback(
+    (messageId: string, onSilence: () => void): (() => void) => {
+      const WATCHDOG_MS = 180_000;
+      let timer = 0;
+      let unsub: () => void = () => {};
+      const stillStreaming = () => {
+        const data = qc.getQueryData<Message[]>(["messages", projectId]);
+        const m = data?.find((x) => x.id === messageId);
+        return !!m && m.tokens_out === null;
+      };
+      const fire = () => {
+        if (stillStreaming()) {
+          unsub();
+          onSilence();
+        }
+      };
+      const arm = () => {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(fire, WATCHDOG_MS);
+      };
+      arm();
+      unsub = qc.getQueryCache().subscribe((evt) => {
+        if (
+          evt.type === "updated" &&
+          evt.query.queryKey[0] === "messages" &&
+          (evt.query.queryKey[1] as string) === projectId
+        ) {
+          const data = evt.query.state.data as Message[] | undefined;
+          const m = data?.find((x) => x.id === messageId);
+          if (m && m.tokens_out !== null && m.tokens_out !== undefined) {
+            window.clearTimeout(timer);
+            streamingRef.current = false;
+            unsub();
+          } else if (m) {
+            arm();
+          }
+        }
+      });
+      return () => {
+        window.clearTimeout(timer);
+        unsub();
+      };
+    },
+    [qc, projectId],
+  );
+
+  // Opens the real WS and wires bounded auto-reconnect: an unexpected drop
+  // while a generation is still in flight reconnects (up to 5×, backing off);
+  // the server replays the buffer via stream.sync on each (re)connect. Used by
+  // submit (new prompt) and the reconnect effect (page refresh mid-build).
+  const connect = useCallback(() => {
+    const ctl = openRealStream(projectId, apply, {
+      onOpen: () => {
+        reconnectAttemptsRef.current = 0;
+      },
+      onClose: () => {
+        // Normal end leaves streamingRef false → no reconnect. Cancel/stop nulls
+        // onclose upstream, so this never runs for an intentional close.
+        if (!streamingRef.current) return;
+        if (reconnectAttemptsRef.current >= 5) return;
+        reconnectAttemptsRef.current += 1;
+        window.setTimeout(
+          () => {
+            if (streamingRef.current) connectRef.current();
+          },
+          Math.min(1000 * reconnectAttemptsRef.current, 5000),
+        );
+      },
+    });
+    cancelRef.current = ctl.cancel;
+    sendRef.current = ctl.send;
+  }, [projectId, apply]);
+  // Keep connectRef pointing at the latest `connect` so the onClose reconnect
+  // closure can re-invoke it without taking `connect` as its own dependency
+  // (which would recreate the socket on every render). Assigned in an effect,
+  // not during render. onClose only fires after a socket exists, by which time
+  // this has run — so the initial no-op is never the one called.
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   const submit = useCallback(
     async (
@@ -310,7 +479,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // Real prod path: open WS BEFORE POST so we don't race the first chunk.
       if (!USE_MOCKS) {
         cancelRef.current?.();
-        cancelRef.current = openRealStream(projectId, apply);
+        connect();
       }
 
       // Helper: collapse the optimistic placeholder into an error state so
@@ -401,52 +570,90 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // (brief → writer → images → design-judge) is fine as long as events
       // keep arriving. Reset on every update for this message; fire only
       // after WATCHDOG_MS of true silence (a dead/stuck task).
-      const WATCHDOG_MS = 180_000;
-      const fireWatchdog = () => {
-        const data = qc.getQueryData<Message[]>(["messages", projectId]);
-        const m = data?.find((x) => x.id === message_id);
-        if (m && m.tokens_out === null) {
-          _failPrompt(
-            "Нет ответа от модели",
-            "слишком долго без ответа — попробуй ещё раз или сменить модель",
-          );
-        }
-      };
-      let watchdog = window.setTimeout(fireWatchdog, WATCHDOG_MS);
-
-      // Mocks set tokens_out on the assistant row when done — keep the
-      // existing waiter so the streamingRef releases on llm.done.
-      const unsub = qc.getQueryCache().subscribe((evt) => {
-        if (
-          evt.type === "updated" &&
-          evt.query.queryKey[0] === "messages" &&
-          (evt.query.queryKey[1] as string) === projectId
-        ) {
-          const data = evt.query.state.data as Message[] | undefined;
-          const m = data?.find((x) => x.id === message_id);
-          if (m && m.tokens_out !== null && m.tokens_out !== undefined) {
-            window.clearTimeout(watchdog);
-            streamingRef.current = false;
-            unsub();
-          } else if (m) {
-            // Still working — any chunk/notice resets the silence timer.
-            window.clearTimeout(watchdog);
-            watchdog = window.setTimeout(fireWatchdog, WATCHDOG_MS);
-          }
-        }
-      });
+      // Silence watchdog (shared with the reconnect path): if the message goes
+      // quiet too long while still streaming, surface an explicit error instead
+      // of a stuck spinner. Mocks set tokens_out directly, so this also releases
+      // streamingRef on their completion.
+      watchMessage(message_id, () =>
+        _failPrompt(
+          "Нет ответа от модели",
+          "слишком долго без ответа — попробуй ещё раз или сменить модель",
+        ),
+      );
     },
-    [projectId, projectSlug, qc, apply],
+    [projectId, projectSlug, qc, apply, connect, watchMessage, fireQueued],
   );
 
   // Сохраняем актуальный submit в ref, чтобы fireQueued мог его вызвать,
   // не замыкаясь на устаревшую версию (useCallback пересоздаётся каждый рендер).
   submitRef.current = submit;
 
+  // Reconnect to an in-flight generation we did NOT start in this mount — i.e.
+  // the page was refreshed mid-build. THE fix for "F5 → realtime freezes": the
+  // old code only opened the WS inside submit(), so after reload nobody listened
+  // and the preview stalled forever. We detect the dangling assistant message
+  // (real id, tokens_out === null) and reopen the socket; the server replays the
+  // buffer via stream.sync. Guarded so it never double-connects.
+  useEffect(() => {
+    if (USE_MOCKS) return;
+    const failReconnect = (messageId: string) => {
+      qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+        (prev ?? []).map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                content:
+                  m.content ||
+                  "[Ошибка: соединение потеряно — обнови страницу или повтори промпт]",
+                tokens_out: 0,
+                tokens_in: 0,
+              }
+            : m,
+        ),
+      );
+      streamingRef.current = false;
+      cancelRef.current?.();
+      cancelRef.current = null;
+      toast.error("Соединение со стримом потеряно", {
+        description: "не удалось досмотреть генерацию — обнови страницу",
+        duration: 8_000,
+      });
+    };
+    const maybeReconnect = () => {
+      if (cancelRef.current) return; // already have a socket
+      if (streamingRef.current) return; // submit owns the active stream
+      const msgs = qc.getQueryData<Message[]>(["messages", projectId]);
+      const last = msgs?.[msgs.length - 1];
+      if (
+        last &&
+        last.role === "assistant" &&
+        last.tokens_out === null &&
+        !last.id.startsWith("__opt_") // real server id, not an optimistic row
+      ) {
+        streamingRef.current = true;
+        reconnectAttemptsRef.current = 0;
+        connect();
+        watchMessage(last.id, () => failReconnect(last.id));
+      }
+    };
+    maybeReconnect();
+    const unsub = qc.getQueryCache().subscribe((evt) => {
+      if (
+        evt.type === "updated" &&
+        evt.query.queryKey[0] === "messages" &&
+        (evt.query.queryKey[1] as string) === projectId
+      ) {
+        maybeReconnect();
+      }
+    });
+    return unsub;
+  }, [projectId, qc, connect, watchMessage]);
+
   const cancel = useCallback(() => {
     // 1) Рвём WS — фронт перестаёт получать чанки.
     cancelRef.current?.();
     cancelRef.current = null;
+    sendRef.current = null;
     streamingRef.current = false;
 
     // 2) Помечаем последнее ассистентское сообщение завершённым, чтобы
