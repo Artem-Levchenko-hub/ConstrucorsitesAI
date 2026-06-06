@@ -44,6 +44,12 @@ class PromptRequest(BaseModel):
     # doesn't 422. Honoured only as an admin override via env OMNIA_FORCE_MODEL.
     model_id: str | None = Field(default=None)
     selected_elements: list[SelectedElement] | None = Field(default=None, max_length=12)
+    # The onboarding quiz collects the brief client-side on the first prompt, so
+    # the server-side clarify interview must NOT also fire — otherwise it would
+    # ask questions again instead of building the already-enriched prompt. The
+    # quiz (and the "just generate" skip) send skip_clarify=true. Optional →
+    # legacy clients keep the server clarify behaviour.
+    skip_clarify: bool = Field(default=False)
 
 
 class PromptResponse(BaseModel):

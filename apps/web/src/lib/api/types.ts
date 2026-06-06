@@ -125,6 +125,24 @@ export type Charge = {
   created_at: IsoDateTime;
 };
 
+/**
+ * One of the 8 server-defined design presets, as served by
+ * `GET /api/design-presets`. The onboarding quiz renders these as style/palette
+ * cards (swatches from `palette`); picking one sets the project's preset via
+ * `PUT /api/projects/:id/design-preset`.
+ */
+export type DesignPresetPublic = {
+  id: string;
+  name: string;
+  one_liner: string;
+  reference_url: string;
+  /** HEX values keyed by role: bg, bg_alt, fg, muted, accent, border. */
+  palette: Record<string, string>;
+  fonts: Record<string, string>;
+  hero_type: string;
+  industries: string[];
+};
+
 export type WalletState = {
   balance_rub: number;
   recent_charges: Charge[];

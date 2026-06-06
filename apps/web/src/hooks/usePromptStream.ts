@@ -114,13 +114,19 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     text: string;
     modelId: string;
     selections?: SelectedElement[];
+    opts?: { skipClarify?: boolean };
   } | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   // submitRef нужен, потому что fireQueued вызывается из apply (стабильный
   // useCallback), а submit пересоздаётся при каждом рендере с свежим apply —
   // прямая ссылка на submit замкнётся на устаревшую версию.
   const submitRef = useRef<
-    | ((text: string, modelId: string, selections?: SelectedElement[]) => void)
+    | ((
+        text: string,
+        modelId: string,
+        selections?: SelectedElement[],
+        opts?: { skipClarify?: boolean },
+      ) => void)
     | null
   >(null);
   const selectSnapshot = useWorkspaceStore((s) => s.selectSnapshot);
@@ -132,7 +138,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     setPendingPrompt(null);
     // setTimeout, чтобы не вызвать submit изнутри обработчика событий react-query
     // и дать React закоммитить текущий рендер.
-    setTimeout(() => submitRef.current?.(p.text, p.modelId, p.selections), 0);
+    setTimeout(
+      () => submitRef.current?.(p.text, p.modelId, p.selections, p.opts),
+      0,
+    );
   }, []);
 
   const apply = useCallback(
@@ -449,11 +458,12 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       promptText: string,
       modelId: string,
       selections?: SelectedElement[],
+      opts?: { skipClarify?: boolean },
     ) => {
       // Стрим в процессе — кладём в очередь (один слот, новый замещает старый).
       // Выделения переносим вместе с текстом, чтобы отложенный промпт сохранил контекст.
       if (streamingRef.current) {
-        pendingRef.current = { text: promptText, modelId, selections };
+        pendingRef.current = { text: promptText, modelId, selections, opts };
         setPendingPrompt(promptText);
         return;
       }
@@ -540,6 +550,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           promptText,
           modelId,
           selections,
+          opts,
         );
         message_id = resp.message_id;
       } catch (e) {

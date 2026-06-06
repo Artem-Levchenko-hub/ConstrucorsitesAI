@@ -303,6 +303,10 @@ async def post_prompt(
             )
         ).first() is not None
         do_clarify = not _has_prior_msg
+    # The frontend onboarding quiz already collected the brief client-side and
+    # folded it into this prompt — so skip the server clarify and build now.
+    if payload.skip_clarify:
+        do_clarify = False
     intent = decide_intent(
         payload.prompt,
         is_first_prompt=is_first_build,

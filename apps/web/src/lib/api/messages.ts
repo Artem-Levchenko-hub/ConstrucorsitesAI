@@ -12,6 +12,7 @@ export async function sendPrompt(
   prompt: string,
   modelId: string,
   selectedElements?: SelectedElement[] | null,
+  opts?: { skipClarify?: boolean },
 ): Promise<PromptResponse> {
   if (USE_MOCKS) {
     const { assistantMessageId } = mockApi.beginPrompt(
@@ -40,6 +41,9 @@ export async function sendPrompt(
       ...(selectedElements && selectedElements.length
         ? { selected_elements: selectedElements }
         : {}),
+      // Onboarding quiz already gathered the brief → skip the server clarify
+      // interview so this enriched first prompt builds immediately.
+      ...(opts?.skipClarify ? { skip_clarify: true } : {}),
     },
   });
 }
