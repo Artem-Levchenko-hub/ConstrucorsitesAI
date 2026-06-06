@@ -19,6 +19,14 @@ function safeNext(raw: string | null): string | null {
 }
 
 export function middleware(req: NextRequest) {
+  // Dev mock mode (NEXT_PUBLIC_USE_MOCKS !== "false"): no backend exists to set
+  // the auth cookie, so let every route through — the layout's getSession()
+  // returns a demo user in this mode. Prod builds with NEXT_PUBLIC_USE_MOCKS
+  // ="false", so this guard is inert there.
+  if (process.env.NEXT_PUBLIC_USE_MOCKS !== "false") {
+    return NextResponse.next();
+  }
+
   const session = req.cookies.get(AUTH_COOKIE);
   const path = req.nextUrl.pathname;
   const isAuthRoute = path === "/login" || path === "/register";

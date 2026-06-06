@@ -22,6 +22,14 @@ function apiBaseUrl(): string {
 
 /** Read the JWT cookie and resolve the user via /api/auth/me. */
 export async function getSession(): Promise<SessionUser | null> {
+  // Dev mock mode (NEXT_PUBLIC_USE_MOCKS !== "false"): there is no backend to
+  // validate against, so hand back a demo user and let the workspace render
+  // against the in-memory mock API. Prod builds with NEXT_PUBLIC_USE_MOCKS
+  // ="false" (see deploy/full/docker-compose.yml), so this branch is dead there.
+  if (process.env.NEXT_PUBLIC_USE_MOCKS !== "false") {
+    return { id: "u-demo", email: "demo@omnia.ai" };
+  }
+
   const c = await cookies();
   const token = c.get(AUTH_COOKIE)?.value;
   if (!token) return null;
