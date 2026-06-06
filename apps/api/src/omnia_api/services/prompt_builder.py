@@ -2523,6 +2523,58 @@ def _build_edit_messages(
     return messages
 
 
+_EDIT_REWRITE_SYSTEM = """\
+Ты — Omnia.AI в режиме ТОЧЕЧНОЙ ПРАВКИ. Точечный патч не подошёл, поэтому верни
+СТРАНИЦУ ЦЕЛИКОМ, применив РОВНО запрошенное изменение и СОХРАНИВ всё остальное
+дословно.
+
+ЖЕЛЕЗНЫЕ ПРАВИЛА:
+• Внеси ТОЛЬКО запрошенное изменение (и по выделенным элементам, если переданы).
+• ВСЁ остальное — заголовки, тексты, цены, имена, телефоны, другие секции,
+  структуру, навигацию — оставь СЛОВО В СЛОВО как в текущем файле. НЕ переписывай
+  контент, НЕ передизайнивай страницу, НЕ меняй палитру/фон/шрифты, если об этом НЕ
+  просят прямым текстом.
+• Картинки оставь те же `<img src="...">`, что в файле — не выдумывай новые и не
+  возвращай `data-omnia-photo` / `data-omnia-gen`.
+• Используй уже подключённый omnia-kit (его классы уже есть в проекте); новых
+  библиотек не подключай.
+
+ФОРМАТ: верни РОВНО ОДИН блок <file path="index.html"> с ПОЛНЫМ HTML страницы.
+Перед ним — одно короткое предложение, после — одна строка («готово»). Без
+markdown-ограждений вокруг <file>."""
+
+
+def build_edit_rewrite_messages(
+    current_files: dict[str, str],
+    history: Sequence[dict[str, str]],
+    user_prompt: str,
+    selected_elements: Sequence[dict[str, Any]] | None,
+) -> list[dict[str, str]]:
+    """Fallback when a surgical ``<edit>`` can't land: ask for the WHOLE file
+    back with ONLY the requested change applied. Reliable (plain generation, no
+    byte-exact SEARCH to reproduce) — the caller guards against a silent
+    re-design by verifying the original copy survived before committing."""
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": _EDIT_REWRITE_SYSTEM}
+    ]
+    if current_files:
+        files_block = "\n\n".join(
+            f'<file path="{path}">\n{content}\n</file>'
+            for path, content in current_files.items()
+        )
+        messages.append(
+            {"role": "user", "content": "Текущее состояние страницы:\n" + files_block}
+        )
+    for m in list(history)[-HISTORY_LIMIT:]:
+        if m.get("role") in {"user", "assistant"} and m.get("content"):
+            messages.append({"role": m["role"], "content": m["content"]})
+    final_user = user_prompt
+    if selected_elements:
+        final_user = _format_selection_block(selected_elements) + "\n\n" + user_prompt
+    messages.append({"role": "user", "content": final_user})
+    return messages
+
+
 def build_messages(
     current_files: dict[str, str],
     history: Sequence[dict[str, str]],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Sequence
 from decimal import Decimal
 from typing import Annotated, Any
@@ -455,6 +456,31 @@ def _looks_truncated(accumulated: str, files: dict[str, str]) -> bool:
     if tail.endswith("<") or tail.endswith("```html\n<") or tail.endswith("```html"):
         return True
     return False
+
+
+_EDIT_WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]{3,}")
+_EDIT_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.S | re.I)
+_EDIT_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _visible_words(html: str) -> set[str]:
+    """Lowercased set of visible words (≥3 chars) in HTML — tags + script/style
+    bodies stripped. Measures how much of a page's CONTENT survived a fallback
+    rewrite so a scoped edit (text preserved) is told apart from a silent
+    re-design (text replaced)."""
+    no_code = _EDIT_SCRIPT_STYLE_RE.sub(" ", html)
+    text = _EDIT_TAG_RE.sub(" ", no_code)
+    return {w.lower() for w in _EDIT_WORD_RE.findall(text)}
+
+
+def _text_preserved_ratio(old_html: str, new_html: str) -> float:
+    """Fraction of the OLD page's visible words still present in the NEW page.
+    ~1.0 = same content (a scoped edit — e.g. only the background changed);
+    low = the model rewrote the copy (a re-design we must NOT silently ship)."""
+    old = _visible_words(old_html)
+    if not old:
+        return 1.0
+    return len(old & _visible_words(new_html)) / len(old)
 
 
 _KIT_LINK = '<link rel="stylesheet" href="assets/omnia-kit.css">'
@@ -1260,6 +1286,87 @@ async def _process_prompt(
                 except (UnsafePathError, ValueError):
                     files = {}
             print(f"[PP] surgical_retry applied files={len(files)}", flush=True)
+
+        # --- Surgical rewrite fallback: <edit> still couldn't land --------
+        # SEARCH/REPLACE is fragile on a cheap model for BLOCK-level changes
+        # ("сделай фон поинтереснее" — the hero markup is complex, and the model
+        # can't reproduce it byte-for-byte). Rather than ship "ничего не
+        # поменялось", regenerate the WHOLE file applying ONLY the change, then
+        # GUARD against drift: accept the rewrite only if the page's original
+        # copy survived (a scoped edit), never a silent re-design. Static
+        # (index.html) projects only — fullstack edits stay on <edit>.
+        if surgical and not files and current_files.get("index.html"):
+            from omnia_api.services.prompt_builder import build_edit_rewrite_messages
+
+            rw_msgs = build_edit_rewrite_messages(
+                current_files, history_serialized, prompt_text, selected_elements
+            )
+            _rw_notice = (
+                "\n\n*Точечно не вышло — переписываю страницу аккуратно, сохраняя "
+                "остальное…*\n\n"
+            )
+            accumulated = accumulated + _rw_notice
+            await publish_event(
+                project_id,
+                "llm.chunk",
+                {"message_id": str(assistant_message_id), "delta": _rw_notice},
+            )
+            print("[PP] surgical_rewrite_fallback start", flush=True)
+            _rw_parts: list[str] = []
+            _rw_usage: dict[str, Any] | None = None
+            try:
+                async for _ev in stream_chat_completion(
+                    rw_msgs,
+                    model_for_role("edit", override=force_model),
+                    str(user_id),
+                    str(project_id),
+                    str(assistant_message_id),
+                ):
+                    if "delta" in _ev:
+                        _d = str(_ev["delta"])
+                        _rw_parts.append(_d)
+                        pub["seq"] = int(pub["seq"]) + 1
+                        pub["content"] = str(pub["content"]) + _d
+                        await publish_event(
+                            project_id,
+                            "llm.chunk",
+                            {
+                                "message_id": str(assistant_message_id),
+                                "delta": _d,
+                                "seq": int(pub["seq"]),
+                            },
+                        )
+                    elif "usage" in _ev:
+                        _rw_usage = _ev["usage"]  # type: ignore[assignment]
+            except Exception as _rw_exc:
+                print(f"[PP] surgical_rewrite_fallback stream_err {_rw_exc!r}", flush=True)
+            _rw_acc = "".join(_rw_parts)
+            accumulated = accumulated + _rw_acc
+            try:
+                _rw_files, _ = _extract_files_and_edits(_rw_acc, current_files)
+            except (UnsafePathError, ValueError):
+                _rw_files = {}
+            _old_index = current_files.get("index.html", "")
+            _new_index = _rw_files.get("index.html", "")
+            _ratio = (
+                _text_preserved_ratio(_old_index, _new_index) if _new_index else 0.0
+            )
+            # ≥0.6 of the original words must survive — a real scoped edit keeps
+            # the copy; a re-design replaces it. Reject the drift, keep the page.
+            if _new_index and _ratio >= 0.6:
+                files = _rw_files
+                if _rw_usage:
+                    usage_data = _rw_usage  # type: ignore[assignment]
+                print(
+                    f"[PP] surgical_rewrite_fallback applied ratio={_ratio:.2f}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[PP] surgical_rewrite_fallback rejected ratio={_ratio:.2f} "
+                    f"new_len={len(_new_index)}",
+                    flush=True,
+                )
 
         # --- Pass 2..N: empty-content fallback ----------------------
         # If we got nothing usable back AND the primary model has known

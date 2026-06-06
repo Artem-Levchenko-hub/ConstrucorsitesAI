@@ -1,11 +1,12 @@
 import pytest
 
-from omnia_api.routers.messages import _ensure_kit_linked
+from omnia_api.routers.messages import _ensure_kit_linked, _text_preserved_ratio
 from omnia_api.services import skill_library
 from omnia_api.services.prompt_builder import (
     KIT_FILES,
     _compute_skill_brief,
     _expand_ru_to_en,
+    build_edit_rewrite_messages,
     build_messages,
     build_system_prompt,
 )
@@ -491,6 +492,38 @@ def test_edit_mode_independent_of_model_tier() -> None:
         system = _edit_system(model_id=mid)
         assert "ТОЧЕЧНОЙ ПРАВКИ" in system
         assert "СТАНДАРТ КАЧЕСТВА" not in system
+
+
+def test_edit_rewrite_messages_asks_full_file_and_preserve() -> None:
+    msgs = build_edit_rewrite_messages(
+        {"index.html": "<h1>УНИК-СОДЕРЖИМОЕ-42</h1>"},
+        [],
+        "сделай фон темнее",
+        None,
+    )
+    system = msgs[0]["content"]
+    assert "СТРАНИЦУ ЦЕЛИКОМ" in system
+    assert '<file path="index.html">' in system
+    joined = "\n".join(m["content"] for m in msgs)
+    assert "УНИК-СОДЕРЖИМОЕ-42" in joined  # current file fed verbatim
+    assert "сделай фон темнее" in joined
+
+
+def test_text_preserved_ratio_scoped_edit_vs_redesign() -> None:
+    old = (
+        "<h1>Суши Юген</h1><p>Дикий тунец блюфин премиум класса</p>"
+        "<a>Забронировать стол</a>"
+    )
+    # Background-only change — same copy → nearly all words survive.
+    bg_only = (
+        "<body style='background:#111'><h1>Суши Юген</h1>"
+        "<p>Дикий тунец блюфин премиум класса</p>"
+        "<a>Забронировать стол</a></body>"
+    )
+    assert _text_preserved_ratio(old, bg_only) >= 0.9
+    # Full re-design — different copy → most words gone → must be rejected.
+    redesign = "<h1>Pizza Roma</h1><p>italian dough mozzarella</p><a>Order now</a>"
+    assert _text_preserved_ratio(old, redesign) < 0.4
 
 
 def test_build_mode_still_carries_full_prompt() -> None:
