@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
   collectStreamingFilesPartial,
@@ -29,12 +30,29 @@ const DEVICE_WIDTH: Record<StreamingDevice, string> = {
 export function StreamingPreviewFrame({
   content,
   device,
+  projectId,
+  messageId,
 }: {
   content: string;
   device: StreamingDevice;
+  projectId: string;
+  messageId: string;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [ready, setReady] = useState(false);
+
+  // Live image drop-in: resolved images for THIS message, populated by
+  // usePromptStream on `image.resolved` events. Client-only cache (no fetch);
+  // same pattern as the multipass ["passes"] cache (PassProgressBar).
+  const { data: streamImages } = useQuery<{ idx: number; url: string }[]>({
+    queryKey: ["stream-images", projectId, messageId],
+    queryFn: () => [],
+    enabled: false,
+    initialData: [],
+  });
+  // Track which (idx,url) we've already pushed so re-renders don't replay the
+  // settle animation; reset when the message changes (new generation).
+  const postedRef = useRef<Set<string>>(new Set());
 
   // Bootstrap srcDoc with the canonical omnia-kit.css linked from the API
   // origin (styling parity with the committed /p/<slug>). Memoised empty-dep
@@ -109,6 +127,31 @@ export function StreamingPreviewFrame({
     }
     win.postMessage({ type: "omnia:status", text: status }, "*");
   }, [ready, content, bodyHtml]);
+
+  // New generation: forget what we've posted and clear the iframe's image map
+  // so a previous build's photos can't bleed into the new frames (idx reuse).
+  useEffect(() => {
+    postedRef.current = new Set();
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "omnia:images-reset" },
+      "*",
+    );
+  }, [messageId]);
+
+  // Push each newly-resolved image into its frame. The iframe animates it
+  // settling in (blur+scale → sharp). Only NEW (idx,url) pairs are posted so a
+  // re-render never replays the animation.
+  useEffect(() => {
+    if (!ready) return;
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    for (const img of streamImages ?? []) {
+      const key = `${img.idx}:${img.url}`;
+      if (postedRef.current.has(key)) continue;
+      postedRef.current.add(key);
+      win.postMessage({ type: "omnia:image", idx: img.idx, url: img.url }, "*");
+    }
+  }, [ready, streamImages]);
 
   return (
     <motion.iframe

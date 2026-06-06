@@ -157,6 +157,14 @@ class Settings(BaseSettings):
     # spend less. Env: IMAGE_GEN_MAX_UNIQUE.
     image_gen_max_unique: int = Field(default=8)
 
+    # Live image drop-in (2026-06-06) — emit a per-image `image.resolved` WS
+    # event as each generated picture finishes, so the streaming preview can
+    # swap it into its frame in real time (the "фотки въезжают в рамки" effect)
+    # instead of all images appearing at once on the final snapshot. Purely
+    # additive (extra events); OFF kills the live signal, images still land on
+    # the committed snapshot. Env: USE_LIVE_IMAGE_EVENTS.
+    use_live_image_events: bool = Field(default=True)
+
     # Visual enricher — post-process pass that injected decorative layers
     # (mesh / blob / SVG dot-grid / diagonal-lines / waves) into every bare
     # <section>. Built as a Haiku-era crutch against "flat AI sites", but it

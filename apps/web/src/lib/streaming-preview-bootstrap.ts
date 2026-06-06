@@ -78,6 +78,25 @@ export const BOOTSTRAP_HTML = `<!doctype html>
     75%  { content: "..."; }
     100% { content: ""; }
   }
+  /* Empty image frame — shimmer until the photo drops in. !important beats the
+     inline gradient the generator leaves on data-omnia-gen imgs; once the src
+     is set the :not([src]) selector stops matching and the real image shows. */
+  img[data-omnia-gen]:not([src]),
+  img[data-omnia-gen][src=""] {
+    background-image: linear-gradient(90deg, rgba(0,0,0,0.04) 0%, rgba(0,0,0,0.09) 50%, rgba(0,0,0,0.04) 100%) !important;
+    background-size: 200% 100% !important;
+    background-repeat: no-repeat !important;
+    animation: omnia-shimmer 1.4s ease-in-out infinite;
+    border-radius: 10px;
+  }
+  /* Photo settling into its frame: blur+scale resolving to sharp. */
+  @keyframes omnia-img-in {
+    from { opacity: 0; filter: blur(14px); transform: scale(1.05); }
+    to   { opacity: 1; filter: blur(0);    transform: scale(1); }
+  }
+  img[data-omnia-img-in] {
+    animation: omnia-img-in 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
 </style>
 </head>
 <body>
@@ -97,6 +116,30 @@ export const BOOTSTRAP_HTML = `<!doctype html>
 (function () {
   var cssEl = document.getElementById('omnia-css');
   var placeholderRemoved = false;
+  // idx -> resolved url. Survives morphdom patches: the streamed content keeps
+  // the src-less data-omnia-gen placeholders, so we re-apply after each render.
+  window.__omniaImages = window.__omniaImages || {};
+
+  function applyImage(idx, url, animate) {
+    var imgs = document.querySelectorAll('img[data-omnia-gen]');
+    var el = imgs[idx];
+    if (!el || !url) return;
+    if (el.getAttribute('src') === url) return;
+    el.setAttribute('src', url);
+    if (animate) {
+      el.setAttribute('data-omnia-img-in', '');
+      setTimeout(function () { el.removeAttribute('data-omnia-img-in'); }, 700);
+    }
+  }
+
+  function reapplyImages() {
+    var map = window.__omniaImages || {};
+    for (var k in map) {
+      if (Object.prototype.hasOwnProperty.call(map, k)) {
+        applyImage(parseInt(k, 10), map[k], false);
+      }
+    }
+  }
 
   function render(bodyHtml, cssText) {
     if (cssEl && cssText != null && cssEl.textContent !== cssText) {
@@ -142,6 +185,14 @@ export const BOOTSTRAP_HTML = `<!doctype html>
         onBeforeElUpdated: function (fromEl, toEl) {
           // Не дёргаем idle узлы — экономим перерасчёт стилей и анимации.
           if (fromEl.isEqualNode(toEl)) return false;
+          // Preserve a live-swapped image: the streamed content still carries
+          // the src-less data-omnia-gen placeholder, so without this morphdom
+          // would strip the src we set and the photo would flicker out.
+          if (fromEl.tagName === 'IMG' &&
+              fromEl.hasAttribute('data-omnia-gen') &&
+              fromEl.getAttribute('src')) {
+            return false;
+          }
           return true;
         }
       });
@@ -149,6 +200,10 @@ export const BOOTSTRAP_HTML = `<!doctype html>
       // Фолбэк, если morphdom CDN не загрузился: грубая замена.
       document.body.innerHTML = newBody.innerHTML;
     }
+
+    // Restore any images that resolved already (a fresh morph re-inserts the
+    // src-less placeholder for not-yet-preserved nodes).
+    reapplyImages();
 
     // Анимация триггерится самим css-keyframe-ом на data-omnia-new;
     // через 400ms (250ms анимация + запас) снимаем атрибут, чтобы при
@@ -172,6 +227,21 @@ export const BOOTSTRAP_HTML = `<!doctype html>
     // model returns junk, or "AI пишет ответ" baseline.
     if (data.type === 'omnia:status') {
       try { updateStatus(String(data.text || '')); } catch (_) {}
+      return;
+    }
+    // A generated image resolved → drop it into its frame (animated).
+    if (data.type === 'omnia:image') {
+      try {
+        var i = (data.idx | 0);
+        window.__omniaImages[i] = data.url;
+        applyImage(i, data.url, true);
+      } catch (_) {}
+      return;
+    }
+    // New generation → forget the previous build's images so their urls can't
+    // bleed into the new frames at the same indices.
+    if (data.type === 'omnia:images-reset') {
+      window.__omniaImages = {};
       return;
     }
     if (data.type !== 'omnia:render') return;

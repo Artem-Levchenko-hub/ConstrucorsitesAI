@@ -445,6 +445,8 @@ export function PreviewFrame({ project }: { project: Project }) {
                       key="streaming"
                       content={last?.content ?? ""}
                       device={device}
+                      projectId={project.id}
+                      messageId={last?.id ?? ""}
                     />
                   ) : fullstackLive ? (
                     <motion.iframe

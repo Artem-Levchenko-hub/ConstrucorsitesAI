@@ -23,6 +23,7 @@ import base64
 import hashlib
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
 
@@ -433,13 +434,21 @@ def _replace_tag(content: str, tag: ImgTag, url: str) -> str:
 
 
 async def resolve_images(
-    files: dict[str, str], project_id: str
+    files: dict[str, str],
+    project_id: str,
+    on_image: Callable[[int, str], Awaitable[None]] | None = None,
 ) -> tuple[dict[str, str], int, int]:
     """Resolve every ``data-omnia-gen`` tag in ``files`` to a real image URL.
 
     Returns ``(new_files, resolved_count, total_tags)``. Files without tags
     pass through untouched. Tags whose gateway/MinIO call failed are left in
     place so subsequent passes (or the next prompt) can retry.
+
+    ``on_image(preview_idx, url)`` — optional async callback fired the moment a
+    generated image is ready, for each tag sharing that prompt in index.html.
+    ``preview_idx`` is the tag's position among index.html's data-omnia-gen imgs
+    (document order), so the streaming preview can drop the photo into the right
+    frame live. Best-effort: callback errors never abort resolution.
     """
     tags = extract_image_tags(files)
     photo_tags = _extract_photo_tags(files)
@@ -476,6 +485,32 @@ async def resolve_images(
     _budget = max(1, int(settings.image_gen_max_unique))
     gen_prompts = unique_eff[:_budget]
     overflow_eff = set(unique_eff[_budget:])
+
+    # Live drop-in mapping: for each effective prompt, the document-order indices
+    # of its tags AMONG index.html's data-omnia-gen imgs — matches the streaming
+    # preview's querySelectorAll('img[data-omnia-gen]') order, so the frontend
+    # swaps the correct frame the instant each image resolves. Grouped tags all
+    # receive the shared image; tags in other files (no live preview) are skipped.
+    _preview_idx: dict[int, int] = {}
+    _i = 0
+    for _t in tags:
+        if _t.file_path == "index.html":
+            _preview_idx[id(_t)] = _i
+            _i += 1
+    _eff_to_preview: dict[str, list[int]] = {}
+    for _t in tags:
+        _pi = _preview_idx.get(id(_t))
+        if _pi is not None:
+            _eff_to_preview.setdefault(_eff(_t), []).append(_pi)
+
+    async def _emit(orig_prompt: str, url: str) -> None:
+        if on_image is None:
+            return
+        for _pi in _eff_to_preview.get(orig_prompt, []):
+            try:
+                await on_image(_pi, url)
+            except Exception:
+                pass
 
     # AI image generation is GATED and TIME-BOXED. When the gpt-image upstream is
     # down (proxyapi dry / OpenAI unreachable from the RU egress) each _fetch_one
@@ -521,19 +556,32 @@ async def resolve_images(
                 url = await asyncio.to_thread(_upload_image, img, project_id, gen_prompt)
                 return orig_prompt, url
 
+        # Resolve via as_completed so each image fires its `on_image` event the
+        # moment it's ready (the live drop-in), not in one batch at the end. The
+        # semaphore keeps generation serial, so events arrive naturally spaced.
+        # The overall budget still bounds the phase: on timeout we keep whatever
+        # resolved and cancel stragglers so the build always ships (R-10).
+        _tasks = [asyncio.ensure_future(_resolve(p)) for p in gen_prompts]
+        pairs: list[tuple[str, str | None]] = []
         try:
-            pairs = await asyncio.wait_for(
-                asyncio.gather(*[_resolve(p) for p in gen_prompts]),
-                timeout=_IMAGE_RESOLVE_BUDGET_S,
-            )
-        except (asyncio.TimeoutError, TimeoutError):
+            for _fut in asyncio.as_completed(
+                _tasks, timeout=_IMAGE_RESOLVE_BUDGET_S
+            ):
+                orig_prompt, url = await _fut
+                pairs.append((orig_prompt, url))
+                if url:
+                    await _emit(orig_prompt, url)
+        except TimeoutError:
             log.warning(
                 "image_resolver: gen budget %.0fs exceeded (%d prompts) — "
                 "stripping unresolved tags so the build ships",
                 _IMAGE_RESOLVE_BUDGET_S,
                 len(gen_prompts),
             )
-            pairs = []
+        finally:
+            for _task in _tasks:
+                if not _task.done():
+                    _task.cancel()
         prompt_to_url = {p: u for p, u in pairs if u}
 
     # Any successfully generated image — reused for over-budget card tags so the

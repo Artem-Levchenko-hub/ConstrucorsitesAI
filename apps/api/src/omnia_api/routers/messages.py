@@ -1658,8 +1658,26 @@ async def _process_prompt(
                 # must NEVER hang the build — on timeout we ship the page as-is so
                 # it still reaches commit (no lost work). 75s over the resolver's
                 # own per-image deadline.
+                # Live drop-in: emit a per-image event as each picture resolves so
+                # the streaming preview swaps it into its frame in real time. Gated
+                # by use_live_image_events; off → images still land on the snapshot.
+                async def _emit_img(idx: int, url: str) -> None:
+                    await publish_event(
+                        project_id,
+                        "image.resolved",
+                        {
+                            "message_id": str(assistant_message_id),
+                            "idx": idx,
+                            "url": url,
+                        },
+                    )
+
+                _on_img = (
+                    _emit_img if get_settings().use_live_image_events else None
+                )
                 files, resolved, total = await asyncio.wait_for(
-                    resolve_images(files, str(project_id)), timeout=75
+                    resolve_images(files, str(project_id), on_image=_on_img),
+                    timeout=75,
                 )
                 print(
                     f"[PP] image_resolver resolved={resolved} total={total}",

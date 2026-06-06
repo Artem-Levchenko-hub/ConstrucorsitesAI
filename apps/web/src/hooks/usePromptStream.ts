@@ -210,6 +210,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         qc.removeQueries({
           queryKey: ["passes", projectId, event.data.message_id],
         });
+        qc.removeQueries({
+          queryKey: ["stream-images", projectId, event.data.message_id],
+        });
         // Real backend: re-fetch messages and snapshots to capture
         // server-side state we may have missed during streaming.
         if (!USE_MOCKS) {
@@ -245,6 +248,22 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               current: base.current === stageName ? null : base.current,
               completed,
             };
+          },
+        );
+        return;
+      }
+
+      if (event.type === "image.resolved") {
+        // Live drop-in: accumulate resolved images for this message so the
+        // streaming preview can swap each into its frame. Client-only cache
+        // (no fetch), read by StreamingPreviewFrame via useQuery+enabled:false.
+        // De-dup by idx so a re-emit doesn't replay the settle animation twice.
+        qc.setQueryData<{ idx: number; url: string }[]>(
+          ["stream-images", projectId, event.data.message_id],
+          (prev) => {
+            const list = prev ?? [];
+            if (list.some((i) => i.idx === event.data.idx)) return list;
+            return [...list, { idx: event.data.idx, url: event.data.url }];
           },
         );
         return;

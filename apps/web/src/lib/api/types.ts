@@ -271,6 +271,14 @@ export type WsEvent =
       data: { message_id: Uuid; content: string; seq: number };
     }
   | {
+      // Live image drop-in: one event per generated picture as it resolves, so
+      // the streaming preview swaps it into its frame in real time (instead of
+      // every image appearing at once on the final snapshot). `idx` is the
+      // image's position among index.html's data-omnia-gen <img> tags.
+      type: "image.resolved";
+      data: { message_id: Uuid; idx: number; url: string };
+    }
+  | {
       type: "llm.done";
       data: {
         message_id: Uuid;
