@@ -408,7 +408,7 @@ export function PreviewFrame({ project }: { project: Project }) {
         </div>
       )}
 
-      <div className="flex-1 p-4 overflow-hidden">
+      <div className="flex-1 p-2 overflow-hidden">
         <div className="h-full w-full rounded-lg border border-border-default bg-surface-raised overflow-hidden flex flex-col">
           {viewMode === "code" && visible ? (
             <CodeView projectId={project.id} snapshotId={visible.id} />
