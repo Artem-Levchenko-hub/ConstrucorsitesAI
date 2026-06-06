@@ -1361,25 +1361,16 @@ async def _process_prompt(
                         str(assistant_message_id),
                     ):
                         if "delta" in _ev:
-                            _d = str(_ev["delta"])
-                            _z_parts.append(_d)
-                            pub["seq"] = int(pub["seq"]) + 1
-                            pub["content"] = str(pub["content"]) + _d
-                            await publish_event(
-                                project_id,
-                                "llm.chunk",
-                                {
-                                    "message_id": str(assistant_message_id),
-                                    "delta": _d,
-                                    "seq": int(pub["seq"]),
-                                },
-                            )
+                            # Accumulate SILENTLY — the model streams a raw
+                            # <section>, which is neither <file> nor <edit>, so
+                            # publishing it would dump raw HTML into the chat. We
+                            # add a clean "Правка" chip once it lands.
+                            _z_parts.append(str(_ev["delta"]))
                         elif "usage" in _ev:
                             _z_usage = _ev["usage"]  # type: ignore[assignment]
                 except Exception as _ze_exc:
                     print(f"[PP] zone_edit stream_err {_ze_exc!r}", flush=True)
                 _z_acc = "".join(_z_parts)
-                accumulated = accumulated + _z_acc
                 _new_block = _ze.extract_block(_z_acc)
                 _old_root_id = _ze.root_id(_block)
                 # Accept only a real block whose root id matches (proves the model
@@ -1392,6 +1383,12 @@ async def _process_prompt(
                     }
                     if _z_usage:
                         usage_data = _z_usage  # type: ignore[assignment]
+                    # Clean chip in chat — never the raw <section>.
+                    accumulated = accumulated + (
+                        '\n<edit path="index.html">\n'
+                        "Обновил выделенную зону, остальную страницу не трогал.\n"
+                        "</edit>\n"
+                    )
                     print(
                         f"[PP] zone_edit applied new_block_len={len(_new_block)}",
                         flush=True,
