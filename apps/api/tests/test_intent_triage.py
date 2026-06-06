@@ -18,6 +18,21 @@ def test_first_prompt_always_orchestrates() -> None:
     assert decide_intent("сделай лендинг кофейни", is_first_prompt=True) == ORCHESTRATE
 
 
+def test_selected_element_always_edits_even_if_first_build() -> None:
+    """Owner regression (2026-06-06): after a rollback to the starter snapshot the
+    project looks like a first build, but a CLICK on the page means there's a zone
+    to edit — it must be a scoped edit, never a full rebuild that loses images."""
+    assert (
+        decide_intent("поменяй фон на графику", is_first_prompt=True, selected_count=1)
+        == CHEAP
+    )
+    # And even with a build-noun in the prompt, a selection keeps it an edit.
+    assert (
+        decide_intent("сделай этот раздел ярче", is_first_prompt=True, selected_count=2)
+        == CHEAP
+    )
+
+
 def test_add_intro_to_existing_site_is_cheap() -> None:
     """Owner's regression (2026-06-06): "добавь интро к сайту" used to match the
     "сайт" keyword → full orchestration → whole-page rewrite + palette re-roll

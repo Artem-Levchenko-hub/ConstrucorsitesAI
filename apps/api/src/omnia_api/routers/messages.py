@@ -1317,6 +1317,94 @@ async def _process_prompt(
         # GUARD against drift: accept the rewrite only if the page's original
         # copy survived (a scoped edit), never a silent re-design. Static
         # (index.html) projects only — fullstack edits stay on <edit>.
+        # 1) ZONE-scoped rewrite — preferred when the user pointed at a zone.
+        # Rewrite ONLY the enclosing landmark block (<section>/<header>/<footer>)
+        # and splice it back, so the rest of the page (other sections + their
+        # images) stays byte-identical. This is the "выбрал секцию → меняю только
+        # её, не переписываю весь сайт" path the owner asked for.
+        if surgical and not files and selected_elements and current_files.get(
+            "index.html"
+        ):
+            from omnia_api.services import zone_edit as _ze
+            from omnia_api.services.prompt_builder import build_zone_edit_messages
+
+            _old_index_src = current_files["index.html"]
+            _span = _ze.find_enclosing_block(
+                _old_index_src, _ze.distinctive_anchors(selected_elements)
+            )
+            if _span is not None:
+                _block = _old_index_src[_span[0] : _span[1]]
+                _z_notice = (
+                    "\n\n*Меняю только выделенную зону, остальную страницу не "
+                    "трогаю…*\n\n"
+                )
+                accumulated = accumulated + _z_notice
+                await publish_event(
+                    project_id,
+                    "llm.chunk",
+                    {"message_id": str(assistant_message_id), "delta": _z_notice},
+                )
+                print(
+                    f"[PP] zone_edit start span={_span} block_len={len(_block)}",
+                    flush=True,
+                )
+                _z_parts: list[str] = []
+                _z_usage: dict[str, Any] | None = None
+                try:
+                    async for _ev in stream_chat_completion(
+                        build_zone_edit_messages(
+                            _block, prompt_text, selected_elements
+                        ),
+                        model_for_role("freeform_writer", override=force_model),
+                        str(user_id),
+                        str(project_id),
+                        str(assistant_message_id),
+                    ):
+                        if "delta" in _ev:
+                            _d = str(_ev["delta"])
+                            _z_parts.append(_d)
+                            pub["seq"] = int(pub["seq"]) + 1
+                            pub["content"] = str(pub["content"]) + _d
+                            await publish_event(
+                                project_id,
+                                "llm.chunk",
+                                {
+                                    "message_id": str(assistant_message_id),
+                                    "delta": _d,
+                                    "seq": int(pub["seq"]),
+                                },
+                            )
+                        elif "usage" in _ev:
+                            _z_usage = _ev["usage"]  # type: ignore[assignment]
+                except Exception as _ze_exc:
+                    print(f"[PP] zone_edit stream_err {_ze_exc!r}", flush=True)
+                _z_acc = "".join(_z_parts)
+                accumulated = accumulated + _z_acc
+                _new_block = _ze.extract_block(_z_acc)
+                _old_root_id = _ze.root_id(_block)
+                # Accept only a real block whose root id matches (proves the model
+                # returned the SAME zone rewritten, not a different/empty thing).
+                if _new_block and (
+                    _old_root_id is None or _ze.root_id(_new_block) == _old_root_id
+                ):
+                    files = {
+                        "index.html": _ze.splice(_old_index_src, _span, _new_block)
+                    }
+                    if _z_usage:
+                        usage_data = _z_usage  # type: ignore[assignment]
+                    print(
+                        f"[PP] zone_edit applied new_block_len={len(_new_block)}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "[PP] zone_edit rejected (no/invalid block or id mismatch)",
+                        flush=True,
+                    )
+
+        # 2) Whole-file rewrite — last resort (no selection, no zone found, or the
+        # zone rewrite was rejected). Regenerates the WHOLE file; guarded by the
+        # text-preservation ratio so a silent re-design is rejected.
         if surgical and not files and current_files.get("index.html"):
             from omnia_api.services.prompt_builder import build_edit_rewrite_messages
 

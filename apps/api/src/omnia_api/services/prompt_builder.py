@@ -2610,6 +2610,52 @@ def build_edit_rewrite_messages(
     return messages
 
 
+_ZONE_EDIT_SYSTEM = """\
+Тебе дан РОВНО ОДИН блок страницы (`<section>`/`<header>`/`<footer>`), в который
+ткнул пользователь, и его просьба. Верни ТОЛЬКО этот блок целиком, переписанный с
+применением правки. Ты НЕ видишь остальную страницу и НЕ должен её трогать — она
+останется как есть.
+
+ЖЕЛЕЗНЫЕ ПРАВИЛА:
+• Меняй РОВНО то, что просят. Остальное в блоке — тот же корневой тег с тем же
+  `id`, заголовки, тексты, цены, имена, кнопки, картинки `<img src="...">`,
+  структуру и ВЫСОТУ (`min-h-*`, `py-*`), сетки, позиционирование — сохрани 1:1.
+• ФОН блока задают СЛОИ-ПОДЛОЖКИ, а не контент. Чтобы сменить фон — меняй
+  `<div class="omnia-shader" data-omnia-colors="#..,#..,#..,#..">` (эти HEX) и/или
+  градиент-слои (`bg-gradient-* from-[#..] via-[#..] to-[#..]`, `.bg-mesh`,
+  `.bg-aurora`). НЕ вешай фон на прозрачный `.omnia-shader-over` / `relative z-10`
+  (он поверх — фон под ним не виден). Картинки/`<img>` не выдумывай заново.
+• Впиши правку В ОБЩИЙ СТИЛЬ: та же палитра/шрифты/ритм, что уже в блоке. «Тихая
+  роскошь» = глубокий тёмный тон + сдержанный металлик дозой, мягкие переходы.
+• Используй уже подключённый omnia-kit (его классы есть в проекте), новых
+  библиотек не подключай.
+
+ФОРМАТ: верни РОВНО `<тег ...>...</тег>` (тот же корневой тег), без markdown-фенсов,
+без пояснений до или после."""
+
+
+def build_zone_edit_messages(
+    block_html: str,
+    user_prompt: str,
+    selected_elements: Sequence[dict[str, Any]] | None,
+) -> list[dict[str, str]]:
+    """Messages for a zone-scoped rewrite: the model sees ONLY the pointed-at
+    landmark block and returns it rewritten. The caller splices it back into the
+    exact source span, so the rest of the page is untouched."""
+    comment = ""
+    if selected_elements:
+        comment = _format_selection_block(selected_elements) + "\n\n"
+    user = (
+        f"{comment}ПРАВКА: {user_prompt}\n\n"
+        f"ТЕКУЩИЙ БЛОК (перепиши только его, верни тот же тег с тем же id):\n"
+        f"{block_html}"
+    )
+    return [
+        {"role": "system", "content": _ZONE_EDIT_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+
 def build_messages(
     current_files: dict[str, str],
     history: Sequence[dict[str, str]],

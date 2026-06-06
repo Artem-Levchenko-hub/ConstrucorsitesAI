@@ -87,10 +87,15 @@ def decide_intent(
     3. structural / full-stack add   → ORCHESTRATE (changes architecture)
     4. otherwise (existing project)  → CHEAP (the edit default — surgical patch)
 
-    ``selected_count`` is accepted for caller compatibility and as documentation:
-    a pointed element is the strongest possible "edit just this" signal, and it
-    falls through to the CHEAP default — we never special-case it into a rebuild.
+    ``selected_count`` wins over everything: a pointed element proves a built
+    page already exists on screen, so it's always a scoped edit — never a
+    (re)build. This MUST be checked before ``is_first_prompt`` because a rollback
+    to the project's starter snapshot makes the next prompt look like a first
+    build, and a click on that page must still edit, not regenerate from scratch.
     """
+    if selected_count >= 1:
+        return CHEAP
+
     if is_first_prompt:
         return ORCHESTRATE
 
