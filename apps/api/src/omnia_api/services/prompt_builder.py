@@ -2102,6 +2102,38 @@ CAP: прогресс + ОДИН shimmer-акцент + ОДИН sticky-CTA ма
 путь/связь. Всё reduced-motion-safe, floor никогда не ломает страницу."""
 
 
+_HERO_GRAPHIC = """\
+ГЕРОЙ — ГЛАВНЫЙ АКЦЕНТ (приоритетный блок). Первый экран обязан быть «дорогим» и
+запоминаться. Выбери РОВНО ОДИН из двух режимов под вайб бизнеса и доведи до предела.
+Вялый мелкий заголовок по центру на плоском/градиентном фоне = БРАК.
+
+▸ РЕЖИМ I — ТИП-ГЕРОЙ (типографика-как-графика): заголовок САМ и есть графика, фото
+  не нужно. Собери так:
+  • Масштаб = иерархия: .display-fill (до ~13rem) / .display-hero; крупный контраст размеров.
+  • ПОСТЕРНЫЙ МИКС: часть слов — сплошной заливкой, часть — КОНТУРОМ .text-stroke
+    (.text-stroke-2 толще; style="--stroke:#hex" под акцент). НЕ весь заголовок контуром.
+  • РОВНО ОДНО акцент-слово выделено цветом: .gradient-text ИЛИ .text-shimmer.
+  • ОДИН кинетик-вход (не три): data-anime="hero-stagger" | .line-rise (строки из-под
+    маски) | data-omnia-scramble (короткое слово). Всё floor-safe (видно и без JS).
+  • ФОН — ЖИВОЙ тон-в-тон, НЕ плоская заливка: .omnia-shader
+    data-omnia-colors="#..,#..,#..,#.." | .fx-aurora-soft | .bg-mesh (+ опц .grain).
+    Контент оборачивай в .omnia-shader-over.
+
+▸ РЕЖИМ II — ФОТО/АРТ-ГЕРОЙ (затемнённый кадр): кадр = настроение, текст = смысл.
+  • Full-bleed <img data-omnia-gen="<детальный EN-prompt>" class="absolute inset-0 object-cover">.
+    Это НЕ обязательно фотореализм — можно НАРИСОВАННАЯ графика; укажи стиль в промпте:
+    "editorial illustration", "painterly", "risograph poster", "isometric 3D render",
+    "ink + watercolor", "cinematic matte painting".
+  • Затемнение УМЕРЕННОЕ — overlay /45-/55 (НИКОГДА /70-/90 и не сплошная чернота);
+    текст защищай ЛОКАЛЬНО (.text-protect / мягкий градиент только под текстом).
+  • ГРАФ-СЛОЙ ПОВЕРХ кадра (не голое фото): .grain / .fx-grid-glow / тонкая линия-рамка.
+  • Тон-грейдинг кадра под палитру: .tone-warm / .tone-cool / .tone-monochrome.
+  • Заголовок можно «врезать» в кадр через .text-blend (difference) — авто-контраст.
+
+В БРИФЕ зафиксируй строкой: ГЕРОЙ-РЕЖИМ: I|II + точные классы (и для II — стиль-промпт кадра).
+"""
+
+
 def build_system_prompt(
     template: str,
     preset_id: str | None = None,
@@ -2239,6 +2271,7 @@ def build_system_prompt(
             _KIT_V4_REFERENCE,
             _KIT_V5_REFERENCE,
             _KIT_V6_REFERENCE,
+            _HERO_GRAPHIC,
             _QUALITY_BAR,
             _COPY_RULES,
             _LAYOUT_RIGOR,

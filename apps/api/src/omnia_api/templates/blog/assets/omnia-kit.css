@@ -1178,3 +1178,32 @@ html.lenis, html.lenis body { height: auto; }
   .text-shimmer { animation: omnia-shimmer 4.5s linear infinite; }
   @keyframes omnia-shimmer { to { background-position: 200% center; } }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  v9.0 — Типографика-как-графика для ГЕРОЯ. Added 2026-06-06. ЧИСТО СТАТИКА:
+ *  никаких opacity:0/анимаций → capture-safe (vision-гейт видит финальный вид
+ *  сразу; кинетик-вход делают СУЩЕСТВУЮЩИЕ gated-классы — data-anime=
+ *  "hero-stagger" / .line-rise / .split-chars / data-omnia-scramble). Палитра
+ *  через --vars; дефолты наследуют currentColor → текст НИКОГДА не пропадает.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* V9.1 — Контурный (полый) шрифт: крупный заголовок одной обводкой. СМЕШИВАЙ
+ * заливку и контур по словам (часть слов сплошные, часть .text-stroke) →
+ * постерный «тип-как-графика». НЕ весь заголовок контуром (читаемость). Дефолт
+ * --stroke=currentColor (контур в цвет текста, виден всегда); цветной акцент —
+ * style="--stroke:#hex". Приём для .display-fill/.display-hero, не для мелкого. */
+.text-stroke {
+  -webkit-text-stroke: var(--stroke-w, 2px) var(--stroke, currentColor);
+  color: transparent;
+}
+.text-stroke-2 { -webkit-text-stroke-width: 3px; }
+/* Контур + призрачная заливка (еле видно «тело» буквы) — мягче чистого полого. */
+.text-stroke-ghost { color: var(--stroke-fill, rgba(120, 120, 120, .16)); }
+
+/* V9.2 — Заголовок-врезка в кадр: текст «пробивает» фото через mix-blend-mode.
+ * ТОЛЬКО поверх фото/арт-кадра (РЕЖИМ II героя) — над плоским фоном бессмысленно.
+ * .text-blend = инверсия (difference; белый текст даёт авто-контраст на любом
+ * кадре). .text-blend-screen = осветление (для тёмной иллюстрации). Floor: без
+ * поддержки blend остаётся читаемый #fff. */
+.text-blend { color: #fff; mix-blend-mode: difference; }
+.text-blend-screen { color: #fff; mix-blend-mode: screen; }
