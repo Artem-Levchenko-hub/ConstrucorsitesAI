@@ -119,7 +119,7 @@ export function CodeView({
             {paths.length}
           </span>
         </div>
-        <div className="flex-1 overflow-y-auto py-1.5">
+        <div className="flex-1 overflow-y-auto py-1.5 scrollbar-elegant">
           {paths.map((path) => {
             const body = data.files[path] ?? "";
             const size = new Blob([body]).size;
@@ -193,7 +193,7 @@ export function CodeView({
             </span>
           )}
         </div>
-        <pre className="flex-1 overflow-auto m-0 p-3 text-[12px] leading-[1.55] font-mono text-fg-secondary bg-surface-base whitespace-pre">
+        <pre className="flex-1 overflow-auto m-0 p-3 text-[12px] leading-[1.55] font-mono text-fg-secondary bg-surface-base whitespace-pre scrollbar-elegant">
           {activeBody}
         </pre>
       </div>

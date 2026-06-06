@@ -178,7 +178,7 @@ function FileChip({
             transition={{ duration: 0.15 }}
             className="overflow-hidden border-t border-border-subtle"
           >
-            <pre className="text-[11px] font-mono text-fg-secondary leading-relaxed p-3 overflow-x-auto max-h-80 overflow-y-auto bg-surface-base">
+            <pre className="text-[11px] font-mono text-fg-secondary leading-relaxed p-3 overflow-x-auto max-h-80 overflow-y-auto bg-surface-base scrollbar-elegant">
               {body}
             </pre>
           </motion.div>

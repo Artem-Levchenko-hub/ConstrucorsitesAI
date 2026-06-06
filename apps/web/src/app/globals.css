@@ -152,4 +152,25 @@
   .hairline-top { box-shadow: 0 -0.5px 0 var(--color-separator-solid); }
 
   .tabular-nums { font-variant-numeric: tabular-nums; }
+
+  /* Elegant overlay-style scrollbar — kills the chunky native Windows bar
+     (track + arrow buttons = the "worm"). Thin, rounded, translucent thumb on
+     a transparent track; no arrow buttons. Apply to internal scroll regions. */
+  .scrollbar-elegant {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(235 235 245 / 0.18) transparent;
+  }
+  .scrollbar-elegant::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scrollbar-elegant::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-elegant::-webkit-scrollbar-thumb {
+    background-color: rgb(235 235 245 / 0.18);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .scrollbar-elegant::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(235 235 245 / 0.32);
+  }
+  .scrollbar-elegant::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+  .scrollbar-elegant::-webkit-scrollbar-corner { background: transparent; }
 }
