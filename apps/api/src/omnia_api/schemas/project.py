@@ -91,6 +91,10 @@ class ProjectPublic(BaseModel):
     design_preset_id: str | None = None
     image_gen_enabled: bool = True
     current_snapshot_id: UUID | None
+    # Thumbnail of the current snapshot (its rendered preview PNG), or None until
+    # the first preview render lands. Not a mapped column — the projects router
+    # sets it from the current snapshot's preview_key.
+    preview_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

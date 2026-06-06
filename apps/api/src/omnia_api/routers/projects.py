@@ -117,7 +117,20 @@ async def list_projects(
         .where(Project.owner_id == current_user.id)
         .order_by(Project.created_at.desc())
     )
-    return list(res.scalars().all())
+    projects = list(res.scalars().all())
+
+    # Attach each project's current-snapshot thumbnail in ONE batch query
+    # (not N+1) so the projects grid can show a mini preview per card.
+    snap_ids = [p.current_snapshot_id for p in projects if p.current_snapshot_id]
+    previews: dict[UUID, str | None] = {}
+    if snap_ids:
+        rows = await session.execute(
+            select(Snapshot.id, Snapshot.preview_key).where(Snapshot.id.in_(snap_ids))
+        )
+        previews = {sid: preview_public_url(key) for sid, key in rows.all()}
+    for p in projects:
+        p.preview_url = previews.get(p.current_snapshot_id)
+    return projects
 
 
 @router.get("/{project_id}", response_model=ProjectPublic)
@@ -127,6 +140,9 @@ async def get_project(
     project = await session.get(Project, project_id)
     if project is None or project.owner_id != current_user.id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    if project.current_snapshot_id:
+        snap = await session.get(Snapshot, project.current_snapshot_id)
+        project.preview_url = preview_public_url(snap.preview_key) if snap else None
     return project
 
 

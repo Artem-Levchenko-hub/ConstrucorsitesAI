@@ -38,6 +38,9 @@ export type Project = {
   /** Per-project toggle: when true, AI-emitted <img data-omnia-gen> tags are
    *  resolved to real images via gpt-image-1. Default true. */
   image_gen_enabled?: boolean;
+  /** Thumbnail of the current snapshot (rendered preview PNG), or null until the
+   *  first preview render lands. Shown as the project card's mini preview. */
+  preview_url?: string | null;
 };
 
 export type Snapshot = {
