@@ -16,16 +16,18 @@
 
 ## Цветовые токены
 
-Все цвета — в `tailwind.config.ts` через CSS-переменные. **Никаких hex-значений в JSX.**
+Все цвета — в `apps/web/src/app/globals.css` (`@theme`, Tailwind v4) через CSS-переменные с
+префиксом `--color-*`. **Никаких hex-значений в JSX.** Палитра — тёплый charcoal + фиолет/индиго:
+дружелюбнее холодного `#000`/iOS-синего, инженерный Apple-system-вайб сохранён.
 
 ### Поверхности (фоны)
 
 | Токен | Hex | Назначение |
 |---|---|---|
-| `--surface-base` | `#0A0A0A` | главный фон страницы (тёплый чёрный, не #000) |
-| `--surface-raised` | `#141414` | sidebar, header, card |
-| `--surface-overlay` | `#1F1F1F` | модалки, dropdown, popover |
-| `--surface-input` | `#0F0F0F` | textarea, input |
+| `--surface-base` | `#0d0d12` | главный фон (тёплый charcoal, не #000) — совпадает с фоном TopBar |
+| `--surface-raised` | `#1a1a20` | sidebar, header, card |
+| `--surface-overlay` | `#26262e` | модалки, dropdown, popover |
+| `--surface-input` | `#1a1a20` | textarea, input |
 
 ### Бордеры
 
@@ -49,9 +51,9 @@
 
 | Токен | Hex | Назначение |
 |---|---|---|
-| `--accent` | `#3B82F6` | primary CTA, активные ссылки, focus-ring |
-| `--accent-hover` | `#2563EB` | hover на primary |
-| `--accent-subtle` | `#1E3A8A` (alpha 0.15) | мягкий фон для активного состояния |
+| `--accent` | `#6e5be8` | primary CTA, активные ссылки, focus-ring (фиолет/индиго под лого Omnia; white-on-accent 4.86:1) |
+| `--accent-hover` | `#5d4ad0` | hover на primary |
+| `--accent-subtle` | `#6e5be8` (alpha 0.14) | мягкий фон для активного состояния |
 
 ### Семантика
 

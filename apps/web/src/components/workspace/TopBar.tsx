@@ -1,7 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronDown, LogOut, Settings, User as UserIcon } from "lucide-react";
+import {
+  ChevronDown,
+  LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Settings,
+  User as UserIcon,
+} from "lucide-react";
 import { logoutAction } from "@/app/(auth)/actions";
 import {
   Avatar,
@@ -22,6 +31,7 @@ import { ImageGenToggle } from "./ImageGenToggle";
 import { LogsViewer } from "./LogsViewer";
 import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
+import { useWorkspaceStore } from "@/store/workspace";
 
 export function TopBar({
   user,
@@ -47,6 +57,10 @@ export function TopBar({
   showProjectControls?: boolean;
 }) {
   const initial = user.email.slice(0, 1).toUpperCase();
+  const chatCollapsed = useWorkspaceStore((s) => s.chatCollapsed);
+  const timelineCollapsed = useWorkspaceStore((s) => s.timelineCollapsed);
+  const toggleChat = useWorkspaceStore((s) => s.toggleChat);
+  const toggleTimeline = useWorkspaceStore((s) => s.toggleTimeline);
 
   return (
     <header className="shrink-0 h-14 flex items-center justify-between px-6 border-b border-border-subtle bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
@@ -70,6 +84,38 @@ export function TopBar({
       <div className="flex items-center gap-2">
         {showProjectControls && (
           <>
+            <div className="mr-1 flex items-center gap-0.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="px-1.5"
+                onClick={toggleChat}
+                aria-label={chatCollapsed ? "Показать чат" : "Свернуть чат"}
+                title={chatCollapsed ? "Показать чат" : "Свернуть чат"}
+              >
+                {chatCollapsed ? (
+                  <PanelLeftOpen className="h-4 w-4 text-fg-tertiary" />
+                ) : (
+                  <PanelLeftClose className="h-4 w-4 text-fg-tertiary" />
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="px-1.5"
+                onClick={toggleTimeline}
+                aria-label={
+                  timelineCollapsed ? "Показать историю" : "Свернуть историю"
+                }
+                title={timelineCollapsed ? "Показать историю" : "Свернуть историю"}
+              >
+                {timelineCollapsed ? (
+                  <PanelRightOpen className="h-4 w-4 text-fg-tertiary" />
+                ) : (
+                  <PanelRightClose className="h-4 w-4 text-fg-tertiary" />
+                )}
+              </Button>
+            </div>
             {projectId && <RuntimeButton projectId={projectId} />}
             {projectId && <LogsViewer projectId={projectId} />}
             {projectId && projectSlug && (

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PanelRightClose } from "lucide-react";
 import { toast } from "sonner";
 import { listSnapshots, rollback } from "@/lib/api/snapshots";
 import type { Project } from "@/lib/api/types";
@@ -13,6 +14,7 @@ export function Timeline({ project }: { project: Project }) {
   const qc = useQueryClient();
   const selectedSnapshotId = useWorkspaceStore((s) => s.selectedSnapshotId);
   const selectSnapshot = useWorkspaceStore((s) => s.selectSnapshot);
+  const toggleTimeline = useWorkspaceStore((s) => s.toggleTimeline);
 
   const { data, isPending } = useQuery({
     queryKey: ["snapshots", project.id],
@@ -41,11 +43,22 @@ export function Timeline({ project }: { project: Project }) {
         <span className="text-[10px] font-mono text-fg-tertiary uppercase tracking-wider">
           История
         </span>
-        {data && (
-          <span className="text-[10px] font-mono text-fg-tertiary">
-            {data.length}
-          </span>
-        )}
+        <div className="flex items-center gap-1.5">
+          {data && (
+            <span className="text-[10px] font-mono text-fg-tertiary tabular-nums">
+              {data.length}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={toggleTimeline}
+            aria-label="Свернуть историю версий"
+            title="Свернуть историю"
+            className="-mr-1 flex h-6 w-6 items-center justify-center rounded text-fg-tertiary transition-colors hover:bg-surface-overlay hover:text-fg-secondary"
+          >
+            <PanelRightClose className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       <ScrollArea className="flex-1">

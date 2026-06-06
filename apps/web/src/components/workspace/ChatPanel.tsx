@@ -2,11 +2,13 @@
 
 import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { PanelLeftClose } from "lucide-react";
 import { listMessages } from "@/lib/api/messages";
 import { ChatMessage } from "./ChatMessage";
 import { PromptInput } from "./PromptInput";
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useWorkspaceStore } from "@/store/workspace";
 
 export function ChatPanel({
   projectId,
@@ -23,6 +25,7 @@ export function ChatPanel({
     projectId,
     projectSlug,
   );
+  const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const { data: messages, isPending } = useQuery({
@@ -49,15 +52,24 @@ export function ChatPanel({
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
     // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
     <div className="flex flex-col h-full min-h-0 bg-surface-panel-dark">
-      <div className="shrink-0 px-4 h-10 flex items-center border-b border-border-subtle">
+      <div className="shrink-0 px-4 h-10 flex items-center justify-between border-b border-border-subtle">
         <span className="text-xs font-mono text-fg-tertiary uppercase tracking-wider">
           Чат
         </span>
+        <button
+          type="button"
+          onClick={toggleChat}
+          aria-label="Свернуть чат"
+          title="Свернуть чат"
+          className="-mr-1.5 flex h-6 w-6 items-center justify-center rounded text-fg-tertiary transition-colors hover:bg-surface-overlay hover:text-fg-secondary"
+        >
+          <PanelLeftClose className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
       >
         {isPending && (
           <div className="p-4 space-y-3">

@@ -4,11 +4,14 @@
    Tailwind v4 generates utilities from --color-* / --font-* / --radius-* / --shadow-*. */
 
 @theme {
-  --color-bg-base: #000000;
-  --color-bg-elevated-1: #1c1c1e;
-  --color-surface: #2c2c2e;
-  --color-surface-2: #3a3a3c;
-  --color-surface-3: #48484a;
+  /* Warm charcoal (not pure black) + violet/indigo accent — friendlier than the
+     cold #000/#0a84ff while keeping the engineering Apple-system feel. Base #0d0d12
+     matches the TopBar header rgba(13,13,18,…) so chrome reads as one surface. */
+  --color-bg-base: #0d0d12;
+  --color-bg-elevated-1: #1a1a20;
+  --color-surface: #26262e;
+  --color-surface-2: #34343e;
+  --color-surface-3: #43434e;
 
   --color-separator: rgb(84 84 88 / 0.6);
   --color-separator-solid: #38383a;
@@ -18,7 +21,7 @@
   --color-label-3: rgb(235 235 245 / 0.3);
   --color-label-4: rgb(235 235 245 / 0.18);
 
-  --color-accent: #0a84ff;
+  --color-accent: #6e5be8;
   --color-accent-fg: #ffffff;
 
   --color-system-red: #ff453a;
@@ -28,11 +31,11 @@
   --color-system-teal: #5ac8fa;
   --color-system-indigo: #5e5ce6;
 
-  --material-ultrathin-bg: rgb(28 28 30 / 0.5);
-  --material-thin-bg: rgb(28 28 30 / 0.65);
-  --material-regular-bg: rgb(28 28 30 / 0.78);
-  --material-thick-bg: rgb(28 28 30 / 0.87);
-  --material-ultrathick-bg: rgb(28 28 30 / 0.94);
+  --material-ultrathin-bg: rgb(26 26 32 / 0.5);
+  --material-thin-bg: rgb(26 26 32 / 0.65);
+  --material-regular-bg: rgb(26 26 32 / 0.78);
+  --material-thick-bg: rgb(26 26 32 / 0.87);
+  --material-ultrathick-bg: rgb(26 26 32 / 0.94);
 
   --radius-xs: 6px;
   --radius-sm: 10px;
@@ -53,24 +56,24 @@
     Menlo, Monaco, Consolas, monospace;
 
   /* Legacy aliases — kept until W2 component sweep replaces direct refs. */
-  --color-surface-base: #000000;
-  --color-surface-raised: #1c1c1e;
-  --color-surface-overlay: #2c2c2e;
-  --color-surface-input: #1c1c1e;
-  --color-surface-panel-dark: #000000;
-  --color-surface-glass: rgb(28 28 30 / 0.65);
+  --color-surface-base: #0d0d12;
+  --color-surface-raised: #1a1a20;
+  --color-surface-overlay: #26262e;
+  --color-surface-input: #1a1a20;
+  --color-surface-panel-dark: #0d0d12;
+  --color-surface-glass: rgb(26 26 32 / 0.65);
   --color-border-subtle: rgb(84 84 88 / 0.6);
   --color-border-default: rgb(84 84 88 / 0.6);
   --color-border-strong: #38383a;
-  --color-border-accent: #0a84ff;
+  --color-border-accent: #6e5be8;
   --color-fg-primary: rgb(255 255 255 / 1);
   --color-fg-secondary: rgb(235 235 245 / 0.6);
   --color-fg-tertiary: rgb(235 235 245 / 0.3);
   --color-fg-muted: rgb(235 235 245 / 0.18);
   --color-fg-on-accent: #ffffff;
-  --color-accent-hover: #0974e0;
-  --color-accent-subtle: rgb(10 132 255 / 0.12);
-  --color-accent-secondary: #5ac8fa;
+  --color-accent-hover: #5d4ad0;
+  --color-accent-subtle: rgb(110 91 232 / 0.14);
+  --color-accent-secondary: #9a86ff;
   --color-success: #32d74b;
   --color-warning: #ff9f0a;
   --color-danger: #ff453a;
@@ -81,6 +84,9 @@
   html {
     color-scheme: dark;
     scroll-behavior: smooth;
+    /* `clip` (not `hidden`) kills stray horizontal scroll app-wide without
+       creating a scroll container — so it never breaks position: sticky. */
+    overflow-x: clip;
   }
 
   body {
@@ -90,6 +96,8 @@
     background: var(--color-bg-base);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    overflow-x: clip;
+    max-width: 100%;
   }
 
   ::selection {
