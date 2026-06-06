@@ -1,6 +1,10 @@
 import pytest
 
-from omnia_api.routers.messages import _ensure_kit_linked, _text_preserved_ratio
+from omnia_api.routers.messages import (
+    _ensure_kit_linked,
+    _salvage_html,
+    _text_preserved_ratio,
+)
 from omnia_api.services import skill_library
 from omnia_api.services.prompt_builder import (
     KIT_FILES,
@@ -524,6 +528,19 @@ def test_text_preserved_ratio_scoped_edit_vs_redesign() -> None:
     # Full re-design — different copy → most words gone → must be rejected.
     redesign = "<h1>Pizza Roma</h1><p>italian dough mozzarella</p><a>Order now</a>"
     assert _text_preserved_ratio(old, redesign) < 0.4
+
+
+def test_salvage_html_rescues_unwrapped_and_fenced() -> None:
+    body = "x" * 900
+    raw = f"Готово, поменял фон.\n<!doctype html><html><body><h1>Hi</h1>{body}</body></html>\nготово"
+    out = _salvage_html(raw)
+    assert out is not None
+    assert out.startswith("<!doctype html")
+    assert out.rstrip().endswith("</html>")
+    fenced = f"```html\n<html><body>{body}</body></html>\n```"
+    assert _salvage_html(fenced) is not None
+    # No real page → None (so the drift guard rejects, page kept).
+    assert _salvage_html("просто текст без разметки") is None
 
 
 def test_build_mode_still_carries_full_prompt() -> None:

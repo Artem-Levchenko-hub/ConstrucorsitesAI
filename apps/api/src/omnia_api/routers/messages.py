@@ -483,6 +483,28 @@ def _text_preserved_ratio(old_html: str, new_html: str) -> float:
     return len(old & _visible_words(new_html)) / len(old)
 
 
+_HTML_START_RE = re.compile(r"<!doctype html|<html[ >]", re.I)
+_HTML_FENCE_RE = re.compile(r"```(?:html)?\s*(.*?)```", re.S | re.I)
+
+
+def _salvage_html(text: str) -> str | None:
+    """Pull a full HTML document out of a rewrite that forgot the <file> wrapper
+    (or fenced it in ```html). The rewrite model sometimes streams raw HTML; this
+    rescues it instead of dropping the whole edit. Returns the page or None."""
+    t = text.strip()
+    fence = _HTML_FENCE_RE.search(t)
+    if fence and "<" in fence.group(1):
+        t = fence.group(1).strip()
+    m = _HTML_START_RE.search(t)
+    if not m:
+        return None
+    html = t[m.start() :]
+    end = html.lower().rfind("</html>")
+    if end != -1:
+        html = html[: end + len("</html>")]
+    return html if len(html) > 800 else None
+
+
 _KIT_LINK = '<link rel="stylesheet" href="assets/omnia-kit.css">'
 # anime.min.js must load BEFORE omnia-kit.js — the kit's defer callback reads
 # window.anime at DOMContentLoaded. Both are KIT_FILES (stripped from model
@@ -1315,9 +1337,14 @@ async def _process_prompt(
             _rw_parts: list[str] = []
             _rw_usage: dict[str, Any] | None = None
             try:
+                # Use the reliable full-file writer (freeform_writer), not the
+                # cheap edit model — the cheap model shadow-dropped the rewrite
+                # (empty output) on prod. This pass runs only on the rare edit
+                # that <edit> couldn't express, so the slightly richer model is
+                # worth a dependable result.
                 async for _ev in stream_chat_completion(
                     rw_msgs,
-                    model_for_role("edit", override=force_model),
+                    model_for_role("freeform_writer", override=force_model),
                     str(user_id),
                     str(project_id),
                     str(assistant_message_id),
@@ -1348,6 +1375,17 @@ async def _process_prompt(
                 _rw_files = {}
             _old_index = current_files.get("index.html", "")
             _new_index = _rw_files.get("index.html", "")
+            # The writer sometimes streams raw HTML without the <file> wrapper —
+            # salvage it instead of dropping the whole edit.
+            if not _new_index:
+                _salvaged = _salvage_html(_rw_acc)
+                if _salvaged:
+                    _new_index = _salvaged
+                    _rw_files = {"index.html": _salvaged}
+                    print(
+                        f"[PP] surgical_rewrite_fallback salvaged_html len={len(_salvaged)}",
+                        flush=True,
+                    )
             _ratio = (
                 _text_preserved_ratio(_old_index, _new_index) if _new_index else 0.0
             )
