@@ -312,34 +312,10 @@ export function PreviewFrame({ project }: { project: Project }) {
         </div>
 
         <div className="flex items-center gap-1">
-          {/* Device toggle + reload — только для preview-режима */}
+          {/* Inspect + reload — только для preview-режима. Переключатель
+              устройств переехал в браузер-бар превью (он про сам сайт). */}
           {viewMode === "preview" && (
             <>
-              <div className="flex items-center rounded-full border border-border-subtle bg-surface-raised p-0.5">
-                {(
-                  [
-                    ["mobile", Smartphone],
-                    ["tablet", Tablet],
-                    ["desktop", Monitor],
-                  ] as const
-                ).map(([d, Icon]) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setDevice(d)}
-                    title={d}
-                    className={cn(
-                      "p-1.5 rounded-full transition-all",
-                      device === d
-                        ? "bg-accent-subtle text-accent ring-1 ring-inset ring-[rgba(124,92,255,0.25)]"
-                        : "text-fg-tertiary hover:text-fg-secondary",
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                  </button>
-                ))}
-              </div>
-
               <Button
                 size="sm"
                 variant="ghost"
@@ -422,11 +398,38 @@ export function PreviewFrame({ project }: { project: Project }) {
                   href={fullstackLive ? runtime!.dev_url! : publicUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="ml-3 text-xs font-mono text-fg-tertiary truncate hover:text-fg-secondary transition-colors"
+                  className="ml-3 min-w-0 flex-1 text-xs font-mono text-fg-tertiary truncate hover:text-fg-secondary transition-colors"
                   title="Открыть в новой вкладке"
                 >
                   {fullstackLive ? runtime!.dev_url : publicUrl}
                 </a>
+
+                {/* Device size — свойство превьюемого сайта, поэтому живёт в
+                    браузер-баре, а не в инструментах сверху. */}
+                <div className="flex items-center rounded-full border border-border-subtle bg-surface-raised p-0.5 shrink-0">
+                  {(
+                    [
+                      ["mobile", Smartphone],
+                      ["tablet", Tablet],
+                      ["desktop", Monitor],
+                    ] as const
+                  ).map(([d, Icon]) => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setDevice(d)}
+                      title={d}
+                      className={cn(
+                        "p-1 rounded-full transition-all",
+                        device === d
+                          ? "bg-accent-subtle text-accent ring-1 ring-inset ring-[rgba(124,92,255,0.25)]"
+                          : "text-fg-tertiary hover:text-fg-secondary",
+                      )}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="flex-1 relative bg-surface-base flex items-start justify-center overflow-auto">
