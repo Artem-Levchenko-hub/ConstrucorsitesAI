@@ -64,7 +64,7 @@ export function TopBar({
   const toggleTimeline = useWorkspaceStore((s) => s.toggleTimeline);
 
   return (
-    <header className="shrink-0 h-14 flex items-center justify-between px-6 border-b border-border-subtle bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
+    <header className="shrink-0 h-14 flex items-center justify-between px-6 bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
       <div className="flex items-center gap-4 min-w-0">
         <Link
           href="/projects"

@@ -110,7 +110,7 @@ export function CodeView({
   return (
     <div className="h-full flex bg-surface-base">
       <div className="w-56 shrink-0 border-r border-border-subtle flex flex-col overflow-hidden">
-        <div className="h-9 px-3 flex items-center gap-1.5 border-b border-border-subtle">
+        <div className="h-9 px-3 flex items-center gap-1.5">
           <Folder className="h-3.5 w-3.5 text-fg-tertiary" />
           <span className="text-xs font-mono text-fg-tertiary uppercase tracking-wider">
             Файлы
@@ -150,7 +150,7 @@ export function CodeView({
       </div>
 
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="h-9 px-3 flex items-center gap-2 border-b border-border-subtle shrink-0">
+        <div className="h-9 px-3 flex items-center gap-2 shrink-0">
           {active ? (
             <>
               <FileCode2 className="h-3.5 w-3.5 text-fg-tertiary" />

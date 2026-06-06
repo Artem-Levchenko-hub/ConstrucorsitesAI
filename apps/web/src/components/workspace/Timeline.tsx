@@ -39,7 +39,7 @@ export function Timeline({ project }: { project: Project }) {
 
   return (
     <div className="flex flex-col h-full bg-surface-panel-dark">
-      <div className="h-8 flex items-center justify-between px-3 border-b border-border-subtle">
+      <div className="h-8 flex items-center justify-between px-3">
         <span className="text-[10px] font-mono text-fg-tertiary uppercase tracking-wider">
           История
         </span>

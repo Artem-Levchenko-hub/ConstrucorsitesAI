@@ -52,7 +52,7 @@ export function ChatPanel({
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
     // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
     <div className="flex flex-col h-full min-h-0 bg-surface-panel-dark">
-      <div className="shrink-0 px-4 h-10 flex items-center justify-between border-b border-border-subtle">
+      <div className="shrink-0 px-4 h-10 flex items-center justify-between">
         <span className="text-xs font-mono text-fg-tertiary uppercase tracking-wider">
           Чат
         </span>

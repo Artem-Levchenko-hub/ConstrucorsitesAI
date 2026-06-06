@@ -84,7 +84,7 @@ export function PromptInput({
   return (
     <div
       className={cn(
-        "border-t border-border-subtle bg-surface-panel-dark p-3 space-y-2",
+        "bg-surface-panel-dark p-3 space-y-2",
         className,
       )}
     >

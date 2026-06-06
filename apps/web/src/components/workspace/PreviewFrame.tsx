@@ -258,7 +258,7 @@ export function PreviewFrame({ project }: { project: Project }) {
 
   return (
     <div className="flex flex-col h-full bg-surface-base">
-      <div className="h-10 flex items-center justify-between px-4 border-b border-border-subtle gap-3">
+      <div className="h-10 flex items-center justify-between px-4 gap-3">
         <div className="flex items-center gap-1.5 shrink-0">
           {/* Preview / Code tabs — pill style matching landing */}
           <div className="flex items-center rounded-full border border-border-subtle bg-surface-raised p-0.5">
@@ -380,7 +380,7 @@ export function PreviewFrame({ project }: { project: Project }) {
             <CodeView projectId={project.id} snapshotId={visible.id} />
           ) : (
             <>
-              <div className="h-9 border-b border-border-subtle flex items-center gap-1.5 px-3 shrink-0">
+              <div className="h-9 flex items-center gap-1.5 px-3 shrink-0">
                 <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
                 <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
                 <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />

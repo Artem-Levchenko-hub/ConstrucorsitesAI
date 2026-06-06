@@ -1,7 +1,6 @@
 "use client";
 
 import type { Project } from "@/lib/api/types";
-import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/store/workspace";
 import { ChatPanel } from "./ChatPanel";
 import { PreviewFrame } from "./PreviewFrame";
@@ -24,23 +23,13 @@ export function Workspace({ project }: { project: Project }) {
         }`,
       }}
     >
-      <div
-        className={cn(
-          "min-h-0 overflow-hidden",
-          !chatCollapsed && "border-r border-border-subtle",
-        )}
-      >
+      <div className="min-h-0 overflow-hidden">
         <ChatPanel projectId={project.id} projectSlug={project.slug} />
       </div>
       <div className="min-h-0">
         <PreviewFrame project={project} />
       </div>
-      <div
-        className={cn(
-          "min-h-0 overflow-hidden",
-          !timelineCollapsed && "border-l border-border-subtle",
-        )}
-      >
+      <div className="min-h-0 overflow-hidden">
         <Timeline project={project} />
       </div>
     </div>
