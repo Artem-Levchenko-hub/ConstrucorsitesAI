@@ -1940,6 +1940,19 @@ async def _process_prompt(
 
         new_snapshot_id: UUID | None = None
         if files:
+            # Carry the user's direct style edits (omnia-overrides block + font
+            # links) across this regeneration so manual color/font tweaks aren't
+            # lost when the model rewrites index.html. Fail-soft, like the guards.
+            try:
+                from omnia_api.services import overrides as _overrides
+
+                _old_index = current_files.get("index.html")
+                if _old_index and files.get("index.html"):
+                    files["index.html"] = _overrides.carry_over_overrides(
+                        _old_index, files["index.html"]
+                    )
+            except Exception as _co_exc:  # noqa: BLE001 — never block the build
+                print(f"[PP] overrides carry-over skipped err={_co_exc!r}", flush=True)
             new_sha = await asyncio.to_thread(
                 repo_svc.commit_files,
                 project_id,

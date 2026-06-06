@@ -18,7 +18,11 @@
  *
  * Protocol:
  *   parent → iframe: omnia:inspect:enable | :disable | :clear | :remove {id}
- *   iframe → parent: omnia:inspect:ready  | omnia:pick {el:{id,selector,label,text,html,rect}}
+ *   parent → iframe (style 1.5): omnia:style:enable | :disable |
+ *       omnia:style:set {target:'element'|'token', selector, prop, value} |
+ *       omnia:font:link {family, href} | omnia:style:reset {selector?}
+ *   iframe → parent: omnia:inspect:ready |
+ *       omnia:pick {el:{id,selector,label,text,html,rect,tag,color,backgroundColor,borderColor,fontFamily}}
  */
 (function () {
   "use strict";
@@ -41,6 +45,18 @@
   var hoverBox = null;
   var rafId = 0;
   var pendingEvent = null;
+
+  // Direct style-edit (1.5): when the parent turns on styleMode, clicks select a
+  // single element and the parent sends omnia:style:set / omnia:font:link to
+  // mutate it LIVE. We render into a TRANSIENT <style id="omnia-overrides-live">
+  // (kept last in <head> so its !important rules win) + <link data-omnia-font>
+  // tags. We deliberately do NOT reuse the committed "omnia-overrides" id so a
+  // new edit session never wipes already-saved overrides baked into the page; on
+  // Save the backend merges these edits into the committed block, and a reload
+  // collapses both into one — same look (parity).
+  var styleMode = false;
+  var overrideModel = { tokens: {}, elements: {}, fonts: {} };
+  var overrideStyleEl = null;
 
   function ensureHoverBox() {
     if (hoverBox) return hoverBox;
@@ -176,6 +192,10 @@
     e.stopPropagation();
     e.stopImmediatePropagation();
 
+    // Style mode selects ONE element at a time — drop the previous outline so the
+    // user isn't left with a trail of highlights while recolouring.
+    if (styleMode) clearAll();
+
     // Already picked? Ignore (we still blocked the site's click above). Re-marking
     // the same element would corrupt outline restore — the 2nd mark would capture
     // the 1st mark's outline as "previous".
@@ -186,6 +206,9 @@
     var id = String(++counter);
     var r = el.getBoundingClientRect();
     markElement(id, el);
+    // Computed color/font so the style panel can show the element's CURRENT
+    // values (additive fields — the AI-edit compose path ignores them).
+    var cs = window.getComputedStyle(el);
     post({
       type: "omnia:pick",
       el: {
@@ -194,6 +217,11 @@
         label: shortLabel(el),
         text: collapse(el.textContent, MAX_TEXT),
         html: collapse(el.outerHTML, MAX_HTML),
+        tag: el.nodeName.toLowerCase(),
+        color: cs.color,
+        backgroundColor: cs.backgroundColor,
+        borderColor: cs.borderTopColor,
+        fontFamily: cs.fontFamily,
         rect: {
           x: Math.round(r.left),
           y: Math.round(r.top),
@@ -237,6 +265,87 @@
     marks = keep;
   }
 
+  // Mirror of services/overrides.py sanitizers, so live CSS == persisted CSS.
+  function escVal(v) {
+    return String(v == null ? "" : v).replace(/[<>{};\n\r]/g, "").trim();
+  }
+  function escSel(s) {
+    return String(s == null ? "" : s).replace(/[<{}\n\r]/g, "").trim();
+  }
+
+  function ensureFontLink(family, href) {
+    if (!family || !href) return;
+    overrideModel.fonts[family] = href;
+    var head = document.head || document.documentElement;
+    var existing = head.querySelector(
+      'link[data-omnia-font="' + String(family).replace(/"/g, "") + '"]'
+    );
+    if (!existing) {
+      var l = document.createElement("link");
+      l.setAttribute("data-omnia-font", family);
+      l.rel = "stylesheet";
+      l.href = href;
+      head.appendChild(l);
+    }
+  }
+
+  function renderLiveOverrides() {
+    var css = "";
+    var tvars = Object.keys(overrideModel.tokens);
+    if (tvars.length) {
+      css += ":root{";
+      for (var i = 0; i < tvars.length; i++) {
+        css += escVal(tvars[i]) + ":" + escVal(overrideModel.tokens[tvars[i]]) + " !important;";
+      }
+      css += "}\n";
+    }
+    var sels = Object.keys(overrideModel.elements);
+    for (var j = 0; j < sels.length; j++) {
+      var decls = overrideModel.elements[sels[j]];
+      var body = "";
+      for (var p in decls) {
+        if (Object.prototype.hasOwnProperty.call(decls, p)) {
+          body += p + ":" + escVal(decls[p]) + " !important;";
+        }
+      }
+      if (body) css += escSel(sels[j]) + "{" + body + "}\n";
+    }
+    if (!overrideStyleEl) {
+      overrideStyleEl =
+        document.getElementById("omnia-overrides-live") ||
+        document.createElement("style");
+      overrideStyleEl.id = "omnia-overrides-live";
+    }
+    overrideStyleEl.textContent = css;
+    // Re-append so the block stays LAST in <head> and its !important rules win.
+    (document.head || document.documentElement).appendChild(overrideStyleEl);
+  }
+
+  function setStyle(d) {
+    if (d.target === "token") {
+      if (!d.prop) return;
+      if (d.value == null || d.value === "") delete overrideModel.tokens[d.prop];
+      else overrideModel.tokens[d.prop] = d.value;
+    } else {
+      var sel = d.selector;
+      if (!sel || !d.prop) return;
+      var e = overrideModel.elements[sel] || (overrideModel.elements[sel] = {});
+      if (d.value == null || d.value === "") delete e[d.prop];
+      else e[d.prop] = d.value;
+      if (!Object.keys(e).length) delete overrideModel.elements[sel];
+    }
+    renderLiveOverrides();
+  }
+
+  function resetStyle(d) {
+    if (d && d.selector) delete overrideModel.elements[d.selector];
+    else {
+      overrideModel.tokens = {};
+      overrideModel.elements = {};
+    }
+    renderLiveOverrides();
+  }
+
   function post(msg) {
     // Target '*' (consistent with the streaming-preview bridge): the only data
     // we emit is the user's own generated markup, and the recipient is the
@@ -261,6 +370,23 @@
         break;
       case "omnia:inspect:remove":
         removeOne(d.id);
+        break;
+      case "omnia:style:enable":
+        styleMode = true;
+        enable();
+        break;
+      case "omnia:style:disable":
+        styleMode = false;
+        disable();
+        break;
+      case "omnia:style:set":
+        setStyle(d);
+        break;
+      case "omnia:font:link":
+        ensureFontLink(d.family, d.href);
+        break;
+      case "omnia:style:reset":
+        resetStyle(d);
         break;
     }
   });

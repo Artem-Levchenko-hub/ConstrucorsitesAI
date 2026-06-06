@@ -32,6 +32,12 @@ ErrorCode = Literal[
     "github_repo_failed",
     "github_push_failed",
     "project_empty",
+    # Direct style-patch (1.5) — in-preview color/font edit.
+    "empty_patch",
+    "banned_color",
+    "invalid_font",
+    "no_snapshot",
+    "no_index",
 ]
 
 

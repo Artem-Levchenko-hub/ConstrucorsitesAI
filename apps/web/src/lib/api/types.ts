@@ -125,6 +125,31 @@ export type Charge = {
   created_at: IsoDateTime;
 };
 
+/** A font the in-preview picker can apply, from `GET /api/fonts`. */
+export type FontOption = {
+  family: string;
+  category: string;
+  google_fonts_url: string;
+  css_stack: string;
+};
+
+/**
+ * Direct style edit sent to `POST /api/projects/:id/style-patch`. `tokens` are
+ * site-wide CSS-var changes; `elements` are per-selector color/font overrides.
+ * Persisted as a snapshot (no LLM). Colors are hex; `font_family` must be a
+ * family from `GET /api/fonts`.
+ */
+export type StylePatchPayload = {
+  tokens: { var: string; value: string }[];
+  elements: {
+    selector: string;
+    color?: string;
+    background_color?: string;
+    border_color?: string;
+    font_family?: string;
+  }[];
+};
+
 /**
  * One of the 8 server-defined design presets, as served by
  * `GET /api/design-presets`. The onboarding quiz renders these as style/palette

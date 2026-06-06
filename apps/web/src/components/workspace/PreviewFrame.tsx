@@ -15,6 +15,7 @@ import {
   Play,
   ServerCog,
   MousePointerClick,
+  Pipette,
   PanelLeftOpen,
   PanelRightOpen,
 } from "lucide-react";
@@ -25,12 +26,14 @@ import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
 import { useInspectorStore } from "@/store/inspector";
+import { useStyleEditStore } from "@/store/styleEdit";
 import { toast } from "sonner";
 import type { Project, Snapshot } from "@/lib/api/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shortSha, cn, formatRelativeTime } from "@/lib/utils";
 import { StreamingPreviewFrame } from "./StreamingPreviewFrame";
 import { StreamingCodeView } from "./StreamingCodeView";
+import { StylePanel } from "./StylePanel";
 import { CodeView } from "./CodeView";
 
 type Device = "mobile" | "tablet" | "desktop";
@@ -59,6 +62,20 @@ export function PreviewFrame({ project }: { project: Project }) {
   const addSelection = useInspectorStore((s) => s.addSelection);
   const selections = useInspectorStore((s) => s.selections);
   const prevPickIds = useRef<string[]>([]);
+
+  // Style-edit mode (1.5) — direct color/font picker, mutually exclusive with
+  // select-mode (both hijack clicks in the preview).
+  const styleMode = useStyleEditStore((s) => s.styleMode);
+  const setStyleMode = useStyleEditStore((s) => s.setStyleMode);
+  const styleSelected = useStyleEditStore((s) => s.selected);
+  const onToggleInspect = useCallback(() => {
+    setStyleMode(false);
+    toggleInspect();
+  }, [setStyleMode, toggleInspect]);
+  const onToggleStyle = useCallback(() => {
+    if (!styleMode) setInspectMode(false);
+    setStyleMode(!styleMode);
+  }, [styleMode, setStyleMode, setInspectMode]);
   // Tracks which iframe key has emitted `omnia:inspect:ready` — used by the
   // race-fallback timer to know whether to warn the user.
   const inspectorReadyKeyRef = useRef<number | null>(null);
@@ -170,10 +187,23 @@ export function PreviewFrame({ project }: { project: Project }) {
     };
   }, [inspectMode, iframeKey, postToPreview]);
 
-  // Picking on an old snapshot would edit HEAD — confusing, so disable it.
+  // Style-mode enable/disable bridge (mirrors the select-mode effect above).
+  useEffect(() => {
+    postToPreview({
+      type: styleMode ? "omnia:style:enable" : "omnia:style:disable",
+    });
+    if (!styleMode) return;
+    const retry = window.setTimeout(() => {
+      postToPreview({ type: "omnia:style:enable" });
+    }, 700);
+    return () => window.clearTimeout(retry);
+  }, [styleMode, iframeKey, postToPreview]);
+
+  // Editing an old snapshot would touch HEAD — confusing, so disable both modes.
   useEffect(() => {
     if (viewingOld && inspectMode) setInspectMode(false);
-  }, [viewingOld, inspectMode, setInspectMode]);
+    if (viewingOld && styleMode) setStyleMode(false);
+  }, [viewingOld, inspectMode, styleMode, setInspectMode, setStyleMode]);
 
   // Receive picks from the preview; re-arm after a (re)load.
   useEffect(() => {
@@ -190,18 +220,33 @@ export function PreviewFrame({ project }: { project: Project }) {
         // can distinguish "script loaded" from "script never loaded".
         inspectorReadyKeyRef.current = iframeKey;
         if (inspectMode) postToPreview({ type: "omnia:inspect:enable" });
+        if (useStyleEditStore.getState().styleMode)
+          postToPreview({ type: "omnia:style:enable" });
         return;
       }
       if (d.type === "omnia:pick" && d.el) {
         const el = d.el;
-        addSelection({
-          id: String(el.id),
-          selector: String(el.selector ?? ""),
-          label: el.label ?? null,
-          text: el.text ?? null,
-          html: el.html ?? null,
-          comment: "",
-        });
+        // Style mode routes the pick to the style panel (computed color/font);
+        // select mode attaches it as a commentable chip for an AI edit.
+        if (useStyleEditStore.getState().styleMode) {
+          useStyleEditStore.getState().selectElement({
+            selector: String(el.selector ?? ""),
+            tag: String(el.tag ?? ""),
+            color: String(el.color ?? ""),
+            backgroundColor: String(el.backgroundColor ?? ""),
+            borderColor: String(el.borderColor ?? ""),
+            fontFamily: String(el.fontFamily ?? ""),
+          });
+        } else {
+          addSelection({
+            id: String(el.id),
+            selector: String(el.selector ?? ""),
+            label: el.label ?? null,
+            text: el.text ?? null,
+            html: el.html ?? null,
+            comment: "",
+          });
+        }
       }
     }
     window.addEventListener("message", onMessage);
@@ -324,7 +369,7 @@ export function PreviewFrame({ project }: { project: Project }) {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => toggleInspect()}
+                onClick={onToggleInspect}
                 disabled={viewingOld}
                 title={
                   viewingOld
@@ -336,6 +381,23 @@ export function PreviewFrame({ project }: { project: Project }) {
                 className={cn(inspectMode && "text-accent bg-accent-subtle")}
               >
                 <MousePointerClick className="h-3.5 w-3.5" />
+              </Button>
+
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onToggleStyle}
+                disabled={viewingOld}
+                title={
+                  viewingOld
+                    ? "Редактирование стиля недоступно для старой версии"
+                    : styleMode
+                      ? "Выключить редактор стиля"
+                      : "Пипетка: менять цвет и шрифт прямо в превью"
+                }
+                className={cn(styleMode && "text-accent bg-accent-subtle")}
+              >
+                <Pipette className="h-3.5 w-3.5" />
               </Button>
 
               <Button
@@ -533,6 +595,12 @@ export function PreviewFrame({ project }: { project: Project }) {
                             150,
                           );
                         }
+                        if (styleMode) {
+                          window.setTimeout(
+                            () => postToPreview({ type: "omnia:style:enable" }),
+                            150,
+                          );
+                        }
                       }}
                     />
                   ) : null}
@@ -553,6 +621,10 @@ export function PreviewFrame({ project }: { project: Project }) {
                     </motion.div>
                   )}
                 </AnimatePresence>
+
+                {styleMode && styleSelected && (
+                  <StylePanel projectId={project.id} post={postToPreview} />
+                )}
               </div>
             </>
           )}
