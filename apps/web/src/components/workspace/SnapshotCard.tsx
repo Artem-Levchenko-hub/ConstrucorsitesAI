@@ -18,6 +18,7 @@ import { cn, formatRelativeTime, shortSha } from "@/lib/utils";
 
 export function SnapshotCard({
   snapshot,
+  versionNumber,
   isCurrent,
   isSelected,
   onSelect,
@@ -25,6 +26,8 @@ export function SnapshotCard({
   rolling,
 }: {
   snapshot: Snapshot;
+  /** Версия по хронологии (старейший = 1). Делает одинаковые тёмные превью различимыми. */
+  versionNumber?: number;
   isCurrent: boolean;
   isSelected: boolean;
   onSelect: () => void;
@@ -88,10 +91,7 @@ export function SnapshotCard({
         {isCurrent && (
           <Badge
             variant="accent"
-            className={cn(
-              "absolute top-1 left-1 px-1 py-0 transition-[font-size]",
-              hovered ? "text-[8px]" : "text-[6px]",
-            )}
+            className="absolute top-1.5 left-1.5 px-1.5 py-0 text-[10px]"
           >
             Текущая
           </Badge>
@@ -99,29 +99,15 @@ export function SnapshotCard({
         {snapshot.is_rollback_target && (
           <Badge
             variant="outline"
-            className={cn(
-              "absolute top-1 right-1 px-1 py-0 transition-[font-size]",
-              hovered ? "text-[8px]" : "text-[6px]",
-            )}
+            className="absolute top-1.5 right-1.5 px-1.5 py-0 text-[10px]"
           >
             Откат
           </Badge>
         )}
       </div>
 
-      <motion.div
-        layout="position"
-        className={cn(
-          "transition-[padding] duration-200",
-          hovered ? "px-1.5 py-1 space-y-0.5" : "px-1 py-0.5 space-y-0",
-        )}
-      >
-        <div
-          className={cn(
-            "text-fg-primary line-clamp-1 transition-[font-size,line-height] duration-200",
-            hovered ? "text-[9px] leading-3.5" : "text-[7px] leading-[10px]",
-          )}
-        >
+      <motion.div layout="position" className="px-2 py-1.5 space-y-1">
+        <div className="text-[11px] leading-4 text-fg-primary line-clamp-2">
           {snapshot.prompt_text ?? (
             <span className="text-fg-tertiary italic">
               {snapshot.parent_id ? "Откат к версии" : "Стартовый"}
@@ -129,14 +115,18 @@ export function SnapshotCard({
           )}
         </div>
 
-        <div
-          className={cn(
-            "flex items-center justify-between font-mono text-fg-tertiary transition-[font-size] duration-200",
-            hovered ? "text-[8px]" : "text-[6px]",
-          )}
-        >
-          <span>{shortSha(snapshot.commit_sha)}</span>
-          <span>{formatRelativeTime(snapshot.created_at)}</span>
+        <div className="flex items-center justify-between gap-1 font-mono text-[10px] leading-none">
+          <span className="flex min-w-0 items-center gap-1">
+            {versionNumber != null && (
+              <span className="font-semibold text-accent">v{versionNumber}</span>
+            )}
+            <span className="truncate text-fg-tertiary">
+              {shortSha(snapshot.commit_sha)}
+            </span>
+          </span>
+          <span className="shrink-0 text-fg-secondary tabular-nums">
+            {formatRelativeTime(snapshot.created_at)}
+          </span>
         </div>
 
         {/* Кнопка "Откатить" появляется только при hover/focus — на компактной

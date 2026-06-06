@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import {
+  ArrowLeft,
   ChevronDown,
   LogOut,
   PanelLeftClose,
@@ -75,6 +76,14 @@ export function TopBar({
 
         {projectName && (
           <>
+            <span className="text-fg-tertiary">/</span>
+            <Link
+              href="/projects"
+              className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-sm text-fg-secondary transition-colors hover:bg-surface-overlay hover:text-fg-primary"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Проекты
+            </Link>
             <span className="text-fg-tertiary">/</span>
             <span className="truncate text-sm font-medium">{projectName}</span>
           </>

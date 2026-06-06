@@ -84,10 +84,11 @@ export function Timeline({ project }: { project: Project }) {
             </div>
           )}
 
-          {data?.map((snap) => (
+          {data?.map((snap, i) => (
             <SnapshotCard
               key={snap.id}
               snapshot={snap}
+              versionNumber={data.length - i}
               isCurrent={project.current_snapshot_id === snap.id}
               isSelected={selectedSnapshotId === snap.id}
               onSelect={() => selectSnapshot(snap.id)}
