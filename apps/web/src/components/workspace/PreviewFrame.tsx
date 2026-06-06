@@ -15,6 +15,8 @@ import {
   Play,
   ServerCog,
   MousePointerClick,
+  PanelLeftOpen,
+  PanelRightOpen,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listSnapshots } from "@/lib/api/snapshots";
@@ -42,6 +44,10 @@ export function PreviewFrame({ project }: { project: Project }) {
   const selectSnapshot = useWorkspaceStore((s) => s.selectSnapshot);
   const viewMode = useWorkspaceStore((s) => s.viewMode);
   const setViewMode = useWorkspaceStore((s) => s.setViewMode);
+  const chatCollapsed = useWorkspaceStore((s) => s.chatCollapsed);
+  const timelineCollapsed = useWorkspaceStore((s) => s.timelineCollapsed);
+  const toggleChat = useWorkspaceStore((s) => s.toggleChat);
+  const toggleTimeline = useWorkspaceStore((s) => s.toggleTimeline);
 
   // Select-mode (element picker). The inspector script lives inside the preview
   // document; we drive it over postMessage through the iframe ref below.
@@ -260,6 +266,20 @@ export function PreviewFrame({ project }: { project: Project }) {
     <div className="flex flex-col h-full bg-surface-base">
       <div className="h-10 flex items-center justify-between px-4 gap-3">
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Развернуть чат — появляется когда левая панель свёрнута (preview
+              на всю ширину); свернуть обратно можно шевроном в шапке чата. */}
+          {chatCollapsed && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="px-1.5"
+              onClick={toggleChat}
+              aria-label="Развернуть чат"
+              title="Развернуть чат"
+            >
+              <PanelLeftOpen className="h-4 w-4 text-fg-tertiary" />
+            </Button>
+          )}
           {/* Preview / Code tabs — pill style matching landing */}
           <div className="flex items-center rounded-full border border-border-subtle bg-surface-raised p-0.5">
             {(
@@ -354,6 +374,20 @@ export function PreviewFrame({ project }: { project: Project }) {
               Открыть
             </a>
           </Button>
+
+          {/* Развернуть историю — появляется когда правая панель свёрнута. */}
+          {timelineCollapsed && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="px-1.5"
+              onClick={toggleTimeline}
+              aria-label="Развернуть историю"
+              title="Развернуть историю"
+            >
+              <PanelRightOpen className="h-4 w-4 text-fg-tertiary" />
+            </Button>
+          )}
         </div>
       </div>
 
