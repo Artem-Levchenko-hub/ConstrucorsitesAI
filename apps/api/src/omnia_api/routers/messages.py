@@ -2149,12 +2149,20 @@ async def _process_prompt(
             await _finalize_message(
                 factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
             )
-            hint = (
-                "Модель не вернула ни одного файла в формате "
-                '<file path="...">...</file>. Похоже, выбранная модель плохо '
-                "следует структурному формату для генерации сайтов — попробуй "
-                "Claude Haiku 4.5 (быстро) или Claude Sonnet 4.6 (качественно)."
-            )
+            # Surgical edit that didn't land (SEARCH didn't match) gets a friendly,
+            # actionable hint — never the build-path "switch models" text (the user
+            # has no model picker, and this is an edit, not a fresh build).
+            if surgical:
+                hint = (
+                    "Не получилось применить точечную правку. Уточни, что именно и "
+                    "где поменять (например: «увеличь заголовок в первой секции» или "
+                    "«поменяй текст кнопки на …»), и я попробую снова."
+                )
+            else:
+                hint = (
+                    "Не получилось собрать страницу с первого раза. Попробуй "
+                    "переформулировать запрос или повторить — иногда помогает."
+                )
             await publish_event(
                 project_id,
                 "llm.error",

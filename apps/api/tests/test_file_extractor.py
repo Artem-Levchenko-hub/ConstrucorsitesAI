@@ -167,6 +167,48 @@ def test_apply_edits_ambiguous_search_records_conflict() -> None:
     assert "2 вхождений" in conflicts[0]
 
 
+def test_apply_edits_indent_tolerant() -> None:
+    """A SEARCH whose lines match but with different indentation still applies —
+    a cheap model often reproduces the right lines with the wrong leading
+    whitespace, the #1 reason a correct edit silently fails to land."""
+    base = {
+        "index.html": (
+            '    <section id="hero" class="bg-[#0C0A09]">\n'
+            "      <h1>Заголовок</h1>\n"
+            "    </section>"
+        )
+    }
+    edits = {
+        "index.html": [
+            (
+                # no indentation, different from the file
+                '<section id="hero" class="bg-[#0C0A09]">\n<h1>Заголовок</h1>\n</section>',
+                '<section id="hero" class="bg-[#1A1A2E]">\n<h1>Заголовок</h1>\n</section>',
+            )
+        ]
+    }
+    updated, conflicts = apply_edits(edits, base)
+    assert conflicts == []
+    assert "bg-[#1A1A2E]" in updated["index.html"]
+    assert "bg-[#0C0A09]" not in updated["index.html"]
+
+
+def test_apply_edits_content_mismatch_still_refused() -> None:
+    """Indent tolerance must NOT forgive a real content difference — a SEARCH
+    naming a tag/attribute that isn't in the file (e.g. a hallucinated
+    data-omnia-photo where the committed file has a resolved <img src>) must
+    still be refused, not fuzzed onto the wrong element."""
+    base = {"index.html": '<img src="https://cdn.example/x.jpg" alt="a">'}
+    edits = {
+        "index.html": [
+            ('<img data-omnia-photo="sushi plate" alt="a">', '<img src="y.jpg">')
+        ]
+    }
+    updated, conflicts = apply_edits(edits, base)
+    assert "index.html" not in updated
+    assert len(conflicts) == 1
+
+
 def test_apply_edits_missing_file_records_conflict() -> None:
     edits = {"nope.html": [("foo", "bar")]}
     updated, conflicts = apply_edits(edits, BASE)

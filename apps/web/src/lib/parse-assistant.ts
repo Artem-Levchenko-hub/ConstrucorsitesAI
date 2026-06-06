@@ -8,14 +8,20 @@
 
 export type AssistantPart =
   | { kind: "text"; text: string }
-  | { kind: "file"; path: string; body: string; closed: boolean };
+  | { kind: "file"; path: string; body: string; closed: boolean }
+  // Surgical edit (`<edit path="...">` with SEARCH/REPLACE inside). Rendered as
+  // a compact "Правка" chip, NOT as raw diff text — otherwise a follow-up edit
+  // dumps the whole SEARCH/REPLACE block into the chat.
+  | { kind: "edit"; path: string; body: string; closed: boolean };
 
-const FILE_OPEN = /<file\s+path="([^"]+)"\s*>/g;
+// Matches the opening tag of either an AI file block or a surgical edit block.
+// Mirrors apps/api/src/omnia_api/services/file_extractor.py (`<file>`/`<edit>`).
+const BLOCK_OPEN = /<(file|edit)\s+path="([^"]+)"\s*>/g;
 
 /**
- * Делит content на части в порядке появления. Незакрытый `<file>` в конце
- * (типично во время стриминга, пока модель не дописала `</file>`) тоже
- * возвращается, но с `closed: false` — UI может показать его как «генерируется».
+ * Делит content на части в порядке появления. `<file>` и `<edit>` блоки
+ * выносятся в свои части (UI рисует их как чипы, а не сырой текст). Незакрытый
+ * блок в конце (типично во время стриминга) возвращается с `closed: false`.
  */
 export function parseAssistantContent(content: string): AssistantPart[] {
   if (!content) return [];
@@ -23,38 +29,35 @@ export function parseAssistantContent(content: string): AssistantPart[] {
   const parts: AssistantPart[] = [];
   let cursor = 0;
 
-  FILE_OPEN.lastIndex = 0;
+  BLOCK_OPEN.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = FILE_OPEN.exec(content)) !== null) {
+  while ((match = BLOCK_OPEN.exec(content)) !== null) {
+    const tag = match[1] as "file" | "edit";
     const openStart = match.index;
     const openEnd = openStart + match[0].length;
-    const path = match[1];
+    const path = match[2];
 
     if (openStart > cursor) {
       const text = content.slice(cursor, openStart);
       if (text.trim()) parts.push({ kind: "text", text });
     }
 
-    const closeIdx = content.indexOf("</file>", openEnd);
+    const closeTag = `</${tag}>`;
+    const closeIdx = content.indexOf(closeTag, openEnd);
     if (closeIdx === -1) {
-      parts.push({
-        kind: "file",
-        path,
-        body: content.slice(openEnd),
-        closed: false,
-      });
+      parts.push({ kind: tag, path, body: content.slice(openEnd), closed: false });
       cursor = content.length;
       break;
     }
 
     parts.push({
-      kind: "file",
+      kind: tag,
       path,
       body: content.slice(openEnd, closeIdx),
       closed: true,
     });
-    cursor = closeIdx + "</file>".length;
-    FILE_OPEN.lastIndex = cursor;
+    cursor = closeIdx + closeTag.length;
+    BLOCK_OPEN.lastIndex = cursor;
   }
 
   if (cursor < content.length) {

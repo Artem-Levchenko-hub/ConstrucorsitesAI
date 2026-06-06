@@ -22,7 +22,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { DesignPresetSelector } from "./DesignPresetSelector";
 import { GithubPushButton } from "./GithubPushButton";
 import { ImageGenToggle } from "./ImageGenToggle";
 import { LogsViewer } from "./LogsViewer";
@@ -34,8 +33,6 @@ export function TopBar({
   projectName,
   projectId,
   projectSlug,
-  designPresetId,
-  designPresetName,
   imageGenEnabled,
   showProjectControls = true,
 }: {
@@ -96,13 +93,6 @@ export function TopBar({
               <ImageGenToggle
                 projectId={projectId}
                 imageGenEnabled={imageGenEnabled ?? true}
-              />
-            )}
-            {projectId && (
-              <DesignPresetSelector
-                projectId={projectId}
-                initialPresetId={designPresetId}
-                initialPresetName={designPresetName}
               />
             )}
             <WalletBadge />

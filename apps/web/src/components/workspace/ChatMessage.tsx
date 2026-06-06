@@ -5,6 +5,7 @@ import {
   Bot,
   User as UserIcon,
   FileCode2,
+  PencilLine,
   ChevronRight,
   Loader2,
 } from "lucide-react";
@@ -68,11 +69,6 @@ export function ChatMessage({
           <span className="text-fg-tertiary">
             {formatRelativeTime(message.created_at)}
           </span>
-          {message.model_id && !isUser && (
-            <span className="font-mono text-fg-tertiary">
-              · {message.model_id}
-            </span>
-          )}
         </div>
 
         <div className="text-sm text-fg-primary leading-6 space-y-1.5">
@@ -89,7 +85,13 @@ export function ChatMessage({
                 {p.text}
               </div>
             ) : (
-              <FileChip key={i} path={p.path} body={p.body} closed={p.closed} />
+              <FileChip
+                key={i}
+                path={p.path}
+                body={p.body}
+                closed={p.closed}
+                variant={p.kind}
+              />
             ),
           )}
 
@@ -132,13 +134,20 @@ function FileChip({
   path,
   body,
   closed,
+  variant = "file",
 }: {
   path: string;
   body: string;
   closed: boolean;
+  variant?: "file" | "edit";
 }) {
   const [open, setOpen] = useState(false);
   const size = new Blob([body]).size;
+  const isEdit = variant === "edit";
+  const Icon = isEdit ? PencilLine : FileCode2;
+  // For an edit the body is a SEARCH/REPLACE diff — its byte size is noise; show
+  // a plain "правка" label instead. The diff stays available behind the chevron.
+  const meta = isEdit ? "правка" : formatBytes(size);
 
   return (
     <div className="rounded-md border border-border-subtle bg-surface-raised overflow-hidden">
@@ -153,17 +162,17 @@ function FileChip({
             open && "rotate-90",
           )}
         />
-        <FileCode2 className="h-3.5 w-3.5 text-fg-secondary shrink-0" />
+        <Icon className="h-3.5 w-3.5 text-fg-secondary shrink-0" />
         <span className="font-mono text-xs text-fg-primary truncate">
-          {path}
+          {isEdit ? `Правка · ${path}` : path}
         </span>
         <span className="ml-auto flex items-center gap-2 text-[11px] font-mono text-fg-tertiary shrink-0">
           {closed ? (
-            formatBytes(size)
+            meta
           ) : (
             <>
               <Loader2 className="h-3 w-3 animate-spin" />
-              <span>{formatBytes(size)}</span>
+              <span>{meta}</span>
             </>
           )}
         </span>

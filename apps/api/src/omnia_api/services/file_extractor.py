@@ -182,6 +182,59 @@ def extract_edits(answer: str) -> dict[str, list[tuple[str, str]]]:
     return edits
 
 
+def _match_span(content: str, search: str) -> tuple[int, int] | None:
+    """Locate ``search`` inside ``content`` and return its ``(start, end)`` char
+    span, or ``None`` if it's missing OR ambiguous (>1 place).
+
+    Two passes:
+    1. **Exact** — the byte-for-byte ``str.find`` the SEARCH contract asks for.
+       Unique hit wins; multiple hits are ambiguous → ``None``.
+    2. **Indent-tolerant** — compare WHOLE lines stripped of leading/trailing
+       whitespace. A cheap model often reproduces the right lines but with
+       different indentation (the #1 reason a perfectly-correct edit fails to
+       apply). Leading/trailing blank lines in the SEARCH are ignored. Only a
+       UNIQUE line-window match is accepted — never guess between two.
+
+    The fallback only forgives WHITESPACE, never content: a SEARCH that names a
+    different tag/attribute than the file (e.g. a hallucinated ``data-omnia-photo``
+    where the committed file has a resolved ``<img src>``) still won't match — that
+    is the prompt's job to get right, not something we should fuzz over.
+    """
+    n_exact = content.count(search)
+    if n_exact == 1:
+        i = content.index(search)
+        return (i, i + len(search))
+    if n_exact > 1:
+        return None
+
+    s_lines = search.split("\n")
+    while s_lines and not s_lines[0].strip():
+        s_lines.pop(0)
+    while s_lines and not s_lines[-1].strip():
+        s_lines.pop()
+    if not s_lines:
+        return None
+    s_norm = [ln.strip() for ln in s_lines]
+
+    c_lines = content.split("\n")
+    # Char offset where each content line begins (line i + its trailing "\n").
+    offsets: list[int] = []
+    pos = 0
+    for ln in c_lines:
+        offsets.append(pos)
+        pos += len(ln) + 1
+
+    window = len(s_norm)
+    found: list[tuple[int, int]] = []
+    for i in range(len(c_lines) - window + 1):
+        if all(c_lines[i + k].strip() == s_norm[k] for k in range(window)):
+            last = i + window - 1
+            found.append((offsets[i], offsets[last] + len(c_lines[last])))
+            if len(found) > 1:
+                return None  # ambiguous — refuse to guess
+    return found[0] if len(found) == 1 else None
+
+
 def apply_edits(
     edits: dict[str, list[tuple[str, str]]],
     base_files: dict[str, str],
@@ -210,23 +263,25 @@ def apply_edits(
             continue
         content = base_files[path]
         for i, (search, replace) in enumerate(pairs, 1):
-            count = content.count(search)
-            if count == 0:
-                conflicts.append(
-                    f"{path} #{i}: SEARCH-блок не найден в файле "
-                    f"(первые 60 chars: {search[:60]!r})"
-                )
+            span = _match_span(content, search)
+            if span is None:
+                exact = content.count(search)
+                if exact > 1:
+                    conflicts.append(
+                        f"{path} #{i}: SEARCH-блок неоднозначен ({exact} вхождений), "
+                        f"нужен больший контекст"
+                    )
+                else:
+                    conflicts.append(
+                        f"{path} #{i}: SEARCH-блок не найден уникально "
+                        f"(первые 60 chars: {search[:60]!r})"
+                    )
                 # Прекращаем дальнейшие правки этого файла — последующие
                 # SEARCH могут зависеть от предыдущего REPLACE, который не
                 # применился, и тогда будут ещё больше промахов.
                 break
-            if count > 1:
-                conflicts.append(
-                    f"{path} #{i}: SEARCH-блок неоднозначен ({count} вхождений), "
-                    f"нужен больший контекст"
-                )
-                break
-            content = content.replace(search, replace, 1)
+            start, end = span
+            content = content[:start] + replace + content[end:]
         else:
             # for-else: цикл прошёл без break → все пары применились
             updated[path] = content
