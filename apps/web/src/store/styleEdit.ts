@@ -13,6 +13,9 @@ export type StyleSelected = {
   fontFamily: string;
   /** Current <img> source (empty for non-images) — drives "replace image". */
   src?: string;
+  /** All image sources at the click point (carousel/slider stacks several) so
+   *  the panel can offer a chooser instead of only the topmost. */
+  srcs?: string[];
   rect?: { x: number; y: number; width: number; height: number };
 };
 

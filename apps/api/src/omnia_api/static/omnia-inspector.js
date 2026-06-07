@@ -231,6 +231,34 @@
     return null;
   }
 
+  // ALL distinct image sources at this point — a carousel/slider stacks several
+  // <img> on top of each other, so a single pick can't reach the lower ones.
+  // Returns the stack under the cursor (topmost first); falls back to images
+  // inside the clicked container when none sit exactly under the point.
+  function pickedImgs(el, x, y) {
+    var out = [];
+    var seen = {};
+    function add(im) {
+      if (im && im.nodeName === "IMG") {
+        var s = im.getAttribute("src") || im.src || "";
+        if (s && !seen[s]) {
+          seen[s] = 1;
+          out.push(s);
+        }
+      }
+    }
+    if (el.nodeName === "IMG") add(el);
+    if (document.elementsFromPoint) {
+      var st = document.elementsFromPoint(x, y);
+      for (var i = 0; i < st.length; i++) add(st[i]);
+    }
+    if (out.length === 0 && el.querySelectorAll) {
+      var inn = el.querySelectorAll("img");
+      for (var j = 0; j < inn.length; j++) add(inn[j]);
+    }
+    return out;
+  }
+
   function onClick(e) {
     if (!enabled) return;
     var el = e.target;
@@ -258,7 +286,7 @@
     // Computed color/font so the style panel can show the element's CURRENT
     // values (additive fields — the AI-edit compose path ignores them).
     var cs = window.getComputedStyle(el);
-    var imgEl = pickedImg(el, e.clientX, e.clientY);
+    var imgs = pickedImgs(el, e.clientX, e.clientY);
     post({
       type: "omnia:pick",
       el: {
@@ -272,9 +300,11 @@
         backgroundColor: cs.backgroundColor,
         borderColor: cs.borderTopColor,
         fontFamily: cs.fontFamily,
-        // The picked image's source (the element itself / under the cursor / a
-        // descendant) so the style panel can offer "replace with your own image".
-        src: imgEl ? (imgEl.getAttribute("src") || imgEl.src || "") : "",
+        // Image sources at the click — usually one, but a carousel stacks
+        // several; the panel lets the user choose which to replace. `src` keeps
+        // the topmost for back-compat.
+        src: imgs[0] || "",
+        srcs: imgs,
         rect: {
           x: Math.round(r.left),
           y: Math.round(r.top),

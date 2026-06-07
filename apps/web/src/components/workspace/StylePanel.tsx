@@ -84,6 +84,7 @@ export function StylePanel({
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [chosenSrc, setChosenSrc] = useState<string | null>(null);
 
   const { data: fonts } = useQuery({
     queryKey: ["fonts"],
@@ -104,6 +105,17 @@ export function StylePanel({
   }, [selected, elements, target]);
 
   if (!selected) return null;
+
+  // Images at the click point — a carousel stacks several; let the user choose
+  // which one to replace (defaults to the topmost).
+  const imgSrcs =
+    selected.srcs && selected.srcs.length
+      ? selected.srcs
+      : selected.src
+        ? [selected.src]
+        : [];
+  const activeSrc =
+    chosenSrc && imgSrcs.includes(chosenSrc) ? chosenSrc : (imgSrcs[0] ?? "");
 
   const applyColor = (hex: string) => {
     if (siteWide) {
@@ -172,7 +184,7 @@ export function StylePanel({
 
   // Replace this image with the user's own upload — commits a snapshot, no LLM.
   const replaceImage = async (file: File) => {
-    if (!selected?.src || uploading) return;
+    if (!activeSrc || uploading) return;
     if (!file.type.startsWith("image/")) {
       toast.error("Это не изображение");
       return;
@@ -180,7 +192,7 @@ export function StylePanel({
     setUploading(true);
     try {
       const { url } = await uploadImage(projectId, file);
-      await applyImagePatch(projectId, { old_src: selected.src, new_src: url });
+      await applyImagePatch(projectId, { old_src: activeSrc, new_src: url });
       await qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
       selectSnapshot(null);
       clearAll();
@@ -219,12 +231,35 @@ export function StylePanel({
 
       <div className="p-3 space-y-4 overflow-y-auto scrollbar-elegant">
         {/* IMAGE — replace a generated picture with your own (no LLM) */}
-        {selected.src ? (
+        {imgSrcs.length > 0 ? (
           <div className="space-y-2">
             <div className="flex items-center gap-1.5 text-[11px] text-fg-tertiary">
               <ImageUp className="h-3 w-3" />
-              Картинка — загрузи свою
+              {imgSrcs.length > 1
+                ? "Картинки — выбери, какую заменить"
+                : "Картинка — загрузи свою"}
             </div>
+            {imgSrcs.length > 1 ? (
+              <div className="flex gap-1.5 overflow-x-auto pb-1">
+                {imgSrcs.map((s, i) => (
+                  <button
+                    key={s + i}
+                    type="button"
+                    onClick={() => setChosenSrc(s)}
+                    title={`Картинка ${i + 1}`}
+                    className={cn(
+                      "relative h-12 w-12 shrink-0 rounded-md overflow-hidden border-2 transition-colors",
+                      s === activeSrc
+                        ? "border-accent"
+                        : "border-transparent opacity-60 hover:opacity-100",
+                    )}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={s} alt="" className="h-full w-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <label
               onDragOver={(e) => {
                 e.preventDefault();
@@ -243,7 +278,7 @@ export function StylePanel({
               )}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={selected.src} alt="" className="w-full h-24 object-cover" />
+              <img src={activeSrc} alt="" className="w-full h-24 object-cover" />
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
@@ -258,6 +293,8 @@ export function StylePanel({
               <div className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 hover:opacity-100 transition-opacity text-[11px] text-white font-medium px-2 text-center">
                 {uploading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
+                ) : imgSrcs.length > 1 ? (
+                  "Заменить выбранную — клик или перетащи"
                 ) : (
                   "Заменить — клик или перетащи файл"
                 )}

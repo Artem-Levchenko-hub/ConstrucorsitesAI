@@ -212,7 +212,7 @@ export function PreviewFrame({ project }: { project: Project }) {
       if (!win || e.source !== win) return; // trust only our own preview
       const d = e.data as {
         type?: string;
-        el?: Record<string, string>;
+        el?: Record<string, string> & { srcs?: string[] };
       };
       if (!d || typeof d.type !== "string") return;
       if (d.type === "omnia:inspect:ready") {
@@ -237,6 +237,7 @@ export function PreviewFrame({ project }: { project: Project }) {
             borderColor: String(el.borderColor ?? ""),
             fontFamily: String(el.fontFamily ?? ""),
             src: String(el.src ?? ""),
+            srcs: Array.isArray(el.srcs) ? el.srcs.map(String) : [],
           });
         } else {
           addSelection({
