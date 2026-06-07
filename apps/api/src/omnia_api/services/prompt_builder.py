@@ -2465,6 +2465,18 @@ _EDIT_IDENTITY = """\
   старым. НЕ выдумывай новую дизайн-систему и НЕ объявляй новые CSS-переменные.
 • Не добавляй секции/блоки/эффекты, которых не просили. Просят одно — делаешь одно."""
 
+_EDIT_FAITHFUL = """\
+ТОЧНОСТЬ ИСПОЛНЕНИЯ (именно это чаще всего ломается — соблюдай жёстко):
+• ВЕРБАТИМ-ТЕКСТ: дал пользователь точный текст («заголовок ровно на X», «кнопка: Y»,
+  «подпись / адрес / телефон Z») — вставь его ДОСЛОВНО, символ-в-символ. НЕ
+  перефразируй, НЕ переводи, НЕ сокращай, НЕ придумывай СВОЙ вариант «в том же стиле».
+  Подменить данный текст своей выдумкой — БРАК.
+• НАЙДИ ИМЕННО НУЖНЫЙ ЭЛЕМЕНТ по смыслу запроса: «заголовок hero» = <h1> в секции hero;
+  «кнопка» / «CTA» / «кнопка бронирования» = тег с классом .btn-cta-primary (или с этим
+  видимым текстом); «подзаголовок» = <p> сразу под <h1>; «цена» = элемент с ₽; «телефон»
+  = строка с номером. Меняй ИМЕННО его — НЕ соседний <img> / <div> / <link> / <script>.
+• Текст разбит на <span> / <br> — замени текст ВНУТРИ, сохранив обёртки (`<span>…</span>`)."""
+
 _EDIT_KIT_HINT = """\
 Если ДОБАВЛЯЕШЬ элемент — переиспользуй уже подключённый omnia-kit (его классы уже
 есть в проекте, ничего подключать не надо): .reveal / .scroll-fade-up (мягкое
@@ -2573,15 +2585,37 @@ def _build_edit_messages(
     No build kit, no palette anchor, no self-check — so the cheap model can't be
     pushed into regenerating the page or re-rolling the palette.
     """
-    system = "\n\n".join(
-        (
-            _EDIT_IDENTITY,
-            _EDIT_KIT_HINT,
-            _EDIT_BG_HINT,
-            _IMAGE_GEN_HINT,
-            _EDIT_RESPONSE,
+    # Situational hints are GATED by request keywords. The cheap edit model copies
+    # whatever recipe sits in context, so a dark-theme bg example or an image-gen
+    # recipe present on EVERY edit derails unrelated text edits (the measured bug:
+    # "смени заголовок" → the page went dark because _EDIT_BG_HINT's «Тихая роскошь
+    # = тёмный фон + золото» example was always in scope). Include a hint ONLY when
+    # the request is actually about that dimension.
+    _p = (user_prompt or "").lower()
+    _wants_bg = any(
+        k in _p for k in (
+            "фон", "background", "цвет", "палитр", "градиент",
+            "тёмн", "темн", "светл", "оттенок", " тон",
         )
     )
+    _wants_img = any(
+        k in _p for k in (
+            "картин", "фото", "изображ", "image", "баннер",
+            "иллюстрац", "генери", "сгенер", "снимок",
+        )
+    )
+    _wants_add = any(
+        k in _p for k in ("добав", "вставь", "встав", "ещё", "еще", "новый блок", "секци")
+    )
+    _blocks: list[str] = [_EDIT_IDENTITY, _EDIT_FAITHFUL]
+    if _wants_add:
+        _blocks.append(_EDIT_KIT_HINT)
+    if _wants_bg:
+        _blocks.append(_EDIT_BG_HINT)
+    if _wants_img:
+        _blocks.append(_IMAGE_GEN_HINT)
+    _blocks.append(_EDIT_RESPONSE)
+    system = "\n\n".join(_blocks)
     messages: list[dict[str, str]] = [{"role": "system", "content": system}]
 
     if current_files:
