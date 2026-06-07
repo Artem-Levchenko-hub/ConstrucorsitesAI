@@ -28,6 +28,7 @@ from omnia_api.routers.public import _INDEX_CANDIDATES
 from omnia_api.schemas.snapshot import SnapshotPublic
 from omnia_api.schemas.upload import (
     ElementDeleteRequest,
+    ElementMoveRequest,
     ImagePatchRequest,
     TextPatchRequest,
 )
@@ -350,6 +351,118 @@ async def element_delete(
         project_id=project_id,
         commit_sha=new_sha,
         prompt_text="(удаление элемента)",
+        model_id=None,
+        parent_id=project.current_snapshot_id,
+    )
+    session.add(new_snapshot)
+    await session.flush()
+    project.current_snapshot_id = new_snapshot.id
+    await session.commit()
+    await session.refresh(new_snapshot)
+
+    await asyncio.to_thread(enqueue_preview, new_snapshot.id)
+
+    await publish_event(
+        project_id,
+        "snapshot.created",
+        {
+            "snapshot": {
+                "id": str(new_snapshot.id),
+                "project_id": str(new_snapshot.project_id),
+                "commit_sha": new_snapshot.commit_sha,
+                "prompt_text": new_snapshot.prompt_text,
+                "model_id": new_snapshot.model_id,
+                "parent_id": (
+                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
+                ),
+                "preview_url": preview_public_url(new_snapshot.preview_key),
+                "is_rollback_target": new_snapshot.is_rollback_target,
+                "created_at": new_snapshot.created_at.isoformat(),
+            }
+        },
+    )
+
+    return SnapshotPublic.model_validate(_snapshot_dict(new_snapshot))
+
+
+@router.post("/{project_id}/element-move", response_model=SnapshotPublic)
+async def element_move(
+    project_id: UUID,
+    payload: ElementMoveRequest,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> SnapshotPublic:
+    """Move up/down — swap two elements' exact source HTML in index.html."""
+    project = await _owned_project(session, project_id, current_user.id)
+
+    if project.current_snapshot_id is None:
+        raise ApiError(
+            "no_snapshot", "project has no snapshot to edit",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    current = await session.get(Snapshot, project.current_snapshot_id)
+    if current is None:
+        raise ApiError(
+            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
+        )
+    parent_sha = current.commit_sha
+
+    files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
+    index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
+    if index_path is None:
+        raise ApiError(
+            "no_index", "this project has no static index.html to edit",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    html_src = files[index_path]
+
+    def _nth(sub: str, n: int) -> int:
+        last = 0
+        pos = -1
+        for _ in range(n + 1):
+            pos = html_src.find(sub, last)
+            if pos == -1:
+                return -1
+            last = pos + len(sub)
+        return pos
+
+    pa = _nth(payload.a_html, payload.a_index)
+    pb = _nth(payload.b_html, payload.b_index)
+    if pa == -1 or pb == -1:
+        raise ApiError(
+            "element_not_found",
+            "не нашёл элементы для перемещения — обнови превью",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    if pa == pb:
+        raise ApiError("empty_patch", "no change", status.HTTP_400_BAD_REQUEST)
+    # Order by source position; swap the two blocks, keeping what's between them.
+    if pa < pb:
+        lo, lo_h, hi, hi_h = pa, payload.a_html, pb, payload.b_html
+    else:
+        lo, lo_h, hi, hi_h = pb, payload.b_html, pa, payload.a_html
+    if lo + len(lo_h) > hi:
+        raise ApiError(
+            "overlap", "элементы вложены — переместить нельзя",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    mid = html_src[lo + len(lo_h) : hi]
+    new_html = html_src[:lo] + hi_h + mid + lo_h + html_src[hi + len(hi_h) :]
+    if new_html == html_src:
+        raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
+
+    new_sha = await asyncio.to_thread(
+        repo_svc.commit_files,
+        project_id,
+        {index_path: new_html},
+        "element: перемещение",
+        parent_sha,
+    )
+    new_snapshot = Snapshot(
+        project_id=project_id,
+        commit_sha=new_sha,
+        prompt_text="(перемещение элемента)",
         model_id=None,
         parent_id=project.current_snapshot_id,
     )

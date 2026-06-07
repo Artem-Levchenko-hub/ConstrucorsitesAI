@@ -25,6 +25,12 @@ export type StyleSelected = {
    *  (surgical cut from index.html). Empty when too big to match safely. */
   outerHTML?: string;
   htmlIndex?: number;
+  /** Prev/next sibling source HTML + index — for move up/down (swap). Empty
+   *  string when there's no sibling in that direction. */
+  prevHTML?: string;
+  prevIndex?: number;
+  nextHTML?: string;
+  nextIndex?: number;
   rect?: { x: number; y: number; width: number; height: number };
 };
 

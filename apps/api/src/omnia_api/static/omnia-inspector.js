@@ -296,6 +296,20 @@
     return { text: t, index: idx };
   }
 
+  // An element's exact source HTML + occurrence index among identical outerHTML
+  // blocks (document order) — for hard delete and move (sibling swap).
+  function outerHtmlIndex(node) {
+    var h = node && node.outerHTML ? node.outerHTML : "";
+    if (!h || h.length > 20000) return { html: "", index: 0 };
+    var all = document.querySelectorAll("*");
+    var idx = 0;
+    for (var i = 0; i < all.length && i < 2000; i++) {
+      if (all[i] === node) break;
+      if (all[i].outerHTML === h) idx++;
+    }
+    return { html: h, index: idx };
+  }
+
   function onClick(e) {
     if (!enabled) return;
     var el = e.target;
@@ -325,20 +339,13 @@
     var cs = window.getComputedStyle(el);
     var imgs = pickedImgs(el, e.clientX, e.clientY);
     var ti = textInfo(el);
-    // Exact source HTML of the element (+ occurrence index among identical ones)
-    // for HARD delete — a surgical substring cut on the server. Skipped when too
-    // big to match safely (the panel then falls back to "Убрать"/hide).
-    var ohRaw = el.outerHTML || "";
-    var ohIndex = 0;
-    if (ohRaw.length <= 20000) {
-      var allEl = document.querySelectorAll("*");
-      for (var oi = 0; oi < allEl.length && oi < 2000; oi++) {
-        if (allEl[oi] === el) break;
-        if (allEl[oi].outerHTML === ohRaw) ohIndex++;
-      }
-    } else {
-      ohRaw = "";
-    }
+    // Exact source HTML + occurrence index for HARD delete and MOVE (swap with a
+    // sibling) — for the element and its prev/next sibling.
+    var ohInfo = outerHtmlIndex(el);
+    var prevS = el.previousElementSibling;
+    var nextS = el.nextElementSibling;
+    var prevInfo = prevS ? outerHtmlIndex(prevS) : { html: "", index: 0 };
+    var nextInfo = nextS ? outerHtmlIndex(nextS) : { html: "", index: 0 };
     post({
       type: "omnia:pick",
       el: {
@@ -360,8 +367,12 @@
         editableText: ti ? true : false,
         editText: ti ? ti.text : "",
         textIndex: ti ? ti.index : 0,
-        outerHTML: ohRaw,
-        htmlIndex: ohIndex,
+        outerHTML: ohInfo.html,
+        htmlIndex: ohInfo.index,
+        prevHTML: prevInfo.html,
+        prevIndex: prevInfo.index,
+        nextHTML: nextInfo.html,
+        nextIndex: nextInfo.index,
         rect: {
           x: Math.round(r.left),
           y: Math.round(r.top),

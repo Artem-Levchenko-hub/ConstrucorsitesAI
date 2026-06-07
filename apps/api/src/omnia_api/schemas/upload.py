@@ -32,3 +32,12 @@ class ElementDeleteRequest(BaseModel):
     # Occurrence index among identical outerHTML blocks (document order).
     index: int = Field(default=0, ge=0, le=2000)
 
+
+class ElementMoveRequest(BaseModel):
+    """Move up/down — swap two elements' exact source HTML (a ↔ a sibling)."""
+
+    a_html: str = Field(min_length=1, max_length=20000)
+    a_index: int = Field(default=0, ge=0, le=2000)
+    b_html: str = Field(min_length=1, max_length=20000)
+    b_index: int = Field(default=0, ge=0, le=2000)
+

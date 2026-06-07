@@ -90,3 +90,17 @@ export async function deleteElementHard(
     json: payload,
   });
 }
+
+/**
+ * Move an element up/down by swapping its source HTML with a sibling's. Commits
+ * a snapshot.
+ */
+export async function moveElement(
+  projectId: string,
+  payload: { a_html: string; a_index: number; b_html: string; b_index: number },
+): Promise<Snapshot> {
+  return apiFetch<Snapshot>(`/api/projects/${projectId}/element-move`, {
+    method: "POST",
+    json: payload,
+  });
+}

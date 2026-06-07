@@ -219,6 +219,10 @@ export function PreviewFrame({ project }: { project: Project }) {
           textIndex?: number;
           outerHTML?: string;
           htmlIndex?: number;
+          prevHTML?: string;
+          prevIndex?: number;
+          nextHTML?: string;
+          nextIndex?: number;
         };
       };
       if (!d || typeof d.type !== "string") return;
@@ -250,6 +254,10 @@ export function PreviewFrame({ project }: { project: Project }) {
             textIndex: typeof el.textIndex === "number" ? el.textIndex : 0,
             outerHTML: String(el.outerHTML ?? ""),
             htmlIndex: typeof el.htmlIndex === "number" ? el.htmlIndex : 0,
+            prevHTML: String(el.prevHTML ?? ""),
+            prevIndex: typeof el.prevIndex === "number" ? el.prevIndex : 0,
+            nextHTML: String(el.nextHTML ?? ""),
+            nextIndex: typeof el.nextIndex === "number" ? el.nextIndex : 0,
           });
         } else {
           addSelection({

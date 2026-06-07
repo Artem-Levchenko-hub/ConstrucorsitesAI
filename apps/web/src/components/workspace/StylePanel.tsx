@@ -3,6 +3,8 @@
 import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDown,
+  ArrowUp,
   Check,
   Globe,
   ImageUp,
@@ -21,6 +23,7 @@ import {
   applyTextPatch,
   deleteElementHard,
   listFonts,
+  moveElement,
   uploadImage,
 } from "@/lib/api/style";
 import type { FontOption } from "@/lib/api/types";
@@ -91,6 +94,7 @@ export function StylePanel({
   const [savingText, setSavingText] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [hardDeleting, setHardDeleting] = useState(false);
+  const [moving, setMoving] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   const { data: fonts } = useQuery({
@@ -301,6 +305,33 @@ export function StylePanel({
       });
     } finally {
       setHardDeleting(false);
+    }
+  };
+
+  // Move the element up/down by swapping its source HTML with a sibling's.
+  const move = async (dir: "up" | "down") => {
+    if (!selected || moving || !selected.outerHTML) return;
+    const sibHtml = dir === "up" ? selected.prevHTML : selected.nextHTML;
+    const sibIndex = dir === "up" ? selected.prevIndex : selected.nextIndex;
+    if (!sibHtml) return;
+    setMoving(true);
+    try {
+      await moveElement(projectId, {
+        a_html: selected.outerHTML,
+        a_index: selected.htmlIndex ?? 0,
+        b_html: sibHtml,
+        b_index: sibIndex ?? 0,
+      });
+      await qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+      selectSnapshot(null);
+      clearAll();
+      toast.success("Элемент перемещён — новая версия в истории");
+    } catch (e) {
+      toast.error("Не удалось переместить", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    } finally {
+      setMoving(false);
     }
   };
 
@@ -544,6 +575,39 @@ export function StylePanel({
             })}
           </div>
         </div>
+        ) : null}
+
+        {/* MOVE — reorder among siblings (swap with prev/next) */}
+        {selected.outerHTML && (selected.prevHTML || selected.nextHTML) ? (
+          <div className="pt-1 border-t border-border-subtle">
+            <div className="flex items-center gap-1.5 text-[11px] text-fg-tertiary mb-1.5">
+              Переместить
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!selected.prevHTML || moving}
+                onClick={() => void move("up")}
+                title="Поднять выше"
+                className="flex-1 gap-1.5"
+              >
+                <ArrowUp className="h-3.5 w-3.5" />
+                Выше
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!selected.nextHTML || moving}
+                onClick={() => void move("down")}
+                title="Опустить ниже"
+                className="flex-1 gap-1.5"
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+                Ниже
+              </Button>
+            </div>
+          </div>
         ) : null}
 
         {/* DELETE — hide (safe, reversible) or hard-cut from the source HTML */}
