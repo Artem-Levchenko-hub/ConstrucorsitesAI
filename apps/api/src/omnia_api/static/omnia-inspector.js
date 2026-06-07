@@ -126,10 +126,14 @@
       if (!e2 || !enabled) return;
       var el = e2.target;
       if (!el || el.nodeType !== 1 || isOurs(el)) return;
-      // In style mode, hint that hovering an image lets you replace it — makes
-      // the upload affordance discoverable instead of buried in the panel.
-      var im = styleMode ? pickedImg(el, e2.clientX, e2.clientY) : null;
-      positionHoverBox(el.getBoundingClientRect(), im ? "Заменить фото" : "");
+      // In style mode, hint what a click does (replace image / edit text) so the
+      // affordances are discoverable instead of buried in the panel.
+      var hint = "";
+      if (styleMode) {
+        if (pickedImg(el, e2.clientX, e2.clientY)) hint = "Заменить фото";
+        else if (isPlainTextEl(el)) hint = "Изменить текст";
+      }
+      positionHoverBox(el.getBoundingClientRect(), hint);
     });
   }
 
@@ -263,15 +267,22 @@
   // text) and visible content. Returns its trimmed text + the occurrence index
   // among identical pure-text elements (document order) so the server patches
   // the right one when a label repeats. null when it isn't plain editable text.
-  function textInfo(el) {
-    if (!el.children || el.children.length !== 0) return null;
+  // Light check (no index scan) — pure-text element with visible content. Used
+  // by the hover hint on every mousemove, so it must stay cheap.
+  function isPlainTextEl(el) {
+    if (!el.children || el.children.length !== 0) return false;
     var nn = el.nodeName;
     if (nn === "INPUT" || nn === "TEXTAREA" || nn === "SELECT" ||
         nn === "SCRIPT" || nn === "STYLE" || nn === "IMG" || nn === "SVG") {
-      return null;
+      return false;
     }
+    return !!(el.textContent || "").trim();
+  }
+
+  function textInfo(el) {
+    if (!isPlainTextEl(el)) return null;
     var t = (el.textContent || "").trim();
-    if (!t || t.length > 5000) return null;
+    if (t.length > 5000) return null;
     var all = document.querySelectorAll("*");
     var idx = 0;
     for (var i = 0; i < all.length; i++) {

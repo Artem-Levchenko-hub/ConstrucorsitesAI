@@ -124,6 +124,10 @@ export function StylePanel({
   const activeSrc =
     chosenSrc && imgSrcs.includes(chosenSrc) ? chosenSrc : (imgSrcs[0] ?? "");
 
+  // Show only the controls that fit the element: colour for anything but a pure
+  // image; the font picker only for editable text. Declutters the panel.
+  const isImageEl = !!selected.src && !selected.editableText;
+
   const applyColor = (hex: string) => {
     if (siteWide) {
       setToken(token, hex);
@@ -270,6 +274,14 @@ export function StylePanel({
       toast.error("Элемент великоват для жёсткого удаления", {
         description: "используй «Убрать элемент»",
       });
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        "Удалить элемент из кода насовсем? Откатить можно через историю версий.",
+      )
+    ) {
       return;
     }
     setHardDeleting(true);
@@ -422,8 +434,9 @@ export function StylePanel({
           </div>
         ) : null}
 
-        {/* COLOR */}
-        <div className="space-y-2">
+        {/* COLOR — not for a pure image */}
+        {!isImageEl ? (
+          <div className="space-y-2">
           <div className="flex items-center rounded-lg border border-border-subtle bg-surface-raised p-0.5">
             {TARGETS.map((t) => (
               <button
@@ -494,10 +507,12 @@ export function StylePanel({
               ))}
             </select>
           )}
-        </div>
+          </div>
+        ) : null}
 
-        {/* FONT */}
-        <div className="space-y-2">
+        {/* FONT — only for editable text */}
+        {selected.editableText ? (
+          <div className="space-y-2">
           <div className="flex items-center gap-1.5 text-[11px] text-fg-tertiary">
             <Type className="h-3 w-3" />
             Шрифт · сейчас{" "}
@@ -529,6 +544,7 @@ export function StylePanel({
             })}
           </div>
         </div>
+        ) : null}
 
         {/* DELETE — hide (safe, reversible) or hard-cut from the source HTML */}
         <div className="pt-1 border-t border-border-subtle space-y-1">
