@@ -555,12 +555,23 @@ async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None
     chosen = best
     # Full-res source URL first (no auth header to a 3rd-party CDN); then the
     # Openverse thumbnail proxy (auth ok — same host as the API).
+    # Many source CDNs (and Openverse's media proxy) 403 the default python-httpx
+    # User-Agent. Send a browser UA + Accept so the bytes come through, and follow
+    # redirects (the thumbnail proxy can 302 to the CDN). This was the cause of
+    # "openverse img-fetch 403" stripping content photos → broken section layout.
+    _ua = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        ),
+        "Accept": "image/avif,image/webp,image/png,image/*,*/*;q=0.8",
+    }
     for img_url, hdrs in ((chosen.get("url"), {}), (chosen.get("thumbnail"), headers)):
         if not img_url:
             continue
         try:
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                img_resp = await c.get(img_url, headers=hdrs)
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
+                img_resp = await c.get(img_url, headers={**_ua, **hdrs})
             if img_resp.status_code == 200 and img_resp.content:
                 return img_resp.content
             log.warning("image_resolver: openverse img-fetch %d", img_resp.status_code)
@@ -623,24 +634,47 @@ def _replace_tag(content: str, tag: ImgTag, url: str) -> str:
 _UNRESOLVED_IMG_RE = re.compile(
     r"<img\b[^>]*\bdata-omnia-(?:gen|photo)\b[^>]*>", re.IGNORECASE
 )
+_CLASS_ATTR_RE = re.compile(r'\bclass\s*=\s*"([^"]*)"', re.IGNORECASE)
+_STYLE_ATTR_RE = re.compile(r'\bstyle\s*=\s*"([^"]*)"', re.IGNORECASE)
+# Same-size fallback fill so a dropped photo slot keeps its shape + a kit-toned
+# gradient instead of collapsing into an empty hole (the "съехавший дизайн"
+# symptom when a content photo 403s). Picks up the project palette vars.
+_PLACEHOLDER_FILL = (
+    "background:linear-gradient(135deg,var(--brand,#1e293b),var(--accent,#0ea5e9));"
+)
+
+
+def _img_to_placeholder(match: re.Match[str]) -> str:
+    """Turn an unresolved data-omnia <img> into a same-sized gradient <div> so the
+    section keeps its layout (height/rounding from the original classes) with a
+    kit-toned fill — never an empty collapsed block."""
+    tag = match.group(0)
+    cls_m = _CLASS_ATTR_RE.search(tag)
+    sty_m = _STYLE_ATTR_RE.search(tag)
+    cls_attr = f' class="{cls_m.group(1)}"' if cls_m else ""
+    style_val = sty_m.group(1).strip() if sty_m else ""
+    low = style_val.lower()
+    if "gradient" not in low and "background" not in low:
+        style_val = (style_val + ";" if style_val else "") + _PLACEHOLDER_FILL
+    return f'<div{cls_attr} style="{style_val}" aria-hidden="true"></div>'
 
 
 def strip_unresolved_tags(files: dict[str, str]) -> tuple[dict[str, str], int]:
-    """Remove any ``<img data-omnia-gen|photo …>`` tags still unresolved after
-    ``resolve_images`` (e.g. the image budget ran out, or it timed out before it
-    could strip them itself). Returns ``(files, removed_count)``. Dropping the tag
-    lets the section's drawn/graphic background show instead of shipping a broken
-    image box. No-op when every image already resolved."""
+    """Replace any ``<img data-omnia-gen|photo …>`` still unresolved after
+    ``resolve_images`` with a same-sized gradient placeholder ``<div>`` — keeps
+    the section's shape + a kit-toned fill instead of a broken/empty box (the
+    cause of the "съехавший" layout when a CDN 403s a content photo). Returns
+    ``(files, replaced_count)``. No-op when every image already resolved."""
     out: dict[str, str] = {}
-    removed = 0
+    replaced = 0
     for path, content in files.items():
         if path.lower().endswith((".html", ".htm")):
-            new, n = _UNRESOLVED_IMG_RE.subn("", content)
-            removed += n
+            new, n = _UNRESOLVED_IMG_RE.subn(_img_to_placeholder, content)
+            replaced += n
             out[path] = new
         else:
             out[path] = content
-    return out, removed
+    return out, replaced
 
 
 async def resolve_images(
