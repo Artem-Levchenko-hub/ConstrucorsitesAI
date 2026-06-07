@@ -173,4 +173,19 @@
   }
   .scrollbar-elegant::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
   .scrollbar-elegant::-webkit-scrollbar-corner { background: transparent; }
+
+  /* Marketing hero — soft drifting accent glow for dark-theme depth (not flat).
+     Pure CSS; the global reduced-motion guard freezes the drift. */
+  .hero-glow {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(80px);
+    pointer-events: none;
+    background: radial-gradient(circle, var(--color-accent) 0%, transparent 70%);
+    animation: omnia-hero-glow 14s var(--ease-system) infinite;
+  }
+  @keyframes omnia-hero-glow {
+    0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.4; }
+    50% { transform: translate3d(4%, -6%, 0) scale(1.18); opacity: 0.62; }
+  }
 }

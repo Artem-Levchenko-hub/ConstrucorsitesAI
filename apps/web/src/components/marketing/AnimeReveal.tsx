@@ -77,7 +77,7 @@ export function AnimeReveal({
         translateY: reduceMotion ? undefined : ["0.4em", "0em"],
         duration: reduceMotion ? 300 : duration,
         delay: i * (reduceMotion ? 20 : step),
-        easing: "cubicBezier(0.22, 1, 0.36, 1)",
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
       });
     });
     // No cleanup needed: animations finish on their own and we don't

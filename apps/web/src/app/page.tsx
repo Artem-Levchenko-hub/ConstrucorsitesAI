@@ -14,6 +14,9 @@ import {
   Cpu,
 } from "lucide-react";
 
+import { Reveal } from "@/components/marketing/Reveal";
+import { WordReveal } from "@/components/marketing/WordReveal";
+
 export const metadata = {
   title: "Omnia.AI — AI-конструктор веб-приложений на русском",
   description:
@@ -92,53 +95,69 @@ function Nav() {
 
 function Hero() {
   return (
-    <section className="relative max-w-7xl mx-auto px-6 lg:px-12 pt-20 lg:pt-28 pb-20 lg:pb-24">
-      <div className="grid lg:grid-cols-12 gap-12 lg:gap-16 items-center">
+    <section className="relative max-w-7xl mx-auto px-6 lg:px-12 pt-20 lg:pt-28 pb-20 lg:pb-24 overflow-hidden">
+      <div className="hero-glow left-[-10%] top-[6%] h-[460px] w-[460px]" aria-hidden />
+      <div className="hero-glow right-[-8%] top-[26%] h-[400px] w-[400px] [animation-delay:-7s]" aria-hidden />
+      <div className="relative z-10 grid lg:grid-cols-12 gap-12 lg:gap-16 items-center">
         <div className="lg:col-span-7 space-y-7">
-          <div className="inline-flex items-center gap-2 px-3 h-7 rounded-full border border-separator text-[12px] font-mono text-label-2 tabular-nums">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-system-green" />
-            v3 · multi-stack · ru-1
-          </div>
+          <Reveal>
+            <div className="inline-flex items-center gap-2 px-3 h-7 rounded-full border border-separator text-[12px] font-mono text-label-2 tabular-nums">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-system-green" />
+              v3 · multi-stack · ru-1
+            </div>
+          </Reveal>
 
           <h1 className="text-[clamp(40px,5.8vw,76px)] leading-[0.98] tracking-[-0.035em] font-semibold text-balance">
-            Пишешь промпт.
-            <br />
-            Получаешь продакшен.
-            <br />
-            <span className="text-accent">На&nbsp;русском.</span>
+            <WordReveal text="Пишешь промпт." className="block" />
+            <WordReveal
+              text="Получаешь продакшен."
+              className="block"
+              baseDelay={0.18}
+            />
+            <WordReveal
+              text="На русском."
+              className="block text-accent"
+              baseDelay={0.36}
+            />
           </h1>
 
-          <p className="text-[17px] leading-[1.55] text-label-2 max-w-xl">
-            Omnia собирает full-stack сайт, бэкенд, базу и деплой за один
-            разговор. 9 курируемых стеков, рублёвый биллинг и кнопка
-            «откатиться» под каждым промптом.
-          </p>
+          <Reveal delay={0.12}>
+            <p className="text-[17px] leading-[1.55] text-label-2 max-w-xl">
+              Omnia собирает full-stack сайт, бэкенд, базу и деплой за один
+              разговор. 9 курируемых стеков, рублёвый биллинг и кнопка
+              «откатиться» под каждым промптом.
+            </p>
+          </Reveal>
 
-          <div className="flex flex-wrap gap-3 pt-2">
-            <Link
-              href="/register"
-              className="inline-flex items-center gap-2 h-12 px-6 rounded-full bg-accent text-accent-fg font-medium hover:bg-accent-hover active:scale-[0.98] transition-transform"
-            >
-              Создать проект
-              <ArrowRight className="h-4 w-4" strokeWidth={2} />
-            </Link>
-            <a
-              href="#demo"
-              className="inline-flex items-center gap-2 h-12 px-6 rounded-full border border-separator-solid text-label-1 hover:border-label-3 active:scale-[0.98] transition-transform"
-            >
-              <Play className="h-4 w-4" strokeWidth={1.75} />
-              Посмотреть демо
-            </a>
-          </div>
+          <Reveal delay={0.2}>
+            <div className="flex flex-wrap gap-3 pt-2">
+              <Link
+                href="/register"
+                className="inline-flex items-center gap-2 h-12 px-6 rounded-full bg-accent text-accent-fg font-medium hover:bg-accent-hover active:scale-[0.98] transition-transform"
+              >
+                Создать проект
+                <ArrowRight className="h-4 w-4" strokeWidth={2} />
+              </Link>
+              <a
+                href="#demo"
+                className="inline-flex items-center gap-2 h-12 px-6 rounded-full border border-separator-solid text-label-1 hover:border-label-3 active:scale-[0.98] transition-transform"
+              >
+                <Play className="h-4 w-4" strokeWidth={1.75} />
+                Посмотреть демо
+              </a>
+            </div>
+          </Reveal>
 
-          <div className="pt-6 text-[11px] font-mono uppercase tracking-[0.15em] text-label-3 tabular-nums">
-            beeline · яндекс edu · skyeng · tinkoff · x5
-          </div>
+          <Reveal delay={0.28}>
+            <div className="pt-6 text-[11px] font-mono uppercase tracking-[0.15em] text-label-3 tabular-nums">
+              beeline · яндекс edu · skyeng · tinkoff · x5
+            </div>
+          </Reveal>
         </div>
 
-        <div className="lg:col-span-5">
+        <Reveal delay={0.18} className="lg:col-span-5">
           <WorkspaceMockCard />
-        </div>
+        </Reveal>
       </div>
     </section>
   );
@@ -348,7 +367,7 @@ function StackCarousel() {
       id="stacks"
       className="max-w-7xl mx-auto px-6 lg:px-12 py-24 lg:py-32"
     >
-      <div className="max-w-3xl mb-12">
+      <Reveal className="max-w-3xl mb-12">
         <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-label-3 mb-3">
           02 · стеки
         </div>
@@ -359,12 +378,12 @@ function StackCarousel() {
           9 курируемых шаблонов. Описываешь продукт — Omnia выбирает топ-3 с
           обоснованием. Хочешь иначе — override одним кликом.
         </p>
-      </div>
+      </Reveal>
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {stacks.map((s) => (
           <div
             key={s.name}
-            className="group rounded-xl border border-separator p-5 bg-bg-elevated-1 hover:border-label-3 transition-colors"
+            className="group rounded-xl border border-separator p-5 bg-bg-elevated-1 hover:border-label-3 hover:-translate-y-1 transition-[transform,border-color] duration-300"
           >
             <div className="flex items-start justify-between mb-4">
               <s.icon
@@ -418,7 +437,7 @@ function WorkspaceShowcase() {
       id="workspace"
       className="max-w-7xl mx-auto px-6 lg:px-12 py-24 lg:py-32 border-t border-separator"
     >
-      <div className="max-w-3xl mb-12">
+      <Reveal className="max-w-3xl mb-12">
         <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-label-3 mb-3">
           03 · рабочее место
         </div>
@@ -429,7 +448,7 @@ function WorkspaceShowcase() {
           Chat слева. Live preview по центру. Versions справа. Управляешь
           моделью, регионом и балансом из одного места.
         </p>
-      </div>
+      </Reveal>
       <div className="mb-12 max-w-5xl mx-auto">
         <WorkspaceMockCard />
       </div>
@@ -482,19 +501,19 @@ function CaseStudies() {
       id="cases"
       className="max-w-7xl mx-auto px-6 lg:px-12 py-24 lg:py-32 border-t border-separator"
     >
-      <div className="max-w-3xl mb-12">
+      <Reveal className="max-w-3xl mb-12">
         <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-label-3 mb-3">
           04 · проекты
         </div>
         <h2 className="text-[clamp(32px,4vw,52px)] leading-[1.05] tracking-[-0.025em] font-semibold mb-4 text-balance">
           Что собирают на Omnia.
         </h2>
-      </div>
+      </Reveal>
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {cases.map((c) => (
           <div
             key={c.title}
-            className="group rounded-xl overflow-hidden border border-separator bg-bg-elevated-1 hover:border-label-3 transition-colors"
+            className="group rounded-xl overflow-hidden border border-separator bg-bg-elevated-1 hover:border-label-3 hover:-translate-y-1 transition-[transform,border-color] duration-300"
           >
             <div className="aspect-[16/10] bg-bg-base border-b border-separator flex items-center justify-center">
               <div className="text-[24px] font-semibold tracking-tight text-label-3 group-hover:text-label-1 transition-colors">
@@ -572,14 +591,14 @@ function Pricing() {
       id="pricing"
       className="max-w-7xl mx-auto px-6 lg:px-12 py-24 lg:py-32 border-t border-separator"
     >
-      <div className="max-w-2xl mb-12 text-center mx-auto">
+      <Reveal className="max-w-2xl mb-12 text-center mx-auto">
         <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-label-3 mb-3">
           05 · цены
         </div>
         <h2 className="text-[clamp(32px,4vw,52px)] leading-[1.05] tracking-[-0.025em] font-semibold mb-4 text-balance">
           Платишь за токены. Без подписок-сюрпризов.
         </h2>
-      </div>
+      </Reveal>
       <div className="grid lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
         {tiers.map((t) => (
           <div
@@ -663,14 +682,14 @@ function Faq() {
       id="faq"
       className="max-w-3xl mx-auto px-6 py-24 lg:py-32 border-t border-separator"
     >
-      <div className="mb-12">
+      <Reveal className="mb-12">
         <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-label-3 mb-3">
           06 · вопросы
         </div>
         <h2 className="text-[clamp(32px,4vw,52px)] leading-[1.05] tracking-[-0.025em] font-semibold mb-4 text-balance">
           Что спрашивают.
         </h2>
-      </div>
+      </Reveal>
       <div className="divide-y divide-separator border-y border-separator">
         {faqs.map((f) => (
           <details key={f.q} className="group py-5">
