@@ -20,6 +20,7 @@ import {
   PanelRightOpen,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { EASE_OUT, springSnappy } from "@/lib/motion";
 import { listSnapshots } from "@/lib/api/snapshots";
 import { listMessages } from "@/lib/api/messages";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
@@ -373,22 +374,32 @@ export function PreviewFrame({ project }: { project: Project }) {
                 ["preview", Eye, "Preview"],
                 ["code", CodeIcon, "Код"],
               ] as const
-            ).map(([mode, Icon, label]) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setViewMode(mode)}
-                className={cn(
-                  "px-2.5 h-6 rounded-full text-xs font-medium transition-all flex items-center gap-1.5",
-                  viewMode === mode
-                    ? "bg-accent-subtle text-accent ring-1 ring-inset ring-[rgba(124,92,255,0.25)]"
-                    : "text-fg-tertiary hover:text-fg-secondary",
-                )}
-              >
-                <Icon className="h-3 w-3" />
-                {label}
-              </button>
-            ))}
+            ).map(([mode, Icon, label]) => {
+              const active = viewMode === mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setViewMode(mode)}
+                  className={cn(
+                    "relative px-2.5 h-6 rounded-full text-xs font-medium transition-colors flex items-center gap-1.5",
+                    active ? "text-accent" : "text-fg-tertiary hover:text-fg-secondary",
+                  )}
+                >
+                  {/* Sliding selection — glides between Preview/Код instead of
+                      snapping. Shared layoutId; only the active tab renders it. */}
+                  {active && (
+                    <motion.span
+                      layoutId="preview-tab-pill"
+                      transition={springSnappy}
+                      className="absolute inset-0 rounded-full bg-accent-subtle ring-1 ring-inset ring-[rgba(124,92,255,0.25)]"
+                    />
+                  )}
+                  <Icon className="relative z-10 h-3 w-3" />
+                  <span className="relative z-10">{label}</span>
+                </button>
+              );
+            })}
           </div>
           {visible?.commit_sha && (
             <span className="text-[11px] font-mono text-fg-tertiary ml-1">
@@ -535,22 +546,32 @@ export function PreviewFrame({ project }: { project: Project }) {
                       ["tablet", Tablet],
                       ["desktop", Monitor],
                     ] as const
-                  ).map(([d, Icon]) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => setDevice(d)}
-                      title={d}
-                      className={cn(
-                        "p-1.5 rounded-md transition-colors",
-                        device === d
-                          ? "bg-accent-subtle text-accent"
-                          : "text-fg-tertiary hover:text-fg-secondary",
-                      )}
-                    >
-                      <Icon className="h-4 w-4" />
-                    </button>
-                  ))}
+                  ).map(([d, Icon]) => {
+                    const active = device === d;
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setDevice(d)}
+                        title={d}
+                        className={cn(
+                          "relative p-1.5 rounded-md transition-colors",
+                          active
+                            ? "text-accent"
+                            : "text-fg-tertiary hover:text-fg-secondary",
+                        )}
+                      >
+                        {active && (
+                          <motion.span
+                            layoutId="device-pill"
+                            transition={springSnappy}
+                            className="absolute inset-0 rounded-md bg-accent-subtle"
+                          />
+                        )}
+                        <Icon className="relative z-10 h-4 w-4" />
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -564,12 +585,21 @@ export function PreviewFrame({ project }: { project: Project }) {
                 {/* Surgical edit in flight — the current preview stays visible
                     (no rebuild, no blank); a quiet chip confirms work is happening
                     and that only the requested bit will change. */}
-                {isEditTurn && (
-                  <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 rounded-full border border-border-subtle bg-surface-raised/90 px-3 py-1.5 text-xs text-fg-secondary shadow-sm backdrop-blur">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Точечная правка…
-                  </div>
-                )}
+                <AnimatePresence>
+                  {isEditTurn && (
+                    <motion.div
+                      key="edit-turn-chip"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.2, ease: EASE_OUT }}
+                      className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 rounded-full border border-border-subtle bg-surface-raised/90 px-3 py-1.5 text-xs text-fg-secondary shadow-sm backdrop-blur"
+                    >
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Точечная правка…
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 <AnimatePresence mode="wait">
                   {showStreaming ? (

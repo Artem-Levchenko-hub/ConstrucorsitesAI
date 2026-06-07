@@ -15,8 +15,10 @@ import {
   Type,
   X,
 } from "lucide-react";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { popIn, springSnappy } from "@/lib/motion";
 import {
   applyImagePatch,
   applyStylePatch,
@@ -341,7 +343,15 @@ export function StylePanel({
   const hasEyeDropper = typeof window !== "undefined" && "EyeDropper" in window;
 
   return (
-    <div className="absolute right-3 bottom-3 z-40 w-72 rounded-xl border border-border-default bg-surface-panel-dark shadow-2xl flex flex-col max-h-[calc(100%-1.5rem)]">
+    // Springs in from its bottom-right anchor the moment you pick an element to
+    // edit — the panel feels attached to the corner it lives in.
+    <motion.div
+      variants={popIn}
+      initial="hidden"
+      animate="visible"
+      style={{ transformOrigin: "bottom right" }}
+      className="absolute right-3 bottom-3 z-40 w-72 rounded-xl border border-border-default bg-surface-panel-dark shadow-2xl flex flex-col max-h-[calc(100%-1.5rem)]"
+    >
       <div className="flex items-center gap-2 px-3 h-10 border-b border-border-subtle shrink-0">
         <Pipette className="h-4 w-4 text-accent" />
         <span className="text-xs font-medium text-fg-primary">Стиль элемента</span>
@@ -469,21 +479,31 @@ export function StylePanel({
         {!isImageEl ? (
           <div className="space-y-2">
           <div className="flex items-center rounded-lg border border-border-subtle bg-surface-raised p-0.5">
-            {TARGETS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTarget(t.key)}
-                className={cn(
-                  "flex-1 h-6 rounded-md text-[11px] font-medium transition-colors",
-                  target === t.key
-                    ? "bg-accent-subtle text-accent"
-                    : "text-fg-tertiary hover:text-fg-secondary",
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
+            {TARGETS.map((t) => {
+              const active = target === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setTarget(t.key)}
+                  className={cn(
+                    "relative flex-1 h-6 rounded-md text-[11px] font-medium transition-colors",
+                    active ? "text-accent" : "text-fg-tertiary hover:text-fg-secondary",
+                  )}
+                >
+                  {/* Sliding pill — the accent fill glides to the picked segment
+                      instead of snapping. layoutId is unique to this control. */}
+                  {active && (
+                    <motion.span
+                      layoutId="style-target-pill"
+                      transition={springSnappy}
+                      className="absolute inset-0 rounded-md bg-accent-subtle"
+                    />
+                  )}
+                  <span className="relative z-10">{t.label}</span>
+                </button>
+              );
+            })}
           </div>
 
           <div className="flex items-center gap-2">
@@ -664,6 +684,6 @@ export function StylePanel({
           Сохранить
         </Button>
       </div>
-    </div>
+    </motion.div>
   );
 }

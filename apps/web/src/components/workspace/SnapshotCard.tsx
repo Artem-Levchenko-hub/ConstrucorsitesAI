@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Undo2, Loader2 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { Snapshot } from "@/lib/api/types";
+import { EASE_OUT, tapSubtle } from "@/lib/motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -42,7 +43,8 @@ export function SnapshotCard({
       layout
       initial={{ opacity: 0, x: 10 }}
       animate={{ opacity: 1, x: 0 }}
-      transition={{ layout: { duration: 0.22, ease: [0.16, 1, 0.3, 1] }, duration: 0.18 }}
+      whileTap={tapSubtle}
+      transition={{ layout: { duration: 0.22, ease: EASE_OUT }, duration: 0.18 }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}

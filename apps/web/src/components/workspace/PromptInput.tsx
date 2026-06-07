@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Send, StopCircle, Clock, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EASE_OUT } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import type { SelectedElement } from "@/lib/api/types";
 import { useInspectorStore } from "@/store/inspector";
@@ -88,23 +90,33 @@ export function PromptInput({
         className,
       )}
     >
-      {pendingPrompt && (
-        <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface-raised px-2.5 py-1.5 text-xs">
-          <Clock className="h-3.5 w-3.5 text-fg-tertiary shrink-0" />
-          <span className="text-fg-secondary shrink-0">В очереди:</span>
-          <span className="text-fg-primary truncate flex-1 min-w-0">
-            {pendingPrompt}
-          </span>
-          <button
-            type="button"
-            onClick={onCancelPending}
-            title="Убрать из очереди"
-            className="text-fg-tertiary hover:text-fg-primary transition-colors shrink-0"
+      <AnimatePresence initial={false}>
+        {pendingPrompt && (
+          <motion.div
+            initial={{ opacity: 0, height: 0, y: -4 }}
+            animate={{ opacity: 1, height: "auto", y: 0 }}
+            exit={{ opacity: 0, height: 0, y: -4 }}
+            transition={{ duration: 0.22, ease: EASE_OUT }}
+            className="overflow-hidden"
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
+            <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface-raised px-2.5 py-1.5 text-xs">
+              <Clock className="h-3.5 w-3.5 text-fg-tertiary shrink-0" />
+              <span className="text-fg-secondary shrink-0">В очереди:</span>
+              <span className="text-fg-primary truncate flex-1 min-w-0">
+                {pendingPrompt}
+              </span>
+              <button
+                type="button"
+                onClick={onCancelPending}
+                title="Убрать из очереди"
+                className="text-fg-tertiary hover:text-fg-primary transition-colors shrink-0"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <SelectedChips
         items={selections}

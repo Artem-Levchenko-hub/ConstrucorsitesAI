@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { Message } from "@/lib/api/types";
+import { EASE_OUT, fadeUp } from "@/lib/motion";
 import { formatRelativeTime, cn } from "@/lib/utils";
 import {
   parseAssistantContent,
@@ -42,9 +43,9 @@ export function ChatMessage({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.18 }}
+      variants={fadeUp}
+      initial="hidden"
+      animate="visible"
       className="flex gap-3 px-4 py-3"
     >
       <div
@@ -184,7 +185,7 @@ function FileChip({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15 }}
+            transition={{ duration: 0.2, ease: EASE_OUT }}
             className="overflow-hidden border-t border-border-subtle"
           >
             <pre className="text-[11px] font-mono text-fg-secondary leading-relaxed p-3 overflow-x-auto max-h-80 overflow-y-auto bg-surface-base scrollbar-elegant">

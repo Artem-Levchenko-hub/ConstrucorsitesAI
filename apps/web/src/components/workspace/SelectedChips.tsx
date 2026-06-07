@@ -1,6 +1,8 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
 import { MousePointerClick, X } from "lucide-react";
+import { chipIn } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 export type ChipItem = {
@@ -33,13 +35,22 @@ export function SelectedChips({
   const editable = Boolean(onComment || onRemove);
 
   return (
+    // `initial={false}` keeps history-replay chips from popping on first paint;
+    // only chips added live (picking an element to edit) animate in, and removed
+    // ones animate out. `layout` slides the survivors closed behind a removal.
     <div className={cn("space-y-1.5", className)}>
-      {items.map((it, i) => (
-        <div
-          key={it.id ?? i}
-          className="rounded-md border border-accent/30 bg-accent-subtle/40 px-2 py-1.5"
-        >
-          <div className="flex items-center gap-1.5">
+      <AnimatePresence initial={false}>
+        {items.map((it, i) => (
+          <motion.div
+            key={it.id ?? i}
+            layout
+            variants={chipIn}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className="rounded-md border border-accent/30 bg-accent-subtle/40 px-2 py-1.5"
+          >
+            <div className="flex items-center gap-1.5">
             <MousePointerClick className="h-3 w-3 text-accent shrink-0" />
             <span
               className="font-mono text-[11px] text-fg-secondary truncate"
@@ -79,8 +90,9 @@ export function SelectedChips({
               {it.comment}
             </div>
           ) : null}
-        </div>
-      ))}
+          </motion.div>
+        ))}
+      </AnimatePresence>
     </div>
   );
 }
