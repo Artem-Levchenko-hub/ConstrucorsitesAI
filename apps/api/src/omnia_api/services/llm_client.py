@@ -99,6 +99,37 @@ async def stream_chat_completion(
                     except json.JSONDecodeError as exc:
                         print(f"[LLM] json_err chunk={chunk[:100]!r} err={exc}", flush=True)
                         continue
+                    # Upstream errors arrive INSIDE the SSE stream as
+                    # `data: {"error": {...}}` (vsegpt: out-of-budget / rate-limit
+                    # / model-unavailable). Without this they looked like an empty
+                    # response → the user saw a generic "timeout 90с". Surface a
+                    # clean, actionable message instead and end the stream.
+                    if isinstance(data, dict) and data.get("error"):
+                        _e = data["error"]
+                        _raw = (
+                            _e.get("message") if isinstance(_e, dict) else str(_e)
+                        ) or "upstream error"
+                        _low = _raw.lower()
+                        if any(k in _low for k in ("budget", "balance", "money", "out of")):
+                            _msg = (
+                                "Недостаточно средств на балансе LLM-провайдера — "
+                                "пополни баланс и попробуй снова."
+                            )
+                        elif "rate" in _low or "429" in _low:
+                            _msg = (
+                                "Провайдер перегружен (rate-limit) — попробуй ещё раз "
+                                "через минуту."
+                            )
+                        elif any(k in _low for k in ("unavailable", "501", "unknown main", "not available")):
+                            _msg = (
+                                "Модель временно недоступна у провайдера — попробуй "
+                                "другую модель или позже."
+                            )
+                        else:
+                            _msg = f"Ошибка LLM-провайдера: {_raw[:200]}"
+                        print(f"[LLM] upstream_error {_raw[:200]!r}", flush=True)
+                        yield {"error": _msg}
+                        return
                     delta = (
                         data.get("choices", [{}])[0]
                         .get("delta", {})
