@@ -267,6 +267,18 @@ class Settings(BaseSettings):
     # rich freeform page; this keeps the freeform page + the score, and makes
     # builds fast. Flip ACCEPTANCE_SCORE_ONLY=true to enable.
     acceptance_score_only: bool = Field(default=False)
+    # Repair spend floor (2026-06-07, cost): with the design judge on, the gate
+    # used to fire a full second writer pass whenever attempt-0 wasn't "passed"
+    # (vision score < acceptance_min_score=7). The Awwwards critic rarely scores
+    # ≥7 first try, so that ~37%-of-build repair ran on ~100% of builds — and the
+    # best-so-far guard often reverted it anyway (pure waste, measured on prod).
+    # Now the repair is spent ONLY on a GENUINELY deficient page: a hard
+    # structural/responsive defect, a "broken" vision verdict, or a vision score
+    # BELOW this floor. A merely-not-perfect page (struct+resp OK, score in
+    # [floor, min_score)) ships as attempt-0 — first-pass quality is raised by a
+    # sharper brief, not a reflexive re-roll. Set = acceptance_min_score (7) to
+    # restore the old always-repair-on-borderline behaviour.
+    acceptance_repair_floor: int = Field(default=5)
 
     # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
     # Originality: fingerprint each accepted freeform page and penalise the

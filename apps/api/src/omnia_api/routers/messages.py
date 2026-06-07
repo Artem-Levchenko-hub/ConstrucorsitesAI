@@ -2223,6 +2223,10 @@ async def _process_prompt(
                 if _acc_settings.acceptance_score_only
                 else max(0, int(_acc_settings.acceptance_max_retries))
             )
+            # Cost floor: only spend a repair re-roll on a genuinely deficient
+            # page (see acceptance_repair_floor docstring) — not on every
+            # borderline vision score.
+            _repair_floor = max(0, int(_acc_settings.acceptance_repair_floor))
             _verdict = None
             # Best-so-far guard: the design-judge repair can REGRESS (re-add dead
             # links → struct fails, or strip wow-features). Track the best-ranked
@@ -2291,7 +2295,24 @@ async def _process_prompt(
                             "score": _verdict.score,
                         },
                     )
-                    if _verdict.passed or not _verdict.feedback or _acc_attempt >= _max_acc:
+                    # Spend the repair re-roll ONLY on a genuinely deficient page:
+                    # a hard structural/responsive defect, a "broken" vision
+                    # verdict, or a vision score below the floor. A merely-not-
+                    # perfect page (struct+resp OK, score in [floor, min_score))
+                    # ships as attempt-0 — this is the ~37%-of-build cost cut
+                    # (the reflexive repair fired on ~100% of builds before).
+                    _repair_worthy = (
+                        not _verdict.structural_ok
+                        or not _verdict.responsive_ok
+                        or _verdict.verdict == "broken"
+                        or (_verdict.vision_ran and int(_verdict.score) < _repair_floor)
+                    )
+                    if (
+                        _verdict.passed
+                        or not _verdict.feedback
+                        or _acc_attempt >= _max_acc
+                        or not _repair_worthy
+                    ):
                         break
                     notice = (
                         f"\n\n*Приёмка {_acc_attempt + 1}/{_max_acc}: правлю вёрстку "

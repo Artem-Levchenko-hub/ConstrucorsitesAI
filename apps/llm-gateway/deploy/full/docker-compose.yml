@@ -221,6 +221,12 @@ services:
       # image-less template pages. WITHOUT this passthrough line the .env value is
       # ignored (compose only injects keys listed here) and score-only never armed.
       ACCEPTANCE_SCORE_ONLY: ${ACCEPTANCE_SCORE_ONLY:-false}
+      # Repair spend floor (2026-06-07, cost): a repair re-roll runs ONLY when
+      # the page is genuinely deficient (structural/responsive fail, "broken"
+      # vision verdict, or vision score < this). Borderline pages (score in
+      # [floor, min_score)) ship attempt-0 — kills the ~37%-of-build reflexive
+      # repair that fired on ~100% of builds. Set =7 to restore old behaviour.
+      ACCEPTANCE_REPAIR_FLOOR: ${ACCEPTANCE_REPAIR_FLOOR:-5}
       # PIPELINE DEBUG (owner 2026-06-03, temporary forensics): when DUMP=true,
       # write each pass's RAW output (system prompt, art-director brief, writer
       # HTML, vision verdict) to PIPELINE_DEBUG_DIR/<project>/<message>/ so we can
@@ -293,6 +299,12 @@ services:
       # image-less template pages. WITHOUT this passthrough line the .env value is
       # ignored (compose only injects keys listed here) and score-only never armed.
       ACCEPTANCE_SCORE_ONLY: ${ACCEPTANCE_SCORE_ONLY:-false}
+      # Repair spend floor (2026-06-07, cost): a repair re-roll runs ONLY when
+      # the page is genuinely deficient (structural/responsive fail, "broken"
+      # vision verdict, or vision score < this). Borderline pages (score in
+      # [floor, min_score)) ship attempt-0 — kills the ~37%-of-build reflexive
+      # repair that fired on ~100% of builds. Set =7 to restore old behaviour.
+      ACCEPTANCE_REPAIR_FLOOR: ${ACCEPTANCE_REPAIR_FLOOR:-5}
       # PIPELINE DEBUG (owner 2026-06-03, temporary forensics): when DUMP=true,
       # write each pass's RAW output (system prompt, art-director brief, writer
       # HTML, vision verdict) to PIPELINE_DEBUG_DIR/<project>/<message>/ so we can
