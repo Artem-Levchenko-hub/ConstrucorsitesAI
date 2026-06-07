@@ -449,41 +449,69 @@ async def _openverse_token() -> str | None:
         return token
 
 
+def _openverse_query_variants(keywords: str) -> list[str]:
+    """Progressively broader search queries (≤3). The CC0/Public-Domain pool is
+    sparse for long descriptive phrases ('modern dental clinic interior' → 0 hits)
+    but matches the head noun ('clinic interior', 'interior'). Try the full phrase,
+    then the pre-comma subject, then its tail — first non-empty result wins."""
+    kw = keywords.strip()
+    head = kw.split(",")[0].strip()
+    words = [w for w in re.split(r"\s+", head) if w]
+    candidates = [kw, head]
+    if len(words) > 2:
+        candidates.append(" ".join(words[-2:]))
+    if len(words) >= 2:
+        candidates.append(words[-1])
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in candidates:
+        if c and c.lower() not in seen:
+            seen.add(c.lower())
+            out.append(c)
+    return out[:3]
+
+
 async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None:
-    """Search Openverse for ``keywords`` (license-filtered to commercially-usable,
-    no-attribution) and download one photo. Deterministic pick by (project_id,
-    keywords) so a project re-renders the same shot. Bytes come from the source
-    CDN; on any miss we fall back to the Openverse thumbnail proxy — served from
-    api.openverse.org, the one host known reachable when a source CDN (e.g.
-    Wikimedia) is blocked by the RU egress. Fail-soft → None."""
+    """Search Openverse (license-filtered to commercially-usable, no-attribution)
+    and download one photo. Deterministic pick by (project_id, keywords). The query
+    is broadened (``_openverse_query_variants``) until a license-clean result
+    appears — the CC0 pool misses long phrases. Bytes come from the source CDN; on
+    any miss we fall back to the Openverse thumbnail proxy (api.openverse.org,
+    reachable when a source CDN is RU-blocked). Fail-soft → None."""
     settings = get_settings()
     headers: dict[str, str] = {}
     token = await _openverse_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    params = {
-        "q": keywords,
-        "license": settings.openverse_license,
-        "page_size": _OPENVERSE_PAGE_SIZE,
-        "mature": "false",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+
+    async def _search(client: httpx.AsyncClient, query: str) -> list[dict]:
+        params = {
+            "q": query,
+            "license": settings.openverse_license,
+            "page_size": _OPENVERSE_PAGE_SIZE,
+            "mature": "false",
+        }
+        try:
             resp = await client.get(
                 _OPENVERSE_SEARCH_URL, params=params, headers=headers
             )
-    except Exception as exc:  # noqa: BLE001 — never break a resolve over one tag
-        log.warning(
-            "image_resolver: openverse transport kw=%.40s err=%r", keywords, exc
-        )
-        return None
-    if resp.status_code >= 400:
-        log.warning("image_resolver: openverse %d kw=%.40s", resp.status_code, keywords)
-        return None
-    try:
-        results = resp.json().get("results") or []
-    except ValueError:
-        return None
+        except Exception as exc:  # noqa: BLE001 — never break a resolve over one tag
+            log.warning("image_resolver: openverse transport q=%.40s err=%r", query, exc)
+            return []
+        if resp.status_code >= 400:
+            log.warning("image_resolver: openverse %d q=%.40s", resp.status_code, query)
+            return []
+        try:
+            return resp.json().get("results") or []
+        except ValueError:
+            return []
+
+    results: list[dict] = []
+    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+        for query in _openverse_query_variants(keywords):
+            results = await _search(client, query)
+            if results:
+                break
     if not results:
         return None
     pick = int(
