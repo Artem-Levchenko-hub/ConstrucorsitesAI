@@ -97,6 +97,11 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
     # for the brief, inside _DEFAULT_TIMEOUT_S=240s. Reasoning is a separate
     # field, so `content` stays clean (no inline <think> to strip).
     "kimi-k2.6-thinking": "moonshotai/kimi-k2.6-thinking",
+    # Kimi K2.6 NON-thinking — same taste/vision, no long reasoning. The -thinking
+    # variant 502s as art_director (deep reasoning on the large brief prompt exceeds
+    # the 240s upstream timeout → empty brief → generic build). Non-thinking returns
+    # the brief fast; art_director default (2026-06-07).
+    "kimi-k2.6": "moonshotai/kimi-k2.6",
 }
 
 

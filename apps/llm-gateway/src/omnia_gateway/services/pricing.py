@@ -39,6 +39,9 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     # Kimi K2.6 thinking via vsegpt — art_director (design-brain). Internal RUB
     # floor (vsegpt price ≈ mid-tier); recheck vsegpt price page before billing.
     "kimi-k2.6-thinking": ModelPrice(Decimal("0.12"), Decimal("0.50")),
+    # Kimi K2.6 NON-thinking — art_director default (2026-06-07); thinking 502s on
+    # the large brief. Same vsegpt tier as the thinking variant.
+    "kimi-k2.6": ModelPrice(Decimal("0.12"), Decimal("0.50")),
     # Haiku 4.5 via proxyapi.ru (sk- key, OpenAI-compat). Anthropic list price
     # ~$1/$5 per 1M; converted at the same factor as Sonnet (0.30/1.50 ≈ $3/$15)
     # then padded ~25% for proxyapi markup → 0.15/0.75 ₽ per 1k. Recheck the

@@ -527,13 +527,14 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # clean content). DEVELOPER (writes the HTML) = deepseek-v4-pro NON-thinking
     # (no reasoning overhead → faster, clean HTML). Both 1M context, both vsegpt.
     # Swap at runtime via ROLE_MODELS env — no code change.
-    # Design-brain → Kimi K2.6 thinking (owner 2026-06-03): native multimodal +
-    # stronger design taste than DeepSeek (no vision, weaker aesthetics → the
-    # generic/monotone output we saw). Kimi writes the ultra-detailed brief; the
-    # DeepSeek freeform_writer below transcribes it (Kimi=brain, DeepSeek=hands).
-    # Confirmed live on vsegpt (same VSEGPT_API_KEY). Swap back without a deploy
-    # via ROLE_MODELS env, e.g. art_director=gemini-3.5-flash-high.
-    "art_director": "kimi-k2.6-thinking",
+    # Design-brain → Kimi K2.6 (owner 2026-06-03): native multimodal + stronger
+    # design taste than DeepSeek. NON-thinking variant (2026-06-07): the -thinking
+    # one 502s as art_director — deep reasoning on the large brief prompt (≈40K-token
+    # system + directive) blows the gateway 240s timeout → empty brief → generic
+    # build (caught live in an E2E). Non-thinking returns the brief fast, same price,
+    # keeps Kimi's taste. Kimi writes the brief; DeepSeek freeform_writer transcribes.
+    # Swap without a deploy via ROLE_MODELS env (e.g. art_director=gemini-3.5-flash-high).
+    "art_director": "kimi-k2.6",
     "freeform_writer": "deepseek-v4-pro",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
 }
