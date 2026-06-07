@@ -13,10 +13,12 @@ import { cn } from "@/lib/utils";
  * until the first event arrives — so single-shot generations don't show
  * a useless 0/4 placeholder.
  *
- * The 4 stages (skeleton → content → visual → assembly) render as a slim
- * 4-segment bar: each segment fills 0% → 50% (active) → 100% (done). The
- * active stage name is shown in the header line, not inside the bar, so the
- * widget stays width-safe and never overflows the chat column.
+ * Both pipelines have 4 stages — multipass (skeleton → content → visual →
+ * assembly) and freeform (Замысел → Вёрстка → Картинки → Проверка); the set
+ * is picked per-message from the events seen. They render as a slim 4-segment
+ * bar: each segment fills 0% → 50% (active) → 100% (done). The active stage
+ * name is shown in the header line, not inside the bar, so the widget stays
+ * width-safe and never overflows the chat column.
  *
  * The bar lives inside `ChatMessage` body and is auto-removed on
  * `llm.done` / `llm.error` / cancel (the hook calls `removeQueries`).
@@ -28,9 +30,14 @@ const MULTIPASS_STAGES: { id: MultipassStage; label: string }[] = [
   { id: "assembly", label: "Сборка" },
 ];
 // The default (freeform) path emits these via the same llm.pass channel.
+// Four real stages, in pipeline order: the Art-Director writes the brief, the
+// Writer lays out the HTML, the resolver paints in the images, and the
+// design-judge reviews the page. Backend emits all four (messages.py).
 const FREEFORM_STAGES: { id: MultipassStage; label: string }[] = [
   { id: "art_director", label: "Замысел" },
   { id: "writer", label: "Вёрстка" },
+  { id: "images", label: "Картинки" },
+  { id: "judge", label: "Проверка" },
 ];
 const FREEFORM_IDS = new Set<MultipassStage>(FREEFORM_STAGES.map((s) => s.id));
 

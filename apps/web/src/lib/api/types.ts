@@ -292,9 +292,13 @@ export type MultipassStage =
   | "content"
   | "visual"
   | "assembly"
-  // Freeform pipeline stages (art_director_writer.py) — same llm.pass channel.
+  // Freeform pipeline stages, in order, on the same llm.pass channel:
+  // art_director/writer (art_director_writer.py) then the two post-writer
+  // stages emitted by the orchestrator (messages.py): images, judge.
   | "art_director"
-  | "writer";
+  | "writer"
+  | "images"
+  | "judge";
 
 /**
  * Client-side aggregate of `llm.pass` events for one assistant message.

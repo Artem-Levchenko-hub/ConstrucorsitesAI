@@ -953,7 +953,38 @@ async def _process_prompt(
         # via the dict trick — Python doesn't let us rebind outer names
         # cleanly from a nested coroutine.
         # ──────────────────────────────────────────────────────────────
-        state: dict[str, object] = {"accumulated": "", "usage": None, "error": None}
+        state: dict[str, object] = {
+            "accumulated": "",
+            "usage": None,
+            "error": None,
+            # Set True once the freeform (Art-Director → Writer) path runs, so the
+            # two post-writer stages below (image-resolve, design-judge) emit their
+            # own llm.pass events ONLY for a freeform build — never for edits,
+            # catalog or multipass, where the progress bar uses a different stage
+            # set. See _emit_stage.
+            "freeform": False,
+        }
+
+        # Phase B.3 — surface the two post-writer freeform stages (Картинки,
+        # Проверка) on the SAME llm.pass channel the Art-Director/Writer passes
+        # use, so PassProgressBar fills all four segments (Замысел → Вёрстка →
+        # Картинки → Проверка) instead of stalling at 2/4. Gated on the freeform
+        # build path and best-effort — a progress ping must never abort a build.
+        async def _emit_stage(pass_name: str, stage: str) -> None:
+            if not state.get("freeform"):
+                return
+            try:
+                await publish_event(
+                    project_id,
+                    "llm.pass",
+                    {
+                        "message_id": str(assistant_message_id),
+                        "pass": pass_name,
+                        "stage": stage,
+                    },
+                )
+            except Exception:
+                pass
 
         # Phase B — multipass for budget models is ON by default.
         # `effective_multipass_models` = CHEAP_MODELS ∪ env override.
@@ -1043,6 +1074,9 @@ async def _process_prompt(
                 and _gen_mode != "freeform"
             )
             if _adw_active:
+                # Mark the freeform path so the post-writer image-resolve and
+                # design-judge stages emit their llm.pass progress (4-segment bar).
+                state["freeform"] = True
                 source = art_director_writer_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
@@ -2097,6 +2131,7 @@ async def _process_prompt(
             print(f"[PP] retry_branch_failed err={retry_exc!r}", flush=True)
 
         if files and project_image_gen_enabled:
+            await _emit_stage("images", "start")
             try:
                 # Hard cap: a broken image upstream (flux 501 / pexels timeout)
                 # must NEVER hang the build — on timeout we ship the page as-is so
@@ -2142,6 +2177,7 @@ async def _process_prompt(
                     )
             except Exception as img_exc:
                 print(f"[PP] image_resolver failed: {img_exc!r}", flush=True)
+            await _emit_stage("images", "end")
 
         # Belt-and-suspenders: if image-gen failed (budget exhausted / timeout),
         # the resolver leaves the data-omnia-gen tags in place → a BROKEN <img>
@@ -2173,6 +2209,7 @@ async def _process_prompt(
             and _acc_settings.use_acceptance_gate
             and _gen_mode in ("freeform", "catalog")
         ):
+            await _emit_stage("judge", "start")
             from omnia_api.services import acceptance as _acceptance
             # Design judge (premium / on-button): force the Awwwards vision-critic
             # and allow EXACTLY ONE repair re-roll even in score-only mode (owner:
@@ -2358,6 +2395,7 @@ async def _process_prompt(
                         )
             except Exception as _acc_exc:
                 print(f"[PP] acceptance_gate_failed err={_acc_exc!r}", flush=True)
+            await _emit_stage("judge", "end")
 
         # Phase 12 — deterministic design guards on the FINAL HTML, right before
         # commit (so snapshot / GitHub export / rollback all carry the fixed
