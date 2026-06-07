@@ -553,8 +553,10 @@ async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None
         log.info("image_resolver: openverse no on-theme match kw=%.50s", keywords)
         return None
     chosen = best
-    # Full-res source URL first (no auth header to a 3rd-party CDN); then the
-    # Openverse thumbnail proxy (auth ok — same host as the API).
+    # Openverse thumbnail PROXY first (api.openverse.org — the reachable host that
+    # always 200s from the RU prod egress; verified live). The 3rd-party source
+    # CDNs are what 403 (geo/hotlink), so the full-res source URL is the FALLBACK,
+    # not the primary. Soft-but-present beats a 403'd hole on a content photo.
     # Many source CDNs (and Openverse's media proxy) 403 the default python-httpx
     # User-Agent. Send a browser UA + Accept so the bytes come through, and follow
     # redirects (the thumbnail proxy can 302 to the CDN). This was the cause of
@@ -566,7 +568,7 @@ async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None
         ),
         "Accept": "image/avif,image/webp,image/png,image/*,*/*;q=0.8",
     }
-    for img_url, hdrs in ((chosen.get("url"), {}), (chosen.get("thumbnail"), headers)):
+    for img_url, hdrs in ((chosen.get("thumbnail"), headers), (chosen.get("url"), {})):
         if not img_url:
             continue
         try:
