@@ -182,6 +182,24 @@
     }
   }
 
+  // The <img> the user actually meant: the clicked element itself, the image
+  // stacked under the cursor (full-bleed background photo behind overlay
+  // content), or a descendant image of the clicked container. null = no image.
+  function pickedImg(el, x, y) {
+    if (el.nodeName === "IMG") return el;
+    if (document.elementsFromPoint) {
+      var stack = document.elementsFromPoint(x, y);
+      for (var i = 0; i < stack.length; i++) {
+        if (stack[i].nodeName === "IMG") return stack[i];
+      }
+    }
+    if (el.querySelector) {
+      var inner = el.querySelector("img");
+      if (inner) return inner;
+    }
+    return null;
+  }
+
   function onClick(e) {
     if (!enabled) return;
     var el = e.target;
@@ -209,6 +227,7 @@
     // Computed color/font so the style panel can show the element's CURRENT
     // values (additive fields — the AI-edit compose path ignores them).
     var cs = window.getComputedStyle(el);
+    var imgEl = pickedImg(el, e.clientX, e.clientY);
     post({
       type: "omnia:pick",
       el: {
@@ -222,9 +241,9 @@
         backgroundColor: cs.backgroundColor,
         borderColor: cs.borderTopColor,
         fontFamily: cs.fontFamily,
-        // For an <img>, its current source — lets the style panel offer
-        // "replace with your own image" (matches the src in index.html).
-        src: el.nodeName === "IMG" ? (el.getAttribute("src") || el.src || "") : "",
+        // The picked image's source (the element itself / under the cursor / a
+        // descendant) so the style panel can offer "replace with your own image".
+        src: imgEl ? (imgEl.getAttribute("src") || imgEl.src || "") : "",
         rect: {
           x: Math.round(r.left),
           y: Math.round(r.top),
