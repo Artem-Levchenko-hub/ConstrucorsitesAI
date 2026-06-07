@@ -314,6 +314,20 @@
     var cs = window.getComputedStyle(el);
     var imgs = pickedImgs(el, e.clientX, e.clientY);
     var ti = textInfo(el);
+    // Exact source HTML of the element (+ occurrence index among identical ones)
+    // for HARD delete — a surgical substring cut on the server. Skipped when too
+    // big to match safely (the panel then falls back to "Убрать"/hide).
+    var ohRaw = el.outerHTML || "";
+    var ohIndex = 0;
+    if (ohRaw.length <= 20000) {
+      var allEl = document.querySelectorAll("*");
+      for (var oi = 0; oi < allEl.length && oi < 2000; oi++) {
+        if (allEl[oi] === el) break;
+        if (allEl[oi].outerHTML === ohRaw) ohIndex++;
+      }
+    } else {
+      ohRaw = "";
+    }
     post({
       type: "omnia:pick",
       el: {
@@ -335,6 +349,8 @@
         editableText: ti ? true : false,
         editText: ti ? ti.text : "",
         textIndex: ti ? ti.index : 0,
+        outerHTML: ohRaw,
+        htmlIndex: ohIndex,
         rect: {
           x: Math.round(r.left),
           y: Math.round(r.top),

@@ -26,7 +26,11 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers.public import _INDEX_CANDIDATES
 from omnia_api.schemas.snapshot import SnapshotPublic
-from omnia_api.schemas.upload import ImagePatchRequest, TextPatchRequest
+from omnia_api.schemas.upload import (
+    ElementDeleteRequest,
+    ImagePatchRequest,
+    TextPatchRequest,
+)
 from omnia_api.services import repo as repo_svc
 from omnia_api.services import user_uploads
 from omnia_api.services.queue import enqueue_preview
@@ -251,6 +255,101 @@ async def text_patch(
         project_id=project_id,
         commit_sha=new_sha,
         prompt_text="(правка текста)",
+        model_id=None,
+        parent_id=project.current_snapshot_id,
+    )
+    session.add(new_snapshot)
+    await session.flush()
+    project.current_snapshot_id = new_snapshot.id
+    await session.commit()
+    await session.refresh(new_snapshot)
+
+    await asyncio.to_thread(enqueue_preview, new_snapshot.id)
+
+    await publish_event(
+        project_id,
+        "snapshot.created",
+        {
+            "snapshot": {
+                "id": str(new_snapshot.id),
+                "project_id": str(new_snapshot.project_id),
+                "commit_sha": new_snapshot.commit_sha,
+                "prompt_text": new_snapshot.prompt_text,
+                "model_id": new_snapshot.model_id,
+                "parent_id": (
+                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
+                ),
+                "preview_url": preview_public_url(new_snapshot.preview_key),
+                "is_rollback_target": new_snapshot.is_rollback_target,
+                "created_at": new_snapshot.created_at.isoformat(),
+            }
+        },
+    )
+
+    return SnapshotPublic.model_validate(_snapshot_dict(new_snapshot))
+
+
+@router.post("/{project_id}/element-delete", response_model=SnapshotPublic)
+async def element_delete(
+    project_id: UUID,
+    payload: ElementDeleteRequest,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> SnapshotPublic:
+    """HARD delete — cut the element's exact source HTML out of index.html."""
+    project = await _owned_project(session, project_id, current_user.id)
+
+    if project.current_snapshot_id is None:
+        raise ApiError(
+            "no_snapshot", "project has no snapshot to edit",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    current = await session.get(Snapshot, project.current_snapshot_id)
+    if current is None:
+        raise ApiError(
+            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
+        )
+    parent_sha = current.commit_sha
+
+    files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
+    index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
+    if index_path is None:
+        raise ApiError(
+            "no_index", "this project has no static index.html to edit",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    html_src = files[index_path]
+    oh = payload.outer_html
+    # Cut the requested exact occurrence of the element's source HTML.
+    positions: list[int] = []
+    i = html_src.find(oh)
+    while i != -1:
+        positions.append(i)
+        i = html_src.find(oh, i + len(oh))
+    if not positions:
+        raise ApiError(
+            "element_not_found",
+            "не нашёл элемент в коде — попробуй «Убрать элемент»",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    idx = payload.index if payload.index < len(positions) else 0
+    start = positions[idx]
+    new_html = html_src[:start] + html_src[start + len(oh) :]
+    if new_html == html_src:
+        raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
+
+    new_sha = await asyncio.to_thread(
+        repo_svc.commit_files,
+        project_id,
+        {index_path: new_html},
+        "element: жёсткое удаление",
+        parent_sha,
+    )
+    new_snapshot = Snapshot(
+        project_id=project_id,
+        commit_sha=new_sha,
+        prompt_text="(удаление элемента)",
         model_id=None,
         parent_id=project.current_snapshot_id,
     )

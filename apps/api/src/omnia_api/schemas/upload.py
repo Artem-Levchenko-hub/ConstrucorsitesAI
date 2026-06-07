@@ -23,3 +23,12 @@ class TextPatchRequest(BaseModel):
     # 0-based index of the occurrence to replace among identical pure-text
     # elements (document order). Disambiguates repeated labels.
     index: int = Field(default=0, ge=0, le=2000)
+
+
+class ElementDeleteRequest(BaseModel):
+    """Hard-delete: cut an element's exact source HTML out of index.html."""
+
+    outer_html: str = Field(min_length=1, max_length=20000)
+    # Occurrence index among identical outerHTML blocks (document order).
+    index: int = Field(default=0, ge=0, le=2000)
+

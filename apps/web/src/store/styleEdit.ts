@@ -21,6 +21,10 @@ export type StyleSelected = {
   editableText?: boolean;
   editText?: string;
   textIndex?: number;
+  /** Exact source HTML of the element + occurrence index — for HARD delete
+   *  (surgical cut from index.html). Empty when too big to match safely. */
+  outerHTML?: string;
+  htmlIndex?: number;
   rect?: { x: number; y: number; width: number; height: number };
 };
 

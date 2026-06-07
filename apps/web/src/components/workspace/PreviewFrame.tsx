@@ -217,6 +217,8 @@ export function PreviewFrame({ project }: { project: Project }) {
           editableText?: boolean;
           editText?: string;
           textIndex?: number;
+          outerHTML?: string;
+          htmlIndex?: number;
         };
       };
       if (!d || typeof d.type !== "string") return;
@@ -246,6 +248,8 @@ export function PreviewFrame({ project }: { project: Project }) {
             editableText: Boolean(el.editableText),
             editText: String(el.editText ?? ""),
             textIndex: typeof el.textIndex === "number" ? el.textIndex : 0,
+            outerHTML: String(el.outerHTML ?? ""),
+            htmlIndex: typeof el.htmlIndex === "number" ? el.htmlIndex : 0,
           });
         } else {
           addSelection({

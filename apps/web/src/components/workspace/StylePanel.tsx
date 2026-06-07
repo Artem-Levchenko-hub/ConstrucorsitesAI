@@ -19,6 +19,7 @@ import {
   applyImagePatch,
   applyStylePatch,
   applyTextPatch,
+  deleteElementHard,
   listFonts,
   uploadImage,
 } from "@/lib/api/style";
@@ -89,6 +90,7 @@ export function StylePanel({
   const [chosenSrc, setChosenSrc] = useState<string | null>(null);
   const [savingText, setSavingText] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [hardDeleting, setHardDeleting] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   const { data: fonts } = useQuery({
@@ -257,6 +259,36 @@ export function StylePanel({
       });
     } finally {
       setDeleting(false);
+    }
+  };
+
+  // HARD delete — cut the element out of the source HTML (vs hide). Degrades to
+  // a hint to use "Убрать" when the element can't be matched in source.
+  const hardDelete = async () => {
+    if (!selected || hardDeleting) return;
+    if (!selected.outerHTML) {
+      toast.error("Элемент великоват для жёсткого удаления", {
+        description: "используй «Убрать элемент»",
+      });
+      return;
+    }
+    setHardDeleting(true);
+    try {
+      await deleteElementHard(projectId, {
+        outer_html: selected.outerHTML,
+        index: selected.htmlIndex ?? 0,
+      });
+      await qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+      selectSnapshot(null);
+      clearAll();
+      toast.success("Элемент удалён из кода — новая версия в истории");
+    } catch (e) {
+      toast.error("Не удалось удалить из кода", {
+        description:
+          e instanceof Error ? e.message : "используй «Убрать элемент»",
+      });
+    } finally {
+      setHardDeleting(false);
     }
   };
 
@@ -498,14 +530,14 @@ export function StylePanel({
           </div>
         </div>
 
-        {/* DELETE — remove (hide) any element from the page */}
-        <div className="pt-1 border-t border-border-subtle">
+        {/* DELETE — hide (safe, reversible) or hard-cut from the source HTML */}
+        <div className="pt-1 border-t border-border-subtle space-y-1">
           <Button
             size="sm"
             variant="ghost"
             onClick={deleteElement}
             disabled={deleting}
-            title="Убрать этот элемент со страницы"
+            title="Скрыть этот элемент (display:none) — обратимо"
             className="w-full gap-1.5 text-fg-tertiary hover:text-red-400 hover:bg-red-500/10"
           >
             {deleting ? (
@@ -515,6 +547,15 @@ export function StylePanel({
             )}
             Убрать элемент
           </Button>
+          <button
+            type="button"
+            onClick={hardDelete}
+            disabled={hardDeleting}
+            title="Вырезать элемент из HTML насовсем"
+            className="w-full text-[10px] text-fg-tertiary hover:text-red-400 disabled:opacity-50 transition-colors"
+          >
+            {hardDeleting ? "удаляю из кода…" : "или удалить из кода насовсем"}
+          </button>
         </div>
       </div>
 

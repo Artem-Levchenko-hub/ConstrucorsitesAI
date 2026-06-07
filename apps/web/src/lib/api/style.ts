@@ -76,3 +76,17 @@ export async function applyTextPatch(
     json: payload,
   });
 }
+
+/**
+ * HARD-delete an element — cut its exact source HTML from index.html. `index`
+ * disambiguates identical blocks. Commits a snapshot.
+ */
+export async function deleteElementHard(
+  projectId: string,
+  payload: { outer_html: string; index: number },
+): Promise<Snapshot> {
+  return apiFetch<Snapshot>(`/api/projects/${projectId}/element-delete`, {
+    method: "POST",
+    json: payload,
+  });
+}
