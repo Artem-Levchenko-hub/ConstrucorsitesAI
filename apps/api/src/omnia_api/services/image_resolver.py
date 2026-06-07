@@ -23,6 +23,7 @@ import base64
 import hashlib
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
@@ -117,6 +118,21 @@ _GROUP_RE = re.compile(r'data-omnia-gen-group\s*=\s*"([^"]+)"', re.IGNORECASE)
 # backgrounds; per_page gives a small deterministic pick-pool per keyword.
 _PEXELS_SEARCH_URL = "https://api.pexels.com/v1/search"
 _PEXELS_PER_PAGE = 15
+
+# ── Openverse stock (free CC0 / Public Domain) ────────────────────────────
+# api.openverse.org is reachable from the RU prod egress where Pexels/Unsplash
+# 404/000. Anonymous search works; an optional OAuth client-credentials token
+# lifts the rate limit. Image bytes come from the source CDN, with the Openverse
+# thumbnail proxy (same reachable host) as the guaranteed-reachable fallback.
+_OPENVERSE_SEARCH_URL = "https://api.openverse.org/v1/images/"
+_OPENVERSE_TOKEN_URL = "https://api.openverse.org/v1/auth_tokens/token/"
+_OPENVERSE_PAGE_SIZE = 12
+
+# Cached client-credentials token (Openverse tokens last ~12h). Refreshed when
+# within 60s of expiry; the lock stops concurrent resolves stampeding the token
+# endpoint. monotonic clock so a wall-clock jump can't expire it early.
+_ov_token: dict[str, object] = {"value": None, "expires_at": 0.0}
+_ov_token_lock = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -393,6 +409,114 @@ async def _fetch_photo(keywords: str, project_id: str) -> bytes | None:
     return None
 
 
+async def _openverse_token() -> str | None:
+    """OAuth client-credentials bearer token for Openverse, cached until ~expiry.
+
+    Returns None when no client creds are configured — anonymous search still
+    works (just rate-limited), so a missing token degrades, never breaks. Any
+    transport/parse error also returns None (fall back to anonymous)."""
+    settings = get_settings()
+    cid = settings.openverse_client_id
+    secret = settings.openverse_client_secret
+    if not cid or secret is None:
+        return None
+    if _ov_token["value"] and time.monotonic() < float(_ov_token["expires_at"]):
+        return _ov_token["value"]  # type: ignore[return-value]
+    async with _ov_token_lock:
+        if _ov_token["value"] and time.monotonic() < float(_ov_token["expires_at"]):
+            return _ov_token["value"]  # type: ignore[return-value]
+        data = {
+            "grant_type": "client_credentials",
+            "client_id": cid,
+            "client_secret": secret.get_secret_value(),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(_OPENVERSE_TOKEN_URL, data=data)
+            if resp.status_code >= 400:
+                log.warning("image_resolver: openverse token %d", resp.status_code)
+                return None
+            body = resp.json()
+        except Exception as exc:  # noqa: BLE001 — anonymous fallback on any failure
+            log.warning("image_resolver: openverse token err=%r", exc)
+            return None
+        token = body.get("access_token")
+        ttl = float(body.get("expires_in") or 0)
+        if not token:
+            return None
+        _ov_token["value"] = token
+        _ov_token["expires_at"] = time.monotonic() + max(0.0, ttl - 60)
+        return token
+
+
+async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None:
+    """Search Openverse for ``keywords`` (license-filtered to commercially-usable,
+    no-attribution) and download one photo. Deterministic pick by (project_id,
+    keywords) so a project re-renders the same shot. Bytes come from the source
+    CDN; on any miss we fall back to the Openverse thumbnail proxy — served from
+    api.openverse.org, the one host known reachable when a source CDN (e.g.
+    Wikimedia) is blocked by the RU egress. Fail-soft → None."""
+    settings = get_settings()
+    headers: dict[str, str] = {}
+    token = await _openverse_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    params = {
+        "q": keywords,
+        "license": settings.openverse_license,
+        "page_size": _OPENVERSE_PAGE_SIZE,
+        "mature": "false",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+            resp = await client.get(
+                _OPENVERSE_SEARCH_URL, params=params, headers=headers
+            )
+    except Exception as exc:  # noqa: BLE001 — never break a resolve over one tag
+        log.warning(
+            "image_resolver: openverse transport kw=%.40s err=%r", keywords, exc
+        )
+        return None
+    if resp.status_code >= 400:
+        log.warning("image_resolver: openverse %d kw=%.40s", resp.status_code, keywords)
+        return None
+    try:
+        results = resp.json().get("results") or []
+    except ValueError:
+        return None
+    if not results:
+        return None
+    pick = int(
+        hashlib.sha256(f"{project_id}|{keywords}".encode("utf-8")).hexdigest(), 16
+    ) % len(results)
+    chosen = results[pick]
+    # Full-res source URL first (no auth header to a 3rd-party CDN); then the
+    # Openverse thumbnail proxy (auth ok — same host as the API).
+    for img_url, hdrs in ((chosen.get("url"), {}), (chosen.get("thumbnail"), headers)):
+        if not img_url:
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as c:
+                img_resp = await c.get(img_url, headers=hdrs)
+            if img_resp.status_code == 200 and img_resp.content:
+                return img_resp.content
+            log.warning("image_resolver: openverse img-fetch %d", img_resp.status_code)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("image_resolver: openverse img-fetch err=%r", exc)
+    return None
+
+
+async def _fetch_stock_photo(keywords: str, project_id: str) -> bytes | None:
+    """Dispatch a stock-photo fetch to the configured provider (R-01: callers
+    don't know which backend served the bytes). Returns None for "off"."""
+    source = get_settings().photo_source
+    if source == "pexels":
+        return await _fetch_photo(keywords, project_id)
+    if source == "openverse":
+        return await _fetch_photo_openverse(keywords, project_id)
+    return None
+
+
 def _upload_photo(image_bytes: bytes, project_id: str, keywords: str) -> str | None:
     """Cache a Pexels photo in MinIO, content-addressed by (project_id,
     keywords) so the same keyword in one project costs one fetch + one object."""
@@ -402,7 +526,7 @@ def _upload_photo(image_bytes: bytes, project_id: str, keywords: str) -> str | N
     if not _ensure_bucket(client, bucket):
         return None
     sha = hashlib.sha256(
-        f"pexels|{project_id}|{keywords}".encode("utf-8")
+        f"{settings.photo_source}|{project_id}|{keywords}".encode("utf-8")
     ).hexdigest()[:32]
     key = f"{project_id}/{sha}.jpg"
     try:
@@ -636,7 +760,7 @@ async def resolve_images(
     # Disabled / no key / fetch fail → STRIP the tag so the section's flat
     # or mesh fallback shows, never a broken <img> (the bg layer sits behind).
     if photo_tags:
-        photo_on = (
+        photo_on = settings.photo_source == "openverse" or (
             settings.photo_source == "pexels" and settings.pexels_api_key is not None
         )
         kw_to_url: dict[str, str] = {}
@@ -645,7 +769,7 @@ async def resolve_images(
 
             async def _resolve_photo(kw: str) -> tuple[str, str | None]:
                 async with sem:
-                    img = await _fetch_photo(kw, project_id)
+                    img = await _fetch_stock_photo(kw, project_id)
                 if img is None:
                     return kw, None
                 url = await asyncio.to_thread(_upload_photo, img, project_id, kw)

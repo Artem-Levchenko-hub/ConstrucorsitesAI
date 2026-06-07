@@ -34,18 +34,30 @@ class Settings(BaseSettings):
     minio_public_url: str = Field(default="http://localhost:9000")
 
     # Stock photography for `<img data-omnia-photo="keywords">` tags — real
-    # thematic photos, not only gpt-image-1. "off" (default) leaves the feature
+    # thematic photos, not AI-generated. "off" (default) leaves the feature
     # dormant: the resolver strips unresolved photo tags so the section's flat /
-    # mesh fallback shows (no broken images). "pexels" resolves via the Pexels
-    # API and caches each result into `minio_bucket_photos` — one Pexels hit per
-    # unique keyword, never per render. Needs PEXELS_API_KEY (free; pexels.com/api).
-    photo_source: Literal["off", "pexels"] = Field(default="off")
+    # mesh fallback shows (no broken images). "pexels" → Pexels API (blocked from
+    # the RU prod egress — needs PEXELS_PROXY). "openverse" → Openverse API
+    # (reachable from prod; free CC0/PD stock, no key needed). Each result caches
+    # into `minio_bucket_photos` — one upstream hit per unique keyword, never per
+    # render.
+    photo_source: Literal["off", "pexels", "openverse"] = Field(default="off")
     pexels_api_key: SecretStr | None = Field(default=None)
     # Outbound proxy for Pexels calls only. pexels.com is unreliable / blocked
     # from the RU prod egress, so the api container reaches it via this proxy
     # (e.g. "http://user:pass@host:port"). Empty = direct. Applies ONLY to the
     # image_resolver Pexels client, never to the gateway / gpt-image path.
     pexels_proxy: str | None = Field(default=None)
+    # Openverse (https://api.openverse.org) — free CC stock for `data-omnia-photo`,
+    # reachable from the RU prod egress where Pexels/Unsplash are blocked. Anonymous
+    # search works (low rate ~5/hr, 100/day); MinIO caches one fetch per UNIQUE
+    # keyword so volume stays modest. For prod register a free app and set the
+    # client id/secret (POST /v1/auth_tokens/register/) → an OAuth token lifts the
+    # limit to ~100/min, 10k/day. `openverse_license` keeps picks commercially
+    # usable WITHOUT attribution (default cc0,pdm = CC0 + Public Domain Mark).
+    openverse_client_id: str | None = Field(default=None)
+    openverse_client_secret: SecretStr | None = Field(default=None)
+    openverse_license: str = Field(default="cc0,pdm")
     minio_bucket_photos: str = Field(default="omnia-photos")
 
     jwt_secret: SecretStr

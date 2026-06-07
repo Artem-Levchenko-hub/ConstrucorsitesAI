@@ -58,3 +58,46 @@ def test_strip_unresolved_tags_noop_when_resolved() -> None:
     out, n = strip_unresolved_tags(files)
     assert n == 0
     assert out == files
+
+
+def test_openverse_photo_resolved(monkeypatch) -> None:
+    # photo_source="openverse" routes data-omnia-photo through the Openverse
+    # fetcher (dispatched by _fetch_stock_photo); the tag is rewritten to the
+    # cached MinIO URL. Network + MinIO are stubbed — this locks the dispatch +
+    # replacement wiring, complementing the off-path strip test above.
+    import omnia_api.services.image_resolver as ir
+
+    class _S:
+        use_image_gen = False
+        use_image_prompt_enrichment = False
+        image_gen_max_unique = 8
+        photo_source = "openverse"
+        pexels_api_key = None
+
+    monkeypatch.setattr(ir, "get_settings", lambda: _S())
+
+    async def _fake_fetch(kw: str, pid: str) -> bytes:
+        return b"\xff\xd8\xff\xe0jpeg"
+
+    monkeypatch.setattr(ir, "_fetch_photo_openverse", _fake_fetch)
+    monkeypatch.setattr(
+        ir, "_upload_photo", lambda b, pid, kw: "http://minio/omnia-photos/p/x.jpg"
+    )
+
+    files = {"index.html": '<img data-omnia-photo="office team" class="x">'}
+    out, resolved, total = asyncio.run(ir.resolve_images(files, "proj"))
+    assert 'src="http://minio/omnia-photos/p/x.jpg"' in out["index.html"]
+    assert "data-omnia-photo" not in out["index.html"]
+    assert (resolved, total) == (1, 1)
+
+
+def test_fetch_stock_photo_off_returns_none(monkeypatch) -> None:
+    # The dispatcher is the single seam that knows the provider — "off" yields
+    # None so resolve_images strips the tag (no broken <img>).
+    import omnia_api.services.image_resolver as ir
+
+    class _S:
+        photo_source = "off"
+
+    monkeypatch.setattr(ir, "get_settings", lambda: _S())
+    assert asyncio.run(ir._fetch_stock_photo("anything", "proj")) is None
