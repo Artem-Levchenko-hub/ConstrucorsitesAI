@@ -14,6 +14,7 @@ import {
   Layers,
   Info,
   Sparkles,
+  Check,
 } from "lucide-react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import type { Message } from "@/lib/api/types";
@@ -100,7 +101,7 @@ export function ChatMessage({
           ) : (
             parts.map((p, i) =>
               p.kind === "text" ? (
-                <AssistantText key={i} text={p.text} />
+                <AssistantText key={i} text={p.text} streaming={!!streaming} />
               ) : (
                 <FileChip
                   key={i}
@@ -264,7 +265,13 @@ function QuizSummary({ idea, items }: { idea: string; items: QuizItem[] }) {
 
 /** Renders an assistant prose chunk, lifting `*Приёмка…*` / `*Свободная
  *  вёрстка…*` status lines out into a live StatusCard. */
-function AssistantText({ text }: { text: string }) {
+function AssistantText({
+  text,
+  streaming,
+}: {
+  text: string;
+  streaming?: boolean;
+}) {
   if (!STATUS_RE.test(text)) {
     return (
       <div className="whitespace-pre-wrap break-words text-fg-secondary">
@@ -293,7 +300,7 @@ function AssistantText({ text }: { text: string }) {
     <div className="space-y-2">
       {blocks.map((b, i) =>
         b.kind === "s" ? (
-          <StatusCard key={i} raw={b.text} />
+          <StatusCard key={i} raw={b.text} streaming={streaming} />
         ) : (
           <div
             key={i}
@@ -307,25 +314,41 @@ function AssistantText({ text }: { text: string }) {
   );
 }
 
-/** A live "the page is being reworked" card — shimmer sweep + spinning ring +
- *  pulsing dots. Replaces the old flat italic status line. Reduced-motion safe. */
-function StatusCard({ raw }: { raw: string }) {
+/** Page-rework status. While the message is STREAMING it's a live "working" card
+ *  (shimmer sweep + spinning ring + pulsing dots). Once the message is done it
+ *  becomes a STATIC "done" card (check, no looping animation) — otherwise a
+ *  finished generation would appear to rework the page forever (owner 2026-06-07).
+ *  `active` also respects reduced-motion. */
+function StatusCard({ raw, streaming }: { raw: string; streaming?: boolean }) {
   const reduce = useReducedMotion();
+  const active = !!streaming && !reduce;
   const clean = raw
     .replace(/\*/g, "")
     .replace(/\.{2,}$/, "")
     .replace(/^\s+|\s+$/g, "");
   const isAccept = /Приёмка/i.test(clean);
-  const title = isAccept ? "Дорабатываю страницу" : "Пересобираю страницу";
+  const title = streaming
+    ? isAccept
+      ? "Дорабатываю страницу"
+      : "Пересобираю страницу"
+    : isAccept
+      ? "Страница доработана"
+      : "Страница пересобрана";
+  const Icon = streaming ? Wand2 : Check;
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: EASE_OUT }}
-      className="relative overflow-hidden rounded-xl border border-accent/25 bg-accent-subtle/40 px-3 py-2.5"
+      className={cn(
+        "relative overflow-hidden rounded-xl border px-3 py-2.5",
+        streaming
+          ? "border-accent/25 bg-accent-subtle/40"
+          : "border-border-subtle bg-surface-raised/60",
+      )}
     >
-      {!reduce && (
+      {active && (
         <motion.span
           aria-hidden
           className="pointer-events-none absolute inset-y-0 -left-1/2 w-1/2 -skew-x-12 bg-gradient-to-r from-transparent via-accent/15 to-transparent"
@@ -334,9 +357,19 @@ function StatusCard({ raw }: { raw: string }) {
         />
       )}
       <div className="relative flex items-center gap-3">
-        <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/15">
-          <Wand2 className="h-3.5 w-3.5 text-accent" />
-          {!reduce && (
+        <span
+          className={cn(
+            "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
+            streaming ? "bg-accent/15" : "bg-surface-overlay",
+          )}
+        >
+          <Icon
+            className={cn(
+              "h-3.5 w-3.5",
+              streaming ? "text-accent" : "text-fg-secondary",
+            )}
+          />
+          {active && (
             <motion.span
               aria-hidden
               className="absolute inset-0 rounded-full border border-transparent border-t-accent"
@@ -349,16 +382,18 @@ function StatusCard({ raw }: { raw: string }) {
           <div className="text-[13px] font-medium text-fg-primary">{title}</div>
           <div className="truncate text-[11px] text-fg-tertiary">{clean}</div>
         </div>
-        <span aria-hidden className="ml-auto flex shrink-0 items-center gap-1">
-          {[0, 1, 2].map((i) => (
-            <motion.span
-              key={i}
-              className="h-1 w-1 rounded-full bg-accent/70"
-              animate={reduce ? undefined : { opacity: [0.3, 1, 0.3] }}
-              transition={{ duration: 1, repeat: Infinity, delay: i * 0.18 }}
-            />
-          ))}
-        </span>
+        {active && (
+          <span aria-hidden className="ml-auto flex shrink-0 items-center gap-1">
+            {[0, 1, 2].map((i) => (
+              <motion.span
+                key={i}
+                className="h-1 w-1 rounded-full bg-accent/70"
+                animate={{ opacity: [0.3, 1, 0.3] }}
+                transition={{ duration: 1, repeat: Infinity, delay: i * 0.18 }}
+              />
+            ))}
+          </span>
+        )}
       </div>
     </motion.div>
   );
