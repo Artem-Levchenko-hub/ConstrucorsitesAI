@@ -14,8 +14,8 @@ import {
   Loader2,
   Play,
   ServerCog,
-  MousePointerClick,
-  Paintbrush,
+  Sparkles,
+  Pencil,
   PanelLeftOpen,
   PanelRightOpen,
 } from "lucide-react";
@@ -381,6 +381,9 @@ export function PreviewFrame({ project }: { project: Project }) {
               устройств переехал в браузер-бар превью (он про сам сайт). */}
           {viewMode === "preview" && (
             <>
+              <span className="text-[11px] font-medium text-fg-tertiary ml-1 select-none">
+                Править
+              </span>
               <Button
                 size="sm"
                 variant="ghost"
@@ -388,14 +391,18 @@ export function PreviewFrame({ project }: { project: Project }) {
                 disabled={viewingOld}
                 title={
                   viewingOld
-                    ? "Выбор недоступен при просмотре старой версии"
+                    ? "Недоступно при просмотре старой версии"
                     : inspectMode
-                      ? "Выключить выбор элементов"
-                      : "Выбрать элементы в превью для точечной правки"
+                      ? "Выключить ИИ-правку"
+                      : "Выдели элементы и опиши правку в чате — изменит ИИ"
                 }
-                className={cn(inspectMode && "text-accent bg-accent-subtle")}
+                className={cn(
+                  "gap-1.5",
+                  inspectMode && "text-accent bg-accent-subtle",
+                )}
               >
-                <MousePointerClick className="h-3.5 w-3.5" />
+                <Sparkles className="h-3.5 w-3.5" />
+                С ИИ
               </Button>
 
               <Button
@@ -405,14 +412,18 @@ export function PreviewFrame({ project }: { project: Project }) {
                 disabled={viewingOld}
                 title={
                   viewingOld
-                    ? "Редактирование стиля недоступно для старой версии"
+                    ? "Недоступно при просмотре старой версии"
                     : styleMode
-                      ? "Выключить редактор"
-                      : "Редактор в превью: цвет, шрифт и замена картинок"
+                      ? "Выключить ручную правку"
+                      : "Меняй цвет, шрифт и картинки сам, без ИИ"
                 }
-                className={cn(styleMode && "text-accent bg-accent-subtle")}
+                className={cn(
+                  "gap-1.5",
+                  styleMode && "text-accent bg-accent-subtle",
+                )}
               >
-                <Paintbrush className="h-3.5 w-3.5" />
+                <Pencil className="h-3.5 w-3.5" />
+                Вручную
               </Button>
 
               <Button
