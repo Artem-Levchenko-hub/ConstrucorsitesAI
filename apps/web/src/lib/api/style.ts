@@ -62,3 +62,17 @@ export async function applyImagePatch(
     json: payload,
   });
 }
+
+/**
+ * Edit an element's text content directly (no LLM). Commits a snapshot. `index`
+ * disambiguates repeated labels. Mirrors `applyImagePatch`.
+ */
+export async function applyTextPatch(
+  projectId: string,
+  payload: { old_text: string; new_text: string; index: number },
+): Promise<Snapshot> {
+  return apiFetch<Snapshot>(`/api/projects/${projectId}/text-patch`, {
+    method: "POST",
+    json: payload,
+  });
+}

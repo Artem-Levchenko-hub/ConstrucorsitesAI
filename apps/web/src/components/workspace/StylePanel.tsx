@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import {
   applyImagePatch,
   applyStylePatch,
+  applyTextPatch,
   listFonts,
   uploadImage,
 } from "@/lib/api/style";
@@ -85,6 +86,8 @@ export function StylePanel({
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [chosenSrc, setChosenSrc] = useState<string | null>(null);
+  const [savingText, setSavingText] = useState(false);
+  const textRef = useRef<HTMLTextAreaElement>(null);
 
   const { data: fonts } = useQuery({
     queryKey: ["fonts"],
@@ -206,6 +209,32 @@ export function StylePanel({
     }
   };
 
+  // Save direct text edit — commits a snapshot, no LLM.
+  const saveText = async () => {
+    if (!selected?.editableText || savingText) return;
+    const next = textRef.current?.value ?? "";
+    const prev = selected.editText ?? "";
+    if (next === prev) return;
+    setSavingText(true);
+    try {
+      await applyTextPatch(projectId, {
+        old_text: prev,
+        new_text: next,
+        index: selected.textIndex ?? 0,
+      });
+      await qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+      selectSnapshot(null);
+      clearAll();
+      toast.success("Текст изменён — новая версия в истории");
+    } catch (e) {
+      toast.error("Не удалось изменить текст", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    } finally {
+      setSavingText(false);
+    }
+  };
+
   const activeFamily = familyName(
     elements[selected.selector]?.font_family ?? selected.fontFamily,
   );
@@ -230,6 +259,36 @@ export function StylePanel({
       </div>
 
       <div className="p-3 space-y-4 overflow-y-auto scrollbar-elegant">
+        {/* TEXT — edit the element's content directly (no LLM) */}
+        {selected.editableText ? (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-[11px] text-fg-tertiary">
+              <Type className="h-3 w-3" />
+              Текст — редактируй прямо тут
+            </div>
+            <textarea
+              key={selected.selector}
+              ref={textRef}
+              defaultValue={selected.editText ?? ""}
+              rows={3}
+              className="w-full rounded-lg border border-border-default bg-surface-input px-2.5 py-2 text-sm text-fg-primary focus:outline-none focus:ring-1 focus:ring-accent resize-y"
+            />
+            <Button
+              size="sm"
+              onClick={saveText}
+              disabled={savingText}
+              className="w-full gap-1.5"
+            >
+              {savingText ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Check className="h-3.5 w-3.5" />
+              )}
+              Сохранить текст
+            </Button>
+          </div>
+        ) : null}
+
         {/* IMAGE — replace a generated picture with your own (no LLM) */}
         {imgSrcs.length > 0 ? (
           <div className="space-y-2">

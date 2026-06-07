@@ -16,6 +16,11 @@ export type StyleSelected = {
   /** All image sources at the click point (carousel/slider stacks several) so
    *  the panel can offer a chooser instead of only the topmost. */
   srcs?: string[];
+  /** Direct text editing: set when the element is pure text (no child elements).
+   *  `editText` is the current text; `textIndex` disambiguates repeated labels. */
+  editableText?: boolean;
+  editText?: string;
+  textIndex?: number;
   rect?: { x: number; y: number; width: number; height: number };
 };
 

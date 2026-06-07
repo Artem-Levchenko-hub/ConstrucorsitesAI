@@ -259,6 +259,32 @@
     return out;
   }
 
+  // Text the user can edit in place: an element with NO child elements (pure
+  // text) and visible content. Returns its trimmed text + the occurrence index
+  // among identical pure-text elements (document order) so the server patches
+  // the right one when a label repeats. null when it isn't plain editable text.
+  function textInfo(el) {
+    if (!el.children || el.children.length !== 0) return null;
+    var nn = el.nodeName;
+    if (nn === "INPUT" || nn === "TEXTAREA" || nn === "SELECT" ||
+        nn === "SCRIPT" || nn === "STYLE" || nn === "IMG" || nn === "SVG") {
+      return null;
+    }
+    var t = (el.textContent || "").trim();
+    if (!t || t.length > 5000) return null;
+    var all = document.querySelectorAll("*");
+    var idx = 0;
+    for (var i = 0; i < all.length; i++) {
+      var n = all[i];
+      if (n === el) break;
+      if (n.children && n.children.length === 0 &&
+          (n.textContent || "").trim() === t) {
+        idx++;
+      }
+    }
+    return { text: t, index: idx };
+  }
+
   function onClick(e) {
     if (!enabled) return;
     var el = e.target;
@@ -287,6 +313,7 @@
     // values (additive fields — the AI-edit compose path ignores them).
     var cs = window.getComputedStyle(el);
     var imgs = pickedImgs(el, e.clientX, e.clientY);
+    var ti = textInfo(el);
     post({
       type: "omnia:pick",
       el: {
@@ -305,6 +332,9 @@
         // the topmost for back-compat.
         src: imgs[0] || "",
         srcs: imgs,
+        editableText: ti ? true : false,
+        editText: ti ? ti.text : "",
+        textIndex: ti ? ti.index : 0,
         rect: {
           x: Math.round(r.left),
           y: Math.round(r.top),

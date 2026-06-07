@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import asyncio
+import html as _html
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Request, status
@@ -24,7 +26,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers.public import _INDEX_CANDIDATES
 from omnia_api.schemas.snapshot import SnapshotPublic
-from omnia_api.schemas.upload import ImagePatchRequest
+from omnia_api.schemas.upload import ImagePatchRequest, TextPatchRequest
 from omnia_api.services import repo as repo_svc
 from omnia_api.services import user_uploads
 from omnia_api.services.queue import enqueue_preview
@@ -149,6 +151,106 @@ async def image_patch(
         project_id=project_id,
         commit_sha=new_sha,
         prompt_text="(своя картинка)",
+        model_id=None,
+        parent_id=project.current_snapshot_id,
+    )
+    session.add(new_snapshot)
+    await session.flush()
+    project.current_snapshot_id = new_snapshot.id
+    await session.commit()
+    await session.refresh(new_snapshot)
+
+    await asyncio.to_thread(enqueue_preview, new_snapshot.id)
+
+    await publish_event(
+        project_id,
+        "snapshot.created",
+        {
+            "snapshot": {
+                "id": str(new_snapshot.id),
+                "project_id": str(new_snapshot.project_id),
+                "commit_sha": new_snapshot.commit_sha,
+                "prompt_text": new_snapshot.prompt_text,
+                "model_id": new_snapshot.model_id,
+                "parent_id": (
+                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
+                ),
+                "preview_url": preview_public_url(new_snapshot.preview_key),
+                "is_rollback_target": new_snapshot.is_rollback_target,
+                "created_at": new_snapshot.created_at.isoformat(),
+            }
+        },
+    )
+
+    return SnapshotPublic.model_validate(_snapshot_dict(new_snapshot))
+
+
+@router.post("/{project_id}/text-patch", response_model=SnapshotPublic)
+async def text_patch(
+    project_id: UUID,
+    payload: TextPatchRequest,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> SnapshotPublic:
+    """Replace a text element's content directly (no LLM); commit a snapshot."""
+    project = await _owned_project(session, project_id, current_user.id)
+
+    if payload.old_text == payload.new_text:
+        raise ApiError("empty_patch", "no change", status.HTTP_400_BAD_REQUEST)
+    if project.current_snapshot_id is None:
+        raise ApiError(
+            "no_snapshot", "project has no snapshot to edit",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    current = await session.get(Snapshot, project.current_snapshot_id)
+    if current is None:
+        raise ApiError(
+            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
+        )
+    parent_sha = current.commit_sha
+
+    files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
+    index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
+    if index_path is None:
+        raise ApiError(
+            "no_index", "this project has no static index.html to edit",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    html_src = files[index_path]
+    # Match the text ONLY where it is the FULL content of an element (between a
+    # `>` and the next `<`), whitespace-tolerant — never touches attribute values
+    # or script strings. The frontend offers this only for pure-text elements, so
+    # the occurrence index stays 1:1 with what the user sees.
+    pattern = re.compile(r"(>)(\s*)" + re.escape(payload.old_text) + r"(\s*)(<)")
+    matches = list(pattern.finditer(html_src))
+    if not matches:
+        raise ApiError(
+            "text_not_found", "не нашёл этот текст на странице",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    idx = payload.index if payload.index < len(matches) else 0
+    m = matches[idx]
+    esc_new = _html.escape(payload.new_text, quote=False)
+    new_html = (
+        html_src[: m.start()]
+        + m.group(1) + m.group(2) + esc_new + m.group(3) + m.group(4)
+        + html_src[m.end() :]
+    )
+    if new_html == html_src:
+        raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
+
+    new_sha = await asyncio.to_thread(
+        repo_svc.commit_files,
+        project_id,
+        {index_path: new_html},
+        "text: правка текста",
+        parent_sha,
+    )
+    new_snapshot = Snapshot(
+        project_id=project_id,
+        commit_sha=new_sha,
+        prompt_text="(правка текста)",
         model_id=None,
         parent_id=project.current_snapshot_id,
     )
