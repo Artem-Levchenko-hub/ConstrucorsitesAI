@@ -451,17 +451,17 @@ async def _openverse_token() -> str | None:
 
 def _openverse_query_variants(keywords: str) -> list[str]:
     """Progressively broader search queries (≤3). The CC0/Public-Domain pool is
-    sparse for long descriptive phrases ('modern dental clinic interior' → 0 hits)
-    but matches the head noun ('clinic interior', 'interior'). Try the full phrase,
-    then the pre-comma subject, then its tail — first non-empty result wins."""
+    sparse for long descriptive phrases ('modern dental clinic interior' → 0 hits),
+    so fall back to a shorter THEME-ANCHORED phrase ('dental clinic', 'clinic
+    interior'). Never drop to a single generic word ('interior', 'portrait') — that
+    pulls off-theme junk; keep at least two words so the theme survives."""
     kw = keywords.strip()
     head = kw.split(",")[0].strip()
     words = [w for w in re.split(r"\s+", head) if w]
     candidates = [kw, head]
     if len(words) > 2:
-        candidates.append(" ".join(words[-2:]))
-    if len(words) >= 2:
-        candidates.append(words[-1])
+        candidates.append(" ".join(words[:2]))   # leading words = the subject
+        candidates.append(" ".join(words[-2:]))  # trailing words = the object
     out: list[str] = []
     seen: set[str] = set()
     for c in candidates:
@@ -471,23 +471,53 @@ def _openverse_query_variants(keywords: str) -> list[str]:
     return out[:3]
 
 
+# Words too generic to anchor relevance — they sit in countless off-theme titles.
+_OV_STOPWORDS = frozenset({
+    "the", "and", "with", "for", "modern", "interior", "background", "photo",
+    "image", "view", "scene", "closeup", "high", "quality", "professional", "real",
+})
+
+
+def _ov_relevance(item: dict, query_words: set[str]) -> int:
+    """How many distinct query words appear in the item's title/tags. Openverse
+    sorts by its own relevance, but the CC0 pool is thin enough that result #0 is
+    often only loosely related — re-ranking against the ACTUAL keywords stops a
+    'dentist portrait' query landing on a Tudor painting or a bee macro."""
+    tags = item.get("tags") or []
+    text = (
+        (item.get("title") or "")
+        + " "
+        + " ".join(t.get("name", "") for t in tags if isinstance(t, dict))
+    ).lower()
+    return sum(1 for w in query_words if w in text)
+
+
 async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None:
-    """Search Openverse (license-filtered to commercially-usable, no-attribution)
-    and download one photo. Deterministic pick by (project_id, keywords). The query
-    is broadened (``_openverse_query_variants``) until a license-clean result
-    appears — the CC0 pool misses long phrases. Bytes come from the source CDN; on
-    any miss we fall back to the Openverse thumbnail proxy (api.openverse.org,
-    reachable when a source CDN is RU-blocked). Fail-soft → None."""
+    """Search Openverse (PHOTOGRAPHS only, no-attribution licenses) and download the
+    photo that BEST matches ``keywords``. The query is broadened
+    (``_openverse_query_variants``) and every candidate is re-ranked by keyword
+    overlap (``_ov_relevance``) — the highest-scoring photo wins. If NOTHING shares a
+    keyword we return None so the tag is stripped and the section's kit graphic
+    shows: a clean blank section beats a random off-theme image (owner 2026-06-07 —
+    the CC0 pool served a bee for a dental hero and a Tudor painting for a surgeon).
+    Bytes come from the source CDN with the Openverse thumbnail proxy as the
+    reachable fallback. Fail-soft → None. (``project_id`` kept for call-site parity.)"""
     settings = get_settings()
     headers: dict[str, str] = {}
     token = await _openverse_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    query_words = {
+        w
+        for w in re.findall(r"[a-zа-яё0-9]+", keywords.lower())
+        if len(w) > 2 and w not in _OV_STOPWORDS
+    }
 
     async def _search(client: httpx.AsyncClient, query: str) -> list[dict]:
         params = {
             "q": query,
             "license": settings.openverse_license,
+            "category": "photograph",  # exclude paintings / illustrations / clipart
             "page_size": _OPENVERSE_PAGE_SIZE,
             "mature": "false",
         }
@@ -506,18 +536,23 @@ async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None
         except ValueError:
             return []
 
-    results: list[dict] = []
+    # Collect candidates across broadening steps, keep the most ON-THEME one.
+    best: dict | None = None
+    best_score = 0
     async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
         for query in _openverse_query_variants(keywords):
-            results = await _search(client, query)
-            if results:
+            for item in await _search(client, query):
+                score = _ov_relevance(item, query_words) if query_words else 1
+                if score > best_score:  # strictly better wins; ties keep first (rank)
+                    best, best_score = item, score
+            # Stop once we have a solid match (2+ words, or 1 word for short queries).
+            if best_score >= 2 or (best_score >= 1 and len(query_words) <= 2):
                 break
-    if not results:
+    # No photo shares a keyword with the request → don't ship a random one.
+    if best is None or best_score < 1:
+        log.info("image_resolver: openverse no on-theme match kw=%.50s", keywords)
         return None
-    pick = int(
-        hashlib.sha256(f"{project_id}|{keywords}".encode("utf-8")).hexdigest(), 16
-    ) % len(results)
-    chosen = results[pick]
+    chosen = best
     # Full-res source URL first (no auth header to a 3rd-party CDN); then the
     # Openverse thumbnail proxy (auth ok — same host as the API).
     for img_url, hdrs in ((chosen.get("url"), {}), (chosen.get("thumbnail"), headers)):

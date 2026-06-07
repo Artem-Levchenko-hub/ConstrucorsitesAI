@@ -1035,10 +1035,14 @@ _IMAGE_GEN_ON = """\
      alt="русский alt"
      style="background:linear-gradient(135deg,var(--brand,#1e293b),var(--accent,#0ea5e9));"
      class="w-full h-72 object-cover rounded-2xl" />
-   • Ключевики на английском, конкретные: «smiling barista portrait», «fresh sushi
-     platter top view», «modern dental clinic interior».
-   • Omnia подтянет реальное бесплатное фото (CC0) и закэширует. Дёшево → используй
-     ЩЕДРО для всех контентных фото (это основной источник картинок на сайте).
+   • Ключевики ТОЛЬКО английские и ОБОБЩЁННЫЕ — тип/роль/сцена, НЕ имена людей и НЕ
+     бренд: «female dentist portrait», «male orthodontist smiling», «dental clinic
+     reception interior», «fresh sushi platter top view». ЗАПРЕЩЕНО в keywords: имена
+     («Анна Сергеевна»), название бренда («Жемчуг»), русские слова — сток ищет по
+     английскому и промахнётся мимо темы.
+   • Omnia ставит САМОЕ релевантное фото по этим словам; если по теме ничего нет —
+     слот тихо заменится графикой кита (НЕ случайной картинкой). Потому пиши простые
+     предметные англо-ключевики. Используй ЩЕДРО для всех контентных фото.
 
 ПРАВИЛА ОБОИХ ТЕГОВ:
 • ВСЕГДА inline-градиент в style= под палитру (var(--brand)/var(--accent)) — виден
