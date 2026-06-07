@@ -407,8 +407,8 @@ export function PreviewFrame({ project }: { project: Project }) {
                   viewingOld
                     ? "Редактирование стиля недоступно для старой версии"
                     : styleMode
-                      ? "Выключить редактор стиля"
-                      : "Пипетка: менять цвет и шрифт прямо в превью"
+                      ? "Выключить редактор"
+                      : "Редактор в превью: цвет, шрифт и замена картинок"
                 }
                 className={cn(styleMode && "text-accent bg-accent-subtle")}
               >

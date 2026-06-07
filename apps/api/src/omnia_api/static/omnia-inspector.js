@@ -55,6 +55,7 @@
   // Save the backend merges these edits into the committed block, and a reload
   // collapses both into one — same look (parity).
   var styleMode = false;
+  var hoverLabel = null;
   var overrideModel = { tokens: {}, elements: {}, fonts: {} };
   var overrideStyleEl = null;
 
@@ -73,6 +74,25 @@
     s.display = "none";
     s.top = "0";
     s.left = "0";
+    // A small badge that rides the top-left of the box — used to surface an
+    // affordance hint (e.g. "Заменить фото" when hovering an image) so the
+    // feature is discoverable instead of hidden behind the mode.
+    hoverLabel = document.createElement("div");
+    hoverLabel.setAttribute("data-omnia-inspector", "hover-label");
+    var ls = hoverLabel.style;
+    ls.position = "absolute";
+    ls.top = "0";
+    ls.left = "0";
+    ls.transform = "translateY(-100%)";
+    ls.background = HL_COLOR;
+    ls.color = "#fff";
+    ls.font = "600 11px system-ui, -apple-system, sans-serif";
+    ls.padding = "2px 6px";
+    ls.borderRadius = "4px";
+    ls.whiteSpace = "nowrap";
+    ls.pointerEvents = "none";
+    ls.display = "none";
+    hoverBox.appendChild(hoverLabel);
     (document.body || document.documentElement).appendChild(hoverBox);
     return hoverBox;
   }
@@ -81,12 +101,20 @@
     return el && el.getAttribute && el.getAttribute("data-omnia-inspector") !== null;
   }
 
-  function positionHoverBox(rect) {
+  function positionHoverBox(rect, labelText) {
     var box = ensureHoverBox();
     box.style.display = "block";
     box.style.width = rect.width + "px";
     box.style.height = rect.height + "px";
     box.style.transform = "translate(" + rect.left + "px," + rect.top + "px)";
+    if (hoverLabel) {
+      if (labelText) {
+        hoverLabel.textContent = labelText;
+        hoverLabel.style.display = "block";
+      } else {
+        hoverLabel.style.display = "none";
+      }
+    }
   }
 
   function onMouseMove(e) {
@@ -98,7 +126,10 @@
       if (!e2 || !enabled) return;
       var el = e2.target;
       if (!el || el.nodeType !== 1 || isOurs(el)) return;
-      positionHoverBox(el.getBoundingClientRect());
+      // In style mode, hint that hovering an image lets you replace it — makes
+      // the upload affordance discoverable instead of buried in the panel.
+      var im = styleMode ? pickedImg(el, e2.clientX, e2.clientY) : null;
+      positionHoverBox(el.getBoundingClientRect(), im ? "Заменить фото" : "");
     });
   }
 
