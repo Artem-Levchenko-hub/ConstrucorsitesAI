@@ -129,6 +129,10 @@ async def post_style_patch(
             href = href_for(e.font_family)
             if href:
                 font_links.append((e.font_family, href))
+        if e.hidden:
+            # "Remove element" = hide it (display:none !important via the
+            # overrides block). Reversible, selector-targeted, no HTML surgery.
+            decls["display"] = "none"
         if decls:
             element_rules.append((e.selector, decls))
 

@@ -9,6 +9,7 @@ import {
   Loader2,
   Pipette,
   RotateCcw,
+  Trash2,
   Type,
   X,
 } from "lucide-react";
@@ -87,6 +88,7 @@ export function StylePanel({
   const [dragOver, setDragOver] = useState(false);
   const [chosenSrc, setChosenSrc] = useState<string | null>(null);
   const [savingText, setSavingText] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   const { data: fonts } = useQuery({
@@ -232,6 +234,29 @@ export function StylePanel({
       });
     } finally {
       setSavingText(false);
+    }
+  };
+
+  // Remove the element from the page — hides it (display:none) via the overrides
+  // block. Reversible (a snapshot in history); works for any element.
+  const deleteElement = async () => {
+    if (!selected || deleting) return;
+    setDeleting(true);
+    try {
+      await applyStylePatch(projectId, {
+        tokens: [],
+        elements: [{ selector: selected.selector, hidden: true }],
+      });
+      await qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+      selectSnapshot(null);
+      clearAll();
+      toast.success("Элемент убран — новая версия в истории");
+    } catch (e) {
+      toast.error("Не удалось убрать элемент", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -471,6 +496,25 @@ export function StylePanel({
               );
             })}
           </div>
+        </div>
+
+        {/* DELETE — remove (hide) any element from the page */}
+        <div className="pt-1 border-t border-border-subtle">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={deleteElement}
+            disabled={deleting}
+            title="Убрать этот элемент со страницы"
+            className="w-full gap-1.5 text-fg-tertiary hover:text-red-400 hover:bg-red-500/10"
+          >
+            {deleting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+            Убрать элемент
+          </Button>
         </div>
       </div>
 

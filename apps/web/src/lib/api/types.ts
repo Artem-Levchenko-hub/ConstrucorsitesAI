@@ -150,6 +150,8 @@ export type StylePatchPayload = {
     background_color?: string;
     border_color?: string;
     font_family?: string;
+    /** Hide the element (display:none) — the "remove element" action. */
+    hidden?: boolean;
   }[];
 };
 

@@ -50,6 +50,8 @@ class ElementOverride(BaseModel):
     background_color: str | None = None
     border_color: str | None = None
     font_family: str | None = Field(default=None, max_length=80)
+    # Hide the element (display:none) — the in-preview "remove element" action.
+    hidden: bool = False
 
     @field_validator("color", "background_color", "border_color")
     @classmethod
