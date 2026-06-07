@@ -15,7 +15,7 @@ import {
   Play,
   ServerCog,
   MousePointerClick,
-  Pipette,
+  Paintbrush,
   PanelLeftOpen,
   PanelRightOpen,
 } from "lucide-react";
@@ -412,7 +412,7 @@ export function PreviewFrame({ project }: { project: Project }) {
                 }
                 className={cn(styleMode && "text-accent bg-accent-subtle")}
               >
-                <Pipette className="h-3.5 w-3.5" />
+                <Paintbrush className="h-3.5 w-3.5" />
               </Button>
 
               <Button
