@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -2571,6 +2572,26 @@ DOM, позиционирование, сетки — фон на расклад
 поедет вёрстка и появится «обрезанный странный край»."""
 
 
+# A prior BUILD answer saved in chat history is the page's full <file>…</file>
+# HTML (30–60 KB). In EDIT mode the CURRENT file is already supplied verbatim as
+# «текущее состояние», so that stale copy in history is pure waste: it ~doubles
+# the input the gateway bills AND tempts the cheap model to copy a byte-exact
+# SEARCH from the OUTDATED markup → a silent conflict + a wasted retry. Replace
+# those blocks with a short marker; keep the rest (small <edit> diffs carry the
+# user's recent intent). Edit-only — the build path keeps its history verbatim.
+_FILE_BLOCK_RE = re.compile(r"<file\b[^>]*>.*?</file>", re.S | re.I)
+
+
+def _history_for_edit(history: Sequence[dict[str, str]]) -> list[dict[str, str]]:
+    """Last ``HISTORY_LIMIT`` user/assistant turns with full-file HTML stripped."""
+    out: list[dict[str, str]] = []
+    for m in list(history)[-HISTORY_LIMIT:]:
+        if m.get("role") in {"user", "assistant"} and m.get("content"):
+            content = _FILE_BLOCK_RE.sub("[предыдущая сборка страницы]", m["content"])
+            out.append({"role": m["role"], "content": content})
+    return out
+
+
 def _build_edit_messages(
     current_files: dict[str, str],
     history: Sequence[dict[str, str]],
@@ -2633,9 +2654,7 @@ def _build_edit_messages(
             }
         )
 
-    for m in list(history)[-HISTORY_LIMIT:]:
-        if m.get("role") in {"user", "assistant"} and m.get("content"):
-            messages.append({"role": m["role"], "content": m["content"]})
+    messages.extend(_history_for_edit(history))
 
     final_user = user_prompt
     if selected_elements:
@@ -2699,9 +2718,7 @@ def build_edit_rewrite_messages(
         messages.append(
             {"role": "user", "content": "Текущее состояние страницы:\n" + files_block}
         )
-    for m in list(history)[-HISTORY_LIMIT:]:
-        if m.get("role") in {"user", "assistant"} and m.get("content"):
-            messages.append({"role": m["role"], "content": m["content"]})
+    messages.extend(_history_for_edit(history))
     final_user = user_prompt
     if selected_elements:
         final_user = _format_selection_block(selected_elements) + "\n\n" + user_prompt
