@@ -21,12 +21,26 @@ import { cn } from "@/lib/utils";
  * The bar lives inside `ChatMessage` body and is auto-removed on
  * `llm.done` / `llm.error` / cancel (the hook calls `removeQueries`).
  */
-const STAGES: { id: MultipassStage; label: string }[] = [
+const MULTIPASS_STAGES: { id: MultipassStage; label: string }[] = [
   { id: "skeleton", label: "Структура" },
   { id: "content", label: "Контент" },
   { id: "visual", label: "Визуал" },
   { id: "assembly", label: "Сборка" },
 ];
+// The default (freeform) path emits these via the same llm.pass channel.
+const FREEFORM_STAGES: { id: MultipassStage; label: string }[] = [
+  { id: "art_director", label: "Замысел" },
+  { id: "writer", label: "Вёрстка" },
+];
+const FREEFORM_IDS = new Set<MultipassStage>(FREEFORM_STAGES.map((s) => s.id));
+
+/** Pick the stage set that matches the events seen for this message. */
+function pickStages(p: PassProgress): { id: MultipassStage; label: string }[] {
+  const seen = [p.current, ...p.completed];
+  return seen.some((s) => s && FREEFORM_IDS.has(s))
+    ? FREEFORM_STAGES
+    : MULTIPASS_STAGES;
+}
 
 export function PassProgressBar({
   projectId,
@@ -49,9 +63,11 @@ export function PassProgressBar({
 
   if (!progress) return null;
 
+  const stages = pickStages(progress);
+  const isFreeform = stages === FREEFORM_STAGES;
   const totalDone = progress.completed.length;
   const activeIdx = progress.current
-    ? STAGES.findIndex((s) => s.id === progress.current)
+    ? stages.findIndex((s) => s.id === progress.current)
     : -1;
 
   return (
@@ -68,16 +84,17 @@ export function PassProgressBar({
             aria-hidden
             className="h-3 w-3 shrink-0 animate-spin text-accent"
           />
-          <span className="shrink-0">multipass</span>
+          <span className="shrink-0">{isFreeform ? "генерация" : "multipass"}</span>
           <span aria-hidden className="shrink-0">·</span>
           <span className="shrink-0 tabular-nums">
-            {totalDone}/{STAGES.length}
+            {totalDone}/{stages.length}
           </span>
           {progress.current && (
             <>
               <span aria-hidden className="shrink-0">·</span>
               <span className="truncate text-fg-secondary">
-                {labelFor(progress.current)}
+                {stages.find((s) => s.id === progress.current)?.label ??
+                  progress.current}
               </span>
             </>
           )}
@@ -87,10 +104,10 @@ export function PassProgressBar({
             horizontal scrollbar (the old labelled chips did). The active
             stage name lives in the header above, not inside the bar. */}
         <ol
-          aria-label={`Прогресс генерации: ${totalDone} из ${STAGES.length}`}
+          aria-label={`Прогресс генерации: ${totalDone} из ${stages.length}`}
           className="flex min-w-0 items-center gap-1"
         >
-          {STAGES.map((stage, idx) => {
+          {stages.map((stage, idx) => {
             const isDone = progress.completed.includes(stage.id);
             const isActive = idx === activeIdx;
             return (
@@ -115,8 +132,4 @@ export function PassProgressBar({
       </motion.div>
     </AnimatePresence>
   );
-}
-
-function labelFor(stage: MultipassStage): string {
-  return STAGES.find((s) => s.id === stage)?.label ?? stage;
 }

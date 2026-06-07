@@ -291,7 +291,10 @@ export type MultipassStage =
   | "skeleton"
   | "content"
   | "visual"
-  | "assembly";
+  | "assembly"
+  // Freeform pipeline stages (art_director_writer.py) — same llm.pass channel.
+  | "art_director"
+  | "writer";
 
 /**
  * Client-side aggregate of `llm.pass` events for one assistant message.
