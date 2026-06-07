@@ -2,10 +2,24 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Globe, Loader2, Pipette, RotateCcw, Type, X } from "lucide-react";
+import {
+  Check,
+  Globe,
+  ImageUp,
+  Loader2,
+  Pipette,
+  RotateCcw,
+  Type,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { applyStylePatch, listFonts } from "@/lib/api/style";
+import {
+  applyImagePatch,
+  applyStylePatch,
+  listFonts,
+  uploadImage,
+} from "@/lib/api/style";
 import type { FontOption } from "@/lib/api/types";
 import { useStyleEditStore } from "@/store/styleEdit";
 import { useWorkspaceStore } from "@/store/workspace";
@@ -68,6 +82,8 @@ export function StylePanel({
   const [siteWide, setSiteWide] = useState(false);
   const [token, setTokenSel] = useState<string>("--accent");
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   const { data: fonts } = useQuery({
     queryKey: ["fonts"],
@@ -154,6 +170,30 @@ export function StylePanel({
     }
   };
 
+  // Replace this image with the user's own upload — commits a snapshot, no LLM.
+  const replaceImage = async (file: File) => {
+    if (!selected?.src || uploading) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Это не изображение");
+      return;
+    }
+    setUploading(true);
+    try {
+      const { url } = await uploadImage(projectId, file);
+      await applyImagePatch(projectId, { old_src: selected.src, new_src: url });
+      await qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+      selectSnapshot(null);
+      clearAll();
+      toast.success("Фото заменено — новая версия в истории");
+    } catch (e) {
+      toast.error("Не удалось заменить фото", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const activeFamily = familyName(
     elements[selected.selector]?.font_family ?? selected.fontFamily,
   );
@@ -178,6 +218,57 @@ export function StylePanel({
       </div>
 
       <div className="p-3 space-y-4 overflow-y-auto scrollbar-elegant">
+        {/* IMAGE — replace a generated picture with your own (no LLM) */}
+        {selected.src ? (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-[11px] text-fg-tertiary">
+              <ImageUp className="h-3 w-3" />
+              Картинка — загрузи свою
+            </div>
+            <label
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const f = e.dataTransfer.files?.[0];
+                if (f) void replaceImage(f);
+              }}
+              className={cn(
+                "relative block rounded-lg border border-dashed overflow-hidden cursor-pointer transition-colors",
+                dragOver ? "border-accent" : "border-border-default",
+              )}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={selected.src} alt="" className="w-full h-24 object-cover" />
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                disabled={uploading}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void replaceImage(f);
+                  e.target.value = "";
+                }}
+                className="absolute inset-0 opacity-0 cursor-pointer"
+              />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 hover:opacity-100 transition-opacity text-[11px] text-white font-medium px-2 text-center">
+                {uploading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  "Заменить — клик или перетащи файл"
+                )}
+              </div>
+            </label>
+            <p className="text-[10px] text-fg-tertiary">
+              PNG / JPG / WebP, до 6 МБ. Сохранится новой версией в истории.
+            </p>
+          </div>
+        ) : null}
+
         {/* COLOR */}
         <div className="space-y-2">
           <div className="flex items-center rounded-lg border border-border-subtle bg-surface-raised p-0.5">

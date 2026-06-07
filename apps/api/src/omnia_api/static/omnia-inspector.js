@@ -222,6 +222,9 @@
         backgroundColor: cs.backgroundColor,
         borderColor: cs.borderTopColor,
         fontFamily: cs.fontFamily,
+        // For an <img>, its current source — lets the style panel offer
+        // "replace with your own image" (matches the src in index.html).
+        src: el.nodeName === "IMG" ? (el.getAttribute("src") || el.src || "") : "",
         rect: {
           x: Math.round(r.left),
           y: Math.round(r.top),

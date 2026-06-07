@@ -236,6 +236,7 @@ export function PreviewFrame({ project }: { project: Project }) {
             backgroundColor: String(el.backgroundColor ?? ""),
             borderColor: String(el.borderColor ?? ""),
             fontFamily: String(el.fontFamily ?? ""),
+            src: String(el.src ?? ""),
           });
         } else {
           addSelection({

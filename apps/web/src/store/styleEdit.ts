@@ -11,6 +11,8 @@ export type StyleSelected = {
   backgroundColor: string;
   borderColor: string;
   fontFamily: string;
+  /** Current <img> source (empty for non-images) — drives "replace image". */
+  src?: string;
   rect?: { x: number; y: number; width: number; height: number };
 };
 
