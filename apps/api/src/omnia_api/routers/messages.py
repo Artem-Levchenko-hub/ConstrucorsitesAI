@@ -1484,6 +1484,53 @@ async def _process_prompt(
                     files = {}
             print(f"[PP] surgical_retry applied files={len(files)}", flush=True)
 
+        # --- Surgical conflict retry: PARTIAL apply -----------------------
+        # Some SEARCH blocks matched, others didn't (a cheap model mis-copies one
+        # long class line — e.g. drops a char in `min-h-[95vh]`). The applied edits
+        # stay; the failed ones used to vanish silently (files non-empty → the
+        # not-files retry above never fired), so the user saw part of the request
+        # ignored. Re-ask ONCE for ONLY the conflicted edits, with the exact
+        # conflict list + a "anchor on short text/id, not long class strings"
+        # nudge, and merge the result on top of the already-patched file.
+        if surgical and files and edit_conflicts and accumulated.strip():
+            _base_after_first = {**current_files, **files}
+            _conf_note = (
+                "Часть правок НЕ применилась — SEARCH не совпал с файлом:\n"
+                + "\n".join(f"— {c}" for c in edit_conflicts[:6])
+                + "\n\nПовтори ТОЛЬКО непрошедшие правки. Якорь SEARCH бери КОРОТКИЙ "
+                "и ПРОСТОЙ: видимый ТЕКСТ (слова заголовка/кнопки/цены), атрибут "
+                '`id="…"` или одно уникальное слово — НЕ копируй длинные `class="…"` '
+                "со [скобочными] значениями (`min-h-[95vh]` и т.п.): cheap-модель их "
+                "портит и SEARCH промахивается. Скопируй фрагмент из показанного файла "
+                "символ-в-символ. Только <edit>, ровно непрошедшее, остальное не трогай."
+            )
+            messages.append({"role": "assistant", "content": accumulated})
+            messages.append({"role": "user", "content": _conf_note})
+            print(
+                f"[PP] surgical_conflict_retry conflicts={len(edit_conflicts)}",
+                flush=True,
+            )
+            await _run_stream(
+                model_id, force_single_shot=True, force_all=force_model
+            )
+            _cr_acc = str(state["accumulated"])
+            if _cr_acc.strip():
+                try:
+                    _cr_files, _ = _extract_files_and_edits(_cr_acc, _base_after_first)
+                except (UnsafePathError, ValueError):
+                    _cr_files = {}
+                if _cr_files:
+                    files = {**files, **_cr_files}
+                    accumulated = accumulated + "\n" + _cr_acc
+                    if state["usage"] and isinstance(state["usage"], dict):
+                        usage_data = state["usage"]  # type: ignore[assignment]
+                    print(
+                        f"[PP] surgical_conflict_retry applied files={list(files.keys())}",
+                        flush=True,
+                    )
+                else:
+                    print("[PP] surgical_conflict_retry no_new_files", flush=True)
+
         # --- Surgical rewrite fallback: <edit> still couldn't land --------
         # SEARCH/REPLACE is fragile on a cheap model for BLOCK-level changes
         # ("сделай фон поинтереснее" — the hero markup is complex, and the model
