@@ -41,6 +41,10 @@ log = structlog.get_logger("omnia_orchestrator.builder")
 # edits in the nextjs-postgres-drizzle template (pages live under src/).
 _OVERLAY_PATHS = [
     "src",
+    # Base44-style nextjs-entities stack: the AI's data model is entities/*.json
+    # read at runtime by the engine. Without this the prod image has ZERO
+    # entities and every /api/entities/* call 404s (dev works, prod doesn't).
+    "entities",
     "public",
     "package.json",
     "next.config.ts",
@@ -70,7 +74,10 @@ def _resolve_runtime_dsn(project_id: str) -> str:
     dsn = postgres_admin.load_existing_dsn(UUID(project_id))
     return dsn or _DB_PLACEHOLDER
 
-_TEMPLATE = "nextjs-postgres-drizzle"
+# Default/fallback template. The actual template per deploy is recovered from
+# the dev container's image (omnia-template-<t>:dev) in `_run`, so an entities
+# project seeds its prod build context from the entities template, not this one.
+_DEFAULT_TEMPLATE = "nextjs-postgres-drizzle"
 
 # Prod build config the orchestrator forces into every deploy. AI-generated
 # code very often has TS/ESLint errors that `next dev` (the live preview)
@@ -86,6 +93,12 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
+  // nextjs-entities: the engine reads entities/*.json from disk at runtime; the
+  // tracer can't see fs reads, so force them into the standalone bundle or prod
+  // 404s on every /api/entities/* call. No-op for templates with no entities/.
+  outputFileTracingIncludes: {
+    "/api/entities/**": ["./entities/**/*.json"],
+  },
 };
 
 export default nextConfig;
@@ -135,8 +148,15 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
             project_id, "deploy.progress", {"phase": "building", "slug": slug}
         )
 
-        # 1. Seed the build context from the template (Dockerfile.prod + configs).
-        template_dir = _template_source_dir(_TEMPLATE)
+        # 1. Seed the build context from the PROJECT's template (recovered from
+        # the dev container's image), falling back to the default. This keeps an
+        # entities project on the entities template's Dockerfile.prod/configs.
+        template = (
+            await docker_client.container_image_template(dev_name)
+            or _DEFAULT_TEMPLATE
+        )
+        log.info("deploy.template", project_id=project_id, template=template)
+        template_dir = _template_source_dir(template)
         shutil.copytree(
             template_dir,
             build_dir,

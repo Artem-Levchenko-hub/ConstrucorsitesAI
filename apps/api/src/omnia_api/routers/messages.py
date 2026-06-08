@@ -514,6 +514,13 @@ _KIT_LINK = '<link rel="stylesheet" href="assets/omnia-kit.css">'
 _ANIME_SCRIPT = '<script src="assets/anime.min.js" defer></script>'
 _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 
+# Next.js container-backed templates. They render React (not static index.html),
+# so they skip the static-only guards (dead-link repair, omnia-kit CSS/JS
+# injection) and the landing-page acceptance gate, and they DO hot-reload
+# generated files into their dev container. `nextjs_entities` is the Base44-style
+# entity-engine stack; both behave like `fullstack` for these gates.
+CONTAINER_NEXT = ("fullstack", "nextjs_entities")
+
 
 def _extract_files_and_edits(
     accumulated: str, base_files: dict[str, str]
@@ -1837,7 +1844,7 @@ async def _process_prompt(
         # Skip on surgical edits: rewriting a PRE-EXISTING dead link the user
         # didn't mention violates "change only what was asked". The edit prompt
         # already forbids dead links in any element the edit adds.
-        if files and not surgical and project_template != "fullstack":
+        if files and not surgical and project_template not in CONTAINER_NEXT:
             initial_dead = find_dead_links(files)
             if initial_dead:
                 files = repair_dead_links_inline(files)
@@ -1898,7 +1905,7 @@ async def _process_prompt(
         # Kit files are Omnia-managed: drop any model attempt to write/delete them,
         # and re-inject the kit <link>/<script> into returned HTML if the model
         # dropped them (so animations/interactivity never silently break).
-        if files and project_template != "fullstack":
+        if files and project_template not in CONTAINER_NEXT:
             files = {p: c for p, c in files.items() if p not in KIT_FILES}
             files = _ensure_kit_linked(files)
 
@@ -2252,7 +2259,7 @@ async def _process_prompt(
         if (
             files
             and not surgical
-            and project_template not in ("fullstack", "tgbot", "api")
+            and project_template not in ("fullstack", "nextjs_entities", "tgbot", "api")
             and _acc_settings.use_acceptance_gate
             and _gen_mode in ("freeform", "catalog")
         ):
@@ -2607,7 +2614,7 @@ async def _process_prompt(
             # Failure here is logged + surfaced as a chat notice but does
             # NOT roll the snapshot back — the canonical state is still in
             # git/MinIO and the user can hit "Запустить" again to retry.
-            if project is not None and project.template == "fullstack":
+            if project is not None and project.template in CONTAINER_NEXT:
                 try:
                     hot = await orchestrator_client.hot_reload(
                         project_id=project_id,

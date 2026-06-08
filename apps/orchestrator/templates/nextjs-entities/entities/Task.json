@@ -1,0 +1,11 @@
+{
+  "name": "Task",
+  "access": "owner",
+  "fields": {
+    "title": { "type": "string", "required": true },
+    "done": { "type": "boolean", "default": false },
+    "priority": { "type": "enum", "options": ["low", "medium", "high"], "default": "medium" },
+    "due": { "type": "date" },
+    "notes": { "type": "text" }
+  }
+}

@@ -13,10 +13,12 @@ from omnia_api.services.design_presets import PRESETS
 #
 # 2. Container-backed V2 — runs inside an orchestrator-provisioned Docker
 #    container, accessed via `runtime.dev_url`:
-#    * `fullstack`  → `nextjs-postgres-drizzle` (Next.js 15 + Postgres + auth)
-#    * `spa`        → `vite-react-spa`           (Vite + React, no backend)
-#    * `tgbot`      → `telegram-bot-aiogram`     (aiogram 3 + Postgres)
-#    * `api`        → `fastapi-postgres`         (FastAPI + SQLAlchemy + JWT)
+#    * `fullstack`      → `nextjs-postgres-drizzle` (Next.js 15 + Postgres + auth)
+#    * `nextjs_entities`→ `nextjs-entities`         (Base44-style: fixed entity-engine
+#                                                    backend + generative React frontend)
+#    * `spa`            → `vite-react-spa`           (Vite + React, no backend)
+#    * `tgbot`          → `telegram-bot-aiogram`     (aiogram 3 + Postgres)
+#    * `api`            → `fastapi-postgres`         (FastAPI + SQLAlchemy + JWT)
 #
 # All container-backed templates share the `<file path="...">` AI contract
 # and the same per-project Postgres schema (provisioned by
@@ -27,6 +29,7 @@ Template = Literal[
     "portfolio",
     "blog",
     "fullstack",
+    "nextjs_entities",
     "spa",
     "tgbot",
     "api",
@@ -38,6 +41,7 @@ Template = Literal[
 # imports this rather than hardcoding.
 _ORCHESTRATOR_TEMPLATE_BY_API: dict[str, str] = {
     "fullstack": "nextjs-postgres-drizzle",
+    "nextjs_entities": "nextjs-entities",
     "spa": "vite-react-spa",
     "tgbot": "telegram-bot-aiogram",
     "api": "fastapi-postgres",

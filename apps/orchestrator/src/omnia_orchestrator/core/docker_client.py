@@ -229,6 +229,39 @@ async def container_status(name: str) -> dict[str, str]:
     return await asyncio.to_thread(_do)
 
 
+async def container_image_template(name: str) -> str | None:
+    """Best-effort: recover the orchestrator template name from a container's
+    image. Dev containers run `omnia-template-<template>:dev`, so deploy can seed
+    the prod build context from the RIGHT template without the api threading it
+    through. Returns None when it can't be parsed (caller falls back to default).
+    """
+    log.info("docker.container_image_template", name=name)
+
+    def _do() -> str | None:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound:
+            return None
+        refs: list[str] = []
+        img_ref = (c.attrs.get("Config", {}) or {}).get("Image", "") or ""
+        if img_ref:
+            refs.append(img_ref)
+        try:
+            refs.extend(c.image.tags or [])
+        except Exception:
+            pass
+        for ref in refs:
+            base = ref.rsplit("/", 1)[-1]  # drop any registry/host prefix
+            if base.startswith("omnia-template-"):
+                template = base[len("omnia-template-") :].split(":", 1)[0]
+                if template:
+                    return template
+        return None
+
+    return await asyncio.to_thread(_do)
+
+
 async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/app") -> dict[str, str]:
     """Stream a set of AI-generated files into a running container via
     `docker cp` semantics (put_archive). Paths in `files` are container-relative
