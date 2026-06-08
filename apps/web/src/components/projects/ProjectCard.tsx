@@ -13,6 +13,7 @@ const TEMPLATE_LABEL: Record<Project["template"], string> = {
   portfolio: "Портфолио",
   blog: "Блог",
   fullstack: "Full-stack",
+  nextjs_entities: "SaaS на сущностях",
 };
 
 export function ProjectCard({ project }: { project: Project }) {
