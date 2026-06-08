@@ -19,6 +19,7 @@ with mode 0600 so a restart can recover state without re-rotating.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import secrets
 from dataclasses import dataclass
@@ -104,9 +105,16 @@ def build_dsn(role: str, password: str, schema: str) -> str:
     """
     raw = get_settings().database_url
     parsed = urlparse(_normalize_admin_dsn(raw))
-    host = _user_facing_host(parsed.hostname or "localhost")
-    port = parsed.port or 5432
     db = (parsed.path or "/").lstrip("/") or "postgres"
+    # User containers reach Postgres CONTAINER-TO-CONTAINER over the shared
+    # runtime network (omnia-runtime_default) by its container name + internal
+    # port 5432 — NOT via the host bind (127.0.0.1:5433), which lives in the
+    # host's loopback and is unreachable from a container's network namespace
+    # (host.docker.internal → bridge gateway, where Postgres isn't listening).
+    # The container must be attached to that network (see docker_client
+    # start_container). Overridable via env if the infra names change.
+    host = os.getenv("OMNIA_RUNTIME_DB_HOST", "omnia-postgres-users")
+    port = int(os.getenv("OMNIA_RUNTIME_DB_PORT") or 5432)
     encoded_password = quote(password, safe="")
     return (
         f"postgresql://{role}:{encoded_password}@{host}:{port}/{db}"

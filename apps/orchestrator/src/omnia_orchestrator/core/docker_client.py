@@ -15,6 +15,7 @@ TODO sprint A1:
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 
 import docker  # type: ignore[import-untyped]
@@ -24,6 +25,12 @@ from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import OrchestratorError
 
 log = structlog.get_logger("omnia_orchestrator.docker")
+
+# Docker network that hosts `omnia-postgres-users` (the per-project Postgres).
+# User containers join it so they reach the DB container-to-container by name
+# (the host bind is 127.0.0.1-only — unreachable from a container). Override via
+# env if the compose project/network is renamed.
+_RUNTIME_NETWORK = os.getenv("OMNIA_RUNTIME_NETWORK", "omnia-runtime_default")
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +113,10 @@ async def start_container(spec: ContainerSpec) -> str:
                 # Desktop it already does. Matches the DSN built by
                 # `postgres_admin._user_facing_host`.
                 extra_hosts={"host.docker.internal": "host-gateway"},
+                # Join the runtime network so the container resolves and reaches
+                # `omnia-postgres-users` (and the DSN built by postgres_admin) by
+                # name. Without this the dev/prod app cannot reach its database.
+                network=spec.network_name or _RUNTIME_NETWORK,
                 restart_policy={"Name": spec.restart_policy_name},
                 labels={
                     "omnia.project_id": spec.project_id,
