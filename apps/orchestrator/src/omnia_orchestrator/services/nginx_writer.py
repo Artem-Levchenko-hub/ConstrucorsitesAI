@@ -151,6 +151,12 @@ async def _issue_cert(host: str) -> bool:
     """
     s = get_settings()
     acme = os.path.expanduser("~/.acme.sh/acme.sh")
+    # acme.sh's default working dir is ~/.acme.sh, which the unit's
+    # ProtectHome=read-only makes unwritable → "Cannot create domain key" and no
+    # cert (so HTTPS for the per-project preview never comes up). Redirect --home
+    # to a writable runtime dir (seeded once from ~/.acme.sh so the LE account +
+    # config carry over — no re-registration). Overridable via env.
+    acme_home = os.getenv("OMNIA_ACME_HOME", "/opt/omnia-runtime/acme-home")
     # acme.sh treats LOG_LEVEL/DEBUG as integers; the orchestrator sets
     # LOG_LEVEL=INFO, which makes acme.sh's `[ "$LOG_LEVEL" -ge 2 ]` abort with
     # "integer expression expected". Strip them for the acme.sh subprocess.
@@ -172,7 +178,7 @@ async def _issue_cert(host: str) -> bool:
 
     await run(
         [
-            acme, "--issue", "-d", host,
+            acme, "--home", acme_home, "--issue", "-d", host,
             "-w", s.acme_webroot,
             "--server", "letsencrypt",
             "--keylength", "ec-256",
@@ -182,7 +188,7 @@ async def _issue_cert(host: str) -> bool:
     )
     install = await run(
         [
-            acme, "--install-cert", "-d", host, "--ecc",
+            acme, "--home", acme_home, "--install-cert", "-d", host, "--ecc",
             "--key-file", str(privkey),
             "--fullchain-file", str(fullchain),
             "--reloadcmd", "sudo -n systemctl reload nginx",
