@@ -22,6 +22,8 @@
  * Fixed template file — AI never edits it.
  */
 
+import { signIn as nextAuthSignIn, signOut as nextAuthSignOut } from "next-auth/react";
+
 export type Row = Record<string, unknown> & {
   id: string;
   /** Related records embedded via `expand` — keyed by the reference field
@@ -127,9 +129,45 @@ export interface Me {
   role: string;
 }
 
+/** Email + password sign-in via the Auth.js Credentials provider. Shared by
+ *  `auth.signIn` and the tail of `auth.signUp`. Throws ApiError(401) on bad
+ *  credentials so callers can `try/catch` like every other SDK call. */
+async function signInWithPassword(email: string, password: string): Promise<void> {
+  const res = await nextAuthSignIn("credentials", { email, password, redirect: false });
+  if (res?.error) {
+    throw new ApiError(401, "Неверный email или пароль");
+  }
+}
+
 export const auth = {
   /** The signed-in user, or null. */
   me: () => req<Me | null>("GET", "/api/auth/me"),
+
+  /** Sign in with email + password. Throws ApiError(401) if they don't match. */
+  signIn: (email: string, password: string): Promise<void> =>
+    signInWithPassword(email, password),
+
+  /** Create an email + password account and sign the user in. Throws ApiError
+   *  (409 if the email is taken) on failure. `name` is optional. */
+  signUp: async (email: string, password: string, name?: string): Promise<void> => {
+    const res = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ email, password, name }),
+    });
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      throw new ApiError(
+        res.status,
+        (json as { error?: string }).error ?? "Не удалось зарегистрироваться",
+      );
+    }
+    await signInWithPassword(email, password);
+  },
+
+  /** Clear the current session (no redirect — the caller updates its own UI). */
+  signOut: (): Promise<unknown> => nextAuthSignOut({ redirect: false }),
 };
 
 export interface UploadResult {
