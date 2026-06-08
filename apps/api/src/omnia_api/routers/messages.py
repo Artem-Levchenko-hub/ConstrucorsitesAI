@@ -33,13 +33,20 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
-from omnia_api.services import image_edit
-from omnia_api.services import orchestrator_client
+from omnia_api.services import image_edit, orchestrator_client, pipeline_debug, zone_edit
 from omnia_api.services import repo as repo_svc
-from omnia_api.services import pipeline_debug
-from omnia_api.services import zone_edit
 from omnia_api.services.art_director_writer import art_director_writer_generate
+from omnia_api.services.clarify import generate_clarify_questions
+from omnia_api.services.contrast_guard import enforce_contrast
 from omnia_api.services.director_polish import director_polish_generate
+from omnia_api.services.discovery import (
+    BUILD as DISCOVERY_BUILD,
+)
+from omnia_api.services.discovery import (
+    DiscoveryResult,
+    run_discovery,
+    wants_build_now,
+)
 from omnia_api.services.file_extractor import (
     UnsafePathError,
     apply_edits,
@@ -47,8 +54,6 @@ from omnia_api.services.file_extractor import (
     extract_files,
 )
 from omnia_api.services.image_resolver import resolve_images
-from omnia_api.services.contrast_guard import enforce_contrast
-from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.intent_triage import ORCHESTRATE, decide_intent
 from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
@@ -61,6 +66,8 @@ from omnia_api.services.ui_audit import format_failures_for_retry
 from omnia_api.services.vendor_profiles import vendor_directive
 from omnia_api.services.visual_enricher import (
     enrich_files as enrich_visual_files,
+)
+from omnia_api.services.visual_enricher import (
     ensure_signature_floor,
 )
 
@@ -221,6 +228,65 @@ def _spawn_clarify(
     task.add_done_callback(_on_done)
 
 
+async def _run_text_turn(
+    project_id: UUID, assistant_message_id: UUID, text: str
+) -> None:
+    """Stream a pre-computed assistant message (no LLM, no build) and finalize.
+
+    Used by the progressive-discovery ASK turn: the next question was already
+    decided in ``post_prompt``, so we just publish it as one chunk + persist +
+    done. Mirrors ``_run_clarify`` minus the gateway call."""
+    await publish_event(
+        project_id,
+        "llm.chunk",
+        {"message_id": str(assistant_message_id), "delta": text, "seq": 1},
+    )
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        msg = await session.get(Message, assistant_message_id)
+        if msg is not None:
+            msg.content = text
+            msg.tokens_in = 0
+            msg.tokens_out = 0
+            await session.commit()
+    await publish_event(
+        project_id,
+        "llm.done",
+        {"message_id": str(assistant_message_id), "snapshot_id": None},
+    )
+
+
+def _spawn_text_turn(
+    project_id: UUID, assistant_message_id: UUID, text: str
+) -> None:
+    """Fire-and-forget _run_text_turn with a strong ref + error finalize (so a
+    publish hiccup never hangs the UI spinner; mirrors _spawn_clarify)."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    task = asyncio.create_task(
+        _run_text_turn(project_id, assistant_message_id, text)
+    )
+    _BACKGROUND_TASKS.add(task)
+
+    def _on_done(t: asyncio.Task[None]) -> None:
+        _BACKGROUND_TASKS.discard(t)
+        exc = None if t.cancelled() else t.exception()
+        if exc is not None:
+            log.error("_run_text_turn failed", exc_info=exc)
+            _emerg = asyncio.create_task(
+                _emergency_error(
+                    project_id,
+                    assistant_message_id,
+                    f"{type(exc).__name__}: {exc}",
+                )
+            )
+            _BACKGROUND_TASKS.add(_emerg)
+            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
+
+    task.add_done_callback(_on_done)
+
+
 def _snapshot_payload(s: Snapshot) -> dict[str, object]:
     return {
         "id": str(s.id),
@@ -233,6 +299,19 @@ def _snapshot_payload(s: Snapshot) -> dict[str, object]:
         "is_rollback_target": s.is_rollback_target,
         "created_at": s.created_at.isoformat(),
     }
+
+
+def _compose_build_prompt(result: DiscoveryResult) -> str:
+    """Fold the discovery brief (+ recommended stack hint) into the generator
+    prompt. Stack provisioning is wired separately (P1 subtask 5); until then the
+    recommendation rides in the brief so the build is aware of the intended shape."""
+    brief = result.brief.strip()
+    if result.stack and result.stack != "static":
+        brief = (
+            f"{brief}\n\n[Рекомендованный стек: {result.stack} — полноценное "
+            "приложение с данными.]"
+        )
+    return brief
 
 
 async def _ensure_owner(session: SessionDep, project_id: UUID, user_id: UUID) -> Project:
@@ -292,26 +371,68 @@ async def post_prompt(
         else None
     )
     is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
-    # Clarify interview: on the VERY FIRST message of a fresh project, ask 3–4
-    # business-specific questions before building (precise brief → точечнее сайт).
-    # Fires only with zero prior messages (so the answers — the NEXT message —
-    # generate normally) and no real snapshot. User can reply "генерируй" to skip.
+
+    # ── Onboarding interview routing ──────────────────────────────────────
+    # On a brand-new project we don't build straight away: we first run a short
+    # discovery so the first generation works from a real brief, not a one-line
+    # idea. Two regimes (progressive supersedes the legacy batch clarify):
+    #   * progressive discovery (default) — ask ONE elementary question at a time,
+    #     adapt, and build when the model decides it has enough (services/discovery).
+    #   * legacy clarify — a single batch of 3–4 questions (kept as a flag fallback).
+    # A select-mode pick, an explicit skip_clarify, or a non-first-build prompt all
+    # bypass the interview entirely and go straight to generation.
+    settings = get_settings()
+    discovery_result: DiscoveryResult | None = None
     do_clarify = False
-    if get_settings().use_clarify_interview and is_first_build:
+    effective_prompt = payload.prompt
+    interview_eligible = (
+        is_first_build and not payload.skip_clarify and not selected_dump
+    )
+    if interview_eligible and settings.use_progressive_discovery:
+        # Gather the prior conversation (questions already asked + answers) to
+        # drive the next discovery turn. The newest message (payload.prompt) is
+        # passed separately — it isn't persisted yet.
+        _rows = list(
+            (
+                await session.execute(
+                    select(Message)
+                    .where(Message.project_id == project_id)
+                    .order_by(Message.created_at.asc())
+                    .limit(20)
+                )
+            ).scalars().all()
+        )
+        _history = [
+            {"role": m.role, "content": m.content} for m in _rows if m.content
+        ]
+        _asked = sum(1 for m in _rows if m.role == "assistant")
+        discovery_result = await run_discovery(
+            _history,
+            payload.prompt,
+            asked_count=_asked,
+            force_build=wants_build_now(payload.prompt),
+        )
+        if discovery_result.action == DISCOVERY_BUILD:
+            # Build now — the compiled brief (with the recommended stack folded in)
+            # becomes the generator's prompt; the raw idea stays as the user turn.
+            effective_prompt = _compose_build_prompt(discovery_result)
+        # else: ASK — we stream the question below, no generation this turn.
+    elif interview_eligible and settings.use_clarify_interview:
+        # Legacy batch clarify (fires only with zero prior messages so the
+        # answers — the NEXT message — generate normally). Reply "генерируй" to skip.
         _has_prior_msg = (
             await session.execute(
-                select(Message.id)
-                .where(Message.project_id == project_id)
-                .limit(1)
+                select(Message.id).where(Message.project_id == project_id).limit(1)
             )
         ).first() is not None
         do_clarify = not _has_prior_msg
-    # The frontend onboarding quiz already collected the brief client-side and
-    # folded it into this prompt — so skip the server clarify and build now.
-    if payload.skip_clarify:
-        do_clarify = False
+
+    discovery_ask = (
+        discovery_result is not None and discovery_result.action != DISCOVERY_BUILD
+    )
+
     intent = decide_intent(
-        payload.prompt,
+        effective_prompt,
         is_first_prompt=is_first_build,
         selected_count=len(selected_dump or []),
     )
@@ -321,7 +442,7 @@ async def post_prompt(
     # hidden admin override (env FORCE_MODEL). Otherwise the triage decides:
     # orchestrate → director (Opus) drives prompt-routing + Director→Polish;
     # cheap → a single reliable Haiku shot (role `edit`).
-    force_model = get_settings().force_model or None
+    force_model = settings.force_model or None
     routing_model = force_model or model_for_role("director" if orchestrate else "edit")
 
     user_msg = Message(
@@ -343,7 +464,13 @@ async def post_prompt(
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
 
-    if do_clarify:
+    if discovery_ask:
+        # Progressive discovery: stream the next short question, no build this
+        # turn. The user's reply (next message) continues the discovery; the
+        # generator only runs once discovery decides it has enough.
+        assert discovery_result is not None  # discovery_ask ⇒ result exists
+        _spawn_text_turn(project_id, assistant_msg.id, discovery_result.message)
+    elif do_clarify:
         # Ask first — no generation this turn. The user's answers (next message)
         # flow into the real build via chat history.
         _spawn_clarify(project_id, assistant_msg.id, payload.prompt)
@@ -354,7 +481,9 @@ async def post_prompt(
             user_message_id=user_msg.id,
             assistant_message_id=assistant_msg.id,
             current_snapshot_id=project.current_snapshot_id,
-            prompt_text=payload.prompt,
+            # On a discovery BUILD this is the compiled brief; otherwise the raw
+            # prompt. The full Q&A still rides along via chat history.
+            prompt_text=effective_prompt,
             model_id=routing_model,
             force_model=force_model,
             is_free=is_free,
@@ -375,7 +504,11 @@ async def post_prompt(
     # Tell the workspace how this turn will be handled so it can set the right
     # expectation instantly: a surgical edit keeps the current preview and shows
     # "точечная правка" copy; a build shows the full-generation experience.
-    turn_mode = "clarify" if do_clarify else ("build" if orchestrate else "edit")
+    turn_mode = (
+        "clarify"
+        if (discovery_ask or do_clarify)
+        else ("build" if orchestrate else "edit")
+    )
     return PromptResponse(
         message_id=assistant_msg.id, snapshot_id=None, mode=turn_mode
     )
@@ -779,7 +912,7 @@ async def _craft_image_prompt(
                 parts.append(str(ev["delta"]))
             elif "usage" in ev:
                 usage = ev["usage"]  # type: ignore[assignment]
-    except Exception as exc:  # noqa: BLE001 — fail-soft to a template
+    except Exception as exc:
         print(f"[PP] craft_image_prompt failed {exc!r}", flush=True)
     prompt = " ".join("".join(parts).split()).strip().strip('"')[:600]
     if len(prompt) < 12:
@@ -2529,7 +2662,7 @@ async def _process_prompt(
                         "07b_forced_palette.md", repr(_palette),
                     )
                 files = enforce_palette(files, _palette)
-            except Exception as _pg_exc:  # noqa: BLE001 — never block the build
+            except Exception as _pg_exc:
                 print(f"[PP] palette_guard skipped err={_pg_exc!r}", flush=True)
             files = enforce_contrast(files)
             if pipeline_debug.enabled():
@@ -2551,7 +2684,7 @@ async def _process_prompt(
                     files["index.html"] = _overrides.carry_over_overrides(
                         _old_index, files["index.html"]
                     )
-            except Exception as _co_exc:  # noqa: BLE001 — never block the build
+            except Exception as _co_exc:
                 print(f"[PP] overrides carry-over skipped err={_co_exc!r}", flush=True)
             new_sha = await asyncio.to_thread(
                 repo_svc.commit_files,

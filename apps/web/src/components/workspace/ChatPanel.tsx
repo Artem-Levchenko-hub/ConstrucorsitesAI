@@ -1,15 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AnimatePresence } from "framer-motion";
 import { PanelLeftClose } from "lucide-react";
 import { listMessages } from "@/lib/api/messages";
-import { setProjectDesignPreset } from "@/lib/api/presets";
 import type { SelectedElement } from "@/lib/api/types";
 import { ChatMessage } from "./ChatMessage";
 import { PromptInput } from "./PromptInput";
-import { OnboardingQuiz } from "./OnboardingQuiz";
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
@@ -31,23 +28,17 @@ export function ChatPanel({
   );
   const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // When set, the onboarding quiz is open seeded with this idea (the user's
-  // first prompt). null = quiz closed.
-  const [quizIdea, setQuizIdea] = useState<string | null>(null);
 
   const { data: messages, isPending } = useQuery({
     queryKey: ["messages", projectId],
     queryFn: () => listMessages(projectId),
   });
 
-  // First prompt of a fresh project → run the onboarding quiz before building,
-  // so the very first generation works from a real brief. Every later prompt
-  // submits straight through.
+  // Zero-friction onboarding (P1): no blocking quiz modal. The very first prompt
+  // submits straight through — the server runs a progressive in-chat discovery
+  // (one short question at a time) before the first build. Every later prompt
+  // submits the same way.
   const handleSubmit = (text: string, selections: SelectedElement[]) => {
-    if (messages && messages.length === 0 && quizIdea === null) {
-      setQuizIdea(text);
-      return;
-    }
     submit(text, modelId, selections);
   };
 
@@ -128,31 +119,6 @@ export function ChatPanel({
           pendingPrompt={pendingPrompt}
         />
       </div>
-
-      <AnimatePresence>
-        {quizIdea !== null && (
-          <OnboardingQuiz
-            idea={quizIdea}
-            onComplete={async (brief, presetId) => {
-              // Pin the chosen preset BEFORE submitting so the build reads it.
-              if (presetId) {
-                try {
-                  await setProjectDesignPreset(projectId, presetId);
-                } catch {
-                  // Non-fatal: the brief still carries the palette in text.
-                }
-              }
-              setQuizIdea(null);
-              submit(brief, modelId, undefined, { skipClarify: true });
-            }}
-            onSkip={() => {
-              const idea = quizIdea;
-              setQuizIdea(null);
-              submit(idea, modelId, undefined, { skipClarify: true });
-            }}
-          />
-        )}
-      </AnimatePresence>
     </div>
   );
 }

@@ -255,6 +255,16 @@ class Settings(BaseSettings):
     # and no real snapshot yet; the user can reply "генерируй" to skip. ON by
     # default. Kill per-env: USE_CLARIFY_INTERVIEW=false.
     use_clarify_interview: bool = Field(default=True)
+    # Progressive discovery (2026-06-09, owner P1 — zero-friction onboarding).
+    # Supersedes BOTH the blocking onboarding quiz (removed client-side) AND the
+    # one-shot 3-4-question clarify above. On a brand-new project the assistant
+    # runs a CONVERSATIONAL discovery: it asks ONE short elementary question at a
+    # time, adapts to answers, and decides on its own when it has enough — then
+    # compiles a brief, recommends a stack, and builds. When on, it takes over
+    # the first-build interview and the legacy `use_clarify_interview` path is
+    # bypassed. Kill switch for instant rollback to the batch clarify (R-10):
+    # USE_PROGRESSIVE_DISCOVERY=false.
+    use_progressive_discovery: bool = Field(default=True)
     # Max self-repair re-rolls before the gate gives up (and freeform falls
     # back to catalog). Each retry is one extra LLM call — keep small.
     acceptance_max_retries: int = Field(default=2)
