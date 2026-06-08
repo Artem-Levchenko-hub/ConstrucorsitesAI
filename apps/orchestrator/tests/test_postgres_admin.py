@@ -75,9 +75,11 @@ def test_build_dsn_shape() -> None:
     dsn = postgres_admin.build_dsn(
         "proj_01234567_user", "p@ss/w:rd!", "proj_01234567"
     )
-    # Host must be rewritten away from localhost; password URL-encoded.
+    # Host must be rewritten away from localhost to the container-to-container
+    # name on the runtime network (NOT the 127.0.0.1:5433 host bind, which is
+    # unreachable from a container); password URL-encoded.
     assert dsn.startswith("postgresql://proj_01234567_user:")
-    assert "@host.docker.internal:5433/omnia_users" in dsn
+    assert "@omnia-postgres-users:5432/omnia_users" in dsn
     assert "p%40ss%2Fw%3Ard%21" in dsn  # @ / : ! all percent-encoded
     assert "?options=-c+search_path%3Dproj_01234567" in dsn
 
