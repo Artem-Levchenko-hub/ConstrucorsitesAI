@@ -772,6 +772,113 @@ _ENTITIES_STACK = """\
     паролей, JWT, любые auth/DB-библиотеки — движок делает всё это.
   • .env не пиши. Нужен внешний ключ — назови env-имя в чате и остановись."""
 
+_ENTITIES_UI = """\
+ИНТЕРФЕЙС ПРИЛОЖЕНИЯ — ГОТОВЫЙ КИТ (НЕ ВЁРСТКА С НУЛЯ). Это НЕ лендинг, а
+РАБОЧЕЕ ПРИЛОЖЕНИЕ (дашборд / CRM / SaaS / админка). Планка — enterprise-уровень
+(Linear, Notion, Vercel, Stripe Dashboard): чисто, плотно, профессионально,
+адаптивно. В шаблоне УЖЕ стоит компонентный кит на shadcn/ui + дизайн-токены —
+СОБИРАЙ ИЗ НЕГО, не лепи кнопки/таблицы/сайдбары сырым Tailwind.
+
+▸ ИМПОРТЫ (готовы, просто используй):
+  import { AppShell, PageHeader, StatCard, DataTable, CrudResource,
+           EntityForm, EmptyState, useEntity, type Column } from "@/components/omnia";
+  import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
+  // dialog, sheet, tabs, badge, dropdown-menu, table, checkbox, avatar, tooltip, separator …
+  import { cn, formatRub, formatDate } from "@/lib/utils";   // formatRub(1234)→"1 234 ₽"
+  import { toast } from "sonner";                            // toast.success("Сохранено")
+
+▸ АРХИТЕКТУРА — МНОГОСТРАНИЧНОЕ ПРИЛОЖЕНИЕ, НЕ ОДИН ЭКРАН. Минимум: дашборд `/`
+  + отдельная страница на КАЖДУЮ сущность (`/clients`, `/deals` …) + при нужде
+  настройки. Каждая страница живёт В <AppShell> (постоянный сайдбар + топбар);
+  на мобиле сайдбар сам сворачивается в drawer. ЗАПРЕЩЕНО: всё на одной
+  прокручиваемой странице, отсутствие навигации, голый <table>.
+  Каркас — ОДИН раз в layout группы маршрутов `(app)`:
+  <file path="src/app/(app)/layout.tsx">
+  "use client";
+  import { useRouter } from "next/navigation";
+  import { useEffect, useState } from "react";
+  import { LayoutDashboard, Users, Briefcase } from "lucide-react";
+  import { AppShell } from "@/components/omnia";
+  import { auth, type Me } from "@/lib/sdk";
+  const NAV = [
+    { label: "Дашборд", href: "/", icon: <LayoutDashboard /> },
+    { label: "Клиенты", href: "/clients", icon: <Users /> },
+    { label: "Сделки",  href: "/deals",  icon: <Briefcase /> },
+  ];
+  export default function AppLayout({ children }: { children: React.ReactNode }) {
+    const router = useRouter();
+    const [me, setMe] = useState<Me | null>(null);
+    useEffect(() => { auth.me().then(setMe).catch(() => router.push("/signin")); }, [router]);
+    return (
+      <AppShell brand="MyCRM" nav={NAV} user={me}
+        onSignOut={async () => { await auth.signOut(); router.push("/signin"); }}>
+        {children}
+      </AppShell>
+    );
+  }
+  </file>
+  Страницы кладёшь в ту же группу — наследуют шелл: src/app/(app)/page.tsx (дашборд),
+  src/app/(app)/clients/page.tsx, src/app/(app)/deals/page.tsx …
+
+▸ СПИСКИ / CRUD — одним компонентом <CrudResource> (таблица + поиск + сортировка +
+  пагинация + диалоги создать/править + подтверждение удаления — всё подключено к
+  SDK). Не пиши это руками:
+  <file path="src/app/(app)/clients/page.tsx">
+  "use client";
+  import { CrudResource } from "@/components/omnia";
+  import { Badge } from "@/components/ui/badge";
+  import { formatDate } from "@/lib/utils";
+  export default function ClientsPage() {
+    return (
+      <CrudResource
+        entity="Client" title="Клиенты" description="База клиентов и контактов"
+        columns={[
+          { key: "name",   header: "Имя",    sortable: true },
+          { key: "email",  header: "Email" },
+          { key: "status", header: "Статус", render: (r) => <Badge variant="secondary">{String(r.status)}</Badge> },
+          { key: "created_at", header: "Создан", sortable: true, render: (r) => formatDate(r.created_at as string) },
+        ]}
+        fields={[
+          { name: "name",   label: "Имя",     kind: "text",     required: true },
+          { name: "email",  label: "Email",   kind: "text" },
+          { name: "status", label: "Статус",  kind: "select", options: [
+              { value: "lead", label: "Лид" }, { value: "active", label: "Активный" } ] },
+          { name: "note",   label: "Заметка", kind: "textarea" },
+        ]}
+      />
+    );
+  }
+  </file>
+  Поля формы (kind): text | textarea | number | boolean | date | select(+options) |
+  reference(+refEntity — сам грузит опции связанной сущности) | image(+сам заливает
+  через uploadFile). Колонкам можно render для бейджей/денег/дат.
+
+▸ ДАШБОРД — собери из кита: ряд <StatCard> (KPI) + свежие записи через <DataTable>:
+  <PageHeader title="Дашборд" description="Обзор" />
+  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <StatCard label="Клиентов" value={clients.length} icon={<Users />} />
+    <StatCard label="Выручка" value={formatRub(total)} icon={<TrendingUp />} trend={{ value: "+12%", positive: true }} />
+  </div>
+  Данные — useEntity("Client") или entities.X.list() в useEffect. Графиков-библиотек
+  НЕТ — рисуй простые CSS/SVG-бары или ограничься KPI + таблицами (НЕ импортируй
+  recharts/chart.js — их нет).
+
+▸ АДАПТИВНОСТЬ — ОБЯЗАТЕЛЬНА И ПРОВЕРЯЕТСЯ. Mobile-first. Сетки —
+  `grid-cols-1 md:grid-cols-2 lg:grid-cols-4`, флексы переносятся
+  (`flex-col sm:flex-row`). НИКОГДА фикс-ширин (`w-[1200px]`) на контейнерах —
+  только `max-w-*` + проценты/fr. Шелл, таблицы и диалоги кита уже адаптивны.
+
+▸ ТОКЕНЫ ТЕМЫ, НЕ ХАРДКОД ЦВЕТА. Фон — `bg-background`/`bg-card`, текст —
+  `text-foreground`/`text-muted-foreground`, акцент — `bg-primary text-primary-foreground`,
+  рамки — `border-border`, опасное — `text-destructive`. НЕ пиши `bg-zinc-900`/
+  `bg-white`/`text-black`/произвольный hex: арт-директор перекрашивает `--primary`,
+  и на токенах всё перекрашивается само. Иконки — lucide, НЕ эмодзи.
+
+▸ НЕ ДЕЛАЙ: не ставь shadcn заново (он в src/components/ui), не добавляй пакеты
+  (всё есть), не трогай фиксированный бэкенд и файлы кита, не верстай собственные
+  <table>/модалку/сайдбар когда есть DataTable/Dialog/AppShell. Кит = высокий пол;
+  для нетиповых экранов спускайся к примитивам `@/components/ui/*`, но не ниже."""
+
 _SPA_STACK = """\
 СТЕК — VITE + REACT SPA (только фронтенд, бэкенда нет, БД нет).
 На VPS крутится dev-контейнер с Vite — изменения подхватываются через
@@ -2282,26 +2389,26 @@ def build_system_prompt(
         )
     elif template == "nextjs_entities":
         # Base44-style: fixed entity-engine backend + generative React frontend.
-        # Same visual bar as fullstack (the UI still must look finished), but we
-        # drop _VISUAL_RICH_KIT — these are functional app screens (dashboards,
-        # CRUD), not 9-section landings — and swap the stack rules for the
-        # entity-engine contract (define entities/*.json, build on @/lib/sdk).
+        # These are functional APP screens (dashboards, CRUD, SaaS), NOT landings:
+        # drop the landing-decoration kits (_VISUAL_RICH_KIT, _KIT_V3/V4, AWWWARDS)
+        # and add _ENTITIES_UI — the shadcn-based app kit + app-shell / multi-route
+        # / responsive / design-token doctrine — as the authoritative LAST design
+        # block (highest salience). _QUALITY_BAR/_COPY_RULES/_LAYOUT_RIGOR/_TASTE
+        # stay: finish, real copy, spacing and taste are universal.
         sections = (
             _IDENTITY,
             *((design_anchor,) if design_anchor else ()),
             _ART_DIRECTOR,
             _TASTE_CODEX,
-            _KIT_V3_REFERENCE,
-            _KIT_V4_REFERENCE,
             _QUALITY_BAR,
             _COPY_RULES,
             _LAYOUT_RIGOR,
-            AWWWARDS_PRINCIPLES,
             *((_DESIGN_KIT,) if include_design_kit else ()),
             *((preset_block,) if preset_block else ()),
             image_block,
             _FUNCTIONAL_CONTRACT,
             _ENTITIES_STACK,
+            _ENTITIES_UI,
             _SELF_CHECK,
             _PALETTE_TAIL_REMINDER,
             _RESPONSE,

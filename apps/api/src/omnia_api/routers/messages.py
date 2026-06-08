@@ -1092,6 +1092,7 @@ async def _process_prompt(
                     user_id=user_id,
                     project_id=project_id,
                     message_id=assistant_message_id,
+                    template=project_template,
                 )
             elif _dp_active:
                 source = director_polish_generate(
@@ -2247,6 +2248,30 @@ async def _process_prompt(
                     print(f"[PP] stripped_unresolved_img_tags={_stripped}", flush=True)
             except Exception as _strip_exc:
                 print(f"[PP] strip_unresolved skipped: {_strip_exc!r}", flush=True)
+
+        # ── Structure audit (entity/app builds) — non-blocking smoke detector ─
+        # Entity/fullstack apps skip the acceptance gate (container-backed), so we
+        # at least LOG drift from the app-UI doctrine (hardcoded colours, fixed-px
+        # widths, raw <table>/<aside>, missing app-shell). Never blocks the build.
+        if files and not surgical and project_template in ("nextjs_entities", "fullstack"):
+            try:
+                from omnia_api.services.structure_audit import audit_entity_app
+
+                _struct_warnings = audit_entity_app(files)
+                if _struct_warnings:
+                    print(
+                        f"[PP] structure_audit ({len(_struct_warnings)}): "
+                        + " | ".join(_struct_warnings[:12]),
+                        flush=True,
+                    )
+                    pipeline_debug.dump(
+                        project_id,
+                        assistant_message_id,
+                        "04_structure_audit.md",
+                        "\n".join(f"- {w}" for w in _struct_warnings),
+                    )
+            except Exception as _audit_exc:
+                print(f"[PP] structure_audit skipped: {_audit_exc!r}", flush=True)
 
         # ── Phase 11 — acceptance gate (freeform safety net) ──────────────
         # Render → check structure + responsiveness (+ optional vision). If it

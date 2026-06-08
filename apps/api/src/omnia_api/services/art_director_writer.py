@@ -193,6 +193,129 @@ _WRITER_INSTRUCTION_TEMPLATE = """\
 БРИФ>>>"""
 
 
+# ─── App variant (template == nextjs_entities) ───────────────────────────────
+# Entity/app builds are functional product screens (dashboard / CRM / SaaS), not
+# landings. The art-director designs an APPLICATION (information architecture +
+# theme tokens), and the writer assembles it from the shadcn-based app kit
+# (AppShell / CrudResource / StatCard / DataTable) — NOT hero sections, scroll
+# attractions, omnia-shader or fx-beams.
+_APP_TEMPLATES = {"nextjs_entities"}
+
+_ART_DIRECTOR_INSTRUCTION_APP = """\
+Ты — АРТ-ДИРЕКТОР ПРОДУКТА и автор СПЕЦИФИКАЦИИ ПРИЛОЖЕНИЯ (проход 1 из 2). Это НЕ
+лендинг — это РАБОЧЕЕ приложение (дашборд / CRM / SaaS / админка) на ГОТОВОМ
+компонентном ките (shadcn/ui + дизайн-токены + AppShell / DataTable / CrudResource /
+StatCard / EntityForm). Планка — enterprise: Linear, Notion, Stripe Dashboard —
+чисто, плотно, функционально, адаптивно. Ты НЕ пишешь код. Пишешь бриф настолько
+точный, что верстальщик ТОЛЬКО соберёт его из кита.
+
+Думай как продуктовый дизайнер: кто пользователь и его задачи → какие СУЩНОСТИ
+(данные) → какие ЭКРАНЫ (навигация) → что на каждом экране. НИКАКИХ hero /
+секций-лендинга / скролл-аттракционов / omnia-shader / fx-beams — это приложение,
+а не реклама.
+
+Формат — СТРОГО так, плотно, без воды, без markdown-ограждений вокруг ответа:
+
+# 1. ПРОДУКТ (3 строки)
+СУТЬ: <что за приложение и кому>
+ПОЛЬЗОВАТЕЛЬ И ЗАДАЧИ: <кто внутри и 2-3 задачи, что он делает каждый день>
+ТОН: <деловой / спокойный / уверенный — продукт, не реклама>
+
+# 2. ТЕМА (точные токены — верстальщик впишет их в globals.css :root)
+БРЕНД-НАЗВАНИЕ: "<имя приложения для сайдбара>"
+PRIMARY <#HEX> (ОДИН бренд-акцент: кнопки / активный пункт нав / ключевые цифры) ·
+  FOREGROUND <#HEX (почти чёрный)> · BACKGROUND <#HEX (почти белый, НЕ чистый #fff)>
+ШРИФТ: <дефолт кита (Manrope) ИЛИ точное имя из next/font, если нужен характер>
+РАДИУС: <0.5rem | 0.65rem | 0.85rem>
+ПРИНЦИП: нейтральная база (zinc) + ОДИН акцент дозой. ЗАПРЕЩЕНЫ радужные градиенты,
+неон, glow. Статусы — семантикой (success / warning / destructive токены), не радугой.
+
+# 3. АРХИТЕКТУРА (навигация = сайдбар)
+СУЩНОСТИ: перечисли entities/*.json — имя, access (owner/public/admin) и КЛЮЧЕВЫЕ поля
+с типами (string | text | number | boolean | date | enum(+опции) | reference(+entity) |
+image). Заведи СВЯЗИ reference там, где они есть по смыслу (Deal.clientId→Client,
+Task.dealId→Deal). Два разных продукта = две разные модели данных.
+НАВИГАЦИЯ (пункты сайдбара по порядку, каждый с lucide-иконкой):
+  - "Дашборд" → "/" (LayoutDashboard)
+  - "<Сущность мн.ч.>" → "/<route>" (icon) — пункт на каждую основную сущность
+  - <"Настройки" при нужде>
+
+# 4. ЭКРАНЫ (каждый — страница в группе (app), наследует AppShell)
+ДАШБОРД "/":
+  KPI (3-4 <StatCard>): для каждого — ЛЕЙБЛ + что считаем (из какой сущности) + иконка.
+  НИЖЕ: 1-2 блока — последние записи (<DataTable>) и/или разбивка по статусу
+  (простые CSS-бары, БЕЗ chart-библиотек).
+КАЖДАЯ СУЩНОСТЬ — страница "/<route>" через <CrudResource entity="<Имя>">:
+  КОЛОНКИ: key | заголовок | sortable? | render (бейдж статуса / formatRub / formatDate).
+  ПОЛЯ формы: name | лейбл | kind | required? | select→опции | reference→refEntity.
+  ПУСТО: 1 строка для пустого состояния.
+НЕТИПОВЫЕ ЭКРАНЫ (если нужны — канбан сделок, деталь-профиль): раскладку из примитивов
+кита, тоже адаптивно.
+
+# 5. КРАФТ-ФЛОР приложения (повтори верстальщику)
+— Каждый экран В <AppShell>. НИКОГДА не всё на одной странице. НИКОГДА голый <table> —
+  только <DataTable> / <CrudResource>. НИКОГДА самописный сайдбар/модалка — только кит.
+— ТОКЕНЫ ТЕМЫ, не хардкод цвета: bg-background / bg-card / text-foreground /
+  text-muted-foreground / bg-primary / border-border. Хардкод bg-zinc-900 / #hex
+  запрещён — иначе тема не перекрасится.
+— Плотность и выравнивание: деньги через formatRub, даты через formatDate, статусы —
+  <Badge> с семантикой; числовые колонки выровнены.
+— АДАПТИВ обязателен: KPI-сетка grid-cols-1 sm:grid-cols-2 lg:grid-cols-4; на мобиле
+  сайдбар = drawer (кит сам); таблицы скроллятся; диалоги влезают.
+— Пустые/загрузочные состояния у каждого списка (кит даёт). Ноль «ваш текст»/lorem —
+  реальные русские лейблы, статусы, правдоподобные имена/суммы.
+— Иконки lucide, НЕ эмодзи. Один <h1> на экран (через <PageHeader title>).
+
+Пиши плотно: каждая строка — принятое решение с конкретикой. Только текст брифа, без кода."""
+
+_WRITER_INSTRUCTION_TEMPLATE_APP = """\
+Ты — ВЕРСТАЛЬЩИК ПРИЛОЖЕНИЯ (проход 2 из 2). Арт-директор принял ВСЕ решения — бриф
+ниже это спецификация приложения. Ты собираешь его ИЗ ГОТОВОГО КИТА (shadcn/ui +
+@/components/omnia), НЕ верстаешь с нуля и НЕ изобретаешь компоненты.
+
+ЖЕЛЕЗНЫЕ ПРАВИЛА:
+• СУЩНОСТИ — заведи каждый entities/<Имя>.json из брифа (поля, типы, reference-связи) ДОСЛОВНО.
+• КАРКАС — ОДИН src/app/(app)/layout.tsx с <AppShell> и навигацией из брифа; все страницы
+  клади в группу (app), чтобы наследовать шелл.
+• КАЖДЫЙ экран — из кита: список/CRUD = <CrudResource entity=... columns=... fields=...>
+  (НЕ свой <table>/форма/модалка); дашборд = <PageHeader> + ряд <StatCard> + <DataTable>;
+  нетиповые экраны — из примитивов @/components/ui/*.
+• ТЕМА — впиши PRIMARY / FOREGROUND / BACKGROUND / РАДИУС из брифа в src/app/globals.css
+  :root (перекрась --primary, --primary-foreground, --background, --foreground, --radius;
+  для primary подбери читаемый --primary-foreground). Шрифт, если в брифе не дефолт, —
+  поменяй в layout.tsx (next/font/google). В КОМПОНЕНТАХ — только токен-классы
+  (bg-primary / bg-card / text-muted-foreground / border-border), НИКОГДА bg-zinc-* / hex.
+• Колонки / поля / лейблы / статусы / KPI — ровно из брифа, дословно. formatRub для денег,
+  formatDate для дат, <Badge> для статусов.
+• Контракт «ноль тупиков»: каждый пункт нав ведёт на существующую страницу, каждая кнопка
+  работает. Данные — через SDK (useEntity / entities.X), НЕ хардкодь фейковые строки в JSX.
+• Формат ответа — <file ...> как требует системный промпт.
+
+ДИСЦИПЛИНА (по этому проверяют автоматом — нарушил = брак):
+• Многостраничность: есть (app)/layout.tsx с <AppShell> + ≥2 маршрута (дашборд + ≥1 сущность).
+• Кит, не руками: ноль собственных <table> / <aside class=sidebar> / самописных модалок —
+  только DataTable / AppShell / Dialog кита.
+• Токены: ноль bg-zinc-900 / bg-white / text-black / hex в компонентах; цвет — через
+  токены и globals.css.
+• Адаптив: KPI и карточки в responsive-сетке (grid-cols-1 … lg:grid-cols-4); ноль фикс-ширин
+  w-[..px] на контейнерах.
+• Доступность: один <h1> на экран (PageHeader), у полей label (кит даёт), alt у картинок.
+
+САМОПРОВЕРКА ПЕРЕД ВЫВОДОМ (тихо сверься, исправь, потом выводи):
+1. Все сущности брифа заведены (entities/*.json) с верными типами и reference-связями?
+2. Есть (app)/layout.tsx с <AppShell> и навигацией из брифа? Все пункты ведут на реальные страницы?
+3. У каждой сущности — страница через <CrudResource> с колонками и полями из брифа?
+4. Дашборд: <PageHeader> + StatCard-ряд (KPI из брифа) + таблица/разбивка?
+5. Тема впитана в globals.css (--primary и пр. из брифа)? В компонентах только токен-классы, ноль хардкод-цвета?
+6. Адаптив (responsive-сетки, ноль фикс-ширин)? Один <h1> на экран? Формат <file ...>?
+Нашёл отклонение — исправь ДО вывода. Выводи только финальные <file>-блоки, без объяснений.
+
+СПЕЦИФИКАЦИЯ ПРИЛОЖЕНИЯ (исполнять буквально):
+<<<БРИФ
+{brief}
+БРИФ>>>"""
+
+
 def _aggregate_usage(*usages: dict[str, Any] | None) -> dict[str, Any]:
     """Sum tokens / cost across pass usages. None entries treated as zeros."""
     return {
@@ -207,15 +330,23 @@ def _build_art_director_messages(
     base_messages: list[dict[str, str]],
     user_prompt: str,
     model_id: str | None,
+    template: str | None = None,
 ) -> list[dict[str, str]]:
     """Art-Director pass: shared system prompt, last user turn appends the
-    brief directive. ``json_strict=False`` — the brief is prose, not JSON."""
+    brief directive. ``json_strict=False`` — the brief is prose, not JSON.
+    Entity/app templates get the APPLICATION brief (IA + theme), not the
+    landing brief (hero + sections)."""
+    instruction = (
+        _ART_DIRECTOR_INSTRUCTION_APP
+        if template in _APP_TEMPLATES
+        else _ART_DIRECTOR_INSTRUCTION
+    )
     directive = vendor_directive(model_id, json_strict=False)
     suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
     msgs.append({
         "role": "user",
-        "content": f"{user_prompt}\n\n{_ART_DIRECTOR_INSTRUCTION}{suffix}",
+        "content": f"{user_prompt}\n\n{instruction}{suffix}",
     })
     return msgs
 
@@ -225,15 +356,23 @@ def _build_writer_messages(
     user_prompt: str,
     brief: str,
     model_id: str | None,
+    template: str | None = None,
 ) -> list[dict[str, str]]:
     """Writer pass: shared system prompt + the brief injected into the last
     user turn. ``json_strict=False`` — freeform HTML, never a JSON nudge. An
-    empty ``brief`` degrades to the base freeform prompt (R-10 fail-soft)."""
+    empty ``brief`` degrades to the base freeform prompt (R-10 fail-soft).
+    Entity/app templates use the APP writer instruction (assemble from the kit),
+    not the landing one (transcribe a section spec)."""
+    writer_tmpl = (
+        _WRITER_INSTRUCTION_TEMPLATE_APP
+        if template in _APP_TEMPLATES
+        else _WRITER_INSTRUCTION_TEMPLATE
+    )
     directive = vendor_directive(model_id, json_strict=False)
     suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
     if brief:
-        tail = _WRITER_INSTRUCTION_TEMPLATE.format(brief=brief)
+        tail = writer_tmpl.format(brief=brief)
         content = f"{user_prompt}\n\n{tail}{suffix}"
     else:
         content = f"{user_prompt}{suffix}"
@@ -250,6 +389,7 @@ async def art_director_writer_generate(
     user_id: UUID,
     project_id: UUID,
     message_id: UUID,
+    template: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run Art-Director (Opus, brief) → Writer (DeepSeek, HTML).
 
@@ -264,7 +404,7 @@ async def art_director_writer_generate(
 
     # ─── Pass 1: Art-Director (silent — accumulate the brief) ────────────
     yield {"pass": "art_director", "stage": "start", "model": art_director_model}
-    ad_msgs = _build_art_director_messages(base_messages, user_prompt, art_director_model)
+    ad_msgs = _build_art_director_messages(base_messages, user_prompt, art_director_model, template)
     if pipeline_debug.enabled():
         _sys = next((m["content"] for m in base_messages if m.get("role") == "system"), "")
         pipeline_debug.dump(project_id, message_id, "00_system_prompt.md", _sys)
@@ -294,7 +434,7 @@ async def art_director_writer_generate(
 
     # ─── Pass 2: Writer (streams the HTML to the caller) ─────────────────
     yield {"pass": "writer", "stage": "start", "model": writer_model}
-    writer_msgs = _build_writer_messages(base_messages, user_prompt, brief, writer_model)
+    writer_msgs = _build_writer_messages(base_messages, user_prompt, brief, writer_model, template)
     if pipeline_debug.enabled():
         pipeline_debug.dump(project_id, message_id, "01b_writer_input.md", writer_msgs[-1]["content"])
     writer_usage: dict[str, Any] | None = None
