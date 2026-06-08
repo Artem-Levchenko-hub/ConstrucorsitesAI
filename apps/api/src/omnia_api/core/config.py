@@ -265,6 +265,15 @@ class Settings(BaseSettings):
     # bypassed. Kill switch for instant rollback to the batch clarify (R-10):
     # USE_PROGRESSIVE_DISCOVERY=false.
     use_progressive_discovery: bool = Field(default=True)
+    # Auto stack-routing (2026-06-09, owner P1 — last mile of zero-friction).
+    # When progressive discovery decides to BUILD and recommends a container
+    # stack (fullstack / nextjs_entities) for a still-static project, the server
+    # flips the project's template to that stack, re-scaffolds its git from the
+    # matching template, and provisions the orchestrator dev container — so the
+    # user never has to pick a stack or hit «Запустить». Kill switch (R-10):
+    # USE_AUTO_STACK_ROUTING=false (discovery still recommends in the brief, but
+    # the project stays static — old behaviour).
+    use_auto_stack_routing: bool = Field(default=True)
     # Max self-repair re-rolls before the gate gives up (and freeform falls
     # back to catalog). Each retry is one extra LLM call — keep small.
     acceptance_max_retries: int = Field(default=2)

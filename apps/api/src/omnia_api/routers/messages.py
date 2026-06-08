@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Sequence
 from decimal import Decimal
@@ -33,7 +34,13 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
-from omnia_api.services import image_edit, orchestrator_client, pipeline_debug, zone_edit
+from omnia_api.services import (
+    image_edit,
+    orchestrator_client,
+    pipeline_debug,
+    stack_routing,
+    zone_edit,
+)
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.art_director_writer import art_director_writer_generate
 from omnia_api.services.clarify import generate_clarify_questions
@@ -416,6 +423,21 @@ async def post_prompt(
             # Build now — the compiled brief (with the recommended stack folded in)
             # becomes the generator's prompt; the raw idea stays as the user turn.
             effective_prompt = _compose_build_prompt(discovery_result)
+            # Auto stack-routing: if discovery picked a container stack for this
+            # still-static project, flip the template + re-scaffold its git +
+            # provision the dev container, so the build yields a real app instead
+            # of a flat page. Fail-soft (R-10) — a hiccup falls back to a static
+            # build rather than dead-ending onboarding.
+            if settings.use_auto_stack_routing:
+                try:
+                    await stack_routing.switch_to_stack(
+                        session, project, discovery_result.stack
+                    )
+                except Exception as _sr_exc:
+                    await session.rollback()
+                    logging.getLogger(__name__).warning(
+                        "stack_routing switch failed (static fallback): %r", _sr_exc
+                    )
         # else: ASK — we stream the question below, no generation this turn.
     elif interview_eligible and settings.use_clarify_interview:
         # Legacy batch clarify (fires only with zero prior messages so the
@@ -968,9 +990,9 @@ async def _process_prompt(
     current_files: dict[str, str] = {}
     history_serialized: list[dict[str, str]] = []
     project_template = "blank"
+    project_slug = ""
     project_name = ""
     project_design_preset_id: str | None = None
-    project_image_gen_enabled: bool = True
     project_image_gen_enabled: bool = True
 
     try:
@@ -982,6 +1004,7 @@ async def _process_prompt(
             proj = await session.get(Project, project_id)
             if proj is not None:
                 project_template = proj.template
+                project_slug = proj.slug
                 project_name = proj.name or ""
                 project_design_preset_id = proj.design_preset_id
                 project_image_gen_enabled = proj.image_gen_enabled
@@ -997,6 +1020,17 @@ async def _process_prompt(
                 {"role": m.role, "content": m.content} for m in rows if m.content
             ]
         print(f"[PP] ctx_loaded sha={current_sha} history={len(history_serialized)}", flush=True)
+
+        # Auto stack-routing, part 2: container-backed stacks need a live dev
+        # container for the post-build hot_reload to land in. Provision it now —
+        # at the START of the worker — so it warms up in parallel with the
+        # (minutes-long) generation below. Idempotent + fail-soft: if the
+        # container already exists this is a no-op; if the orchestrator hiccups
+        # the build still ships the snapshot and hot_reload/«Запустить» retries.
+        if project_template in CONTAINER_NEXT and project_slug:
+            await stack_routing.ensure_provisioned(
+                project_id, project_slug, project_template
+            )
 
         if current_sha:
             current_files = await asyncio.to_thread(
