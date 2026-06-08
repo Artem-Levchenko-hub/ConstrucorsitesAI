@@ -83,6 +83,8 @@ Sign up / sign in / sign out already work. Pages: `/signin`, `/signup`.
 
 - `src/lib/db/**` (schema, client), `src/lib/entities/**` (the engine), `src/lib/sdk/**`, `src/app/api/**` (entities + auth routes), `src/lib/auth.ts`, `src/lib/session.ts`.
 - `package.json`, `next.config.ts`, `tsconfig.json`, `drizzle.config.ts`, any `Dockerfile.*`, `docker-entrypoint.sh`.
+- `src/app/globals.css` — the Tailwind v4 token system (`@import "tailwindcss"` + `@theme inline`). NEVER rewrite it or use `@tailwind`/`@apply border-border`/HSL (breaks the build). To re-theme, override CSS-var values in one `<style>` in your layout.
+- `src/components/ui/**` and `src/components/omnia/**` — the component kit. Import and compose; don't edit.
 - Do NOT write Drizzle tables, server actions for CRUD, your own API routes, password hashing, JWT, or any auth/DB library. The engine does all of it.
 - Do NOT write `.env`. If you need a real external API key, name the env var in chat and stop.
 

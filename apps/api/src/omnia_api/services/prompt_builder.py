@@ -819,6 +819,9 @@ _ENTITIES_UI = """\
   </file>
   Страницы кладёшь в ту же группу — наследуют шелл: src/app/(app)/page.tsx (дашборд),
   src/app/(app)/clients/page.tsx, src/app/(app)/deals/page.tsx …
+  ⚠️ ОБЯЗАТЕЛЬНО удали стартовый src/app/page.tsx — отдай пустой блок
+  <file path="src/app/page.tsx"></file>. Дашборд теперь (app)/page.tsx; если оставить
+  оба — два маршрута резолвятся в "/" → конфликт (сборка падает / висит стартер).
 
 ▸ СПИСКИ / CRUD — одним компонентом <CrudResource> (таблица + поиск + сортировка +
   пагинация + диалоги создать/править + подтверждение удаления — всё подключено к
@@ -871,8 +874,16 @@ _ENTITIES_UI = """\
 ▸ ТОКЕНЫ ТЕМЫ, НЕ ХАРДКОД ЦВЕТА. Фон — `bg-background`/`bg-card`, текст —
   `text-foreground`/`text-muted-foreground`, акцент — `bg-primary text-primary-foreground`,
   рамки — `border-border`, опасное — `text-destructive`. НЕ пиши `bg-zinc-900`/
-  `bg-white`/`text-black`/произвольный hex: арт-директор перекрашивает `--primary`,
-  и на токенах всё перекрашивается само. Иконки — lucide, НЕ эмодзи.
+  `bg-white`/`text-black`/произвольный hex. Иконки — lucide, НЕ эмодзи.
+
+▸ globals.css — ФИКСИРОВАН, НЕ ПЕРЕПИСЫВАЙ И НЕ РЕДАКТИРУЙ. Там уже стоит
+  `@import "tailwindcss"`, `@theme inline` и все токены (Tailwind v4). ⛔ НИКОГДА не
+  используй `@tailwind base/components/utilities`, `@apply border-border`, HSL-каналы
+  (`210 40% 98%`) или свой shadcn-блок из памяти — это ЛОМАЕТ сборку
+  (`Cannot apply unknown utility class border-border`). Бренд-цвет задаётся ТОЛЬКО так:
+  ОДИН статический `<style>` в `src/app/(app)/layout.tsx`, переопределяющий ЗНАЧЕНИЯ
+  переменных в oklch (утилиты при этом не трогаются):
+    <style>{":root{--primary:oklch(0.52 0.12 233);--primary-foreground:oklch(0.99 0 0);--ring:oklch(0.52 0.12 233)}"}</style>
 
 ▸ НЕ ДЕЛАЙ: не ставь shadcn заново (он в src/components/ui), не добавляй пакеты
   (всё есть), не трогай фиксированный бэкенд и файлы кита, не верстай собственные

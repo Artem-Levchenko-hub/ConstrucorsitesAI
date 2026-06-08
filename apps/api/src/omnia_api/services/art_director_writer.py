@@ -221,7 +221,7 @@ StatCard / EntityForm). Планка — enterprise: Linear, Notion, Stripe Dash
 ПОЛЬЗОВАТЕЛЬ И ЗАДАЧИ: <кто внутри и 2-3 задачи, что он делает каждый день>
 ТОН: <деловой / спокойный / уверенный — продукт, не реклама>
 
-# 2. ТЕМА (точные токены — верстальщик впишет их в globals.css :root)
+# 2. ТЕМА (точные токены — верстальщик применит их ОДНИМ <style> в (app)/layout, в oklch; globals.css НЕ трогается)
 БРЕНД-НАЗВАНИЕ: "<имя приложения для сайдбара>"
 PRIMARY <#HEX> (ОДИН бренд-акцент: кнопки / активный пункт нав / ключевые цифры) ·
   FOREGROUND <#HEX (почти чёрный)> · BACKGROUND <#HEX (почти белый, НЕ чистый #fff)>
@@ -276,15 +276,19 @@ _WRITER_INSTRUCTION_TEMPLATE_APP = """\
 ЖЕЛЕЗНЫЕ ПРАВИЛА:
 • СУЩНОСТИ — заведи каждый entities/<Имя>.json из брифа (поля, типы, reference-связи) ДОСЛОВНО.
 • КАРКАС — ОДИН src/app/(app)/layout.tsx с <AppShell> и навигацией из брифа; все страницы
-  клади в группу (app), чтобы наследовать шелл.
+  клади в группу (app). ⚠️ УДАЛИ стартовый src/app/page.tsx (отдай пустой
+  <file path="src/app/page.tsx"></file>) — дашборд теперь (app)/page.tsx, иначе два
+  маршрута резолвятся в "/" и сборка падает.
 • КАЖДЫЙ экран — из кита: список/CRUD = <CrudResource entity=... columns=... fields=...>
   (НЕ свой <table>/форма/модалка); дашборд = <PageHeader> + ряд <StatCard> + <DataTable>;
   нетиповые экраны — из примитивов @/components/ui/*.
-• ТЕМА — впиши PRIMARY / FOREGROUND / BACKGROUND / РАДИУС из брифа в src/app/globals.css
-  :root (перекрась --primary, --primary-foreground, --background, --foreground, --radius;
-  для primary подбери читаемый --primary-foreground). Шрифт, если в брифе не дефолт, —
-  поменяй в layout.tsx (next/font/google). В КОМПОНЕНТАХ — только токен-классы
-  (bg-primary / bg-card / text-muted-foreground / border-border), НИКОГДА bg-zinc-* / hex.
+• globals.css — НЕ ТРОГАЙ (фиксирован: @import "tailwindcss" + @theme inline + токены,
+  Tailwind v4). ⛔ Запрещены @tailwind base/components/utilities, @apply border-border,
+  HSL-каналы, свой shadcn-блок из памяти — это ломает сборку (unknown utility border-border).
+  Бренд-цвет — ОДИН статический <style> в (app)/layout.tsx, переопредели значения в oklch:
+  <style>{":root{--primary:oklch(0.52 0.12 233);--primary-foreground:oklch(0.99 0 0);--ring:oklch(0.52 0.12 233)}"}</style>.
+  В КОМПОНЕНТАХ — только токен-классы (bg-primary / bg-card / text-muted-foreground /
+  border-border), НИКОГДА bg-zinc-* / hex. Шрифт — дефолт кита (Manrope).
 • Колонки / поля / лейблы / статусы / KPI — ровно из брифа, дословно. formatRub для денег,
   formatDate для дат, <Badge> для статусов.
 • Контракт «ноль тупиков»: каждый пункт нав ведёт на существующую страницу, каждая кнопка
@@ -306,7 +310,7 @@ _WRITER_INSTRUCTION_TEMPLATE_APP = """\
 2. Есть (app)/layout.tsx с <AppShell> и навигацией из брифа? Все пункты ведут на реальные страницы?
 3. У каждой сущности — страница через <CrudResource> с колонками и полями из брифа?
 4. Дашборд: <PageHeader> + StatCard-ряд (KPI из брифа) + таблица/разбивка?
-5. Тема впитана в globals.css (--primary и пр. из брифа)? В компонентах только токен-классы, ноль хардкод-цвета?
+5. globals.css НЕ тронут (ноль @tailwind/@apply/HSL)? Бренд-цвет — через <style> в (app)/layout? Стартовый src/app/page.tsx удалён (пустой <file>)? В компонентах только токен-классы?
 6. Адаптив (responsive-сетки, ноль фикс-ширин)? Один <h1> на экран? Формат <file ...>?
 Нашёл отклонение — исправь ДО вывода. Выводи только финальные <file>-блоки, без объяснений.
 

@@ -43,6 +43,23 @@ def audit_entity_app(files: dict[str, str]) -> list[str]:
     Empty list = clean. Best-effort and side-effect-free; callers log the result
     but must never fail a build on it.
     """
+    warnings: list[str] = []
+
+    # Killer bug 1: writer rewrote globals.css with Tailwind v3 syntax (drops the
+    # v4 @theme/token system) → build dies with "unknown utility class border-border".
+    g = files.get("src/app/globals.css")
+    if isinstance(g, str) and ("@tailwind " in g or "@apply border-border" in g):
+        warnings.append(
+            "src/app/globals.css: Tailwind v3 syntax (@tailwind/@apply border-border) — "
+            "breaks the v4 build; globals.css must stay the fixed v4 token file (never rewrite)"
+        )
+    # Killer bug 2: starter page left alongside the (app) dashboard → two pages at "/".
+    if "src/app/page.tsx" in files and "src/app/(app)/page.tsx" in files:
+        warnings.append(
+            "route conflict: src/app/page.tsx and src/app/(app)/page.tsx both resolve to '/' — "
+            "delete the starter src/app/page.tsx"
+        )
+
     app_tsx = {
         path: code
         for path, code in files.items()
@@ -51,9 +68,8 @@ def audit_entity_app(files: dict[str, str]) -> list[str]:
         and not path.startswith(_FIXED_PREFIXES)
     }
     if not app_tsx:
-        return []
+        return warnings
 
-    warnings: list[str] = []
     all_src = "\n".join(app_tsx.values())
 
     # App shell + multi-route: a real app wraps pages in <AppShell> (usually via a

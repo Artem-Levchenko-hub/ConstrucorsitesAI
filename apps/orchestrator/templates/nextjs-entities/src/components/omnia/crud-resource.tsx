@@ -64,7 +64,20 @@ export function CrudResource({
   canDelete = true,
   createLabel = "Создать",
 }: CrudResourceProps) {
-  const data = useEntity(entity, listParams);
+  // Auto-expand reference fields so columns can render the related row
+  // (e.g. `row._expanded.clientId.name`) without the caller wiring `expand`.
+  const expand = React.useMemo(
+    () => fields.filter((f) => f.kind === "reference").map((f) => f.name),
+    [fields],
+  );
+  const mergedParams = React.useMemo(
+    () => ({
+      ...listParams,
+      expand: [...(listParams?.expand ?? []), ...expand],
+    }),
+    [listParams, expand],
+  );
+  const data = useEntity(entity, expand.length ? mergedParams : listParams);
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Row | null>(null);
   const [deleting, setDeleting] = React.useState<Row | null>(null);

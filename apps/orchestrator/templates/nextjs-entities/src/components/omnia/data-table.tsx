@@ -94,9 +94,12 @@ export function DataTable<T extends { id: string }>({
   const keys = searchKeys ?? columns.map((c) => c.key);
 
   const filtered = React.useMemo(() => {
+    // Defensive: callers often start with `useState()` (undefined) before data
+    // loads and pass it straight in — never let that crash the table.
+    const all = Array.isArray(rows) ? rows : [];
     const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((row) =>
+    if (!q) return all;
+    return all.filter((row) =>
       keys.some((k) => {
         const v = rawValue(row as Record<string, unknown>, k);
         return v != null && String(v).toLowerCase().includes(q);
