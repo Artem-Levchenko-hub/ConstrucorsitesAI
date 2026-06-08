@@ -22,6 +22,7 @@ sprint A1 swaps the body.
 
 from __future__ import annotations
 
+import os
 import secrets as _secrets
 import shutil
 from pathlib import Path
@@ -45,6 +46,34 @@ from omnia_orchestrator.services.port_allocator import get_port_allocator
 # imports cleanly, the static landing page still renders, and the failure
 # surfaces only when AI-generated code actually queries the DB.
 _DB_FALLBACK = "postgresql://placeholder:placeholder@127.0.0.1:1/placeholder"
+
+
+def _integration_env() -> dict[str, str]:
+    """Env for the Base44-style "Core" integrations injected into every user
+    container. Containers reach MinIO + the LLM gateway CONTAINER-TO-CONTAINER
+    over the runtime network (their host binds are 127.0.0.1-only, unreachable
+    from a container). Values come from the orchestrator env with prod-shaped
+    defaults; the MinIO secret + public URL must be set in the orchestrator env
+    for UploadFile to work (see docs/08-vps-setup.md). SMTP is opt-in — absent →
+    SendEmail stubs. LLM_GATEWAY_URL is injected now for the later InvokeLLM/
+    GenerateImage pass.
+    """
+    out: dict[str, str] = {
+        "MINIO_ENDPOINT": os.getenv("OMNIA_MINIO_ENDPOINT", "omnia-prod-minio:9000"),
+        "MINIO_ACCESS_KEY": os.getenv("OMNIA_MINIO_ACCESS_KEY", "omnia"),
+        "MINIO_BUCKET": os.getenv("OMNIA_MINIO_UPLOAD_BUCKET", "omnia-user-uploads"),
+        "MINIO_SECURE": os.getenv("OMNIA_MINIO_SECURE", "false"),
+        "MINIO_PUBLIC_URL": os.getenv("OMNIA_MINIO_PUBLIC_URL", ""),
+        "LLM_GATEWAY_URL": os.getenv("OMNIA_LLM_GATEWAY_URL", "http://omnia-prod-gw:8001"),
+    }
+    secret = os.getenv("OMNIA_MINIO_SECRET_KEY")
+    if secret:
+        out["MINIO_SECRET_KEY"] = secret
+    for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM"):
+        val = os.getenv(f"OMNIA_{key}")
+        if val:
+            out[key] = val
+    return out
 
 
 def _load_or_create_auth_secret(project_id: str) -> str:
@@ -159,6 +188,7 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         "AUTH_SECRET": auth_secret,
         "AUTH_URL": dev_origin,
         "AUTH_TRUST_HOST": "true",
+        **_integration_env(),
         **req.initial_env,
     }
 

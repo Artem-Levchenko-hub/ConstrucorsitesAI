@@ -747,10 +747,17 @@ _ENTITIES_STACK = """\
 с `"use client"` (SDK дёргает свой же API с cookie-сессией):
 
   "use client";
-  import { entities, type Row } from "@/lib/sdk";
+  import { entities, auth, integrations, type Row } from "@/lib/sdk";
   // entities.Expense.list({sort:"spentAt",order:"desc"}) → Row[]
   // entities.Expense.filter({category:"Еда"}) ; .get(id) ; .create(data) ;
   // .update(id,data) ; .delete(id) ; auth.me() → текущий юзер | null
+
+ИНТЕГРАЦИИ (server-side, креды скрыты — НЕ изобретай загрузку/почту сам, бери из SDK):
+  import { integrations } from "@/lib/sdk";
+  • integrations.uploadFile(file) → { url, key, size } — загрузка File в хранилище,
+    возвращает публичный URL (для аватаров, вложений, картинок-загрузок).
+  • integrations.sendEmail({ to, subject, body }) → отправка письма (за auth).
+    Без настроенного SMTP вернёт { sent:false, stubbed:true } — флоу не падает.
 
 АВТОРИЗАЦИЯ ВСТРОЕНА — НЕ ИЗОБРЕТАЙ. Регистрация/вход/выход уже работают
 (/signin, /signup). Гейти UI через `auth.me()` (null = не залогинен → отправь на

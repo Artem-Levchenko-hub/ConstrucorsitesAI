@@ -132,4 +132,42 @@ export const auth = {
   me: () => req<Me | null>("GET", "/api/auth/me"),
 };
 
+export interface UploadResult {
+  url: string;
+  key: string;
+  size: number;
+  contentType: string;
+}
+
+/**
+ * Base44-style "Core" integrations — run server-side with hidden credentials.
+ * Phase 2a: file storage + email. (invokeLLM / generateImage land later.)
+ * Use in client components; both require a signed-in user.
+ */
+export const integrations = {
+  /** Store a File in object storage; returns a public URL. */
+  uploadFile: async (file: File): Promise<UploadResult> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/integrations/upload-file", {
+      method: "POST",
+      credentials: "include",
+      body: fd,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new ApiError(res.status, (json as { error?: string }).error ?? res.statusText);
+    }
+    return (json as { data: UploadResult }).data;
+  },
+
+  /** Send an email (SMTP; stubbed until configured — check result.stubbed). */
+  sendEmail: (input: { to: string; subject: string; body: string }) =>
+    req<{ sent: boolean; stubbed?: boolean; note?: string }>(
+      "POST",
+      "/api/integrations/send-email",
+      input,
+    ),
+};
+
 export { ApiError };
