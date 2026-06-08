@@ -1,21 +1,22 @@
 #!/bin/sh
-# Dev container entrypoint — sync the Drizzle schema with the per-project
-# Postgres schema, THEN start Next. `db:push --force` is the right primitive
-# for a dev container: it materialises whatever `src/lib/db/schema.ts`
-# declares without managing migration files (which would race AI writes).
+# Dev container entrypoint — ensure the FIXED schema (Auth.js tables + the
+# generic `records` store) exists, THEN start Next.
 #
-# Fail-soft: if push fails (e.g. DB unreachable on first boot), we still
-# start Next so the user sees something. The DB-touching pages will error
-# at request time — that's better than an opaque "container won't start".
+# We use a deterministic `node scripts/init-db.mjs` (plain CREATE TABLE IF NOT
+# EXISTS via the `pg` driver) instead of `drizzle-kit push`. push introspects
+# the DB first ("Pulling schema from database…"), and on the shared per-project
+# Postgres that step hangs for minutes — run synchronously it would block the
+# dev server from ever coming up. Our schema is fixed, so no introspection is
+# needed. `timeout` is a hard backstop so DB trouble can never wedge boot.
 #
-# Auth tables (users/sessions/accounts/verification_tokens) live in the
-# same schema.ts, so this push is what makes signup/signin work from the
-# very first request after provision.
+# Fail-soft: if init errors/times out we still start Next; DB-touching requests
+# error until the tables land. Auth + `records` both live in the same schema,
+# so this is what makes signup and the entity engine work from the first request.
 
 set -e
 
-echo "[entrypoint] syncing drizzle schema -> postgres"
-pnpm db:push --force || echo "[entrypoint] db:push failed (continuing — pages will error on DB access)"
+echo "[entrypoint] ensuring schema (auth tables + records)"
+timeout 30 node scripts/init-db.mjs || echo "[entrypoint] init-db slow/failed — starting dev anyway"
 
 echo "[entrypoint] starting Next.js dev server"
 exec pnpm dev
