@@ -291,6 +291,66 @@ sudo systemctl enable --now omnia-orchestrator
 sudo systemctl status omnia-orchestrator
 ```
 
+### Шаг 7.1. Хардненинг юнита — два обязательных фикса (иначе превью не работает)
+
+> На проде юнит запущен под `i48ptgvnis` (в группе `docker`) и **захардненен**
+> сверх шаблона выше: `NoNewPrivileges=true`, `ProtectSystem=full`,
+> `ProtectHome=read-only`, `ReadWritePaths=/opt/omnia-runtime`. Эти директивы
+> **конфликтуют с дизайном** оркестратора (ему нужен `sudo nginx` и запись
+> acme-ключей) и тихо ломают per-project preview-домены для ВСЕХ container-
+> шаблонов. Если ставишь юнит с таким хардненингом — применить оба фикса.
+> (Без хардненинга, как в шаблоне Шага 7, фиксы не нужны.)
+
+**Фикс 1 — `NoNewPrivileges=false` (nginx reload).** `NoNewPrivileges` блокирует
+`sudo -n nginx -t/-s reload`, без которого не публикуется preview-домен. Сервис
+и так root-эквивалентен через docker-сокет, так что NNP тут почти не даёт
+защиты. Снять через drop-in override (не правя основной юнит):
+
+```bash
+sudo mkdir -p /etc/systemd/system/omnia-orchestrator.service.d
+sudo tee /etc/systemd/system/omnia-orchestrator.service.d/override.conf <<'EOF'
+[Service]
+NoNewPrivileges=false
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart omnia-orchestrator
+# проверка: должно быть `NoNewPrivileges=no`
+systemctl show -p NoNewPrivileges omnia-orchestrator
+```
+
+Также нужно sudoers-правило NOPASSWD для `nginx` и `systemctl reload nginx`
+(на проде это покрыто широким passwordless-sudo юзера `i48ptgvnis`; для
+выделенного `omnia-orchestrator` — добавить `/etc/sudoers.d/omnia-orchestrator`).
+
+**Фикс 2 — acme-home в writable путь (HTTPS-сертификаты).** acme.sh по умолчанию
+пишет аккаунт/ключи в `~/.acme.sh`, который `ProtectHome=read-only` делает
+недоступным на запись → `Cannot create domain key` → нет per-project HTTPS-cert
+(а preview-iframe в workspace загружается только по валидному HTTPS). Оркестратор
+(`nginx_writer.py`) уже передаёт acme `--home $OMNIA_ACME_HOME`
+(default `/opt/omnia-runtime/acme-home` — это writable `ReadWritePaths`). Нужен
+**one-time seed** этого каталога из существующей установки acme.sh, чтобы
+перенёсся Let's Encrypt-аккаунт (иначе re-registration + риск rate-limit):
+
+```bash
+# из-под юзера, под которым крутится сервис (на проде — i48ptgvnis):
+cp -a ~/.acme.sh /opt/omnia-runtime/acme-home
+# при желании сменить путь — добавить в .env.orchestrator:
+#   OMNIA_ACME_HOME=/opt/omnia-runtime/acme-home
+```
+
+> Проверка обоих фиксов: provision пробного проекта → за ~15–20 с в логе
+> оркестратора cert выписывается без `Cannot create domain key`, а
+> `curl --resolve <host>:443:127.0.0.1 https://<host>/` отдаёт `200`
+> (`ssl_verify=0`). `curl https://<host>` С САМОГО VPS даёт `000` — это
+> DNS-hairpin (VPS не ходит на свой публичный IP), снаружи всё работает.
+
+**Прочие env-оверрайды оркестратора** (defaults в коде, переопределять только
+при нестандартной инфре): `OMNIA_RUNTIME_NETWORK` (default `omnia-runtime_default`
+— docker-сеть, где живёт `omnia-postgres-users`; user-контейнеры цепляются к ней
+и ходят в БД по имени), `OMNIA_RUNTIME_DB_HOST` / `OMNIA_RUNTIME_DB_PORT`
+(default `omnia-postgres-users` / `5432` — контейнерный DSN, container-to-container,
+а НЕ через host-бинд `127.0.0.1:5433`, который из контейнера недостижим).
+
 ## Шаг 8. Подключение apps/api к orchestrator
 
 V1 контейнер `omnia-prod-api` (на :8200) должен знать, как достучаться до orchestrator (на host'е :8003). Через `host.docker.internal`:
