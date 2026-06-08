@@ -1,7 +1,8 @@
 /**
  * Default page for a freshly provisioned project — a working Task list wired to
- * the entity engine via the SDK. It proves the backend end-to-end (auth →
- * entities.Task CRUD) the moment the container boots, before any AI write.
+ * the entity engine via the SDK, built with the Omnia app kit. It proves the
+ * backend end-to-end (auth → entities.Task CRUD) and that the component kit
+ * renders, the moment the container boots, before any AI write.
  *
  * The AI replaces this file on the user's first prompt. It's a client component
  * because the SDK talks to the same-origin API with the session cookie.
@@ -9,8 +10,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ListTodo, Plus, Trash2 } from "lucide-react";
 
 import { auth, entities, type Me, type Row } from "@/lib/sdk";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/omnia";
 
 export default function Home() {
   const [me, setMe] = useState<Me | null>(null);
@@ -54,78 +63,95 @@ export default function Home() {
     await refresh();
   }
 
-  if (!ready) return null;
+  const open = tasks.filter((t) => !t.done).length;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col gap-6 px-6 py-16">
-      <header className="space-y-1">
-        <p className="text-xs uppercase tracking-widest text-zinc-500">
+      <header className="space-y-2">
+        <Badge variant="secondary" className="gap-1.5">
+          <ListTodo className="size-3.5" />
           Omnia · entity engine
-        </p>
+        </Badge>
         <h1 className="text-3xl font-semibold tracking-tight">Мои задачи</h1>
-        <p className="text-sm text-zinc-400">
-          Бэкенд из коробки: сущность <code className="font-mono">Task</code> →
-          авто-CRUD, авторизация и владение — без бэкенд-кода.
+        <p className="text-sm text-muted-foreground">
+          Бэкенд из коробки: сущность <code className="rounded bg-muted px-1 font-mono text-xs">Task</code>{" "}
+          → авто-CRUD, авторизация и владение — без бэкенд-кода.
         </p>
       </header>
 
-      {!me ? (
-        <a
-          href="/signin"
-          className="self-start rounded-lg bg-white px-4 py-2 text-sm font-medium text-zinc-900 transition hover:bg-zinc-200"
-        >
-          Войти, чтобы увидеть свои задачи →
-        </a>
+      {!ready ? (
+        <div className="space-y-3">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+        </div>
+      ) : !me ? (
+        <Card className="items-start gap-4 p-6">
+          <p className="text-sm text-muted-foreground">
+            Войдите, чтобы увидеть и вести свои задачи.
+          </p>
+          <Button asChild>
+            <a href="/signin">Войти →</a>
+          </Button>
+        </Card>
       ) : (
         <>
           <form onSubmit={add} className="flex gap-2">
-            <input
+            <Input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Новая задача…"
-              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-zinc-500"
             />
-            <button
-              type="submit"
-              className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-zinc-900 transition hover:bg-zinc-200"
-            >
+            <Button type="submit">
+              <Plus />
               Добавить
-            </button>
+            </Button>
           </form>
 
-          <ul className="space-y-2">
-            {tasks.map((t) => (
-              <li
-                key={t.id}
-                className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2"
-              >
-                <input
-                  type="checkbox"
-                  checked={Boolean(t.done)}
-                  onChange={() => toggle(t)}
-                  className="h-4 w-4 accent-emerald-500"
-                />
-                <span
-                  className={
-                    t.done ? "flex-1 text-zinc-500 line-through" : "flex-1"
-                  }
-                >
-                  {String(t.title)}
-                </span>
-                <button
-                  onClick={() => remove(t)}
-                  className="text-xs text-zinc-500 transition hover:text-red-400"
-                >
-                  удалить
-                </button>
-              </li>
-            ))}
-            {tasks.length === 0 && (
-              <li className="rounded-lg border border-dashed border-zinc-800 px-3 py-6 text-center text-sm text-zinc-500">
-                Пока пусто. Добавьте первую задачу.
-              </li>
-            )}
-          </ul>
+          {tasks.length === 0 ? (
+            <EmptyState
+              icon={<ListTodo />}
+              title="Пока пусто"
+              description="Добавьте первую задачу — она сразу сохранится в базе."
+            />
+          ) : (
+            <Card className="gap-0 divide-y divide-border p-0">
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-sm font-medium">Список</span>
+                <Badge variant="outline" className="tabular-nums">
+                  {open} активных
+                </Badge>
+              </div>
+              <ul className="divide-y divide-border">
+                {tasks.map((t) => (
+                  <li key={t.id} className="flex items-center gap-3 px-4 py-3">
+                    <Checkbox
+                      checked={Boolean(t.done)}
+                      onCheckedChange={() => toggle(t)}
+                    />
+                    <span
+                      className={
+                        t.done
+                          ? "flex-1 text-muted-foreground line-through"
+                          : "flex-1"
+                      }
+                    >
+                      {String(t.title)}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => remove(t)}
+                      aria-label="Удалить"
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
         </>
       )}
     </main>

@@ -8,6 +8,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { signIn, auth } from "@/lib/auth";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export const metadata = { title: "Вход" };
 
@@ -30,53 +32,48 @@ export default async function SignInPage({
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center px-6 py-12">
-      <div className="w-full max-w-sm space-y-6">
-        <header className="text-center space-y-1">
+    <main className="grid min-h-screen place-items-center bg-muted/30 px-4 py-12">
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-8 shadow-sm">
+        <header className="mb-6 space-y-1 text-center">
           <h1 className="text-2xl font-semibold tracking-tight">Вход</h1>
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-muted-foreground">
             Нет аккаунта?{" "}
-            <Link href="/signup" className="text-emerald-700 hover:underline">
+            <Link href="/signup" className="font-medium text-primary hover:underline">
               Зарегистрироваться
             </Link>
           </p>
         </header>
 
         {sp.error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             Неверный email или пароль.
           </div>
         )}
 
         <form action={action} className="space-y-4">
           <input type="hidden" name="next" value={sp.next ?? "/"} />
-          <label className="block">
-            <span className="text-sm font-medium">Email</span>
-            <input
-              name="email"
-              type="email"
-              required
-              autoComplete="email"
-              className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm font-medium">Пароль</span>
-            <input
+          <div className="space-y-2">
+            <label htmlFor="email" className="text-sm font-medium">
+              Email
+            </label>
+            <Input id="email" name="email" type="email" required autoComplete="email" />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="password" className="text-sm font-medium">
+              Пароль
+            </label>
+            <Input
+              id="password"
               name="password"
               type="password"
               required
               minLength={8}
               autoComplete="current-password"
-              className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
             />
-          </label>
-          <button
-            type="submit"
-            className="w-full rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800"
-          >
+          </div>
+          <Button type="submit" size="lg" className="w-full">
             Войти
-          </button>
+          </Button>
         </form>
       </div>
     </main>

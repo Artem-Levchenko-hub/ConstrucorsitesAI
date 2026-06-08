@@ -45,7 +45,7 @@ migrations, no server code, no restart**.
 ```
 
 - `name` matches the filename. `access`: `owner` (each user sees only their own — the default and right choice for dashboards/CRM/SaaS), `public` (anyone reads, author edits — blogs, catalogs), `admin` (role admin only).
-- Field `type`: `string` | `text` | `number` | `boolean` | `date` (ISO string) | `enum` (+`options`). Optional `required`, `default`.
+- Field `type`: `string` | `text` | `number` | `boolean` | `date` (ISO string) | `enum` (+`options`) | `reference` (a relation — `{ "type": "reference", "entity": "Project" }` stores the related row's id; filter by it, and `?expand=field` embeds the row). Optional `required`, `default`.
 - **Never declare** `id` / `created_by` / `created_at` / `updated_at` — the engine adds and returns them on every row.
 
 ## Build the frontend with the SDK (client components)
@@ -86,12 +86,23 @@ Sign up / sign in / sign out already work. Pages: `/signin`, `/signup`.
 - Do NOT write Drizzle tables, server actions for CRUD, your own API routes, password hashing, JWT, or any auth/DB library. The engine does all of it.
 - Do NOT write `.env`. If you need a real external API key, name the env var in chat and stop.
 
-## Design quality (binding) — no "default-looking" output
+## Design quality (binding) — build the app from the kit, enterprise-grade
 
-Every page must look like a finished product, not a scaffold:
-- One accent + a neutral scale (slate/zinc/stone, never pure `#000` on `#fff`) + max two fonts (via `next/font/google` or a `<link>` in `app/layout.tsx`). Never bare Tailwind defaults.
-- Real Russian content, responsive (375/768/1024/1440), accessible (one `<h1>`, visible focus). SVG icons (Lucide), never emoji. Hover/transition polish, loading + empty states for every list.
-- Tailwind v4 only (`@import "tailwindcss"` in globals.css). `cn()` from `@/lib/utils` for conditional classes.
+These are functional **app** screens (dashboard / CRM / SaaS), not a landing. The
+template ships a component kit — **use it, don't hand-roll** chrome:
+- `@/components/omnia` — `AppShell` (responsive sidebar + topbar), `PageHeader`,
+  `StatCard`, `DataTable`, `CrudResource` (full managed list+CRUD for one entity),
+  `EntityForm`, `EmptyState`, `useEntity`. `@/components/ui/*` — shadcn primitives
+  (button, card, input, select, dialog, sheet, table, badge, tabs, …).
+- **Multi-page app, not one screen**: wrap every page in `<AppShell>` (a route-group
+  `src/app/(app)/layout.tsx` defines the nav once); a route per entity + a dashboard.
+- **Design tokens, not hardcoded colour**: `bg-background`/`bg-card`,
+  `text-foreground`/`text-muted-foreground`, `bg-primary`, `border-border`. Never
+  `bg-zinc-900`/`#000`/raw hex — the theme re-maps `--primary` per brand.
+- Real Russian content, **responsive** (375/768/1024/1440 — kit is mobile-first),
+  accessible (one `<h1>`, visible focus). Lucide icons, never emoji. Loading +
+  empty states for every list (the kit gives them for free).
+- Tailwind v4 (`@import "tailwindcss"` in globals.css). `cn()` from `@/lib/utils`.
 
 ## Zero dead-ends
 

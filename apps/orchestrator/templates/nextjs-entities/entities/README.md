@@ -27,7 +27,7 @@ rows live in the single `records` table (`data` JSONB), discriminated by entity.
   - `public` — anyone (even signed-out) can read; writing needs auth and you can only edit rows you created.
   - `admin` — only users with role `admin`.
 - `fields` — a map of field → `{ type, required?, default?, options? }`.
-  - `type`: `string` | `text` | `number` | `boolean` | `date` (ISO string) | `enum` (needs `options`).
+  - `type`: `string` | `text` | `number` | `boolean` | `date` (ISO string) | `enum` (needs `options`) | `reference` (a relation — needs `entity`, the target name; stores that row's id, filterable, and `?expand=<field>` embeds the related row).
   - `required: true` — must be present on create.
   - `default` — applied on create when omitted.
 
