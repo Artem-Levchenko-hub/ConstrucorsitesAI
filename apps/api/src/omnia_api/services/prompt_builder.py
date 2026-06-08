@@ -733,8 +733,13 @@ _ENTITIES_STACK = """\
   • `name` = имя файла. `access`: `owner` (каждый видит только свои записи — дефолт
     для дашбордов/CRM/SaaS), `public` (читают все, правит автор — блог/каталог),
     `admin` (только роль admin).
-  • Типы полей: string | text | number | boolean | date (ISO-строка) | enum (+options).
-    Опционально `required`, `default`.
+  • Типы полей: string | text | number | boolean | date (ISO-строка) | enum (+options) |
+    reference (СВЯЗЬ на другую сущность: `{ "type":"reference", "entity":"Project" }` —
+    хранит id связанной записи). Опционально `required`, `default`.
+  • СВЯЗИ между сущностями: reference-поле фильтруется как обычное
+    (`entities.Task.filter({ projectId })`); чтобы подтянуть связанную запись БЕЗ N+1 —
+    `expand`: `entities.Task.list({ expand:["projectId"] })` → у каждой строки
+    `row._expanded.projectId` = полная Project (или null). Аналогично `.get(id,{expand:[...]})`.
   • НИКОГДА не объявляй id / created_by / created_at / updated_at — движок добавляет
     и возвращает их на каждой записи сам.
 

@@ -22,7 +22,12 @@
  * Fixed template file — AI never edits it.
  */
 
-export type Row = Record<string, unknown> & { id: string };
+export type Row = Record<string, unknown> & {
+  id: string;
+  /** Related records embedded via `expand` — keyed by the reference field
+   *  (e.g. row._expanded?.projectId is the full Project, or null). */
+  _expanded?: Record<string, Row | null>;
+};
 export type Query = Record<string, string | number | boolean | undefined>;
 export interface ListParams {
   sort?: string;
@@ -30,6 +35,8 @@ export interface ListParams {
   limit?: number;
   page?: number;
   offset?: number;
+  /** Embed related records for these reference fields into row._expanded. */
+  expand?: string[];
 }
 
 class ApiError extends Error {
@@ -75,8 +82,9 @@ export interface EntityClient {
   list(params?: ListParams): Promise<Row[]>;
   /** List rows matching exact field values, e.g. `{ done: false }`. */
   filter(query: Query, params?: ListParams): Promise<Row[]>;
-  /** One row by id. Throws ApiError(404) if missing / not yours. */
-  get(id: string): Promise<Row>;
+  /** One row by id. Throws ApiError(404) if missing / not yours.
+   *  `params.expand` embeds related records into row._expanded. */
+  get(id: string, params?: { expand?: string[] }): Promise<Row>;
   /** Create a row. Validated against the entity schema server-side. */
   create(data: Record<string, unknown>): Promise<Row>;
   /** Partial update by id (merges into existing data). */
@@ -91,7 +99,8 @@ function entityClient(name: string): EntityClient {
     list: (params) => req<Row[]>("GET", base + qs(params)),
     filter: (query, params) =>
       req<Row[]>("GET", base + qs({ ...query, ...params })),
-    get: (id) => req<Row>("GET", `${base}/${encodeURIComponent(id)}`),
+    get: (id, params) =>
+      req<Row>("GET", `${base}/${encodeURIComponent(id)}${qs(params)}`),
     create: (data) => req<Row>("POST", base, data),
     update: (id, data) => req<Row>("PUT", `${base}/${encodeURIComponent(id)}`, data),
     delete: (id) =>

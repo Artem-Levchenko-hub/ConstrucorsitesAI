@@ -8,7 +8,7 @@
  * Fixed template file — the AI never edits it.
  */
 
-import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { records } from "@/lib/db/schema";
@@ -17,6 +17,8 @@ import {
   applyDefaults,
   createSchema,
   fieldSqlType,
+  loadEntity,
+  referenceFields,
   updateSchema,
   type EntityDef,
 } from "@/lib/entities/registry";
@@ -32,7 +34,7 @@ export class EngineError extends Error {
   }
 }
 
-const RESERVED = new Set(["sort", "order", "limit", "offset", "page"]);
+const RESERVED = new Set(["sort", "order", "limit", "offset", "page", "expand"]);
 const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 50;
 
@@ -74,7 +76,7 @@ function fieldExpr(def: EntityDef, field: string): SQL | null {
   return sql`${records.data} ->> ${field}`;
 }
 
-function shape(row: typeof records.$inferSelect) {
+function shape(row: typeof records.$inferSelect): Record<string, unknown> {
   // Flatten to the Base44-ish record shape the SDK/UI expects: the entity's
   // own fields, then engine metadata LAST so id/timestamps always win even if a
   // (mis)declared field collides with a reserved name.
@@ -85,6 +87,74 @@ function shape(row: typeof records.$inferSelect) {
     created_at: row.createdAt,
     updated_at: row.updatedAt,
   };
+}
+
+/** Non-throwing access for an EXPAND fetch: skip (null) instead of erroring. */
+function scopeForExpand(
+  targetDef: EntityDef,
+  user: CurrentUser | null,
+): { allowed: boolean; scopeOwner: boolean } {
+  if (targetDef.access === "admin")
+    return { allowed: user?.role === "admin", scopeOwner: false };
+  if (targetDef.access === "public") return { allowed: true, scopeOwner: false };
+  return { allowed: !!user, scopeOwner: true }; // owner
+}
+
+/**
+ * Embed related records for the requested `reference` fields into each row's
+ * `_expanded` map. Batched (one query per target entity, `id = ANY(...)`) so a
+ * list of N rows never does N+1. Each expand fetch is access-scoped exactly like
+ * a normal read of the target entity — an inaccessible relation comes back null,
+ * never leaking another user's row.
+ */
+async function expandRecords(
+  def: EntityDef,
+  rows: Record<string, unknown>[],
+  expandFields: string[],
+  user: CurrentUser | null,
+): Promise<Record<string, unknown>[]> {
+  if (!rows.length || !expandFields.length) return rows;
+  const refs = referenceFields(def);
+  const fields = expandFields.filter((f) => refs[f]);
+  if (!fields.length) return rows;
+
+  for (const field of fields) {
+    const targetDef = await loadEntity(refs[field]);
+    let map = new Map<string, Record<string, unknown>>();
+    if (targetDef) {
+      const scope = scopeForExpand(targetDef, user);
+      const ids = [
+        ...new Set(
+          rows
+            .map((r) => r[field])
+            .filter((v): v is string => typeof v === "string" && v.length > 0),
+        ),
+      ];
+      if (scope.allowed && ids.length) {
+        const conds: SQL[] = [
+          eq(records.entity, targetDef.name),
+          inArray(records.id, ids),
+        ];
+        if (scope.scopeOwner && user) conds.push(eq(records.createdBy, user.id));
+        const rel = await db.select().from(records).where(and(...conds));
+        map = new Map(rel.map((r) => [r.id, shape(r)]));
+      }
+    }
+    for (const r of rows) {
+      const exp = (r._expanded as Record<string, unknown>) ?? {};
+      const refId = r[field];
+      exp[field] = typeof refId === "string" ? map.get(refId) ?? null : null;
+      r._expanded = exp;
+    }
+  }
+  return rows;
+}
+
+/** Parse `?expand=a,b` (or an explicit string[]) into a clean field list. */
+function parseExpand(raw: string | string[] | null | undefined): string[] {
+  if (!raw) return [];
+  const arr = Array.isArray(raw) ? raw : raw.split(",");
+  return arr.map((s) => s.trim()).filter(Boolean);
 }
 
 export async function listRecords(opts: {
@@ -129,7 +199,9 @@ export async function listRecords(opts: {
     .limit(limit)
     .offset(Math.max(0, offset));
 
-  return rows.map(shape);
+  const shaped = rows.map(shape);
+  const expand = parseExpand(params.get("expand"));
+  return expand.length ? await expandRecords(def, shaped, expand, user) : shaped;
 }
 
 export async function createRecord(opts: {
@@ -172,10 +244,15 @@ export async function getRecord(opts: {
   def: EntityDef;
   user: CurrentUser | null;
   id: string;
+  expand?: string[];
 }) {
   const row = await findScoped(opts.def, opts.user, opts.id);
   if (!row) throw new EngineError(404, "not found");
-  return shape(row);
+  const shaped = shape(row);
+  const expand = parseExpand(opts.expand);
+  if (!expand.length) return shaped;
+  const [out] = await expandRecords(opts.def, [shaped], expand, opts.user);
+  return out;
 }
 
 export async function updateRecord(opts: {

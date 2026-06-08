@@ -25,7 +25,11 @@ export type FieldType =
   | "number"
   | "boolean"
   | "date"
-  | "enum";
+  | "enum"
+  // A relation: stores the referenced record's id (uuid). `entity` names the
+  // target. Filter by it like any field; `?expand=<field>` embeds the related
+  // record (see engine). This is how entities link (Task.projectId → Project).
+  | "reference";
 
 export interface FieldDef {
   type: FieldType;
@@ -34,6 +38,8 @@ export interface FieldDef {
   default?: unknown;
   /** For `type: "enum"` — the allowed values. */
   options?: string[];
+  /** For `type: "reference"` — the target entity name. */
+  entity?: string;
 }
 
 /** Who may read/write rows of this entity. */
@@ -109,6 +115,10 @@ function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
       required: Boolean(f?.required),
       default: f?.default,
       options: Array.isArray(f?.options) ? f.options : undefined,
+      entity:
+        type === "reference" && typeof f?.entity === "string" && NAME_RE.test(f.entity)
+          ? f.entity
+          : undefined,
     };
   }
   return { name, access, fields };
@@ -129,11 +139,23 @@ function zodForField(f: FieldDef): z.ZodTypeAny {
       return z.string().refine((s) => !Number.isNaN(Date.parse(s)), {
         message: "invalid date",
       });
+    case "reference":
+      // Stores the referenced record's id (uuid string).
+      return z.string().min(1);
     case "string":
     case "text":
     default:
       return z.string();
   }
+}
+
+/** Reference fields → their target entity name (for ?expand). */
+export function referenceFields(def: EntityDef): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, f] of Object.entries(def.fields)) {
+    if (f.type === "reference" && f.entity) out[key] = f.entity;
+  }
+  return out;
 }
 
 /**

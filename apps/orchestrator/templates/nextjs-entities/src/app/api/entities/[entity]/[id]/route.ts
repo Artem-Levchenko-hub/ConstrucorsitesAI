@@ -22,13 +22,14 @@ import { run } from "@/lib/entities/http";
 
 type Ctx = { params: Promise<{ entity: string; id: string }> };
 
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
   const { entity, id } = await ctx.params;
   return run(async () => {
     const def = await loadEntity(entity);
     if (!def) throw new EngineError(404, `unknown entity '${entity}'`);
     const user = await getCurrentUser();
-    const data = await getRecord({ def, user, id });
+    const expand = req.nextUrl.searchParams.get("expand")?.split(",");
+    const data = await getRecord({ def, user, id, expand });
     return NextResponse.json({ data });
   });
 }
