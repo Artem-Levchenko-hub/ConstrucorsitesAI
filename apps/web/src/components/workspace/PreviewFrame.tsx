@@ -99,9 +99,11 @@ export function PreviewFrame({ project }: { project: Project }) {
   // Fullstack projects (V2 Phase A) preview a live Next.js dev container,
   // not a static Playwright PNG. We hit /api/projects/:id/runtime on a short
   // poll while the container is provisioning, then settle on the dev_url
-  // returned by orchestrator. For V1 projects (template !== "fullstack")
-  // this query is skipped — we keep the existing /p/<slug> iframe.
-  const isFullstack = project.template === "fullstack";
+  // returned by orchestrator. For V1 (static) projects this query is skipped —
+  // we keep the existing /p/<slug> iframe. Both container-backed Next stacks
+  // (fullstack + nextjs_entities) take the live-container path.
+  const isFullstack =
+    project.template === "fullstack" || project.template === "nextjs_entities";
   const qc = useQueryClient();
   const {
     data: runtime,

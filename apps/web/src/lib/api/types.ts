@@ -22,7 +22,10 @@ export type ProjectTemplate =
   // V2 Phase A — runs as a Next.js + Drizzle dev container managed by the
   // orchestrator. Preview iframe points at the live container's dev_url
   // instead of the static /p/<slug> path.
-  | "fullstack";
+  | "fullstack"
+  // Base44-style: fixed entity-engine backend (DB + auth + CRUD out of the box)
+  // + generative React frontend. Also a container-backed Next.js app.
+  | "nextjs_entities";
 
 export type Project = {
   id: Uuid;

@@ -95,6 +95,7 @@ const TEMPLATE_LABELS: Record<ProjectTemplate, string> = {
   portfolio: "Портфолио",
   blog: "Простой блог",
   fullstack: "Full-stack SaaS",
+  nextjs_entities: "SaaS на сущностях",
 };
 
 type Store = {

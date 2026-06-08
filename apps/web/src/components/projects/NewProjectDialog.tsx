@@ -37,6 +37,13 @@ const TEMPLATES: Array<{
     label: "Full-stack SaaS",
     hint: "Next.js + Postgres + Drizzle, live dev-сервер",
   },
+  // Base44-style: fixed entity-engine backend (БД + auth + CRUD из коробки),
+  // AI описывает сущности и верстает фронт — бэкенд не пишет.
+  {
+    id: "nextjs_entities",
+    label: "SaaS на сущностях",
+    hint: "Бэкенд из коробки: сущности → авто-CRUD, auth",
+  },
 ];
 
 export function NewProjectDialog() {
