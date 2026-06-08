@@ -42,6 +42,11 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     hibernate._last_activity.clear()
+    hibernate._last_rx.clear()
+    # Isolate the sweep from real Docker: the network probe is exercised by its
+    # own tests below, which re-patch this. Default to "no traffic" so the
+    # timer-only sweep tests behave exactly as before the probe existed.
+    monkeypatch.setattr(hibernate, "_read_dev_rx", lambda: {})
 
 
 # ---------- tier policy ----------
@@ -94,6 +99,109 @@ async def test_record_activity_overwrites_existing() -> None:
     hibernate._last_activity[pid] = 0.0  # ancient
     await hibernate.record_activity(pid)
     assert hibernate._last_activity[pid] > 1_000_000_000  # not the ancient one
+
+
+# ---------- network-activity probe ----------
+
+
+PID_NET = "00000000-0000-0000-0000-0000000000a0"
+
+
+async def test_network_activity_bumps_when_rx_grows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RX grew since last sweep → preview is being watched → reset idle timer."""
+    hibernate._last_rx[PID_NET] = 100.0
+    monkeypatch.setattr(hibernate, "_read_dev_rx", lambda: {PID_NET: 5000.0})
+
+    now = time.time()
+    await hibernate._refresh_network_activity(now)
+
+    assert hibernate._last_activity[PID_NET] == now
+    assert hibernate._last_rx[PID_NET] == 5000.0  # baseline advanced
+
+
+async def test_network_activity_no_bump_when_rx_flat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No new traffic (RX unchanged) → idle timer untouched, so idleness
+    keeps accruing and a truly-idle preview still hibernates."""
+    hibernate._last_rx[PID_NET] = 5000.0
+    monkeypatch.setattr(hibernate, "_read_dev_rx", lambda: {PID_NET: 5000.0})
+
+    await hibernate._refresh_network_activity(time.time())
+
+    assert PID_NET not in hibernate._last_activity  # never marked active
+
+
+async def test_network_activity_first_sight_only_seeds_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First reading has nothing to compare against — seed the baseline but
+    do NOT mark active (a fresh container shouldn't look 'busy' for free)."""
+    monkeypatch.setattr(hibernate, "_read_dev_rx", lambda: {PID_NET: 5000.0})
+
+    await hibernate._refresh_network_activity(time.time())
+
+    assert hibernate._last_rx[PID_NET] == 5000.0
+    assert PID_NET not in hibernate._last_activity
+
+
+async def test_sweep_keeps_watched_preview_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """★ The P0 fix: a container idle 16 min on the timer is NOT hibernated if
+    its preview served traffic this cycle. Without the network probe this
+    container would be stopped right under the viewer."""
+    hibernate._last_activity[PID_NET] = time.time() - 16 * 60  # past threshold
+    hibernate._last_rx[PID_NET] = 100.0
+    monkeypatch.setattr(hibernate, "_read_dev_rx", lambda: {PID_NET: 999_999.0})
+    monkeypatch.setattr(
+        hibernate,
+        "_list_dev_containers",
+        lambda: [("omnia-dev-watched", "running", PID_NET, "free")],
+    )
+    stop_mock = AsyncMock()
+    monkeypatch.setattr(hibernate.docker_client, "stop_container", stop_mock)
+
+    await hibernate._sweep_once()
+
+    stop_mock.assert_not_called()
+
+
+async def test_sweep_hibernates_unwatched_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No traffic this cycle (RX flat) + idle past threshold → still hibernate.
+    Guards that the probe didn't accidentally pin every container awake."""
+    hibernate._last_activity[PID_NET] = time.time() - 16 * 60
+    hibernate._last_rx[PID_NET] = 5000.0
+    monkeypatch.setattr(hibernate, "_read_dev_rx", lambda: {PID_NET: 5000.0})
+    monkeypatch.setattr(
+        hibernate,
+        "_list_dev_containers",
+        lambda: [("omnia-dev-quiet", "running", PID_NET, "free")],
+    )
+    stop_mock = AsyncMock()
+    monkeypatch.setattr(hibernate.docker_client, "stop_container", stop_mock)
+
+    await hibernate._sweep_once()
+
+    stop_mock.assert_awaited_once_with("omnia-dev-quiet", pause=False)
+
+
+def test_read_dev_rx_failsoft_on_docker_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Docker daemon unreachable → `{}`, never raises (sweep must survive)."""
+    import docker as docker_sdk  # type: ignore[import-untyped]
+
+    def boom(*_a: object, **_kw: object) -> object:
+        raise docker_sdk.errors.DockerException("daemon down")
+
+    monkeypatch.setattr(hibernate.docker, "DockerClient", boom)
+
+    assert hibernate._read_dev_rx() == {}
 
 
 # ---------- sweep behaviour ----------

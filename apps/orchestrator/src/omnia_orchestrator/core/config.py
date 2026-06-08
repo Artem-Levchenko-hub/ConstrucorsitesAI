@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     hibernate_pro_tier_minutes: int = Field(default=60)
     wake_timeout_seconds: int = Field(default=60)
 
+    # Memory ceiling for dev preview containers. Heavy entity/fullstack apps
+    # (Next.js + Turbopack compiling many routes) blew past the old 2 GB limit
+    # and were OOM-killed mid-compile. This is a ceiling, not a reservation —
+    # a light project still settles around 500 MB; only a heavy compile climbs
+    # toward it. Tune per host (or per tier later) via env without a code edit.
+    dev_container_memory_mb: int = Field(default=4096)
+
     # Redis pub-sub channel for hibernate activity. Whoever fronts dev preview
     # traffic (apps/api proxy / nginx ingress) publishes `activity:<project_id>`
     # on every request; the hibernate loop subscribes to reset idle timers.

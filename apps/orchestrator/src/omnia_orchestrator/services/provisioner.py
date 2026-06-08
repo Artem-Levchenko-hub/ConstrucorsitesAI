@@ -192,10 +192,15 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         **req.initial_env,
     }
 
-    # Next.js 15 + Turbopack peaks at ~1.5 GB during the first compile of a
-    # cold project; once warm it settles around 500-800 MB. 512 MB will be
-    # OOM-killed mid-compile. Sprint A1 will pick limits per tier (free 1 GB,
-    # pro 2 GB, business 4 GB); PoC picks the pro-tier ceiling for everyone.
+    # Next.js 15 + Turbopack peaks well past 2 GB during the first compile of a
+    # heavy entity/fullstack app (many routes); once warm it settles around
+    # 500-800 MB. A 2 GB ceiling OOM-killed those mid-compile, so the memory
+    # limit is config-driven (default 4 GB — a ceiling, not a reservation).
+    #
+    # restart_policy `unless-stopped` makes a crashed dev server (non-zero exit)
+    # self-heal: docker re-runs it automatically. Hibernation is unaffected —
+    # docker only restarts containers that exited on their own, never ones the
+    # daemon API stopped/paused, so an idle-sweep `stop` stays down until /wake.
     spec = ContainerSpec(
         name=container_name,
         image=image_tag,
@@ -203,7 +208,8 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         project_id=str(req.project_id),
         env=env,
         cpu_quota=1.0,
-        memory_mb=2048,
+        memory_mb=settings.dev_container_memory_mb,
+        restart_policy_name="unless-stopped",
         tier=req.tier,
     )
 

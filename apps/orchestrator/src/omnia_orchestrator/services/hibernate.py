@@ -2,14 +2,20 @@
 
 Design (sprint A1 — fills in for the prior scaffold):
 
-- **Activity ingest** — Redis pub-sub on channel `activity:<project_id>`.
-  Whoever fronts the dev preview (apps/api proxy / nginx ingress / ws hub)
-  publishes a message on every request that reaches a live container; we
-  subscribe with a `psubscribe("activity:*")` pattern and update the in-
-  memory `_last_activity` map. A bare HTTP fallback lives at
-  `POST /internal/projects/<id>/heartbeat` for envs without Redis (tests,
-  bare-metal docker-compose). Wake explicitly resets the timer too, so a
-  user click never races the sweeper.
+- **Activity ingest** — three reinforcing signals feed `_last_activity`:
+  1. Redis pub-sub on channel `activity:<project_id>` — whoever fronts the
+     dev preview (apps/api proxy / ws hub) publishes on every request that
+     reaches a live container; we `psubscribe("activity:*")`.
+  2. `POST /internal/projects/<id>/heartbeat` — bare HTTP fallback for envs
+     without Redis (tests, bare-metal compose) and the workspace UI keepalive.
+  3. **Network probe** (`_read_dev_rx`) — a direct hit to a project's preview
+     subdomain proxies straight to `127.0.0.1:<port>` via its own nginx
+     vhost and never touches the orchestrator, so signals 1-2 miss it. Each
+     sweep reads every running dev container's network RX counter; if it grew
+     since last sweep, a browser is rendering the preview (HMR holds a socket
+     open only while a tab is connected) → reset the idle timer. This is what
+     keeps a preview that's being actively watched from hibernating under the
+     user. Wake explicitly resets the timer too, so a click never races us.
 
 - **Sweep** — every 60 s walk every container with label `omnia.kind=dev`,
   read `omnia.tier` (defaulting to "free"), compare idle vs tier threshold,
@@ -50,6 +56,10 @@ log = structlog.get_logger("omnia_orchestrator.hibernate")
 # Single-process orchestrator on a single event loop — plain dict is safe
 # without a lock (all writes happen from coroutines, not threads).
 _last_activity: dict[str, float] = {}
+# Last-seen total RX bytes per project, for the network-activity probe. A
+# growth between two sweeps means the preview served traffic (a viewer is
+# connected) → activity. Seeded on first sight; never used as an absolute.
+_last_rx: dict[str, float] = {}
 _loop_task: asyncio.Task[None] | None = None
 _pubsub_task: asyncio.Task[None] | None = None
 _redis_client: Any = None  # redis.asyncio.Redis | None — lazy import
@@ -108,15 +118,70 @@ def _list_dev_containers() -> list[tuple[str, str, str, str]]:
     return out
 
 
+def _read_dev_rx() -> dict[str, float]:
+    """Total network RX bytes per project for every *running* dev container.
+
+    Traffic to a dev container means a browser is rendering its preview — the
+    HMR WebSocket stays open only while a tab is connected, and the sweep can't
+    otherwise see preview requests (they hit the per-project nginx vhost and
+    proxy straight to `127.0.0.1:<port>`, never the orchestrator).
+
+    Sync docker-py call — the caller runs us in a thread. One `stats` read per
+    running dev container per sweep; cheap at our scale (a handful of live
+    previews). Fail-soft (R-10): any docker hiccup returns `{}`, so the sweep
+    silently falls back to timer-only hibernation and never raises.
+    """
+    out: dict[str, float] = {}
+    try:
+        client = docker.DockerClient(base_url=get_settings().docker_host)
+        containers = client.containers.list(
+            filters={"label": "omnia.kind=dev", "status": "running"},
+        )
+    except docker.errors.DockerException:
+        return {}
+    for c in containers:
+        project_id = (c.labels or {}).get("omnia.project_id")
+        if not project_id:
+            continue
+        try:
+            stats = c.stats(stream=False)
+        except Exception:
+            continue  # one container's stats failing must not blind the rest
+        rx = 0.0
+        for iface in (stats.get("networks") or {}).values():
+            rx += float(iface.get("rx_bytes", 0) or 0)
+        out[project_id] = rx
+    return out
+
+
+async def _refresh_network_activity(now: float) -> None:
+    """Reset the idle timer for any dev container whose RX grew since the last
+    sweep — i.e. its preview is being actively watched. First sight only seeds
+    the baseline (no prior reading to compare), so a freshly-listed container
+    isn't falsely marked active. Complements the Redis/heartbeat paths, which
+    the direct-preview case never triggers.
+    """
+    rx_now = await asyncio.to_thread(_read_dev_rx)
+    for project_id, rx in rx_now.items():
+        prev = _last_rx.get(project_id)
+        _last_rx[project_id] = rx
+        if prev is not None and rx > prev:
+            _last_activity[project_id] = now
+
+
 async def _sweep_once() -> None:
     """One sweep pass: hibernate any container idle past its tier threshold."""
+    now = time.time()
+    # Fold in network traffic before judging idleness so an actively-watched
+    # preview (whose hits never reach us) isn't hibernated under the viewer.
+    await _refresh_network_activity(now)
+
     try:
         containers = await asyncio.to_thread(_list_dev_containers)
     except docker.errors.DockerException as exc:
         log.warning("hibernate.docker_unavailable", err=str(exc))
         return
 
-    now = time.time()
     for name, status, project_id, tier in containers:
         if status != "running":
             continue  # already paused / stopped / exited — nothing to do
