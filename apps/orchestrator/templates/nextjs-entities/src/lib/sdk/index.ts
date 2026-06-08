@@ -139,22 +139,41 @@ async function signInWithPassword(email: string, password: string): Promise<void
   }
 }
 
+/** Credentials, accepted either positionally or as one object — generated UIs
+ *  call `auth.signUp(email, password)` AND `auth.signUp({ email, password })`,
+ *  so the SDK tolerates both rather than silently sending an `[object Object]`. */
+export interface Creds {
+  email: string;
+  password: string;
+  name?: string;
+}
+function coerceCreds(a: string | Creds, password?: string, name?: string): Creds {
+  if (a && typeof a === "object") {
+    return { email: a.email, password: a.password, name: a.name ?? name };
+  }
+  return { email: String(a ?? ""), password: String(password ?? ""), name };
+}
+
 export const auth = {
   /** The signed-in user, or null. */
   me: () => req<Me | null>("GET", "/api/auth/me"),
 
-  /** Sign in with email + password. Throws ApiError(401) if they don't match. */
-  signIn: (email: string, password: string): Promise<void> =>
-    signInWithPassword(email, password),
+  /** Sign in with email + password (positional OR `{ email, password }`).
+   *  Throws ApiError(401) if they don't match. */
+  signIn: (a: string | Creds, password?: string): Promise<void> => {
+    const c = coerceCreds(a, password);
+    return signInWithPassword(c.email, c.password);
+  },
 
-  /** Create an email + password account and sign the user in. Throws ApiError
-   *  (409 if the email is taken) on failure. `name` is optional. */
-  signUp: async (email: string, password: string, name?: string): Promise<void> => {
+  /** Create an email + password account and sign the user in (positional OR
+   *  `{ email, password, name? }`). Throws ApiError (409 if the email is taken). */
+  signUp: async (a: string | Creds, password?: string, name?: string): Promise<void> => {
+    const c = coerceCreds(a, password, name);
     const res = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ email, password, name }),
+      body: JSON.stringify({ email: c.email, password: c.password, name: c.name }),
     });
     if (!res.ok) {
       const json = await res.json().catch(() => ({}));
@@ -163,7 +182,7 @@ export const auth = {
         (json as { error?: string }).error ?? "Не удалось зарегистрироваться",
       );
     }
-    await signInWithPassword(email, password);
+    await signInWithPassword(c.email, c.password);
   },
 
   /** Clear the current session (no redirect — the caller updates its own UI). */
