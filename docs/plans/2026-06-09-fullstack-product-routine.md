@@ -70,7 +70,7 @@
 - [x] A1 — fullstack -> `.tsx` writer вместо freeform HTML (9c87d02). Проверено: 5 tsx, hot_reload=7, Compiled, GET / 200.
 - [x] A2 — auth.ts `strategy:"jwt"` для Credentials (UnsupportedStrategy fix, 87d25ce). Проверено: ошибка ушла.
 - [x] A3 — signin catch AuthError (CredentialsSignin не роняет апп, 8669da1).
-- [ ] A4 — **Публичное превью**: app доступен снаружи по `<slug>-dev.preview.lead-generator.ru` (сейчас timeout, нет роута). На VPS лежит `9b7cc9b` (wildcard-cert) — передеплоить `omnia-orchestrator`, проверить что роут создаётся при provision и URL отдаёт 200. БЕЗ этого нельзя «поделиться».
+- [x] A4 — **Публичное превью** DONE (verify-only, без правок кода). Внешне URL отдаёт **200**; раннее «timeout» был артефакт NAT-hairpin (curl С САМОГО VPS своего же публичного хоста). Оркестратор уже на `9b7cc9b` (wildcard-cert), публикует роут при provision (`nginx.published_https` + `nginx.cert_wildcard`). Проверено: `https://test-fullstack-v2-0497d7-dev.preview.lead-generator.ru` → 200, TITLE «Мои задачи», реальный лендинг (Начать бесплатно / Войти), без error-overlay.
 - [ ] A5 — **Миграции БД на provision**: схема аппа (users + сущности) мигрируется (drizzle), иначе signup/login/CRUD не персистятся. Проверить `docker-entrypoint.sh`/provision + signup в тесте.
 - [ ] A6 — **Качество кабинета**: structure_audit ругается «no AppShell/(app) layout, single-page». Усилить fullstack-систем-промпт: публичный лендинг `/`, auth-gated кабинет `(app)/dashboard` с общим шеллом, приватные данные юзера.
 - [ ] A7 — **E2E acceptance**: свежий промпт -> signup->login->кабинет->CRUD реально работают (тест прогоняет полный путь и фиксит).
@@ -93,3 +93,4 @@
 - 2026-06-09 ~10:00 MSK — A1 DONE (9c87d02): fullstack->.tsx. E2E: 5 tsx, hot_reload=7, Compiled, GET / 200. PASS.
 - 2026-06-09 ~10:30 MSK — A2 DONE (87d25ce): jwt strategy. Проверено: UnsupportedStrategy ушёл, GET / 200. PASS.
 - 2026-06-09 ~10:34 MSK — рутина заведена. Старт со следующего шага A4.
+- 2026-06-09 ~10:46 MSK — ИТЕРАЦИЯ 1 (A4): публичное превью РАБОТАЕТ. Внешний curl → 200, TITLE «Мои задачи — простой список дел», реальный лендинг (Начать бесплатно/Войти), без error-overlay. Раннее «timeout» = NAT-hairpin (curl с самого VPS), не баг. Оркестратор на 9b7cc9b публикует роут+wildcard-cert при provision. Без правок кода. A4 [x]. PASS. Следующий: A5 (миграции БД на provision — проверить что signup/login/CRUD персистятся).
