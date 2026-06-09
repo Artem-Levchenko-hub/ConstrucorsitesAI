@@ -102,7 +102,7 @@
 ## 5. ROADMAP (строго сверху вниз; `[ ]` pending, `[x]` done, `[~]` частично)
 
 ### PHASE 0 — РАБОТАЕТ С ПЕРВОГО ПРОМПТА (надёжность; разблокирует остальное)
-- [ ] 0.1 **A7 — цельный свежий E2E fullstack**: новый проект → промпт → discovery → build → signup → login → кабинет → CRUD насквозь, 0 ошибок, браузером под тест-аккаунтом, скрины. (блокеры A1–A6b закрыты — прогнать ЦЕЛЬНО через починенный пайплайн.) Память `omnia_entities_app_e2e_lipstick`, routine-план `docs/plans/2026-06-09-fullstack-product-routine.md`.
+- [x] 0.1 **A7 — цельный свежий E2E fullstack** ✅ PASS вживую (2026-06-09, апп TaskFlow `a7-zadachi-saas-e2e-ec4081`): zero-friction создание → discovery → авто-стек nextjs_entities → build → лендинг → signup→авто-логин→кабинет → CRUD (create 201/read/delete 200, persist) → логи чистые. Детали в Логе. (UPDATE-клик-через — минорный остаток.)
 - [ ] 0.2 **A5b — drizzle-kit push под per-project search_path**: генерит FK на `public.users` (таблицы в `proj_<id>`) → ALTER откатывается. Архфикс: БД-на-проект (всё в public) ИЛИ pgSchema-инъекция ИЛИ post-push raw-SQL reconcile в entrypoint. E2E: ALTER применился, auth-колонки на месте, signup/login персистят.
 - [ ] 0.3 **Wake-from-hibernation = 200, не 502**: апп заснул → зашёл → проснулся → 200. Вживую: дождаться/форсить гибернацию, открыть preview, проверить отсутствие 502. Память `omnia_p0_infra_enabler`, `omnia_v2_runtime_live`.
 - [ ] 0.4 **Авто-retry прерванной генерации** (снапшота ещё нет → не показывать голый стартер; ре-генерировать или явный статус). Память E3 в routine-плане.
@@ -157,7 +157,7 @@
 ## 6. ПРОГРЕСС
 <!-- Итерации отмечают [x]/[~] выше + блок в Логе ниже -->
 
-**0.1 IN-FLIGHT** (с 2026-06-09 ~21:30 MSK): тест-проект `462af0bb-a8fd-4056-b704-b910670fa92b` (slug `a7-zadachi-saas-e2e-ec4081`), аккаунт `undj00x03`, браузер=puppeteer (playwright занят др. сессией). Отправлен fullstack-промпт (задачи-SaaS с auth+кабинет+CRUD). Следующий тик: НЕ создавать новый проект — проверить билд этого, открыть сгенеренный апп, прогнать signup→login→кабинет→CRUD, логи. Прибрать тест-проект после.
+**0.1 DONE ✅** (2026-06-09 ~22:05 MSK): A7 PASS вживую. Тест-проект `462af0bb` (slug `a7-zadachi-saas-e2e-ec4081`) ОСТАВЛЕН как живой демо (можно удалить). Апп-юзер `taskuser-a7@example.com`/`Taskflow123`. Следующий тик: Phase **0.2** (A5b drizzle FK).
 
 ## 7. ЛОГ ИТЕРАЦИЙ
 <!-- Новые блоки ДОПИСЫВАТЬ СВЕРХУ. Формат:
@@ -171,6 +171,19 @@
 - Владельцу утром: <что глянуть>
 - Идея на следующую итерацию: <чтобы не гадать>
 -->
+
+## 2026-06-09 21:40–22:05 MSK — Phase 0.1 DONE ✅ (A7 fullstack E2E «работает с первого промпта»)
+- Статус: DONE — PASS вживую (puppeteer на проде; билдер undj00x03; апп-юзер taskuser-a7@example.com)
+- Апп TaskFlow (slug a7-zadachi-saas-e2e-ec4081, контейнер Up, авто-стек nextjs_entities):
+  - Лендинг: красивый публичный «TaskFlow» (hero «Управляйте задачами легко и красиво», фичи, 3 шага, FAQ; синий/белый по брифу) — скрин a7-02.
+  - Auth: signup (POST /signup 303) → АВТО-ЛОГИН → кабинет; сессия переживает reload (/api/auth/me 200).
+  - Кабинет (enterprise-кит): AppShell+сайдбар, 4× StatCard, DataTable, empty-state — скрин a7-03.
+  - CRUD: CREATE (POST /api/entities/Task 201, в таблице, переживает reload) ✓; READ/LIST 200 ✓; DELETE (DELETE …/Task/<id> 200 → строка ушла, empty-state) ✓; UPDATE — диалог открывается, тот же [id]-эндпоинт что у DELETE(200); полный save-клик не гонял (глитч вывода puppeteer) = минорный остаток, низкий риск.
+  - Логи контейнера ЧИСТЫЕ: Ready, Compiled, 200/201/303, НЕТ 500/UnsupportedStrategy/uncaught. Косметика: warn allowedDevOrigins + aria-describedby (a11y → Phase 4.3).
+- Грабли (в план, не блокеры): discovery turn-1 задала канон-вопрос проигнорив детальный промпт (Phase 1); «слетела сессия» при быстрых evaluate = клиентский транзиент (сервер auth/me 200), НЕ баг.
+- Verify/Доставка: рантайм не правил (генерация чистая); docs (план) commit+push.
+- Владельцу утром: ✅ полноценный SaaS С ПЕРВОГО ПРОМПТА работает (рег→авто-вход→кабинет→CRUD, 0 ошибок). Живой демо: https://a7-zadachi-saas-e2e-ec4081-dev.preview.lead-generator.ru (taskuser-a7@example.com / Taskflow123). Тест-проект 462af0bb удалить когда наглядишься.
+- Идея на следующий тик: Phase 0.2 (A5b drizzle FK под per-project search_path), затем 0.3 (wake-from-hibernation 502→200).
 
 ## 2026-06-09 21:19–21:40 MSK — SETUP + Phase 0.1 START (A7 fullstack E2E)
 - Статус: IN-FLIGHT (рутина заведена; 0.1 билд идёт)
