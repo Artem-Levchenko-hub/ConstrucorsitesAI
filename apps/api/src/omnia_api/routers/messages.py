@@ -1380,6 +1380,13 @@ async def _process_prompt(
                 # always-on for builds; it just avoids feeding HTML to the
                 # catalog/plain JSON parser if freeform is ever switched off.
                 and _gen_mode == "freeform"
+                # Container-backed Next.js apps (fullstack / nextjs_entities) must
+                # be written as .tsx files by the fullstack system prompt — the
+                # freeform art-director writer emits ONE static index.html, the
+                # wrong artifact for a React app (it gets discarded, app stays the
+                # blank template). Keep container apps off the freeform writer so
+                # they fall through to the single-shot .tsx path below.
+                and project_template not in CONTAINER_NEXT
             )
             _dp_active = (
                 not force_single_shot
@@ -1391,6 +1398,9 @@ async def _process_prompt(
                 # (that path is a catalog/IR enhancement). The acceptance gate
                 # is freeform's quality mechanism instead.
                 and _gen_mode != "freeform"
+                # Catalog/IR (Director→Polish) renders static HTML — never for a
+                # container-backed Next.js app, which needs .tsx files.
+                and project_template not in CONTAINER_NEXT
             )
             if _adw_active:
                 # Mark the freeform path so the post-writer image-resolve and
@@ -1469,6 +1479,9 @@ async def _process_prompt(
                     _settings.use_section_catalog
                     and _gen_mode != "freeform"
                     and tier_for_model(_ss_model) == "premium"
+                    # Fullstack/entity apps emit .tsx <file> blocks, never PageIR
+                    # JSON — a "JSON only" vendor nudge would corrupt the response.
+                    and project_template not in CONTAINER_NEXT
                 )
                 source = stream_chat_completion(
                     _with_vendor_directive(messages, _ss_model, json_strict=_expects_ir),
@@ -1655,7 +1668,10 @@ async def _process_prompt(
         from omnia_api.core.config import get_settings as _get_settings
         # Only catalog mode parses the answer as PageIR JSON. Freeform/plain
         # emit HTML in <file> blocks and fall straight through to the extractor.
-        if _gen_mode == "catalog":
+        # Container-backed Next.js apps emit .tsx <file> blocks, not PageIR JSON —
+        # never run the catalog/IR parser on them (it would discard the files and
+        # try to render a static index.html for a React app).
+        if _gen_mode == "catalog" and project_template not in CONTAINER_NEXT:
             import json as _json
 
             from pydantic import ValidationError as _ValidationError
