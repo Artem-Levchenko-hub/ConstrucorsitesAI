@@ -26,7 +26,12 @@ class Snapshot(Base):
     model_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("snapshots.id"),
+        # SET NULL so a project's snapshots can be torn down row-by-row without
+        # the timeline's self-reference (child.parent_id -> parent.id) raising a
+        # ForeignKeyViolationError mid-cascade. Without this, deleting any
+        # project with a multi-snapshot timeline 500s and the project is stuck
+        # undeletable.
+        ForeignKey("snapshots.id", ondelete="SET NULL"),
         nullable=True,
     )
     preview_key: Mapped[str | None] = mapped_column(Text, nullable=True)
