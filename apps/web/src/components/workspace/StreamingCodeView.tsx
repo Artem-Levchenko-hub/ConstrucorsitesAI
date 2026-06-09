@@ -43,9 +43,15 @@ export function StreamingCodeView({ content }: { content: string }) {
 
   if (paths.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-2 text-xs text-fg-tertiary">
-        <FileCode2 className="h-5 w-5 animate-pulse" />
-        <span>AI пишет код…</span>
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-fg-tertiary">
+        <span className="relative flex items-center justify-center">
+          <span className="absolute inline-flex h-10 w-10 rounded-full bg-accent/20 animate-ping" />
+          <span className="relative inline-flex h-3 w-3 rounded-full bg-accent" />
+        </span>
+        <span className="text-sm font-medium text-fg-secondary">
+          AI собирает ваше приложение…
+        </span>
+        <span className="text-xs text-fg-tertiary">Код пишется в реальном времени</span>
       </div>
     );
   }
@@ -100,6 +106,14 @@ export function StreamingCodeView({ content }: { content: string }) {
       </div>
 
       <div className="flex-1 flex flex-col min-w-0">
+        {/* Live "writing now" pulse — a thin accent line at the top of the
+            stream, fades out the instant the model stops on this file. */}
+        <div
+          className={cn(
+            "h-0.5 w-full bg-gradient-to-r from-transparent via-accent to-transparent transition-opacity duration-300",
+            isWritingActive ? "opacity-100 animate-pulse" : "opacity-0",
+          )}
+        />
         <div className="h-9 px-3 flex items-center gap-2 shrink-0">
           <FileCode2 className="h-3.5 w-3.5 text-fg-tertiary" />
           <span className="font-mono text-xs text-fg-primary truncate">
