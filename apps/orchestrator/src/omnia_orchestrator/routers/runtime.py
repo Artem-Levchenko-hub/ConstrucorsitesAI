@@ -265,7 +265,11 @@ async def hot_reload(
         try:
             drizzle_result = await exec_cmd(
                 container_name,
-                cmd=["npx", "--yes", "drizzle-kit", "push", "--config=drizzle.config.ts"],
+                # --force: non-interactive. Without it drizzle-kit prompts
+                # "Yes/No, abort" on any change it deems risky and the exec
+                # stalls/aborts, so the model's new tables never get created
+                # and its DB-backed pages 500 at runtime.
+                cmd=["npx", "--yes", "drizzle-kit", "push", "--force", "--config=drizzle.config.ts"],
                 workdir="/app",
                 timeout_sec=90,
             )
