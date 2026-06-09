@@ -15,8 +15,8 @@ The FK name follows the metadata naming convention
 (fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s) ->
 fk_snapshots_parent_id_snapshots.
 
-Revision ID: 0010_snapshots_parent_fk_set_null
-Revises: 0009_users_free_generations_used
+Revision ID: 0011_snapshots_parent_fk_set_null
+Revises: 0010_template_entity_stacks
 Create Date: 2026-06-09
 """
 
@@ -24,8 +24,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0010_snapshots_parent_fk_set_null"
-down_revision = "0009_users_free_generations_used"
+revision = "0011_snapshots_parent_fk_set_null"
+down_revision = "0010_template_entity_stacks"
 branch_labels = None
 depends_on = None
 
