@@ -356,6 +356,14 @@ export type WsEvent =
     }
   | { type: "llm.error"; data: { message_id: Uuid; error: string } }
   | {
+      // App build/runtime failure surfaced as a chat card (messages.py +
+      // services/app_errors.py). The card content itself is persisted into the
+      // assistant message as an `<app-error …>` block; this event just tells the
+      // client to refetch so it appears live without a manual reload.
+      type: "app.error";
+      data: { message_id: Uuid; category: string; title: string };
+    }
+  | {
       // Phase B.3 — multipass progress. Backend (multipass_generator.py)
       // emits start+end events for each of skeleton/content/visual/assembly
       // so the chat UI can show "Шаг 2/4: Контент" while the cheap model

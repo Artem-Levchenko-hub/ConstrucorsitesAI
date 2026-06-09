@@ -32,6 +32,7 @@ from omnia_orchestrator.core.docker_client import (
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.schemas.runtime import (
+    CompileStatusResponse,
     DeployRequest,
     DeployResponse,
     HotReloadRequest,
@@ -44,6 +45,7 @@ from omnia_orchestrator.schemas.runtime import (
     WakeResponse,
 )
 from omnia_orchestrator.services import builder, deploy_state, nginx_writer
+from omnia_orchestrator.services.compile_status import parse_next_compile_error
 from omnia_orchestrator.services.hibernate import record_activity
 from omnia_orchestrator.services.port_allocator import (
     get_port_allocator,
@@ -411,6 +413,38 @@ async def logs(
         container_name=name,
         tail=tail,
         logs=result["logs"],
+    )
+
+
+@router.get("/{project_id}/compile-status", response_model=CompileStatusResponse)
+async def compile_status(
+    project_id: str,
+    slug: str | None = None,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> CompileStatusResponse:
+    """Whether the dev container's Next.js/Turbopack build currently fails.
+
+    apps/api polls this right after a hot-reload so the chat can surface a
+    compile error as a card instead of leaving the user on a broken preview.
+    Reads recent dev logs and parses them (see ``services.compile_status``).
+
+    Missing container → ``ok=True`` (no app, nothing to report) — same
+    fail-soft posture as ``/logs``: never raise a 404 the caller would have to
+    special-case.
+    """
+    _verify_token(x_internal_token)
+    from uuid import UUID
+
+    name = await find_project_container(project_id, kind="dev")
+    if name is None and slug:
+        name = f"omnia-dev-{slug}"
+    if name is None:
+        return CompileStatusResponse(project_id=UUID(project_id), ok=True)
+
+    result = await container_logs(name, tail=250, kind="dev")
+    ok, error, file = parse_next_compile_error(result["logs"])
+    return CompileStatusResponse(
+        project_id=UUID(project_id), ok=ok, error=error, file=file
     )
 
 

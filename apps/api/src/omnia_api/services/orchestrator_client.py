@@ -196,6 +196,25 @@ async def get_logs(
     )
 
 
+async def compile_status(
+    project_id: UUID, *, slug: str | None = None
+) -> dict[str, Any]:
+    """GET /internal/projects/<uuid>/compile-status — does the dev build fail?
+
+    Returns `{"project_id", "ok": bool, "error": str|None, "file": str|None}`.
+    `ok=True` when the Next.js dev server is compiling cleanly (or has no
+    outstanding error). Used right after a hot-reload to surface a compile
+    failure as a chat card. Fail-soft on the orchestrator side: a missing
+    container returns `ok=True`, never a 404.
+    """
+    params = {"slug": slug} if slug else None
+    return await _request(
+        "GET",
+        f"/internal/projects/{project_id}/compile-status",
+        params=params,
+    )
+
+
 async def hot_reload(
     project_id: UUID, slug: str, files: dict[str, str]
 ) -> dict[str, Any]:

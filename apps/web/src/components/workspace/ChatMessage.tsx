@@ -15,6 +15,8 @@ import {
   Info,
   Sparkles,
   Check,
+  AlertTriangle,
+  Wrench,
 } from "lucide-react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import type { Message } from "@/lib/api/types";
@@ -24,6 +26,7 @@ import {
   parseAssistantContent,
   formatBytes,
   type AssistantPart,
+  type AppErrorCategory,
 } from "@/lib/parse-assistant";
 import { SelectedChips } from "./SelectedChips";
 import { PassProgressBar } from "./PassProgressBar";
@@ -41,6 +44,7 @@ export function ChatMessage({
   message,
   streaming,
   projectId,
+  onFix,
 }: {
   message: Message;
   streaming?: boolean;
@@ -51,6 +55,9 @@ export function ChatMessage({
    * screenshots, in which case the progress bar simply never renders.
    */
   projectId?: string;
+  /** Submit a follow-up "fix this error" prompt (wired from the error card's
+   *  «Починить» button). Omitted in replays / screenshots → button hidden. */
+  onFix?: (prompt: string) => void;
 }) {
   const isUser = message.role === "user";
   const quiz = isUser ? parseQuizBrief(message.content) : null;
@@ -102,6 +109,8 @@ export function ChatMessage({
             parts.map((p, i) =>
               p.kind === "text" ? (
                 <AssistantText key={i} text={p.text} streaming={!!streaming} />
+              ) : p.kind === "app-error" ? (
+                <AppErrorCard key={i} part={p} onFix={onFix} />
               ) : (
                 <FileChip
                   key={i}
@@ -395,6 +404,112 @@ function StatusCard({ raw, streaming }: { raw: string; streaming?: boolean }) {
           </span>
         )}
       </div>
+    </motion.div>
+  );
+}
+
+/* ───────────────────────────── app error card ─────────────────────────── */
+
+const CATEGORY_LABEL: Record<AppErrorCategory, string> = {
+  build: "Сборка",
+  compile: "Компиляция",
+  schema: "База данных",
+  runtime: "Среда выполнения",
+};
+
+/** A build/compile/schema/runtime failure of the generated app, surfaced as a
+ *  red card. Detail collapses behind a chevron; «Починить» fires a follow-up
+ *  fix prompt that routes through the normal edit pipeline. */
+function AppErrorCard({
+  part,
+  onFix,
+}: {
+  part: Extract<AssistantPart, { kind: "app-error" }>;
+  onFix?: (prompt: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const detail = part.body.trim();
+  const hasDetail = detail.length > 0;
+
+  const handleFix = () => {
+    if (!onFix) return;
+    const label = CATEGORY_LABEL[part.category] ?? "приложение";
+    const lines = [`Исправь ошибку в приложении (${label}): ${part.title}.`];
+    if (part.file) lines.push(`Файл: ${part.file}.`);
+    if (hasDetail) lines.push("", detail);
+    onFix(lines.join("\n"));
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: EASE_OUT }}
+      className="overflow-hidden rounded-xl border border-red-500/30 bg-red-500/5"
+    >
+      <div className="flex items-start gap-3 px-3 py-2.5">
+        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-500/15">
+          <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+        </span>
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[13px] font-semibold text-fg-primary">
+              {part.title}
+            </span>
+            <span className="rounded-md bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-300">
+              {CATEGORY_LABEL[part.category] ?? part.category}
+            </span>
+          </div>
+          {part.file && (
+            <div className="truncate font-mono text-[11px] text-fg-tertiary">
+              {part.file}
+            </div>
+          )}
+          <div className="flex items-center gap-2 pt-0.5">
+            {part.fixable && onFix && (
+              <button
+                type="button"
+                onClick={handleFix}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-200 transition-colors hover:bg-red-500/20"
+              >
+                <Wrench className="h-3 w-3" />
+                Починить
+              </button>
+            )}
+            {hasDetail && (
+              <button
+                type="button"
+                onClick={() => setOpen((o) => !o)}
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-fg-tertiary transition-colors hover:text-fg-secondary"
+              >
+                <ChevronRight
+                  className={cn(
+                    "h-3.5 w-3.5 transition-transform",
+                    open && "rotate-90",
+                  )}
+                />
+                {open ? "Скрыть детали" : "Детали"}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {open && hasDetail && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: EASE_OUT }}
+            className="overflow-hidden border-t border-red-500/20"
+          >
+            <pre className="scrollbar-elegant max-h-64 overflow-auto bg-surface-base/60 p-3 text-[11px] font-mono leading-relaxed text-fg-secondary">
+              {detail}
+            </pre>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

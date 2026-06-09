@@ -337,6 +337,19 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         return;
       }
 
+      if (event.type === "app.error") {
+        // The card block is already persisted into the assistant message
+        // (services/app_errors.py appended it). Refetch so it renders now —
+        // single source of truth = the DB row, no cache surgery here. The card
+        // can land after llm.done, so this is independent of streaming state.
+        qc.invalidateQueries({ queryKey: ["messages", projectId] });
+        toast.error(event.data.title, {
+          description: "Подробности — в карточке ошибки в чате.",
+          duration: 7_000,
+        });
+        return;
+      }
+
       if (event.type === "llm.error") {
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>

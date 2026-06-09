@@ -95,3 +95,12 @@ class LogsResponse(BaseModel):
     container_name: str | None = None
     tail: int
     logs: str  # raw stdout+stderr concatenated, UTF-8, newline-separated
+
+
+class CompileStatusResponse(BaseModel):
+    project_id: UUID
+    # True = dev server is compiling cleanly (or no outstanding error); False =
+    # the AI-written code currently fails to compile / errors at render.
+    ok: bool
+    error: str | None = None  # compact, ANSI-stripped excerpt of the error block
+    file: str | None = None  # first implicated project source file (e.g. src/app/page.tsx)

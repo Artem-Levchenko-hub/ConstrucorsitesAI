@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.core.config import (
     FREE_GENERATION_LIMIT,
@@ -35,6 +35,7 @@ from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
 from omnia_api.services import (
+    app_errors,
     image_edit,
     orchestrator_client,
     pipeline_debug,
@@ -133,6 +134,57 @@ async def _emergency_error(
                 await session.commit()
     except Exception as db_exc:
         _elog.error("emergency finalize failed: %r", db_exc)
+
+
+async def _probe_compile_errors(
+    factory: async_sessionmaker[AsyncSession],
+    project_id: UUID,
+    assistant_message_id: UUID,
+    slug: str,
+) -> None:
+    """After a clean hot-reload, poll the dev server for a Next.js compile error
+    and surface it as a chat card.
+
+    Turbopack recompiles asynchronously, so we give it a few seconds and poll a
+    handful of times (bounded ~9s). Runs as a background task so it never delays
+    ``llm.done`` — the card arrives later via its own ``app.error`` event. Fully
+    fail-soft (R-10): any orchestrator hiccup is swallowed — a missing card is
+    acceptable, a crashed build is not.
+    """
+    for _ in range(3):
+        await asyncio.sleep(3)
+        try:
+            status = await orchestrator_client.compile_status(project_id, slug=slug)
+        except Exception as exc:
+            # Probe is best-effort: a missing card is fine, a crashed build isn't.
+            print(f"[PP] compile_status probe failed: {exc!r}", flush=True)
+            return
+        if status.get("ok", True):
+            continue  # clean (or still compiling) — keep watching
+        await app_errors.publish(
+            factory,
+            project_id,
+            assistant_message_id,
+            category="compile",
+            detail=status.get("error") or "Next.js не смог скомпилировать приложение.",
+            file=status.get("file"),
+        )
+        return
+
+
+def _spawn_compile_probe(
+    factory: async_sessionmaker[AsyncSession],
+    project_id: UUID,
+    assistant_message_id: UUID,
+    slug: str,
+) -> None:
+    """Fire-and-forget the compile probe with a strong reference (see
+    ``_BACKGROUND_TASKS``)."""
+    task = asyncio.create_task(
+        _probe_compile_errors(factory, project_id, assistant_message_id, slug)
+    )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _spawn_process_prompt(**kwargs: object) -> None:
@@ -2807,6 +2859,10 @@ async def _process_prompt(
             # NOT roll the snapshot back — the canonical state is still in
             # git/MinIO and the user can hit "Запустить" again to retry.
             if project is not None and project.template in CONTAINER_NEXT:
+                # Error cards for drizzle / sync failures are a strict improvement
+                # over the old italic notice, so they're always on. Only the new,
+                # riskier compile probe (extra orchestrator call) is flag-gated.
+                probe_compile = get_settings().use_error_cards
                 try:
                     hot = await orchestrator_client.hot_reload(
                         project_id=project_id,
@@ -2820,32 +2876,40 @@ async def _process_prompt(
                     )
                     drizzle_exit = hot.get("drizzle_exit_code")
                     if drizzle_exit and drizzle_exit not in ("0", "n/a"):
-                        # Drizzle push failed — tell the user, don't fail the prompt.
-                        await publish_event(
+                        # Drizzle push failed — surface it, don't fail the prompt.
+                        await app_errors.publish(
+                            factory,
                             project_id,
-                            "llm.chunk",
-                            {
-                                "message_id": str(assistant_message_id),
-                                "delta": (
-                                    f"\n\n*Файлы записаны в dev-контейнер, но `drizzle-kit push` "
-                                    f"завершился с кодом {drizzle_exit}. Проверь src/lib/db/schema.ts и "
-                                    f"подключение к Postgres.*\n\n"
-                                ),
-                            },
+                            assistant_message_id,
+                            category="schema",
+                            detail=(
+                                hot.get("drizzle_stderr_tail")
+                                or f"drizzle-kit push завершился с кодом {drizzle_exit}."
+                            ),
+                            file="src/lib/db/schema.ts",
+                        )
+                    elif probe_compile:
+                        # Files synced cleanly — Turbopack now recompiles async.
+                        # Probe for a compile error in the background so the card
+                        # arrives without holding up llm.done.
+                        _spawn_compile_probe(
+                            factory, project_id, assistant_message_id, project.slug
                         )
                 except Exception as hot_exc:
                     print(f"[PP] hot_reload failed: {hot_exc!r}", flush=True)
-                    await publish_event(
+                    await app_errors.publish(
+                        factory,
                         project_id,
-                        "llm.chunk",
-                        {
-                            "message_id": str(assistant_message_id),
-                            "delta": (
-                                f"\n\n*Снапшот сохранён в git, но синхронизация с dev-контейнером "
-                                f"не удалась: {hot_exc}. Нажми «Запустить» в верхней панели чтобы "
-                                f"проверить runtime.*\n\n"
-                            ),
-                        },
+                        assistant_message_id,
+                        category="runtime",
+                        title="Синхронизация с контейнером не удалась",
+                        detail=(
+                            f"Снапшот сохранён, но файлы не доехали до dev-контейнера: "
+                            f"{hot_exc}. Нажми «Запустить» в верхней панели, чтобы поднять "
+                            f"среду выполнения."
+                        ),
+                        file=None,
+                        fixable=False,
                     )
         else:
             # Модель ответила, но ни одного <file path="...">...</file> в выводе.

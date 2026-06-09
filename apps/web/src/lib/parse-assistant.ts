@@ -6,22 +6,63 @@
  * Если бэк-парсер обновляется — обновить тут.
  */
 
+export type AppErrorCategory = "build" | "compile" | "schema" | "runtime";
+
 export type AssistantPart =
   | { kind: "text"; text: string }
   | { kind: "file"; path: string; body: string; closed: boolean }
   // Surgical edit (`<edit path="...">` with SEARCH/REPLACE inside). Rendered as
   // a compact "Правка" chip, NOT as raw diff text — otherwise a follow-up edit
   // dumps the whole SEARCH/REPLACE block into the chat.
-  | { kind: "edit"; path: string; body: string; closed: boolean };
+  | { kind: "edit"; path: string; body: string; closed: boolean }
+  // App build/runtime failure (`<app-error category=… title=… file=… fixable=…>`
+  // detail `</app-error>`). Mirrors apps/api/src/omnia_api/services/app_errors.py.
+  // Rendered as a red error card with an optional "Починить" action.
+  | {
+      kind: "app-error";
+      category: AppErrorCategory;
+      title: string;
+      file: string | null;
+      fixable: boolean;
+      body: string;
+      closed: boolean;
+    };
 
-// Matches the opening tag of either an AI file block or a surgical edit block.
-// Mirrors apps/api/src/omnia_api/services/file_extractor.py (`<file>`/`<edit>`).
-const BLOCK_OPEN = /<(file|edit)\s+path="([^"]+)"\s*>/g;
+// Matches the opening tag of a file / edit / app-error block. The attribute
+// string is captured generically (group 2) and parsed per-tag below.
+// Mirrors apps/api file_extractor.py (`<file>`/`<edit>`) + app_errors.py.
+const BLOCK_OPEN = /<(file|edit|app-error)\b([^>]*)>/g;
+
+function getAttr(attrs: string, name: string): string | null {
+  const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
+  return m ? m[1] : null;
+}
+
+function makePart(
+  tag: "file" | "edit" | "app-error",
+  attrs: string,
+  body: string,
+  closed: boolean,
+): AssistantPart {
+  if (tag === "app-error") {
+    return {
+      kind: "app-error",
+      category: (getAttr(attrs, "category") ?? "build") as AppErrorCategory,
+      title: getAttr(attrs, "title") ?? "Ошибка приложения",
+      file: getAttr(attrs, "file"),
+      fixable: getAttr(attrs, "fixable") !== "0",
+      body,
+      closed,
+    };
+  }
+  return { kind: tag, path: getAttr(attrs, "path") ?? "", body, closed };
+}
 
 /**
- * Делит content на части в порядке появления. `<file>` и `<edit>` блоки
- * выносятся в свои части (UI рисует их как чипы, а не сырой текст). Незакрытый
- * блок в конце (типично во время стриминга) возвращается с `closed: false`.
+ * Делит content на части в порядке появления. `<file>` / `<edit>` / `<app-error>`
+ * блоки выносятся в свои части (UI рисует их как чипы / карточки, а не сырой
+ * текст). Незакрытый блок в конце (типично во время стриминга) возвращается с
+ * `closed: false`.
  */
 export function parseAssistantContent(content: string): AssistantPart[] {
   if (!content) return [];
@@ -32,10 +73,10 @@ export function parseAssistantContent(content: string): AssistantPart[] {
   BLOCK_OPEN.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = BLOCK_OPEN.exec(content)) !== null) {
-    const tag = match[1] as "file" | "edit";
+    const tag = match[1] as "file" | "edit" | "app-error";
+    const attrs = match[2];
     const openStart = match.index;
     const openEnd = openStart + match[0].length;
-    const path = match[2];
 
     if (openStart > cursor) {
       const text = content.slice(cursor, openStart);
@@ -45,17 +86,12 @@ export function parseAssistantContent(content: string): AssistantPart[] {
     const closeTag = `</${tag}>`;
     const closeIdx = content.indexOf(closeTag, openEnd);
     if (closeIdx === -1) {
-      parts.push({ kind: tag, path, body: content.slice(openEnd), closed: false });
+      parts.push(makePart(tag, attrs, content.slice(openEnd), false));
       cursor = content.length;
       break;
     }
 
-    parts.push({
-      kind: tag,
-      path,
-      body: content.slice(openEnd, closeIdx),
-      closed: true,
-    });
+    parts.push(makePart(tag, attrs, content.slice(openEnd, closeIdx), true));
     cursor = closeIdx + closeTag.length;
     BLOCK_OPEN.lastIndex = cursor;
   }

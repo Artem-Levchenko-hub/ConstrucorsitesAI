@@ -274,6 +274,12 @@ class Settings(BaseSettings):
     # USE_AUTO_STACK_ROUTING=false (discovery still recommends in the brief, but
     # the project stays static — old behaviour).
     use_auto_stack_routing: bool = Field(default=True)
+    # App-error cards (2026-06-09, owner P2). After a container-app build, surface
+    # build/compile/schema failures as structured cards in the chat (instead of
+    # plain italic notices) and probe the dev server for a Next.js compile error
+    # post hot-reload. OFF → original italic-text notices, no compile probe
+    # (instant rollback, R-10). Env: USE_ERROR_CARDS=false.
+    use_error_cards: bool = Field(default=True)
     # Max self-repair re-rolls before the gate gives up (and freeform falls
     # back to catalog). Each retry is one extra LLM call — keep small.
     acceptance_max_retries: int = Field(default=2)

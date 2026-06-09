@@ -42,6 +42,12 @@ export function ChatPanel({
     submit(text, modelId, selections);
   };
 
+  // «Починить» on an error card → submit a follow-up fix prompt through the
+  // normal pipeline (surgical edit / rebuild as the triage decides).
+  const handleFix = (prompt: string) => {
+    submit(prompt, modelId, []);
+  };
+
   // Determine streaming state from data: an assistant message with
   // tokens_out === null is mid-stream.
   const last = messages?.[messages.length - 1];
@@ -106,6 +112,7 @@ export function ChatPanel({
             message={m}
             streaming={m.id === streamingId}
             projectId={projectId}
+            onFix={handleFix}
           />
         ))}
       </div>
