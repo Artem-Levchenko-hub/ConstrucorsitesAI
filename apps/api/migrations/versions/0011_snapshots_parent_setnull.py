@@ -15,16 +15,19 @@ The FK name follows the metadata naming convention
 (fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s) ->
 fk_snapshots_parent_id_snapshots.
 
-Revision ID: 0011_snapshots_parent_fk_set_null
+Revision ID: 0011_snapshots_parent_setnull
 Revises: 0010_template_entity_stacks
 Create Date: 2026-06-09
+
+NOTE: revision id kept <= 32 chars — alembic_version.version_num is
+varchar(32), so a longer slug (e.g. ..._fk_set_null) overflows on stamp.
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0011_snapshots_parent_fk_set_null"
+revision = "0011_snapshots_parent_setnull"
 down_revision = "0010_template_entity_stacks"
 branch_labels = None
 depends_on = None
