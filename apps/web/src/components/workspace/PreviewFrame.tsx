@@ -392,6 +392,21 @@ export function PreviewFrame({ project }: { project: Project }) {
   const showStreamingCode =
     isStreaming && !selectedSnapshotId && isFullstack && !isEditTurn;
 
+  // Phase 0.4 — never present the bare starter scaffold as if it were the
+  // generated result. The starter snapshot is committed at project creation
+  // with no prompt_text (and no parent); if it is still the auto-shown head,
+  // no real generation has landed yet — fresh project, or a build that was
+  // interrupted before producing any snapshot. Rendering its iframe makes an
+  // empty template look like a finished site (the user thinks it "worked").
+  // For static projects we suppress it and fall through to the explicit
+  // await/empty status instead. `selectedSnapshotId` set → the user is
+  // deliberately inspecting the scaffold from the timeline, so allow that.
+  const headIsStarter =
+    !!headSnapshot &&
+    headSnapshot.prompt_text === null &&
+    headSnapshot.parent_id === null;
+  const suppressStarter = headIsStarter && !selectedSnapshotId && !isStreaming;
+
   return (
     <div className="flex flex-col h-full bg-surface-base">
       <div className="h-10 flex items-center justify-between px-4 gap-3">
@@ -708,7 +723,7 @@ export function PreviewFrame({ project }: { project: Project }) {
                         startMut.mutate();
                       }}
                     />
-                  ) : visible ? (
+                  ) : visible && !suppressStarter ? (
                     <motion.iframe
                       key={`${visible.id}-${iframeKey}`}
                       ref={iframeRef}
@@ -742,7 +757,7 @@ export function PreviewFrame({ project }: { project: Project }) {
                       }}
                     />
                   ) : null}
-                  {!visible && !isPending && !isFullstack && (
+                  {(!visible || suppressStarter) && !isPending && !isFullstack && (
                     <motion.div
                       key="empty"
                       initial={{ opacity: 0 }}
@@ -750,11 +765,12 @@ export function PreviewFrame({ project }: { project: Project }) {
                       className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center px-6"
                     >
                       <div className="text-sm text-fg-secondary">
-                        Здесь появится ваш сайт.
+                        Сайт ещё не сгенерирован.
                       </div>
                       <div className="text-xs text-fg-tertiary leading-5 max-w-xs">
-                        Отправьте первый промпт — мы сгенерируем код, закоммитим
-                        в git и сделаем скриншот.
+                        Опишите проект в чате — мы сгенерируем код, закоммитим в
+                        git и сделаем скриншот. Здесь появится готовый сайт, а не
+                        пустой шаблон.
                       </div>
                     </motion.div>
                   )}
