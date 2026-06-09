@@ -64,6 +64,32 @@ def _site_path(host: str) -> Path:
     return Path(get_settings().nginx_sites_dir) / f"{host}.conf"
 
 
+def _wildcard_cert_dir(host: str) -> str | None:
+    """A pre-issued WILDCARD cert covering `host`, if one exists.
+
+    Preview/prod hosts are `<single-label>.<suffix>` (e.g.
+    `myslug-dev.preview.lead-generator.ru`), all covered by one `*.<suffix>`
+    cert living at `<live_root>/<suffix>/`. When that cert is present we point
+    the host's HTTPS block straight at it and SKIP per-host acme — which is the
+    flaky bit: a failed issuance leaves an EMPTY fullchain, so `ensure_tls`
+    never writes the :443 block and the preview falls through to the catch-all
+    `*.preview` vhost → 502 "no live project". The wildcard is instant + can't
+    rate-limit or half-fail. Falls back to per-host acme when no wildcard exists
+    (e.g. sslip.io hosts). `live_root` overridable via OMNIA_WILDCARD_CERT_ROOT.
+    """
+    parent = host.split(".", 1)[1] if "." in host else ""
+    if not parent:
+        return None
+    root = os.getenv("OMNIA_WILDCARD_CERT_ROOT", "/etc/letsencrypt/live")
+    cert_dir = Path(root) / parent
+    try:
+        if (cert_dir / "fullchain.pem").exists() and (cert_dir / "privkey.pem").exists():
+            return str(cert_dir)
+    except OSError:
+        return None
+    return None
+
+
 def _proxy_location(port: int) -> str:
     # `$omnia_connection_upgrade` is defined once in conf.d/omnia-runtime.conf.
     # X-Frame-Options is hidden so the workspace can embed the preview iframe.
@@ -105,7 +131,9 @@ server {{
 
 
 def _https_block(host: str, port: int) -> str:
-    cert_dir = f"{get_settings().acme_certs_dir}/{host}"
+    # Prefer a pre-issued wildcard cert (instant, reliable); else the per-host
+    # acme cert dir.
+    cert_dir = _wildcard_cert_dir(host) or f"{get_settings().acme_certs_dir}/{host}"
     return f"""\
 # omnia auto-generated — {host} (HTTPS)
 server {{
@@ -149,6 +177,12 @@ async def _issue_cert(host: str) -> bool:
     so we don't gate on its exit code — `--install-cert` copies whatever cert
     acme.sh holds, and success is "the installed files exist afterwards".
     """
+    # A pre-issued wildcard cert covers this host → use it, skip acme entirely.
+    # This is the reliable path for `*.preview.<domain>` previews; per-host acme
+    # is only for hosts without a covering wildcard (e.g. sslip.io).
+    if _wildcard_cert_dir(host):
+        log.info("nginx.cert_wildcard", host=host)
+        return True
     s = get_settings()
     acme = os.path.expanduser("~/.acme.sh/acme.sh")
     # acme.sh's default working dir is ~/.acme.sh, which the unit's
