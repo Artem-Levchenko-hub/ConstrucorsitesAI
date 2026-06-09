@@ -14,6 +14,7 @@ from omnia_api.core.deps import SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.schemas.project import is_fullstack
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 
@@ -243,31 +244,47 @@ _INDEX_CANDIDATES = (
 
 
 async def _fullstack_redirect(project: Project) -> Response | None:
-    """For a fullstack project that has a finished deploy, redirect /p/<slug>
-    to the live prod URL so visitors actually see the running app — not the
-    "Приложение запускается" stub. Returns None if no deploy is available, so
-    the caller can fall through to `_preview_shell`.
+    """For a container project (fullstack / nextjs_entities), redirect /p/<slug>
+    to the LIVE app so visitors see it running — not the "Приложение
+    запускается" stub. Preference order:
+      1) a finished prod deploy → its prod_url (the canonical public site);
+      2) otherwise, if the dev container is running → its public dev-preview URL
+         (so the share link works immediately, before the user deploys).
+    Returns None only when nothing is live, so the caller falls through to
+    `_preview_shell`.
 
-    Best-effort: any orchestrator failure logs and returns None — the shell is
-    a perfectly safe fallback. The redirect is 302 (not 301) so a future deploy
-    URL change is picked up without browser cache lock-in. `?snapshot=...` and
-    `?inspect=1` are NEVER forwarded — those are dev/workspace-only concepts.
+    Best-effort: any orchestrator failure logs and returns None — the shell is a
+    safe fallback. Redirects are 302 (not 301) so the URL can change later (e.g.
+    dev-preview → prod after a deploy) without browser cache lock-in. `?snapshot`
+    / `?inspect=1` are NEVER forwarded — those are dev/workspace-only concepts.
     """
-    if project.template != "fullstack":
+    if not is_fullstack(project.template):
         return None
+    # 1) Canonical public URL once deployed.
     try:
         deploy = await orchestrator_client.get_deploy(project.id)
+        if deploy.get("phase") == "done" and deploy.get("prod_url"):
+            return RedirectResponse(
+                url=str(deploy["prod_url"]),
+                status_code=status.HTTP_302_FOUND,
+                headers={"Cache-Control": "no-cache"},
+            )
     except Exception as exc:
         # Best-effort: any orchestrator failure (timeout, 5xx, network) must
-        # NEVER block /p. Log + fall through to the shell.
+        # NEVER block /p. Log + fall through to the dev-preview check / shell.
         log.warning("public.deploy_lookup_failed slug=%s err=%s", project.slug, exc)
-        return None
-    if deploy.get("phase") == "done" and deploy.get("prod_url"):
-        return RedirectResponse(
-            url=str(deploy["prod_url"]),
-            status_code=status.HTTP_302_FOUND,
-            headers={"Cache-Control": "no-cache"},
-        )
+    # 2) Not deployed yet — send visitors to the running dev preview (publicly
+    #    reachable) so the share link isn't an eternal "запускается" stub.
+    try:
+        st = await orchestrator_client.get_status(project.id)
+        if st.get("state") == "running" and st.get("dev_url"):
+            return RedirectResponse(
+                url=str(st["dev_url"]),
+                status_code=status.HTTP_302_FOUND,
+                headers={"Cache-Control": "no-cache"},
+            )
+    except Exception as exc:
+        log.warning("public.status_lookup_failed slug=%s err=%s", project.slug, exc)
     return None
 
 
