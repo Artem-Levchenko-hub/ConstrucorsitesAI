@@ -12,7 +12,7 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 from minio import Minio
-from playwright.async_api import async_playwright
+from playwright.async_api import Page, async_playwright
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -94,6 +94,31 @@ async def _await_paint(page) -> None:
     except Exception:
         pass
     await page.wait_for_timeout(_RENDER_SETTLE_MS)
+
+
+# Bounded best-effort wait for a CONTAINER app's client-side data fetches to
+# settle before the shot. A generated dashboard renders its shell on first paint
+# but loads its lists / StatCards via a client fetch right after hydration — so
+# the fixed `_RENDER_SETTLE_MS` beat alone catches the empty Suspense skeleton,
+# not the real data, and the timeline thumbnail looks blank even though the live
+# app is fine. Container Next.js apps ship compiled Tailwind v4 and finite data
+# fetches, so `networkidle` actually fires once those finish. (Static freeform
+# pages must NOT use this — capture() loads the Tailwind *Play-CDN*, a perpetual
+# connection that keeps the network busy forever so networkidle never settles;
+# that is exactly why the static path sticks to `domcontentloaded`.) Bounded so
+# an app that long-polls client-side can't hang the capture — on timeout we just
+# shoot the current frame, i.e. the prior behaviour (R-10 fail-soft).
+_CONTAINER_NETWORKIDLE_MS = 3500
+
+
+async def _await_container_ready(page: Page) -> None:
+    """Let a live container app's post-hydration data fetches finish before the
+    screenshot. Best-effort: a timeout (or any error) falls through to the shot
+    instead of blocking it — never worse than the old skeleton-catching beat."""
+    try:
+        await page.wait_for_load_state("networkidle", timeout=_CONTAINER_NETWORKIDLE_MS)
+    except Exception:
+        pass
 
 
 async def capture(
@@ -242,6 +267,13 @@ async def _render_async(snapshot_id: str) -> None:
                         wait_until="domcontentloaded",
                         timeout=GOTO_TIMEOUT_MS,
                     )
+                    # A live container app paints its shell first, then fetches its
+                    # data client-side — wait for that to settle so the thumbnail
+                    # shows real content, not the empty skeleton. Static pages
+                    # render off disk with no such fetch (and load the Tailwind
+                    # Play-CDN, where networkidle never fires) → they skip it.
+                    if live_url is not None:
+                        await _await_container_ready(page)
                     # Same settle as capture(): fonts + images painted + JIT beat,
                     # and reduced_motion so reveal-animated content isn't opacity:0.
                     await _await_paint(page)

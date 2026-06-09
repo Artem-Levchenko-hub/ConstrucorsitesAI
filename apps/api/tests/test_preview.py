@@ -49,3 +49,31 @@ def test_container_next_matches_messages_router() -> None:
     from omnia_api.routers import messages
 
     assert preview.CONTAINER_NEXT == messages.CONTAINER_NEXT
+
+
+class _FakePage:
+    """Minimal stand-in capturing wait_for_load_state calls."""
+
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.calls: list[tuple[str, float | None]] = []
+        self._raises = raises
+
+    async def wait_for_load_state(self, state: str, **kwargs: object) -> None:
+        self.calls.append((state, kwargs.get("timeout")))  # type: ignore[arg-type]
+        if self._raises is not None:
+            raise self._raises
+
+
+async def test_await_container_ready_waits_networkidle() -> None:
+    """Container settle waits for networkidle with the bounded budget."""
+    page = _FakePage()
+    await preview._await_container_ready(page)
+    assert page.calls == [("networkidle", preview._CONTAINER_NETWORKIDLE_MS)]
+
+
+async def test_await_container_ready_swallows_timeout() -> None:
+    """A slow/long-polling app must never hang or fail the capture (R-10)."""
+    page = _FakePage(raises=RuntimeError("Timeout 3500ms exceeded"))
+    # Must not raise — falls through to the screenshot.
+    await preview._await_container_ready(page)
+    assert page.calls == [("networkidle", preview._CONTAINER_NETWORKIDLE_MS)]
