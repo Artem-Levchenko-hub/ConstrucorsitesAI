@@ -217,6 +217,47 @@ async def drop_schema(project_id: UUID) -> None:
     )
 
 
+async def archive_schema(project_id: UUID) -> None:
+    """Soft-delete the project's schema: rename it aside instead of dropping.
+
+    Rule 5 (no user data hard-dropped without a backup): on project teardown we
+    keep the rows for a grace window by renaming `proj_<id8>` →
+    `zdel_proj_<id8>`. The app can no longer reach the schema (its `DATABASE_URL`
+    pointed at the old name), so from the user's side the data is gone, but it is
+    recoverable by an admin rename-back. A later hard purge can call
+    :func:`drop_schema` on the archived name.
+
+    Idempotent (R-10): missing schema is success. Project ids are never reused,
+    so a re-run (the live schema already archived) is a clean no-op. The role is
+    left in place — harmless, and a fresh provision rotates its password.
+    """
+    short = _project_short_id(project_id)
+    schema_name = f"proj_{short}"
+    archived_name = f"zdel_proj_{short}"
+    schema_q = _quote_ident(schema_name)
+    archived_q = _quote_ident(archived_name)
+
+    pool = await _get_admin_pool()
+    async with pool.acquire() as conn:
+        live = await conn.fetchrow(
+            "SELECT 1 FROM information_schema.schemata WHERE schema_name = $1",
+            schema_name,
+        )
+        if live is not None:
+            # Clear any stale archive of the same project first, then rename.
+            await conn.execute(f"DROP SCHEMA IF EXISTS {archived_q} CASCADE")
+            await conn.execute(f"ALTER SCHEMA {schema_q} RENAME TO {archived_q}")
+
+    secret_file = Path(get_settings().secrets_root) / str(project_id) / "db.env"
+    secret_file.unlink(missing_ok=True)
+    log.info(
+        "postgres_admin.archived",
+        project_id=str(project_id),
+        schema=schema_name,
+        archived=archived_name,
+    )
+
+
 def load_existing_dsn(project_id: UUID) -> str | None:
     """Read back a previously persisted DSN from `secrets_root`.
 

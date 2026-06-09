@@ -13,7 +13,13 @@ from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.schemas.project import ProjectCreate, ProjectPublic, ProjectUpdate
+from omnia_api.schemas.project import (
+    ProjectCreate,
+    ProjectPublic,
+    ProjectUpdate,
+    is_fullstack,
+)
+from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.preset_classifier import classify_preset_sync
 from omnia_api.services.queue import enqueue_preview
@@ -167,8 +173,33 @@ async def update_project(
 async def delete_project(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> None:
+    """Delete a project the caller owns: tear down its runtime, drop its git
+    repo, then cascade-delete its rows.
+
+    Owner-scoping: a missing project is 404; someone else's project is 403 (the
+    caller is authenticated, so we can tell them it's simply not theirs).
+
+    Order is teardown-first and fail-closed (R-10): for a container-backed
+    project we ask the orchestrator to remove the container + archive the schema
+    *before* deleting the DB row. If the orchestrator is unreachable we raise
+    rather than delete — better a retryable error than an orphaned container
+    still serving the user's data. The orchestrator side is idempotent, so the
+    retry is safe.
+    """
     project = await session.get(Project, project_id)
-    if project is None or project.owner_id != current_user.id:
+    if project is None:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    if project.owner_id != current_user.id:
+        raise ApiError("forbidden", "not your project", status.HTTP_403_FORBIDDEN)
+
+    if is_fullstack(project.template):
+        # Containers/schema/nginx — idempotent teardown. Errors propagate
+        # (503/4xx) so the project row survives for a retry, no orphans.
+        await orchestrator_client.destroy(project.id, project.slug)
+
+    # Bare-repo tarball in MinIO (idempotent). Snapshots + messages cascade at
+    # the ORM layer when the project row goes.
+    await asyncio.to_thread(repo_svc.delete_repo, project.id)
+
     await session.delete(project)
     await session.commit()

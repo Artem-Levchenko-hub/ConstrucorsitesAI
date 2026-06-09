@@ -100,6 +100,18 @@ def init_repo(project_id: UUID, template_dir: Path, template_name: str) -> str:
         return str(commit_oid)
 
 
+def delete_repo(project_id: UUID) -> None:
+    """Remove the project's bare-repo tarball from MinIO. Idempotent: a missing
+    object (already deleted, or never created) is a no-op."""
+    client = get_minio_client()
+    try:
+        client.remove_object(_bucket(), _repo_key(project_id))
+    except S3Error as e:
+        if e.code in {"NoSuchKey", "NoSuchBucket"}:
+            return
+        raise
+
+
 def commit_files(
     project_id: UUID,
     files: dict[str, str],

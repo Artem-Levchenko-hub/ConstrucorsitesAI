@@ -1,11 +1,20 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, MoreVertical, Trash2 } from "lucide-react";
 import type { Project } from "@/lib/api/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatRelativeTime } from "@/lib/utils";
+import { DeleteProjectDialog } from "./DeleteProjectDialog";
 
 const TEMPLATE_LABEL: Record<Project["template"], string> = {
   blank: "Чистый холст",
@@ -17,12 +26,47 @@ const TEMPLATE_LABEL: Record<Project["template"], string> = {
 };
 
 export function ProjectCard({ project }: { project: Project }) {
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
   return (
-    <Link
-      href={`/projects/${project.id}`}
-      className="group focus:outline-none"
-    >
-      <Card className="h-full overflow-hidden hover:border-border-strong transition-colors">
+    <div className="group relative">
+      {/* Project menu — sibling of the navigation Link (not nested inside it),
+          so opening it / deleting never triggers a page navigation. */}
+      <div className="absolute right-2 top-2 z-10">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Действия с проектом"
+              className="h-8 w-8 bg-surface-raised/80 opacity-0 backdrop-blur transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              className="text-danger focus:text-danger"
+              onSelect={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="h-4 w-4" />
+              Удалить проект
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <DeleteProjectDialog
+        project={project}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+      />
+
+      <Link
+        href={`/projects/${project.id}`}
+        className="block focus:outline-none"
+      >
+        <Card className="h-full overflow-hidden hover:border-border-strong transition-colors">
         {/* Mini preview — the current snapshot's rendered screenshot (top fold).
             16:10 matches the 1280×800 preview viewport, so no distortion. */}
         <div className="relative aspect-[16/10] overflow-hidden border-b border-border-subtle bg-surface-base">
@@ -60,7 +104,8 @@ export function ProjectCard({ project }: { project: Project }) {
             Обновлён {formatRelativeTime(project.updated_at)}
           </div>
         </CardContent>
-      </Card>
-    </Link>
+        </Card>
+      </Link>
+    </div>
   );
 }

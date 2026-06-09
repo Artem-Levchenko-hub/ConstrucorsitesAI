@@ -113,3 +113,66 @@ def test_normalize_admin_dsn_strips_asyncpg_dialect() -> None:
 def test_escape_sql_literal_doubles_single_quotes() -> None:
     assert postgres_admin._escape_sql_literal("a'b") == "a''b"
     assert postgres_admin._escape_sql_literal("no quotes") == "no quotes"
+
+
+class _FakeConn:
+    def __init__(self, schema_present: bool) -> None:
+        self.executed: list[str] = []
+        self._present = schema_present
+
+    async def fetchrow(self, query: str, *args: object) -> object:
+        return (1,) if self._present else None
+
+    async def execute(self, query: str, *args: object) -> None:
+        self.executed.append(query)
+
+
+class _FakePool:
+    def __init__(self, conn: _FakeConn) -> None:
+        self._conn = conn
+
+    def acquire(self):  # type: ignore[no-untyped-def]
+        conn = self._conn
+
+        class _CM:
+            async def __aenter__(self_inner) -> _FakeConn:
+                return conn
+
+            async def __aexit__(self_inner, *exc: object) -> bool:
+                return False
+
+        return _CM()
+
+
+@pytest.mark.asyncio
+async def test_archive_schema_renames_live_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _FakeConn(schema_present=True)
+
+    async def _pool() -> _FakePool:
+        return _FakePool(conn)
+
+    monkeypatch.setattr(postgres_admin, "_get_admin_pool", _pool)
+    await postgres_admin.archive_schema(PROJECT_ID)
+
+    joined = " | ".join(conn.executed)
+    # Stale archive cleared, then live schema renamed aside (soft-delete).
+    assert 'DROP SCHEMA IF EXISTS "zdel_proj_01234567" CASCADE' in joined
+    assert 'ALTER SCHEMA "proj_01234567" RENAME TO "zdel_proj_01234567"' in joined
+
+
+@pytest.mark.asyncio
+async def test_archive_schema_noop_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _FakeConn(schema_present=False)
+
+    async def _pool() -> _FakePool:
+        return _FakePool(conn)
+
+    monkeypatch.setattr(postgres_admin, "_get_admin_pool", _pool)
+    await postgres_admin.archive_schema(PROJECT_ID)
+
+    # Nothing to archive → no DDL executed (idempotent re-run).
+    assert conn.executed == []

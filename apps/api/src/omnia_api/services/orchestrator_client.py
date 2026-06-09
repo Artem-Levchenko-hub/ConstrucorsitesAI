@@ -167,9 +167,18 @@ async def get_deploy(project_id: UUID) -> dict[str, Any]:
     return await _request("GET", f"/internal/projects/{project_id}/deploy")
 
 
-async def destroy(project_id: UUID) -> dict[str, Any]:
-    """POST /internal/projects/<uuid>/destroy — full teardown (CASCADE delete)."""
-    return await _request("POST", f"/internal/projects/{project_id}/destroy")
+async def destroy(project_id: UUID, slug: str) -> dict[str, Any]:
+    """POST /internal/projects/<uuid>/destroy?slug=<slug> — full teardown.
+
+    Removes dev+prod containers, releases ports, archives the per-project
+    Postgres schema, removes nginx vhosts. Idempotent on the orchestrator side,
+    so a retry after a partial failure is safe. `slug` is required as a query
+    param (orchestrator looks containers up by `omnia-dev-<slug>`)."""
+    return await _request(
+        "POST",
+        f"/internal/projects/{project_id}/destroy",
+        params={"slug": slug},
+    )
 
 
 async def get_logs(

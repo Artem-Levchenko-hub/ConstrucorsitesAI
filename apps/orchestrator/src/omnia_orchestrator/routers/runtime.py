@@ -15,6 +15,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header
 
+from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import (
     container_logs,
@@ -44,7 +45,10 @@ from omnia_orchestrator.schemas.runtime import (
 )
 from omnia_orchestrator.services import builder, deploy_state, nginx_writer
 from omnia_orchestrator.services.hibernate import record_activity
-from omnia_orchestrator.services.port_allocator import get_port_allocator
+from omnia_orchestrator.services.port_allocator import (
+    get_port_allocator,
+    get_prod_port_allocator,
+)
 from omnia_orchestrator.services.provisioner import provision as provision_svc
 
 router = APIRouter(prefix="/internal/projects", tags=["runtime"])
@@ -416,14 +420,34 @@ async def destroy(
     slug: str,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> dict[str, str]:
-    """Full cleanup: stop + remove container, release port.
+    """Full teardown of a project's runtime. Mirrors :func:`provision` in reverse.
 
-    PoC: doesn't drop Postgres schema or remove nginx site (sprint A1).
-    `slug` query param same rationale as `status`.
+    Removes the dev + prod containers, releases both ports, archives the
+    per-project Postgres schema (soft-delete — rule 5: user data is kept for a
+    grace window, not hard-dropped), and removes the dev + prod nginx vhosts.
+
+    Idempotent (R-10): every step is a no-op when its resource is already gone,
+    so apps/api can safely retry after a partial failure. `slug` query param has
+    the same rationale as `status`/`hot-reload` (no project_id↔name registry).
     """
     _verify_token(x_internal_token)
     from uuid import UUID
 
+    pid = UUID(project_id)
+
+    # 1. Containers — dev + prod. Missing is a no-op.
     await destroy_container(f"omnia-dev-{slug}")
-    await get_port_allocator().release(UUID(project_id))
+    await destroy_container(f"omnia-app-{slug}")
+
+    # 2. Ports — dev + prod pools.
+    await get_port_allocator().release(pid)
+    await get_prod_port_allocator().release(pid)
+
+    # 3. Per-project Postgres — soft archive (rename aside), keep data recoverable.
+    await postgres_admin.archive_schema(pid)
+
+    # 4. nginx vhosts — dev + prod. Missing site is a no-op.
+    await nginx_writer.unpublish(nginx_writer.dev_host(slug))
+    await nginx_writer.unpublish(nginx_writer.prod_host(slug))
+
     return {"state": "destroyed"}

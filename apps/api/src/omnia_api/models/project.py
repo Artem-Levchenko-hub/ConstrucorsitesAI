@@ -53,8 +53,12 @@ class Project(Base):
 
     __table_args__ = (
         CheckConstraint("char_length(name) BETWEEN 1 AND 100", name="ck_projects_name_length"),
+        # Keep in sync with migration 0010 + the `Template` literal in
+        # schemas/project.py. Was stale at the 4 static V1 values; the DB has
+        # allowed the container stacks since 0010.
         CheckConstraint(
-            "template IN ('blank', 'landing', 'portfolio', 'blog')",
+            "template IN ('blank', 'landing', 'portfolio', 'blog', "
+            "'fullstack', 'nextjs_entities', 'spa', 'tgbot', 'api')",
             name="ck_projects_template_allowed",
         ),
         Index("ix_projects_owner_id_created_at", "owner_id", "created_at"),
