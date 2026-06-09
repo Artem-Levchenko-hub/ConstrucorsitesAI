@@ -16,14 +16,17 @@ Routes follow `docs/01-api-contract.md` § "V2: Runtime + Deploy".
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, status
 
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.project import Project
+from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.project import orchestrator_template
 from omnia_api.schemas.runtime import (
     DeployRequest,
@@ -33,8 +36,19 @@ from omnia_api.schemas.runtime import (
     RuntimeStopRequest,
 )
 from omnia_api.services import orchestrator_client
+from omnia_api.services import repo as repo_svc
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["runtime"])
+
+# Container-backed templates whose dev container holds AI-generated files in its
+# writable layer (no bind mount). Canonical list lives in routers/messages.py
+# CONTAINER_NEXT; kept in sync. A recreated container (destroy+reprovision, host
+# reboot losing the layer, manual cleanup) comes up running the *baked template*
+# — the "Новый проект на Omnia.AI" starter — instead of the user's app, unless
+# we re-push the latest snapshot. start_runtime does exactly that.
+_CONTAINER_NEXT = ("fullstack", "nextjs_entities")
 
 
 async def _project_owned_by(
@@ -112,7 +126,50 @@ async def start_runtime(
         template=orch_template,
         tier="free",
     )
+
+    # E3 — "always works, never the silent starter". provision is idempotent and
+    # leaves an *existing* container's files untouched, but a recreated one boots
+    # from the baked template (the "Новый проект на Omnia.AI" starter). If this
+    # project has a generated snapshot, re-push its files so the user always sees
+    # their app, not the starter. Fail-soft: a resync hiccup must not turn a
+    # successful start into an error — git/MinIO stay canonical and the user can
+    # hit "Запустить" again.
+    if project.template in _CONTAINER_NEXT and project.current_snapshot_id:
+        await _resync_latest_snapshot(session, project)
+
     return _to_runtime_status(payload)
+
+
+async def _resync_latest_snapshot(session: SessionDep, project: Project) -> None:
+    """Re-push the latest snapshot's files into the (possibly freshly recreated)
+    dev container via orchestrator hot-reload, so an opened project shows its own
+    code rather than the baked template starter. Best-effort; never raises."""
+    try:
+        snap = await session.get(Snapshot, project.current_snapshot_id)
+        if snap is None:
+            return
+        files = await asyncio.to_thread(
+            repo_svc.read_files, project.id, snap.commit_sha
+        )
+        if not files:
+            return
+        result = await orchestrator_client.hot_reload(
+            project_id=project.id,
+            slug=project.slug,
+            files=files,
+        )
+        log.info(
+            "runtime.start_resync",
+            project_id=str(project.id),
+            files=len(files),
+            written=result.get("written"),
+        )
+    except Exception as exc:  # noqa: BLE001 — resync is best-effort
+        log.warning(
+            "runtime.start_resync_failed",
+            project_id=str(project.id),
+            err=str(exc),
+        )
 
 
 @router.get("/{project_id}/runtime/logs", response_model=RuntimeLogs)
