@@ -17,6 +17,7 @@ export function PromptInput({
   isStreaming,
   pendingPrompt,
   className,
+  textareaRef,
 }: {
   onSubmit: (text: string, selections: SelectedElement[]) => void;
   onCancel: () => void;
@@ -24,9 +25,14 @@ export function PromptInput({
   isStreaming: boolean;
   pendingPrompt: string | null;
   className?: string;
+  // Optional lifted ref so the parent can focus the input — used by the
+  // discovery "Другое" chip to hand the user the free-text field. Falls back to
+  // an internal ref when omitted, so existing call sites are unchanged.
+  textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
 }) {
   const [value, setValue] = useState("");
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const internalRef = useRef<HTMLTextAreaElement>(null);
+  const ref = textareaRef ?? internalRef;
 
   const selections = useInspectorStore((s) => s.selections);
   const setComment = useInspectorStore((s) => s.setComment);

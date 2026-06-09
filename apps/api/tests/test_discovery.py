@@ -129,6 +129,83 @@ async def test_gateway_5xx_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.action == ASK and result.message
 
 
+# ─── ASK quick-reply chips (P1) ──────────────────────────────────────────
+
+
+async def test_ask_returns_model_choices(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "ask",
+                    "message": "Нужна админка?",
+                    "choices": ["Да", "Нет"],
+                }
+            )
+        ),
+    )
+    result = await run_discovery([], "хочу crm", asked_count=0)
+    assert result.action == ASK
+    assert result.choices == ("Да", "Нет")
+    assert result.allow_custom is True  # free-text path always open
+
+
+async def test_ask_open_question_has_no_choices(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps({"action": "ask", "message": "Как ты это представляешь?"})
+        ),
+    )
+    result = await run_discovery([], "идея", asked_count=0)
+    assert result.action == ASK
+    assert result.choices == ()
+
+
+async def test_choices_are_clamped_and_deduped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Untrusted model output: ≤5 chips, length-capped, de-duped, junk dropped."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "ask",
+                    "message": "Стиль?",
+                    "choices": [
+                        "Премиум",
+                        "премиум",  # dup (case-insensitive)
+                        "  ",  # blank → dropped
+                        42,  # non-string → dropped
+                        "x" * 80,  # over-long → truncated to 40
+                        "A",
+                        "B",
+                        "C",
+                        "D",  # would be the 6th kept → dropped by cap
+                    ],
+                }
+            )
+        ),
+    )
+    result = await run_discovery([], "сайт", asked_count=0)
+    assert len(result.choices) <= 5
+    assert "Премиум" in result.choices
+    assert all(len(c) <= 40 for c in result.choices)
+    # case-insensitive dedup keeps a single "премиум"
+    assert sum(1 for c in result.choices if c.lower() == "премиум") == 1
+
+
+async def test_fallback_question_carries_paired_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a gateway failure the deterministic question for the 'tone' turn
+    (index 1) still ships its tappable chips, not just bare text."""
+    _install(monkeypatch, exc=RuntimeError("gateway down"))
+    result = await run_discovery([], "идея", asked_count=1)
+    assert result.action == ASK
+    assert "Премиум" in result.choices
+
+
 # ─── BUILD path ──────────────────────────────────────────────────────────
 
 

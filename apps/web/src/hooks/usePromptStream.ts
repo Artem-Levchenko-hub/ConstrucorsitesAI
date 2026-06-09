@@ -576,6 +576,17 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           ["turn-mode", projectId, message_id],
           resp.mode ?? "build",
         );
+        // Progressive-discovery quick replies: stash the chip answers for THIS
+        // question keyed by its message id. ChatPanel renders them under the
+        // streamed question (only while it's the latest message) so the user can
+        // tap an answer. Client-only cache — chips are a convenience for the live
+        // turn, not persisted; the free-text input is always there as a fallback.
+        if (resp.choices && resp.choices.length > 0) {
+          qc.setQueryData(["discovery-choices", projectId, message_id], {
+            choices: resp.choices,
+            allowCustom: resp.allow_custom ?? true,
+          });
+        }
       } catch (e) {
         // sendPrompt failed BEFORE the backend even spawned _process_prompt
         // — network error, 4xx (wallet_empty, not_found), 5xx, timeout.

@@ -197,6 +197,12 @@ export type PromptResponse = {
   // Optional so a stale frontend reading an older API still type-checks; the
   // hook defaults a missing value to "build".
   mode?: TurnMode;
+  // Progressive-discovery quick replies for a "clarify" turn: short tappable
+  // chip answers to the streamed question, plus whether the free-text path
+  // stays open. Absent / empty on build/edit turns. Optional → older API still
+  // type-checks.
+  choices?: string[];
+  allow_custom?: boolean;
 };
 
 export type ApiErrorCode =

@@ -676,8 +676,21 @@ async def post_prompt(
         if (discovery_ask or do_clarify)
         else ("build" if orchestrate else "edit")
     )
+    # Quick-reply chips ride on the ASK turn only — the workspace renders them
+    # under the streamed question so the user can tap an answer instead of typing.
+    if discovery_ask:
+        assert discovery_result is not None  # discovery_ask ⇒ result exists
+        ask_choices = list(discovery_result.choices)
+        allow_custom = discovery_result.allow_custom
+    else:
+        ask_choices = []
+        allow_custom = True
     return PromptResponse(
-        message_id=assistant_msg.id, snapshot_id=None, mode=turn_mode
+        message_id=assistant_msg.id,
+        snapshot_id=None,
+        mode=turn_mode,
+        choices=ask_choices,
+        allow_custom=allow_custom,
     )
 
 

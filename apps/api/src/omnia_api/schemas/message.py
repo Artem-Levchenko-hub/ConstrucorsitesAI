@@ -74,3 +74,8 @@ class PromptResponse(BaseModel):
     #   "edit"    — surgical, scoped change (cheap, preserves the rest of the page)
     #   "clarify" — no generation this turn; the server is asking questions first
     mode: Literal["build", "edit", "clarify"] = "build"
+    # Progressive-discovery quick replies for a "clarify" turn: short tappable
+    # chip answers to the question being streamed, plus whether a free-text
+    # ("Другое") path stays open. Empty on build/edit turns (no chips to show).
+    choices: list[str] = Field(default_factory=list)
+    allow_custom: bool = True

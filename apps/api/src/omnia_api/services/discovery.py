@@ -57,12 +57,19 @@ class DiscoveryResult:
     ``action`` is ASK (stream ``message`` as the next question, no build) or BUILD
     (run the generator with ``brief`` as the prompt). ``stack`` is the recommended
     stack id; ``message`` on a BUILD is a short friendly "собираю…" note.
+
+    On an ASK, ``choices`` are 0–5 short quick-reply answers the UI renders as
+    tappable chips beneath the question; ``allow_custom`` (always True) tells the
+    UI to keep a free-text "Другое" path open so a chip never traps the user.
+    Empty ``choices`` is fine — the question is just answered by typing.
     """
 
     action: str
     message: str
     brief: str
     stack: str
+    choices: tuple[str, ...] = ()
+    allow_custom: bool = True
 
 
 def wants_build_now(prompt: str) -> bool:
@@ -95,7 +102,13 @@ _SYSTEM = (
     "подходящее под entities.\n\n"
     "ФОРМАТ ОТВЕТА — СТРОГО один JSON-объект на одной строке, без пояснений и кода.\n"
     "Если спрашиваешь:\n"
-    '{"action":"ask","message":"<один короткий вопрос на русском>"}\n'
+    '{"action":"ask","message":"<один короткий вопрос на русском>",'
+    '"choices":["<2–5 коротких вариантов ответа, 1–3 слова каждый>"]}\n'
+    "  — choices это подсказки-кнопки под вопросом (например для «Нужна "
+    "админка?» → [\"Да\",\"Нет\"]; для стиля → [\"Премиум\",\"Дружелюбный\","
+    "\"Строгий\"]). Давай их КОГДА ответ сводится к выбору. Если вопрос "
+    "открытый (например «как ты это представляешь?») — верни choices:[] "
+    "(пустой). Пользователь всегда может ответить и своим текстом.\n"
     "Если пора строить:\n"
     '{"action":"build","message":"<короткая фраза: «Отлично, собираю…»>",'
     '"brief":"<сжатый бриф для генератора на русском: тип продукта, цель, '
@@ -104,17 +117,65 @@ _SYSTEM = (
 )
 
 
+# Deterministic fallback questions + matching quick-reply chips, keyed by how
+# many questions we've already asked (no randomness — keeps the turn resumable).
+# Chips parallel ``_FALLBACK_QUESTIONS`` index-for-index; an empty tuple means
+# "answer by typing" (open question).
+_FALLBACK_QUESTIONS: tuple[str, ...] = (
+    "Расскажите в двух словах — что за проект и какая у него главная цель?",
+    "Кто ваша аудитория и какое настроение ближе — премиум, дружелюбное или строгое?",
+    "Какие разделы или возможности обязательно нужны?",
+    "Есть фирменные цвета, логотип или сайт-референс, который вам нравится?",
+)
+_FALLBACK_CHOICES: tuple[tuple[str, ...], ...] = (
+    (),
+    ("Премиум", "Дружелюбное", "Строгое"),
+    (),
+    (),
+)
+
+
 def _fallback_question(asked_count: int) -> str:
-    """Deterministic next question when the gateway/parse fails — one at a time,
-    keyed by how many we've already asked (no randomness — keeps resumable)."""
-    questions = [
-        "Расскажите в двух словах — что за проект и какая у него главная цель?",
-        "Кто ваша аудитория и какое настроение ближе — премиум, дружелюбное или строгое?",
-        "Какие разделы или возможности обязательно нужны?",
-        "Есть фирменные цвета, логотип или сайт-референс, который вам нравится?",
-    ]
-    idx = min(asked_count, len(questions) - 1)
-    return questions[idx]
+    """Deterministic next question when the gateway/parse fails — one at a time."""
+    idx = min(asked_count, len(_FALLBACK_QUESTIONS) - 1)
+    return _FALLBACK_QUESTIONS[idx]
+
+
+def _fallback_choices(asked_count: int) -> tuple[str, ...]:
+    """Quick-reply chips paired with the deterministic fallback question."""
+    idx = min(asked_count, len(_FALLBACK_CHOICES) - 1)
+    return _FALLBACK_CHOICES[idx]
+
+
+# Quick-reply chips are untrusted model output headed into the UI: cap the count
+# and per-chip length (R-10 fail-fast at the boundary) so a misbehaving model
+# can't flood the chat with a wall of long "buttons".
+_MAX_CHOICES = 5
+_MAX_CHOICE_LEN = 40
+
+
+def _clean_choices(raw: object) -> tuple[str, ...]:
+    """Normalise the model's ``choices`` into ≤5 short, de-duped chip labels.
+    Anything non-list / unparseable degrades to no chips (the question still
+    stands on its own — typing always works)."""
+    if not isinstance(raw, list):
+        return ()
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        label = item.strip()[:_MAX_CHOICE_LEN].strip()
+        if not label:
+            continue
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(label)
+        if len(out) >= _MAX_CHOICES:
+            break
+    return tuple(out)
 
 
 def _fallback_brief(history: list[dict[str, str]], latest_prompt: str) -> str:
@@ -237,13 +298,20 @@ async def run_discovery(
             message = "Отлично — собираю первый вариант. Это займёт минуту."
         return DiscoveryResult(action=BUILD, message=message, brief=brief, stack=stack)
 
-    # ASK path — one more question.
+    # ASK path — one more question (+ optional quick-reply chips).
     message = ""
+    choices: tuple[str, ...] = ()
     if parsed and action == ASK:
         message = str(parsed.get("message") or "").strip()
+        choices = _clean_choices(parsed.get("choices"))
     if not message:
+        # Gateway/parse failed → deterministic question AND its paired chips, so
+        # the fallback turn still offers tappable answers, not just bare text.
         message = _fallback_question(asked_count)
-    return DiscoveryResult(action=ASK, message=message, brief="", stack=stack)
+        choices = _fallback_choices(asked_count)
+    return DiscoveryResult(
+        action=ASK, message=message, brief="", stack=stack, choices=choices
+    )
 
 
 __all__ = [

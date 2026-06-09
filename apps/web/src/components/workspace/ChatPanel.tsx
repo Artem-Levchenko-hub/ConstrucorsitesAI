@@ -1,15 +1,18 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PanelLeftClose } from "lucide-react";
 import { listMessages } from "@/lib/api/messages";
 import type { SelectedElement } from "@/lib/api/types";
 import { ChatMessage } from "./ChatMessage";
 import { PromptInput } from "./PromptInput";
+import { DiscoveryChips } from "./DiscoveryChips";
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
+
+type DiscoveryChoices = { choices: string[]; allowCustom: boolean };
 
 export function ChatPanel({
   projectId,
@@ -28,6 +31,8 @@ export function ChatPanel({
   );
   const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const qc = useQueryClient();
 
   const { data: messages, isPending } = useQuery({
     queryKey: ["messages", projectId],
@@ -48,6 +53,16 @@ export function ChatPanel({
     submit(prompt, modelId, []);
   };
 
+  // Discovery chip tapped → submit it as the user's answer to the question.
+  const handlePickChoice = (choice: string) => {
+    submit(choice, modelId, []);
+  };
+
+  // «Другое» chip → hand the user the free-text input instead of a preset.
+  const handleCustom = () => {
+    inputRef.current?.focus();
+  };
+
   // Determine streaming state from data: an assistant message with
   // tokens_out === null is mid-stream.
   const last = messages?.[messages.length - 1];
@@ -55,12 +70,33 @@ export function ChatPanel({
     last?.role === "assistant" && last.tokens_out === null;
   const streamingId = isStreaming ? last?.id : null;
 
+  // Progressive-discovery quick replies (P1): chips belong to the LATEST
+  // assistant question. Reading the client cache the prompt hook populated on
+  // the POST response (keyed by that message id) — via useQuery so the render
+  // reacts the instant the hook stashes them. Showing only when the question is
+  // the last message means the chips vanish on their own once the user answers.
+  const lastAssistantId =
+    last?.role === "assistant" && !last.id.startsWith("__opt_")
+      ? last.id
+      : null;
+  const { data: chips } = useQuery<DiscoveryChoices | null>({
+    queryKey: ["discovery-choices", projectId, lastAssistantId],
+    queryFn: () =>
+      qc.getQueryData<DiscoveryChoices>([
+        "discovery-choices",
+        projectId,
+        lastAssistantId,
+      ]) ?? null,
+    enabled: !!lastAssistantId,
+    staleTime: Infinity,
+  });
+
   // Auto-scroll on new messages / chunks.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages?.length, last?.content]);
+  }, [messages?.length, last?.content, chips]);
 
   return (
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
@@ -115,6 +151,15 @@ export function ChatPanel({
             onFix={handleFix}
           />
         ))}
+
+        {chips && chips.choices.length > 0 && (
+          <DiscoveryChips
+            choices={chips.choices}
+            allowCustom={chips.allowCustom}
+            onPick={handlePickChoice}
+            onCustom={handleCustom}
+          />
+        )}
       </div>
 
       <div className="shrink-0">
@@ -124,6 +169,7 @@ export function ChatPanel({
           onCancelPending={cancelPending}
           isStreaming={isStreaming}
           pendingPrompt={pendingPrompt}
+          textareaRef={inputRef}
         />
       </div>
     </div>
