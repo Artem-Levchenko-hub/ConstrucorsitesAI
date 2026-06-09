@@ -122,6 +122,15 @@ def extract_files(answer: str) -> dict[str, str]:
     for match in _FILE_BLOCK.finditer(answer):
         raw_path = match.group("path").strip()
         body = match.group("body")
+        # A whitespace-only body (incl. a lone "\n") is the model's way of asking
+        # to DROP a file — the app writer empties the starter src/app/page.tsx
+        # exactly so, to hand "/" to (app)/page.tsx. Normalise to "" so the
+        # downstream git-commit (unlink) and orchestrator hot_reload (rm) both
+        # treat it as delete-intent; a 1-byte "\n" would otherwise be written as
+        # a broken module and crash the dev server ("default export is not a
+        # React Component").
+        if body.strip() == "":
+            body = ""
         if not is_safe_path(raw_path):
             raise UnsafePathError(f"unsafe file path: {raw_path!r}")
         if _looks_like_unchanged_stub(body):

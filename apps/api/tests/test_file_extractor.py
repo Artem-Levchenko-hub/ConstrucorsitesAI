@@ -30,6 +30,21 @@ def test_extract_files_skips_placeholder_stub() -> None:
     assert extract_files(answer) == {}
 
 
+def test_extract_files_whitespace_body_is_delete_intent() -> None:
+    # The app writer empties the starter page.tsx; the model often leaves a
+    # newline inside the tag. Whitespace-only body must normalise to "" so
+    # downstream treats it as a delete (not a 1-byte broken module).
+    assert extract_files('<file path="src/app/page.tsx"></file>') == {
+        "src/app/page.tsx": ""
+    }
+    assert extract_files('<file path="src/app/page.tsx">\n</file>') == {
+        "src/app/page.tsx": ""
+    }
+    assert extract_files('<file path="src/app/page.tsx">\n   \n</file>') == {
+        "src/app/page.tsx": ""
+    }
+
+
 # ---------------------------------------------------------------------------
 # extract_edits — new parser
 # ---------------------------------------------------------------------------
