@@ -10,6 +10,7 @@
  */
 
 import { eq } from "drizzle-orm";
+import { AuthError } from "next-auth";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth, hashPassword, signIn } from "@/lib/auth";
@@ -62,7 +63,17 @@ export default async function SignUpPage({
 
     // Immediately sign in. `redirectTo` triggers a server-side navigation
     // through Auth.js — survives the action -> response boundary cleanly.
-    await signIn("credentials", { email, password, redirectTo: next });
+    // If sign-in somehow fails right after the account was created, an
+    // AuthError lands the user on /signin instead of crashing; the success
+    // path throws NEXT_REDIRECT (not an AuthError) and is re-thrown.
+    try {
+      await signIn("credentials", { email, password, redirectTo: next });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        redirect(`/signin?next=${encodeURIComponent(next)}`);
+      }
+      throw error;
+    }
   }
 
   const errorMessage: Record<string, string> = {
