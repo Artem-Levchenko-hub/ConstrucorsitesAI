@@ -142,7 +142,16 @@ async def post_style_patch(
     is_container = project.template in _CONTAINER_NEXT
     if is_container:
         target_path = "src/app/globals.css"
+        # Container apps only commit AI-generated files to git; the fixed
+        # globals.css lives in the image. Read the committed copy if a prior
+        # edit already persisted it, else fetch the live one from the container.
         src = files.get(target_path)
+        from_container = False
+        if src is None:
+            src = await orchestrator_client.read_container_file(
+                project_id, project.slug, target_path
+            )
+            from_container = True
         if src is None:
             raise ApiError(
                 "no_index",
@@ -152,6 +161,13 @@ async def post_style_patch(
         new_content = ov.apply_css_overrides(
             src, tokens=tokens, element_rules=element_rules
         )
+        # First container-sourced edit: there is no prior repo copy of
+        # globals.css, so the unchanged-content guard below would never trip;
+        # the merge always adds the managed block on a fresh read.
+        if from_container and new_content == src:
+            raise ApiError(
+                "empty_patch", "no effective changes", status.HTTP_400_BAD_REQUEST
+            )
     else:
         index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
         if index_path is None:
@@ -167,7 +183,10 @@ async def post_style_patch(
             element_rules=element_rules,
             font_links=font_links,
         )
-    if new_content == files[target_path]:
+    # No-op guard. For a container app whose globals.css was just read live (not
+    # in `files`), the fresh-read case is already handled above; `.get` keeps
+    # this from KeyError-ing on that path.
+    if new_content == files.get(target_path):
         raise ApiError(
             "empty_patch", "no effective changes", status.HTTP_400_BAD_REQUEST
         )

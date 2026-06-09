@@ -236,6 +236,27 @@ async def runtime_status(
     )
 
 
+async def read_container_file(
+    project_id: UUID, slug: str, path: str
+) -> str | None:
+    """GET /internal/projects/{id}/read-file — read a whitelisted fixed file
+    (e.g. ``src/app/globals.css``) straight from the running dev container.
+
+    The project git repo only tracks AI-generated files; the template's fixed
+    files live solely in the container image. Returns the file content, or
+    ``None`` if it isn't present / the container is down (caller falls back).
+    """
+    resp = await _request(
+        "GET",
+        f"/internal/projects/{project_id}/read-file",
+        params={"slug": slug, "path": path},
+    )
+    if not resp.get("found"):
+        return None
+    content = resp.get("content")
+    return content if isinstance(content, str) else None
+
+
 async def hot_reload(
     project_id: UUID, slug: str, files: dict[str, str]
 ) -> dict[str, Any]:

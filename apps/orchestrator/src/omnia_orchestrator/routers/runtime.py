@@ -57,6 +57,12 @@ from omnia_orchestrator.services.runtime_probe import probe_runtime_error
 
 router = APIRouter(prefix="/internal/projects", tags=["runtime"])
 
+# Fixed template files (globals.css, the component kit, layout) are baked into
+# the container image and never committed to the project git repo. The direct
+# style-patch endpoint needs the current globals.css to append its managed
+# override block, so we expose a narrow, read-only door — strictly whitelisted.
+_READABLE_FILES = frozenset({"src/app/globals.css"})
+
 
 def _verify_token(token: str | None) -> None:
     expected = get_settings().internal_token.get_secret_value()
@@ -281,6 +287,36 @@ async def hot_reload(
         response["drizzle_exit_code"] = drizzle_result["exit_code"]
         response["drizzle_stderr_tail"] = drizzle_result["stderr"][-500:]
     return response
+
+
+@router.get("/{project_id}/read-file")
+async def read_file(
+    project_id: str,
+    slug: str,
+    path: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """Read a single whitelisted file from the running dev container.
+
+    Only the fixed ``globals.css`` is exposed (see ``_READABLE_FILES``). Returns
+    ``{found, content}``; a missing file / stopped container yields
+    ``found=False`` rather than an error, so the caller can fall back cleanly.
+    """
+    _verify_token(x_internal_token)
+    if path not in _READABLE_FILES:
+        raise OrchestratorError(
+            code="validation_failed",
+            message=f"path not readable: {path}",
+            status_code=403,
+        )
+    container_name = f"omnia-dev-{slug}"
+    try:
+        result = await exec_cmd(container_name, cmd=["cat", path], workdir="/app")
+    except OrchestratorError:
+        # Container not running / not found — let the caller fall back.
+        return {"found": False, "content": ""}
+    found = result["exit_code"] == "0"
+    return {"found": found, "content": result["stdout"] if found else ""}
 
 
 def _deploy_record_to_response(rec: deploy_state.DeployRecord) -> DeployResponse:
