@@ -216,6 +216,16 @@
 - Идея на следующий запуск: <чтобы следующий запуск не гадал>
 -->
 
+## 2026-06-09 07:35–07:48 MSK — копи-фикс: empty-state /projects под zero-friction (остаток-хвост P1)
+- Статус: DONE (1-строчный копи-фикс, доставлен на прод; не новая эпика — конец окна)
+- Контекст: прошлый прогон (07:25–07:40, c95ef13) убрал template-пикер, но пометил «Владельцу утром»: empty-state на странице `/projects` всё ещё пишет «…выберите шаблон, и пишите промпт» — стале после удаления пикера. Взял как малую завершаемую задачу (07:35, у конца окна — большую P4-эпику не начинать).
+- Файлы: `apps/web/src/components/projects/ProjectsList.tsx` (empty-state текст: «выберите шаблон, и пишите промпт» → «дайте ему название — дальше Omnia сама расспросит о задаче в чате и соберёт приложение»).
+- E2E: браузер-сессия playwright-MCP была ЗАНЯТА другой сессией (`Browser is already in use`) → верифицировал деплой grep'ом собранного бандла В web-контейнере: НОВАЯ фраза «расспросит» count=1 в client-чанке `page-ea6b1a78….js` И server-чанке `page.js`; СТАРАЯ «выберите шаблон» count=0 в обоих → правка реально в проде. site https 200, web Up (healthy).
+- Проверка: web `npm run typecheck` ЗЕЛЁНЫЙ (tsc --noEmit, 0 ошибок); eslint ProjectsList.tsx чисто (0 вывода). canon: только UI-копи, без логики/абстракций.
+- Доставка: commit 76c824a | push main ✓ (PAT — gh протух) | deploy: prod `git fetch + merge --ff-only` (ff чистый) → `docker compose -p full up -d --build web`. Health: web Up (healthy), site 200. Фронт-онли — api/worker/orchestrator не трогал.
+- Владельцу утром: (1) Мелкий копи-долг с прошлого захода закрыт — empty-state /projects теперь согласован с zero-friction (нет «выберите шаблон»). Откат: revert 76c824a + rebuild web. (2) Браузерный E2E этого захода — через grep бандла (playwright был занят соседней сессией); если нужно глазами — зайти новым аккаунтом на /projects с нулём проектов. (3) Остаётся высший незакрытый приоритет — **P4** (live code-stream синхронно в превью для full + анимированный въезд картинок + полировка «магии»; settle-полировка container-скрина) — большая эпика, не влезла в конец окна.
+- Идея на следующий запуск: P4 (синхронный live code-stream→рендер для full-аппов, память `omnia_realtime_build_ux`; settle-полировка container-thumbnail скрина — ждать главный контент, не сплэш; анимированный въезд картинок). Деплой web = долгий Next-build (~7мин) детачем, project full. Push PAT. ssh ТОЛЬКО PowerShell+alias lh-server; для grep с кириллицей/кавычками — b64-врап remote-команды (PowerShell рвёт `2>/dev/null` и вложенные кавычки → `Out-File C:\dev\null`).
+
 ## 2026-06-09 07:25–07:40 MSK — P1 финал: убран template-пикер из NewProjectDialog (zero-friction)
 - Статус: DONE (последний остаток P1 закрыт — теперь P1 закрыт ПОЛНОСТЬЮ)
 - Файлы: `apps/web/src/components/projects/NewProjectDialog.tsx` (удалён TEMPLATES-грид + state `template` + неиспользуемые импорты `ProjectTemplate`/`cn`; create шлёт `template:"blank"`; описание диалога переписано под дискавери).
