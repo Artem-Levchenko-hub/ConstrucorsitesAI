@@ -65,29 +65,34 @@ def _site_path(host: str) -> Path:
 
 
 def _wildcard_cert_dir(host: str) -> str | None:
-    """A pre-issued WILDCARD cert covering `host`, if one exists.
+    """The pre-issued WILDCARD cert dir covering `host`, or None.
 
-    Preview/prod hosts are `<single-label>.<suffix>` (e.g.
-    `myslug-dev.preview.lead-generator.ru`), all covered by one `*.<suffix>`
-    cert living at `<live_root>/<suffix>/`. When that cert is present we point
-    the host's HTTPS block straight at it and SKIP per-host acme — which is the
-    flaky bit: a failed issuance leaves an EMPTY fullchain, so `ensure_tls`
-    never writes the :443 block and the preview falls through to the catch-all
-    `*.preview` vhost → 502 "no live project". The wildcard is instant + can't
-    rate-limit or half-fail. Falls back to per-host acme when no wildcard exists
-    (e.g. sslip.io hosts). `live_root` overridable via OMNIA_WILDCARD_CERT_ROOT.
+    Dev/prod hosts are `<single-label>.<runtime_host_suffix>` (e.g.
+    `myslug-dev.preview.lead-generator.ru`), all covered by one
+    `*.<suffix>` cert. Pointing the HTTPS block straight at that cert and
+    SKIPPING per-host acme removes the flaky bit: a half-failed acme issuance
+    leaves an EMPTY fullchain, so `ensure_tls` never writes the :443 block and
+    the preview falls through to the catch-all `*.preview` vhost → 502 "no live
+    project". The wildcard is instant and can't rate-limit or half-fail.
+
+    OPT-IN via env `OMNIA_WILDCARD_CERT_ROOT` (the letsencrypt *live* dir, e.g.
+    `/etc/letsencrypt/live`); unset → keep per-host acme (back-compat, and the
+    only option for hosts without a covering wildcard, e.g. sslip.io). We do NOT
+    stat the cert: the orchestrator user typically can't read /etc/letsencrypt
+    (root:ssl-cert 0750), but nginx can — so a wrong/missing path is caught by
+    `nginx -t` on reload and `ensure_tls` fails soft back to the HTTP block.
+    The cert dir is `<root>/<suffix>` (the standard certbot/acme layout).
     """
-    parent = host.split(".", 1)[1] if "." in host else ""
-    if not parent:
+    root = os.getenv("OMNIA_WILDCARD_CERT_ROOT", "").rstrip("/")
+    if not root:
         return None
-    root = os.getenv("OMNIA_WILDCARD_CERT_ROOT", "/etc/letsencrypt/live")
-    cert_dir = Path(root) / parent
-    try:
-        if (cert_dir / "fullchain.pem").exists() and (cert_dir / "privkey.pem").exists():
-            return str(cert_dir)
-    except OSError:
+    suffix = get_settings().runtime_host_suffix
+    if not host.endswith("." + suffix):
         return None
-    return None
+    label = host[: -(len(suffix) + 1)]
+    if not label or "." in label:  # a *.<suffix> wildcard covers exactly ONE label
+        return None
+    return f"{root}/{suffix}"
 
 
 def _proxy_location(port: int) -> str:
