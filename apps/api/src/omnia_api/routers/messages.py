@@ -822,6 +822,55 @@ _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 CONTAINER_NEXT = ("fullstack", "nextjs_entities")
 
 
+# A6a — managed auth columns the AI must never drop when it rewrites
+# src/lib/db/schema.ts for its own entity. The template ships them (+ a comment)
+# yet the model still strips them, which breaks signup/signin (insert/select on a
+# column that no longer exists). We re-inject them deterministically.
+_AUTH_USERS_COLUMNS = (
+    '  passwordHash: text("password_hash"),\n'
+    '  role: text("role").notNull().default("user"),\n'
+)
+
+
+def _preserve_auth_schema(files: dict[str, str]) -> dict[str, str]:
+    """Re-inject users.passwordHash / users.role into a rewritten Drizzle schema.
+
+    Container-backed Next apps authenticate via a Credentials provider that reads
+    ``users.passwordHash`` and ``users.role``; signup writes ``passwordHash``.
+    When the model rewrites ``src/lib/db/schema.ts`` to add its own tables it
+    frequently drops these infra columns from the ``users`` pgTable, so every
+    signup/login then fails with a missing-column error. This guard restores them.
+
+    Idempotent + fail-soft: only acts on a schema.ts that declares ``users`` but
+    has lost ``password_hash``; on any parse surprise it returns ``files`` as-is.
+    """
+    path = "src/lib/db/schema.ts"
+    src = files.get(path)
+    if not src or "password_hash" in src or 'pgTable("users"' not in src:
+        return files
+    import re
+
+    m = re.search(r'export const users\s*=\s*pgTable\(\s*"users"\s*,\s*\{', src)
+    if not m:
+        return files
+    # Walk braces from just after the opening `{` to find this object's close,
+    # tolerating nested `{ ... }` (e.g. timestamp("x", { withTimezone: true })).
+    depth, i, n = 1, m.end(), len(src)
+    while i < n and depth > 0:
+        ch = src[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        i += 1
+    if depth != 0:
+        return files
+    close_brace = i - 1  # index of the object's closing `}`
+    patched = src[:close_brace] + _AUTH_USERS_COLUMNS + src[close_brace:]
+    print("[PP] auth_schema_guard: re-injected users.passwordHash/role", flush=True)
+    return {**files, path: patched}
+
+
 def _extract_files_and_edits(
     accumulated: str, base_files: dict[str, str]
 ) -> tuple[dict[str, str], list[str]]:
@@ -2868,6 +2917,11 @@ async def _process_prompt(
 
         new_snapshot_id: UUID | None = None
         if files:
+            # A6a — restore the managed auth columns if the model dropped them
+            # while rewriting the Drizzle schema, so signup/signin keep working.
+            # Runs before commit + hot_reload so git and the container agree.
+            if project_template in CONTAINER_NEXT:
+                files = _preserve_auth_schema(files)
             # Carry the user's direct style edits (omnia-overrides block + font
             # links) across this regeneration so manual color/font tweaks aren't
             # lost when the model rewrites index.html. Fail-soft, like the guards.
