@@ -248,10 +248,13 @@ async def _fullstack_redirect(project: Project) -> Response | None:
     to the LIVE app so visitors see it running — not the "Приложение
     запускается" stub. Preference order:
       1) a finished prod deploy → its prod_url (the canonical public site);
-      2) otherwise, if the dev container is running → its public dev-preview URL
-         (so the share link works immediately, before the user deploys).
-    Returns None only when nothing is live, so the caller falls through to
-    `_preview_shell`.
+      2) otherwise, if the project has a provisioned dev container → its public
+         dev-preview URL. This holds even when the container is HIBERNATED
+         (state stopped/paused): the dev vhost wakes it on the first hit
+         (scale-from-zero, Phase 0.3), so a stranger opening the share link of a
+         sleeping app gets the waking page → live app, not a dead shell.
+    Returns None only when the project has no container at all (or a dead one),
+    so the caller falls through to `_preview_shell`.
 
     Best-effort: any orchestrator failure logs and returns None — the shell is a
     safe fallback. Redirects are 302 (not 301) so the URL can change later (e.g.
@@ -273,11 +276,16 @@ async def _fullstack_redirect(project: Project) -> Response | None:
         # Best-effort: any orchestrator failure (timeout, 5xx, network) must
         # NEVER block /p. Log + fall through to the dev-preview check / shell.
         log.warning("public.deploy_lookup_failed slug=%s err=%s", project.slug, exc)
-    # 2) Not deployed yet — send visitors to the running dev preview (publicly
+    # 2) Not deployed yet — send visitors to the dev preview (publicly
     #    reachable) so the share link isn't an eternal "запускается" stub.
+    #    A provisioned container reports a dev_url even while hibernated; its
+    #    nginx vhost wakes it on the first request (Phase 0.3), so any wakeable
+    #    state redirects there. Only a project with no container (dev_url None)
+    #    or a dead one (state failed) falls through to the shell.
+    _WAKEABLE_STATES = {"running", "stopped", "paused", "provisioning"}
     try:
         st = await orchestrator_client.get_status(project.id)
-        if st.get("state") == "running" and st.get("dev_url"):
+        if st.get("dev_url") and st.get("state") in _WAKEABLE_STATES:
             return RedirectResponse(
                 url=str(st["dev_url"]),
                 status_code=status.HTTP_302_FOUND,
