@@ -376,7 +376,11 @@ def _build_writer_messages(
     suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
     if brief:
-        tail = writer_tmpl.format(brief=brief)
+        # NB: plain str.replace, NOT str.format — the APP template embeds literal
+        # CSS/JSX braces (e.g. `<style>{":root{...}"}</style>`) that str.format
+        # would misread as fields and crash with KeyError. Only `{brief}` is a
+        # placeholder; everything else stays verbatim.
+        tail = writer_tmpl.replace("{brief}", brief)
         content = f"{user_prompt}\n\n{tail}{suffix}"
     else:
         content = f"{user_prompt}{suffix}"

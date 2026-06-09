@@ -203,7 +203,11 @@ async def run_discovery(
     }
     parsed: dict[str, object] | None = None
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        # Discovery runs INSIDE the POST /prompt request, and the web client caps
+        # that POST at 30s. Bound the gateway call well under that (R-10 fail
+        # fast) so a slow/cold gateway degrades to a deterministic question/brief
+        # within the window instead of blowing the client timeout with an error.
+        async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(url, json=payload)
         if resp.status_code < 400:
             body = resp.json()
