@@ -34,7 +34,8 @@ export function ProjectsList() {
       <div className="rounded-lg border border-dashed border-border-default bg-surface-raised p-12 text-center space-y-3">
         <h3 className="text-lg font-medium">Здесь будет ваш первый проект</h3>
         <p className="text-sm text-fg-secondary max-w-md mx-auto">
-          Нажмите «Новый проект» сверху, выберите шаблон, и пишите промпт.
+          Нажмите «Новый проект» сверху и дайте ему название — дальше Omnia
+          сама расспросит о задаче в чате и соберёт приложение.
         </p>
       </div>
     );
