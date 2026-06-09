@@ -18,11 +18,11 @@ export interface StatCardProps {
 /** KPI tile for dashboards. A row of these is the canonical dashboard top. */
 export function StatCard({ label, value, icon, hint, trend, className }: StatCardProps) {
   return (
-    <Card className={cn("gap-0 p-5", className)}>
+    <Card className={cn("hover-lift gap-0 p-5", className)}>
       <div className="flex items-start justify-between gap-3">
         <p className="text-sm font-medium text-muted-foreground">{label}</p>
         {icon ? (
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-5">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary [&_svg]:size-5">
             {icon}
           </span>
         ) : null}

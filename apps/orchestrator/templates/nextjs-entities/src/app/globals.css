@@ -203,3 +203,38 @@
 @media (hover: hover) {
   .hover-lift:hover { transform: translateY(-3px); box-shadow: 0 16px 40px -18px rgba(15, 23, 42, .25); }
 }
+
+/* ── Premium elevation + canvas (awwwards-grade depth for app surfaces) ────────
+ * Soft, layered shadows = the "floating panel" look of Linear / Stripe / Vercel
+ * dashboards. `.elev-1` is the resting card; `.elev-2` is raised / hover. */
+:root {
+  --elevation-1: 0 1px 2px -1px oklch(0.21 0.01 285 / 0.07), 0 4px 12px -4px oklch(0.21 0.01 285 / 0.08);
+  --elevation-2: 0 2px 6px -2px oklch(0.21 0.01 285 / 0.10), 0 14px 36px -10px oklch(0.21 0.01 285 / 0.14);
+}
+.dark {
+  --elevation-1: 0 1px 2px -1px oklch(0 0 0 / 0.5), 0 4px 12px -4px oklch(0 0 0 / 0.4);
+  --elevation-2: 0 2px 6px -2px oklch(0 0 0 / 0.6), 0 14px 36px -10px oklch(0 0 0 / 0.55);
+}
+.elev-1 { box-shadow: var(--elevation-1); }
+.elev-2 { box-shadow: var(--elevation-2); }
+
+@layer base {
+  /* Faint top glow tied to the brand hue — the canvas isn't dead-flat. */
+  body {
+    background-image: radial-gradient(110% 55% at 50% -12%, color-mix(in oklch, var(--ring) 5%, transparent), transparent 55%);
+    background-attachment: fixed;
+  }
+}
+
+/* Staggered entrance — children rise in sequence on mount (KPI rows, grids,
+ * lists). Add `stagger` to the wrapping grid/flex. Reduced-motion safe. */
+@media (prefers-reduced-motion: no-preference) {
+  .stagger > * { animation: omnia-fade-up .5s cubic-bezier(.16, 1, .3, 1) both; }
+  .stagger > *:nth-child(2) { animation-delay: .05s; }
+  .stagger > *:nth-child(3) { animation-delay: .10s; }
+  .stagger > *:nth-child(4) { animation-delay: .15s; }
+  .stagger > *:nth-child(5) { animation-delay: .20s; }
+  .stagger > *:nth-child(6) { animation-delay: .25s; }
+  .stagger > *:nth-child(7) { animation-delay: .30s; }
+  .stagger > *:nth-child(8) { animation-delay: .35s; }
+}
