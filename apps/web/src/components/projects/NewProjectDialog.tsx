@@ -6,7 +6,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { createProject } from "@/lib/api/projects";
-import type { ProjectTemplate } from "@/lib/api/types";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,37 +18,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
 
-const TEMPLATES: Array<{
-  id: ProjectTemplate;
-  label: string;
-  hint: string;
-}> = [
-  { id: "blank", label: "Пустой", hint: "Начать с чистого листа" },
-  { id: "landing", label: "Лендинг", hint: "Hero · фичи · CTA · форма" },
-  { id: "portfolio", label: "Портфолио", hint: "Грид работ + о себе" },
-  { id: "blog", label: "Блог", hint: "Список постов + страница поста" },
-  // V2 Phase A — runs as a real Next.js + Postgres + Drizzle dev container
-  // managed by the orchestrator. Promptable as a SaaS, not a static site.
-  {
-    id: "fullstack",
-    label: "Full-stack SaaS",
-    hint: "Next.js + Postgres + Drizzle, live dev-сервер",
-  },
-  // Base44-style: fixed entity-engine backend (БД + auth + CRUD из коробки),
-  // AI описывает сущности и верстает фронт — бэкенд не пишет.
-  {
-    id: "nextjs_entities",
-    label: "SaaS на сущностях",
-    hint: "Бэкенд из коробки: сущности → авто-CRUD, auth",
-  },
-];
-
+// Zero-friction: no template picker. The project starts blank; the in-chat
+// discovery + auto stack-routing decide the real stack (static landing vs
+// full SaaS) from what the user describes, then provision it. One click → name
+// → workspace.
 export function NewProjectDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState<ProjectTemplate>("landing");
   const router = useRouter();
   const qc = useQueryClient();
 
@@ -70,7 +46,7 @@ export function NewProjectDialog() {
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-    mutation.mutate({ name: name.trim(), template });
+    mutation.mutate({ name: name.trim(), template: "blank" });
   };
 
   return (
@@ -85,7 +61,7 @@ export function NewProjectDialog() {
         <DialogHeader>
           <DialogTitle>Новый проект</DialogTitle>
           <DialogDescription>
-            Выберите шаблон и дайте название. Можно менять промптом потом.
+            Дайте название — остальное Omnia выяснит в чате и соберёт под вас.
           </DialogDescription>
         </DialogHeader>
 
@@ -99,30 +75,6 @@ export function NewProjectDialog() {
               placeholder="Кофейня в Казани"
               autoFocus
             />
-          </div>
-
-          <div className="space-y-2">
-            <Label>Шаблон</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {TEMPLATES.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setTemplate(t.id)}
-                  className={cn(
-                    "rounded-md border p-3 text-left transition-colors",
-                    template === t.id
-                      ? "border-accent bg-accent-subtle"
-                      : "border-border-default hover:border-border-strong",
-                  )}
-                >
-                  <div className="text-sm font-medium">{t.label}</div>
-                  <div className="text-xs text-fg-tertiary mt-0.5">
-                    {t.hint}
-                  </div>
-                </button>
-              ))}
-            </div>
           </div>
 
           <DialogFooter>
