@@ -21,8 +21,10 @@ down (it is shared with other tenants).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+from contextlib import suppress
 from pathlib import Path
 
 import structlog
@@ -98,6 +100,12 @@ def _wildcard_cert_dir(host: str) -> str | None:
 def _proxy_location(port: int) -> str:
     # `$omnia_connection_upgrade` is defined once in conf.d/omnia-runtime.conf.
     # X-Frame-Options is hidden so the workspace can embed the preview iframe.
+    #
+    # Wake-on-request: a hibernated container leaves nothing on 127.0.0.1:<port>,
+    # so the proxy_pass connection is refused → 502. `proxy_intercept_errors`
+    # routes that to @omnia_waking, which boots the container and returns a
+    # self-refreshing "waking up" page instead of a raw Bad Gateway. Once the
+    # app is up the proxy_pass succeeds and @omnia_waking is never reached.
     return f"""\
     location / {{
         proxy_pass http://127.0.0.1:{port};
@@ -110,6 +118,24 @@ def _proxy_location(port: int) -> str:
         proxy_set_header Connection $omnia_connection_upgrade;
         proxy_read_timeout 86400;
         proxy_hide_header X-Frame-Options;
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @omnia_waking;
+    }}
+
+{_wake_location()}"""
+
+
+def _wake_location() -> str:
+    """Internal fallback that boots a hibernated upstream. Reached only when
+    `location /` 502s. Forwards the original Host so the orchestrator can map
+    the hostname back to its dev/prod container (see routers/ingress.py)."""
+    target = get_settings().orchestrator_wake_target
+    return f"""\
+    location @omnia_waking {{
+        proxy_pass http://{target}/_omnia/wake;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Omnia-Forwarded-Uri $request_uri;
     }}"""
 
 
@@ -327,7 +353,6 @@ def publish_tls_in_background(host: str, port: int) -> None:
     out of band; the optimistic `https://` URL the caller returns starts
     working as soon as the cert lands (overlaps Next.js cold start anyway).
     """
-    import asyncio
 
     async def _go() -> None:
         try:
@@ -338,6 +363,91 @@ def publish_tls_in_background(host: str, port: int) -> None:
     task = asyncio.create_task(_go())
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
+
+
+_SERVER_NAME_RE = re.compile(r"server_name\s+([^;\s]+)\s*;")
+_PROXY_PORT_RE = re.compile(r"proxy_pass\s+http://127\.0\.0\.1:(\d+)\s*;")
+
+
+def _rebuild_conf(text: str) -> str | None:
+    """Rebuild a vhost's text with the current template, preserving its host,
+    upstream port and TLS mode. Returns None when the file isn't a recognizable
+    omnia proxy vhost (no host / no upstream port) — caller skips it untouched.
+    """
+    host_m = _SERVER_NAME_RE.search(text)
+    port_m = _PROXY_PORT_RE.search(text)
+    if not host_m or not port_m:
+        return None
+    host = host_m.group(1)
+    port = int(port_m.group(1))
+    is_tls = "listen 443" in text
+    return _https_block(host, port) if is_tls else _http_block(host, port)
+
+
+def _rewrite_legacy_confs(sites_dir: Path) -> dict[Path, str]:
+    """Rewrite every legacy conf in `sites_dir` in place; return {path: old}
+    backups for the ones changed. Sync (blocking FS) — call via a thread.
+
+    Idempotent: a conf already carrying `@omnia_waking`, or one we can't parse,
+    is left untouched and not backed up.
+    """
+    backups: dict[Path, str] = {}
+    if not sites_dir.is_dir():
+        return backups
+    for path in sorted(sites_dir.glob("*.conf")):
+        try:
+            old = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "@omnia_waking" in old:
+            continue  # already on the new template
+        new = _rebuild_conf(old)
+        if new is None or new == old:
+            continue
+        try:
+            path.write_text(new, encoding="utf-8")
+            backups[path] = old
+        except OSError as exc:
+            log.warning("nginx.refresh_write_failed", path=str(path), err=str(exc))
+    return backups
+
+
+def _restore_confs(backups: dict[Path, str]) -> None:
+    """Revert each conf to its backed-up bytes. Sync — call via a thread."""
+    for path, old in backups.items():
+        with suppress(OSError):
+            path.write_text(old, encoding="utf-8")
+
+
+async def refresh_vhosts() -> int:
+    """Re-render every existing omnia vhost with the current template, so a
+    template change (e.g. wake-on-request) reaches previews provisioned before
+    the upgrade — without re-running provision or re-issuing certs.
+
+    Idempotent: a conf already carrying `@omnia_waking` is skipped, so repeat
+    startups are no-ops. Fail-soft (R-10): files are rewritten first, then a
+    single `nginx -t` gates the reload; if the config is invalid EVERY file is
+    restored to its prior bytes and nginx is reloaded back to the known-good
+    state. A broken template therefore can never take the shared box down —
+    worst case is "no upgrade this round".
+
+    Returns the number of vhosts upgraded.
+    """
+    sites_dir = Path(get_settings().nginx_sites_dir)
+    backups = await asyncio.to_thread(_rewrite_legacy_confs, sites_dir)
+    if not backups:
+        return 0
+
+    res = await _reload()
+    if res.ok:
+        log.info("nginx.refresh_vhosts", upgraded=len(backups))
+        return len(backups)
+
+    # Invalid config — roll every file back and reload to the prior good state.
+    await asyncio.to_thread(_restore_confs, backups)
+    await _reload()
+    log.warning("nginx.refresh_vhosts_rolled_back", stderr=res.stderr[-300:])
+    return 0
 
 
 async def unpublish(host: str) -> None:

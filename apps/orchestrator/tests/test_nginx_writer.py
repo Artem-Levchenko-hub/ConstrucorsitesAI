@@ -124,3 +124,121 @@ def test_proxy_location_carries_websocket_upgrade() -> None:
     assert "X-Forwarded-Proto $scheme" in block
     # X-Frame-Options hidden so the workspace can iframe the preview.
     assert "proxy_hide_header X-Frame-Options" in block
+
+
+# ---------- wake-on-request (scale-from-zero) ----------
+
+
+def test_proxy_location_intercepts_502_to_wake() -> None:
+    """A hibernated upstream 502s; without intercept the user sees Bad Gateway
+    instead of the waking page."""
+    block = nginx_writer._proxy_location(3200)
+    assert "proxy_intercept_errors on" in block
+    assert "error_page 502 503 504 = @omnia_waking" in block
+    assert "location @omnia_waking" in block
+    assert "/_omnia/wake" in block
+
+
+def test_blocks_embed_wake_fallback() -> None:
+    """Both HTTP-only and HTTPS blocks must carry the @omnia_waking location so
+    wake-on-request works before AND after the TLS upgrade."""
+    for block in (
+        nginx_writer._http_block("t.example.com", 3200),
+        nginx_writer._https_block("t.example.com", 3200),
+    ):
+        assert "location @omnia_waking" in block
+        assert "/_omnia/wake" in block
+
+
+def test_rebuild_conf_upgrades_legacy_vhost() -> None:
+    """A pre-wake conf is re-rendered with the wake fallback, preserving host,
+    port and TLS mode."""
+    legacy = (
+        "server {\n"
+        "    listen 443 ssl;\n"
+        "    server_name old-app-dev.preview.omniadevelop.ru;\n"
+        "    location / { proxy_pass http://127.0.0.1:3271; }\n"
+        "}\n"
+    )
+    out = nginx_writer._rebuild_conf(legacy)
+    assert out is not None
+    assert "server_name old-app-dev.preview.omniadevelop.ru" in out
+    assert "proxy_pass http://127.0.0.1:3271" in out
+    assert "listen 443 ssl" in out  # TLS mode preserved
+    assert "@omnia_waking" in out
+
+
+def test_rebuild_conf_skips_unrecognized() -> None:
+    """A conf with no upstream port isn't ours — leave it untouched (None)."""
+    assert nginx_writer._rebuild_conf("server { listen 80; }\n") is None
+
+
+async def test_refresh_vhosts_idempotent_and_upgrades(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """refresh_vhosts upgrades legacy confs once and skips already-upgraded
+    ones; the reload is gated, so we stub it green."""
+    import omnia_orchestrator.services.nginx_writer as nw
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    async def _ok() -> CmdResult:
+        return CmdResult(rc=0, stdout="", stderr="")
+
+    monkeypatch.setattr(nw, "_reload", _ok)
+
+    legacy = tmp_path / "a-dev.preview.omniadevelop.ru.conf"
+    legacy.write_text(
+        "server {\n  listen 80;\n  server_name a-dev.preview.omniadevelop.ru;\n"
+        "  location / { proxy_pass http://127.0.0.1:3300; }\n}\n",
+        encoding="utf-8",
+    )
+
+    first = await nw.refresh_vhosts()
+    assert first == 1
+    assert "@omnia_waking" in legacy.read_text(encoding="utf-8")
+
+    # Second pass is a no-op (already carries the fallback).
+    second = await nw.refresh_vhosts()
+    assert second == 0
+
+
+async def test_refresh_vhosts_rolls_back_on_bad_config(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If nginx -t rejects the new render, every file reverts to its prior
+    bytes — a broken template can't take the shared box down."""
+    import omnia_orchestrator.services.nginx_writer as nw
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    calls = {"n": 0}
+
+    async def _fail_then_ok() -> CmdResult:
+        # First call (the gate) fails; the rollback reload succeeds.
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return CmdResult(rc=1, stdout="", stderr="nginx: bad config")
+        return CmdResult(rc=0, stdout="", stderr="")
+
+    monkeypatch.setattr(nw, "_reload", _fail_then_ok)
+
+    conf = tmp_path / "b-dev.preview.omniadevelop.ru.conf"
+    original = (
+        "server {\n  listen 80;\n  server_name b-dev.preview.omniadevelop.ru;\n"
+        "  location / { proxy_pass http://127.0.0.1:3301; }\n}\n"
+    )
+    conf.write_text(original, encoding="utf-8")
+
+    upgraded = await nw.refresh_vhosts()
+    assert upgraded == 0
+    # Reverted byte-for-byte.
+    assert conf.read_text(encoding="utf-8") == original

@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     #   dev preview → "{slug}-dev.{suffix}"   prod deploy → "{slug}.{suffix}"
     runtime_host_suffix: str = Field(default="170-168-72-200.sslip.io")
 
+    # Where the per-project nginx vhost forwards a 502 (dead/hibernated
+    # upstream) so the wake-on-request interstitial can boot the container and
+    # serve a "waking up" page instead of a raw Bad Gateway. This is the
+    # orchestrator's own HTTP bind, reached over loopback from the shared nginx.
+    orchestrator_wake_target: str = Field(default="127.0.0.1:8003")
+
     # Per-host Let's Encrypt (HTTP-01 via webroot). No DNS API token needed
     # because sslip.io hosts already resolve to us. Fail-soft: if a cert can't
     # be issued the site stays HTTP-only rather than failing the whole flow.

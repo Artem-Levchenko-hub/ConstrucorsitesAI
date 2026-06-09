@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
@@ -18,15 +19,24 @@ from omnia_orchestrator.core.errors import (
     unhandled_error_handler,
 )
 from omnia_orchestrator.core.sentry import init_sentry
-from omnia_orchestrator.routers import health, runtime
+from omnia_orchestrator.routers import health, ingress, runtime
+from omnia_orchestrator.services import nginx_writer
 from omnia_orchestrator.services.hibernate import (
     start_hibernate_loop,
     stop_hibernate_loop,
 )
 
+_log = structlog.get_logger("omnia_orchestrator.main")
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Upgrade vhosts provisioned before wake-on-request landed. Fail-soft: a
+    # broken render rolls back and never takes the shared nginx down.
+    try:
+        await nginx_writer.refresh_vhosts()
+    except Exception as exc:  # never block startup on a best-effort migration
+        _log.warning("startup.refresh_vhosts_failed", err=str(exc))
     await start_hibernate_loop()
     try:
         yield
@@ -54,6 +64,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(runtime.router)
+    app.include_router(ingress.router)
 
     return app
 

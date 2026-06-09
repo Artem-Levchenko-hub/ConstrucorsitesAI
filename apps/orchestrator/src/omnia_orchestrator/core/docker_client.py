@@ -220,7 +220,10 @@ async def find_project_container(project_id: str, *, kind: str = "dev") -> str |
 
 
 async def container_status(name: str) -> dict[str, str]:
-    """Return {state, id, port} where state ∈ {running, paused, stopped, not_found}."""
+    """Return {state, id, port, project_id} where state ∈ {running, paused,
+    stopped, not_found}. `project_id` is the `omnia.project_id` label ("" when
+    absent) — the wake-on-request ingress needs it to reset the idle timer
+    without a second docker round-trip."""
     log.info("docker.container_status", name=name)
 
     def _do() -> dict[str, str]:
@@ -228,14 +231,20 @@ async def container_status(name: str) -> dict[str, str]:
         try:
             c = client.containers.get(name)
         except docker.errors.NotFound:
-            return {"state": "not_found", "id": "", "port": ""}
+            return {"state": "not_found", "id": "", "port": "", "project_id": ""}
         ports = c.attrs.get("NetworkSettings", {}).get("Ports", {}) or {}
         host_port = ""
         for bindings in ports.values():
             if bindings:
                 host_port = str(bindings[0].get("HostPort", ""))
                 break
-        return {"state": c.status, "id": c.id, "port": host_port}
+        project_id = (c.labels or {}).get("omnia.project_id", "")
+        return {
+            "state": c.status,
+            "id": c.id,
+            "port": host_port,
+            "project_id": project_id,
+        }
 
     return await asyncio.to_thread(_do)
 
