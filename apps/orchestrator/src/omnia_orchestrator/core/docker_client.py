@@ -281,10 +281,12 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
     Returns a small summary {written: int, total_bytes: int, dropped: list-of-paths}.
 
     Safety: refuses any path with `..`, leading `/`, or escaping `dest_root`.
-    Empty content (`""`) means "delete this file" — we write a zero-length
-    file rather than removing; the file_extractor on the api side already
-    treats empty as delete-intent, but here we keep a sentinel so a future
-    audit (`docker exec ls -la`) shows the intent without a separate exec.
+    Empty content (`""`) means "delete this file" (mirrors the api repo layer,
+    which unlinks empty-content files). We DELETE it (`rm -f`) rather than write
+    a zero-length file: a 0-byte source module is not a no-op to the framework —
+    e.g. an empty `src/app/page.tsx` still resolves for "/" and clashes with
+    `(app)/page.tsx`, crashing the dev server with "default export is not a React
+    Component". The app writer relies on this to drop the starter page.
 
     Missing container = explicit OrchestratorError (caller should handle).
     """
@@ -313,6 +315,7 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
             )
 
         dropped: list[str] = []
+        to_delete: list[str] = []
         written = 0
         total_bytes = 0
 
@@ -332,6 +335,13 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
                 joined = posixpath.normpath(posixpath.join(dest_root, norm))
                 if not (joined == dest_root or joined.startswith(dest_root + "/")):
                     dropped.append(raw_path)
+                    continue
+
+                # Empty content = delete-intent: remove the file after the tar is
+                # applied (put_archive can only add/overwrite, not delete). A
+                # 0-byte source file would be a broken module, not a no-op.
+                if content == "":
+                    to_delete.append(joined)
                     continue
 
                 # Add missing parent dirs as tar entries so put_archive
@@ -360,29 +370,54 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
                 written += 1
                 total_bytes += len(data)
 
-        buf.seek(0)
-        try:
-            ok = c.put_archive(path=dest_root, data=buf.getvalue())
-        except docker.errors.APIError as exc:
-            raise OrchestratorError(
-                code="container_failure",
-                message=f"put_archive failed for {name}: {exc}",
-                status_code=500,
-            ) from exc
-        if not ok:
-            raise OrchestratorError(
-                code="container_failure",
-                message=f"put_archive returned False for {name}",
-                status_code=500,
-            )
+        # Only push an archive when there's something to write — an all-deletes
+        # batch produces an empty tar that put_archive would reject.
+        if written > 0:
+            buf.seek(0)
+            try:
+                ok = c.put_archive(path=dest_root, data=buf.getvalue())
+            except docker.errors.APIError as exc:
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"put_archive failed for {name}: {exc}",
+                    status_code=500,
+                ) from exc
+            if not ok:
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"put_archive returned False for {name}",
+                    status_code=500,
+                )
 
-        return {"written": written, "total_bytes": total_bytes, "dropped": dropped}
+        # Apply deletes (empty-content paths). Best-effort: a delete failure must
+        # not fail the whole hot-reload — the files that were written still land.
+        deleted = 0
+        if to_delete:
+            try:
+                res = c.exec_run(["rm", "-f", *to_delete], user="1000:1000")
+                if getattr(res, "exit_code", 0) in (0, None):
+                    deleted = len(to_delete)
+                else:
+                    log.warning(
+                        "docker.write_files.delete_nonzero",
+                        name=name, paths=to_delete, exit=res.exit_code,
+                    )
+            except docker.errors.APIError as exc:
+                log.warning("docker.write_files.delete_failed", name=name, err=str(exc))
+
+        return {
+            "written": written,
+            "total_bytes": total_bytes,
+            "dropped": dropped,
+            "deleted": deleted,
+        }
 
     raw = await asyncio.to_thread(_do)
     # Coerce types for the response (mypy: dict[str,object] → dict[str,str|int|list]).
     return {
         "written": str(raw["written"]),
         "total_bytes": str(raw["total_bytes"]),
+        "deleted": str(raw["deleted"]),
         "dropped": ",".join(raw["dropped"]) if raw["dropped"] else "",  # type: ignore[arg-type]
     }
 
