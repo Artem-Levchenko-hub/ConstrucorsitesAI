@@ -128,14 +128,20 @@ def _proxy_location(port: int) -> str:
 def _wake_location() -> str:
     """Internal fallback that boots a hibernated upstream. Reached only when
     `location /` 502s. Forwards the original Host so the orchestrator can map
-    the hostname back to its dev/prod container (see routers/ingress.py)."""
+    the hostname back to its dev/prod container (see routers/ingress.py).
+
+    nginx forbids a literal URI part in `proxy_pass` inside a NAMED location,
+    so the target is built into a variable — the variable form is allowed and
+    proxies to exactly that address (no $uri appended, which is what we want:
+    the orchestrator keys on Host, not path). 127.0.0.1 needs no resolver."""
     target = get_settings().orchestrator_wake_target
     return f"""\
     location @omnia_waking {{
-        proxy_pass http://{target}/_omnia/wake;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Omnia-Forwarded-Uri $request_uri;
+        set $omnia_wake_target http://{target}/_omnia/wake;
+        proxy_pass $omnia_wake_target;
     }}"""
 
 
