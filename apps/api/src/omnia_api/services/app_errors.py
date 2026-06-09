@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from omnia_api.core.redis import publish_event
 from omnia_api.models.message import Message
 
-ErrorCategory = Literal["build", "compile", "schema", "runtime"]
+ErrorCategory = Literal["build", "compile", "schema", "runtime", "client"]
 
 # Human title per category — shown bold on the card when the caller doesn't pass
 # a more specific one.
@@ -35,6 +35,7 @@ _DEFAULT_TITLE: dict[str, str] = {
     "compile": "Ошибка компиляции",
     "schema": "Ошибка миграции базы данных",
     "runtime": "Ошибка среды выполнения",
+    "client": "Ошибка в браузере",
 }
 
 
@@ -103,6 +104,39 @@ async def publish(
     except Exception as exc:
         # Live event is best-effort — the card is already persisted above.
         print(f"[app_errors] publish failed: {exc!r}", flush=True)
+
+
+def client_card_signature(message: str, source: str, line: int) -> tuple[str, str | None]:
+    """Title + file locator for a client-side JS error card.
+
+    Title = the error's first line; file = ``filename:line`` (just the basename,
+    full URLs are noisy). Used both to render the card and to dedup it — the same
+    broken preview re-fires the error on every reload.
+    """
+    first = message.strip().splitlines()[0] if message.strip() else ""
+    title = first[:140] if first else "JavaScript-ошибка"
+    file: str | None = None
+    if source:
+        name = source.rsplit("/", 1)[-1].split("?", 1)[0]
+        file = f"{name}:{line}" if line else name
+    return title, file
+
+
+def has_client_card(content: str, title: str, file: str | None) -> bool:
+    """True if a client-error card with this title/file is already in the message.
+
+    Conservative dedup (R-10): we'd rather skip an occasional genuine card than
+    spam the chat with the same error on every preview reload. Requires the
+    ``client`` category plus the sanitised title (and file, when present) to all
+    appear — a cross-card substring collision can only ever *suppress* a card.
+    """
+    if 'category="client"' not in content:
+        return False
+    if _attr(title) not in content:
+        return False
+    if file is not None and _attr(file) not in content:
+        return False
+    return True
 
 
 def _attr(value: str) -> str:

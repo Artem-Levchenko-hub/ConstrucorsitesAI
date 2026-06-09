@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,7 +33,12 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
-from omnia_api.schemas.message import MessagePublic, PromptRequest, PromptResponse
+from omnia_api.schemas.message import (
+    ClientErrorReport,
+    MessagePublic,
+    PromptRequest,
+    PromptResponse,
+)
 from omnia_api.services import (
     app_errors,
     image_edit,
@@ -405,6 +410,67 @@ async def _ensure_owner(session: SessionDep, project_id: UUID, user_id: UUID) ->
     if project is None or project.owner_id != user_id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     return project
+
+
+@router.post(
+    "/{project_id}/client-error",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def report_client_error(
+    project_id: UUID,
+    payload: ClientErrorReport,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> Response:
+    """Surface an uncaught JS error from the live preview as a chat card.
+
+    The inspector (inside the previewed page) forwards uncaught exceptions /
+    unhandled rejections to the workspace shell, which posts them here. We attach
+    the card to the latest *finalised* assistant message so it persists across a
+    reload, deduping repeats (the same broken page re-fires on every load).
+
+    Fail-soft + conservative (R-10): gated by ``use_error_cards``; no assistant
+    message yet → nothing to attach to → 204; a duplicate → 204. Owner-scoped via
+    ``_ensure_owner`` (404 for a foreign/unknown project). The public ``/p/<slug>``
+    has no workspace parent, so it never reaches this endpoint.
+    """
+    await _ensure_owner(session, project_id, current_user.id)
+    if not get_settings().use_error_cards:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    res = await session.execute(
+        select(Message)
+        .where(Message.project_id == project_id)
+        .where(Message.role == "assistant")
+        .where(Message.tokens_out.is_not(None))
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    msg = res.scalar_one_or_none()
+    if msg is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    title, file = app_errors.client_card_signature(
+        payload.message, payload.source, payload.line
+    )
+    if app_errors.has_client_card(msg.content or "", title, file):
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    detail = payload.message
+    if payload.stack:
+        detail = f"{payload.message}\n\n{payload.stack}"
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    await app_errors.publish(
+        factory,
+        project_id,
+        msg.id,
+        category="client",
+        title=title,
+        detail=detail,
+        file=file,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

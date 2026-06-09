@@ -52,6 +52,19 @@ class PromptRequest(BaseModel):
     skip_clarify: bool = Field(default=False)
 
 
+class ClientErrorReport(BaseModel):
+    """An uncaught JS error / unhandled rejection observed in the live preview,
+    reported by the inspector → workspace shell. Untrusted browser input headed
+    into the chat, so every field is length-clamped (R-10 fail-fast at the edge).
+    """
+
+    message: str = Field(min_length=1, max_length=2000)
+    source: str = Field(default="", max_length=2000)
+    line: int = Field(default=0, ge=0)
+    col: int = Field(default=0, ge=0)
+    stack: str = Field(default="", max_length=4000)
+
+
 class PromptResponse(BaseModel):
     message_id: UUID
     snapshot_id: UUID | None = None

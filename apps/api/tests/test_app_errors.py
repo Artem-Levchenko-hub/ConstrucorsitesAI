@@ -71,6 +71,68 @@ def test_render_block_caps_detail_length() -> None:
     assert len(body) <= 600
 
 
+# ── client-side JS error cards (signature + dedup) ───────────────────────────
+
+
+def test_client_card_signature_basic() -> None:
+    title, file = app_errors.client_card_signature(
+        "TypeError: x is not a function",
+        "https://app.dev/_next/static/chunks/page.js",
+        42,
+    )
+    assert title == "TypeError: x is not a function"
+    # Only the basename is kept (full chunk URL is noise), with the line.
+    assert file == "page.js:42"
+
+
+def test_client_card_signature_first_line_only_and_no_source() -> None:
+    title, file = app_errors.client_card_signature(
+        "Boom\n  at foo\n  at bar", "", 0
+    )
+    assert title == "Boom"
+    assert file is None  # no source → no locator
+
+
+def test_client_card_signature_strips_query_and_caps_title() -> None:
+    title, file = app_errors.client_card_signature(
+        "E" * 300, "/a/b/main.js?v=123", 7
+    )
+    assert file == "main.js:7"
+    assert len(title) <= 140
+
+
+def test_render_block_supports_client_category() -> None:
+    block = app_errors.render_block(
+        category="client",
+        title=None,
+        detail="ReferenceError",
+        file="page.js:1",
+        fixable=True,
+    )
+    assert 'category="client"' in block
+    assert 'title="Ошибка в браузере"' in block  # default title for client
+
+
+def test_has_client_card_dedups_same_error() -> None:
+    title, file = app_errors.client_card_signature("Boom", "page.js", 3)
+    block = app_errors.render_block(
+        category="client", title=title, detail="Boom", file=file, fixable=True
+    )
+    content = "ответ ассистента" + block
+    assert app_errors.has_client_card(content, title, file) is True
+    # A different error (other line) is NOT considered a duplicate.
+    t2, f2 = app_errors.client_card_signature("Boom", "page.js", 99)
+    assert app_errors.has_client_card(content, t2, f2) is False
+
+
+def test_has_client_card_ignores_other_categories() -> None:
+    compile_block = app_errors.render_block(
+        category="compile", title="Boom", detail="Boom", file="page.js:3", fixable=True
+    )
+    # Same title/file but a compile card — must not suppress a real client card.
+    assert app_errors.has_client_card(compile_block, "Boom", "page.js:3") is False
+
+
 class _FakeSession:
     def __init__(self, msg: object) -> None:
         self._msg = msg

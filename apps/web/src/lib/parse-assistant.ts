@@ -6,7 +6,12 @@
  * Если бэк-парсер обновляется — обновить тут.
  */
 
-export type AppErrorCategory = "build" | "compile" | "schema" | "runtime";
+export type AppErrorCategory =
+  | "build"
+  | "compile"
+  | "schema"
+  | "runtime"
+  | "client";
 
 export type AssistantPart =
   | { kind: "text"; text: string }

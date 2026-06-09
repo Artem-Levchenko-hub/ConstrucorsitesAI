@@ -542,6 +542,68 @@
     }
   });
 
+  // ── Runtime-error reporter (always on, independent of select-mode) ────────
+  // Forwards UNCAUGHT JS errors + unhandled promise rejections from the previewed
+  // page up to the workspace shell, which turns them into a chat card. Strict
+  // gating so a healthy app never spams the chat (R-10):
+  //   * only genuine uncaught exceptions — resource 404s (img/script/link) and
+  //     console.warn/log are ignored;
+  //   * dedup by signature + a hard cap per page load;
+  //   * silent unless a workspace parent embeds us — standalone opens and the
+  //     public /p/<slug> share link (no parent listener) report nothing.
+  var ERR_CAP = 5;
+  var errSeen = {};
+  var errCount = 0;
+
+  function reportError(sig, payload) {
+    if (errCount >= ERR_CAP || errSeen[sig]) return;
+    if (!window.parent || window.parent === window) return; // no workspace shell
+    errSeen[sig] = 1;
+    errCount++;
+    post({ type: "omnia:preview:error", err: payload });
+  }
+
+  window.addEventListener(
+    "error",
+    function (e) {
+      // Resource-load failures fire "error" too, but target the failing element
+      // (not window) and carry no message — skip them; only script exceptions
+      // reach window with a message/Error object.
+      if (!e || e.target !== window) return;
+      var msg = (e.message || (e.error && e.error.message) || "").toString();
+      if (!msg) return;
+      var src = (e.filename || "").toString();
+      var line = e.lineno || 0;
+      var stack = e.error && e.error.stack ? String(e.error.stack).slice(0, 1000) : "";
+      reportError(msg + "@" + src + ":" + line, {
+        message: msg.slice(0, 300),
+        source: src.slice(0, 300),
+        line: line,
+        col: e.colno || 0,
+        stack: stack,
+      });
+    },
+    true
+  );
+
+  window.addEventListener("unhandledrejection", function (e) {
+    var reason = e && e.reason;
+    var msg = "";
+    var stack = "";
+    if (reason && typeof reason === "object") {
+      msg = (reason.message || "").toString();
+      stack = reason.stack ? String(reason.stack).slice(0, 1000) : "";
+    }
+    if (!msg) msg = "Unhandled promise rejection: " + String(reason);
+    reportError("reject:" + msg, {
+      message: msg.slice(0, 300),
+      source: "",
+      line: 0,
+      col: 0,
+      stack: stack,
+    });
+  });
+
   // Tell the parent we're ready so it can (re)send enable after a reload while
   // select-mode is still on.
   if (window.parent) window.parent.postMessage({ type: "omnia:inspect:ready" }, "*");

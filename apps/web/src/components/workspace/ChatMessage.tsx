@@ -415,6 +415,7 @@ const CATEGORY_LABEL: Record<AppErrorCategory, string> = {
   compile: "Компиляция",
   schema: "База данных",
   runtime: "Среда выполнения",
+  client: "Браузер",
 };
 
 /** A build/compile/schema/runtime failure of the generated app, surfaced as a

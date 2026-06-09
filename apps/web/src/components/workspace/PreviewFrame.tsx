@@ -22,7 +22,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { EASE_OUT, springSnappy } from "@/lib/motion";
 import { listSnapshots } from "@/lib/api/snapshots";
-import { listMessages } from "@/lib/api/messages";
+import { listMessages, reportClientError } from "@/lib/api/messages";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
@@ -63,6 +63,10 @@ export function PreviewFrame({ project }: { project: Project }) {
   const addSelection = useInspectorStore((s) => s.addSelection);
   const selections = useInspectorStore((s) => s.selections);
   const prevPickIds = useRef<string[]>([]);
+  // Client-side dedup + cap for preview runtime errors forwarded by the inspector.
+  // The inspector already dedups per page load; this guards across reloads so a
+  // persistently-broken preview can't refill the chat with the same card.
+  const reportedErrorsRef = useRef<Set<string>>(new Set());
 
   // Style-edit mode (1.5) — direct color/font picker, mutually exclusive with
   // select-mode (both hijack clicks in the preview).
@@ -229,6 +233,37 @@ export function PreviewFrame({ project }: { project: Project }) {
         };
       };
       if (!d || typeof d.type !== "string") return;
+      if (d.type === "omnia:preview:error") {
+        // Uncaught JS error from the live preview → chat card. Skip old-snapshot
+        // views (not actionable) and dedup/cap so a broken page can't spam.
+        if (viewingOld) return;
+        const err = (
+          e.data as {
+            err?: {
+              message?: string;
+              source?: string;
+              line?: number;
+              col?: number;
+              stack?: string;
+            };
+          }
+        ).err;
+        if (!err || !err.message) return;
+        const sig = `${err.message}@${err.source ?? ""}:${err.line ?? 0}`;
+        const seen = reportedErrorsRef.current;
+        if (seen.has(sig) || seen.size >= 5) return;
+        seen.add(sig);
+        void reportClientError(project.id, {
+          message: String(err.message),
+          source: err.source ? String(err.source) : undefined,
+          line: typeof err.line === "number" ? err.line : undefined,
+          col: typeof err.col === "number" ? err.col : undefined,
+          stack: err.stack ? String(err.stack) : undefined,
+        }).catch(() => {
+          // Best-effort: a dropped error report must not disrupt the preview.
+        });
+        return;
+      }
       if (d.type === "omnia:inspect:ready") {
         // Latch which frame is alive so the toggle effect's fallback timer
         // can distinguish "script loaded" from "script never loaded".
@@ -276,7 +311,13 @@ export function PreviewFrame({ project }: { project: Project }) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [inspectMode, iframeKey, addSelection, postToPreview]);
+  }, [inspectMode, iframeKey, addSelection, postToPreview, project.id, viewingOld]);
+
+  // A new committed snapshot = a fresh build/edit: forget which preview errors
+  // we've already reported so genuine errors on the new code surface again.
+  useEffect(() => {
+    reportedErrorsRef.current = new Set();
+  }, [headSnapshot?.id]);
 
   // Keep the preview's outlines in sync when chips are removed/cleared (e.g.
   // after send): diff against the previous pick ids and tell the inspector.

@@ -7,6 +7,27 @@ export async function listMessages(projectId: string): Promise<Message[]> {
   return apiFetch<Message[]>(`/api/projects/${projectId}/messages`);
 }
 
+/** An uncaught JS error the inspector observed inside the live preview. The
+ *  server turns it into a chat card (category "client"). Best-effort — the
+ *  caller swallows failures (a missing card must never disrupt the preview). */
+export async function reportClientError(
+  projectId: string,
+  err: {
+    message: string;
+    source?: string;
+    line?: number;
+    col?: number;
+    stack?: string;
+  },
+): Promise<void> {
+  if (USE_MOCKS) return;
+  await apiFetch<void>(`/api/projects/${projectId}/client-error`, {
+    method: "POST",
+    json: err,
+    timeoutMs: 10_000,
+  });
+}
+
 export async function sendPrompt(
   projectId: string,
   prompt: string,

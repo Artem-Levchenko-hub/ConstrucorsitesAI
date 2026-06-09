@@ -115,11 +115,30 @@ def test_inject_inspector_appends_when_no_body() -> None:
 
 def test_inspector_copies_stay_in_sync() -> None:
     repo = Path(__file__).resolve().parents[3]  # apps/api/tests/<file> -> repo root
-    api_js = repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
-    tmpl_js = (
-        repo / "apps/orchestrator/templates/nextjs-postgres-drizzle/public/omnia-inspector.js"
-    )
-    assert api_js.read_bytes() == tmpl_js.read_bytes(), (
-        "omnia-inspector.js drifted between apps/api and the orchestrator template — "
-        "keep the two copies byte-identical (copy one over the other)."
-    )
+    canonical = repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
+    copies = [
+        repo / "apps/orchestrator/templates/nextjs-postgres-drizzle/public/omnia-inspector.js",
+        repo / "apps/orchestrator/templates/nextjs-entities/public/omnia-inspector.js",
+    ]
+    want = canonical.read_bytes()
+    for copy in copies:
+        assert copy.read_bytes() == want, (
+            f"omnia-inspector.js drifted between apps/api and {copy.name}'s template "
+            f"({copy.parent.parent.name}) — keep all copies byte-identical "
+            "(copy apps/api/.../static/omnia-inspector.js over the template ones)."
+        )
+
+
+def test_inspector_reports_runtime_errors() -> None:
+    """The canonical inspector must carry the always-on error reporter so a broken
+    preview surfaces a chat card (the two template copies inherit it via the drift
+    guard above)."""
+    src = (
+        Path(__file__).resolve().parents[3]
+        / "apps/api/src/omnia_api/static/omnia-inspector.js"
+    ).read_text(encoding="utf-8")
+    assert 'post({ type: "omnia:preview:error"' in src
+    assert 'addEventListener(\n    "error"' in src or 'addEventListener("error"' in src
+    assert '"unhandledrejection"' in src
+    # Gating contract: silent without a workspace parent (public /p/ stays clean).
+    assert "window.parent === window" in src

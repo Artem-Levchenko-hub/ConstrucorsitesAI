@@ -55,6 +55,7 @@
   // Save the backend merges these edits into the committed block, and a reload
   // collapses both into one — same look (parity).
   var styleMode = false;
+  var hoverLabel = null;
   var overrideModel = { tokens: {}, elements: {}, fonts: {} };
   var overrideStyleEl = null;
 
@@ -73,6 +74,25 @@
     s.display = "none";
     s.top = "0";
     s.left = "0";
+    // A small badge that rides the top-left of the box — used to surface an
+    // affordance hint (e.g. "Заменить фото" when hovering an image) so the
+    // feature is discoverable instead of hidden behind the mode.
+    hoverLabel = document.createElement("div");
+    hoverLabel.setAttribute("data-omnia-inspector", "hover-label");
+    var ls = hoverLabel.style;
+    ls.position = "absolute";
+    ls.top = "0";
+    ls.left = "0";
+    ls.transform = "translateY(-100%)";
+    ls.background = HL_COLOR;
+    ls.color = "#fff";
+    ls.font = "600 11px system-ui, -apple-system, sans-serif";
+    ls.padding = "2px 6px";
+    ls.borderRadius = "4px";
+    ls.whiteSpace = "nowrap";
+    ls.pointerEvents = "none";
+    ls.display = "none";
+    hoverBox.appendChild(hoverLabel);
     (document.body || document.documentElement).appendChild(hoverBox);
     return hoverBox;
   }
@@ -81,12 +101,20 @@
     return el && el.getAttribute && el.getAttribute("data-omnia-inspector") !== null;
   }
 
-  function positionHoverBox(rect) {
+  function positionHoverBox(rect, labelText) {
     var box = ensureHoverBox();
     box.style.display = "block";
     box.style.width = rect.width + "px";
     box.style.height = rect.height + "px";
     box.style.transform = "translate(" + rect.left + "px," + rect.top + "px)";
+    if (hoverLabel) {
+      if (labelText) {
+        hoverLabel.textContent = labelText;
+        hoverLabel.style.display = "block";
+      } else {
+        hoverLabel.style.display = "none";
+      }
+    }
   }
 
   function onMouseMove(e) {
@@ -98,7 +126,14 @@
       if (!e2 || !enabled) return;
       var el = e2.target;
       if (!el || el.nodeType !== 1 || isOurs(el)) return;
-      positionHoverBox(el.getBoundingClientRect());
+      // In style mode, hint what a click does (replace image / edit text) so the
+      // affordances are discoverable instead of buried in the panel.
+      var hint = "";
+      if (styleMode) {
+        if (pickedImg(el, e2.clientX, e2.clientY)) hint = "Заменить фото";
+        else if (isPlainTextEl(el)) hint = "Изменить текст";
+      }
+      positionHoverBox(el.getBoundingClientRect(), hint);
     });
   }
 
@@ -182,6 +217,99 @@
     }
   }
 
+  // The <img> the user actually meant: the clicked element itself, the image
+  // stacked under the cursor (full-bleed background photo behind overlay
+  // content), or a descendant image of the clicked container. null = no image.
+  function pickedImg(el, x, y) {
+    if (el.nodeName === "IMG") return el;
+    if (document.elementsFromPoint) {
+      var stack = document.elementsFromPoint(x, y);
+      for (var i = 0; i < stack.length; i++) {
+        if (stack[i].nodeName === "IMG") return stack[i];
+      }
+    }
+    if (el.querySelector) {
+      var inner = el.querySelector("img");
+      if (inner) return inner;
+    }
+    return null;
+  }
+
+  // ALL distinct image sources at this point — a carousel/slider stacks several
+  // <img> on top of each other, so a single pick can't reach the lower ones.
+  // Returns the stack under the cursor (topmost first); falls back to images
+  // inside the clicked container when none sit exactly under the point.
+  function pickedImgs(el, x, y) {
+    var out = [];
+    var seen = {};
+    function add(im) {
+      if (im && im.nodeName === "IMG") {
+        var s = im.getAttribute("src") || im.src || "";
+        if (s && !seen[s]) {
+          seen[s] = 1;
+          out.push(s);
+        }
+      }
+    }
+    if (el.nodeName === "IMG") add(el);
+    if (document.elementsFromPoint) {
+      var st = document.elementsFromPoint(x, y);
+      for (var i = 0; i < st.length; i++) add(st[i]);
+    }
+    if (out.length === 0 && el.querySelectorAll) {
+      var inn = el.querySelectorAll("img");
+      for (var j = 0; j < inn.length; j++) add(inn[j]);
+    }
+    return out;
+  }
+
+  // Text the user can edit in place: an element with NO child elements (pure
+  // text) and visible content. Returns its trimmed text + the occurrence index
+  // among identical pure-text elements (document order) so the server patches
+  // the right one when a label repeats. null when it isn't plain editable text.
+  // Light check (no index scan) — pure-text element with visible content. Used
+  // by the hover hint on every mousemove, so it must stay cheap.
+  function isPlainTextEl(el) {
+    if (!el.children || el.children.length !== 0) return false;
+    var nn = el.nodeName;
+    if (nn === "INPUT" || nn === "TEXTAREA" || nn === "SELECT" ||
+        nn === "SCRIPT" || nn === "STYLE" || nn === "IMG" || nn === "SVG") {
+      return false;
+    }
+    return !!(el.textContent || "").trim();
+  }
+
+  function textInfo(el) {
+    if (!isPlainTextEl(el)) return null;
+    var t = (el.textContent || "").trim();
+    if (t.length > 5000) return null;
+    var all = document.querySelectorAll("*");
+    var idx = 0;
+    for (var i = 0; i < all.length; i++) {
+      var n = all[i];
+      if (n === el) break;
+      if (n.children && n.children.length === 0 &&
+          (n.textContent || "").trim() === t) {
+        idx++;
+      }
+    }
+    return { text: t, index: idx };
+  }
+
+  // An element's exact source HTML + occurrence index among identical outerHTML
+  // blocks (document order) — for hard delete and move (sibling swap).
+  function outerHtmlIndex(node) {
+    var h = node && node.outerHTML ? node.outerHTML : "";
+    if (!h || h.length > 20000) return { html: "", index: 0 };
+    var all = document.querySelectorAll("*");
+    var idx = 0;
+    for (var i = 0; i < all.length && i < 2000; i++) {
+      if (all[i] === node) break;
+      if (all[i].outerHTML === h) idx++;
+    }
+    return { html: h, index: idx };
+  }
+
   function onClick(e) {
     if (!enabled) return;
     var el = e.target;
@@ -209,6 +337,15 @@
     // Computed color/font so the style panel can show the element's CURRENT
     // values (additive fields — the AI-edit compose path ignores them).
     var cs = window.getComputedStyle(el);
+    var imgs = pickedImgs(el, e.clientX, e.clientY);
+    var ti = textInfo(el);
+    // Exact source HTML + occurrence index for HARD delete and MOVE (swap with a
+    // sibling) — for the element and its prev/next sibling.
+    var ohInfo = outerHtmlIndex(el);
+    var prevS = el.previousElementSibling;
+    var nextS = el.nextElementSibling;
+    var prevInfo = prevS ? outerHtmlIndex(prevS) : { html: "", index: 0 };
+    var nextInfo = nextS ? outerHtmlIndex(nextS) : { html: "", index: 0 };
     post({
       type: "omnia:pick",
       el: {
@@ -222,6 +359,20 @@
         backgroundColor: cs.backgroundColor,
         borderColor: cs.borderTopColor,
         fontFamily: cs.fontFamily,
+        // Image sources at the click — usually one, but a carousel stacks
+        // several; the panel lets the user choose which to replace. `src` keeps
+        // the topmost for back-compat.
+        src: imgs[0] || "",
+        srcs: imgs,
+        editableText: ti ? true : false,
+        editText: ti ? ti.text : "",
+        textIndex: ti ? ti.index : 0,
+        outerHTML: ohInfo.html,
+        htmlIndex: ohInfo.index,
+        prevHTML: prevInfo.html,
+        prevIndex: prevInfo.index,
+        nextHTML: nextInfo.html,
+        nextIndex: nextInfo.index,
         rect: {
           x: Math.round(r.left),
           y: Math.round(r.top),
@@ -389,6 +540,68 @@
         resetStyle(d);
         break;
     }
+  });
+
+  // ── Runtime-error reporter (always on, independent of select-mode) ────────
+  // Forwards UNCAUGHT JS errors + unhandled promise rejections from the previewed
+  // page up to the workspace shell, which turns them into a chat card. Strict
+  // gating so a healthy app never spams the chat (R-10):
+  //   * only genuine uncaught exceptions — resource 404s (img/script/link) and
+  //     console.warn/log are ignored;
+  //   * dedup by signature + a hard cap per page load;
+  //   * silent unless a workspace parent embeds us — standalone opens and the
+  //     public /p/<slug> share link (no parent listener) report nothing.
+  var ERR_CAP = 5;
+  var errSeen = {};
+  var errCount = 0;
+
+  function reportError(sig, payload) {
+    if (errCount >= ERR_CAP || errSeen[sig]) return;
+    if (!window.parent || window.parent === window) return; // no workspace shell
+    errSeen[sig] = 1;
+    errCount++;
+    post({ type: "omnia:preview:error", err: payload });
+  }
+
+  window.addEventListener(
+    "error",
+    function (e) {
+      // Resource-load failures fire "error" too, but target the failing element
+      // (not window) and carry no message — skip them; only script exceptions
+      // reach window with a message/Error object.
+      if (!e || e.target !== window) return;
+      var msg = (e.message || (e.error && e.error.message) || "").toString();
+      if (!msg) return;
+      var src = (e.filename || "").toString();
+      var line = e.lineno || 0;
+      var stack = e.error && e.error.stack ? String(e.error.stack).slice(0, 1000) : "";
+      reportError(msg + "@" + src + ":" + line, {
+        message: msg.slice(0, 300),
+        source: src.slice(0, 300),
+        line: line,
+        col: e.colno || 0,
+        stack: stack,
+      });
+    },
+    true
+  );
+
+  window.addEventListener("unhandledrejection", function (e) {
+    var reason = e && e.reason;
+    var msg = "";
+    var stack = "";
+    if (reason && typeof reason === "object") {
+      msg = (reason.message || "").toString();
+      stack = reason.stack ? String(reason.stack).slice(0, 1000) : "";
+    }
+    if (!msg) msg = "Unhandled promise rejection: " + String(reason);
+    reportError("reject:" + msg, {
+      message: msg.slice(0, 300),
+      source: "",
+      line: 0,
+      col: 0,
+      stack: stack,
+    });
   });
 
   // Tell the parent we're ready so it can (re)send enable after a reload while
