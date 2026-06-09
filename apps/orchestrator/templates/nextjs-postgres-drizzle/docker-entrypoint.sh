@@ -15,7 +15,10 @@
 set -e
 
 echo "[entrypoint] syncing drizzle schema -> postgres"
-pnpm db:push --force || echo "[entrypoint] db:push failed (continuing — pages will error on DB access)"
+# Run drizzle-kit directly (not via the `db:push` pnpm script) so the sync still
+# works if the script is ever missing from package.json — drizzle-kit is a
+# devDependency, always present in node_modules/.bin inside the dev image.
+pnpm exec drizzle-kit push --force || echo "[entrypoint] drizzle push failed (continuing — pages will error on DB access)"
 
 echo "[entrypoint] starting Next.js dev server"
 exec pnpm dev
