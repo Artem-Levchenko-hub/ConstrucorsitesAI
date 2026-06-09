@@ -231,6 +231,11 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.invalidateQueries({ queryKey: ["messages", projectId] });
           qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
           qc.invalidateQueries({ queryKey: ["wallet"] });
+          // A build can auto-route the stack (static → nextjs_entities), which
+          // changes `template`. The workspace preview reads it reactively from
+          // this cache, so refresh it here to flip to the live-container path
+          // without a manual reload.
+          qc.invalidateQueries({ queryKey: ["project", projectId] });
         }
         delete streamMetaRef.current[event.data.message_id];
         streamingRef.current = false;

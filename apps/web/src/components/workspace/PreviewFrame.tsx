@@ -24,6 +24,7 @@ import { EASE_OUT, springSnappy } from "@/lib/motion";
 import { listSnapshots } from "@/lib/api/snapshots";
 import { listMessages, reportClientError } from "@/lib/api/messages";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
+import { getProject } from "@/lib/api/projects";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
 import { useInspectorStore } from "@/store/inspector";
@@ -106,9 +107,23 @@ export function PreviewFrame({ project }: { project: Project }) {
   // returned by orchestrator. For V1 (static) projects this query is skipped —
   // we keep the existing /p/<slug> iframe. Both container-backed Next stacks
   // (fullstack + nextjs_entities) take the live-container path.
-  const isFullstack =
-    project.template === "fullstack" || project.template === "nextjs_entities";
   const qc = useQueryClient();
+  // The `project` prop is server-rendered once at page load and never updates
+  // client-side. When a build auto-routes the stack (static → nextjs_entities
+  // via the orchestrator), `project.template` here would stay stale for the
+  // whole session, so the preview keeps showing the static placeholder instead
+  // of switching to the live dev container. Mirror the project through React
+  // Query (seeded with the server prop) so `usePromptStream` can refresh the
+  // template on `llm.done` and the preview flips to the container path with no
+  // manual reload. (R-02: the staleness is hidden behind one read.)
+  const { data: liveProject } = useQuery({
+    queryKey: ["project", project.id],
+    queryFn: () => getProject(project.id),
+    initialData: project,
+  });
+  const template = liveProject?.template ?? project.template;
+  const isFullstack =
+    template === "fullstack" || template === "nextjs_entities";
   const {
     data: runtime,
     isError: runtimeError,
@@ -117,8 +132,16 @@ export function PreviewFrame({ project }: { project: Project }) {
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
     enabled: isFullstack,
-    refetchInterval: (q) =>
-      q.state.data?.state === "provisioning" ? 2_000 : false,
+    // Keep polling until the container is actually serving (or hard-failed).
+    // The orchestrator can bring the dev container up via auto-provision
+    // (e.g. right after a build) without a guaranteed `runtime.started` WS
+    // event, so a one-shot read can miss the transition and leave the preview
+    // stuck on the startup panel. Poll through any non-terminal state so the
+    // live iframe appears on its own. (R-10: converge to the real state.)
+    refetchInterval: (q) => {
+      const s = q.state.data?.state;
+      return s === "running" || s === "failed" ? false : 2_000;
+    },
     retry: false,
   });
 
