@@ -114,7 +114,7 @@
 
 ### PHASE 0 — РАБОТАЕТ С ПЕРВОГО ПРОМПТА (надёжность; разблокирует остальное)
 - [x] 0.1 **A7 — цельный свежий E2E fullstack** ✅ PASS вживую (2026-06-09, апп TaskFlow `a7-zadachi-saas-e2e-ec4081`): zero-friction создание → discovery → авто-стек nextjs_entities → build → лендинг → signup→авто-логин→кабинет → CRUD (create 201/read/delete 200, persist) → логи чистые. Детали в Логе. (UPDATE-клик-через — минорный остаток.)
-- [ ] 0.2 **A5b — drizzle-kit push под per-project search_path**: генерит FK на `public.users` (таблицы в `proj_<id>`) → ALTER откатывается. Архфикс: БД-на-проект (всё в public) ИЛИ pgSchema-инъекция ИЛИ post-push raw-SQL reconcile в entrypoint. E2E: ALTER применился, auth-колонки на месте, signup/login персистят.
+- [x] 0.2 **A5b — drizzle FK под per-project search_path** ✅ УЖЕ РЕШЕНО архитектурой (2026-06-09 ~23:20 MSK): премиса устарела. Рантайм НЕ использует `drizzle-kit push` — entrypoint гонит `init-db.mjs` (idempotent `CREATE TABLE IF NOT EXISTS` через `pg`), а DSN пинит `search_path=proj_<id8>` (без `public`). Живая прод-проверка (omnia-postgres-users/omnia_users, 8 схем `proj_*`): у КАЖДОГО проекта свои `users/accounts/sessions/records`, **0** `public.users`; все 3 FK (`accounts/sessions/records.created_by`) резолвятся ИНТРА-СХЕМНО на `proj_<id>.users`; auth-колонки (`password_hash`,`role`) на месте; signup-юзер A7 (`taskuser-a7@example.com`) персистнут с реальным `password_hash`+role. Фикс: убрал ЛЖИВЫЙ коммент в `schema.ts` (врал «entrypoint runs db:push --force») → точное описание init-db.mjs + инвариант интра-схемного FK (защита от регрессии — именно эта ложь породила баг-репорт). Деталь в Логе.
 - [ ] 0.3 **Wake-from-hibernation = 200, не 502**: апп заснул → зашёл → проснулся → 200. Вживую: дождаться/форсить гибернацию, открыть preview, проверить отсутствие 502. Память `omnia_p0_infra_enabler`, `omnia_v2_runtime_live`.
 - [ ] 0.4 **Авто-retry прерванной генерации** (снапшота ещё нет → не показывать голый стартер; ре-генерировать или явный статус). Память E3 в routine-плане.
 
@@ -174,6 +174,8 @@
 ## 6. ПРОГРЕСС
 <!-- Итерации отмечают [x]/[~] выше + блок в Логе ниже -->
 
+**0.2 DONE ✅** (2026-06-09 ~23:20 MSK): УЖЕ решено архитектурой per-project-schema (премиса устарела — `drizzle-kit push` давно заменён на `init-db.mjs`; DSN пинит `search_path=proj_<id>` без public). Проверено вживую по прод-БД (8 схем, все FK интра-схемно, 0 public.users, auth-колонки + персист signup A7). Корректнул лживый коммент в `schema.ts`. RAM на проде 10.9GB, 0 dev-контейнеров (чисто). Следующий тик: **0.3** (wake-from-hibernation 502→200) — можно разбудить тест-стенд A7 `462af0bb` (slug `a7-zadachi-saas-e2e-ec4081`).
+
 **0.1 DONE ✅** (2026-06-09 ~22:05 MSK): A7 PASS вживую. Тест-проект `462af0bb` (slug `a7-zadachi-saas-e2e-ec4081`, nextjs_entities) — контейнер **ОСТАНОВЛЕН** для экономии ресурса (владелец просил беречь сервер). НЕ удалять: **тест-стенд** для Phase **0.3** (разбудить → 502→200) и Phase **2.5** (кликер на full). URL 502 пока не разбудишь — это и есть кейс 0.3. Апп-юзер `taskuser-a7@example.com`/`Taskflow123`. Следующий тик: **0.2** (A5b drizzle FK — нужен СВОЙ drizzle-fullstack тест-апп; A7 на entity-стеке).
 
 ## 7. ЛОГ ИТЕРАЦИЙ
@@ -188,6 +190,23 @@
 - Владельцу утром: <что глянуть>
 - Идея на следующую итерацию: <чтобы не гадать>
 -->
+
+## 2026-06-09 23:06–23:25 MSK — Phase 0.2 DONE ✅ (A5b drizzle FK под per-project search_path — уже решено архитектурой)
+- Статус: DONE — премиса задачи устарела; проверено вживую по прод-БД, скорректирован лживый коммент.
+- Вывод: НЕТ бага «FK на public.users». Рантайм-путь НЕ использует `drizzle-kit push`:
+  - `docker-entrypoint.sh` → `node scripts/init-db.mjs` (idempotent `CREATE TABLE IF NOT EXISTS` через драйвер `pg`, без интроспекции — push висел минутами на shared Postgres и блокировал boot).
+  - `postgres_admin.build_dsn` пинит `?options=-c+search_path%3Dproj_<id8>` (один schema, БЕЗ `public`); роль `proj_<id8>_user` скоупнута на свою схему → unqualified DDL и FK резолвятся ИНТРА-СХЕМНО.
+- Живая прод-проверка (ssh lh-server → omnia-postgres-users, db omnia_users):
+  - 8 схем `proj_*`, у каждой свои `accounts,records,sessions,users,verification_tokens`. `public.users` = **0** (нет shadow-хазарда у `CREATE TABLE IF NOT EXISTS`).
+  - FK proj_462af0bb (A7): `accounts/sessions/records.created_by` → ВСЕ `proj_462af0bb.users` (parent_schema=proj_462af0bb). Cross-schema нет.
+  - users-колонки A7: id,name,email,email_verified,image,**password_hash**,**role**,created_at — auth-колонки на месте.
+  - Персист signup: `taskuser-a7@example.com` | has_pw=t | role=user → реальная регистрация записала bcrypt-хеш в per-project schema и пережила (users=1).
+- Фикс (минимальный диф, 1 файл): `apps/orchestrator/templates/nextjs-entities/src/lib/db/schema.ts` — top-comment врал «`docker-entrypoint.sh` runs `db:push --force`». Заменил на точное описание `init-db.mjs` + инвариант «всё в `proj_<id>`, FK интра-схемно, нет `public.users`». Эта ложь и породила баг-репорт 0.2 → коммент-фикс = защита от регрессии (canon: комментарии не лгут). `db:push` npm-скрипт оставлен как ручной escape-hatch (безвреден, drizzle.config тоже пинит search_path через DSN).
+- sequential-thinking: 3 мысли (премиса стара → верифицировать live, а не править вслепую; проверить shadow-хазард IF-NOT-EXISTS+public; auth-колонки/персист). context7: не требовался (без смены DDL-стратегии).
+- Verify: правка — только блок-коммент в .ts (нулевой рантайм/тайп-эффект; typecheck/lint неприменимы к комменту). Resource-guard: RAM available 10.9GB, 0 dev-контейнеров — чисто, тест-апп НЕ создавал (задача = верификация существующего + коммент).
+- Доставка: commit + push main; деплоя НЕТ (коммент, рантайм не затронут; пересборка template-образа не нужна — нулевой behavioral-эффект, бережём сервер). E2E-критерий 0.2 («auth-колонки, signup/login персистят») закрыт прямой БД-уликой + персистом A7-юзера + вчерашним полным signup→login→persist E2E на этом же стеке (0.1).
+- Владельцу утром: ✅ архитектура per-project-schema корректна — никаких cross-schema FK, signup пишет реальный auth и персистит (проверено по 8 живым схемам). Никаких изменений поведения — только убрал вводящий в заблуждение комментарий.
+- Идея на следующий тик: Phase 0.3 (wake-from-hibernation 502→200) — A7 `462af0bb` остановлен = готовый стенд: открыть preview-сабдомен → должен проснуться→200, не 502.
 
 ## 2026-06-09 21:40–22:05 MSK — Phase 0.1 DONE ✅ (A7 fullstack E2E «работает с первого промпта»)
 - Статус: DONE — PASS вживую (puppeteer на проде; билдер undj00x03; апп-юзер taskuser-a7@example.com)

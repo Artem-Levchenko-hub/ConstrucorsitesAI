@@ -3,8 +3,15 @@
  * Auth.js tables (below) and the generic `records` store (bottom). The AI does
  * NOT edit this file — business objects are entities/<Name>.json schemas served
  * by the engine over the single `records` table, so there are no per-entity
- * tables and no migrations. `docker-entrypoint.sh` runs `db:push --force` on
- * container start to materialise exactly these tables.
+ * tables and no migrations. `docker-entrypoint.sh` materialises exactly these
+ * tables on container start via `node scripts/init-db.mjs` (idempotent
+ * `CREATE TABLE IF NOT EXISTS` over the `pg` driver — NOT `drizzle-kit push`,
+ * which would introspect the shared per-project Postgres and hang boot; see
+ * that script's header). The `db:push` npm script remains only as a manual
+ * escape hatch. Every table lands in the project's own `proj_<id>` schema
+ * because the orchestrator-injected DSN pins `search_path` to it (there is no
+ * `public` in the path and no shared `public.users`), so every FK below
+ * resolves INTRA-SCHEMA — never to a cross-schema `public.users`.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * AUTH TABLES — pre-wired Auth.js v5 Drizzle adapter schema.
