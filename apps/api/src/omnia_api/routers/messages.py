@@ -832,21 +832,129 @@ _AUTH_USERS_COLUMNS = (
 )
 
 
+# A6b — the four Auth.js tables the AI must never drop. `src/lib/auth.ts` (a
+# fixed template file) does `import { accounts, sessions, users,
+# verificationTokens } from "@/lib/db/schema"`, so if the model's schema.ts
+# rewrite omits them the whole app fails to compile ("Export users doesn't
+# exist") and 500s. This is the canonical block from the template schema.ts.
+_AUTH_TABLES_BLOCK = '''
+// ─── Auth tables (re-injected by Omnia — the model dropped them) ───────────
+export const users = pgTable("users", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name"),
+  email: text("email").notNull().unique(),
+  emailVerified: timestamp("email_verified", { withTimezone: true }),
+  image: text("image"),
+  passwordHash: text("password_hash"),
+  role: text("role").notNull().default("user"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const accounts = pgTable("accounts", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  type: text("type").$type<AdapterAccountType>().notNull(),
+  provider: text("provider").notNull(),
+  providerAccountId: text("provider_account_id").notNull(),
+  refresh_token: text("refresh_token"),
+  access_token: text("access_token"),
+  expires_at: integer("expires_at"),
+  token_type: text("token_type"),
+  scope: text("scope"),
+  id_token: text("id_token"),
+  session_state: text("session_state"),
+}, (account) => ({
+  pk: primaryKey({ columns: [account.provider, account.providerAccountId] }),
+}));
+
+export const sessions = pgTable("sessions", {
+  sessionToken: text("session_token").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  expires: timestamp("expires", { withTimezone: true }).notNull(),
+});
+
+export const verificationTokens = pgTable("verification_tokens", {
+  identifier: text("identifier").notNull(),
+  token: text("token").notNull(),
+  expires: timestamp("expires", { withTimezone: true }).notNull(),
+}, (vt) => ({
+  pk: primaryKey({ columns: [vt.identifier, vt.token] }),
+}));
+
+'''
+
+# pg-core named imports the auth block needs.
+_AUTH_PGCORE_IMPORTS = ("integer", "pgTable", "primaryKey", "text", "timestamp", "uuid")
+
+
+def _ensure_named_imports(src: str, module: str, needed: tuple[str, ...]) -> str:
+    """Ensure `src` imports every name in `needed` from `module`, merging into an
+    existing `import { ... } from "module"` line (no duplicate-identifier errors)
+    or prepending a fresh one."""
+    import re
+
+    pat = re.compile(
+        r'import\s+\{([^}]*)\}\s+from\s+"' + re.escape(module) + r'"\s*;'
+    )
+    m = pat.search(src)
+    if m:
+        existing = {x.strip() for x in m.group(1).split(",") if x.strip()}
+        merged = sorted(existing | set(needed))
+        line = "import { " + ", ".join(merged) + ' } from "' + module + '";'
+        return src[: m.start()] + line + src[m.end() :]
+    line = "import { " + ", ".join(sorted(needed)) + ' } from "' + module + '";\n'
+    return line + src
+
+
+def _inject_auth_tables(src: str) -> str:
+    """Re-inject the four Auth.js tables when the model dropped them entirely.
+
+    Merges the required imports (drizzle-orm/pg-core names, `sql`, and the
+    `AdapterAccountType` type) then inserts the canonical table block before the
+    model's first `export const`. Fail-soft: on any surprise, returns `src`."""
+    try:
+        out = _ensure_named_imports(src, "drizzle-orm/pg-core", _AUTH_PGCORE_IMPORTS)
+        out = _ensure_named_imports(out, "drizzle-orm", ("sql",))
+        if "AdapterAccountType" not in out:
+            out = (
+                'import type { AdapterAccountType } from "next-auth/adapters";\n'
+                + out
+            )
+        idx = out.find("\nexport const ")
+        if idx == -1:
+            idx = len(out)
+        out = out[:idx] + "\n" + _AUTH_TABLES_BLOCK + out[idx:]
+        print(
+            "[PP] auth_schema_guard: re-injected dropped users/accounts/sessions/"
+            "verificationTokens tables",
+            flush=True,
+        )
+        return out
+    except Exception as exc:  # noqa: BLE001 — guard must never break a build
+        print(f"[PP] auth_schema_guard: inject failed {exc!r}", flush=True)
+        return src
+
+
 def _preserve_auth_schema(files: dict[str, str]) -> dict[str, str]:
-    """Re-inject users.passwordHash / users.role into a rewritten Drizzle schema.
+    """Keep the rewritten Drizzle schema's auth surface intact.
 
-    Container-backed Next apps authenticate via a Credentials provider that reads
-    ``users.passwordHash`` and ``users.role``; signup writes ``passwordHash``.
-    When the model rewrites ``src/lib/db/schema.ts`` to add its own tables it
-    frequently drops these infra columns from the ``users`` pgTable, so every
-    signup/login then fails with a missing-column error. This guard restores them.
+    Two failure modes the model causes when it rewrites ``src/lib/db/schema.ts``
+    to add its own tables:
+      1. Drops the whole ``users``/``accounts``/``sessions``/``verificationTokens``
+         block — ``auth.ts`` imports them by name, so the app 500s on compile.
+      2. Keeps ``users`` but strips the ``password_hash``/``role`` columns the
+         Credentials provider depends on — signup/login then fail at runtime.
 
-    Idempotent + fail-soft: only acts on a schema.ts that declares ``users`` but
-    has lost ``password_hash``; on any parse surprise it returns ``files`` as-is.
+    This guard repairs both. Idempotent + fail-soft: on any parse surprise it
+    returns ``files`` as-is.
     """
     path = "src/lib/db/schema.ts"
     src = files.get(path)
-    if not src or "password_hash" in src or 'pgTable("users"' not in src:
+    if not src:
+        return files
+    if 'pgTable("users"' not in src:
+        # Mode 1: the entire auth-tables block is gone — re-inject all four.
+        return {**files, path: _inject_auth_tables(src)}
+    if "password_hash" in src:
         return files
     import re
 
