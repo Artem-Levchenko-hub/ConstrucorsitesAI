@@ -823,12 +823,20 @@ _ENTITIES_UI = """\
   import { cn, formatRub, formatDate } from "@/lib/utils";   // formatRub(1234)→"1 234 ₽"
   import { toast } from "sonner";                            // toast.success("Сохранено")
 
-▸ АРХИТЕКТУРА — МНОГОСТРАНИЧНОЕ ПРИЛОЖЕНИЕ, НЕ ОДИН ЭКРАН. Минимум: дашборд `/`
-  + отдельная страница на КАЖДУЮ сущность (`/clients`, `/deals` …) + при нужде
-  настройки. Каждая страница живёт В <AppShell> (постоянный сайдбар + топбар);
-  на мобиле сайдбар сам сворачивается в drawer. ЗАПРЕЩЕНО: всё на одной
-  прокручиваемой странице, отсутствие навигации, голый <table>.
-  Каркас — ОДИН раз в layout группы маршрутов `(app)`:
+▸ АРХИТЕКТУРА — ДВА СЛОЯ: ПУБЛИЧНАЯ ВИТРИНА + ЗАКРЫТЫЙ КАБИНЕТ (НЕ один экран).
+  ① ПУБЛИЧНАЯ ГЛАВНАЯ — src/app/page.tsx (маршрут «/»), БЕЗ авторизации. Это
+     ЛЕНДИНГ уровня отдельных лендингов Omnia: полноэкранный герой с оффером,
+     секции (возможности / меню / услуги / отзывы / цены / FAQ), премиум-типографика,
+     ФИРМЕННЫЙ характер под нишу — НЕ дефолтный шаблон. CTA «Войти» / «Личный
+     кабинет» → <Link href="/signin"> и href="/dashboard". Это REACT-страница на
+     Tailwind + токенах проекта; бренд-цвет — <style> с переопределением
+     `--primary`/`--accent` под нишу; акцентный шрифт — через next/font в layout.
+     ❌ НИКОГДА index.html / <!DOCTYPE> / <html> / <body>: это Next.js, статический
+     index.html он ИГНОРИРУЕТ (его не видно, «/» отдаёт 404). Главная = ТОЛЬКО
+     src/app/page.tsx как React-компонент. Тащи сюда всё качество лендингов.
+  ② КАБИНЕТ — под /dashboard, в группе `(app)`, каждая страница в <AppShell>
+     (сайдбар + топбар; на мобиле drawer). ЗАПРЕЩЕНО: всё на одной странице, без
+     навигации, голый <table>. Шелл — ОДИН раз в (app)/layout.tsx:
   <file path="src/app/(app)/layout.tsx">
   "use client";
   import { useRouter } from "next/navigation";
@@ -837,9 +845,9 @@ _ENTITIES_UI = """\
   import { AppShell } from "@/components/omnia";
   import { auth, type Me } from "@/lib/sdk";
   const NAV = [
-    { label: "Дашборд", href: "/", icon: <LayoutDashboard /> },
-    { label: "Клиенты", href: "/clients", icon: <Users /> },
-    { label: "Сделки",  href: "/deals",  icon: <Briefcase /> },
+    { label: "Дашборд", href: "/dashboard", icon: <LayoutDashboard /> },
+    { label: "Клиенты", href: "/dashboard/clients", icon: <Users /> },
+    { label: "Сделки",  href: "/dashboard/deals",  icon: <Briefcase /> },
   ];
   export default function AppLayout({ children }: { children: React.ReactNode }) {
     const router = useRouter();
@@ -853,16 +861,17 @@ _ENTITIES_UI = """\
     );
   }
   </file>
-  Страницы кладёшь в ту же группу — наследуют шелл: src/app/(app)/page.tsx (дашборд),
-  src/app/(app)/clients/page.tsx, src/app/(app)/deals/page.tsx …
-  ⚠️ ОБЯЗАТЕЛЬНО удали стартовый src/app/page.tsx — отдай пустой блок
-  <file path="src/app/page.tsx"></file>. Дашборд теперь (app)/page.tsx; если оставить
-  оба — два маршрута резолвятся в "/" → конфликт (сборка падает / висит стартер).
+  Страницы кабинета — в той же группе под dashboard, наследуют шелл:
+  src/app/(app)/dashboard/page.tsx (дашборд), src/app/(app)/dashboard/clients/page.tsx,
+  src/app/(app)/dashboard/deals/page.tsx …
+  ⚠️ НЕ удаляй src/app/page.tsx — это публичная главная. ⚠️ НЕ клади page.tsx прямо
+  в группу (app)/page.tsx — это маршрут «/», конфликт с главной (две страницы на «/» →
+  сборка падает). Дашборд = (app)/dashboard/page.tsx, НЕ (app)/page.tsx.
 
 ▸ СПИСКИ / CRUD — одним компонентом <CrudResource> (таблица + поиск + сортировка +
   пагинация + диалоги создать/править + подтверждение удаления — всё подключено к
   SDK). Не пиши это руками:
-  <file path="src/app/(app)/clients/page.tsx">
+  <file path="src/app/(app)/dashboard/clients/page.tsx">
   "use client";
   import { CrudResource } from "@/components/omnia";
   import { Badge } from "@/components/ui/badge";

@@ -296,6 +296,16 @@ async def get_index(
     inspect: Annotated[str | None, Query()] = None,
 ) -> Response:
     project, snap = await _resolve_snapshot(session, slug, snapshot)
+    # Container projects (fullstack / nextjs_entities) are served by their LIVE
+    # dev/prod app, never a static file — redirect FIRST, before the index-candidate
+    # scan. Otherwise a stray index.html the AI mistakenly committed (Next.js ignores
+    # it) would hijack /p with a stale static page whose relative links resolve to
+    # THIS domain (the "login → constructor/signin" + broken-layout bug). Workspace
+    # preview (inspect=1) stays in-iframe and never redirects.
+    if inspect != "1" and is_fullstack(project.template):
+        redirect = await _fullstack_redirect(project)
+        if redirect is not None:
+            return redirect
     for candidate in _INDEX_CANDIDATES:
         content = await asyncio.to_thread(
             repo_svc.read_file, project.id, snap.commit_sha, candidate
