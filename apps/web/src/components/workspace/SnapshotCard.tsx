@@ -7,6 +7,7 @@ import type { Snapshot } from "@/lib/api/types";
 import { EASE_OUT, tapSubtle } from "@/lib/motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -84,9 +85,25 @@ export function SnapshotCard({
             className="w-full h-full object-cover"
           />
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center text-fg-tertiary text-[9px]">
-            <Loader2 className="h-2.5 w-2.5 animate-spin mr-1" />
-            Рендер…
+          // Пока превью ещё рендерится (контейнер компилится / воркер скринит),
+          // показываем мини-скелет «страница собирается» вместо пустого квадрата:
+          // шапка → герой → строка контента + лейбл. Не «пусто», а «строится».
+          <div
+            className="absolute inset-0 flex flex-col gap-[3px] p-1.5"
+            role="status"
+            aria-label="Превью строится"
+          >
+            <div className="flex items-center gap-1">
+              <Skeleton className="h-1.5 w-6 rounded-sm" />
+              <Skeleton className="ml-auto h-1.5 w-3 rounded-sm" />
+              <Skeleton className="h-1.5 w-3 rounded-sm" />
+            </div>
+            <Skeleton className="min-h-0 w-full flex-1 rounded-sm" />
+            <Skeleton className="h-1.5 w-2/3 shrink-0 rounded-sm" />
+            <span className="flex shrink-0 items-center gap-1 text-[9px] leading-none text-fg-tertiary">
+              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+              Строится…
+            </span>
           </div>
         )}
 
