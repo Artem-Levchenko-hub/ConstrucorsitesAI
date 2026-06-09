@@ -18,11 +18,18 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.redis import project_channel
+from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 
 VIEWPORT = {"width": 1280, "height": 800}
 GOTO_TIMEOUT_MS = 15_000
+
+# Container-backed templates render from a live dev container, not from repo
+# files — their git repo only tracks AI-generated files, no root `index.html`.
+# (Canonical list lives in routers/messages.py CONTAINER_NEXT; kept in sync.)
+CONTAINER_NEXT = ("fullstack", "nextjs_entities")
 # `domcontentloaded` (NOT networkidle): broken images + the Tailwind Play-CDN keep
 # the network busy, so networkidle never settles and Page.goto times out at 15s —
 # which made the acceptance gate SKIP responsive+vision and ship junk as passed=True.
@@ -153,6 +160,31 @@ async def capture(
     return out
 
 
+# User dev containers serve Next.js on :3000 inside the container. Their host
+# bind is 127.0.0.1-only, so the worker can't reach them via the host port or
+# the public nginx URL (hairpin NAT). It reaches them container-to-container by
+# name over the shared `omnia-runtime_default` network (the worker joins it in
+# deploy/full/docker-compose.yml) — the same path user containers use for MinIO.
+_DEV_CONTAINER_PORT = 3000
+
+
+async def _resolve_live_url(project_id: UUID) -> str | None:
+    """Container-to-container URL of a *running* dev preview, or ``None`` if it
+    isn't up / can't be located. Fail-soft (R-10): any orchestrator hiccup →
+    ``None`` → the caller just skips the thumbnail this round (a later build /
+    edit snapshot re-enqueues a preview once the container is warm)."""
+    try:
+        status = await orchestrator_client.get_status(project_id)
+    except Exception:
+        return None
+    if status.get("state") != "running":
+        return None
+    name = status.get("container_name")
+    if not isinstance(name, str) or not name:
+        return None
+    return f"http://{name}:{_DEV_CONTAINER_PORT}"
+
+
 async def _render_async(snapshot_id: str) -> None:
     settings = get_settings()
     sid = UUID(snapshot_id)
@@ -166,19 +198,38 @@ async def _render_async(snapshot_id: str) -> None:
                 return
             project_id = snapshot.project_id
             commit_sha = snapshot.commit_sha
+            project = await session.get(Project, project_id)
+            template = project.template if project is not None else None
 
         files = await asyncio.to_thread(repo_svc.read_files, project_id, commit_sha)
-        if "index.html" not in files:
+
+        # Two render sources: a static template screenshots its repo `index.html`
+        # off disk; a container template (no index.html in the repo) screenshots
+        # the live dev container over the runtime network instead.
+        is_container = template in CONTAINER_NEXT
+        has_index = "index.html" in files
+        if not has_index and not is_container:
             return
+
+        live_url: str | None = None
+        if not has_index:
+            live_url = await _resolve_live_url(project_id)
+            if live_url is None:
+                return  # container not running / unreachable — no thumbnail now
 
         preview_key = f"{snapshot_id}.png"
         with tempfile.TemporaryDirectory(prefix=f"omnia-preview-{sid}-") as tmp:
             workdir = Path(tmp)
-            for path, content in files.items():
-                full = workdir / path
-                full.parent.mkdir(parents=True, exist_ok=True)
-                full.write_text(content, encoding="utf-8")
             png_path = workdir / "preview.png"
+
+            if live_url is not None:
+                target_url = live_url
+            else:
+                for path, content in files.items():
+                    full = workdir / path
+                    full.parent.mkdir(parents=True, exist_ok=True)
+                    full.write_text(content, encoding="utf-8")
+                target_url = (workdir / "index.html").as_uri()
 
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
@@ -187,7 +238,7 @@ async def _render_async(snapshot_id: str) -> None:
                         viewport=VIEWPORT, reduced_motion="reduce"
                     )
                     await page.goto(
-                        (workdir / "index.html").as_uri(),
+                        target_url,
                         wait_until="domcontentloaded",
                         timeout=GOTO_TIMEOUT_MS,
                     )

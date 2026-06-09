@@ -277,6 +277,12 @@ services:
       PEXELS_PROXY: ${PEXELS_PROXY:-}
       UNLIMITED_GENERATIONS: ${UNLIMITED_GENERATIONS:-false}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      # The preview-render job screenshots live container apps — it asks the
+      # orchestrator for the running container's name (then reaches it on the
+      # shared omnia-runtime network). Without these the worker can't reach the
+      # orchestrator and container apps silently get no timeline thumbnail.
+      ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://172.21.0.1:8003}
+      ORCHESTRATOR_INTERNAL_TOKEN: ${ORCHESTRATOR_INTERNAL_TOKEN:?set ORCHESTRATOR_INTERNAL_TOKEN in .env}
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
       # Per-role model orchestration overrides (empty = code ROLE_MODEL_MAP).
@@ -319,6 +325,9 @@ services:
     restart: unless-stopped
     networks:
       - omnia-prod
+      # Join the user-container runtime network so the preview job can reach a
+      # running dev container by name (omnia-dev-<slug>:3000) to screenshot it.
+      - omnia-runtime
 
   web:
     build:
@@ -354,3 +363,8 @@ volumes:
 networks:
   omnia-prod:
     driver: bridge
+  # External: created by the orchestrator runtime stack. User dev/prod
+  # containers live here; the worker joins it to screenshot live previews.
+  omnia-runtime:
+    external: true
+    name: omnia-runtime_default
