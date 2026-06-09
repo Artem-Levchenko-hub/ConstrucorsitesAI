@@ -215,6 +215,27 @@ async def compile_status(
     )
 
 
+async def runtime_status(
+    project_id: UUID, *, slug: str | None = None, path: str = "/"
+) -> dict[str, Any]:
+    """GET /internal/projects/<uuid>/runtime-status — does the running app 5xx?
+
+    Returns `{"project_id", "ok": bool, "status_code": int|None, "error": str|None,
+    "file": str|None}`. `ok=False` only when the rendered route returns 5xx — a
+    compile-clean app that still crashes on render. Used right after a build,
+    after the compile probe comes back clean. Fail-soft on the orchestrator side:
+    a missing/paused container returns `ok=True`, never a 404.
+    """
+    params: dict[str, str] = {"path": path}
+    if slug:
+        params["slug"] = slug
+    return await _request(
+        "GET",
+        f"/internal/projects/{project_id}/runtime-status",
+        params=params,
+    )
+
+
 async def hot_reload(
     project_id: UUID, slug: str, files: dict[str, str]
 ) -> dict[str, Any]:

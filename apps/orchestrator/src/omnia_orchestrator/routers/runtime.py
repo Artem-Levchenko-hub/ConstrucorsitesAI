@@ -39,6 +39,7 @@ from omnia_orchestrator.schemas.runtime import (
     LogsResponse,
     ProvisionRequest,
     ProvisionResponse,
+    RuntimeStatusResponse,
     StatusResponse,
     StopRequest,
     WakeRequest,
@@ -52,6 +53,7 @@ from omnia_orchestrator.services.port_allocator import (
     get_prod_port_allocator,
 )
 from omnia_orchestrator.services.provisioner import provision as provision_svc
+from omnia_orchestrator.services.runtime_probe import probe_runtime_error
 
 router = APIRouter(prefix="/internal/projects", tags=["runtime"])
 
@@ -445,6 +447,42 @@ async def compile_status(
     ok, error, file = parse_next_compile_error(result["logs"])
     return CompileStatusResponse(
         project_id=UUID(project_id), ok=ok, error=error, file=file
+    )
+
+
+@router.get("/{project_id}/runtime-status", response_model=RuntimeStatusResponse)
+async def runtime_status(
+    project_id: str,
+    slug: str | None = None,
+    path: str = "/",
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> RuntimeStatusResponse:
+    """Whether the running dev app currently 5xx's on render.
+
+    A compile-clean app can still throw a 500 when a route is actually rendered
+    (server components / data fetching run lazily, per-route). apps/api polls
+    this right after a build so a broken-on-load preview surfaces as a card
+    instead of leaving the user staring at a Next.js error overlay.
+
+    Missing / paused container → ``ok=True`` (nothing to probe) — same fail-soft
+    posture as ``/compile-status``: never raise a 404 the caller must special-case.
+    """
+    _verify_token(x_internal_token)
+    from uuid import UUID
+
+    name = await find_project_container(project_id, kind="dev")
+    if name is None and slug:
+        name = f"omnia-dev-{slug}"
+    if name is None:
+        return RuntimeStatusResponse(project_id=UUID(project_id), ok=True)
+
+    probe = await probe_runtime_error(name, path=path)
+    return RuntimeStatusResponse(
+        project_id=UUID(project_id),
+        ok=probe.ok,
+        status_code=probe.status_code,
+        error=probe.error,
+        file=probe.file,
     )
 
 

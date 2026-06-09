@@ -142,14 +142,17 @@ async def _probe_compile_errors(
     assistant_message_id: UUID,
     slug: str,
 ) -> None:
-    """After a clean hot-reload, poll the dev server for a Next.js compile error
-    and surface it as a chat card.
+    """After a clean hot-reload, poll the dev server for a Next.js compile error,
+    then probe the live route for a server-side 5xx, and surface either as a card.
 
     Turbopack recompiles asynchronously, so we give it a few seconds and poll a
-    handful of times (bounded ~9s). Runs as a background task so it never delays
-    ``llm.done`` — the card arrives later via its own ``app.error`` event. Fully
-    fail-soft (R-10): any orchestrator hiccup is swallowed — a missing card is
-    acceptable, a crashed build is not.
+    handful of times (bounded ~9s) for a *compile* error. A compile-clean app can
+    still 5xx when the route actually renders (server components run lazily), so
+    after the compile check is clean we do one *runtime* probe that GETs the page.
+    Runs as a background task so it never delays ``llm.done`` — the card arrives
+    later via its own ``app.error`` event. Fully fail-soft (R-10): any
+    orchestrator hiccup is swallowed — a missing card is acceptable, a crashed
+    build is not.
     """
     for _ in range(3):
         await asyncio.sleep(3)
@@ -170,6 +173,30 @@ async def _probe_compile_errors(
             file=status.get("file"),
         )
         return
+
+    # Compile is clean — now force a render and catch a server-side 5xx that
+    # lazy per-route compilation would otherwise hide until the user opens it.
+    try:
+        runtime = await orchestrator_client.runtime_status(project_id, slug=slug)
+    except Exception as exc:
+        print(f"[PP] runtime_status probe failed: {exc!r}", flush=True)
+        return
+    if runtime.get("ok", True):
+        return
+    code = runtime.get("status_code")
+    detail = runtime.get("error") or (
+        f"Приложение вернуло ошибку сервера (HTTP {code}) при открытии страницы."
+        if code
+        else "Приложение упало с ошибкой сервера при открытии страницы."
+    )
+    await app_errors.publish(
+        factory,
+        project_id,
+        assistant_message_id,
+        category="runtime",
+        detail=detail,
+        file=runtime.get("file"),
+    )
 
 
 def _spawn_compile_probe(
