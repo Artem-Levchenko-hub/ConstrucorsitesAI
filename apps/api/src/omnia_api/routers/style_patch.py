@@ -24,6 +24,7 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers.public import _INDEX_CANDIDATES
 from omnia_api.schemas.snapshot import SnapshotPublic
 from omnia_api.schemas.style_patch import StylePatchRequest
+from omnia_api.services import orchestrator_client
 from omnia_api.services import overrides as ov
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.fonts import css_stack_for, href_for, is_known_family
@@ -31,6 +32,10 @@ from omnia_api.services.palette_guard import BANNED_HEXES
 from omnia_api.services.queue import enqueue_preview
 
 router = APIRouter(prefix="/api/projects", tags=["style-patch"])
+
+# Container-backed Next.js templates render React, not a static index.html, so
+# their direct-style edits persist in ``globals.css`` (mirrors messages.py).
+_CONTAINER_NEXT = ("fullstack", "nextjs_entities")
 
 
 def _expand_hex(h: str) -> str:
@@ -103,13 +108,6 @@ async def post_style_patch(
     parent_sha = current.commit_sha
 
     files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
-    index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
-    if index_path is None:
-        raise ApiError(
-            "no_index",
-            "this project has no static index.html to style-edit",
-            status.HTTP_400_BAD_REQUEST,
-        )
 
     tokens = [(t.var, t.value) for t in payload.tokens]
     element_rules: list[tuple[str, dict[str, str]]] = []
@@ -136,13 +134,40 @@ async def post_style_patch(
         if decls:
             element_rules.append((e.selector, decls))
 
-    new_html = ov.apply_overrides(
-        files[index_path],
-        tokens=tokens,
-        element_rules=element_rules,
-        font_links=font_links,
-    )
-    if new_html == files[index_path]:
+    # Two persistence targets. Static (V1) apps own a real ``index.html`` whose
+    # ``<head>`` carries the managed ``<style>`` block. Container apps (Next.js)
+    # render React — no index.html — so the same edits go into a managed block
+    # appended to the already-imported ``src/app/globals.css`` and are pushed
+    # into the live dev container via hot-reload below.
+    is_container = project.template in _CONTAINER_NEXT
+    if is_container:
+        target_path = "src/app/globals.css"
+        src = files.get(target_path)
+        if src is None:
+            raise ApiError(
+                "no_index",
+                "this app has no globals.css to style-edit",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        new_content = ov.apply_css_overrides(
+            src, tokens=tokens, element_rules=element_rules
+        )
+    else:
+        index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
+        if index_path is None:
+            raise ApiError(
+                "no_index",
+                "this project has no static index.html to style-edit",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        target_path = index_path
+        new_content = ov.apply_overrides(
+            files[index_path],
+            tokens=tokens,
+            element_rules=element_rules,
+            font_links=font_links,
+        )
+    if new_content == files[target_path]:
         raise ApiError(
             "empty_patch", "no effective changes", status.HTTP_400_BAD_REQUEST
         )
@@ -150,10 +175,26 @@ async def post_style_patch(
     new_sha = await asyncio.to_thread(
         repo_svc.commit_files,
         project_id,
-        {index_path: new_html},
+        {target_path: new_content},
         "style: прямое редактирование",
         parent_sha,
     )
+
+    # Container apps: push the edited globals.css into the live dev container so
+    # the change shows immediately via HMR (parity with the build path). Best-
+    # effort (R-10): the canonical state is already committed to git, and the
+    # snapshot is created regardless, so a momentarily-down orchestrator only
+    # delays the live preview, never loses the edit.
+    if is_container:
+        try:
+            await orchestrator_client.hot_reload(
+                project_id=project_id,
+                slug=project.slug,
+                files={target_path: new_content},
+            )
+        except Exception:
+            # Preview refresh must never block save; edit is already committed.
+            pass
 
     new_snapshot = Snapshot(
         project_id=project_id,

@@ -682,9 +682,17 @@ export function PreviewFrame({ project }: { project: Project }) {
                         // finishes loading. The Next.js Script tag (afterInteractive)
                         // may attach its message listener AFTER our toggle effect
                         // already posted, so we re-emit here for the late case.
+                        // Both modes (AI-pick + manual style) need re-arming —
+                        // manual edits persist on full apps too (globals.css).
                         if (inspectMode) {
                           window.setTimeout(
                             () => postToPreview({ type: "omnia:inspect:enable" }),
+                            150,
+                          );
+                        }
+                        if (styleMode) {
+                          window.setTimeout(
+                            () => postToPreview({ type: "omnia:style:enable" }),
                             150,
                           );
                         }

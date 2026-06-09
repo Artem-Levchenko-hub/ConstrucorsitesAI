@@ -22,6 +22,15 @@ import re
 OVERRIDES_STYLE_ID = "omnia-overrides"
 FONT_LINK_ATTR = "data-omnia-font"
 
+# Marker pair wrapping the managed block we append to a container app's
+# ``globals.css``. Full-stack (Next.js) apps render React, not a static
+# ``index.html``, so there is no ``<head>`` for us to inject a ``<style>`` into;
+# instead we append a clearly-delimited, plain-CSS block to the END of the
+# already-imported ``globals.css`` (never rewriting the fixed v4 token file above
+# it). Idempotent: a new patch replaces everything between the markers.
+GLOBALS_START = "/* omnia-overrides:start — managed; direct in-preview edits */"
+GLOBALS_END = "/* omnia-overrides:end */"
+
 _STYLE_RE = re.compile(
     r'<style[^>]*\bid=["\']' + OVERRIDES_STYLE_ID + r'["\'][^>]*>.*?</style>\s*',
     re.IGNORECASE | re.DOTALL,
@@ -43,6 +52,10 @@ _FONT_LINK_PARSE_RE = re.compile(
 )
 _RULE_RE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_GLOBALS_BLOCK_RE = re.compile(
+    re.escape(GLOBALS_START) + r".*?" + re.escape(GLOBALS_END) + r"\s*",
+    re.DOTALL,
+)
 
 
 def _safe_val(v: str) -> str:
@@ -61,13 +74,14 @@ def _attr_safe(s: str) -> str:
     return re.sub(r'["<>]', "", s or "").strip()
 
 
-def render_overrides_block(
+def _css_rule_lines(
     tokens: list[tuple[str, str]],
     element_rules: list[tuple[str, dict[str, str]]],
-) -> str:
-    """Build the ``<style id="omnia-overrides">`` block (or "" if no rules).
+) -> list[str]:
+    """Render the override rules as a list of plain CSS lines (no wrapper).
 
-    tokens: (css-var, value) → site-wide. element_rules: (selector, {prop: value}).
+    Shared by the static ``<style>`` block and the container ``globals.css``
+    append so the two persistence targets stay byte-for-byte equivalent.
     """
     lines: list[str] = []
     token_decls = " ".join(
@@ -86,6 +100,18 @@ def render_overrides_block(
         )
         if sel and body:
             lines.append(sel + "{ " + body + " }")
+    return lines
+
+
+def render_overrides_block(
+    tokens: list[tuple[str, str]],
+    element_rules: list[tuple[str, dict[str, str]]],
+) -> str:
+    """Build the ``<style id="omnia-overrides">`` block (or "" if no rules).
+
+    tokens: (css-var, value) → site-wide. element_rules: (selector, {prop: value}).
+    """
+    lines = _css_rule_lines(tokens, element_rules)
     if not lines:
         return ""
     css = "\n".join(lines)
@@ -185,6 +211,52 @@ def apply_overrides(
     cleaned = _strip_managed(index_html)
     inject = "\n".join(p for p in (links, block) if p)
     return _inject_before_head_close(cleaned, inject)
+
+
+def extract_css_overrides(globals_css: str) -> str:
+    """Return the inner CSS of the managed ``globals.css`` block, or "" if none."""
+    block = _GLOBALS_BLOCK_RE.search(globals_css or "")
+    if not block:
+        return ""
+    inner = block.group(0)
+    inner = inner.replace(GLOBALS_START, "", 1)
+    end = inner.rfind(GLOBALS_END)
+    return inner[:end] if end != -1 else inner
+
+
+def apply_css_overrides(
+    globals_css: str,
+    *,
+    tokens: list[tuple[str, str]],
+    element_rules: list[tuple[str, dict[str, str]]],
+) -> str:
+    """Merge in-preview edits into a container app's ``globals.css``.
+
+    Full-stack (Next.js) apps have no static ``index.html``: their styles live
+    in the fixed v4 ``globals.css`` (``@import "tailwindcss"`` + ``@theme`` +
+    oklch tokens), which we must NOT rewrite. Instead we keep a single managed,
+    marker-delimited block of plain ``!important`` CSS appended AFTER the fixed
+    content. Merging mirrors :func:`apply_overrides` so a later edit never drops
+    an earlier one. Idempotent: re-running replaces the block in place.
+
+    No ``@tailwind``/``@apply``/``@theme`` is emitted, so the v4 build stays
+    intact (see ``structure_audit``). Returns the new ``globals.css``.
+    """
+    old_tokens, old_elements = _parse_overrides(extract_css_overrides(globals_css))
+    merged_tokens = dict(old_tokens)
+    for var, val in tokens:
+        merged_tokens[var] = val
+    merged_elements = {sel: dict(d) for sel, d in old_elements.items()}
+    for sel, decls in element_rules:
+        merged_elements.setdefault(sel, {}).update(decls)
+
+    lines = _css_rule_lines(list(merged_tokens.items()), list(merged_elements.items()))
+    base = _GLOBALS_BLOCK_RE.sub("", globals_css or "").rstrip()
+    if not lines:
+        # Nothing left to override — drop the managed block entirely.
+        return base + "\n" if base else base
+    block = GLOBALS_START + "\n" + "\n".join(lines) + "\n" + GLOBALS_END
+    return base + "\n\n" + block + "\n"
 
 
 def carry_over_overrides(old_html: str, new_html: str) -> str:

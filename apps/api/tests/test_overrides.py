@@ -96,3 +96,89 @@ def test_value_sanitization_blocks_css_breakout():
         font_links=[],
     )
     assert "<script>" not in out  # < / > / } stripped from the value
+
+
+# ── Container (Next.js globals.css) persistence ───────────────────────────────
+
+GLOBALS = (
+    '@import "tailwindcss";\n'
+    "@custom-variant dark (&:is(.dark *));\n"
+    ":root {\n  --primary: oklch(0.21 0.006 285.9);\n}\n"
+    "@theme inline {\n  --color-primary: var(--primary);\n}\n"
+    "@layer base {\n  body { background-color: var(--background); }\n}\n"
+)
+
+
+def test_css_overrides_appends_managed_block_after_fixed_content():
+    out = ov.apply_css_overrides(
+        GLOBALS, tokens=[], element_rules=[("h1", {"color": "#E11D48"})]
+    )
+    assert ov.GLOBALS_START in out
+    assert ov.GLOBALS_END in out
+    assert "h1{ color: #E11D48 !important; }" in out
+    # The fixed v4 file is preserved verbatim and stays ABOVE our block.
+    assert out.index('@import "tailwindcss";') < out.index(ov.GLOBALS_START)
+    assert "@theme inline" in out and "@layer base" in out
+
+
+def test_css_overrides_build_safe_no_tailwind_directives_emitted():
+    """The appended block must never carry @tailwind/@apply/@theme — those break
+    the v4 build (mirrors structure_audit's invariant)."""
+    out = ov.apply_css_overrides(
+        GLOBALS,
+        tokens=[("--accent", "#0EA5E9")],
+        element_rules=[("h1", {"color": "#111111"})],
+    )
+    block = out[out.index(ov.GLOBALS_START) :]
+    assert "@tailwind" not in block
+    assert "@apply" not in block
+    assert "@theme" not in block
+
+
+def test_css_overrides_idempotent_single_block():
+    once = ov.apply_css_overrides(
+        GLOBALS, tokens=[], element_rules=[("h1", {"color": "#111111"})]
+    )
+    twice = ov.apply_css_overrides(
+        once, tokens=[], element_rules=[("h1", {"color": "#111111"})]
+    )
+    assert once == twice
+    assert once.count(ov.GLOBALS_START) == 1
+
+
+def test_css_overrides_merge_accumulates():
+    step1 = ov.apply_css_overrides(
+        GLOBALS, tokens=[], element_rules=[("h1", {"color": "#111111"})]
+    )
+    step2 = ov.apply_css_overrides(
+        step1,
+        tokens=[("--accent", "#222222")],
+        element_rules=[(".cta", {"background-color": "#333333"})],
+    )
+    assert "color: #111111 !important;" in step2  # earlier edit survived
+    assert "background-color: #333333 !important;" in step2
+    assert "--accent: #222222 !important;" in step2
+    # update one element prop, the other element's rule stays
+    step3 = ov.apply_css_overrides(
+        step2, tokens=[], element_rules=[("h1", {"color": "#999999"})]
+    )
+    assert "color: #999999 !important;" in step3
+    assert "#111111" not in step3
+    assert "background-color: #333333 !important;" in step3
+
+
+def test_css_overrides_no_rules_adds_no_block():
+    out = ov.apply_css_overrides(GLOBALS, tokens=[], element_rules=[])
+    assert ov.GLOBALS_START not in out
+    assert '@import "tailwindcss";' in out
+
+
+def test_css_overrides_value_sanitization():
+    out = ov.apply_css_overrides(
+        GLOBALS,
+        tokens=[],
+        element_rules=[("h1", {"color": "#fff}</style>{evil"})],
+    )
+    block = out[out.index(ov.GLOBALS_START) :]
+    assert "</style>" not in block
+    assert "{evil" not in block
