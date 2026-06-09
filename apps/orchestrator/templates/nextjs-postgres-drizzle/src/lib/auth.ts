@@ -5,9 +5,10 @@
  * extending session shape or adding OAuth providers happens here.
  *
  * Architecture:
- * - Session strategy: `database` (sessions table in Postgres). Rows expire
- *   30 days from sign-in unless refreshed by activity. Logging out
- *   deletes the row → token can't be replayed.
+ * - Session strategy: `jwt` (signed cookie). Auth.js v5 MANDATES JWT for the
+ *   Credentials provider — a `database` strategy throws `UnsupportedStrategy`
+ *   at sign-in. The token carries id + role; it expires 30 days from sign-in.
+ *   The adapter still backs users/accounts/verification rows.
  * - Password hashing: bcryptjs (10 rounds). The hash lives in
  *   `users.passwordHash`; the plaintext password NEVER reaches the DB.
  * - `auth.config.ts` would split edge-vs-node concerns if the project
@@ -51,10 +52,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     sessionsTable: sessions,
     verificationTokensTable: verificationTokens,
   }),
-  // `database` strategy keeps sessions revocable (sign-out actually removes
-  // the row). `jwt` would be faster but stateless — can't kick a stolen
-  // token without rotating AUTH_SECRET, which logs everyone out.
-  session: { strategy: "database", maxAge: 30 * 24 * 60 * 60 },
+  // Auth.js v5 REQUIRES `jwt` for the Credentials provider — a `database`
+  // strategy throws `UnsupportedStrategy` on every sign-in. The adapter still
+  // backs users/accounts; only the session lives in a signed JWT cookie.
+  session: { strategy: "jwt", maxAge: 30 * 24 * 60 * 60 },
   pages: {
     signIn: "/signin",
     error: "/signin",
@@ -93,17 +94,27 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     }),
   ],
   callbacks: {
-    /** Attach `role` from DB onto the session so client-side
-     *  `useSession()` and server-side `auth()` both see it. */
-    session: async ({ session, user }) => {
-      if (session.user && user) {
+    /** JWT strategy has no `user` arg in the session callback, so stamp id +
+     *  role onto the token at sign-in (when `user` is present — i.e. the
+     *  Credentials `authorize` just returned it) and read them back below. */
+    jwt: async ({ token, user }) => {
+      if (user) {
+        token.id = user.id as string;
         const row = await db
           .select({ role: users.role })
           .from(users)
-          .where(eq(users.id, user.id))
+          .where(eq(users.id, user.id as string))
           .limit(1);
-        session.user.id = user.id;
-        session.user.role = row[0]?.role ?? "user";
+        token.role = row[0]?.role ?? "user";
+      }
+      return token;
+    },
+    /** Surface id + role (carried on the token) onto the session so client
+     *  `useSession()` and server `auth()` both see them. */
+    session: async ({ session, token }) => {
+      if (session.user) {
+        session.user.id = (token.id as string) ?? session.user.id;
+        session.user.role = (token.role as string) ?? "user";
       }
       return session;
     },
