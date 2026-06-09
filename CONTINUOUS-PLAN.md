@@ -115,7 +115,7 @@
 ### PHASE 0 — РАБОТАЕТ С ПЕРВОГО ПРОМПТА (надёжность; разблокирует остальное)
 - [x] 0.1 **A7 — цельный свежий E2E fullstack** ✅ PASS вживую (2026-06-09, апп TaskFlow `a7-zadachi-saas-e2e-ec4081`): zero-friction создание → discovery → авто-стек nextjs_entities → build → лендинг → signup→авто-логин→кабинет → CRUD (create 201/read/delete 200, persist) → логи чистые. Детали в Логе. (UPDATE-клик-через — минорный остаток.)
 - [x] 0.2 **A5b — drizzle FK под per-project search_path** ✅ УЖЕ РЕШЕНО архитектурой (2026-06-09 ~23:20 MSK): премиса устарела. Рантайм НЕ использует `drizzle-kit push` — entrypoint гонит `init-db.mjs` (idempotent `CREATE TABLE IF NOT EXISTS` через `pg`), а DSN пинит `search_path=proj_<id8>` (без `public`). Живая прод-проверка (omnia-postgres-users/omnia_users, 8 схем `proj_*`): у КАЖДОГО проекта свои `users/accounts/sessions/records`, **0** `public.users`; все 3 FK (`accounts/sessions/records.created_by`) резолвятся ИНТРА-СХЕМНО на `proj_<id>.users`; auth-колонки (`password_hash`,`role`) на месте; signup-юзер A7 (`taskuser-a7@example.com`) персистнут с реальным `password_hash`+role. Фикс: убрал ЛЖИВЫЙ коммент в `schema.ts` (врал «entrypoint runs db:push --force») → точное описание init-db.mjs + инвариант интра-схемного FK (защита от регрессии — именно эта ложь породила баг-репорт). Деталь в Логе.
-- [ ] 0.3 **Wake-from-hibernation = 200, не 502**: апп заснул → зашёл → проснулся → 200. Вживую: дождаться/форсить гибернацию, открыть preview, проверить отсутствие 502. Память `omnia_p0_infra_enabler`, `omnia_v2_runtime_live`.
+- [x] 0.3 **Wake-from-hibernation = 200, не 502** ✅ DONE (2026-06-09 ~23:35 MSK): scale-from-zero ingress. Прямой хит по preview-сабдомену спящего контейнера раньше → 502 (nginx proxy_pass на мёртвый порт). Теперь: nginx перехватывает 502/503/504 → `@omnia_waking` → orchestrator `GET /_omnia/wake` (token-free, host-keyed) будит контейнер и отдаёт self-refresh «Запускаем приложение…» страницу → JS-reload → живой апп. `refresh_vhosts()` на старте апгрейдит старые vhost'ы (идемпотентно, nginx -t + полный байт-откат → ноль blast-radius). Прод @82a4ecc, **16/16 vhost'ов** апгрейднуты (все превью теперь wake-on-request). Live browser-E2E на A7: Exited → waking-page (скрин) → авто-рефреш → TaskFlow рендерится, **ноль 502**. Деталь в Логе.
 - [ ] 0.4 **Авто-retry прерванной генерации** (снапшота ещё нет → не показывать голый стартер; ре-генерировать или явный статус). Память E3 в routine-плане.
 
 ### PHASE 1 — ИНТЕРАКТИВНЫЙ ОНБОРДИНГ С ВЫБОРОМ ОТВЕТОВ (явный запрос владельца)
@@ -174,6 +174,8 @@
 ## 6. ПРОГРЕСС
 <!-- Итерации отмечают [x]/[~] выше + блок в Логе ниже -->
 
+**0.3 DONE ✅** (2026-06-09 ~23:35 MSK): wake-on-request (scale-from-zero). Спящий preview → waking-page 200, не 502; контейнер сам будится; авто-рефреш → апп. Прод @82a4ecc, 16/16 vhost апгрейднуты, live browser-E2E на A7 зелёный (Exited→waking→app, 0×502). ★Грабля: РЕЦИДИВ double-supervisor — старый 8h-proc держал :8003, `--user` юнит фантомил → новый код не биндился. Снёс `--user` (stop/disable) + pkill стрэев → `sudo systemctl restart` system-юнит = единственный супервизор (как в [[omnia_entities_app_e2e_lipstick]]). ★Грабля nginx: literal URI в proxy_pass запрещён внутри named location → `set $var` + `proxy_pass $var`. A7 СТОПНУТ (стенд для 2.5). Следующий тик: **0.4** (авто-retry прерванной генерации) или **Phase 1** (интерактивный онбординг с чипами).
+
 **0.2 DONE ✅** (2026-06-09 ~23:20 MSK): УЖЕ решено архитектурой per-project-schema (премиса устарела — `drizzle-kit push` давно заменён на `init-db.mjs`; DSN пинит `search_path=proj_<id>` без public). Проверено вживую по прод-БД (8 схем, все FK интра-схемно, 0 public.users, auth-колонки + персист signup A7). Корректнул лживый коммент в `schema.ts`. RAM на проде 10.9GB, 0 dev-контейнеров (чисто). Следующий тик: **0.3** (wake-from-hibernation 502→200) — можно разбудить тест-стенд A7 `462af0bb` (slug `a7-zadachi-saas-e2e-ec4081`).
 
 **0.1 DONE ✅** (2026-06-09 ~22:05 MSK): A7 PASS вживую. Тест-проект `462af0bb` (slug `a7-zadachi-saas-e2e-ec4081`, nextjs_entities) — контейнер **ОСТАНОВЛЕН** для экономии ресурса (владелец просил беречь сервер). НЕ удалять: **тест-стенд** для Phase **0.3** (разбудить → 502→200) и Phase **2.5** (кликер на full). URL 502 пока не разбудишь — это и есть кейс 0.3. Апп-юзер `taskuser-a7@example.com`/`Taskflow123`. Следующий тик: **0.2** (A5b drizzle FK — нужен СВОЙ drizzle-fullstack тест-апп; A7 на entity-стеке).
@@ -190,6 +192,24 @@
 - Владельцу утром: <что глянуть>
 - Идея на следующую итерацию: <чтобы не гадать>
 -->
+
+## 2026-06-09 23:25–23:40 MSK — Phase 0.3 DONE ✅ (wake-from-hibernation 502→200, scale-from-zero ingress)
+- Статус: DONE — live browser-E2E зелёный, 0×502.
+- Корень: спящий dev-контейнер → ничего на 127.0.0.1:<port> → nginx proxy_pass = 502. Существующий `/wake` token-gated, зовётся только из workspace; прямой хит по preview-сабдомену не будил никогда. Подтверждено curl'ом до фикса (2×502).
+- Фикс (зона D orchestrator, 7 файлов):
+  - `routers/ingress.py` (новый, token-free): `GET /_omnia/wake` host-keyed — `<slug>-dev.<suffix>`→`omnia-dev-<slug>`, иначе `omnia-app-<slug>`; not_found→404-страница (crawler-safe, НЕ будит); exited/paused→`wake_container`+`record_activity`; отдаёт self-refresh «Запускаем приложение…» (JS reload 6s, sessionStorage счётчик, noscript meta-refresh).
+  - `nginx_writer.py`: `_proxy_location` += `proxy_intercept_errors on; error_page 502 503 504 = @omnia_waking;`; `_wake_location()` (named loc → orchestrator); `refresh_vhosts()` startup-миграция (идемпотентно по `@omnia_waking`, FS-скан в thread, nginx -t гейт + полный байт-откат).
+  - `docker_client.container_status` += label `project_id` (один docker-роунд для idle-резета).
+  - `main.py`: регистрация роутера + `refresh_vhosts()` в lifespan (fail-soft).
+  - `config.py`: `orchestrator_wake_target=127.0.0.1:8003`.
+- sequential-thinking: 3 мысли (scale-from-zero паттерн; host-keyed чтобы dev+prod общий шаблон; рекурс-интерстициал через JS, риск/откат). context7: не требовался (nginx/FastAPI семантика известна).
+- Verify: ruff/mypy чисто на МОЁМ диффе (2 остаточных ruff = pre-existing в `_issue_cert`); **107 pytest passed** (6 новых: host→container parse, vhost rebuild/idempotency/rollback).
+- Грабли деплоя: (1) nginx -t отбил literal URI в proxy_pass внутри named loc → variable-form `set $var; proxy_pass $var` (refresh_vhosts откатил конфиг, бокс жив). (2) РЕЦИДИВ double-supervisor: 8h-proc 1444509 держал :8003, `--user` юнит фантомил strays → новый код не биндился; `systemctl --user stop/disable` + `pkill` + `sudo systemctl restart` system-юнит = единственный лисенер 1294022.
+- E2E (puppeteer, playwright занят): A7 `462af0bb` `docker stop`→Exited → браузер navigate → waking-page (title «Запускаем приложение…»+спиннер, evaluate подтвердил) → авто-рефреш → TaskFlow рендерится (title «Omnia project», h1 hero, nav). nginx error.log: 0×502. `ingress.woke was=exited` ×2 в логах, чисто. Скрин p03-waking-page (по факту уже апп — контейнер тёплый, поднялся <6s).
+- Доставка: commit f603773 (фича) + 82a4ecc (nginx var-fix) | push main (PAT) | deploy: `git merge --ff-only` /opt/omnia + `sudo systemctl restart omnia-orchestrator` | health 200 | refresh 16/16 vhost | nginx -t ok.
+- Resource-guard: A7 СТОПНУТ после E2E (стенд для 2.5). RAM available 10.95GB, 0 dev-контейнеров.
+- Владельцу утром: ✅ спящие превью больше НЕ отдают 502 — зритель видит «Запускаем приложение…» и через пару секунд живой апп (все 16 превью, включая kofeinia/legomagazin/crm). Демо: открой любой -dev.preview-сабдомен после простоя.
+- Идея на следующий тик: Phase 0.4 (авто-retry прерванной генерации — не показывать голый стартер без снапшота) ИЛИ Phase 1.1 (discovery отдаёт choices[] для чипов).
 
 ## 2026-06-09 23:06–23:25 MSK — Phase 0.2 DONE ✅ (A5b drizzle FK под per-project search_path — уже решено архитектурой)
 - Статус: DONE — премиса задачи устарела; проверено вживую по прод-БД, скорректирован лживый коммент.
