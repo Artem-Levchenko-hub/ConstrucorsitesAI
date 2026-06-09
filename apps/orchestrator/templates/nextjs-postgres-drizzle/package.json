@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start --port 3000 --hostname 0.0.0.0",
     "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
