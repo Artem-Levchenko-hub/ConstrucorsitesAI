@@ -166,33 +166,49 @@ export function DataTable<T extends { id: string }>({
         <Table>
           <TableHeader className="bg-muted/40">
             <TableRow>
-              {columns.map((col) => (
-                <TableHead
-                  key={col.key}
-                  className={cn(col.align && alignClass[col.align], col.headerClassName)}
-                >
-                  {col.sortable ? (
-                    <button
-                      type="button"
-                      onClick={() => toggleSort(col.key)}
-                      className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
-                    >
-                      {col.header}
-                      {sort?.key === col.key ? (
-                        sort.dir === "asc" ? (
-                          <ArrowUp className="size-3.5" />
+              {columns.map((col) => {
+                const sortedAsc = sort?.key === col.key && sort.dir === "asc";
+                const sortedDesc = sort?.key === col.key && sort.dir === "desc";
+                return (
+                  <TableHead
+                    key={col.key}
+                    aria-sort={
+                      col.sortable
+                        ? sortedAsc
+                          ? "ascending"
+                          : sortedDesc
+                            ? "descending"
+                            : "none"
+                        : undefined
+                    }
+                    className={cn(col.align && alignClass[col.align], col.headerClassName)}
+                  >
+                    {col.sortable ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(col.key)}
+                        aria-label={`Сортировать по «${col.header}»${
+                          sortedAsc ? ", по возрастанию" : sortedDesc ? ", по убыванию" : ""
+                        }`}
+                        className="-mx-2 inline-flex min-h-9 items-center gap-1 rounded-md px-2 outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                      >
+                        {col.header}
+                        {sort?.key === col.key ? (
+                          sort.dir === "asc" ? (
+                            <ArrowUp className="size-3.5" />
+                          ) : (
+                            <ArrowDown className="size-3.5" />
+                          )
                         ) : (
-                          <ArrowDown className="size-3.5" />
-                        )
-                      ) : (
-                        <ChevronsUpDown className="size-3.5 opacity-50" />
-                      )}
-                    </button>
-                  ) : (
-                    col.header
-                  )}
-                </TableHead>
-              ))}
+                          <ChevronsUpDown className="size-3.5 opacity-50" />
+                        )}
+                      </button>
+                    ) : (
+                      col.header
+                    )}
+                  </TableHead>
+                );
+              })}
               {rowActions ? <TableHead className="w-0 text-right">Действия</TableHead> : null}
             </TableRow>
           </TableHeader>

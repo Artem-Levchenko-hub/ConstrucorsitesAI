@@ -174,7 +174,12 @@ export function AppShell({
           {/* Mobile menu */}
           <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="lg:hidden" aria-label="Меню">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-11 lg:hidden"
+                aria-label="Меню"
+              >
                 <Menu />
               </Button>
             </SheetTrigger>
