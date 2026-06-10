@@ -162,7 +162,7 @@ export function DataTable<T extends { id: string }>({
         </div>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className="elev-1 overflow-hidden rounded-xl border border-border bg-card">
         <Table>
           <TableHeader className="bg-muted/40">
             <TableRow>

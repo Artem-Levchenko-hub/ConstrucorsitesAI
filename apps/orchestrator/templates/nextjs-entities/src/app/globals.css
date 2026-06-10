@@ -201,7 +201,7 @@
 
 .hover-lift { transition: transform .2s ease, box-shadow .2s ease; }
 @media (hover: hover) {
-  .hover-lift:hover { transform: translateY(-3px); box-shadow: 0 16px 40px -18px rgba(15, 23, 42, .25); }
+  .hover-lift:hover { transform: translateY(-3px); box-shadow: var(--elevation-2); }
 }
 
 /* ── Premium elevation + canvas (awwwards-grade depth for app surfaces) ────────
