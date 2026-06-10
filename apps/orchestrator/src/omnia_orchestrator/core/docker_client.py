@@ -438,6 +438,7 @@ async def exec_cmd(
     workdir: str | None = None,
     user: str = "1000:1000",
     timeout_sec: int = 120,
+    max_output: int = 8_000,
 ) -> dict[str, str]:
     """Run a command inside a container, return {exit_code, stdout, stderr}.
 
@@ -445,6 +446,11 @@ async def exec_cmd(
     when the AI changed `src/lib/db/schema.ts`. Idempotent for the caller —
     a non-zero exit is returned in the dict, not raised, so the api layer
     can decide whether to surface it.
+
+    ``max_output`` bounds each stream (chars) to keep command-log dumps small.
+    Callers that read a whole file (e.g. ``read-file`` cat-ing ``globals.css``,
+    which exceeds the default cap) MUST raise it, else the content is silently
+    truncated mid-line — a truncated ``globals.css`` then breaks the CSS build.
     """
     log.info("docker.exec_cmd", name=name, cmd=cmd, workdir=workdir)
 
@@ -469,8 +475,8 @@ async def exec_cmd(
         out_bytes, err_bytes = result.output if isinstance(result.output, tuple) else (result.output, b"")
         return {
             "exit_code": str(result.exit_code),
-            "stdout": (out_bytes or b"").decode("utf-8", errors="replace")[:8000],
-            "stderr": (err_bytes or b"").decode("utf-8", errors="replace")[:8000],
+            "stdout": (out_bytes or b"").decode("utf-8", errors="replace")[:max_output],
+            "stderr": (err_bytes or b"").decode("utf-8", errors="replace")[:max_output],
         }
 
     # exec_run does not honor an explicit timeout; wrap in asyncio.wait_for.

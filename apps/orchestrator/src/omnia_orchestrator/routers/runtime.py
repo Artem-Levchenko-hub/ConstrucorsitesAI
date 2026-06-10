@@ -315,7 +315,12 @@ async def read_file(
         )
     container_name = f"omnia-dev-{slug}"
     try:
-        result = await exec_cmd(container_name, cmd=["cat", path], workdir="/app")
+        # Read the whole file: globals.css (~10 KB) exceeds exec_cmd's default
+        # 8 KB log cap, which would truncate it mid-rule and break the CSS build.
+        # 1 MB ceiling stays bounded (whitelist holds only small fixed files).
+        result = await exec_cmd(
+            container_name, cmd=["cat", path], workdir="/app", max_output=1_000_000
+        )
     except OrchestratorError:
         # Container not running / not found — let the caller fall back.
         return {"found": False, "content": ""}
