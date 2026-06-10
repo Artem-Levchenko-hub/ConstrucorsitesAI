@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import suppress
 from dataclasses import dataclass
 
 import docker  # type: ignore[import-untyped]
@@ -75,6 +76,15 @@ async def start_container(spec: ContainerSpec) -> str:
     stopped and return the existing id without recreating. This matters
     because `provision` and `wake` may race on a fresh project.
 
+    Exception — image change: if the existing container runs a DIFFERENT image
+    than `spec.image`, it is stale and must be replaced. This happens on a stack
+    switch (e.g. auto-stack-routing flips a project drizzle→nextjs-entities and
+    re-provisions): reusing the old container would serve generated code against
+    the wrong template's component kit (`@/components/ui/*` 404 → 500). We
+    compare by the image *tag* string, so a same-tag rebuild does NOT force a
+    recreate — running containers keep serving until their stack actually
+    changes.
+
     Sprint A1 will add per-project networks (--network=proj-<id>), read-only
     rootfs with tmpfs for /tmp, healthcheck wiring, and HMR volume mounts.
     For PoC this is sufficient: defaults still cap-drop ALL and run non-root.
@@ -85,14 +95,28 @@ async def start_container(spec: ContainerSpec) -> str:
         client = _get_client()
         try:
             existing = client.containers.get(spec.name)
-            existing.reload()
-            if existing.status == "paused":
-                existing.unpause()  # can't .start() a frozen container
-            elif existing.status != "running":
-                existing.start()
-            return str(existing.id)
         except docker.errors.NotFound:
-            pass
+            existing = None
+
+        if existing is not None:
+            existing.reload()
+            current_image = (existing.attrs.get("Config") or {}).get("Image")
+            if current_image and current_image != spec.image:
+                # Stack switched — drop the stale container and recreate below.
+                log.info(
+                    "docker.recreate_on_image_change",
+                    name=spec.name,
+                    old_image=current_image,
+                    new_image=spec.image,
+                )
+                with suppress(docker.errors.APIError, docker.errors.NotFound):
+                    existing.remove(force=True)
+            else:
+                if existing.status == "paused":
+                    existing.unpause()  # can't .start() a frozen container
+                elif existing.status != "running":
+                    existing.start()
+                return str(existing.id)
 
         try:
             container = client.containers.run(

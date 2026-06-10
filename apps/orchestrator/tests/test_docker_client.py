@@ -9,6 +9,9 @@ the label-set we stamp onto containers.
 
 from __future__ import annotations
 
+from typing import Any
+
+import docker  # type: ignore[import-untyped]
 import pytest
 
 from omnia_orchestrator.core import docker_client
@@ -73,6 +76,92 @@ def test_container_spec_carries_tier_for_hibernate() -> None:
     # accidentally lands in a pro tier.
     bare = ContainerSpec(name="x", image="y", port=1, project_id="p", env={})
     assert bare.tier == "free"
+
+
+class _FakeContainer:
+    def __init__(self, cid: str, image: str, status: str = "running") -> None:
+        self.id = cid
+        self.status = status
+        self.attrs = {"Config": {"Image": image}}
+        self.removed = False
+        self.started = False
+
+    def reload(self) -> None:
+        pass
+
+    def start(self) -> None:
+        self.started = True
+        self.status = "running"
+
+    def unpause(self) -> None:
+        self.status = "running"
+
+    def remove(self, force: bool = False) -> None:
+        self.removed = True
+
+
+class _FakeContainers:
+    def __init__(self, existing: _FakeContainer | None) -> None:
+        self._existing = existing
+        self.run_image: str | None = None
+        self.run_called = False
+
+    def get(self, name: str) -> _FakeContainer:
+        if self._existing is None:
+            raise docker.errors.NotFound(name)
+        return self._existing
+
+    def run(self, *, image: str, **_: Any) -> _FakeContainer:
+        self.run_called = True
+        self.run_image = image
+        return _FakeContainer("new-container-id", image)
+
+
+class _FakeClient:
+    def __init__(self, existing: _FakeContainer | None) -> None:
+        self.containers = _FakeContainers(existing)
+
+
+def _spec(image: str) -> ContainerSpec:
+    return ContainerSpec(
+        name="omnia-dev-x", image=image, port=3200,
+        project_id="00000000-0000-0000-0000-000000000001", env={},
+    )
+
+
+async def test_start_container_recreates_on_image_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stack switch (drizzle→nextjs-entities) re-provisions with a new image.
+    The stale container must be removed and a fresh one created from the new
+    image — otherwise generated entity code runs against the wrong template's
+    kit and 500s on `@/components/ui/*`. Regression for the stack-switch bug."""
+    stale = _FakeContainer("old-id", "omnia-template-nextjs-postgres-drizzle:dev")
+    client = _FakeClient(stale)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    cid = await docker_client.start_container(_spec("omnia-template-nextjs-entities:dev"))
+
+    assert stale.removed is True, "stale container must be removed on image change"
+    assert client.containers.run_called is True
+    assert client.containers.run_image == "omnia-template-nextjs-entities:dev"
+    assert cid == "new-container-id"
+
+
+async def test_start_container_reuses_when_image_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same image tag (incl. a same-tag rebuild) → reuse the running container,
+    never recreate. A rebuild must not disturb live apps mid-session."""
+    same = _FakeContainer("live-id", "omnia-template-nextjs-entities:dev", status="running")
+    client = _FakeClient(same)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    cid = await docker_client.start_container(_spec("omnia-template-nextjs-entities:dev"))
+
+    assert same.removed is False
+    assert client.containers.run_called is False
+    assert cid == "live-id"
 
 
 def test_module_exposes_expected_public_api() -> None:
