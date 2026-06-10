@@ -8,6 +8,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { signIn, auth } from "@/lib/auth";
+import { APP_HOME } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -21,13 +22,13 @@ export default async function SignInPage({
   const sp = await searchParams;
   // Already signed in → bounce straight through to next= or home.
   const session = await auth();
-  if (session?.user) redirect(sp.next ?? "/");
+  if (session?.user) redirect(sp.next ?? APP_HOME);
 
   async function action(formData: FormData) {
     "use server";
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
     const password = String(formData.get("password") ?? "");
-    const next = String(formData.get("next") ?? "/");
+    const next = String(formData.get("next") ?? APP_HOME);
     await signIn("credentials", { email, password, redirectTo: next });
   }
 
@@ -51,7 +52,7 @@ export default async function SignInPage({
         )}
 
         <form action={action} className="space-y-4">
-          <input type="hidden" name="next" value={sp.next ?? "/"} />
+          <input type="hidden" name="next" value={sp.next ?? APP_HOME} />
           <div className="space-y-2">
             <label htmlFor="email" className="text-sm font-medium">
               Email

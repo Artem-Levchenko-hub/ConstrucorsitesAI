@@ -79,6 +79,9 @@ Sign up / sign in / sign out already work. Pages: `/signin`, `/signup`.
 - For a server-rendered protected page you may use `requireUser()` from `@/lib/session` (redirects when not authed), but render the data list itself in a client component with the SDK.
 - `owner` entities already scope to the signed-in user — you never filter by user yourself.
 
+**The app home is `/dashboard` (binding).** Always build an `(app)/dashboard` route — it is where a user lands the instant they sign up or sign in (the auth pages redirect there for you; never override that). A user who finishes signup must be INSIDE their cabinet, never bounced to the marketing page.
+- The public landing at `/` MUST be auth-aware: when `auth.me()` returns a user, the header/hero CTAs say «В кабинет» / «Открыть приложение» linking to `/dashboard` — NOT «Войти»/«Регистрация». A logged-in visitor who opens `/` must always have a one-click way back into the app, or they feel kicked out.
+
 ## NEVER touch (the fixed backend — editing it breaks everything)
 
 - `src/lib/db/**` (schema, client), `src/lib/entities/**` (the engine), `src/lib/sdk/**`, `src/app/api/**` (entities + auth routes), `src/lib/auth.ts`, `src/lib/session.ts`.

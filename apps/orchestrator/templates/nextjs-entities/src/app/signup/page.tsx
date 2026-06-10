@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth, hashPassword, signIn } from "@/lib/auth";
+import { APP_HOME } from "@/lib/session";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { Button } from "@/components/ui/button";
@@ -27,14 +28,14 @@ export default async function SignUpPage({
 }) {
   const sp = await searchParams;
   const session = await auth();
-  if (session?.user) redirect(sp.next ?? "/");
+  if (session?.user) redirect(sp.next ?? APP_HOME);
 
   async function action(formData: FormData) {
     "use server";
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
     const password = String(formData.get("password") ?? "");
     const name = String(formData.get("name") ?? "").trim() || null;
-    const next = String(formData.get("next") ?? "/");
+    const next = String(formData.get("next") ?? APP_HOME);
 
     if (!email || !password || password.length < 8) {
       redirect(`/signup?error=invalid&next=${encodeURIComponent(next)}`);
@@ -93,7 +94,7 @@ export default async function SignUpPage({
         )}
 
         <form action={action} className="space-y-4">
-          <input type="hidden" name="next" value={sp.next ?? "/"} />
+          <input type="hidden" name="next" value={sp.next ?? APP_HOME} />
           <div className="space-y-2">
             <label htmlFor="name" className="text-sm font-medium">
               Имя <span className="font-normal text-muted-foreground">(необязательно)</span>

@@ -15,6 +15,13 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 
+/** Where an authenticated user belongs by default — the private app home,
+ *  NOT the public marketing landing at `/`. Sign-in / sign-up redirect here
+ *  (unless a `next` param overrides). The design doctrine mandates every app
+ *  ships an `(app)/dashboard` route, so this path always resolves. Landing
+ *  back on `/` after auth makes a logged-in user think they were kicked out. */
+export const APP_HOME = "/dashboard";
+
 export interface CurrentUser {
   id: string;
   email: string;
