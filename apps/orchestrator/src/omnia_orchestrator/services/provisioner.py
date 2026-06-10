@@ -34,6 +34,7 @@ from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import ContainerSpec, start_container
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
+from omnia_orchestrator.core.stack_registry import get_stack
 from omnia_orchestrator.schemas.runtime import (
     ProvisionRequest,
     ProvisionResponse,
@@ -140,7 +141,8 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         tier=req.tier,
     )
 
-    src = _template_source_dir(req.template)
+    stack = get_stack(req.template)
+    src = _template_source_dir(stack.template_dir)
 
     project_dir = Path(settings.projects_root) / str(req.project_id)
     project_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -151,7 +153,7 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
     log.info("provision.port_acquired", port=port)
 
     container_name = f"omnia-dev-{req.slug}"
-    image_tag = f"omnia-template-{req.template}:dev"
+    image_tag = stack.image_tag
 
     # Real per-project DSN — reuse persisted creds on re-provision, otherwise
     # create a fresh schema + role on `omnia-postgres-users`. Fail-soft: if
@@ -211,6 +213,7 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         memory_mb=settings.dev_container_memory_mb,
         restart_policy_name="unless-stopped",
         tier=req.tier,
+        container_port=stack.container_port,
     )
 
     container_id = await start_container(spec)

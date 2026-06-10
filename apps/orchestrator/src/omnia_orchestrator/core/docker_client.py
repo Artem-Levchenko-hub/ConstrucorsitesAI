@@ -40,7 +40,7 @@ class ContainerSpec:
 
     name: str
     image: str
-    port: int  # host port → container's :3000 (Next.js default)
+    port: int  # host port bound to the container's internal listen port
     project_id: str
     env: dict[str, str]
     cpu_quota: float = 0.5  # default for free tier — 50% of 1 core
@@ -49,6 +49,7 @@ class ContainerSpec:
     kind: str = "dev"  # `omnia.kind` label — "dev" or "prod"
     restart_policy_name: str = "no"  # "unless-stopped" for deployed prod
     tier: str = "free"  # `omnia.tier` label — drives hibernate pause/stop policy
+    container_port: int = 3000  # internal port the app listens on (StackSpec-driven)
 
 
 _client: docker.DockerClient | None = None
@@ -123,7 +124,7 @@ async def start_container(spec: ContainerSpec) -> str:
                 image=spec.image,
                 name=spec.name,
                 detach=True,
-                ports={"3000/tcp": ("127.0.0.1", spec.port)},
+                ports={f"{spec.container_port}/tcp": ("127.0.0.1", spec.port)},
                 environment=spec.env,
                 mem_limit=f"{spec.memory_mb}m",
                 cpu_quota=int(spec.cpu_quota * 100_000),
