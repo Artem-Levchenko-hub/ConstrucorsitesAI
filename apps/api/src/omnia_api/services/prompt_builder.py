@@ -829,7 +829,8 @@ _ENTITIES_UI = """\
 
 ▸ ИМПОРТЫ (готовы, просто используй):
   import { AppShell, PageHeader, StatCard, DataTable, CrudResource,
-           EntityForm, EmptyState, useEntity, type Column } from "@/components/omnia";
+           EntityForm, EmptyState, useEntity, type Column,
+           Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
   import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
   // dialog, sheet, tabs, badge, dropdown-menu, table, checkbox, avatar, tooltip, separator …
   import { cn, formatRub, formatDate } from "@/lib/utils";   // formatRub(1234)→"1 234 ₽"
@@ -913,15 +914,24 @@ _ENTITIES_UI = """\
   reference(+refEntity — сам грузит опции связанной сущности) | image(+сам заливает
   через uploadFile). Колонкам можно render для бейджей/денег/дат.
 
-▸ ДАШБОРД — собери из кита: ряд <StatCard> (KPI) + свежие записи через <DataTable>:
+▸ ДАШБОРД — собери из кита: ряд <StatCard> (KPI) + ГРАФИК динамики + свежие записи
+  через <DataTable>. Главному KPI дай `accent` (тонкая верхняя линия акцентом) —
+  ровно ОДНОМУ. В карточку можно вложить мини-тренд через `chart`:
   <PageHeader title="Дашборд" description="Обзор" />
-  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+  <div className="stagger grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <StatCard accent label="Выручка" value={formatRub(total)} icon={<TrendingUp />}
+      trend={{ value: "+12%", positive: true }} chart={<Sparkline data={[4, 6, 5, 8, 7, 11]} />} />
     <StatCard label="Клиентов" value={clients.length} icon={<Users />} />
-    <StatCard label="Выручка" value={formatRub(total)} icon={<TrendingUp />} trend={{ value: "+12%", positive: true }} />
   </div>
-  Данные — useEntity("Client") или entities.X.list() в useEffect. Графиков-библиотек
-  НЕТ — рисуй простые CSS/SVG-бары или ограничься KPI + таблицами (НЕ импортируй
-  recharts/chart.js — их нет).
+  ГРАФИКИ — УЖЕ В КИТЕ (НЕ ставь recharts/chart.js — их нет; примитивы рисуют по
+  токенам, dark-aware, со screen-reader-fallback):
+  • <Sparkline data={number[]} /> — компактный тренд внутри StatCard.
+  • <TrendArea data={number[]} /> — заливная динамика главной метрики (на всю ширину).
+  • <BarMini data={[{ label, value }]} /> — горизонтальная разбивка по категориям.
+  • <DonutStat value="68%" pct={68} label="Конверсия" /> — кольцо одной метрики.
+  Дашборд С ДИНАМИКОЙ обязан показать ХОТЯ БЫ ОДИН график (TrendArea или BarMini),
+  а не только числа. Оттенок графика — класс `text-chart-1..5`. Данные —
+  useEntity("Client") или entities.X.list() в useEffect.
 
 ▸ АДАПТИВНОСТЬ — ОБЯЗАТЕЛЬНА И ПРОВЕРЯЕТСЯ. Mobile-first. Сетки —
   `grid-cols-1 md:grid-cols-2 lg:grid-cols-4`, флексы переносятся
@@ -963,7 +973,9 @@ _ENTITIES_UI = """\
     `tabular-nums` на числах. Дашборд ВСЕГДА начинается с РЯДА KPI (3-4 `StatCard` с
     иконками и трендами), затем основная работа (таблица/список), затем вторичные панели.
     Голая таблица на весь экран — брак.
-  • СОСТОЯНИЯ отполированы ВСЕГДА: пусто → `<EmptyState>` с иконкой + CTA; загрузка →
+  • СОСТОЯНИЯ отполированы ВСЕГДА: пусто → `<EmptyState>` с тематической иллюстрацией
+    (`illustration="list"|"search"|"records"|"error"`) + CTA «Создать первую запись»;
+    загрузка →
     скелетоны (`<Skeleton>`), не «Loading…»; ошибка → аккуратный `toast`.
   • ОДИН «фирменный момент» на приложение: hero-KPI с тонким градиентным акцентом
     (`bg-gradient-to-br from-primary/10`), приветствие «С возвращением, {имя}» в шапке

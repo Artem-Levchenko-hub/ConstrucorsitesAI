@@ -12,13 +12,24 @@ export interface StatCardProps {
   hint?: string;
   /** Small delta pill, e.g. `{ value: "+12%", positive: true }`. */
   trend?: { value: string; positive?: boolean };
+  /** Hairline top accent. Use on the SINGLE primary KPI only (one accent per
+   *  screen — Refactoring UI). Off by default. */
+  accent?: boolean;
+  /** Optional inline chart under the value, e.g. `<Sparkline data={…} />`. */
+  chart?: React.ReactNode;
   className?: string;
 }
 
 /** KPI tile for dashboards. A row of these is the canonical dashboard top. */
-export function StatCard({ label, value, icon, hint, trend, className }: StatCardProps) {
+export function StatCard({ label, value, icon, hint, trend, accent, chart, className }: StatCardProps) {
   return (
-    <Card className={cn("hover-lift gap-0 p-5", className)}>
+    <Card
+      className={cn(
+        "hover-lift gap-0 p-5",
+        accent && "border-t-2 border-t-primary/30",
+        className,
+      )}
+    >
       <div className="flex items-start justify-between gap-3">
         <p className="text-sm font-medium text-muted-foreground">{label}</p>
         {icon ? (
@@ -46,6 +57,7 @@ export function StatCard({ label, value, icon, hint, trend, className }: StatCar
         ) : null}
       </div>
       {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
+      {chart ? <div className="mt-3">{chart}</div> : null}
     </Card>
   );
 }
