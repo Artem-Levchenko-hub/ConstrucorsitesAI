@@ -3,6 +3,10 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 export interface PageHeaderProps {
+  /** Small uppercase label above the title (section / context), e.g. “Обзор”.
+   *  Gives the title hierarchy weight without extra size — type doing graphic
+   *  work, restrained. Optional. */
+  eyebrow?: React.ReactNode;
   title: React.ReactNode;
   description?: React.ReactNode;
   /** Right-aligned controls (e.g. a “Создать” button). */
@@ -10,9 +14,12 @@ export interface PageHeaderProps {
   className?: string;
 }
 
-/** Consistent page heading: title + description on the left, actions on the
- *  right; stacks on mobile. Put one at the top of every app screen. */
-export function PageHeader({ title, description, actions, className }: PageHeaderProps) {
+/** Consistent page heading: optional eyebrow + display title + description on
+ *  the left, actions on the right; stacks on mobile. The title carries real
+ *  hierarchy weight (display size, tight tracking, balanced wrap) so each screen
+ *  has a confident anchor, not flat body text. Put one at the top of every app
+ *  screen. */
+export function PageHeader({ eyebrow, title, description, actions, className }: PageHeaderProps) {
   return (
     <div
       className={cn(
@@ -21,7 +28,14 @@ export function PageHeader({ title, description, actions, className }: PageHeade
       )}
     >
       <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        {eyebrow ? (
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            {eyebrow}
+          </p>
+        ) : null}
+        <h1 className="text-2xl font-semibold leading-tight tracking-tight text-balance sm:text-3xl">
+          {title}
+        </h1>
         {description ? (
           <p className="text-sm text-muted-foreground">{description}</p>
         ) : null}
