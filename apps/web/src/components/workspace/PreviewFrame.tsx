@@ -296,9 +296,20 @@ export function PreviewFrame({ project }: { project: Project }) {
           crumbs: Array.isArray(err.crumbs)
             ? err.crumbs.filter((c) => typeof c === "string").slice(0, 6)
             : undefined,
-        }).catch(() => {
-          // Best-effort: a dropped error report must not disrupt the preview.
-        });
+        })
+          .then(() => {
+            // The server commits the card into the assistant message before the
+            // 204 returns, so refetch now to render it WITHOUT a reload. The
+            // app.error WS event also invalidates this key, but the socket is
+            // only open while a generation streams — a client error on a
+            // FINISHED app (the common case) has no live subscriber, so this
+            // self-invalidation is what makes the card appear. Idempotent: when
+            // the WS is open both fire, React Query dedupes the refetch.
+            void qc.invalidateQueries({ queryKey: ["messages", project.id] });
+          })
+          .catch(() => {
+            // Best-effort: a dropped error report must not disrupt the preview.
+          });
         return;
       }
       if (d.type === "omnia:inspect:ready") {
@@ -348,7 +359,7 @@ export function PreviewFrame({ project }: { project: Project }) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [inspectMode, iframeKey, addSelection, postToPreview, project.id, viewingOld]);
+  }, [inspectMode, iframeKey, addSelection, postToPreview, project.id, viewingOld, qc]);
 
   // A new committed snapshot = a fresh build/edit: forget which preview errors
   // we've already reported so genuine errors on the new code surface again.
