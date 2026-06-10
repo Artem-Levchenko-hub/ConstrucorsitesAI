@@ -231,6 +231,34 @@ def test_client_card_detail_includes_stack_route_and_steps() -> None:
     assert "• ввод: input «Email»" in detail
 
 
+def test_client_card_detail_context_precedes_stack() -> None:
+    # Route + steps must come BEFORE the stack so the actionable context isn't
+    # the first thing a body-length clamp drops (regression: a long framework
+    # stack used to push «Страница»/«Шаги» out of the «Починить» prompt).
+    detail = app_errors.client_card_detail(
+        "boom", "at a\nat b\nat c", "/dashboard", ["клик: button «X»"]
+    )
+    assert detail.index("Страница: /dashboard") < detail.index("at a")
+    assert detail.index("Шаги до ошибки:") < detail.index("at a")
+
+
+def test_client_card_detail_long_stack_keeps_route_and_steps() -> None:
+    # With a stack that alone exceeds the 600-char card body, the rendered block
+    # must still carry the route and breadcrumbs (they lead; the stack tail is
+    # what truncates).
+    block = app_errors.render_block(
+        category="client",
+        title="boom",
+        detail=app_errors.client_card_detail(
+            "boom", "x" * 4000, "/orders", ["клик: a «Купить»"]
+        ),
+        file=None,
+        fixable=True,
+    )
+    assert "Страница: /orders" in block
+    assert "клик: a «Купить»" in block
+
+
 def test_client_card_detail_clamps_and_skips_blank_crumbs() -> None:
     detail = app_errors.client_card_detail(
         "err", "", "/x", ["  ", "a" * 500]

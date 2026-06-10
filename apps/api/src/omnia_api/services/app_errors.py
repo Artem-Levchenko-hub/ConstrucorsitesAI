@@ -125,23 +125,30 @@ def client_card_signature(message: str, source: str, line: int) -> tuple[str, st
 def client_card_detail(
     message: str, stack: str, route: str, crumbs: list[str]
 ) -> str:
-    """Card body for a client-side JS error: message, stack, then context.
+    """Card body for a client-side JS error: message, context, then stack.
 
     Context = the route the error fired on plus the last few user actions
     (element identity only — the inspector never sends typed values). Surfaced in
     the card and therefore in the «Починить» fix-prompt, so the model knows what
-    the user was doing. Per-item clamped here (R-10): the schema bounds the list
-    count, this bounds each string; ``_body`` then clamps the whole to 600.
+    the user was doing.
+
+    Ordering matters: the route and breadcrumbs come BEFORE the raw stack. A
+    framework stack trace can run hundreds of chars and ``_body`` clamps the whole
+    body to 600 — if the stack led, a long one would push the most actionable
+    context (what the user did, on which page) off the end and out of the fix
+    prompt. The stack trails, so a clamp truncates its tail (its top frames, which
+    matter most, survive). Per-item clamped here too (R-10): the schema bounds the
+    list count, this bounds each string.
     """
-    detail = f"{message}\n\n{stack}" if stack else message
-    lines: list[str] = []
+    parts: list[str] = [message]
     if route:
-        lines.append(f"Страница: {route[:300]}")
+        parts.append(f"Страница: {route[:300]}")
     steps = [c.strip()[:120] for c in crumbs if c.strip()]
     if steps:
-        lines.append("Шаги до ошибки:")
-        lines.extend(f"• {s}" for s in steps)
-    return f"{detail}\n\n" + "\n".join(lines) if lines else detail
+        parts.append("Шаги до ошибки:\n" + "\n".join(f"• {s}" for s in steps))
+    if stack:
+        parts.append(stack)
+    return "\n\n".join(parts)
 
 
 def has_client_card(content: str, title: str, file: str | None) -> bool:
