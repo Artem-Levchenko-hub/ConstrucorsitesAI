@@ -768,13 +768,40 @@ export function PreviewFrame({ project }: { project: Project }) {
                   ) : showStreamingCode ? (
                     <motion.div
                       key="streaming-code"
-                      className="w-full h-full"
+                      className="w-full h-full flex flex-col"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                       transition={{ duration: 0.2 }}
                     >
-                      <StreamingCodeView content={last?.content ?? ""} />
+                      <div className="flex-1 min-h-0">
+                        <StreamingCodeView content={last?.content ?? ""} />
+                      </div>
+                      {/* Phase 3.3 — fullstack/container builds are single-shot:
+                          the orchestrator emits no per-stage `llm.pass`, so the
+                          PassProgressBar (static/freeform only) stays empty and
+                          the user watching the code stream gets no progress
+                          signal — it can read as "stalled". Honest two-step hint
+                          (write code → compile container) derived purely from the
+                          streaming state (no fake granularity, no cache deps).
+                          Fail-soft: static text, never throws. */}
+                      <div
+                        role="status"
+                        aria-label="Идёт сборка приложения"
+                        className="shrink-0 border-t border-border-subtle bg-surface-raised px-4 py-2 flex items-center gap-3 text-xs"
+                      >
+                        <span className="flex items-center gap-1.5 text-fg-primary font-medium">
+                          <Loader2 className="h-3 w-3 animate-spin text-accent" />
+                          Пишем код
+                        </span>
+                        <span className="h-px w-4 bg-border-subtle" />
+                        <span className="text-fg-tertiary">
+                          Собираем контейнер
+                        </span>
+                        <span className="ml-auto text-fg-tertiary text-[11px]">
+                          обычно 15–45 сек · код пишется вживую
+                        </span>
+                      </div>
                     </motion.div>
                   ) : fullstackLive ? (
                     <motion.iframe
