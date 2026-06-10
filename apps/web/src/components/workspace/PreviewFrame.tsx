@@ -177,6 +177,14 @@ export function PreviewFrame({ project }: { project: Project }) {
 
   const [device, setDevice] = useState<Device>("desktop");
   const [iframeKey, setIframeKey] = useState(0);
+  // Phase 5.3 — content-load gate for the preview iframe. Both iframes (live dev
+  // container + static /p/<slug>) render with bg-white and paint white until
+  // their OWN document finishes loading — the "белый экран до первого хита". We
+  // cover that gap with a loading skeleton and lift it on the `load` event. We
+  // track the iframe identity that has loaded (not a bare boolean) so a remount
+  // — reload, snapshot switch, flip to the live container — re-covers on its own
+  // without a setState-in-effect reset.
+  const [loadedFrameKey, setLoadedFrameKey] = useState<string | null>(null);
 
   // Reset the per-iframe ready latch whenever the frame remounts so the toggle
   // effect below can correctly tell "inspector is alive in this frame" from
@@ -386,6 +394,44 @@ export function PreviewFrame({ project }: { project: Project }) {
       ? `${publicUrl}?snapshot=${visible.id}&inspect=1#k=${iframeKey}`
       : `${publicUrl}?inspect=1#k=${iframeKey}`;
 
+  // Identity of the iframe currently mounted. Changes on reload (iframeKey),
+  // snapshot switch (visible.id), or flip between static and live container —
+  // each of which remounts the iframe — so comparing it to loadedFrameKey tells
+  // us whether the *current* frame has painted yet (no reset effect needed).
+  const frameKey = fullstackLive
+    ? `live-${iframeKey}`
+    : `${visible?.id ?? "none"}-${iframeKey}`;
+  // Fail-safe (R-10): a load event that never fires (dead container, blocked
+  // request) must not leave the skeleton covering the preview forever. Bounded
+  // timeout lifts the gate regardless. setState here runs inside setTimeout (not
+  // synchronously in the effect body), so it doesn't cascade renders.
+  useEffect(() => {
+    if (loadedFrameKey === frameKey) return;
+    const t = window.setTimeout(() => setLoadedFrameKey(frameKey), 8_000);
+    return () => window.clearTimeout(t);
+  }, [loadedFrameKey, frameKey]);
+
+  // Shared iframe `load` handler — lift the load gate, then re-arm select/style
+  // mode after the inspector script settles. Both iframes (live + static) had
+  // near-identical onLoad bodies; folding them here keeps the re-arm logic in
+  // one place (R-04). The 150ms defer covers Next's afterInteractive script
+  // attaching its message listener after our toggle effect already posted.
+  const handleFrameLoad = useCallback(() => {
+    setLoadedFrameKey(frameKey);
+    if (inspectMode) {
+      window.setTimeout(
+        () => postToPreview({ type: "omnia:inspect:enable" }),
+        150,
+      );
+    }
+    if (styleMode) {
+      window.setTimeout(
+        () => postToPreview({ type: "omnia:style:enable" }),
+        150,
+      );
+    }
+  }, [frameKey, inspectMode, styleMode, postToPreview]);
+
   // Пока ассистент стримит ответ — показываем долгоживущий streaming iframe
   // (StreamingPreviewFrame) с morphdom-патчингом. Когда llm.done приходит и
   // isStreaming становится false, AnimatePresence переключается на iframe
@@ -429,6 +475,17 @@ export function PreviewFrame({ project }: { project: Project }) {
     headSnapshot.prompt_text === null &&
     headSnapshot.parent_id === null;
   const suppressStarter = headIsStarter && !selectedSnapshotId && !isStreaming;
+
+  // Phase 5.3 — whether a real preview iframe is the active branch (live dev
+  // container, or static /p/<slug>). The streaming/startup/empty branches paint
+  // their own content, so the load skeleton only covers the two iframes while
+  // their document loads (handleFrameLoad lifts it).
+  const iframeActive =
+    !showStreaming &&
+    !showStreamingCode &&
+    (fullstackLive || (!isFullstack && !!visible && !suppressStarter));
+  const showFrameLoading =
+    iframeActive && loadedFrameKey !== frameKey && !isPending;
 
   return (
     <div className="flex flex-col h-full bg-surface-base">
@@ -715,26 +772,7 @@ export function PreviewFrame({ project }: { project: Project }) {
                       transition={{ duration: 0.2 }}
                       style={{ width: DEVICE_WIDTH[device], maxWidth: "100%" }}
                       className="h-full bg-white border-0 mx-auto shadow-xl"
-                      onLoad={() => {
-                        // Belt-and-braces: re-fire enable after iframe DOM
-                        // finishes loading. The Next.js Script tag (afterInteractive)
-                        // may attach its message listener AFTER our toggle effect
-                        // already posted, so we re-emit here for the late case.
-                        // Both modes (AI-pick + manual style) need re-arming —
-                        // manual edits persist on full apps too (globals.css).
-                        if (inspectMode) {
-                          window.setTimeout(
-                            () => postToPreview({ type: "omnia:inspect:enable" }),
-                            150,
-                          );
-                        }
-                        if (styleMode) {
-                          window.setTimeout(
-                            () => postToPreview({ type: "omnia:style:enable" }),
-                            150,
-                          );
-                        }
-                      }}
+                      onLoad={handleFrameLoad}
                     />
                   ) : isFullstack ? (
                     <RuntimeStartupPanel
@@ -762,22 +800,7 @@ export function PreviewFrame({ project }: { project: Project }) {
                       transition={{ duration: 0.2 }}
                       style={{ width: DEVICE_WIDTH[device], maxWidth: "100%" }}
                       className="h-full bg-white border-0 mx-auto shadow-xl"
-                      onLoad={() => {
-                        // Same race protection as the live iframe — defensive
-                        // re-enable after inspector script settles.
-                        if (inspectMode) {
-                          window.setTimeout(
-                            () => postToPreview({ type: "omnia:inspect:enable" }),
-                            150,
-                          );
-                        }
-                        if (styleMode) {
-                          window.setTimeout(
-                            () => postToPreview({ type: "omnia:style:enable" }),
-                            150,
-                          );
-                        }
-                      }}
+                      onLoad={handleFrameLoad}
                     />
                   ) : null}
                   {(!visible || suppressStarter) && !isPending && !isFullstack && (
@@ -794,6 +817,30 @@ export function PreviewFrame({ project }: { project: Project }) {
                         Опишите проект в чате — мы сгенерируем код, закоммитим в
                         git и сделаем скриншот. Здесь появится готовый сайт, а не
                         пустой шаблон.
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Phase 5.3 — load skeleton over the preview iframe until its
+                    document paints, so neither the live container's first paint
+                    nor the static /p/<slug> fetch shows a bare white screen. */}
+                <AnimatePresence>
+                  {showFrameLoading && (
+                    <motion.div
+                      key="frame-loading"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.2, ease: EASE_OUT }}
+                      className="absolute inset-0 z-10 p-4 bg-surface-base"
+                      role="status"
+                      aria-label="Превью загружается"
+                    >
+                      <Skeleton className="w-full h-full" />
+                      <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-fg-tertiary">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Загрузка превью…
                       </div>
                     </motion.div>
                   )}
