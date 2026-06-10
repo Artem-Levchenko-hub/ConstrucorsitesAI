@@ -101,6 +101,10 @@ template ships a component kit — **use it, don't hand-roll** chrome:
   (button, card, input, select, dialog, sheet, table, badge, tabs, …).
 - **Multi-page app, not one screen**: wrap every page in `<AppShell>` (a route-group
   `src/app/(app)/layout.tsx` defines the nav once); a route per entity + a dashboard.
+- **`action`/`actions` props take JSX, not objects**: pass a real element, e.g.
+  `action={<Button asChild><Link href="/dashboard/clients">Добавить</Link></Button>}`.
+  Never `action={{ label, href }}` — an object rendered as a React child crashes
+  the page ("Objects are not valid as a React child").
 - **Design tokens, not hardcoded colour**: `bg-background`/`bg-card`,
   `text-foreground`/`text-muted-foreground`, `bg-primary`, `border-border`. Never
   `bg-zinc-900`/`#000`/raw hex — the theme re-maps `--primary` per brand.
