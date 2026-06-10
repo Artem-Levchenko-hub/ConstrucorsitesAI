@@ -47,6 +47,42 @@ _FORBIDDEN_SUBSTRINGS = ("..",)
 MAX_FILES = 100
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
+# The app writer reliably invents a marketing palette of CSS custom properties
+# for landing/auth pages — var(--bg)/var(--fg)/var(--muted)/var(--accent)/
+# var(--bg-alt) — and NEVER emits a :root block defining them. --bg/--fg/--bg-alt
+# then resolve to nothing; worse, --muted/--accent COLLIDE with the kit's shadcn
+# surface tokens in globals.css (oklch≈0.97, near-white), so text-[var(--muted)]/
+# text-[var(--accent)] paint near-white text on a white page = invisible. A
+# negative brief rule doesn't dislodge this strong prior, so we rewrite the
+# arbitrary-value USAGES to the real kit tokens deterministically. Only usages
+# (`var(--X)`) are touched, never a `--X:` DEFINITION, and only in generated
+# source — the kit components use Tailwind utility classes (`bg-accent`), not
+# `var(--accent)`, so they're left untouched. Order matters: rewrite --muted/
+# --accent BEFORE re-introducing var(--muted) via --bg-alt so the alt background
+# stays a light surface, not muted-foreground text colour.
+_PALETTE_VAR_FIXES: tuple[tuple[str, str], ...] = (
+    ("var(--muted)", "var(--muted-foreground)"),
+    ("var(--accent)", "var(--primary)"),
+    ("var(--bg-alt)", "var(--muted)"),
+    ("var(--bg)", "var(--background)"),
+    ("var(--fg)", "var(--foreground)"),
+)
+_PALETTE_FIX_SUFFIXES = (".tsx", ".jsx", ".ts", ".css")
+
+
+def _fix_invented_palette_vars(path: str, body: str) -> str:
+    """Rewrite the writer's invented landing-palette CSS vars to real kit tokens.
+
+    See ``_PALETTE_VAR_FIXES``. No-op unless ``path`` is a generated source file
+    that actually contains an invented usage, so correctly-authored files pass
+    through byte-identical (R-10 fail-soft)."""
+    if not path.endswith(_PALETTE_FIX_SUFFIXES):
+        return body
+    for invented, token in _PALETTE_VAR_FIXES:
+        if invented in body:
+            body = body.replace(invented, token)
+    return body
+
 # Models occasionally violate the "unchanged files: don't mention" contract
 # and return a <file> block whose body is a human-language placeholder like
 # "(код без изменений)". Writing that into the file produces a TypeScript /
@@ -142,6 +178,7 @@ def extract_files(answer: str) -> dict[str, str]:
             continue
         if len(body.encode("utf-8")) > MAX_FILE_BYTES:
             raise ValueError(f"file {raw_path} exceeds {MAX_FILE_BYTES} bytes")
+        body = _fix_invented_palette_vars(raw_path, body)
         files[raw_path] = body
         if len(files) > MAX_FILES:
             raise ValueError(f"too many files in answer: {len(files)} > {MAX_FILES}")

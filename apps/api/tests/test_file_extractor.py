@@ -45,6 +45,36 @@ def test_extract_files_whitespace_body_is_delete_intent() -> None:
     }
 
 
+def test_extract_files_rewrites_invented_palette_vars() -> None:
+    # The writer invents var(--muted)/var(--accent)/var(--bg)/var(--fg)/
+    # var(--bg-alt) for landings and never defines them; --muted/--accent
+    # collide with shadcn surface tokens => invisible text. The extractor
+    # rewrites usages to real kit tokens (.tsx only).
+    answer = (
+        '<file path="src/app/page.tsx">'
+        '<p className="text-[var(--muted)] bg-[var(--bg)]">hi</p>'
+        '<span className="text-[var(--accent)]">x</span>'
+        '<section className="bg-[var(--bg-alt)] text-[var(--fg)]" /></file>'
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert "var(--muted-foreground)" in out  # secondary text now visible
+    assert "var(--primary)" in out  # accent -> brand
+    assert "var(--background)" in out
+    assert "var(--foreground)" in out
+    assert "bg-[var(--muted)]" in out  # bg-alt -> muted surface (still light)
+    # no invented var leaks through
+    for bad in ("var(--bg)", "var(--fg)", "var(--accent)", "var(--bg-alt)"):
+        assert bad not in out
+    # bare var(--muted) only survives as the bg-alt rewrite, never as text
+    assert "text-[var(--muted)]" not in out
+
+
+def test_extract_files_palette_fix_is_scoped_to_source_files() -> None:
+    # A non-source file (e.g. .md/.txt) is left byte-identical.
+    answer = '<file path="notes.md">use var(--muted) here</file>'
+    assert extract_files(answer) == {"notes.md": "use var(--muted) here"}
+
+
 # ---------------------------------------------------------------------------
 # extract_edits — new parser
 # ---------------------------------------------------------------------------
