@@ -937,6 +937,24 @@ _ENTITIES_UI = """\
   а не только числа. Оттенок графика — класс `text-chart-1..5`. Данные —
   useEntity("Client") или entities.X.list() в useEffect.
 
+▸ БЕЗОПАСНЫЕ ДАТЫ — ⛔ КРИТИЧНО, иначе дашборд падает. Поля-даты сущностей часто
+  НЕОБЯЗАТЕЛЬНЫ (приходят "" / null). `new Date("").toISOString()` бросает
+  `RangeError: Invalid time value` и роняет ВСЮ страницу при первой же записи без
+  даты. ❌ НИКОГДА не зови `.toISOString()`/`.getMonth()`/`.getFullYear()`/
+  `.getTime()` прямо на поле-дате записи. Для группировки/чартов по датам бери
+  готовые НЕ-БРОСАЮЩИЕ хелперы из "@/lib/utils":
+    import { monthKey, toISODate, parseDate, formatDate } from "@/lib/utils";
+    // группировка выручки по месяцам — пропускаем записи без даты:
+    const byMonth: Record<string, number> = {};
+    for (const d of deals) {
+      const k = monthKey(d.dealDate);        // "2026-06" | null
+      if (!k) continue;                       // нет/битая дата → не считаем
+      byMonth[k] = (byMonth[k] ?? 0) + Number(d.amount ?? 0);
+    }
+  `formatDate(x)` для показа (сам отдаёт "—" на пустой), `parseDate(x)` если нужен
+  Date-объект (вернёт null вместо краша). Любая сырая арифметика на дате —
+  только после `const dt = parseDate(x); if (!dt) return;`.
+
 ▸ АДАПТИВНОСТЬ — ОБЯЗАТЕЛЬНА И ПРОВЕРЯЕТСЯ. Mobile-first. Сетки —
   `grid-cols-1 md:grid-cols-2 lg:grid-cols-4`, флексы переносятся
   (`flex-col sm:flex-row`). НИКОГДА фикс-ширин (`w-[1200px]`) на контейнерах —

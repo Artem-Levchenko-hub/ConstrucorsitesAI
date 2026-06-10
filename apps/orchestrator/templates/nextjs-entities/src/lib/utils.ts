@@ -36,6 +36,30 @@ export function formatDate(value: string | number | Date | null | undefined): st
   }).format(d);
 }
 
+/**
+ * Parse a possibly-missing/invalid date value into a Date, or null. NEVER throws.
+ * Entity date fields are often optional ("" / null / garbage) — calling
+ * `new Date(x).toISOString()` on such a value throws `RangeError: Invalid time
+ * value` and crashes the whole page. Use this for any computation on a date.
+ */
+export function parseDate(value: string | number | Date | null | undefined): Date | null {
+  if (value == null || value === "") return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Safe `YYYY-MM-DD` key, or null on missing/invalid date. Never throws. */
+export function toISODate(value: string | number | Date | null | undefined): string | null {
+  const d = parseDate(value);
+  return d ? d.toISOString().slice(0, 10) : null;
+}
+
+/** Safe `YYYY-MM` bucket for grouping/charting by month, or null. Never throws. */
+export function monthKey(value: string | number | Date | null | undefined): string | null {
+  const d = parseDate(value);
+  return d ? d.toISOString().slice(0, 7) : null;
+}
+
 /** First letters for an avatar fallback ("Иван Петров" → "ИП"). */
 export function initials(name: string | null | undefined): string {
   if (!name) return "?";
