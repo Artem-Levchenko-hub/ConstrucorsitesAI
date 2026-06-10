@@ -63,6 +63,12 @@ class ClientErrorReport(BaseModel):
     line: int = Field(default=0, ge=0)
     col: int = Field(default=0, ge=0)
     stack: str = Field(default="", max_length=4000)
+    # Context breadcrumbs: which route the error fired on and the last few user
+    # actions before it (element identity only — never a typed value). Untrusted
+    # browser input → clamp count and length (R-10). Surfaced in the card body so
+    # the «Починить» prompt knows what the user was doing.
+    route: str = Field(default="", max_length=300)
+    crumbs: list[str] = Field(default_factory=list, max_length=6)
 
 
 class PromptResponse(BaseModel):

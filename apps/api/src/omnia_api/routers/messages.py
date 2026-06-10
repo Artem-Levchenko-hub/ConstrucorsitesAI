@@ -456,9 +456,9 @@ async def report_client_error(
     if app_errors.has_client_card(msg.content or "", title, file):
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    detail = payload.message
-    if payload.stack:
-        detail = f"{payload.message}\n\n{payload.stack}"
+    detail = app_errors.client_card_detail(
+        payload.message, payload.stack, payload.route, payload.crumbs
+    )
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     await app_errors.publish(

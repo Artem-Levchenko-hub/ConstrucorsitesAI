@@ -209,3 +209,34 @@ async def test_publish_is_fail_soft_on_persist_error(monkeypatch: pytest.MonkeyP
         detail="x",
     )
     assert len(events) == 1  # event still emitted despite persist failure
+
+
+def test_client_card_detail_plain_message_only() -> None:
+    # No stack, no context → just the message (back-compat with old reports).
+    assert app_errors.client_card_detail("boom", "", "", []) == "boom"
+
+
+def test_client_card_detail_includes_stack_route_and_steps() -> None:
+    detail = app_errors.client_card_detail(
+        "Cannot read 'x' of undefined",
+        "at f (page.tsx:10)",
+        "/dashboard",
+        ["клик: button «Удалить»", "ввод: input «Email»"],
+    )
+    assert "Cannot read 'x' of undefined" in detail
+    assert "at f (page.tsx:10)" in detail
+    assert "Страница: /dashboard" in detail
+    assert "Шаги до ошибки:" in detail
+    assert "• клик: button «Удалить»" in detail
+    assert "• ввод: input «Email»" in detail
+
+
+def test_client_card_detail_clamps_and_skips_blank_crumbs() -> None:
+    detail = app_errors.client_card_detail(
+        "err", "", "/x", ["  ", "a" * 500]
+    )
+    assert "Страница: /x" in detail
+    # Blank crumb dropped; the long one clamped to 120 chars.
+    lines = [ln for ln in detail.splitlines() if ln.startswith("• ")]
+    assert len(lines) == 1
+    assert len(lines[0]) - len("• ") == 120

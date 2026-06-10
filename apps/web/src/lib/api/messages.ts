@@ -18,6 +18,10 @@ export async function reportClientError(
     line?: number;
     col?: number;
     stack?: string;
+    /** Route the error fired on + last user actions (element identity only,
+     *  never typed values) — surfaced in the card body and the fix-prompt. */
+    route?: string;
+    crumbs?: string[];
   },
 ): Promise<void> {
   if (USE_MOCKS) return;

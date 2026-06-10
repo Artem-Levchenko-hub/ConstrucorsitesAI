@@ -122,6 +122,28 @@ def client_card_signature(message: str, source: str, line: int) -> tuple[str, st
     return title, file
 
 
+def client_card_detail(
+    message: str, stack: str, route: str, crumbs: list[str]
+) -> str:
+    """Card body for a client-side JS error: message, stack, then context.
+
+    Context = the route the error fired on plus the last few user actions
+    (element identity only — the inspector never sends typed values). Surfaced in
+    the card and therefore in the «Починить» fix-prompt, so the model knows what
+    the user was doing. Per-item clamped here (R-10): the schema bounds the list
+    count, this bounds each string; ``_body`` then clamps the whole to 600.
+    """
+    detail = f"{message}\n\n{stack}" if stack else message
+    lines: list[str] = []
+    if route:
+        lines.append(f"Страница: {route[:300]}")
+    steps = [c.strip()[:120] for c in crumbs if c.strip()]
+    if steps:
+        lines.append("Шаги до ошибки:")
+        lines.extend(f"• {s}" for s in steps)
+    return f"{detail}\n\n" + "\n".join(lines) if lines else detail
+
+
 def has_client_card(content: str, title: str, file: str | None) -> bool:
     """True if a client-error card with this title/file is already in the message.
 

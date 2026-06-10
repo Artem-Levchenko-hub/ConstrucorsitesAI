@@ -555,11 +555,72 @@
   var errSeen = {};
   var errCount = 0;
 
+  // Interaction breadcrumbs: a tiny ring of the last few user actions, attached
+  // to every error report so the chat card can say "what the user did right
+  // before it broke" (and the «Починить» prompt gets that context for free).
+  // PRIVACY: we record element IDENTITY (selector + visible label) and the
+  // action TYPE only — NEVER a typed value, so a password/email can't leak into
+  // the chat. Capture-phase + try/guarded so tracking can never break the page.
+  var CRUMB_CAP = 6;
+  var crumbs = [];
+
+  function pushCrumb(text) {
+    var s = collapse(text, 80);
+    if (!s) return;
+    if (crumbs.length && crumbs[crumbs.length - 1] === s) return; // dedup repeats
+    crumbs.push(s);
+    if (crumbs.length > CRUMB_CAP) crumbs.shift();
+  }
+
+  function describeTarget(el) {
+    if (!el || el.nodeType !== 1) return "";
+    var nn = el.nodeName;
+    var sel = shortLabel(el);
+    var label;
+    if (nn === "INPUT" || nn === "TEXTAREA" || nn === "SELECT") {
+      // Form fields: static identity only — the typed value never leaves the page.
+      label = collapse(
+        el.getAttribute("aria-label") ||
+          el.getAttribute("placeholder") ||
+          el.getAttribute("name") ||
+          "",
+        40
+      );
+    } else {
+      label = collapse(el.textContent || el.getAttribute("aria-label") || "", 40);
+    }
+    return label ? sel + " «" + label + "»" : sel;
+  }
+
+  document.addEventListener(
+    "click",
+    function (e) {
+      try {
+        if (e && e.target && e.target.nodeType === 1)
+          pushCrumb("клик: " + describeTarget(e.target));
+      } catch (_) {}
+    },
+    true
+  );
+  document.addEventListener(
+    "change",
+    function (e) {
+      try {
+        if (e && e.target && e.target.nodeType === 1)
+          pushCrumb("ввод: " + describeTarget(e.target));
+      } catch (_) {}
+    },
+    true
+  );
+
   function reportError(sig, payload) {
     if (errCount >= ERR_CAP || errSeen[sig]) return;
     if (!window.parent || window.parent === window) return; // no workspace shell
     errSeen[sig] = 1;
     errCount++;
+    // Breadcrumbs + route injected centrally so both call sites carry them.
+    payload.route = (location.pathname || "").slice(0, 300);
+    payload.crumbs = crumbs.slice(0, CRUMB_CAP);
     post({ type: "omnia:preview:error", err: payload });
   }
 

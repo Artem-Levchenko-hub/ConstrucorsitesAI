@@ -276,6 +276,8 @@ export function PreviewFrame({ project }: { project: Project }) {
               line?: number;
               col?: number;
               stack?: string;
+              route?: string;
+              crumbs?: string[];
             };
           }
         ).err;
@@ -290,6 +292,10 @@ export function PreviewFrame({ project }: { project: Project }) {
           line: typeof err.line === "number" ? err.line : undefined,
           col: typeof err.col === "number" ? err.col : undefined,
           stack: err.stack ? String(err.stack) : undefined,
+          route: err.route ? String(err.route) : undefined,
+          crumbs: Array.isArray(err.crumbs)
+            ? err.crumbs.filter((c) => typeof c === "string").slice(0, 6)
+            : undefined,
         }).catch(() => {
           // Best-effort: a dropped error report must not disrupt the preview.
         });
