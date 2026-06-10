@@ -50,6 +50,42 @@ _BUILD_NOW_SIGNALS: frozenset[str] = frozenset(
 )
 
 
+# High-precision backend-intent signals (lowered substrings, RU stems + EN).
+# When the user's gathered intent contains ANY of these, the product needs real
+# accounts / saved data / CRUD — a static landing with dead login buttons is the
+# wrong build (owner directive 2026-06-10: «полноценное приложение с 1 генерации»).
+# Kept precise so a genuine marketing landing (кофейня, портфолио) does NOT trip
+# it: these are product-intent words, not generic nav labels.
+_BACKEND_SIGNALS: frozenset[str] = frozenset(
+    {
+        # auth / accounts
+        "регистрац", "зарегистр", "войти", "вход в", "логин", "авториз",
+        "личный кабинет", "кабинет", "профиль пользоват", "аккаунт",
+        "log in", "login", "sign in", "signin", "sign up", "signup", "auth",
+        # private app surface / data ownership
+        "dashboard", "per-user", "каждый пользователь", "пользователи видят",
+        "роли пользоват", "админк", "admin panel",
+        # data / CRUD / commerce
+        "crm", "crud", "база данных", "сущност", "entities", "сохраня",
+        "корзин", "оформить заказ", "заказы", "checkout",
+        "бронирован", "запись на", "каталог товар", "товаров", "трекер",
+    }
+)
+
+
+def _infer_stack_from_text(text: str) -> str | None:
+    """Deterministic safety-net: pick a container stack from product intent.
+
+    Returns ``"nextjs_entities"`` when the text carries clear backend signals
+    (accounts, saved data, CRUD, commerce), else ``None`` (leave as static).
+    Used only when the model didn't confidently pick a container stack — never
+    downgrades a good model choice."""
+    haystack = (text or "").lower()
+    if any(sig in haystack for sig in _BACKEND_SIGNALS):
+        return "nextjs_entities"
+    return None
+
+
 @dataclass(frozen=True)
 class DiscoveryResult:
     """Outcome of one discovery turn.
@@ -296,6 +332,20 @@ async def run_discovery(
             brief = _fallback_brief(history, latest_prompt)
         if not message:
             message = "Отлично — собираю первый вариант. Это займёт минуту."
+        # Stack safety-net: the model often defaults to / mis-classifies as
+        # "static" (or its reply parse-failed → static default above), even when
+        # the user clearly asked for accounts + saved data. Re-derive from the
+        # full gathered intent so a real app gets a container stack instead of a
+        # dead static landing (owner directive 2026-06-10). Only overrides when
+        # the model didn't already pick a container stack.
+        if stack not in ("fullstack", "nextjs_entities"):
+            intent_text = "\n".join(
+                [brief, *(m.get("content") or "" for m in history), latest_prompt or ""]
+            )
+            inferred = _infer_stack_from_text(intent_text)
+            if inferred:
+                log.info("discovery: stack '%s'→'%s' (backend intent signals)", stack, inferred)
+                stack = inferred
         return DiscoveryResult(action=BUILD, message=message, brief=brief, stack=stack)
 
     # ASK path — one more question (+ optional quick-reply chips).

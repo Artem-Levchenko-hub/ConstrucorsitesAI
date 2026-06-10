@@ -20,6 +20,7 @@ from omnia_api.services.discovery import (
     ASK,
     BUILD,
     MAX_DISCOVERY_QUESTIONS,
+    _infer_stack_from_text,
     run_discovery,
     wants_build_now,
 )
@@ -301,3 +302,53 @@ async def test_build_with_unparseable_reply_still_builds_from_history(
     )
     assert result.action == BUILD
     assert "барбершоп" in result.brief
+
+
+# ─── Stack safety-net (P0★ — owner directive 2026-06-10) ─────────────────────
+
+
+def test_infer_stack_detects_backend_intent() -> None:
+    """Accounts / saved-data / commerce intent → a container stack."""
+    assert _infer_stack_from_text("нужна регистрация и личный кабинет") == "nextjs_entities"
+    assert _infer_stack_from_text("habit tracker with login and dashboard") == "nextjs_entities"
+    assert _infer_stack_from_text("магазин с корзиной и каталогом товаров") == "nextjs_entities"
+    assert _infer_stack_from_text("CRM с ролями пользователей") == "nextjs_entities"
+
+
+def test_infer_stack_leaves_pure_landing_alone() -> None:
+    """A genuine marketing landing must NOT be upgraded to a backend app."""
+    assert _infer_stack_from_text("лендинг кофейни в питере с меню и фото") is None
+    assert _infer_stack_from_text("портфолио фотографа, галерея работ") is None
+    assert _infer_stack_from_text("") is None
+
+
+async def test_forced_build_with_backend_intent_routes_to_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE P0★ bug: parse-fail + forced build for an auth/cabinet product used to
+    default to static (dead login buttons). The safety-net now routes it to a
+    real container stack from the gathered intent."""
+    _install(monkeypatch, resp=_gateway_returning("не json — парс упадёт"))
+    result = await run_discovery(
+        [{"role": "user", "content": "SaaS-трекер привычек"}],
+        "регистрация, вход и личный кабинет на /dashboard, генерируй сразу",
+        asked_count=0,
+        force_build=True,
+    )
+    assert result.action == BUILD
+    assert result.stack == "nextjs_entities"
+
+
+async def test_forced_build_pure_landing_stays_static(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A landing with no backend intent still builds static — the net is precise."""
+    _install(monkeypatch, resp=_gateway_returning("не json"))
+    result = await run_discovery(
+        [{"role": "user", "content": "лендинг для кофейни"}],
+        "просто красивая визитка с меню, генерируй",
+        asked_count=0,
+        force_build=True,
+    )
+    assert result.action == BUILD
+    assert result.stack == "static"
