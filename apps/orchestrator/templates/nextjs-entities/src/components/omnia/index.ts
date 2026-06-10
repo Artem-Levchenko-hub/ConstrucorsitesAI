@@ -8,6 +8,7 @@
 export { AppShell, type NavItem, type AppShellUser, type AppShellProps } from "./app-shell";
 export { PageHeader, type PageHeaderProps } from "./page-header";
 export { StatCard, type StatCardProps } from "./stat-card";
+export { CountUp, type CountUpProps } from "./count-up";
 export { EmptyState, type EmptyStateProps } from "./empty-state";
 export { DataTable, type Column, type DataTableProps } from "./data-table";
 export {

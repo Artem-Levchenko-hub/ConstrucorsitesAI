@@ -828,7 +828,7 @@ _ENTITIES_UI = """\
 СОБИРАЙ ИЗ НЕГО, не лепи кнопки/таблицы/сайдбары сырым Tailwind.
 
 ▸ ИМПОРТЫ (готовы, просто используй):
-  import { AppShell, PageHeader, StatCard, DataTable, CrudResource,
+  import { AppShell, PageHeader, StatCard, CountUp, DataTable, CrudResource,
            EntityForm, EmptyState, useEntity, type Column,
            Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
   import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
@@ -919,10 +919,14 @@ _ENTITIES_UI = """\
   ровно ОДНОМУ. В карточку можно вложить мини-тренд через `chart`:
   <PageHeader eyebrow="Обзор" title="Дашборд" description="Ключевые показатели" />
   <div className="stagger grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-    <StatCard accent label="Выручка" value={formatRub(total)} icon={<TrendingUp />}
+    <StatCard accent label="Выручка" icon={<TrendingUp />}
+      value={<CountUp value={total} suffix=" ₽" />}
       trend={{ value: "+12%", positive: true }} chart={<Sparkline data={[4, 6, 5, 8, 7, 11]} />} />
-    <StatCard label="Клиентов" value={clients.length} icon={<Users />} />
+    <StatCard label="Клиентов" value={<CountUp value={clients.length} />} icon={<Users />} />
   </div>
+  ЖИВЫЕ ЧИСЛА: главные KPI оборачивай в <CountUp value={n} /> — число «накручивается»
+  с 0 при загрузке (reduced-motion-safe, SSR отдаёт финал). Один-два на дашборд, не на
+  каждую плитку. `suffix=" ₽"`/`suffix="%"`, `decimals` для дробных.
   ГРАФИКИ — УЖЕ В КИТЕ (НЕ ставь recharts/chart.js — их нет; примитивы рисуют по
   токенам, dark-aware, со screen-reader-fallback):
   • <Sparkline data={number[]} /> — компактный тренд внутри StatCard.
