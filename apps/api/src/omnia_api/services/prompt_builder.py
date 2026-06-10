@@ -965,6 +965,18 @@ _ENTITIES_UI = """\
   рамки — `border-border`, опасное — `text-destructive`. НЕ пиши `bg-zinc-900`/
   `bg-white`/`text-black`/произвольный hex. Иконки — lucide, НЕ эмодзи.
 
+▸ ⛔ КРИТ: НИКОГДА не выдумывай свою палитру через `var(--bg)`/`var(--fg)`/
+  `var(--muted)`/`var(--accent)`/`var(--bg-alt)` и подобные кастом-переменные —
+  это БАГ НЕВИДИМОГО ТЕКСТА. `--bg/--fg/--bg-alt` нигде не определены → пусто; а
+  `--muted`/`--accent` УЖЕ заняты в globals.css как СВЕТЛО-СЕРЫЕ ПОВЕРХНОСТИ
+  (oklch≈0.97, почти белые) → `text-[var(--muted)]`/`text-[var(--accent)]` = почти
+  белый текст на белом фоне = НЕВИДИМО. Лендинг и кабинет — ОДНА система токенов:
+    ❌ `text-[var(--muted)]` `text-[var(--accent)]` `bg-[var(--bg)]` `bg-[var(--accent)]`
+    ✅ вторичный текст → `text-muted-foreground`; акцентный текст/иконка → `text-primary`;
+       акцентный фон → `bg-primary text-primary-foreground`; фон → `bg-background`/`bg-card`;
+       рамка → `border-border`. Хочешь фирменный оттенок — только переопредели ЗНАЧЕНИЕ
+       `--primary` через один `<style>` (см. ниже), а в разметке используй `*-primary`.
+
 ▸ globals.css — ФИКСИРОВАН, НЕ ПЕРЕПИСЫВАЙ И НЕ РЕДАКТИРУЙ. Там уже стоит
   `@import "tailwindcss"`, `@theme inline` и все токены (Tailwind v4). ⛔ НИКОГДА не
   используй `@tailwind base/components/utilities`, `@apply border-border`, HSL-каналы
