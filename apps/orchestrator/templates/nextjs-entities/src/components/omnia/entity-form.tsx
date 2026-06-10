@@ -88,6 +88,7 @@ export function EntityForm({
   >({});
   const [uploading, setUploading] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
+  const [errors, setErrors] = React.useState<Record<string, string>>({});
 
   React.useEffect(() => {
     let alive = true;
@@ -117,6 +118,12 @@ export function EntityForm({
 
   function set(name: string, value: unknown) {
     setValues((v) => ({ ...v, [name]: value }));
+    setErrors((e) => {
+      if (!e[name]) return e;
+      const next = { ...e };
+      delete next[name];
+      return next;
+    });
   }
 
   async function handleFile(name: string, file: File | undefined) {
@@ -132,8 +139,13 @@ export function EntityForm({
     }
   }
 
-  function buildPayload(): Record<string, unknown> | null {
+  type ValidationResult =
+    | { ok: true; payload: Record<string, unknown> }
+    | { ok: false; errors: Record<string, string> };
+
+  function validate(): ValidationResult {
     const out: Record<string, unknown> = {};
+    const errs: Record<string, string> = {};
     for (const f of fields) {
       const raw = values[f.name];
       if (f.kind === "boolean") {
@@ -142,24 +154,29 @@ export function EntityForm({
       }
       const empty = raw === "" || raw == null;
       if (empty) {
-        if (f.required) {
-          toast.error(`Заполните поле «${f.label}»`);
-          return null;
-        }
+        if (f.required) errs[f.name] = `Заполните поле «${f.label}»`;
         continue;
       }
       out[f.name] = f.kind === "number" ? Number(raw) : raw;
     }
-    return out;
+    if (Object.keys(errs).length) return { ok: false, errors: errs };
+    return { ok: true, payload: out };
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const payload = buildPayload();
-    if (!payload) return;
+    const result = validate();
+    if (!result.ok) {
+      // Inline errors + focus first invalid (WCAG focus-management): no blind toast.
+      setErrors(result.errors);
+      const firstInvalid = fields.find((f) => result.errors[f.name]);
+      if (firstInvalid) document.getElementById(`field-${firstInvalid.name}`)?.focus();
+      return;
+    }
+    setErrors({});
     setSubmitting(true);
     try {
-      await onSubmit(payload);
+      await onSubmit(result.payload);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Не удалось сохранить");
     } finally {
@@ -172,6 +189,8 @@ export function EntityForm({
       {fields.map((f) => {
         const id = `field-${f.name}`;
         const value = values[f.name];
+        const error = errors[f.name];
+        const errId = error ? `${id}-error` : undefined;
         return (
           <div key={f.name} className="space-y-2">
             {f.kind !== "boolean" && (
@@ -186,6 +205,8 @@ export function EntityForm({
                 id={id}
                 value={String(value ?? "")}
                 placeholder={f.placeholder}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={errId}
                 onChange={(e) => set(f.name, e.target.value)}
               />
             )}
@@ -195,6 +216,8 @@ export function EntityForm({
                 id={id}
                 value={String(value ?? "")}
                 placeholder={f.placeholder}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={errId}
                 onChange={(e) => set(f.name, e.target.value)}
               />
             )}
@@ -205,6 +228,8 @@ export function EntityForm({
                 type="number"
                 value={value === "" || value == null ? "" : String(value)}
                 placeholder={f.placeholder}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={errId}
                 onChange={(e) => set(f.name, e.target.value)}
               />
             )}
@@ -214,6 +239,8 @@ export function EntityForm({
                 id={id}
                 type="date"
                 value={toDateInput(value)}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={errId}
                 onChange={(e) => set(f.name, e.target.value)}
               />
             )}
@@ -234,7 +261,11 @@ export function EntityForm({
                 value={value ? String(value) : undefined}
                 onValueChange={(v) => set(f.name, v)}
               >
-                <SelectTrigger id={id}>
+                <SelectTrigger
+                  id={id}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={errId}
+                >
                   <SelectValue placeholder={f.placeholder ?? "Выберите…"} />
                 </SelectTrigger>
                 <SelectContent>
@@ -291,6 +322,12 @@ export function EntityForm({
                 </div>
               </div>
             )}
+
+            {error ? (
+              <p id={errId} role="alert" className="text-sm font-medium text-destructive">
+                {error}
+              </p>
+            ) : null}
           </div>
         );
       })}
