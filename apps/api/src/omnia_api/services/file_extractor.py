@@ -83,6 +83,89 @@ def _fix_invented_palette_vars(path: str, body: str) -> str:
             body = body.replace(invented, token)
     return body
 
+
+# The writer reliably hallucinates brand/social icons that lucide-react does NOT
+# export (lucide carries generic UI glyphs, not company logos). An import like
+# `import { Telegram } from "lucide-react"` then breaks the Turbopack build
+# outright — the dev container never serves 200, so the whole generated app is
+# dead. A negative brief rule doesn't stop the model reaching for `<Telegram/>`
+# in a footer, so we repair the IMPORT deterministically: alias a valid,
+# visually-adjacent glyph to the hallucinated local name
+# (`{ Send as Telegram }`), leaving every `<Telegram/>` usage untouched. Keyed by
+# lower-cased imported name so Telegram/TikTok/WhatsApp casing variants all map.
+# Every key below is confirmed ABSENT and every fallback confirmed PRESENT in the
+# template's lucide-react@0.469. Brand glyphs lucide DOES ship (apple, slack,
+# figma, dribbble, github, twitch, signal, twitter, facebook, instagram,
+# youtube, linkedin, x) are deliberately not listed — they must pass through.
+_LUCIDE_INVALID_ICON_FALLBACKS: dict[str, str] = {
+    "telegram": "Send",
+    "whatsapp": "MessageCircle",
+    "vk": "Share2",
+    "vkontakte": "Share2",
+    "tiktok": "Music2",
+    "discord": "MessageSquare",
+    "pinterest": "Image",
+    "reddit": "MessageCircle",
+    "behance": "Palette",
+    "snapchat": "Camera",
+    "threads": "AtSign",
+    "spotify": "Music2",
+    "tumblr": "Hash",
+    "skype": "Phone",
+    "wechat": "MessageCircle",
+    "viber": "Phone",
+    "medium": "BookOpen",
+    "google": "Globe",
+    "paypal": "CreditCard",
+    "visa": "CreditCard",
+    "mastercard": "CreditCard",
+}
+_LUCIDE_FIX_SUFFIXES = (".tsx", ".jsx", ".ts")
+
+# Named-import block from the bare "lucide-react" module: captures the brace body
+# so we can rewrite individual specifiers. `[^{}]` spans newlines (multiline
+# import lists) but stops at a nested brace (there are none in an import list).
+_LUCIDE_IMPORT_BLOCK = re.compile(
+    r'import\s+\{(?P<names>[^{}]*)\}\s+from\s+(?P<q>["\'])lucide-react(?P=q)',
+    re.DOTALL,
+)
+_AS_SPLIT = re.compile(r"\s+as\s+")
+
+
+def _fix_invalid_lucide_imports(path: str, body: str) -> str:
+    """Alias hallucinated lucide brand icons to real glyphs so the build survives.
+
+    See ``_LUCIDE_INVALID_ICON_FALLBACKS``. No-op unless ``path`` is a generated
+    source file importing from ``lucide-react``; an import with no hallucinated
+    name passes through byte-identical (R-10 fail-soft). Only the import block is
+    rewritten — usages keep their original local name via the alias."""
+    if not path.endswith(_LUCIDE_FIX_SUFFIXES) or "lucide-react" not in body:
+        return body
+
+    def _rewrite(match: re.Match[str]) -> str:
+        changed = False
+        specs: list[str] = []
+        for raw in match.group("names").split(","):
+            spec = raw.strip()
+            if not spec:
+                continue
+            parts = _AS_SPLIT.split(spec, 1)
+            imported = parts[0].strip()
+            local = parts[1].strip() if len(parts) > 1 else imported
+            fallback = _LUCIDE_INVALID_ICON_FALLBACKS.get(imported.lower())
+            if fallback and fallback != imported:
+                specs.append(f"{fallback} as {local}")
+                changed = True
+            else:
+                specs.append(spec)
+        if not changed:
+            return match.group(0)
+        return match.group(0).replace(
+            match.group("names"), " " + ", ".join(specs) + " "
+        )
+
+    return _LUCIDE_IMPORT_BLOCK.sub(_rewrite, body)
+
 # Models occasionally violate the "unchanged files: don't mention" contract
 # and return a <file> block whose body is a human-language placeholder like
 # "(код без изменений)". Writing that into the file produces a TypeScript /
@@ -179,6 +262,7 @@ def extract_files(answer: str) -> dict[str, str]:
         if len(body.encode("utf-8")) > MAX_FILE_BYTES:
             raise ValueError(f"file {raw_path} exceeds {MAX_FILE_BYTES} bytes")
         body = _fix_invented_palette_vars(raw_path, body)
+        body = _fix_invalid_lucide_imports(raw_path, body)
         files[raw_path] = body
         if len(files) > MAX_FILES:
             raise ValueError(f"too many files in answer: {len(files)} > {MAX_FILES}")

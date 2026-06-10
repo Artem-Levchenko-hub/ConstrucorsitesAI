@@ -75,6 +75,53 @@ def test_extract_files_palette_fix_is_scoped_to_source_files() -> None:
     assert extract_files(answer) == {"notes.md": "use var(--muted) here"}
 
 
+def test_extract_files_aliases_hallucinated_lucide_brand_icons() -> None:
+    # lucide-react does not export Telegram/Whatsapp/Tiktok; importing them
+    # bare breaks the Turbopack build. We alias a valid glyph to the local name
+    # so `<Telegram/>` usages keep working and the build survives.
+    answer = (
+        '<file path="src/app/page.tsx">'
+        'import { Mail, Telegram, Whatsapp } from "lucide-react";\n'
+        "export const F = () => <><Telegram/><Whatsapp/></>;</file>"
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert "Send as Telegram" in out
+    assert "MessageCircle as Whatsapp" in out
+    assert "Mail," in out  # valid icon untouched
+    # usages keep their original local name (no usage rewrite needed)
+    assert "<Telegram/>" in out and "<Whatsapp/>" in out
+    # no bare hallucinated specifier leaks into the import
+    assert "{ Mail, Send as Telegram, MessageCircle as Whatsapp }" in out
+
+
+def test_extract_files_lucide_fix_handles_casing_and_existing_alias() -> None:
+    # Internal-caps (TikTok) match via lower-cased lookup; an already-aliased
+    # hallucinated import keeps its chosen local name.
+    answer = (
+        '<file path="src/F.tsx">'
+        'import { TikTok, VK as Soc } from "lucide-react";</file>'
+    )
+    out = extract_files(answer)["src/F.tsx"]
+    assert "Music2 as TikTok" in out
+    assert "Share2 as Soc" in out
+
+
+def test_extract_files_lucide_fix_noop_when_all_valid() -> None:
+    # An import of only real icons passes through byte-identical (R-10 fail-soft),
+    # and brand glyphs lucide actually ships (Github, Twitter) are preserved.
+    src = 'import { Github, Twitter, Mail } from "lucide-react";'
+    answer = f'<file path="src/F.tsx">{src}</file>'
+    assert extract_files(answer)["src/F.tsx"] == src
+
+
+def test_extract_files_lucide_fix_scoped_to_source_files() -> None:
+    # A non-source file mentioning lucide is left byte-identical.
+    answer = '<file path="README.md">import { Telegram } from "lucide-react"</file>'
+    assert extract_files(answer)["README.md"] == (
+        'import { Telegram } from "lucide-react"'
+    )
+
+
 # ---------------------------------------------------------------------------
 # extract_edits — new parser
 # ---------------------------------------------------------------------------
