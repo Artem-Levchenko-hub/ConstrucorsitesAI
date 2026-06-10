@@ -79,7 +79,7 @@
 1. **ВЫЯВИЛ** задачу (Шаг 4) + `sequential-thinking` + `context7`.
 2. **РЕШИЛ** — написал код (`code-canon`, минимальный диф).
 3. **Локальный гейт** (чтоб не пушить явно битое): фронт `cd apps/web && npm run typecheck && npm run lint`; бэк `cd apps/api && uv run ruff check . && uv run mypy src && uv run pytest`. **ruff обязателен.** Битое — чинить тут.
-4. **PUSH на GitHub** — commit (трейлер `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`) → `git push origin main` (PAT если gh протух).
+4. **PUSH на GitHub** — commit (трейлер `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`) → `git push origin main`. **⚠ gh-keyring протух + classic-PAT form:** `x-access-token:<PAT>@…` НЕ работает с classic-PAT («Invalid username or token»); рабочая форма = `git push "https://Artem-Levchenko-hub:<PAT>@github.com/Artem-Levchenko-hub/ConstrucorsitesAI.git" main` (username=аккаунт, не x-access-token). PAT валиден (api.github.com/user→200).
 5. **ДЕПЛОЙ** затронутых рантайм-сервисов на прод → health 200 (не 200 → ОТКАТ на прошлый sha).
 6. **ПОЛНЫЙ БРАУЗЕР-ТЕСТ** как реальный юзер: playwright (занят → puppeteer) против живого прода И свежего аппа; логин, весь сценарий (клик/ввод/переход/сабмит), скриншоты. Снять логи: `docker logs` (lh-server) + `browser_console_messages` + `browser_network_requests`. Точечные/ручные UI-правки — проверять **ЧЕРЕЗ КЛИКЕР** (select-mode), не только API (Phase 2.5).
 7. **РАЗВИЛКА:**
