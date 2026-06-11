@@ -63,6 +63,15 @@ export interface DataTableProps<T> {
 
 type SortState = { key: string; dir: "asc" | "desc" } | null;
 
+/**
+ * When the caller forgets `pageSize` (common — the model doesn't always set it),
+ * a list with real production volume would dump every row into the DOM, which
+ * reads as broken rather than enterprise. Past this many rows we fall back to
+ * paginating so the table never does that. Kept generous so seeded demo tables
+ * (usually a handful of rows) still render in one page, unchanged.
+ */
+const AUTO_PAGE_SIZE = 20;
+
 function rawValue(row: Record<string, unknown>, key: string): unknown {
   return row[key];
 }
@@ -148,10 +157,13 @@ export function DataTable<T extends { id: string }>({
   }, [filtered, sort]);
 
   const total = sorted.length;
-  const pages = pageSize ? Math.max(1, Math.ceil(total / pageSize)) : 1;
+  // Honour an explicit pageSize; otherwise auto-paginate only once a table is
+  // genuinely long, so short lists stay on a single page (R-10 fail-safe).
+  const effectivePageSize = pageSize ?? (total > AUTO_PAGE_SIZE ? AUTO_PAGE_SIZE : undefined);
+  const pages = effectivePageSize ? Math.max(1, Math.ceil(total / effectivePageSize)) : 1;
   const current = Math.min(page, pages);
-  const visible = pageSize
-    ? sorted.slice((current - 1) * pageSize, current * pageSize)
+  const visible = effectivePageSize
+    ? sorted.slice((current - 1) * effectivePageSize, current * effectivePageSize)
     : sorted;
 
   React.useEffect(() => {
@@ -270,7 +282,7 @@ export function DataTable<T extends { id: string }>({
           </TableHeader>
           <TableBody>
             {loading ? (
-              Array.from({ length: pageSize ?? 5 }).map((_, i) => (
+              Array.from({ length: effectivePageSize ?? 5 }).map((_, i) => (
                 <TableRow key={`s-${i}`}>
                   {Array.from({ length: colCount }).map((__, j) => (
                     <TableCell key={j}>
@@ -327,10 +339,11 @@ export function DataTable<T extends { id: string }>({
         </Table>
       </div>
 
-      {pageSize && total > pageSize ? (
+      {effectivePageSize && total > effectivePageSize ? (
         <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
           <span>
-            {(current - 1) * pageSize + 1}–{Math.min(current * pageSize, total)} из {total}
+            {(current - 1) * effectivePageSize + 1}–{Math.min(current * effectivePageSize, total)} из{" "}
+            {total}
           </span>
           <div className="flex items-center gap-2">
             <Button
