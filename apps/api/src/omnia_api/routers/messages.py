@@ -2785,7 +2785,8 @@ async def _process_prompt(
         if (
             files
             and not surgical
-            and project_template not in ("fullstack", "nextjs_entities", "tgbot", "api")
+            and project_template
+            not in ("fullstack", "nextjs_entities", "spa", "tgbot", "api")
             and _acc_settings.use_acceptance_gate
             and _gen_mode in ("freeform", "catalog")
         ):
