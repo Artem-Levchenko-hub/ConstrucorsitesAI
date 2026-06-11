@@ -627,3 +627,98 @@ def test_dead_link_falls_back_to_root_when_only_root_exists() -> None:
         )
     )
     assert 'href="/"' in files["src/app/(marketing)/page.tsx"]
+
+
+# ---------------------------------------------------------------------------
+# app killer-bug auto-fix — globals.css v3 + starter/(app) route conflict
+# ---------------------------------------------------------------------------
+
+
+def test_killer_bug_drops_tailwind_v3_globals() -> None:
+    # A v3-syntax globals.css breaks the fixed v4 build; drop it ("" = delete-intent)
+    # so the container image's good v4 token file stays in force.
+    answer = (
+        '<file path="src/app/globals.css">@tailwind base;\n@apply border-border;'
+        "</file>"
+    )
+    assert extract_files(answer)["src/app/globals.css"] == ""
+
+
+def test_killer_bug_keeps_valid_v4_globals() -> None:
+    # A correct v4 globals.css (no v3 signatures) passes through untouched.
+    valid = '@import "tailwindcss";\n@theme inline { --color-x: red; }'
+    answer = f'<file path="src/app/globals.css">{valid}</file>'
+    assert extract_files(answer)["src/app/globals.css"] == valid
+
+
+def test_killer_bug_empties_starter_page_on_route_conflict() -> None:
+    # A non-empty starter page.tsx alongside (app)/page.tsx both resolve to "/".
+    # Empty the starter so the (app) dashboard owns "/".
+    answer = (
+        '<file path="src/app/page.tsx">export default function S(){return <h1>x</h1>}'
+        "</file>"
+        '<file path="src/app/(app)/page.tsx">export default function D(){return null}'
+        "</file>"
+    )
+    out = extract_files(answer)
+    assert out["src/app/page.tsx"] == ""
+    assert out["src/app/(app)/page.tsx"].strip() != ""
+
+
+def test_killer_bug_keeps_starter_page_when_no_app_index() -> None:
+    # A standalone starter page (no (app)/page.tsx) is a legitimate single-page
+    # build — leave it alone.
+    body = "export default function S(){return <h1>x</h1>}"
+    answer = f'<file path="src/app/page.tsx">{body}</file>'
+    assert extract_files(answer)["src/app/page.tsx"] == body
+
+
+# ---------------------------------------------------------------------------
+# app inline-theme oklch guard — drop broken/low-contrast brand override
+# ---------------------------------------------------------------------------
+
+_LAYOUT = "src/app/(app)/layout.tsx"
+
+
+def _layout_with_style(css: str) -> str:
+    return (
+        f'<file path="{_LAYOUT}">'
+        f"export default function L(){{return <html><body>"
+        f'<style>{{"{css}"}}</style>'
+        f"</body></html>}}</file>"
+    )
+
+
+def test_app_theme_keeps_valid_dark_primary() -> None:
+    # Dark primary (L 0.52) + near-white foreground (L 0.99) → big lightness gap,
+    # legible button text → override kept verbatim.
+    css = ":root{--primary:oklch(0.52 0.12 233);--primary-foreground:oklch(0.99 0 0)}"
+    out = extract_files(_layout_with_style(css))[_LAYOUT]
+    assert "oklch(0.52 0.12 233)" in out
+
+
+def test_app_theme_drops_malformed_oklch() -> None:
+    # A malformed oklch (missing components) breaks the theme; drop the override.
+    css = ":root{--primary:oklch(notacolor);--primary-foreground:oklch(0.99 0 0)}"
+    out = extract_files(_layout_with_style(css))[_LAYOUT]
+    assert "<style>" not in out
+
+
+def test_app_theme_drops_low_contrast_primary() -> None:
+    # Light primary (L 0.95) with the default near-white foreground → tiny gap,
+    # unreadable button text → drop the override so the kit default theme stays.
+    css = ":root{--primary:oklch(0.95 0.04 233)}"
+    out = extract_files(_layout_with_style(css))[_LAYOUT]
+    assert "<style>" not in out
+
+
+def test_app_theme_guard_scoped_to_app_layout() -> None:
+    # The same broken style in a non-layout file is left untouched (the guard only
+    # owns the single app-theme knob in (app)/layout.tsx).
+    css = ":root{--primary:oklch(notacolor)}"
+    answer = (
+        '<file path="src/app/(app)/page.tsx">'
+        f'<style>{{"{css}"}}</style></file>'
+    )
+    out = extract_files(answer)["src/app/(app)/page.tsx"]
+    assert "<style>" in out

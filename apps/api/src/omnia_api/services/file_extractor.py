@@ -384,6 +384,136 @@ def _fix_dead_internal_links(files: dict[str, str]) -> None:
             log.info("extract_files: rewrote dead internal link(s) in %r", path)
 
 
+# Two deterministic, 100%-fatal nextjs-entities build-killers the writer recurrently
+# emits. Unlike ``structure_audit`` (which only WARNS for observability), these are
+# repaired here because the outcome is binary — the dev container never serves 200,
+# so the WHOLE generated app is dead — and the fix is unambiguous. Both fire only on
+# the exact fatal shape, so a static/freeform build (single index.html, no
+# globals.css, no ``(app)`` group) passes through untouched (R-10 fail-soft).
+#
+# Killer 1 — globals.css rewritten in Tailwind v3 syntax. The template ships a FIXED
+# v4 ``@theme``/token globals.css INSIDE the container image; the writer must never
+# author one. When it emits a v3 ``@tailwind ...`` / ``@apply border-border`` file
+# the v4 build dies ("unknown utility class border-border"). Fix: DROP it ("" =
+# delete-intent, see extract_files) so the image's good v4 file stays in force.
+#
+# Killer 2 — a non-empty starter ``src/app/page.tsx`` left ALONGSIDE
+# ``src/app/(app)/page.tsx``. Both resolve to "/", so ``next build`` refuses (route
+# conflict). The writer is told to empty the starter; when it forgets, fix: empty it
+# ("" = delete-intent), handing "/" to the (app) dashboard.
+_GLOBALS_V3_SIGNATURES = ("@tailwind ", "@apply border-border")
+
+
+def _fix_app_killer_bugs(files: dict[str, str]) -> None:
+    """Repair the two deterministic, 100%-fatal app build-killers in place.
+
+    No-op on any answer that doesn't carry the exact fatal shape (R-10 fail-soft)."""
+    globals_css = files.get("src/app/globals.css")
+    if isinstance(globals_css, str) and any(
+        sig in globals_css for sig in _GLOBALS_V3_SIGNATURES
+    ):
+        files["src/app/globals.css"] = ""
+        log.info(
+            "extract_files: dropped Tailwind-v3 globals.css — kept the image's "
+            "fixed v4 token file (v3 syntax breaks the v4 build)"
+        )
+
+    starter = files.get("src/app/page.tsx")
+    app_index = files.get("src/app/(app)/page.tsx")
+    if (
+        isinstance(starter, str)
+        and starter.strip()
+        and isinstance(app_index, str)
+        and app_index.strip()
+    ):
+        files["src/app/page.tsx"] = ""
+        log.info(
+            "extract_files: emptied starter src/app/page.tsx — (app)/page.tsx owns "
+            "'/' (both resolving to '/' is a fatal route conflict)"
+        )
+
+
+# The APP writer themes the product with a SINGLE inline <style> in
+# ``(app)/layout.tsx`` overriding --primary/--primary-foreground/--ring in oklch
+# (globals.css is fixed and never touched, so this inline override is the ONLY
+# app-theme knob). It is model-trusted and unguarded — palette_guard/contrast_guard
+# are .html-only — so a malformed oklch (bad/missing L·C·H) or a --primary whose
+# lightness sits too close to its foreground ships unreadable buttons / a half-broken
+# theme. We validate the override deterministically and, on violation, DROP the whole
+# inline :root override so the kit's proven neutral default theme stays in force — a
+# broken brand colour is worse than the safe default (R-10 fail-soft).
+_APP_LAYOUT_SUFFIX = "(app)/layout.tsx"
+# A JSX inline style whose string child carries a ``:root{...}`` override block.
+_INLINE_ROOT_STYLE = re.compile(
+    r"<style>\s*\{\s*(['\"])(?P<css>.*?:root\s*\{.*?)\1\s*\}\s*</style>",
+    re.DOTALL,
+)
+_OKLCH_DECL = re.compile(r"(--[\w-]+)\s*:\s*oklch\(\s*([^)]*)\)", re.IGNORECASE)
+# Min perceptual-lightness gap (oklch L is 0..1) between --primary and its
+# foreground for legible button text. 0.40 is a conservative, comfortable floor.
+_MIN_PRIMARY_FG_L_GAP = 0.40
+# Kit default --primary-foreground is near-white; used when the override omits it.
+_DEFAULT_PRIMARY_FG_L = 0.985
+
+
+def _oklch_lightness(value: str) -> float | None:
+    """Parse the L component (0..1) of an ``oklch(L C H[ / a])`` value.
+
+    Returns None if the value is malformed (missing/garbage L·C·H, out-of-range).
+    Accepts space- or comma-separated components, a percent L, and a trailing
+    ``/ alpha``."""
+    body = value.replace(",", " ").split("/", 1)[0]
+    parts = body.split()
+    if len(parts) < 3:
+        return None
+    try:
+        lightness = float(parts[0].rstrip("%"))
+        chroma = float(parts[1])
+        hue = float(parts[2])
+    except ValueError:
+        return None
+    if parts[0].endswith("%"):
+        lightness /= 100.0
+    if not (0.0 <= lightness <= 1.0) or chroma < 0.0 or not (0.0 <= hue <= 360.0):
+        return None
+    return lightness
+
+
+def _app_theme_override_is_broken(css: str) -> bool:
+    """True when the inline :root override has a malformed oklch, or a --primary too
+    close in lightness to its foreground to be legible."""
+    lightness: dict[str, float] = {}
+    for name, val in _OKLCH_DECL.findall(css):
+        parsed = _oklch_lightness(val)
+        if parsed is None:
+            return True  # a malformed oklch breaks the theme outright
+        lightness[name.lower()] = parsed
+    primary = lightness.get("--primary")
+    if primary is None:
+        return False  # override doesn't touch the brand colour — nothing to judge
+    fg = lightness.get("--primary-foreground", _DEFAULT_PRIMARY_FG_L)
+    return abs(primary - fg) < _MIN_PRIMARY_FG_L_GAP
+
+
+def _fix_app_layout_theme(path: str, body: str) -> str:
+    """Drop the inline :root theme override in ``(app)/layout.tsx`` when its oklch is
+    malformed or low-contrast, so the kit default theme stays. No-op otherwise."""
+    if not path.endswith(_APP_LAYOUT_SUFFIX):
+        return body
+
+    def _strip(match: re.Match[str]) -> str:
+        if _app_theme_override_is_broken(match.group("css")):
+            log.info(
+                "extract_files: dropped broken inline app theme override in %r "
+                "(malformed/low-contrast oklch) — kit default theme kept",
+                path,
+            )
+            return ""
+        return match.group(0)
+
+    return _INLINE_ROOT_STYLE.sub(_strip, body)
+
+
 # Models occasionally violate the "unchanged files: don't mention" contract
 # and return a <file> block whose body is a human-language placeholder like
 # "(код без изменений)". Writing that into the file produces a TypeScript /
@@ -483,11 +613,13 @@ def extract_files(answer: str) -> dict[str, str]:
         body = _fix_invalid_lucide_imports(raw_path, body)
         body = _fix_bare_locale_string(raw_path, body)
         body = _fix_missing_use_client(raw_path, body)
+        body = _fix_app_layout_theme(raw_path, body)
         files[raw_path] = body
         if len(files) > MAX_FILES:
             raise ValueError(f"too many files in answer: {len(files)} > {MAX_FILES}")
-    # Cross-file post-pass: needs the full route set, so it runs after the loop.
+    # Cross-file post-passes: need the full file/route set, so they run after loop.
     _fix_dead_internal_links(files)
+    _fix_app_killer_bugs(files)
     return files
 
 
