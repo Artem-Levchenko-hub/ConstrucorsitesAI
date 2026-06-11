@@ -6,6 +6,7 @@ import { ArrowDown, ArrowUp, ChevronsUpDown, Download, Search } from "lucide-rea
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -56,6 +57,14 @@ export interface DataTableProps<T> {
   exportable?: boolean;
   /** File name for the CSV export (defaults to "export.csv"). */
   exportFilename?: string;
+  /** Show a leading checkbox column so rows can be selected for bulk actions. */
+  selectable?: boolean;
+  /**
+   * Controls shown in the selection toolbar when ≥1 row is selected. Receives
+   * the selected rows (full objects, pruned to those still present) and a
+   * `clear` callback to reset the selection after acting.
+   */
+  bulkActions?: (selected: T[], clear: () => void) => React.ReactNode;
   /** Right-aligned per-row controls (edit / delete …) rendered in a last column. */
   rowActions?: (row: T) => React.ReactNode;
   onRowClick?: (row: T) => void;
@@ -142,6 +151,8 @@ export function DataTable<T extends { id: string }>({
   pageSize,
   exportable,
   exportFilename,
+  selectable,
+  bulkActions,
   rowActions,
   onRowClick,
   empty,
@@ -152,6 +163,7 @@ export function DataTable<T extends { id: string }>({
   const [sort, setSort] = React.useState<SortState>(null);
   const [page, setPage] = React.useState(1);
   const [tabIdx, setTabIdx] = React.useState(0);
+  const [selected, setSelected] = React.useState<Set<string>>(() => new Set());
 
   const keys = searchKeys ?? columns.map((c) => c.key);
   const tabs = filterField ? filterTabs : undefined;
@@ -202,6 +214,31 @@ export function DataTable<T extends { id: string }>({
     ? sorted.slice((current - 1) * effectivePageSize, current * effectivePageSize)
     : sorted;
 
+  // Selection is keyed by id so it survives pagination/filter/sort. Derive the
+  // selected rows from the current filtered set so it self-prunes to rows that
+  // are still present (deleted or filtered-out ids drop out silently).
+  const selectedRows = React.useMemo(
+    () => (selectable ? sorted.filter((row) => selected.has(row.id)) : []),
+    [selectable, sorted, selected],
+  );
+  const allSelected = sorted.length > 0 && selectedRows.length === sorted.length;
+  const someSelected = selectedRows.length > 0 && !allSelected;
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
+  function toggleRow(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(sorted.map((r) => r.id)));
+  }
+
   React.useEffect(() => {
     setPage(1);
   }, [query, sort, tabIdx]);
@@ -217,9 +254,10 @@ export function DataTable<T extends { id: string }>({
   }
 
   function handleExport() {
-    // Export everything that matches the current filter/search/sort, not just
-    // the visible page — that is what a "download this table" action means.
-    const csv = BOM + rowsToCsv(columns, sorted);
+    // Export the selected rows when there is a selection, otherwise everything
+    // that matches the current filter/search/sort — not just the visible page.
+    const exportRows = selectedRows.length ? selectedRows : sorted;
+    const csv = BOM + rowsToCsv(columns, exportRows);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -231,7 +269,7 @@ export function DataTable<T extends { id: string }>({
     URL.revokeObjectURL(url);
   }
 
-  const colCount = columns.length + (rowActions ? 1 : 0);
+  const colCount = columns.length + (selectable ? 1 : 0) + (rowActions ? 1 : 0);
 
   return (
     <div className={cn("space-y-3", className)}>
@@ -298,10 +336,38 @@ export function DataTable<T extends { id: string }>({
         </div>
       )}
 
+      {selectable && selectedRows.length > 0 ? (
+        <div
+          role="region"
+          aria-label="Действия с выбранными"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2"
+        >
+          <span className="text-sm font-medium" aria-live="polite">
+            Выбрано: {selectedRows.length}
+          </span>
+          <div className="flex items-center gap-2">
+            {bulkActions?.(selectedRows, clearSelection)}
+            <Button type="button" variant="ghost" size="sm" onClick={clearSelection}>
+              Снять выбор
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="elev-1 overflow-hidden rounded-xl border border-border bg-card">
         <Table>
           <TableHeader className="bg-muted/40">
             <TableRow>
+              {selectable ? (
+                <TableHead className="w-0">
+                  <Checkbox
+                    checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                    onCheckedChange={toggleAll}
+                    aria-label="Выбрать все"
+                    disabled={sorted.length === 0}
+                  />
+                </TableHead>
+              ) : null}
               {columns.map((col) => {
                 const sortedAsc = sort?.key === col.key && sort.dir === "asc";
                 const sortedDesc = sort?.key === col.key && sort.dir === "desc";
@@ -379,9 +445,19 @@ export function DataTable<T extends { id: string }>({
               visible.map((row) => (
                 <TableRow
                   key={row.id}
+                  data-state={selectable && selected.has(row.id) ? "selected" : undefined}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                   className={onRowClick ? "cursor-pointer" : undefined}
                 >
+                  {selectable ? (
+                    <TableCell className="w-0" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selected.has(row.id)}
+                        onCheckedChange={() => toggleRow(row.id)}
+                        aria-label="Выбрать строку"
+                      />
+                    </TableCell>
+                  ) : null}
                   {columns.map((col) => (
                     <TableCell
                       key={col.key}

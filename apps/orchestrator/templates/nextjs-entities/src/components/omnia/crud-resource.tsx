@@ -35,6 +35,11 @@ export interface CrudResourceProps {
   pageSize?: number;
   /** Show a CSV export button on the table. On by default for managed screens. */
   exportable?: boolean;
+  /**
+   * Let the user tick rows for bulk actions (bulk delete + export selected).
+   * Defaults to whatever `canDelete` is, so deletable lists get it for free.
+   */
+  selectable?: boolean;
   canCreate?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
@@ -68,11 +73,13 @@ export function CrudResource({
   filterTabs,
   pageSize = 10,
   exportable = true,
+  selectable,
   canCreate = true,
   canEdit = true,
   canDelete = true,
   createLabel = "Создать",
 }: CrudResourceProps) {
+  const allowBulk = selectable ?? canDelete;
   // Auto-expand reference fields so columns can render the related row
   // (e.g. `row._expanded.clientId.name`) without the caller wiring `expand`.
   const expand = React.useMemo(
@@ -90,6 +97,10 @@ export function CrudResource({
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Row | null>(null);
   const [deleting, setDeleting] = React.useState<Row | null>(null);
+  const [bulkDeleting, setBulkDeleting] = React.useState<{
+    rows: Row[];
+    clear: () => void;
+  } | null>(null);
   const [busy, setBusy] = React.useState(false);
 
   function openCreate() {
@@ -123,6 +134,25 @@ export function CrudResource({
       toast.error(e instanceof Error ? e.message : "Не удалось удалить");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (!bulkDeleting) return;
+    const { rows, clear } = bulkDeleting;
+    setBusy(true);
+    // allSettled so one failed row doesn't abort the rest; report the tally.
+    const results = await Promise.allSettled(rows.map((r) => data.remove(r.id)));
+    const failed = results.filter((r) => r.status === "rejected").length;
+    setBusy(false);
+    setBulkDeleting(null);
+    clear();
+    if (failed === 0) {
+      toast.success(`Удалено: ${rows.length}`);
+    } else if (failed === rows.length) {
+      toast.error("Не удалось удалить");
+    } else {
+      toast.error(`Удалено: ${rows.length - failed}, с ошибкой: ${failed}`);
     }
   }
 
@@ -176,6 +206,22 @@ export function CrudResource({
         pageSize={pageSize}
         exportable={exportable}
         exportFilename={`${title ?? entity}.csv`}
+        selectable={allowBulk}
+        bulkActions={
+          canDelete
+            ? (selected, clear) => (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setBulkDeleting({ rows: selected, clear })}
+                >
+                  <Trash2 className="size-4" />
+                  Удалить ({selected.length})
+                </Button>
+              )
+            : undefined
+        }
         rowActions={rowActions}
       />
 
@@ -209,6 +255,28 @@ export function CrudResource({
               Отмена
             </Button>
             <Button variant="destructive" onClick={handleDelete} disabled={busy}>
+              Удалить
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk delete confirm */}
+      <Dialog open={!!bulkDeleting} onOpenChange={(o) => !o && !busy && setBulkDeleting(null)}>
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Удалить выбранные записи?</DialogTitle>
+            <DialogDescription>
+              {bulkDeleting
+                ? `Будет удалено записей: ${bulkDeleting.rows.length}. Действие необратимо.`
+                : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkDeleting(null)} disabled={busy}>
+              Отмена
+            </Button>
+            <Button variant="destructive" onClick={handleBulkDelete} disabled={busy}>
               Удалить
             </Button>
           </DialogFooter>
