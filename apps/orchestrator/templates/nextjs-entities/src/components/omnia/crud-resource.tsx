@@ -261,6 +261,14 @@ export function CrudResource({
         }
         rowActions={rowActions}
         onRowClick={rowDetail ? (row) => setViewing(row) : undefined}
+        emptyAction={
+          canCreate ? (
+            <Button onClick={openCreate}>
+              <Plus />
+              {createLabel}
+            </Button>
+          ) : undefined
+        }
       />
 
       {/* Create / edit */}

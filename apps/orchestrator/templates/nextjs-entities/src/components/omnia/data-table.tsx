@@ -97,6 +97,13 @@ export interface DataTableProps<T> {
   rowActions?: (row: T) => React.ReactNode;
   onRowClick?: (row: T) => void;
   empty?: React.ReactNode;
+  /**
+   * Primary call-to-action shown inside the *first-run* empty state (no records
+   * at all) — usually a "create the first record" button. It is NOT shown on a
+   * no-match empty state (records exist but a search/filter hid them), where the
+   * active-filter chips already offer "Сбросить всё". `empty` overrides this.
+   */
+  emptyAction?: React.ReactNode;
   /** Extra controls shown on the toolbar row, left of the search box. */
   toolbar?: React.ReactNode;
   className?: string;
@@ -200,6 +207,7 @@ export function DataTable<T extends { id: string }>({
   rowActions,
   onRowClick,
   empty,
+  emptyAction,
   toolbar,
   className,
 }: DataTableProps<T>) {
@@ -281,6 +289,12 @@ export function DataTable<T extends { id: string }>({
   const visible = effectivePageSize
     ? sorted.slice((current - 1) * effectivePageSize, current * effectivePageSize)
     : sorted;
+
+  // Distinguish a true first-run empty (no records at all → invite the first
+  // one) from a no-match empty (records exist but a search/filter hid them →
+  // the active-filter chips already offer a reset). Gate on the raw count, not
+  // `query`, so an empty-result filter tab is also classified correctly.
+  const noRecords = (Array.isArray(rows) ? rows.length : 0) === 0;
 
   // Selection is keyed by id so it survives pagination/filter/sort. Derive the
   // selected rows from the current filtered set so it self-prunes to rows that
@@ -621,12 +635,13 @@ export function DataTable<T extends { id: string }>({
                   {empty ?? (
                     <EmptyState
                       className="rounded-none border-0"
-                      title={query ? "Ничего не найдено" : "Пока пусто"}
+                      title={noRecords ? "Пока пусто" : "Ничего не найдено"}
                       description={
-                        query
-                          ? "Измените запрос или сбросьте фильтр."
-                          : "Здесь появятся записи, как только вы их добавите."
+                        noRecords
+                          ? "Здесь появятся записи, как только вы их добавите."
+                          : "Измените запрос или сбросьте фильтр."
                       }
+                      action={noRecords ? emptyAction : undefined}
                     />
                   )}
                 </TableCell>
