@@ -50,7 +50,7 @@
 2. ~~**Setup-guide checklist** (#5)~~ ✅ **ЗАШИТО V1.3 slice 2/6 (2026-06-12, commit `14712ce`)** — `setup-checklist.tsx`: `SetupChecklist` (ProgressRing «N/M» + done/pending шаги + per-step CTA + reward-state), экспорт из барреля, бриф «▸ ОНБОРДИНГ-ЧЕК-ЛИСТ» в `_ENTITIES_UI`. Браузер-E2E зелёный: модель сама собрала CRM-дашборд с чек-листом 4 шагов из брифа, CTA рабочие, desktop+mobile, 0 ошибок.
 3. **Active removable filter-chips** (#3) — над `DataTable`/`CrudResource` применённые фильтры висят чипами с × + «Сбросить всё». Дополняет уже зашитые filter-tabs; чистый kit.
 4. **Command palette ⌘K** (#8) — `CommandPalette` индексирует nav-маршруты + «Создать <сущность>». Enterprise-скорость и ощущение; средняя сложность.
-5. **Empty-state copy + CTA-wiring** (#6) — усиление брифа: тёплый доменный заголовок + обязательный primary-CTA создающий первую запись. Дёшево, высокий ROI на «0 тупиков».
+5. ~~**Empty-state copy + CTA-wiring** (#6)~~ ✅ **ЗАШИТО V1.3 slice 5/6 (2026-06-12, commit `5ff5e93`)** — `data-table.tsx`: опц. `emptyAction` + `noRecords`-гейт (первый запуск → create-CTA в пустом состоянии; no-match → без CTA, сброс чипом); `crud-resource.tsx` прокидывает create-кнопку → managed-список зовёт к первой записи; бриф «▸ ПУСТОЙ СПИСОК» (тёплый доменный заголовок + 1 primary-CTA для хэндмейд-списков). Браузер-E2E зелёный desktop+mobile (оба ветвления: first-run CTA, no-match без CTA+reset).
 6. **Trial/план-капсула** (#12) — низкий приоритет (MVP без оплаты), только не-мёртвая заглушка.
 
 > Паттерны #1/#2/#9/#10 уже в ките — на V1.3 только лёгкое усиление брифом (nav-группы при >5 пунктов), не новый код.
