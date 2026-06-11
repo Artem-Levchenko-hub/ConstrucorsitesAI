@@ -47,7 +47,7 @@
 Приоритет = (net-new) × (удар по North-Star) × (model-independent kit-примитив предпочтительнее брифа).
 
 1. ~~**Settings / Account раздел** (#4 + #11)~~ ✅ **ЗАШИТО V1.3 slice 1/6 (2026-06-12, commit `04fb7b0`)** — `settings.tsx`: SettingsShell+SettingsSection+FieldRow+FieldGrid+DangerZone, экспорт из `omnia/index.ts`, бриф «▸ НАСТРОЙКИ / АККАУНТ» в `_ENTITIES_UI`. Браузер-E2E зелёный (модель собрала `/dashboard/settings` на ките, desktop+mobile, 0 ошибок). Остаточный нудж: бриф должен требовать кнопку variant=destructive внутри DangerZone (модель её опустила).
-2. **Setup-guide checklist** (#5) — `SetupChecklist` примитив на дашборде. **Прямой удар по столпу геймификации** (North-Star): пустой апп → чек-лист первых шагов, каждый ведёт к действию, прогресс «N/M». Псих-крючок «доведи до 100%».
+2. ~~**Setup-guide checklist** (#5)~~ ✅ **ЗАШИТО V1.3 slice 2/6 (2026-06-12, commit `14712ce`)** — `setup-checklist.tsx`: `SetupChecklist` (ProgressRing «N/M» + done/pending шаги + per-step CTA + reward-state), экспорт из барреля, бриф «▸ ОНБОРДИНГ-ЧЕК-ЛИСТ» в `_ENTITIES_UI`. Браузер-E2E зелёный: модель сама собрала CRM-дашборд с чек-листом 4 шагов из брифа, CTA рабочие, desktop+mobile, 0 ошибок.
 3. **Active removable filter-chips** (#3) — над `DataTable`/`CrudResource` применённые фильтры висят чипами с × + «Сбросить всё». Дополняет уже зашитые filter-tabs; чистый kit.
 4. **Command palette ⌘K** (#8) — `CommandPalette` индексирует nav-маршруты + «Создать <сущность>». Enterprise-скорость и ощущение; средняя сложность.
 5. **Empty-state copy + CTA-wiring** (#6) — усиление брифа: тёплый доменный заголовок + обязательный primary-CTA создающий первую запись. Дёшево, высокий ROI на «0 тупиков».
