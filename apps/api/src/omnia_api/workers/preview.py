@@ -29,7 +29,8 @@ GOTO_TIMEOUT_MS = 15_000
 # Container-backed templates render from a live dev container, not from repo
 # files — their git repo only tracks AI-generated files, no root `index.html`.
 # (Canonical list lives in routers/messages.py CONTAINER_NEXT; kept in sync.)
-CONTAINER_NEXT = ("fullstack", "nextjs_entities")
+# `spa` (Vite + React, Phase 7.2) renders from its dev container too.
+CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa")
 # `domcontentloaded` (NOT networkidle): broken images + the Tailwind Play-CDN keep
 # the network busy, so networkidle never settles and Page.goto times out at 15s —
 # which made the acceptance gate SKIP responsive+vision and ship junk as passed=True.

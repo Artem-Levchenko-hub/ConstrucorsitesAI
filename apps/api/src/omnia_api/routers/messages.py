@@ -827,12 +827,15 @@ _KIT_LINK = '<link rel="stylesheet" href="assets/omnia-kit.css">'
 _ANIME_SCRIPT = '<script src="assets/anime.min.js" defer></script>'
 _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 
-# Next.js container-backed templates. They render React (not static index.html),
-# so they skip the static-only guards (dead-link repair, omnia-kit CSS/JS
-# injection) and the landing-page acceptance gate, and they DO hot-reload
-# generated files into their dev container. `nextjs_entities` is the Base44-style
-# entity-engine stack; both behave like `fullstack` for these gates.
-CONTAINER_NEXT = ("fullstack", "nextjs_entities")
+# Container-backed React templates that hot-reload `<file path=…>` blocks into a
+# dev container. They render React (not static index.html), so they skip the
+# static-only guards (dead-link repair, omnia-kit CSS/JS injection) and the
+# landing-page acceptance gate, and they DO hot-reload generated files into their
+# dev container. `nextjs_entities` is the Base44-style entity-engine stack; `spa`
+# is the Vite + React no-backend stack (Phase 7.2) — despite the historical name,
+# it's container-backed and file-extracted, so it belongs to this group, not the
+# freeform-HTML path. (tgbot/api are backend-only and handled elsewhere.)
+CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa")
 
 
 # A6a — managed auth columns the AI must never drop when it rewrites

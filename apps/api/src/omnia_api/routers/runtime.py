@@ -47,8 +47,9 @@ router = APIRouter(prefix="/api/projects", tags=["runtime"])
 # CONTAINER_NEXT; kept in sync. A recreated container (destroy+reprovision, host
 # reboot losing the layer, manual cleanup) comes up running the *baked template*
 # — the "Новый проект на Omnia.AI" starter — instead of the user's app, unless
-# we re-push the latest snapshot. start_runtime does exactly that.
-_CONTAINER_NEXT = ("fullstack", "nextjs_entities")
+# we re-push the latest snapshot. start_runtime does exactly that. `spa` (Vite +
+# React, Phase 7.2) holds its AI files in the writable layer too.
+_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa")
 
 
 async def _project_owned_by(
