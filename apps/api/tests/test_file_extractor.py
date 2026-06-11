@@ -177,6 +177,41 @@ def test_extract_files_locale_fix_leaves_explicit_locale_untouched() -> None:
     assert extract_files(md)["notes.md"] == "{n.toLocaleString()}"
 
 
+def test_extract_files_adds_use_client_for_inline_handler() -> None:
+    # A landing page.tsx is a Server Component by default; an inline onSubmit
+    # handler makes RSC throw a 500. The extractor prepends "use client".
+    answer = (
+        '<file path="src/app/page.tsx">'
+        'import Link from "next/link";\n'
+        "export default function HomePage() {\n"
+        "  return <form onSubmit={(e) => e.preventDefault()}><Link href='/'/></form>;\n"
+        "}</file>"
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert out.startswith('"use client";\n\n')
+    assert "onSubmit" in out  # body preserved
+
+
+def test_extract_files_use_client_noop_when_safe() -> None:
+    # Already-directed file, handler-free file, server-only file (metadata /
+    # async page), and non-source file all pass through byte-identical.
+    already = '"use client";\nexport const F = () => <button onClick={() => 0}/>;'
+    assert extract_files(f'<file path="a.tsx">{already}</file>')["a.tsx"] == already
+
+    static = 'export default function P() { return <div>hi</div>; }'
+    assert extract_files(f'<file path="b.tsx">{static}</file>')["b.tsx"] == static
+
+    # server component with metadata + a handler => can't be client; left as-is
+    server = (
+        "export const metadata = { title: 'x' };\n"
+        "export default function P() { return <form onSubmit={() => 0}/>; }"
+    )
+    assert extract_files(f'<file path="c.tsx">{server}</file>')["c.tsx"] == server
+
+    md = '<file path="d.md">use onClick={x} in prose</file>'
+    assert extract_files(md)["d.md"] == "use onClick={x} in prose"
+
+
 # ---------------------------------------------------------------------------
 # extract_edits — new parser
 # ---------------------------------------------------------------------------

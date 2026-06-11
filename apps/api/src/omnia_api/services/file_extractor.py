@@ -207,6 +207,46 @@ def _fix_bare_locale_string(path: str, body: str) -> str:
     return _BARE_LOCALE_CALL.sub(r".toLocale\g<kind>('ru-RU')", body)
 
 
+# The writer authors a public landing as a React Server Component (App Router's
+# default — no "use client" directive) yet wires an interactive form/button with
+# an inline event handler: `<form onSubmit={…}>`. RSC forbids passing event
+# handlers to DOM/client props, so the route throws at render time and serves a
+# 500 — the whole landing is dead. The whole module is either client or server,
+# so a single inline handler forces the file to be client. We prepend the
+# directive deterministically. Guard: never touch a file that already declares a
+# top directive, has no handler, or carries a SERVER-ONLY export (`metadata`,
+# `generateMetadata`, a top-level `async` page) — those are incompatible with
+# "use client", so a file mixing both is a deeper authoring bug we don't worsen.
+_CLIENT_FIX_SUFFIXES = (".tsx", ".jsx")
+_EVENT_HANDLER = re.compile(r"\son[A-Z][A-Za-z]+=\{")
+_TOP_DIRECTIVE = re.compile(r"^﻿?\s*([\"'])use (?:client|server)\1")
+_SERVER_ONLY_EXPORT = re.compile(
+    r"export\s+const\s+metadata\b"
+    r"|export\s+(?:async\s+)?function\s+generateMetadata\b"
+    r"|export\s+default\s+async\s+function"
+    r"|export\s+async\s+function\s+\w*[Pp]age"
+)
+
+
+def _fix_missing_use_client(path: str, body: str) -> str:
+    """Prepend ``"use client"`` when a server component holds an event handler.
+
+    An inline ``on*={…}`` handler makes a React module a client component; without
+    the directive App Router renders it on the server and throws (500). No-op
+    unless ``path`` is a generated ``.tsx``/``.jsx`` that lacks a top directive,
+    actually has a handler, and exposes no server-only export (R-10 fail-soft —
+    a file mixing server-only features with handlers is left untouched)."""
+    if not path.endswith(_CLIENT_FIX_SUFFIXES):
+        return body
+    if _TOP_DIRECTIVE.match(body):
+        return body
+    if not _EVENT_HANDLER.search(body):
+        return body
+    if _SERVER_ONLY_EXPORT.search(body):
+        return body
+    return '"use client";\n\n' + body
+
+
 # Models occasionally violate the "unchanged files: don't mention" contract
 # and return a <file> block whose body is a human-language placeholder like
 # "(код без изменений)". Writing that into the file produces a TypeScript /
@@ -305,6 +345,7 @@ def extract_files(answer: str) -> dict[str, str]:
         body = _fix_invented_palette_vars(raw_path, body)
         body = _fix_invalid_lucide_imports(raw_path, body)
         body = _fix_bare_locale_string(raw_path, body)
+        body = _fix_missing_use_client(raw_path, body)
         files[raw_path] = body
         if len(files) > MAX_FILES:
             raise ValueError(f"too many files in answer: {len(files)} > {MAX_FILES}")
