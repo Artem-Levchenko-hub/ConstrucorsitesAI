@@ -9,6 +9,7 @@ import {
   Rows3,
   Search,
   SlidersHorizontal,
+  X,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -337,6 +338,33 @@ export function DataTable<T extends { id: string }>({
     URL.revokeObjectURL(url);
   }
 
+  // Surface the filters that are actually narrowing the table as removable
+  // chips. Derived from the state the table already owns (search + active
+  // quick-filter tab) — no new props, so every searchable/filterable table
+  // gets them for free, and a table with nothing applied renders no bar at all.
+  // The "show everything" tab (value == null) is not a filter, so it gets no chip.
+  const activeTab = tabs?.[tabIdx];
+  const trimmedQuery = query.trim();
+  const activeFilters: { key: string; label: string; clear: () => void }[] = [];
+  if (trimmedQuery) {
+    activeFilters.push({
+      key: "q",
+      label: `Поиск: «${trimmedQuery}»`,
+      clear: () => setQuery(""),
+    });
+  }
+  if (activeTab && activeTab.value != null) {
+    activeFilters.push({
+      key: "tab",
+      label: activeTab.label,
+      clear: () => setTabIdx(0),
+    });
+  }
+  function clearAllFilters() {
+    setQuery("");
+    setTabIdx(0);
+  }
+
   const colCount = visibleColumns.length + (selectable ? 1 : 0) + (rowActions ? 1 : 0);
 
   return (
@@ -462,6 +490,36 @@ export function DataTable<T extends { id: string }>({
           )}
         </div>
       )}
+
+      {activeFilters.length > 0 ? (
+        <div
+          role="group"
+          aria-label="Активные фильтры"
+          className="flex flex-wrap items-center gap-2"
+        >
+          {activeFilters.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={f.clear}
+              aria-label={`Убрать фильтр «${f.label}»`}
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border bg-muted/60 py-1 pl-3 pr-2 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/40"
+            >
+              <span className="max-w-[16rem] truncate">{f.label}</span>
+              <X className="size-3.5 shrink-0 opacity-70" />
+            </button>
+          ))}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={clearAllFilters}
+            className="h-8 text-muted-foreground"
+          >
+            Сбросить всё
+          </Button>
+        </div>
+      ) : null}
 
       {selectable && selectedRows.length > 0 ? (
         <div
