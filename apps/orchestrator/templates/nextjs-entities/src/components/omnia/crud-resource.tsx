@@ -33,6 +33,8 @@ export interface CrudResourceProps {
   /** Quick-filter segments above the table. First is usually `{ label: "Все", value: null }`. */
   filterTabs?: FilterTab[];
   pageSize?: number;
+  /** Show a CSV export button on the table. On by default for managed screens. */
+  exportable?: boolean;
   canCreate?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
@@ -65,6 +67,7 @@ export function CrudResource({
   filterField,
   filterTabs,
   pageSize = 10,
+  exportable = true,
   canCreate = true,
   canEdit = true,
   canDelete = true,
@@ -171,6 +174,8 @@ export function CrudResource({
         filterField={filterField}
         filterTabs={filterTabs}
         pageSize={pageSize}
+        exportable={exportable}
+        exportFilename={`${title ?? entity}.csv`}
         rowActions={rowActions}
       />
 

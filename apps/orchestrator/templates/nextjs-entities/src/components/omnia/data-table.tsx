@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ArrowDown, ArrowUp, ChevronsUpDown, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronsUpDown, Download, Search } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -52,6 +52,10 @@ export interface DataTableProps<T> {
   filterTabs?: FilterTab[];
   /** Set to enable client pagination. */
   pageSize?: number;
+  /** Show a "Экспорт" button that downloads the filtered+sorted rows as CSV. */
+  exportable?: boolean;
+  /** File name for the CSV export (defaults to "export.csv"). */
+  exportFilename?: string;
   /** Right-aligned per-row controls (edit / delete …) rendered in a last column. */
   rowActions?: (row: T) => React.ReactNode;
   onRowClick?: (row: T) => void;
@@ -91,6 +95,36 @@ function defaultCell(value: unknown): React.ReactNode {
 
 const alignClass = { left: "text-left", right: "text-right", center: "text-center" } as const;
 
+/** UTF-8 BOM so Excel detects the encoding and renders Cyrillic correctly. */
+const BOM = String.fromCharCode(0xfeff);
+
+/** Plain-text value for a CSV cell (no JSX) — mirrors defaultCell's wording. */
+function cellText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "boolean") return value ? "Да" : "Нет";
+  return String(value);
+}
+
+/** RFC-4180 field escaping: quote when the value holds a comma, quote or newline. */
+function csvField(text: string): string {
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/**
+ * Build a CSV string from the visible columns and the given rows. CRLF line
+ * endings keep Excel happy; the caller prepends a UTF-8 BOM so Cyrillic opens
+ * correctly. The action column is intentionally skipped — it has no data value.
+ */
+function rowsToCsv<T>(columns: Column<T>[], rows: T[]): string {
+  const header = columns.map((c) => csvField(c.header)).join(",");
+  const body = rows.map((row) =>
+    columns
+      .map((c) => csvField(cellText(rawValue(row as Record<string, unknown>, c.key))))
+      .join(","),
+  );
+  return [header, ...body].join("\r\n");
+}
+
 /**
  * Presentational data table with client-side search, sort and pagination, plus
  * loading skeletons and an empty state. Pass already-loaded `rows`; for a fully
@@ -106,6 +140,8 @@ export function DataTable<T extends { id: string }>({
   filterField,
   filterTabs,
   pageSize,
+  exportable,
+  exportFilename,
   rowActions,
   onRowClick,
   empty,
@@ -180,11 +216,26 @@ export function DataTable<T extends { id: string }>({
     );
   }
 
+  function handleExport() {
+    // Export everything that matches the current filter/search/sort, not just
+    // the visible page — that is what a "download this table" action means.
+    const csv = BOM + rowsToCsv(columns, sorted);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = exportFilename ?? "export.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   const colCount = columns.length + (rowActions ? 1 : 0);
 
   return (
     <div className={cn("space-y-3", className)}>
-      {(searchable || toolbar || (tabs && tabs.length > 1)) && (
+      {(searchable || toolbar || exportable || (tabs && tabs.length > 1)) && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             {tabs && tabs.length > 1 ? (
@@ -216,15 +267,32 @@ export function DataTable<T extends { id: string }>({
             ) : null}
             {toolbar}
           </div>
-          {searchable && (
-            <div className="relative sm:w-64">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={searchPlaceholder}
-                className="pl-9"
-              />
+          {(searchable || exportable) && (
+            <div className="flex items-center gap-2">
+              {exportable ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleExport}
+                  disabled={total === 0}
+                  aria-label="Экспортировать в CSV"
+                >
+                  <Download className="size-4" />
+                  <span className="hidden sm:inline">Экспорт</span>
+                </Button>
+              ) : null}
+              {searchable ? (
+                <div className="relative flex-1 sm:w-64 sm:flex-none">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder={searchPlaceholder}
+                    className="pl-9"
+                  />
+                </div>
+              ) : null}
             </div>
           )}
         </div>
