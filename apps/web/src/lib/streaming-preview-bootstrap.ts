@@ -50,6 +50,30 @@ export const BOOTSTRAP_HTML = `<!doctype html>
     padding: 48px 24px;
     font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
   }
+  /* Anticipation accent: a slow "breathing" sheen line above the label so the
+     pre-first-token wait reads as intentional build-up, not dead grey. Neutral
+     graphite/slate (no hue) so it never clashes with the brand the page will
+     adopt; the life comes from motion, not colour. */
+  .omnia-breathe-bar {
+    height: 3px;
+    max-width: 220px;
+    margin: 0 auto 22px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, transparent 0%, #cbd5e1 22%, #475569 50%, #cbd5e1 78%, transparent 100%);
+    background-size: 220% 100%;
+    animation: omnia-sheen 2.2s ease-in-out infinite, omnia-breathe 2.6s ease-in-out infinite;
+  }
+  @keyframes omnia-sheen {
+    0%   { background-position: 220% 0; }
+    100% { background-position: -220% 0; }
+  }
+  @keyframes omnia-breathe {
+    0%, 100% { opacity: 0.5; }
+    50%      { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .omnia-breathe-bar { animation: none; opacity: 0.7; }
+  }
   .omnia-placeholder .label {
     font-size: 13px;
     color: #71717a;
@@ -101,6 +125,7 @@ export const BOOTSTRAP_HTML = `<!doctype html>
 </head>
 <body>
 <div id="omnia-placeholder" class="omnia-placeholder">
+  <div class="omnia-breathe-bar"></div>
   <div class="label"><span id="omnia-status">AI пишет ответ</span><span class="dots"></span></div>
   <div class="hint">Обычно 5–15 секунд. Если ответ пустой — переключусь на запасную модель автоматически.</div>
   <div class="omnia-shimmer" style="height: 52px; margin-bottom: 16px;"></div>
