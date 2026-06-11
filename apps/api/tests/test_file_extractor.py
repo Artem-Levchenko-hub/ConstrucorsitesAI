@@ -148,6 +148,35 @@ def test_extract_files_lucide_fix_passes_through_alias_forms() -> None:
     assert extract_files(answer)["src/F.tsx"] == src
 
 
+def test_extract_files_pins_locale_on_bare_to_locale_string() -> None:
+    # A bare `.toLocaleString()` resolves to the runtime locale, which differs
+    # between the SSR (container Node) and client (browser) passes -> the price
+    # renders "4 500" server-side and "4,500" client-side => hydration mismatch.
+    # The extractor pins 'ru-RU' so both passes emit the identical string.
+    answer = (
+        '<file path="src/app/page.tsx">'
+        "<span>{price.toLocaleString()} ₽</span>"
+        "<time>{date.toLocaleDateString()}</time></file>"
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert "price.toLocaleString('ru-RU')" in out
+    assert "date.toLocaleDateString('ru-RU')" in out
+    assert "toLocaleString()" not in out  # no bare call leaks through
+
+
+def test_extract_files_locale_fix_leaves_explicit_locale_untouched() -> None:
+    # A call that already passes a first argument is deterministic across runtimes
+    # and must pass through byte-identical (R-10 fail-soft). Non-source files too.
+    src = (
+        "a.toLocaleString('en-US');"
+        "b.toLocaleString(undefined, { style: 'currency' });"
+    )
+    answer = f'<file path="src/F.tsx">{src}</file>'
+    assert extract_files(answer)["src/F.tsx"] == src
+    md = '<file path="notes.md">{n.toLocaleString()}</file>'
+    assert extract_files(md)["notes.md"] == "{n.toLocaleString()}"
+
+
 # ---------------------------------------------------------------------------
 # extract_edits — new parser
 # ---------------------------------------------------------------------------

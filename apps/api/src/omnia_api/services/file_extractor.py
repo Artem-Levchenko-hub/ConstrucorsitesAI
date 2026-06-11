@@ -177,6 +177,36 @@ def _fix_invalid_lucide_imports(path: str, body: str) -> str:
 
     return _LUCIDE_IMPORT_BLOCK.sub(_rewrite, body)
 
+
+# The writer formats prices/dates with a bare `.toLocaleString()` (no locale arg)
+# on server-rendered landing/page components. The locale then defaults to the
+# RUNTIME's locale, which differs between the SSR pass (the dev container's Node,
+# ru-leaning -> "4 500" with a non-breaking space) and the client (the visitor's
+# browser, e.g. en-US -> "4,500"). React sees server text != client text and
+# throws a hydration-mismatch error, regenerating the whole tree on the client
+# (visible flicker + console error). Pinning an explicit locale makes both passes
+# emit the identical string regardless of runtime locale. We only touch the
+# EMPTY-parens form — `toLocaleString('ru-RU')` / `toLocaleString(undefined, {…})`
+# already pass a first arg and are left byte-identical.
+_LOCALE_FIX_SUFFIXES = (".tsx", ".jsx", ".ts")
+_BARE_LOCALE_CALL = re.compile(
+    r"\.toLocale(?P<kind>String|DateString|TimeString)\(\s*\)"
+)
+
+
+def _fix_bare_locale_string(path: str, body: str) -> str:
+    """Pin an explicit locale on bare ``toLocale*String()`` calls.
+
+    A locale-less call resolves to the runtime locale, which differs between the
+    SSR (container Node) and client (browser) passes -> hydration mismatch. Adding
+    ``'ru-RU'`` makes both passes deterministic. No-op unless ``path`` is a
+    generated source file with a bare call (R-10 fail-soft); calls that already
+    pass an argument are untouched."""
+    if not path.endswith(_LOCALE_FIX_SUFFIXES):
+        return body
+    return _BARE_LOCALE_CALL.sub(r".toLocale\g<kind>('ru-RU')", body)
+
+
 # Models occasionally violate the "unchanged files: don't mention" contract
 # and return a <file> block whose body is a human-language placeholder like
 # "(код без изменений)". Writing that into the file produces a TypeScript /
@@ -274,6 +304,7 @@ def extract_files(answer: str) -> dict[str, str]:
             raise ValueError(f"file {raw_path} exceeds {MAX_FILE_BYTES} bytes")
         body = _fix_invented_palette_vars(raw_path, body)
         body = _fix_invalid_lucide_imports(raw_path, body)
+        body = _fix_bare_locale_string(raw_path, body)
         files[raw_path] = body
         if len(files) > MAX_FILES:
             raise ValueError(f"too many files in answer: {len(files)} > {MAX_FILES}")
