@@ -45,6 +45,11 @@ export interface CrudResourceProps {
    * Defaults to whatever `canDelete` is, so deletable lists get it for free.
    */
   selectable?: boolean;
+  /**
+   * Let the user switch between comfortable and compact row height. On by
+   * default; the toggle only appears once the list has enough rows (≥10).
+   */
+  densityToggle?: boolean;
   canCreate?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
@@ -80,6 +85,7 @@ export function CrudResource({
   exportable = true,
   columnToggle = true,
   selectable,
+  densityToggle = true,
   canCreate = true,
   canEdit = true,
   canDelete = true,
@@ -214,6 +220,7 @@ export function CrudResource({
         exportFilename={`${title ?? entity}.csv`}
         columnToggle={columnToggle}
         selectable={allowBulk}
+        densityToggle={densityToggle}
         bulkActions={
           canDelete
             ? (selected, clear) => (

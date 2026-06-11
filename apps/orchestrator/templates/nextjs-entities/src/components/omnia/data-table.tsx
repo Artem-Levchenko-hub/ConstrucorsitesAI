@@ -6,6 +6,7 @@ import {
   ArrowUp,
   ChevronsUpDown,
   Download,
+  Rows3,
   Search,
   SlidersHorizontal,
 } from "lucide-react";
@@ -80,6 +81,12 @@ export interface DataTableProps<T> {
   /** Show a leading checkbox column so rows can be selected for bulk actions. */
   selectable?: boolean;
   /**
+   * Show a density toggle (comfortable ⇄ compact rows). Only appears once the
+   * list is long enough (≥10 rows) to be worth tightening; short lists are
+   * unaffected and render exactly as before.
+   */
+  densityToggle?: boolean;
+  /**
    * Controls shown in the selection toolbar when ≥1 row is selected. Receives
    * the selected rows (full objects, pruned to those still present) and a
    * `clear` callback to reset the selection after acting.
@@ -111,6 +118,13 @@ const AUTO_PAGE_SIZE = 20;
  * tables render exactly as before even with `columnToggle` on.
  */
 const COLUMN_TOGGLE_MIN = 3;
+
+/**
+ * Tightening row height only matters once a list has some volume. Below this
+ * many rows the density toggle stays hidden, so small tables render exactly as
+ * before even with `densityToggle` on.
+ */
+const DENSITY_TOGGLE_MIN = 10;
 
 function rawValue(row: Record<string, unknown>, key: string): unknown {
   return row[key];
@@ -180,6 +194,7 @@ export function DataTable<T extends { id: string }>({
   exportFilename,
   columnToggle,
   selectable,
+  densityToggle,
   bulkActions,
   rowActions,
   onRowClick,
@@ -193,9 +208,15 @@ export function DataTable<T extends { id: string }>({
   const [tabIdx, setTabIdx] = React.useState(0);
   const [selected, setSelected] = React.useState<Set<string>>(() => new Set());
   const [hidden, setHidden] = React.useState<Set<string>>(() => new Set());
+  const [density, setDensity] = React.useState<"comfortable" | "compact">("comfortable");
 
   const keys = searchKeys ?? columns.map((c) => c.key);
   const tabs = filterField ? filterTabs : undefined;
+
+  // Gate on the raw row count (not the filtered total) so the control's
+  // presence stays stable while the operator searches/filters.
+  const showDensityToggle =
+    !!densityToggle && (Array.isArray(rows) ? rows.length : 0) >= DENSITY_TOGGLE_MIN;
 
   // The toggle only shows for wide-enough tables; below the threshold `hidden`
   // can never change, so `visibleColumns` stays identical to `columns`.
@@ -320,7 +341,12 @@ export function DataTable<T extends { id: string }>({
 
   return (
     <div className={cn("space-y-3", className)}>
-      {(searchable || toolbar || exportable || showColumnToggle || (tabs && tabs.length > 1)) && (
+      {(searchable ||
+        toolbar ||
+        exportable ||
+        showColumnToggle ||
+        showDensityToggle ||
+        (tabs && tabs.length > 1)) && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             {tabs && tabs.length > 1 ? (
@@ -352,8 +378,27 @@ export function DataTable<T extends { id: string }>({
             ) : null}
             {toolbar}
           </div>
-          {(searchable || exportable || showColumnToggle) && (
+          {(searchable || exportable || showColumnToggle || showDensityToggle) && (
             <div className="flex items-center gap-2">
+              {showDensityToggle ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-pressed={density === "compact"}
+                  onClick={() =>
+                    setDensity((d) => (d === "compact" ? "comfortable" : "compact"))
+                  }
+                  aria-label={
+                    density === "compact" ? "Обычная плотность строк" : "Компактные строки"
+                  }
+                >
+                  <Rows3 className="size-4" />
+                  <span className="hidden sm:inline">
+                    {density === "compact" ? "Обычно" : "Компактно"}
+                  </span>
+                </Button>
+              ) : null}
               {showColumnToggle ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -436,7 +481,12 @@ export function DataTable<T extends { id: string }>({
         </div>
       ) : null}
 
-      <div className="elev-1 overflow-hidden rounded-xl border border-border bg-card">
+      <div
+        className={cn(
+          "elev-1 overflow-hidden rounded-xl border border-border bg-card",
+          density === "compact" && "[&_td]:py-1.5 [&_th]:h-9",
+        )}
+      >
         <Table>
           <TableHeader className="bg-muted/40">
             <TableRow>
