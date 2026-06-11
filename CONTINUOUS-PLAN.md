@@ -151,7 +151,7 @@
 ### PHASE V1 — WOW-ДИЗАЙН С 1 ГЕНЕРАЦИИ (Mobbin-driven) ← СТОЛП 1, ВЫСШИЙ ПРИОРИТЕТ
 > Поглощает старую 0★.3. Цель: каждый сгенеренный апп = «бешеный уровень» сразу. Источник = Mobbin top-паттерны → ПРАВИЛА генератора.
 - [x] V1.1 **Mobbin MCP оживить + смоук.** ✅ 2026-06-12 00:30 MSK — Mobbin MCP **LIVE + authenticated в HEADLESS executor-сессии** (OAuth владельца персистнул; tools = `mcp__6816dd4c-d3a8-4fdd-9502-279857c7eb0e__search_screens`/`search_flows`, НЕ `mcp__mobbin__*` shell). 3 смоук-запроса (web) вернули реальные enterprise-скрины+картинки, БЕЗ `MOBBIN-AUTH-NEEDED`. **Это разблокирует весь V1** (20+ прошлых тиков ложно считали Mobbin недоступным). Сид-референсы для V1.2 ниже.
-- [ ] V1.2 **Извлечь 8–12 top enterprise-паттернов → таблица «приём → правило».** Категории: app-shell/sidebar, dashboard-композиция, data-table плотность, empty-state, onboarding-поп-ап, hero/landing верх, pricing, settings/profile, формы, навигация. Для КАЖДОГО: что именно делает класс-референс (Linear/Stripe/Notion/Vercel/Mobbin-топ) → как это выразить ПРАВИЛОМ в `_ENTITIES_UI`/app-kit (не копия). Цитировать `mobbin_url`.
+- [x] V1.2 **Извлечь 8–12 top enterprise-паттернов → таблица «приём → правило».** ✅ 2026-06-12 ~00:50 MSK — делверибл [`docs/plans/mobbin-patterns-to-rules.md`](docs/plans/mobbin-patterns-to-rules.md): 12 паттернов, каждый распакован в правило (бриф vs kit-примитив) + статус (есть/net-new) + цитаты `mobbin_url`. **Очередь V1.3** (приоритет): (1) Settings/Account scaffold `SettingsShell`+`SettingsSection`+`FieldRow` — net-new, нужен каждому аппу; (2) `SetupChecklist` — удар по столпу геймификации; (3) active removable filter-chips; (4) Command palette ⌘K; (5) empty-state copy+CTA; (6) trial-капсула. Net-new находки: Settings (НЕТ scaffold'а), setup-checklist, active-filter-chips, ⌘K. Источники: Time2book/Grammarly/7shifts/Oyster (settings), Vanta/Hootsuite/HoneyBook (checklist), Linear/Vapi/Fey (⌘K), Klarna/Quicken/Typeform (empty-state).
 - [ ] V1.3 **Вшить правила в генератор** (`prompt_builder.py _ENTITIES_UI` + `apps/orchestrator/templates/nextjs-entities` kit) минимальным дифом, по одному приёму за тик, code-canon R-01/R-04. Бриф-правила = model-guidance; kit-примитивы = model-independent (предпочтительнее — детерминированы).
 - [ ] V1.4 **Пересборка образа → визуальный E2E на 3 нишах** (магазин/клиника/SaaS-CRM): 1 промпт → скрин desktop+mobile → балл по WOW-рубрике. Гейт ≥8/10. <8 → root-cause (какой столп-критерий провален) → правка → петля.
 - [ ] V1.5 **Петля до WOW** на разнообразных нишах, пока «с первого раза enterprise» не станет стабильным (а не «иногда»). Каждый прогон = новая ниша, балл, дельта.
@@ -352,6 +352,15 @@
 
 ## 7. ЛОГ ИТЕРАЦИЙ
 <!-- ВРЕМЕННАЯ ВСТАВКА НИЖЕ; формат-комментарий следует за ней. -->
+
+## 2026-06-12 00:32–00:55 MSK — V1.2 Mobbin-паттерны → таблица «приём→правило» (ВТОРАЯ V-задача) [x] — docs-only
+- **Выбор:** stop-gate 00:32 < HARD-STOP 2026-06-15 23:59. Lock свободен → взял (run-7fa3c1e9). Sync ff-only, HEAD `40d4894`, 0 IN-FLIGHT. Первый `[ ]` §5★ = **V1.2** (после V1.1 Mobbin-live).
+- **Делверибл:** [`docs/plans/mobbin-patterns-to-rules.md`](docs/plans/mobbin-patterns-to-rules.md) — 12 enterprise-паттернов с Mobbin (web, MCP `__search_screens`), каждый распакован в ПРАВИЛО генератора (бриф `_ENTITIES_UI` vs детерминир. kit-примитив) + статус (есть/net-new) + `mobbin_url`.
+- **Грунтовка:** прочитал текущий `prompt_builder._ENTITIES_UI` (823–1022) — кит уже покрывает app-shell, две-роли, CrudResource (filterTabs/CSV/bulk/columnToggle/density/record-card/sort), dashboard (StatCard/charts/CountUp), storefront. → таблица фокусируется на NET-NEW.
+- **★Главные net-new находки:** (1) **Settings/Account** — НИ ОДНОГО scaffold'а нет в ките (Time2book/Grammarly/7shifts/Oyster: суб-nav + карточки-группы + явный «Сохранить» + delete-зона); (2) **Setup-checklist** (Vanta «6/20 tasks»/Hootsuite/HoneyBook — прямой удар по столпу геймификации North-Star); (3) **active removable filter-chips** (Squarespace); (4) **Command palette ⌘K** (Linear/Vapi/Fey).
+- **Очередь V1.3** (приоритет в делвериболе): Settings scaffold → SetupChecklist → filter-chips → ⌘K → empty-state copy → trial-капсула. По одному за тик.
+- **Доставка:** docs-only (runtime НЕ затронут) → commit+push main, БЕЗ деплоя. «E2E» = живые MCP-запросы вернули реальные enterprise-скрины+картинки (Klarna/Quicken/Vanta/Linear/Time2book/…). Resource-guard: 0 контейнеров/генераций.
+- **Следующий тик:** V1.3 под-слайс #1 — `SettingsShell`+`SettingsSection`+`FieldRow` kit-примитивы + бриф `/dashboard/settings`, пересборка образа, визуальный E2E.
 
 ## 2026-06-12 00:27–00:40 MSK — V1.1 Mobbin MCP оживлён + смоук (ПЕРВАЯ V-задача roadmap v2.0) [x] — docs-only
 - **Задача:** первый `[ ]` нового §5★ ВИЗИОНЕРСКИЙ ROADMAP (re-aim под NORTH STAR, v2.0 сегодня) = V1.1 — подтвердить доступность Mobbin MCP в свежей headless-сессии + 2–3 смоук-запроса.
