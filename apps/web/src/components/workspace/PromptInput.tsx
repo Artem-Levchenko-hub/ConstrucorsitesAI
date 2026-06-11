@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Send, StopCircle, Clock, X } from "lucide-react";
+import { Clock, Loader2, Mic, Send, Square, StopCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
 import { EASE_OUT } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import type { SelectedElement } from "@/lib/api/types";
@@ -33,6 +34,13 @@ export function PromptInput({
   const [value, setValue] = useState("");
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? internalRef;
+
+  // Voice dictation → drop the transcript into the box (review-first), append to
+  // anything already typed, then focus so the user can edit and send.
+  const voice = useVoiceInput((text) => {
+    setValue((v) => (v.trim() ? `${v.trim()} ${text}` : text));
+    requestAnimationFrame(() => ref.current?.focus());
+  });
 
   const selections = useInspectorStore((s) => s.selections);
   const setComment = useInspectorStore((s) => s.setComment);
@@ -148,20 +156,61 @@ export function PromptInput({
         />
 
         <div className="flex items-center justify-between px-2.5 pb-2.5 gap-2">
-          <span
-            className="text-[11px] font-mono text-fg-tertiary min-w-0 truncate"
-            title="Ctrl + Enter — отправить"
-          >
-            <kbd className="px-1 rounded bg-surface-raised border border-border-subtle">
-              Ctrl
-            </kbd>
-            <span className="mx-0.5">+</span>
-            <kbd className="px-1 rounded bg-surface-raised border border-border-subtle">
-              ↵
-            </kbd>
-          </span>
+          {voice.state === "recording" ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-danger">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger animate-pulse" />
+              Запись… нажмите стоп
+            </span>
+          ) : voice.state === "transcribing" ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-fg-tertiary">
+              <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+              Распознаю речь…
+            </span>
+          ) : voice.error ? (
+            <span className="min-w-0 truncate text-[11px] text-danger" title={voice.error}>
+              {voice.error}
+            </span>
+          ) : (
+            <span
+              className="text-[11px] font-mono text-fg-tertiary min-w-0 truncate"
+              title="Ctrl + Enter — отправить"
+            >
+              <kbd className="px-1 rounded bg-surface-raised border border-border-subtle">
+                Ctrl
+              </kbd>
+              <span className="mx-0.5">+</span>
+              <kbd className="px-1 rounded bg-surface-raised border border-border-subtle">
+                ↵
+              </kbd>
+            </span>
+          )}
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {voice.supported && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={voice.toggle}
+                disabled={voice.state === "transcribing"}
+                className={cn("px-2.5", voice.state === "recording" && "text-danger")}
+                title={
+                  voice.state === "recording"
+                    ? "Остановить запись"
+                    : "Надиктовать промпт голосом"
+                }
+                aria-label="Голосовой ввод"
+              >
+                {voice.state === "transcribing" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : voice.state === "recording" ? (
+                  <Square className="h-3.5 w-3.5 fill-current animate-pulse" />
+                ) : (
+                  <Mic className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            )}
+
             {isStreaming && (
               <Button
                 type="button"

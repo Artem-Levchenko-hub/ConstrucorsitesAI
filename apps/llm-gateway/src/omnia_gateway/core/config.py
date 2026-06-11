@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/1"
 
     default_model: str = "claude-sonnet-4-6"
+    # Speech-to-text (voice prompt dictation). proxyapi's OpenAI surface exposes
+    # whisper-1 + gpt-4o-(mini-)transcribe, reachable from the RU prod box. whisper-1
+    # is the cheap, battle-tested RU-capable default; swap to gpt-4o-mini-transcribe
+    # for higher quality. Routed direct (not LiteLLM), like /v1/images/generations.
+    transcribe_model: str = "whisper-1"
     safety_filter_enabled: bool = True
     cache_ttl_seconds: int = 3600
     min_balance_rub: float = 5.0

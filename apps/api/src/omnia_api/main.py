@@ -29,6 +29,7 @@ from omnia_api.routers import rollback as rollback_router
 from omnia_api.routers import runtime as runtime_router
 from omnia_api.routers import snapshots as snapshots_router
 from omnia_api.routers import style_patch as style_patch_router
+from omnia_api.routers import transcribe as transcribe_router
 from omnia_api.routers import uploads as uploads_router
 from omnia_api.routers import wallet as wallet_router
 from omnia_api.routers import ws as ws_router
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(rollback_router.router)
     app.include_router(style_patch_router.router)
     app.include_router(uploads_router.router)
+    app.include_router(transcribe_router.router)
     app.include_router(fonts_router.router)
     app.include_router(runtime_router.router)
     app.include_router(wallet_router.router)

@@ -121,3 +121,54 @@ export async function apiFetch<T>(
 
   return payload as T;
 }
+
+/**
+ * POST a raw binary Blob (audio, image) and parse the JSON/`ApiError` response —
+ * the same baseURL/credentials/error-envelope contract as `apiFetch`, but for a
+ * Blob body `apiFetch`'s JSON-only `body` type can't express. Used by voice
+ * dictation (`/api/transcribe`). Content-Type comes from the blob itself.
+ */
+export async function postBlob<T>(
+  path: string,
+  blob: Blob,
+  { timeoutMs }: { timeoutMs?: number } = {},
+): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": blob.type || "application/octet-stream" },
+      body: blob,
+      signal: timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : undefined,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new ApiError(0, {
+        code: "internal_error",
+        message: `Request timed out after ${timeoutMs}ms`,
+      });
+    }
+    throw new ApiError(0, {
+      code: "internal_error",
+      message: e instanceof Error ? e.message : "Network error",
+    });
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload: unknown = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+
+  if (!response.ok) {
+    if (typeof payload === "object" && payload !== null && "error" in payload) {
+      throw new ApiError(response.status, (payload as ApiErrorBody).error);
+    }
+    throw new ApiError(response.status, {
+      code: "internal_error",
+      message: typeof payload === "string" ? payload : `HTTP ${response.status}`,
+    });
+  }
+
+  return payload as T;
+}
