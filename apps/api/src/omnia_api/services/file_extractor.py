@@ -20,6 +20,8 @@ import logging
 import re
 from pathlib import PurePosixPath
 
+from omnia_api.services.lucide_icon_names import is_valid_lucide_name
+
 log = logging.getLogger(__name__)
 
 _FILE_BLOCK = re.compile(
@@ -84,19 +86,23 @@ def _fix_invented_palette_vars(path: str, body: str) -> str:
     return body
 
 
-# The writer reliably hallucinates brand/social icons that lucide-react does NOT
-# export (lucide carries generic UI glyphs, not company logos). An import like
-# `import { Telegram } from "lucide-react"` then breaks the Turbopack build
-# outright — the dev container never serves 200, so the whole generated app is
-# dead. A negative brief rule doesn't stop the model reaching for `<Telegram/>`
-# in a footer, so we repair the IMPORT deterministically: alias a valid,
-# visually-adjacent glyph to the hallucinated local name
-# (`{ Send as Telegram }`), leaving every `<Telegram/>` usage untouched. Keyed by
-# lower-cased imported name so Telegram/TikTok/WhatsApp casing variants all map.
-# Every key below is confirmed ABSENT and every fallback confirmed PRESENT in the
-# template's lucide-react@0.469. Brand glyphs lucide DOES ship (apple, slack,
-# figma, dribbble, github, twitch, signal, twitter, facebook, instagram,
-# youtube, linkedin, x) are deliberately not listed — they must pass through.
+# The writer hallucinates lucide-react imports that the package does NOT export.
+# Two flavours, both fatal: brand/social logos (`Telegram`, lucide ships generic
+# glyphs not company logos) AND abbreviated/wrong forms of real icons (`Trend`
+# for `TrendingUp`, `Dashboard` for `LayoutDashboard`, `Cart` for `ShoppingCart`).
+# Any one of them breaks the Turbopack build outright — the dev container never
+# serves 200, so the WHOLE generated app is dead. A negative brief rule doesn't
+# stop the model reaching for `<Trend/>`, so we repair the IMPORT deterministically:
+# every imported specifier is validated against the canonical lucide export set
+# (`is_valid_lucide_name`); an unknown name is aliased to a valid glyph — a
+# visually-adjacent brand fallback when we have one, else a neutral `Circle` — while
+# its `<Name/>` usages keep their original local name via the alias. Valid names
+# (including the `<Base>Icon` / `Lucide<Base>` alias forms) pass through unchanged.
+#
+# The brand table below is the *nicer-looking* fallback layer (Telegram→Send beats
+# Telegram→Circle); keyed by lower-cased imported name so casing variants all map.
+# Keys are confirmed ABSENT and values confirmed PRESENT in the template's lucide.
+_LUCIDE_GENERIC_FALLBACK = "Circle"  # always a valid lucide export; neutral glyph
 _LUCIDE_INVALID_ICON_FALLBACKS: dict[str, str] = {
     "telegram": "Send",
     "whatsapp": "MessageCircle",
@@ -133,12 +139,15 @@ _AS_SPLIT = re.compile(r"\s+as\s+")
 
 
 def _fix_invalid_lucide_imports(path: str, body: str) -> str:
-    """Alias hallucinated lucide brand icons to real glyphs so the build survives.
+    """Alias every invalid lucide import to a real glyph so the build survives.
 
-    See ``_LUCIDE_INVALID_ICON_FALLBACKS``. No-op unless ``path`` is a generated
-    source file importing from ``lucide-react``; an import with no hallucinated
-    name passes through byte-identical (R-10 fail-soft). Only the import block is
-    rewritten — usages keep their original local name via the alias."""
+    Each imported specifier is checked against the canonical lucide export set
+    (``is_valid_lucide_name``). A valid name — including ``<Base>Icon`` /
+    ``Lucide<Base>`` alias forms — passes through byte-identical. An unknown name is
+    aliased to a valid glyph: a visually-adjacent brand fallback when one is known,
+    else ``Circle``. No-op unless ``path`` is a generated source file importing from
+    ``lucide-react`` (R-10 fail-soft). Only the import block is rewritten — usages
+    keep their original local name via the alias."""
     if not path.endswith(_LUCIDE_FIX_SUFFIXES) or "lucide-react" not in body:
         return body
 
@@ -152,12 +161,14 @@ def _fix_invalid_lucide_imports(path: str, body: str) -> str:
             parts = _AS_SPLIT.split(spec, 1)
             imported = parts[0].strip()
             local = parts[1].strip() if len(parts) > 1 else imported
-            fallback = _LUCIDE_INVALID_ICON_FALLBACKS.get(imported.lower())
-            if fallback and fallback != imported:
-                specs.append(f"{fallback} as {local}")
-                changed = True
-            else:
+            if is_valid_lucide_name(imported):
                 specs.append(spec)
+                continue
+            fallback = _LUCIDE_INVALID_ICON_FALLBACKS.get(
+                imported.lower(), _LUCIDE_GENERIC_FALLBACK
+            )
+            specs.append(f"{fallback} as {local}")
+            changed = True
         if not changed:
             return match.group(0)
         return match.group(0).replace(

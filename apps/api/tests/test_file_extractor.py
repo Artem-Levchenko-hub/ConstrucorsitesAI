@@ -122,6 +122,32 @@ def test_extract_files_lucide_fix_scoped_to_source_files() -> None:
     )
 
 
+def test_extract_files_aliases_nonbrand_hallucinated_icons() -> None:
+    # The app-killer that motivated the comprehensive fix: the writer reached for
+    # `<Trend/>` (lucide exports `TrendingUp`, not `Trend`) and `<Dashboard/>`
+    # (it's `LayoutDashboard`). These are not brands, so the old denylist missed
+    # them and the whole build died. Now any name absent from the canonical export
+    # set is aliased to a neutral `Circle`, keeping `<Trend/>` usages working.
+    answer = (
+        '<file path="src/app/page.tsx">'
+        'import { TrendingUp, Trend, Dashboard } from "lucide-react";\n'
+        "export const F = () => <><Trend/><Dashboard/><TrendingUp/></>;</file>"
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert "Circle as Trend" in out
+    assert "Circle as Dashboard" in out
+    assert "TrendingUp," in out  # real icon untouched (not aliased)
+    assert "<Trend/>" in out and "<Dashboard/>" in out  # usages keep local names
+
+
+def test_extract_files_lucide_fix_passes_through_alias_forms() -> None:
+    # lucide also ships `<Base>Icon` and `Lucide<Base>` aliases for every icon;
+    # flagging those as invalid would corrupt a working import. They must survive.
+    src = 'import { TrendingUpIcon, LucideHome, Mail } from "lucide-react";'
+    answer = f'<file path="src/F.tsx">{src}</file>'
+    assert extract_files(answer)["src/F.tsx"] == src
+
+
 # ---------------------------------------------------------------------------
 # extract_edits — new parser
 # ---------------------------------------------------------------------------
