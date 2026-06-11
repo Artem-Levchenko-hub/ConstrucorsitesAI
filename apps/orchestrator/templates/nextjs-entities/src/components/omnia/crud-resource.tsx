@@ -36,6 +36,11 @@ export interface CrudResourceProps {
   /** Show a CSV export button on the table. On by default for managed screens. */
   exportable?: boolean;
   /**
+   * Let the user hide/show columns via a "Колонки" menu. On by default; the menu
+   * only appears once the table has enough columns (≥3) to be worth it.
+   */
+  columnToggle?: boolean;
+  /**
    * Let the user tick rows for bulk actions (bulk delete + export selected).
    * Defaults to whatever `canDelete` is, so deletable lists get it for free.
    */
@@ -73,6 +78,7 @@ export function CrudResource({
   filterTabs,
   pageSize = 10,
   exportable = true,
+  columnToggle = true,
   selectable,
   canCreate = true,
   canEdit = true,
@@ -206,6 +212,7 @@ export function CrudResource({
         pageSize={pageSize}
         exportable={exportable}
         exportFilename={`${title ?? entity}.csv`}
+        columnToggle={columnToggle}
         selectable={allowBulk}
         bulkActions={
           canDelete

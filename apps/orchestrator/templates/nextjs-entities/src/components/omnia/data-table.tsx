@@ -1,12 +1,27 @@
 "use client";
 
 import * as React from "react";
-import { ArrowDown, ArrowUp, ChevronsUpDown, Download, Search } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronsUpDown,
+  Download,
+  Search,
+  SlidersHorizontal,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -57,6 +72,11 @@ export interface DataTableProps<T> {
   exportable?: boolean;
   /** File name for the CSV export (defaults to "export.csv"). */
   exportFilename?: string;
+  /**
+   * Show a "Колонки" menu that lets the user hide/show individual columns.
+   * Only appears once there are enough columns to be worth it (≥3).
+   */
+  columnToggle?: boolean;
   /** Show a leading checkbox column so rows can be selected for bulk actions. */
   selectable?: boolean;
   /**
@@ -84,6 +104,13 @@ type SortState = { key: string; dir: "asc" | "desc" } | null;
  * (usually a handful of rows) still render in one page, unchanged.
  */
 const AUTO_PAGE_SIZE = 20;
+
+/**
+ * Hiding columns only earns its toolbar button once a table is wide enough to
+ * be worth tidying. Below this many columns the toggle stays hidden, so small
+ * tables render exactly as before even with `columnToggle` on.
+ */
+const COLUMN_TOGGLE_MIN = 3;
 
 function rawValue(row: Record<string, unknown>, key: string): unknown {
   return row[key];
@@ -151,6 +178,7 @@ export function DataTable<T extends { id: string }>({
   pageSize,
   exportable,
   exportFilename,
+  columnToggle,
   selectable,
   bulkActions,
   rowActions,
@@ -164,9 +192,27 @@ export function DataTable<T extends { id: string }>({
   const [page, setPage] = React.useState(1);
   const [tabIdx, setTabIdx] = React.useState(0);
   const [selected, setSelected] = React.useState<Set<string>>(() => new Set());
+  const [hidden, setHidden] = React.useState<Set<string>>(() => new Set());
 
   const keys = searchKeys ?? columns.map((c) => c.key);
   const tabs = filterField ? filterTabs : undefined;
+
+  // The toggle only shows for wide-enough tables; below the threshold `hidden`
+  // can never change, so `visibleColumns` stays identical to `columns`.
+  const showColumnToggle = !!columnToggle && columns.length >= COLUMN_TOGGLE_MIN;
+  const visibleColumns = React.useMemo(
+    () => (showColumnToggle ? columns.filter((c) => !hidden.has(c.key)) : columns),
+    [showColumnToggle, columns, hidden],
+  );
+
+  function toggleColumn(key: string) {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   const segmented = React.useMemo(() => {
     // Defensive: callers often start with `useState()` (undefined) before data
@@ -257,7 +303,8 @@ export function DataTable<T extends { id: string }>({
     // Export the selected rows when there is a selection, otherwise everything
     // that matches the current filter/search/sort — not just the visible page.
     const exportRows = selectedRows.length ? selectedRows : sorted;
-    const csv = BOM + rowsToCsv(columns, exportRows);
+    // Export mirrors what's on screen — hidden columns are left out.
+    const csv = BOM + rowsToCsv(visibleColumns, exportRows);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -269,11 +316,11 @@ export function DataTable<T extends { id: string }>({
     URL.revokeObjectURL(url);
   }
 
-  const colCount = columns.length + (selectable ? 1 : 0) + (rowActions ? 1 : 0);
+  const colCount = visibleColumns.length + (selectable ? 1 : 0) + (rowActions ? 1 : 0);
 
   return (
     <div className={cn("space-y-3", className)}>
-      {(searchable || toolbar || exportable || (tabs && tabs.length > 1)) && (
+      {(searchable || toolbar || exportable || showColumnToggle || (tabs && tabs.length > 1)) && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             {tabs && tabs.length > 1 ? (
@@ -305,8 +352,43 @@ export function DataTable<T extends { id: string }>({
             ) : null}
             {toolbar}
           </div>
-          {(searchable || exportable) && (
+          {(searchable || exportable || showColumnToggle) && (
             <div className="flex items-center gap-2">
+              {showColumnToggle ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label="Показать или скрыть колонки"
+                    >
+                      <SlidersHorizontal className="size-4" />
+                      <span className="hidden sm:inline">Колонки</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuLabel>Показать колонки</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {columns.map((col) => {
+                      const isVisible = !hidden.has(col.key);
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={col.key}
+                          checked={isVisible}
+                          // Keep the menu open so several columns can be toggled.
+                          onSelect={(e) => e.preventDefault()}
+                          onCheckedChange={() => toggleColumn(col.key)}
+                          // Never let the user hide the last visible column.
+                          disabled={isVisible && visibleColumns.length === 1}
+                        >
+                          {col.header}
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
               {exportable ? (
                 <Button
                   type="button"
@@ -368,7 +450,7 @@ export function DataTable<T extends { id: string }>({
                   />
                 </TableHead>
               ) : null}
-              {columns.map((col) => {
+              {visibleColumns.map((col) => {
                 const sortedAsc = sort?.key === col.key && sort.dir === "asc";
                 const sortedDesc = sort?.key === col.key && sort.dir === "desc";
                 return (
@@ -458,7 +540,7 @@ export function DataTable<T extends { id: string }>({
                       />
                     </TableCell>
                   ) : null}
-                  {columns.map((col) => (
+                  {visibleColumns.map((col) => (
                     <TableCell
                       key={col.key}
                       className={cn(col.align && alignClass[col.align], col.className)}
