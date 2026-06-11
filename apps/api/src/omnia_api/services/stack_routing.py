@@ -40,18 +40,22 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 # Discovery emits its own small stack vocabulary (``services/discovery._STACKS``).
 # Map it onto the project ``template`` values. ``static`` has no entry — it means
-# "leave the project as the static template it already is".
+# "leave the project as the static template it already is". ``spa`` →
+# ``vite-react-spa`` (the no-backend interactive escape hatch, Phase 7.2);
+# ``orchestrator_template`` + ``is_fullstack`` already treat ``spa`` as a
+# container stack, so the only wiring it needed was this discovery→template entry.
 _DISCOVERY_STACK_TO_TEMPLATE: dict[str, str] = {
     "fullstack": "fullstack",
     "nextjs_entities": "nextjs_entities",
+    "spa": "spa",
 }
 
 
 def discovery_stack_to_template(stack: str) -> str | None:
     """Map a discovery stack id to a project ``template`` value.
 
-    Returns the container template name for ``fullstack`` / ``nextjs_entities``,
-    or ``None`` for ``static`` / anything unknown (→ no switch needed).
+    Returns the container template name for ``fullstack`` / ``nextjs_entities`` /
+    ``spa``, or ``None`` for ``static`` / anything unknown (→ no switch needed).
     """
     return _DISCOVERY_STACK_TO_TEMPLATE.get((stack or "").strip().lower())
 

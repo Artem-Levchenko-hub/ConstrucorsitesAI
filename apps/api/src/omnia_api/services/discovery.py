@@ -29,10 +29,14 @@ ASK = "ask"
 BUILD = "build"
 
 # Stacks the discovery may recommend. ``static`` builds immediately with no
-# container; the container stacks (``fullstack`` / ``nextjs_entities``) are routed
-# to the orchestrator by the provisioning step (P1 subtask 5). Until that lands,
-# the recommendation is recorded in the brief so the build is at least aware of it.
-_STACKS: frozenset[str] = frozenset({"static", "fullstack", "nextjs_entities"})
+# container; the container stacks (``fullstack`` / ``nextjs_entities`` / ``spa``)
+# are routed to the orchestrator by the provisioning step (``stack_routing``).
+# ``spa`` (Vite + React, no backend) is the no-ceiling escape hatch for an
+# INTERACTIVE tool/app that needs real build tooling but no accounts/DB — see the
+# stack-choice rules in ``_SYSTEM`` (Phase 7.2 multi-stack).
+_STACKS: frozenset[str] = frozenset(
+    {"static", "fullstack", "nextjs_entities", "spa"}
+)
 _DEFAULT_STACK = "static"
 
 # Hard cap so discovery can never loop forever — after this many questions we
@@ -129,13 +133,18 @@ _SYSTEM = (
     "продукт, ИЛИ пользователь просит начать — НЕ тяни, верни action=build.\n"
     "4. Обычно хватает 2–4 вопросов. Не превращай это в анкету.\n\n"
     "ВЫБОР СТЕКА (поле stack при build):\n"
-    "- \"static\" — сайт/лендинг/портфолио/блог/визитка. НЕТ входа, личных "
-    "кабинетов, корзины, базы данных, CRUD.\n"
+    "- \"static\" — пассивный сайт-контент: лендинг/портфолио/блог/визитка. "
+    "НЕТ входа, личных кабинетов, корзины, базы данных, CRUD И нет сложной "
+    "клиентской логики (только текст, картинки, ссылки, простые формы).\n"
     "- \"nextjs_entities\" — есть пользователи, каталог/товары, корзина, запись/"
     "бронирование, CRM, личный кабинет, любые сохраняемые данные. Полноценное "
     "приложение с БД.\n"
-    "- \"fullstack\" — интерактивное веб-приложение/SPA с лёгким бэкендом, не "
-    "подходящее под entities.\n\n"
+    "- \"spa\" — ИНТЕРАКТИВНЫЙ инструмент/приложение БЕЗ бэкенда и БЕЗ "
+    "регистрации: калькулятор, конвертер, визуализатор, генератор, игра, "
+    "конфигуратор, интерактивный дашборд на демо-данных. Богатая клиентская "
+    "логика, но НЕ нужны аккаунты или сохранение в БД между пользователями.\n"
+    "- \"fullstack\" — интерактивное веб-приложение с лёгким собственным "
+    "бэкендом, не подходящее под entities.\n\n"
     "ФОРМАТ ОТВЕТА — СТРОГО один JSON-объект на одной строке, без пояснений и кода.\n"
     "Если спрашиваешь:\n"
     '{"action":"ask","message":"<один короткий вопрос на русском>",'
@@ -149,7 +158,7 @@ _SYSTEM = (
     '{"action":"build","message":"<короткая фраза: «Отлично, собираю…»>",'
     '"brief":"<сжатый бриф для генератора на русском: тип продукта, цель, '
     'аудитория, обязательные разделы/возможности, тон, цвета/референс, важные '
-    'детали>","stack":"static|fullstack|nextjs_entities"}'
+    'детали>","stack":"static|spa|nextjs_entities|fullstack"}'
 )
 
 

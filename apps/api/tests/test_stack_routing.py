@@ -27,6 +27,8 @@ from omnia_api.services import repo as repo_svc
         ("static", None),
         ("fullstack", "fullstack"),
         ("nextjs_entities", "nextjs_entities"),
+        ("spa", "spa"),  # Phase 7.2 — no-backend Vite stack
+        ("SPA", "spa"),  # case-insensitive
         ("NEXTJS_ENTITIES", "nextjs_entities"),  # case-insensitive
         ("  fullstack  ", "fullstack"),  # trimmed
         ("", None),
@@ -140,6 +142,20 @@ async def test_provision_container(monkeypatch: pytest.MonkeyPatch) -> None:
     ok = await stack_routing.ensure_provisioned(uuid4(), "slug", "nextjs_entities")
     assert ok is True
     assert seen["template"] == "nextjs-entities"  # mapped to orchestrator dir name
+
+
+async def test_provision_spa_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 7.2 — the spa stack provisions the vite-react-spa image."""
+    seen: dict[str, object] = {}
+
+    async def _fake_provision(*, project_id, slug, template, tier):  # type: ignore[no-untyped-def]
+        seen["template"] = template
+        return {"state": "running"}
+
+    monkeypatch.setattr(orchestrator_client, "provision", _fake_provision)
+    ok = await stack_routing.ensure_provisioned(uuid4(), "slug", "spa")
+    assert ok is True
+    assert seen["template"] == "vite-react-spa"  # mapped to orchestrator dir name
 
 
 async def test_provision_failsoft(monkeypatch: pytest.MonkeyPatch) -> None:

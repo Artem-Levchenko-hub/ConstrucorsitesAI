@@ -236,6 +236,36 @@ async def test_build_path_honours_model_brief_and_stack(
     assert result.stack == "nextjs_entities"
 
 
+async def test_build_path_honours_spa_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 7.2 — a no-backend interactive tool recommended as ``spa`` is kept.
+
+    The backend safety-net only upgrades to ``nextjs_entities`` on account/data
+    signals; a pure client-side calculator carries none, so ``spa`` survives.
+    """
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "build",
+                    "message": "Отлично, собираю…",
+                    "brief": "Интерактивный калькулятор ипотеки на демо-данных.",
+                    "stack": "spa",
+                }
+            )
+        ),
+    )
+    result = await run_discovery(
+        [{"role": "user", "content": "калькулятор ипотеки"}],
+        "со слайдерами, чисто на фронтенде",
+        asked_count=2,
+    )
+    assert result.action == BUILD
+    assert result.stack == "spa"
+
+
 async def test_invalid_stack_defaults_to_static(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(
         monkeypatch,
