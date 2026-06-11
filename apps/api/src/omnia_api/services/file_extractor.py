@@ -394,13 +394,17 @@ def _fix_dead_internal_links(files: dict[str, str]) -> None:
 # Killer 1 — globals.css rewritten in Tailwind v3 syntax. The template ships a FIXED
 # v4 ``@theme``/token globals.css INSIDE the container image; the writer must never
 # author one. When it emits a v3 ``@tailwind ...`` / ``@apply border-border`` file
-# the v4 build dies ("unknown utility class border-border"). Fix: DROP it ("" =
-# delete-intent, see extract_files) so the image's good v4 file stays in force.
+# the v4 build dies ("unknown utility class border-border"). Fix: DISCARD the key
+# entirely — NOT "" (which is delete-intent → the orchestrator ``rm -f``s the path in
+# the container, deleting the image's good globals.css too → an even worse build with
+# no globals.css at all). Dropping the key just never writes/syncs the writer's bad
+# file, so the image's fixed v4 globals.css is neither shadowed nor removed.
 #
 # Killer 2 — a non-empty starter ``src/app/page.tsx`` left ALONGSIDE
 # ``src/app/(app)/page.tsx``. Both resolve to "/", so ``next build`` refuses (route
 # conflict). The writer is told to empty the starter; when it forgets, fix: empty it
-# ("" = delete-intent), handing "/" to the (app) dashboard.
+# ("" IS correct here — page.tsx is a real repo file we WANT deleted), handing "/" to
+# the (app) dashboard.
 _GLOBALS_V3_SIGNATURES = ("@tailwind ", "@apply border-border")
 
 
@@ -412,10 +416,10 @@ def _fix_app_killer_bugs(files: dict[str, str]) -> None:
     if isinstance(globals_css, str) and any(
         sig in globals_css for sig in _GLOBALS_V3_SIGNATURES
     ):
-        files["src/app/globals.css"] = ""
+        del files["src/app/globals.css"]
         log.info(
-            "extract_files: dropped Tailwind-v3 globals.css — kept the image's "
-            "fixed v4 token file (v3 syntax breaks the v4 build)"
+            "extract_files: discarded writer's Tailwind-v3 globals.css — image's "
+            "fixed v4 token file kept (v3 syntax breaks the v4 build)"
         )
 
     starter = files.get("src/app/page.tsx")

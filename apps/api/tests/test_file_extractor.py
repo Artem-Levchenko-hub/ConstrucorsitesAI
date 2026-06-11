@@ -635,13 +635,14 @@ def test_dead_link_falls_back_to_root_when_only_root_exists() -> None:
 
 
 def test_killer_bug_drops_tailwind_v3_globals() -> None:
-    # A v3-syntax globals.css breaks the fixed v4 build; drop it ("" = delete-intent)
-    # so the container image's good v4 token file stays in force.
+    # A v3-syntax globals.css breaks the fixed v4 build. DISCARD the key entirely
+    # (not "" — that is delete-intent and would rm the image's good globals.css in
+    # the container); dropping it just never writes the writer's bad file.
     answer = (
         '<file path="src/app/globals.css">@tailwind base;\n@apply border-border;'
         "</file>"
     )
-    assert extract_files(answer)["src/app/globals.css"] == ""
+    assert "src/app/globals.css" not in extract_files(answer)
 
 
 def test_killer_bug_keeps_valid_v4_globals() -> None:
