@@ -247,6 +247,143 @@ def _fix_missing_use_client(path: str, body: str) -> str:
     return '"use client";\n\n' + body
 
 
+# The writer sometimes wires a CTA to a route it never generates — e.g. a
+# dashboard button `<Link href="/dashboard/appointments/new">` with no
+# `app/(app)/dashboard/appointments/new/page.tsx` in the answer. Clicking it is a
+# 404 dead-end, which violates the "ноль тупиков" (zero dead-ends) product
+# contract. We cannot author the missing route deterministically (that needs the
+# model), but we CAN keep the link working: rewrite a dead internal link to the
+# deepest ANCESTOR route that the SAME answer actually generated (it usually has
+# `/dashboard` at minimum). The user lands on a real, related page instead of a
+# 404. This is cross-file, so it runs as a post-pass over the whole file set.
+#
+# Safety (R-10 fail-soft, "never worsen a working link"):
+# * Only literal, COMPLETE internal hrefs are touched — `href="/..."`,
+#   `href='/...'`, `href={"/..."}`. Interpolated/concatenated hrefs
+#   (`href={`/x/${id}`}`, `href={"/x/" + id}`) and external/hash/mailto/tel are
+#   left alone, so dynamic links to `[id]` routes are never corrupted.
+# * Rewrite fires ONLY when the target is not itself a generated route AND a
+#   shallower ancestor IS one in this answer. A link whose ancestors are also
+#   absent (likely a route authored in a different turn) is left untouched.
+# * extract_files only sees full `<file>` builds (edit-turns carry `<edit>`
+#   blocks → no `<file>` → this no-ops), so on the turn it fires the route set
+#   is complete.
+_LINK_FIX_SUFFIXES = (".tsx", ".jsx")
+_PAGE_FILE = re.compile(r"(?:^|/)page\.(?:tsx|jsx|ts|js)$")
+# Complete literal internal href: bare `"/..."`/`'/...'` or a brace that closes
+# immediately after the string (`{"/..."}`). Concatenation/interpolation inside
+# the brace fails the trailing `\s*\}` and is skipped.
+_HREF = re.compile(
+    r"""href=
+        (?:
+            (?P<q1>["'])(?P<u1>/[^"']*)(?P=q1)
+            |
+            \{\s*(?P<q2>["'])(?P<u2>/[^"']*)(?P=q2)\s*\}
+        )
+    """,
+    re.VERBOSE,
+)
+
+
+def _route_segments_for_key(key: str) -> list[str] | None:
+    """URL route segments for a generated ``page.*`` file key, or ``None``.
+
+    Strips a leading ``src/``, everything up to and including the ``app/`` root,
+    the trailing ``page.*`` file, and App-Router route-group segments (``(...)``).
+    Dynamic (``[id]``) and catch-all (``[...x]``) segments are kept verbatim for
+    pattern matching. A page directly under ``app/`` maps to ``[]`` (the ``/``
+    route)."""
+    if not _PAGE_FILE.search(key):
+        return None
+    norm = key[4:] if key.startswith("src/") else key
+    parts = norm.split("/")
+    if "app" not in parts:
+        return None
+    after = parts[parts.index("app") + 1 : -1]  # drop the page.* filename
+    return [seg for seg in after if not (seg.startswith("(") and seg.endswith(")"))]
+
+
+def _one_seg_match(pat: str, target: str) -> bool:
+    # A dynamic segment ``[id]`` matches any single non-empty literal.
+    return pat == target or (pat.startswith("[") and pat.endswith("]") and bool(target))
+
+
+def _seg_match(target: list[str], pat: list[str]) -> bool:
+    if pat and (pat[-1].startswith("[...") or pat[-1].startswith("[[...")):
+        head = pat[:-1]
+        optional = pat[-1].startswith("[[")
+        min_len = len(head) if optional else len(head) + 1
+        if len(target) < min_len:
+            return False
+        return all(_one_seg_match(p, t) for p, t in zip(head, target, strict=False))
+    if len(target) != len(pat):
+        return False
+    return all(_one_seg_match(p, t) for p, t in zip(pat, target, strict=True))
+
+
+def _collect_routes(files: dict[str, str]) -> list[list[str]]:
+    """Route patterns (segment lists) for every non-empty generated page."""
+    routes: list[list[str]] = []
+    for key, body in files.items():
+        if not body.strip():
+            continue  # an emptied page.tsx is a DELETE, not a route
+        segs = _route_segments_for_key(key)
+        if segs is not None:
+            routes.append(segs)
+    return routes
+
+
+def _route_exists(target: list[str], routes: list[list[str]]) -> bool:
+    return any(_seg_match(target, pat) for pat in routes)
+
+
+def _nearest_ancestor(target: list[str], routes: list[list[str]]) -> str | None:
+    """Deepest existing ancestor URL of a dead ``target``, or ``None``.
+
+    Walks ``target`` shorter one segment at a time; the first shortened path that
+    resolves to a generated route wins. ``[]`` is the root ``/``."""
+    for cut in range(len(target) - 1, -1, -1):
+        ancestor = target[:cut]
+        if _route_exists(ancestor, routes):
+            return "/" + "/".join(ancestor)
+    return None
+
+
+def _fix_dead_internal_links(files: dict[str, str]) -> None:
+    """Rewrite dead internal links to their nearest generated ancestor in place.
+
+    No-op unless the answer carries at least one generated page (route set) and a
+    link points below the deepest route that exists (R-10 fail-soft — anything
+    uncertain is left untouched)."""
+    routes = _collect_routes(files)
+    if not routes:
+        return
+
+    def _rewrite(match: re.Match[str]) -> str:
+        raw = match.group("u1") or match.group("u2")
+        if raw.startswith("//"):  # protocol-relative — external, leave alone
+            return match.group(0)
+        path = raw.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+        target = [s for s in path.split("/") if s]
+        if _route_exists(target, routes):
+            return match.group(0)
+        ancestor = _nearest_ancestor(target, routes)
+        if ancestor is None:
+            return match.group(0)  # no anchor in this answer → cross-turn, skip
+        quote = match.group("q1") or match.group("q2")
+        if match.group("u1") is not None:
+            return f"href={quote}{ancestor}{quote}"
+        return f"href={{{quote}{ancestor}{quote}}}"
+
+    for path, body in files.items():
+        if not path.endswith(_LINK_FIX_SUFFIXES):
+            continue
+        new_body = _HREF.sub(_rewrite, body)
+        if new_body != body:
+            files[path] = new_body
+            log.info("extract_files: rewrote dead internal link(s) in %r", path)
+
+
 # Models occasionally violate the "unchanged files: don't mention" contract
 # and return a <file> block whose body is a human-language placeholder like
 # "(код без изменений)". Writing that into the file produces a TypeScript /
@@ -349,6 +486,8 @@ def extract_files(answer: str) -> dict[str, str]:
         files[raw_path] = body
         if len(files) > MAX_FILES:
             raise ValueError(f"too many files in answer: {len(files)} > {MAX_FILES}")
+    # Cross-file post-pass: needs the full route set, so it runs after the loop.
+    _fix_dead_internal_links(files)
     return files
 
 

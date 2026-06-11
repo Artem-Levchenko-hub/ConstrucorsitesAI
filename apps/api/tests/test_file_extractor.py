@@ -473,3 +473,157 @@ def test_extract_edits_tolerates_marker_length_drift(
     )
     edits = extract_edits(answer)
     assert edits["x.txt"] == [("foo", "bar")]
+
+
+# ---------------------------------------------------------------------------
+# _fix_dead_internal_links — dead CTA → nearest generated ancestor (Phase 8.1)
+# ---------------------------------------------------------------------------
+
+
+_STUB = "export default function S(){return null}"
+
+
+def _answer(files: dict[str, str]) -> str:
+    return "\n".join(
+        f'<file path="{p}">{b}</file>' for p, b in files.items()
+    )
+
+
+def test_dead_link_rewritten_to_nearest_ancestor() -> None:
+    """CTA to an ungenerated route → rewritten to the deepest existing ancestor."""
+    files = extract_files(
+        _answer(
+            {
+                "src/app/(app)/dashboard/page.tsx": (
+                    'export default function P(){return <a '
+                    'href="/dashboard/appointments/new">Записаться</a>}'
+                ),
+                "src/app/(app)/dashboard/appointments/page.tsx": _STUB,
+            }
+        )
+    )
+    # /dashboard/appointments/new is absent; /dashboard/appointments exists.
+    assert 'href="/dashboard/appointments"' in files["src/app/(app)/dashboard/page.tsx"]
+    assert "/dashboard/appointments/new" not in files["src/app/(app)/dashboard/page.tsx"]
+
+
+def test_link_to_existing_route_untouched() -> None:
+    files = extract_files(
+        _answer(
+            {
+                "src/app/(app)/dashboard/page.tsx": (
+                    'export default function P(){return <Link '
+                    'href="/dashboard/clients">Клиенты</Link>}'
+                ),
+                "src/app/(app)/dashboard/clients/page.tsx": _STUB,
+            }
+        )
+    )
+    assert 'href="/dashboard/clients"' in files["src/app/(app)/dashboard/page.tsx"]
+
+
+def test_dynamic_route_link_untouched() -> None:
+    """A literal link to a concrete id matches the generated [id] route."""
+    files = extract_files(
+        _answer(
+            {
+                "src/app/(app)/dashboard/page.tsx": (
+                    'export default function P(){return <a '
+                    'href="/dashboard/clients/42">open</a>}'
+                ),
+                "src/app/(app)/dashboard/clients/[id]/page.tsx": _STUB,
+            }
+        )
+    )
+    assert 'href="/dashboard/clients/42"' in files["src/app/(app)/dashboard/page.tsx"]
+
+
+def test_external_and_hash_links_untouched() -> None:
+    body = (
+        'export default function P(){return <div>'
+        '<a href="https://x.io/y">x</a>'
+        '<a href="#features">f</a>'
+        '<a href="mailto:a@b.io">m</a>'
+        '<a href="//cdn.x/z">z</a>'
+        "</div>}"
+    )
+    files = extract_files(
+        _answer(
+            {
+                "src/app/(app)/dashboard/page.tsx": body,
+                "src/app/(marketing)/page.tsx": "export default function H(){return null}",
+            }
+        )
+    )
+    assert files["src/app/(app)/dashboard/page.tsx"] == body
+
+
+def test_cross_turn_link_with_no_ancestor_untouched() -> None:
+    """Link whose ancestors are also absent → likely another turn → left alone."""
+    body = (
+        'export default function P(){return <a '
+        'href="/store/items/7">go</a>}'
+    )
+    files = extract_files(
+        _answer({"src/app/(app)/dashboard/page.tsx": body})
+    )
+    assert files["src/app/(app)/dashboard/page.tsx"] == body
+
+
+def test_concatenated_href_untouched() -> None:
+    """`href={"/x/" + id}` is interpolation, not a literal — never rewritten."""
+    body = (
+        'export default function P(){return <a '
+        'href={"/dashboard/missing/" + id}>go</a>}'
+    )
+    files = extract_files(
+        _answer(
+            {
+                "src/app/(app)/dashboard/page.tsx": body,
+            }
+        )
+    )
+    assert files["src/app/(app)/dashboard/page.tsx"] == body
+
+
+def test_root_link_untouched() -> None:
+    body = (
+        'export default function P(){return <a href="/">home</a>}'
+    )
+    files = extract_files(
+        _answer(
+            {
+                "src/app/(marketing)/page.tsx": body,
+            }
+        )
+    )
+    assert files["src/app/(marketing)/page.tsx"] == body
+
+
+def test_brace_literal_href_rewritten() -> None:
+    """`href={"/dead"}` (brace closes immediately) is a literal → rewritten."""
+    files = extract_files(
+        _answer(
+            {
+                "src/app/(app)/dashboard/page.tsx": (
+                    'export default function P(){return <a '
+                    'href={"/dashboard/reports/new"}>r</a>}'
+                ),
+            }
+        )
+    )
+    assert 'href={"/dashboard"}' in files["src/app/(app)/dashboard/page.tsx"]
+
+
+def test_dead_link_falls_back_to_root_when_only_root_exists() -> None:
+    files = extract_files(
+        _answer(
+            {
+                "src/app/(marketing)/page.tsx": (
+                    'export default function H(){return <a '
+                    'href="/pricing">Цены</a>}'
+                ),
+            }
+        )
+    )
+    assert 'href="/"' in files["src/app/(marketing)/page.tsx"]
