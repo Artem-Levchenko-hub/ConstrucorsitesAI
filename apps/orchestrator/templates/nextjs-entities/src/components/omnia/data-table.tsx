@@ -487,8 +487,8 @@ export function DataTable<T extends { id: string }>({
           density === "compact" && "[&_td]:py-1.5 [&_th]:h-9",
         )}
       >
-        <Table>
-          <TableHeader className="bg-muted/40">
+        <Table containerClassName="max-h-[70vh]">
+          <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted">
             <TableRow>
               {selectable ? (
                 <TableHead className="w-0">
