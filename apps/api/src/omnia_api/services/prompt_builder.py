@@ -964,6 +964,15 @@ _ENTITIES_UI = """\
   Поля формы (kind): text | textarea | number | boolean | date | select(+options) |
   reference(+refEntity — сам грузит опции связанной сущности) | image(+сам заливает
   через uploadFile). Колонкам можно render для бейджей/денег/дат.
+  ▸ БЫСТРЫЙ ФИЛЬТР (сегменты) — если у сущности есть поле-статус/категория (status,
+    stage, type…), ДОБАВЬ `filterField` + `filterTabs` — над таблицей появится
+    сегмент-переключатель «Все / <значения>» (как в Linear/Stripe), мгновенная
+    фильтрация без перезагрузки. Первый сегмент всегда «Все» (`value: null`):
+      filterField="status"
+      filterTabs={[
+        { label: "Все", value: null }, { label: "Лиды", value: "lead" },
+        { label: "Активные", value: "active" }, { label: "Завершённые", value: "done" } ]}
+    Значения `value` обязаны совпадать с тем, что лежит в поле записи (как в select-опциях).
 
 ▸ ДАШБОРД — собери из кита: ряд <StatCard> (KPI) + ГРАФИК динамики + свежие записи
   через <DataTable>. Главному KPI дай `accent` (тонкая верхняя линия акцентом) —

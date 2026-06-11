@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PageHeader } from "./page-header";
-import { DataTable, type Column } from "./data-table";
+import { DataTable, type Column, type FilterTab } from "./data-table";
 import { EntityForm, type FieldSpec } from "./entity-form";
 import { useEntity } from "./use-entity";
 
@@ -28,6 +28,10 @@ export interface CrudResourceProps {
   listParams?: ListParams;
   searchable?: boolean;
   searchKeys?: string[];
+  /** Row field the quick-filter segments match (e.g. "status"). */
+  filterField?: string;
+  /** Quick-filter segments above the table. First is usually `{ label: "Все", value: null }`. */
+  filterTabs?: FilterTab[];
   pageSize?: number;
   canCreate?: boolean;
   canEdit?: boolean;
@@ -58,6 +62,8 @@ export function CrudResource({
   listParams,
   searchable = true,
   searchKeys,
+  filterField,
+  filterTabs,
   pageSize = 10,
   canCreate = true,
   canEdit = true,
@@ -162,6 +168,8 @@ export function CrudResource({
         loading={data.loading}
         searchable={searchable}
         searchKeys={searchKeys}
+        filterField={filterField}
+        filterTabs={filterTabs}
         pageSize={pageSize}
         rowActions={rowActions}
       />
