@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 
 import httpx
@@ -77,15 +78,41 @@ _BACKEND_SIGNALS: frozenset[str] = frozenset(
 )
 
 
+# A backend signal that is immediately NEGATED ("без регистрации", "без
+# аккаунтов", "no login") means the OPPOSITE — a no-backend tool (the spa stack,
+# Phase 7.2). Naive substring matching is blind to this: "регистрац" lives inside
+# "без регистрации". We anchor a negator at the end of the short window right
+# before the matched signal so only a genuine, non-negated mention fires.
+_NEGATION_BEFORE = re.compile(
+    r"(?:\bбез\b|\bне\s+нужн\w*|\bне\s+требу\w*|\bне\s+надо\b|\bwithout\b|\bno\b)\s*$",
+    re.IGNORECASE,
+)
+_NEGATION_WINDOW = 24
+
+
+def _signal_fires(haystack: str, sig: str) -> bool:
+    """True when ``sig`` occurs in ``haystack`` at least once NOT negated."""
+    start = 0
+    while True:
+        i = haystack.find(sig, start)
+        if i == -1:
+            return False
+        prefix = haystack[max(0, i - _NEGATION_WINDOW) : i]
+        if not _NEGATION_BEFORE.search(prefix):
+            return True  # a non-negated occurrence — the signal genuinely fires
+        start = i + 1  # this one was negated; keep looking for a clean mention
+
+
 def _infer_stack_from_text(text: str) -> str | None:
     """Deterministic safety-net: pick a container stack from product intent.
 
     Returns ``"nextjs_entities"`` when the text carries clear backend signals
     (accounts, saved data, CRUD, commerce), else ``None`` (leave as static).
     Used only when the model didn't confidently pick a container stack — never
-    downgrades a good model choice."""
+    downgrades a good model choice. Negated mentions ("без регистрации") are
+    ignored so a no-backend tool keeps the model's ``spa`` pick (Phase 7.2)."""
     haystack = (text or "").lower()
-    if any(sig in haystack for sig in _BACKEND_SIGNALS):
+    if any(_signal_fires(haystack, sig) for sig in _BACKEND_SIGNALS):
         return "nextjs_entities"
     return None
 

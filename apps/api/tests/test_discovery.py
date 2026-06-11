@@ -352,6 +352,24 @@ def test_infer_stack_leaves_pure_landing_alone() -> None:
     assert _infer_stack_from_text("") is None
 
 
+def test_infer_stack_ignores_negated_backend_words() -> None:
+    """Phase 7.2 — a NEGATED backend mention must not trip the safety-net.
+
+    A no-backend interactive tool is naturally described as «без регистрации»,
+    «без аккаунтов», «no login». Naive substring matching saw "регистрац" inside
+    "без регистрации" and wrongly upgraded the model's correct ``spa`` pick to
+    ``nextjs_entities`` — killing the whole spa stack for the exact phrasing users
+    use. The negated mention must be ignored (→ ``None`` → spa survives)."""
+    assert _infer_stack_from_text("калькулятор ипотеки, без регистрации") is None
+    assert _infer_stack_from_text("конвертер валют без аккаунтов") is None
+    assert _infer_stack_from_text("интерактивный визуализатор, не нужна авторизация") is None
+    assert _infer_stack_from_text("игра-головоломка, no login no accounts") is None
+    # …but a genuine, non-negated backend need STILL fires (no over-suppression).
+    saved = _infer_stack_from_text("калькулятор с сохранением в личном кабинете")
+    assert saved == "nextjs_entities"
+    assert _infer_stack_from_text("магазин с регистрацией и корзиной") == "nextjs_entities"
+
+
 async def test_forced_build_with_backend_intent_routes_to_entities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
