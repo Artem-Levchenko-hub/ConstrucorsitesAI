@@ -16,6 +16,7 @@ import base64
 import json
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from omnia_api.core.config import get_settings, model_for_role
 from omnia_api.services.llm_client import LLMError, complete_chat
@@ -37,6 +38,36 @@ class VisionVerdict:
 # Neutral pass — used whenever vision can't run (mock mode, no gateway, parse
 # fail). Score 10 so a skipped vision never fails the gate on its own.
 _SKIPPED = VisionVerdict(verdict="skipped", score=10, issues=(), skipped=True)
+
+# Skip telemetry. A skip that is DEGRADATION (gateway error, empty answer,
+# unparseable JSON) silently passes the page at score=10 — i.e. a broken judge
+# invisibly disables the whole quality loop. We count skips by reason and emit a
+# stable, greppable `metric=vision_skip` line so a degraded judge is observable
+# (the real metrics sink is a future cross-cutting item; this is the minimum
+# signal). "mock"/"no_input" are legitimate no-ops, not degradation.
+_DEGRADED_SKIPS = frozenset({"gateway_error", "empty_answer", "parse_fail"})
+_skip_counts: dict[str, int] = {}
+
+
+def _skip(reason: str, detail: str = "") -> VisionVerdict:
+    """Record a vision SKIP and return the neutral ``_SKIPPED`` verdict.
+
+    Degradation reasons log at WARNING with a stable ``metric=vision_skip`` tag so a
+    silently-failing judge (which would pass every page at score=10) is visible;
+    legitimate no-ops (mock / no screenshots) log at DEBUG."""
+    _skip_counts[reason] = _skip_counts.get(reason, 0) + 1
+    emit = log.warning if reason in _DEGRADED_SKIPS else log.debug
+    count = _skip_counts[reason]
+    if detail:
+        emit("metric=vision_skip reason=%s count=%d detail=%r", reason, count, detail)
+    else:
+        emit("metric=vision_skip reason=%s count=%d", reason, count)
+    return _SKIPPED
+
+
+def skip_stats() -> dict[str, int]:
+    """Snapshot of vision-skip counts by reason (for a future metrics endpoint)."""
+    return dict(_skip_counts)
 
 # Cap how many viewports we ship to the model — one wide + one narrow is enough
 # to judge composition and mobile, and keeps the multimodal payload small.
@@ -113,8 +144,7 @@ def _parse(raw: str) -> VisionVerdict:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        log.warning("vision_audit: unparseable verdict (fail-soft): %r", raw[:200])
-        return _SKIPPED
+        return _skip("parse_fail", raw[:200])
     verdict = str(data.get("verdict", "")).strip().lower()
     if verdict not in {"broken", "generic", "beautiful"}:
         verdict = "generic"
@@ -143,8 +173,10 @@ async def audit_screenshots(
     asked for?"). Returns `_SKIPPED` on mock mode / gateway error / empty.
     """
     settings = get_settings()
-    if settings.mock_llm or not screenshots:
-        return _SKIPPED
+    if settings.mock_llm:
+        return _skip("mock")
+    if not screenshots:
+        return _skip("no_input")
 
     model = model or model_for_role("audit")
     chosen = {w: screenshots[w] for w in _VISION_WIDTHS if w in screenshots}
@@ -160,7 +192,7 @@ async def audit_screenshots(
         content.append({"type": "text", "text": f"Скриншот ({label}, {w}px):"})
         content.append({"type": "image_url", "image_url": {"url": _data_url(png)}})
 
-    messages = [
+    messages: list[dict[str, Any]] = [
         {"role": "system", "content": _RUBRIC},
         {"role": "user", "content": content},
     ]
@@ -173,11 +205,10 @@ async def audit_screenshots(
             max_tokens=1000,
         )
     except LLMError as exc:
-        log.warning("vision_audit gateway error (fail-soft): %r", exc)
-        return _SKIPPED
+        return _skip("gateway_error", repr(exc)[:200])
     if not raw.strip():
-        return _SKIPPED
+        return _skip("empty_answer")
     return _parse(raw)
 
 
-__all__ = ["VisionVerdict", "audit_screenshots"]
+__all__ = ["VisionVerdict", "audit_screenshots", "skip_stats"]
