@@ -18,6 +18,19 @@ export {
   type EntityFormProps,
 } from "./entity-form";
 export { CrudResource, type CrudResourceProps } from "./crud-resource";
+export {
+  SettingsShell,
+  type SettingsShellProps,
+  type SettingsNavItem,
+  SettingsSection,
+  type SettingsSectionProps,
+  FieldRow,
+  type FieldRowProps,
+  FieldGrid,
+  type FieldGridProps,
+  DangerZone,
+  type DangerZoneProps,
+} from "./settings";
 export { useEntity, type UseEntity } from "./use-entity";
 export {
   Sparkline,

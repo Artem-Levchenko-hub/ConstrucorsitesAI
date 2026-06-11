@@ -1017,6 +1017,24 @@ _ENTITIES_UI = """\
   а не только числа. Оттенок графика — класс `text-chart-1..5`. Данные —
   useEntity("Client") или entities.X.list() в useEffect.
 
+▸ НАСТРОЙКИ / АККАУНТ — почти каждому аппу с профилем юзера нужен раздел
+  /dashboard/settings (страница `src/app/(app)/dashboard/settings/page.tsx`,
+  наследует <AppShell>). Собирай ТОЛЬКО из кита, не верстай форму с нуля:
+    import { SettingsShell, SettingsSection, FieldRow, FieldGrid,
+             DangerZone } from "@/components/omnia";
+  Структура (enterprise-паттерн Grammarly/7shifts/Oyster): <SettingsShell> с
+  группами-секциями; каждая <SettingsSection title=… footer={<Button>Сохранить</Button>}>
+  содержит <FieldRow label="…" htmlFor="…"> с инпутом справа (парные поля —
+  Имя/Фамилия — в <FieldGrid>). Группы: «Профиль» (имя, email, аватар через
+  kind:image), «Безопасность» (смена пароля), при наличии — «Биллинг»/«Команда».
+  • ЯВНЫЙ submit — кнопка «Сохранить» в `footer` секции (НЕ авто-сейв-двусмысленность);
+    onClick → entities.X.update(...) / auth-обновление + toast.success.
+  • DESTRUCTIVE ВНИЗУ — «Удалить аккаунт»/«Очистить данные» только в <DangerZone>
+    в самом низу, изолировано, кнопка variant="destructive". НИКОГДА рядом с обычными
+    сохранениями. ⛔ Пустых/мёртвых полей и кнопок без onClick быть не должно.
+  • Несколько разделов настроек → передай `nav` в <SettingsShell> (под-навигация
+    Профиль/Безопасность/Биллинг), каждый пункт — отдельная под-страница settings.
+
 ▸ БЕЗОПАСНЫЕ ДАТЫ — ⛔ КРИТИЧНО, иначе дашборд падает. Поля-даты сущностей часто
   НЕОБЯЗАТЕЛЬНЫ (приходят "" / null). `new Date("").toISOString()` бросает
   `RangeError: Invalid time value` и роняет ВСЮ страницу при первой же записи без
