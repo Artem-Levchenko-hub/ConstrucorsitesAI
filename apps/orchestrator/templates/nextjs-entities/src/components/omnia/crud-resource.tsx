@@ -50,10 +50,24 @@ export interface CrudResourceProps {
    * default; the toggle only appears once the list has enough rows (≥10).
    */
   densityToggle?: boolean;
+  /**
+   * Open a read-only detail card with every field of a record when its row is
+   * clicked (incl. columns hidden via the column menu). On by default; the edit
+   * and delete buttons inside it reuse the same dialogs.
+   */
+  rowDetail?: boolean;
   canCreate?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
   createLabel?: string;
+}
+
+/** Plain display of a raw field value in the detail card — mirrors the table's
+ *  default cell (—/Да/Нет/text) for columns without a custom `render`. */
+function displayValue(value: unknown): React.ReactNode {
+  if (value == null || value === "") return <span className="text-muted-foreground">—</span>;
+  if (typeof value === "boolean") return value ? "Да" : "Нет";
+  return String(value);
 }
 
 /**
@@ -86,6 +100,7 @@ export function CrudResource({
   columnToggle = true,
   selectable,
   densityToggle = true,
+  rowDetail = true,
   canCreate = true,
   canEdit = true,
   canDelete = true,
@@ -108,6 +123,7 @@ export function CrudResource({
   const data = useEntity(entity, expand.length ? mergedParams : listParams);
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Row | null>(null);
+  const [viewing, setViewing] = React.useState<Row | null>(null);
   const [deleting, setDeleting] = React.useState<Row | null>(null);
   const [bulkDeleting, setBulkDeleting] = React.useState<{
     rows: Row[];
@@ -237,6 +253,7 @@ export function CrudResource({
             : undefined
         }
         rowActions={rowActions}
+        onRowClick={rowDetail ? (row) => setViewing(row) : undefined}
       />
 
       {/* Create / edit */}
@@ -252,6 +269,58 @@ export function CrudResource({
             onSubmit={handleSubmit}
             onCancel={() => setFormOpen(false)}
           />
+        </DialogContent>
+      </Dialog>
+
+      {/* Row detail (read view) */}
+      <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{title ? `${title}: запись` : "Запись"}</DialogTitle>
+          </DialogHeader>
+          {viewing ? (
+            <dl className="divide-y divide-border">
+              {columns.map((col) => (
+                <div
+                  key={col.key}
+                  className="grid grid-cols-1 gap-1 py-2.5 text-sm sm:grid-cols-[10rem_1fr] sm:gap-3"
+                >
+                  <dt className="text-muted-foreground">{col.header}</dt>
+                  <dd className="font-medium break-words">
+                    {col.render ? col.render(viewing) : displayValue(viewing[col.key])}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {canEdit || canDelete ? (
+            <DialogFooter>
+              {canEdit ? (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const row = viewing;
+                    setViewing(null);
+                    if (row) openEdit(row);
+                  }}
+                >
+                  Изменить
+                </Button>
+              ) : null}
+              {canDelete ? (
+                <Button
+                  variant="destructive"
+                  onClick={() => {
+                    const row = viewing;
+                    setViewing(null);
+                    if (row) setDeleting(row);
+                  }}
+                >
+                  Удалить
+                </Button>
+              ) : null}
+            </DialogFooter>
+          ) : null}
         </DialogContent>
       </Dialog>
 
