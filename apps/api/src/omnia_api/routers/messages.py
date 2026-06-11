@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -22,7 +22,7 @@ from omnia_api.core.db import get_engine
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
-from omnia_api.core.ratelimit import limiter
+from omnia_api.core.ratelimit import rate_limit_prompt
 from omnia_api.core.redis import (
     clear_stream_state,
     get_redis,
@@ -478,10 +478,9 @@ async def report_client_error(
     "/{project_id}/prompt",
     response_model=PromptResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(rate_limit_prompt)],
 )
-@limiter.limit(lambda: get_settings().prompt_rate_limit)
 async def post_prompt(
-    request: Request,
     project_id: UUID,
     payload: PromptRequest,
     session: SessionDep,

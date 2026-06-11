@@ -1,24 +1,34 @@
-"""Per-user rate limiting for the costly generate/edit endpoint (slowapi).
+"""Per-user rate limiting as a FastAPI DEPENDENCY (not a decorator).
 
-A single ``Limiter`` keyed by authenticated user, falling back to the real client
-IP. The generate/edit path triggers an expensive LLM build, so an unthrottled
-actor (script, abuser, or a runaway client) can drain a wallet and DoS the single
-VPS. This is the abuse/cost floor that must sit in front of any public exposure.
+The costly generate/edit path triggers an expensive LLM build, so an unthrottled
+actor (script, abuser, runaway client) can drain a wallet and DoS the single VPS.
+This is the abuse/cost floor that must sit in front of any public exposure.
 
-Deep module: callers only touch ``limiter`` (decorate an endpoint with
-``@limiter.limit(...)``) and ``rate_limit_handler`` (registered once in main).
-The key strategy and proxy-IP handling live here, hidden behind that surface.
+Why a dependency, not slowapi's ``@limiter.limit`` decorator: the decorator wraps
+the endpoint with ``functools.wraps``, and combined with ``from __future__ import
+annotations`` in the routers that breaks FastAPI's ForwardRef resolution for typed
+Path params (``project_id: UUID``) — the route 500s with a PydanticUserError. A
+dependency leaves the endpoint signature untouched, so we drive slowapi's own
+engine (the ``limits`` library) directly behind ``Depends(...)``.
+
+The api runs a single uvicorn process, so in-memory storage is exact; promote to
+``limits`` Redis storage if it ever scales to multiple workers.
 """
 
 from __future__ import annotations
 
-from fastapi import Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from fastapi import Request, status
+from limits import parse
+from limits.storage import MemoryStorage
+from limits.strategies import MovingWindowRateLimiter
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import _extract_token
+from omnia_api.core.errors import ApiError
 from omnia_api.core.security import decode_access_token
+
+_storage = MemoryStorage()
+_limiter = MovingWindowRateLimiter(_storage)
 
 
 def _client_ip(request: Request) -> str:
@@ -27,17 +37,17 @@ def _client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return get_remote_address(request)
+    client = request.client
+    return client.host if client else "unknown"
 
 
 def _rate_key(request: Request) -> str:
     """Rate-limit bucket key: the authenticated user when present, else client IP.
 
     The JWT is *verified* (cheap HS256, no DB) purely to derive a stable per-user
-    key — a forged/expired token simply can't claim a user bucket and falls to the
-    IP bucket (the route's auth dep still rejects it). This gives every real user
-    their own generous bucket while anonymous/abusive traffic shares per-IP limits.
-    """
+    key — a forged/expired token can't claim a user bucket and falls to the IP
+    bucket (the route's auth dep still rejects it). Real users get their own
+    generous bucket; anonymous/abusive traffic shares per-IP limits."""
     settings = get_settings()
     token = _extract_token(
         request.cookies.get(settings.jwt_cookie_name),
@@ -50,10 +60,21 @@ def _rate_key(request: Request) -> str:
     return f"ip:{_client_ip(request)}"
 
 
-# headers_enabled stays OFF: with it on slowapi requires every limited endpoint to
-# also declare a `response: Response` param (to inject X-RateLimit-* headers), which
-# we don't want to thread through the large generate/edit handler. The 429 body
-# already tells the client it's throttled.
-limiter = Limiter(key_func=_rate_key, enabled=get_settings().rate_limit_enabled)
+async def rate_limit_prompt(request: Request) -> None:
+    """Dependency: throttle the costly generate/edit/transcribe endpoints.
 
-__all__ = ["limiter"]
+    Tunable via ``PROMPT_RATE_LIMIT`` (default 20/minute) and killable via
+    ``RATE_LIMIT_ENABLED=false`` — no code change. Raises 429 when exceeded."""
+    settings = get_settings()
+    if not settings.rate_limit_enabled:
+        return
+    item = parse(settings.prompt_rate_limit)
+    if not _limiter.hit(item, _rate_key(request)):
+        raise ApiError(
+            "rate_limited",
+            "слишком часто — подождите немного",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+
+__all__ = ["rate_limit_prompt"]

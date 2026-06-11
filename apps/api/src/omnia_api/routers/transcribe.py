@@ -11,12 +11,12 @@ auto-fires an expensive build.
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep
 from omnia_api.core.errors import ApiError
-from omnia_api.core.ratelimit import limiter
+from omnia_api.core.ratelimit import rate_limit_prompt
 
 router = APIRouter(prefix="/api", tags=["transcribe"])
 
@@ -24,8 +24,7 @@ router = APIRouter(prefix="/api", tags=["transcribe"])
 _MAX_AUDIO_BYTES = 12 * 1024 * 1024
 
 
-@router.post("/transcribe")
-@limiter.limit(lambda: get_settings().prompt_rate_limit)
+@router.post("/transcribe", dependencies=[Depends(rate_limit_prompt)])
 async def transcribe(request: Request, current_user: CurrentUserDep) -> dict[str, str]:
     raw = await request.body()
     if not raw:

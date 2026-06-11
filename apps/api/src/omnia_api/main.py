@@ -4,8 +4,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi.errors import RateLimitExceeded
-from slowapi.extension import _rate_limit_exceeded_handler
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.db import dispose_engine, get_engine
@@ -15,7 +13,6 @@ from omnia_api.core.errors import (
     unhandled_error_handler,
     validation_error_handler,
 )
-from omnia_api.core.ratelimit import limiter
 from omnia_api.core.redis import dispose_redis
 from omnia_api.routers import auth as auth_router
 from omnia_api.routers import design_presets as design_presets_router
@@ -51,12 +48,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="Omnia.AI Backend", version="0.0.1", lifespan=lifespan)
-
-    # Rate limiter (per-user, IP fallback) for the costly generate/edit endpoint.
-    # slowapi's handler is typed (Request, RateLimitExceeded) -> Response; Starlette
-    # wants (Request, Exception) — a known slowapi typing friction, safe to ignore.
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
     app.add_middleware(
         CORSMiddleware,
