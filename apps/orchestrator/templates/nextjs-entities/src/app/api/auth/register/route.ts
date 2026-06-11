@@ -12,7 +12,7 @@ export const runtime = "nodejs";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { hashPassword } from "@/lib/auth";
+import { hashPassword, roleForNewUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 
@@ -54,6 +54,7 @@ export async function POST(req: Request) {
       email,
       name,
       passwordHash: await hashPassword(password),
+      role: await roleForNewUser(),
     });
   } catch {
     // Most likely the unique constraint firing on a race — don't leak details.

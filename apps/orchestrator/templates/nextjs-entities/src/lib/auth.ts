@@ -128,3 +128,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 export async function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, 10);
 }
+
+/** Role to stamp on a brand-new signup. The FIRST account created in a freshly
+ *  generated app is its OPERATOR (the business owner who built it) → "admin";
+ *  everyone who registers afterwards is a customer → "user". This makes the
+ *  admin back-office (`access: "admin"` entities, role-gated `/admin` pages)
+ *  reachable out of the box — no manual DB promotion. Both signup paths
+ *  (the /signup server action and the SDK's /api/auth/register) call this so
+ *  the rule lives in ONE place. Fail-soft: any error → "user" (never hand out
+ *  admin on a glitch). The email unique index remains the real race guard;
+ *  a brand-new app being signed into twice at the exact same instant is the
+ *  only window for a double-admin, which is harmless for a single-operator MVP. */
+export async function roleForNewUser(): Promise<"admin" | "user"> {
+  try {
+    const [row] = await db.select({ id: users.id }).from(users).limit(1);
+    return row ? "user" : "admin";
+  } catch {
+    return "user";
+  }
+}

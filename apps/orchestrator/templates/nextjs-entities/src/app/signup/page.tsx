@@ -12,7 +12,7 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { auth, hashPassword, signIn } from "@/lib/auth";
+import { auth, hashPassword, roleForNewUser, signIn } from "@/lib/auth";
 import { APP_HOME } from "@/lib/session";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
@@ -48,6 +48,7 @@ export default async function SignUpPage({
         email,
         name,
         passwordHash: await hashPassword(password),
+        role: await roleForNewUser(),
       });
     } catch {
       // Most likely cause is the unique constraint; either way we don't
