@@ -1,57 +1,99 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { motion, AnimatePresence } from "framer-motion";
-import { Loader2 } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import {
+  Award,
+  Check,
+  Image as ImageIcon,
+  LayoutTemplate,
+  Loader2,
+  Package,
+  Palette,
+  PenTool,
+  Sparkles,
+  Type,
+  type LucideIcon,
+} from "lucide-react";
 import type { MultipassStage, PassProgress } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
 /**
- * Phase B.3 — visualises multipass progress for one streaming assistant
- * message. Reads `["passes", projectId, messageId]` from React Query cache
- * (populated by `usePromptStream` on `llm.pass` events). Renders nothing
- * until the first event arrives — so single-shot generations don't show
- * a useless 0/4 placeholder.
+ * Cinematic build-stage timeline for one streaming assistant message — the
+ * "watching something intelligent build my product" moment. Reads
+ * `["passes", projectId, messageId]` from React Query cache (populated by
+ * `usePromptStream` on `llm.pass` events). Renders nothing until the first
+ * event arrives, so single-shot generations stay clean; auto-removed on
+ * `llm.done` / `llm.error` / cancel.
  *
- * Both pipelines have 4 stages — multipass (skeleton → content → visual →
- * assembly) and freeform (Замысел → Вёрстка → Картинки → Проверка); the set
- * is picked per-message from the events seen. They render as a slim 4-segment
- * bar: each segment fills 0% → 50% (active) → 100% (done). The active stage
- * name is shown in the header line, not inside the bar, so the widget stays
- * width-safe and never overflows the chat column.
- *
- * The bar lives inside `ChatMessage` body and is auto-removed on
- * `llm.done` / `llm.error` / cancel (the hook calls `removeQueries`).
+ * Two 4-stage pipelines feed the SAME llm.pass channel — freeform
+ * (Замысел → Вёрстка → Картинки → Проверка) and multipass (Структура →
+ * Контент → Визуал → Сборка); the set is picked per-message from the events
+ * seen. Each stage is a node on a vertical timeline: pending (dim) → active
+ * (glowing, with a one-line narration of intent + the working model) → done
+ * (accent, locked with a check). Under `prefers-reduced-motion` it degrades to
+ * a slim 4-segment bar with no looping animation.
  */
-const MULTIPASS_STAGES: { id: MultipassStage; label: string }[] = [
-  { id: "skeleton", label: "Структура" },
-  { id: "content", label: "Контент" },
-  { id: "visual", label: "Визуал" },
-  { id: "assembly", label: "Сборка" },
-];
-// The default (freeform) path emits these via the same llm.pass channel.
-// Four real stages, in pipeline order: the Art-Director writes the brief, the
-// Writer lays out the HTML, the resolver paints in the images, and the
-// design-judge reviews the page. Backend emits all four (messages.py).
-const FREEFORM_STAGES: { id: MultipassStage; label: string }[] = [
-  { id: "art_director", label: "Замысел" },
-  { id: "writer", label: "Вёрстка" },
-  { id: "images", label: "Картинки" },
-  { id: "judge", label: "Проверка" },
-];
-const FREEFORM_IDS = new Set<MultipassStage>(FREEFORM_STAGES.map((s) => s.id));
+type StageMeta = { label: string; narration: string; Icon: LucideIcon };
+
+const STAGE_META: Record<MultipassStage, StageMeta> = {
+  // Freeform pipeline (art_director_writer.py → messages.py).
+  art_director: {
+    label: "Замысел",
+    narration: "Продумываю композицию, характер и палитру",
+    Icon: Sparkles,
+  },
+  writer: {
+    label: "Вёрстка",
+    narration: "Собираю страницу секция за секцией",
+    Icon: PenTool,
+  },
+  images: {
+    label: "Картинки",
+    narration: "Подбираю и вписываю изображения",
+    Icon: ImageIcon,
+  },
+  judge: {
+    label: "Проверка",
+    narration: "Сужу как жюри Awwwards — довожу до премиума",
+    Icon: Award,
+  },
+  // Multipass pipeline (multipass_generator.py).
+  skeleton: {
+    label: "Структура",
+    narration: "Расставляю каркас страницы",
+    Icon: LayoutTemplate,
+  },
+  content: {
+    label: "Контент",
+    narration: "Наполняю смыслом и копирайтом",
+    Icon: Type,
+  },
+  visual: {
+    label: "Визуал",
+    narration: "Навожу цвет, ритм и красоту",
+    Icon: Palette,
+  },
+  assembly: {
+    label: "Сборка",
+    narration: "Собираю всё воедино",
+    Icon: Package,
+  },
+};
+
+const FREEFORM_IDS: MultipassStage[] = ["art_director", "writer", "images", "judge"];
+const MULTIPASS_IDS: MultipassStage[] = ["skeleton", "content", "visual", "assembly"];
+const FREEFORM_SET = new Set<MultipassStage>(FREEFORM_IDS);
+
+/** Pick the stage set that matches the events seen for this message. */
+function pickStages(p: PassProgress): MultipassStage[] {
+  const seen = [p.current, ...p.completed];
+  return seen.some((s) => s && FREEFORM_SET.has(s)) ? FREEFORM_IDS : MULTIPASS_IDS;
+}
 
 /** Compact a model id for the header line (drop the provider prefix). */
 function shortModel(model: string): string {
   return model.split("/").pop() ?? model;
-}
-
-/** Pick the stage set that matches the events seen for this message. */
-function pickStages(p: PassProgress): { id: MultipassStage; label: string }[] {
-  const seen = [p.current, ...p.completed];
-  return seen.some((s) => s && FREEFORM_IDS.has(s))
-    ? FREEFORM_STAGES
-    : MULTIPASS_STAGES;
 }
 
 export function PassProgressBar({
@@ -61,11 +103,9 @@ export function PassProgressBar({
   projectId: string;
   messageId: string;
 }) {
-  // `useQuery` with `enabled: false` + no real `queryFn` just subscribes
-  // to whatever the streaming hook writes via `setQueryData`. Re-renders
-  // fire automatically when the cached entry changes; component returns
-  // null until the first event arrives, so single-shot messages stay
-  // clean.
+  const reduced = useReducedMotion();
+  // `useQuery` with `enabled: false` just subscribes to whatever the streaming
+  // hook writes via `setQueryData`; re-renders fire when the cache changes.
   const { data: progress } = useQuery<PassProgress | undefined>({
     queryKey: ["passes", projectId, messageId],
     queryFn: () => undefined,
@@ -76,83 +116,166 @@ export function PassProgressBar({
   if (!progress) return null;
 
   const stages = pickStages(progress);
-  const isFreeform = stages === FREEFORM_STAGES;
   const totalDone = progress.completed.length;
   const activeIdx = progress.current
-    ? stages.findIndex((s) => s.id === progress.current)
+    ? stages.indexOf(progress.current)
     : -1;
 
-  return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0, y: -2 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -2 }}
-        transition={{ duration: 0.18 }}
-        className="min-w-0 max-w-full overflow-hidden rounded-md border border-border-subtle bg-surface-raised px-2.5 py-2"
-      >
-        <div className="flex min-w-0 items-center gap-2 text-[11px] font-mono text-fg-tertiary mb-1.5">
-          <Loader2
-            aria-hidden
-            className="h-3 w-3 shrink-0 animate-spin text-accent"
-          />
-          <span className="shrink-0">{isFreeform ? "генерация" : "multipass"}</span>
-          <span aria-hidden className="shrink-0">·</span>
+  // Reduced-motion / accessibility fallback: the original slim, non-looping bar.
+  if (reduced) {
+    return (
+      <div className="min-w-0 max-w-full overflow-hidden rounded-md border border-border-subtle bg-surface-raised px-2.5 py-2">
+        <div className="mb-1.5 flex min-w-0 items-center gap-2 font-mono text-[11px] text-fg-tertiary">
+          <span className="shrink-0">генерация</span>
           <span className="shrink-0 tabular-nums">
             {totalDone}/{stages.length}
           </span>
           {progress.current && (
-            <>
-              <span aria-hidden className="shrink-0">·</span>
-              <span className="shrink-0 text-fg-secondary">
-                {stages.find((s) => s.id === progress.current)?.label ??
-                  progress.current}
-              </span>
-            </>
-          )}
-          {progress.currentModel && (
-            <>
-              <span aria-hidden className="shrink-0">·</span>
-              <span
-                className="min-w-0 truncate text-fg-tertiary"
-                title={progress.currentModel}
-              >
-                {shortModel(progress.currentModel)}
-              </span>
-            </>
+            <span className="truncate text-fg-secondary">
+              {STAGE_META[progress.current]?.label ?? progress.current}
+            </span>
           )}
         </div>
-        {/* Slim 4-segment bar. Each segment is `flex-1` inside a `min-w-0`
-            row → it shrinks to any column width, so the chat can never grow a
-            horizontal scrollbar (the old labelled chips did). The active
-            stage name lives in the header above, not inside the bar. */}
-        <ol
-          aria-label={`Прогресс генерации: ${totalDone} из ${stages.length}`}
-          className="flex min-w-0 items-center gap-1"
-        >
-          {stages.map((stage, idx) => {
-            const isDone = progress.completed.includes(stage.id);
-            const isActive = idx === activeIdx;
+        <ol className="flex min-w-0 items-center gap-1">
+          {stages.map((id, idx) => {
+            const done = progress.completed.includes(id);
+            const active = idx === activeIdx;
             return (
               <li
-                key={stage.id}
-                className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-overlay"
-              >
-                <motion.span
-                  aria-hidden
-                  className={cn(
-                    "block h-full rounded-full",
-                    isDone ? "bg-accent" : "bg-accent/60",
-                  )}
-                  initial={false}
-                  animate={{ width: isDone ? "100%" : isActive ? "50%" : "0%" }}
-                  transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-                />
-              </li>
+                key={id}
+                className={cn(
+                  "h-1 min-w-0 flex-1 rounded-full",
+                  done || active ? "bg-accent" : "bg-surface-overlay",
+                )}
+              />
             );
           })}
         </ol>
-      </motion.div>
-    </AnimatePresence>
+      </div>
+    );
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -2 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border-subtle bg-surface-raised px-3 py-2.5"
+    >
+      <div className="mb-2 flex min-w-0 items-center gap-2 font-mono text-[11px] text-fg-tertiary">
+        <Sparkles aria-hidden className="h-3 w-3 shrink-0 text-accent" />
+        <span className="shrink-0">Omnia собирает</span>
+        <span aria-hidden className="shrink-0">·</span>
+        <span className="shrink-0 tabular-nums">
+          {totalDone}/{stages.length}
+        </span>
+      </div>
+
+      <ol
+        aria-label={`Этап генерации: ${totalDone} из ${stages.length}`}
+        className="relative min-w-0 space-y-0"
+      >
+        {stages.map((id, idx) => {
+          const meta = STAGE_META[id];
+          const done = progress.completed.includes(id);
+          const active = idx === activeIdx;
+          const pending = !done && !active;
+          const isLast = idx === stages.length - 1;
+          const Icon = meta?.Icon ?? Sparkles;
+          return (
+            <li key={id} className="relative flex min-w-0 gap-2.5 pb-2 last:pb-0">
+              {/* Node + connector column */}
+              <div className="relative flex w-5 shrink-0 flex-col items-center">
+                <motion.div
+                  className={cn(
+                    "z-10 flex h-5 w-5 items-center justify-center rounded-full border",
+                    done && "border-accent bg-accent text-accent-fg",
+                    active && "border-accent bg-accent/10 text-accent",
+                    pending && "border-border-subtle bg-surface-overlay text-fg-tertiary",
+                  )}
+                  animate={
+                    active
+                      ? {
+                          boxShadow: [
+                            "0 0 0 0 rgba(110,91,232,0.0)",
+                            "0 0 0 4px rgba(110,91,232,0.18)",
+                            "0 0 0 0 rgba(110,91,232,0.0)",
+                          ],
+                        }
+                      : { boxShadow: "0 0 0 0 rgba(110,91,232,0)" }
+                  }
+                  transition={
+                    active
+                      ? { duration: 1.6, repeat: Infinity, ease: "easeInOut" }
+                      : { duration: 0.2 }
+                  }
+                >
+                  {done ? (
+                    <motion.span
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      transition={{ type: "spring", stiffness: 500, damping: 22 }}
+                    >
+                      <Check className="h-3 w-3" />
+                    </motion.span>
+                  ) : active ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Icon className="h-2.5 w-2.5" />
+                  )}
+                </motion.div>
+                {!isLast && (
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "absolute top-5 bottom-0 left-1/2 w-px -translate-x-1/2",
+                      done ? "bg-accent/50" : "bg-border-subtle",
+                    )}
+                  />
+                )}
+              </div>
+
+              {/* Label + narration column */}
+              <div className="min-w-0 flex-1 pt-0.5">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "truncate text-xs font-medium",
+                      done && "text-fg-secondary",
+                      active && "text-fg-primary",
+                      pending && "text-fg-tertiary",
+                    )}
+                  >
+                    {meta?.label ?? id}
+                  </span>
+                  {active && progress.currentModel && (
+                    <span
+                      className="min-w-0 truncate font-mono text-[10px] text-fg-tertiary"
+                      title={progress.currentModel}
+                    >
+                      · {shortModel(progress.currentModel)}
+                    </span>
+                  )}
+                </div>
+                <AnimatePresence mode="wait">
+                  {active && meta?.narration && (
+                    <motion.div
+                      key={id}
+                      initial={{ opacity: 0, y: -2, height: 0 }}
+                      animate={{ opacity: 1, y: 0, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.22 }}
+                      className="overflow-hidden text-[11px] leading-4 text-fg-tertiary"
+                    >
+                      {meta.narration}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </motion.div>
   );
 }

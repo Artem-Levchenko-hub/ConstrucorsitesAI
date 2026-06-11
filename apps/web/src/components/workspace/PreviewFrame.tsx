@@ -838,10 +838,14 @@ export function PreviewFrame({ project }: { project: Project }) {
                       // the iframe but blocks privileged APIs (downloads, top-level
                       // navigation away from us). same-origin so cookies don't leak.
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
+                      // "Settle" reveal: the finished site materialises with a
+                      // subtle scale-up instead of a flat fade, so committing a
+                      // build feels like a result landing (not a tab swap). Tiny
+                      // (0.985→1), one-shot, GPU-composited — no reflow, motion-safe.
+                      initial={{ opacity: 0, scale: 0.985 }}
+                      animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0 }}
-                      transition={{ duration: 0.2 }}
+                      transition={{ duration: 0.4, ease: EASE_OUT }}
                       style={{ width: DEVICE_WIDTH[device], maxWidth: "100%" }}
                       className="h-full bg-white border-0 mx-auto shadow-xl"
                       onLoad={handleFrameLoad}
