@@ -107,6 +107,13 @@ export function CrudResource({
   createLabel = "Создать",
 }: CrudResourceProps) {
   const allowBulk = selectable ?? canDelete;
+  // Make every column sortable by default so operators can order a managed list
+  // without the writer remembering `sortable: true` per column. A column can opt
+  // out with an explicit `sortable: false`. Spread keeps render/align/className.
+  const tableColumns = React.useMemo(
+    () => columns.map((c) => ({ ...c, sortable: c.sortable ?? true })),
+    [columns],
+  );
   // Auto-expand reference fields so columns can render the related row
   // (e.g. `row._expanded.clientId.name`) without the caller wiring `expand`.
   const expand = React.useMemo(
@@ -224,7 +231,7 @@ export function CrudResource({
       ) : null}
 
       <DataTable
-        columns={columns}
+        columns={tableColumns}
         rows={data.rows}
         loading={data.loading}
         searchable={searchable}

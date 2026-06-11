@@ -945,10 +945,10 @@ _ENTITIES_UI = """\
       <CrudResource
         entity="Client" title="Клиенты" description="База клиентов и контактов"
         columns={[
-          { key: "name",   header: "Имя",    sortable: true },
+          { key: "name",   header: "Имя" },
           { key: "email",  header: "Email" },
           { key: "status", header: "Статус", render: (r) => <Badge variant="secondary">{String(r.status)}</Badge> },
-          { key: "created_at", header: "Создан", sortable: true, render: (r) => formatDate(r.created_at as string) },
+          { key: "created_at", header: "Создан", render: (r) => formatDate(r.created_at as string) },
         ]}
         fields={[
           { name: "name",   label: "Имя",     kind: "text",     required: true },
@@ -989,6 +989,10 @@ _ENTITIES_UI = """\
   ▸ КАРТОЧКА ЗАПИСИ — <CrudResource> сам открывает детальную карточку (все поля
     записи + «Изменить»/«Удалить») по клику на строку. НЕ пиши свой просмотр строки
     и не делай строку ссылкой ради этого. Для самосборной <DataTable> — `onRowClick`.
+  ▸ СОРТИРОВКА — <CrudResource> делает ВСЕ колонки сортируемыми сам (клик по
+    заголовку → по возр./убыв./сброс). НЕ ставь `sortable: true` — это уже дефолт;
+    нужно запретить сортировку колонки — поставь `sortable: false`. Для самосборной
+    <DataTable> сортировка по-прежнему opt-in: `sortable: true` на нужных колонках.
 
 ▸ ДАШБОРД — собери из кита: ряд <StatCard> (KPI) + ГРАФИК динамики + свежие записи
   через <DataTable>. Главному KPI дай `accent` (тонкая верхняя линия акцентом) —
