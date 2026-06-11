@@ -31,6 +31,12 @@ export {
   DangerZone,
   type DangerZoneProps,
 } from "./settings";
+export {
+  SetupChecklist,
+  type SetupChecklistProps,
+  type ChecklistStep,
+  type ChecklistAction,
+} from "./setup-checklist";
 export { useEntity, type UseEntity } from "./use-entity";
 export {
   Sparkline,
