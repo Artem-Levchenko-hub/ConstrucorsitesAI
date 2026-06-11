@@ -317,6 +317,12 @@ export type MultipassStage =
  */
 export type PassProgress = {
   current: MultipassStage | null;
+  /**
+   * Model working the current stage (e.g. "kimi-k2.6-thinking" / "deepseek-v4-pro"),
+   * when the backend reports it on the active stage's `start` event. Null between
+   * stages. Drives human narration ("Claude · композиция героя") in the build UI.
+   */
+  currentModel: string | null;
   completed: MultipassStage[];
 };
 
@@ -379,6 +385,10 @@ export type WsEvent =
         message_id: Uuid;
         pass: MultipassStage;
         stage: "start" | "end";
+        // Which model is working this stage (art-director / writer / judge).
+        // Present on `start` for freeform stages (messages.py forwards it from
+        // art_director_writer); enables human narration in the build UI.
+        model?: string;
       };
     }
   | { type: "wallet.updated"; data: { balance_rub: number } }

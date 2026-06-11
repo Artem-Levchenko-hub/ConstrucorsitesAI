@@ -41,6 +41,11 @@ const FREEFORM_STAGES: { id: MultipassStage; label: string }[] = [
 ];
 const FREEFORM_IDS = new Set<MultipassStage>(FREEFORM_STAGES.map((s) => s.id));
 
+/** Compact a model id for the header line (drop the provider prefix). */
+function shortModel(model: string): string {
+  return model.split("/").pop() ?? model;
+}
+
 /** Pick the stage set that matches the events seen for this message. */
 function pickStages(p: PassProgress): { id: MultipassStage; label: string }[] {
   const seen = [p.current, ...p.completed];
@@ -99,9 +104,20 @@ export function PassProgressBar({
           {progress.current && (
             <>
               <span aria-hidden className="shrink-0">·</span>
-              <span className="truncate text-fg-secondary">
+              <span className="shrink-0 text-fg-secondary">
                 {stages.find((s) => s.id === progress.current)?.label ??
                   progress.current}
+              </span>
+            </>
+          )}
+          {progress.currentModel && (
+            <>
+              <span aria-hidden className="shrink-0">·</span>
+              <span
+                className="min-w-0 truncate text-fg-tertiary"
+                title={progress.currentModel}
+              >
+                {shortModel(progress.currentModel)}
               </span>
             </>
           )}

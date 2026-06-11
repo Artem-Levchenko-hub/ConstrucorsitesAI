@@ -252,17 +252,30 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         qc.setQueryData<PassProgress>(
           ["passes", projectId, event.data.message_id],
           (prev) => {
-            const base: PassProgress = prev ?? { current: null, completed: [] };
+            const base: PassProgress = prev ?? {
+              current: null,
+              currentModel: null,
+              completed: [],
+            };
             const stageName = event.data.pass;
             if (event.data.stage === "start") {
-              return { ...base, current: stageName };
+              // Carry the working model (backend sends it on freeform `start`)
+              // so the build UI can narrate "<model> · <stage>".
+              return {
+                ...base,
+                current: stageName,
+                currentModel: event.data.model ?? null,
+              };
             }
-            // stage === "end"
+            // stage === "end" — clear current (and its model) when this is the
+            // active stage; the next `start` re-fills both immediately.
             const completed = base.completed.includes(stageName)
               ? base.completed
               : [...base.completed, stageName];
+            const ending = base.current === stageName;
             return {
-              current: base.current === stageName ? null : base.current,
+              current: ending ? null : base.current,
+              currentModel: ending ? null : base.currentModel,
               completed,
             };
           },
