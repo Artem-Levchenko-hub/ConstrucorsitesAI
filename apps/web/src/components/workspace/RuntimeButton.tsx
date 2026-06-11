@@ -93,39 +93,39 @@ function deployUx(state: RuntimeState, deploying: boolean): DeployUx {
   if (deploying)
     return {
       enabled: false,
-      label: "Публикуется…",
+      label: "Публикуем в прод…",
       tooltip: "Сборка prod-образа уже идёт",
     };
   switch (state) {
     case "running":
       return {
         enabled: true,
-        label: "Опубликовать",
+        label: "Опубликовать в прод",
         tooltip: "Собрать prod-образ и переключить трафик",
       };
     case "paused":
       return {
         enabled: false,
-        label: "Опубликовать",
+        label: "Опубликовать в прод",
         tooltip: "Сначала разбудите контейнер",
       };
     case "provisioning":
       return {
         enabled: false,
-        label: "Опубликовать",
+        label: "Опубликовать в прод",
         tooltip: "Дождитесь окончания запуска",
       };
     case "failed":
       return {
         enabled: false,
-        label: "Опубликовать",
+        label: "Опубликовать в прод",
         tooltip: "Сначала перезапустите контейнер",
       };
     case "stopped":
     default:
       return {
         enabled: false,
-        label: "Опубликовать",
+        label: "Опубликовать в прод",
         tooltip: "Сначала запустите контейнер",
       };
   }

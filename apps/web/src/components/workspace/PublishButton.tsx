@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Кнопка «Опубликовать» в TopBar. Открывает модалку со стабильной публичной
- * ссылкой проекта — `/p/<slug>`. Эта ссылка постоянна и работает без входа:
+ * Кнопка «Поделиться» в TopBar (share-link, НЕ прод-деплой — тот живёт в
+ * RuntimeButton как «Опубликовать в прод»). Открывает модалку со стабильной
+ * публичной ссылкой проекта — `/p/<slug>`. Эта ссылка постоянна и работает без входа:
  *   - static-проект → бэкенд отдаёт HTML текущего снапшота;
  *   - контейнер-апп (entities/fullstack) → редирект на живой dev/prod-URL
  *     (просыпается по запросу, см. wake-on-request), так что ссылка не «висит».
@@ -69,7 +70,7 @@ export function PublishButton({ projectSlug }: { projectSlug: string }) {
         title="Поделиться публичной ссылкой на проект"
       >
         <Share2 className="h-3 w-3" />
-        Опубликовать
+        Поделиться
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -77,7 +78,7 @@ export function PublishButton({ projectSlug }: { projectSlug: string }) {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Share2 className="h-4 w-4" />
-              Опубликовать проект
+              Поделиться проектом
             </DialogTitle>
             <DialogDescription>
               Постоянная публичная ссылка — открывается у любого без входа в
