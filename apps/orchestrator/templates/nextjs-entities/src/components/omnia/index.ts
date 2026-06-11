@@ -37,6 +37,12 @@ export {
   type ChecklistStep,
   type ChecklistAction,
 } from "./setup-checklist";
+export {
+  CommandPalette,
+  useCommandPalette,
+  type CommandItem,
+  type CommandPaletteProps,
+} from "./command-palette";
 export { useEntity, type UseEntity } from "./use-entity";
 export {
   Sparkline,

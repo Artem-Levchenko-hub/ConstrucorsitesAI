@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, Menu } from "lucide-react";
+import { LogOut, Menu, Search } from "lucide-react";
 
 import { cn, initials } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  CommandPalette,
+  useCommandPalette,
+  type CommandItem,
+} from "./command-palette";
 
 export interface NavItem {
   label: string;
@@ -41,6 +46,9 @@ export interface AppShellProps {
   title?: React.ReactNode;
   /** Topbar right-side controls. */
   actions?: React.ReactNode;
+  /** Extra ⌘K commands beyond navigation (e.g. quick-create actions). The nav
+   *  itself is added automatically, so apps get the palette for free. */
+  commands?: CommandItem[];
   children: React.ReactNode;
 }
 
@@ -138,10 +146,32 @@ function UserMenu({
   );
 }
 
+/** Topbar button that opens the ⌘K palette and advertises the shortcut — the
+ *  discoverable, mouse- and touch-friendly entry point (Mobbin: Replit «Search &
+ *  run commands ⌘K»). */
+function CommandTrigger({ onOpen }: { onOpen: () => void }) {
+  return (
+    <Button
+      variant="outline"
+      onClick={onOpen}
+      aria-label="Открыть командную палитру (Ctrl+K)"
+      aria-keyshortcuts="Control+K Meta+K"
+      className="h-9 gap-2 px-2.5 text-muted-foreground sm:px-3"
+    >
+      <Search className="size-4" />
+      <span className="hidden text-sm font-normal sm:inline">Поиск…</span>
+      <kbd className="hidden rounded border border-border bg-muted px-1.5 py-0.5 font-sans text-[10px] font-medium leading-none sm:inline">
+        ⌘K
+      </kbd>
+    </Button>
+  );
+}
+
 /**
  * Responsive application shell — persistent sidebar on desktop (lg+), a slide-in
- * Sheet drawer on mobile, plus a sticky topbar. Wrap every page's content with
- * it so the app reads like a real product, not a single scrolling page.
+ * Sheet drawer on mobile, plus a sticky topbar with a ⌘K command palette. Wrap
+ * every page's content with it so the app reads like a real product, not a
+ * single scrolling page.
  *
  *   <AppShell brand="Моя CRM" nav={NAV} user={me} onSignOut={signOut}>
  *     <PageHeader title="Клиенты" actions={...} />
@@ -155,10 +185,27 @@ export function AppShell({
   onSignOut,
   title,
   actions,
+  commands,
   children,
 }: AppShellProps) {
   const pathname = usePathname() ?? "/";
   const [open, setOpen] = React.useState(false);
+  const [cmdOpen, setCmdOpen] = useCommandPalette();
+
+  // Every nav item becomes a "go to" command for free; the app passes extra
+  // `commands` for quick actions (e.g. «Создать клиента»).
+  const paletteCommands: CommandItem[] = React.useMemo(
+    () => [
+      ...nav.map((item) => ({
+        label: item.label,
+        href: item.href,
+        icon: item.icon,
+        group: "Страницы",
+      })),
+      ...(commands ?? []).map((c) => ({ ...c, group: c.group ?? "Действия" })),
+    ],
+    [nav, commands],
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -195,6 +242,7 @@ export function AppShell({
           ) : null}
 
           <div className="ml-auto flex items-center gap-2">
+            <CommandTrigger onOpen={() => setCmdOpen(true)} />
             {actions}
             <UserMenu user={user} onSignOut={onSignOut} />
           </div>
@@ -202,6 +250,8 @@ export function AppShell({
 
         <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</main>
       </div>
+
+      <CommandPalette commands={paletteCommands} open={cmdOpen} onOpenChange={setCmdOpen} />
     </div>
   );
 }
