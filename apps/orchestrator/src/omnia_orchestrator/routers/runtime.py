@@ -4,9 +4,10 @@ All endpoints below are gated by `X-Internal-Token` header verified against
 `Settings.internal_token`. They are meant for apps/api (the public-facing
 FastAPI service) to call; web clients never touch this surface.
 
-Implementation is currently a scaffold — every handler returns 501 with a
-clear "implement in sprint A1" message. The contracts (request/response
-schemas) are stable and consumed by apps/api today.
+These handlers are fully implemented and live in production: provision/wake/
+stop/status, hot-reload, compile + runtime status, and a real prod deploy
+(build image → run durable container → health-poll → nginx vhost + TLS). The
+contracts (request/response schemas) are stable and consumed by apps/api today.
 """
 
 from __future__ import annotations

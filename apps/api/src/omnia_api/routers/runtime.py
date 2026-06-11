@@ -103,14 +103,10 @@ async def start_runtime(
 ) -> RuntimeStatus:
     """Start (or provision-and-start) the project's dev container.
 
-    Phase A note: orchestrator's `wake` endpoint is still scaffold (returns 501
-    "not yet implemented"). `provision` is the only fully wired path, and it's
-    already idempotent — calling it for an existing project returns the live
-    container info without rebuilding. So Phase A always goes through provision.
-
-    When orchestrator/wake lands properly (sprint A1+), this body switches to
-    the wake-first / provision-fallback flow — the public API contract here
-    does not change.
+    Goes through orchestrator `provision`, which is idempotent — calling it for an
+    existing project returns the live container info without rebuilding, and
+    provisions on first call. (Wake-on-request is wired separately at the ingress
+    layer, so a sleeping preview self-revives on the first visitor hit.)
     """
     project = await _project_owned_by(session, project_id, current_user.id)
     # Map api-side `template` to the orchestrator's actual template dir.
