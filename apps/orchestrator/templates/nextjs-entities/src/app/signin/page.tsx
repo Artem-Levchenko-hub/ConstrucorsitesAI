@@ -5,6 +5,7 @@
  * (Tailwind classes, copy, brand colors); core form structure isn't.
  */
 
+import { AuthError } from "next-auth";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { signIn, auth } from "@/lib/auth";
@@ -29,7 +30,20 @@ export default async function SignInPage({
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
     const password = String(formData.get("password") ?? "");
     const next = String(formData.get("next") ?? APP_HOME);
-    await signIn("credentials", { email, password, redirectTo: next });
+    try {
+      await signIn("credentials", { email, password, redirectTo: next });
+    } catch (error) {
+      // Bad credentials → Auth.js throws CredentialsSignin (an AuthError).
+      // Redirect back to the form with a friendly ?error= banner instead of
+      // letting the action crash the whole app. The SUCCESS path throws
+      // NEXT_REDIRECT (not an AuthError), so we re-throw it for Next to follow.
+      if (error instanceof AuthError) {
+        redirect(
+          `/signin?error=CredentialsSignin&next=${encodeURIComponent(next)}`,
+        );
+      }
+      throw error;
+    }
   }
 
   return (
