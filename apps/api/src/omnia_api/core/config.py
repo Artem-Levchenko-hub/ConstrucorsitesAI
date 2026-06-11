@@ -95,6 +95,13 @@ class Settings(BaseSettings):
 
     initial_wallet_balance_rub: float = Field(default=100.0)
 
+    # Rate limiting (slowapi) on the costly generate/edit endpoint. Keyed per
+    # authenticated user (valid JWT) and falling back to the real client IP, so a
+    # single actor can't flood expensive LLM builds and drain balance / DoS the
+    # box. Tunable without a code change; set rate_limit_enabled=false to disable.
+    rate_limit_enabled: bool = Field(default=True)
+    prompt_rate_limit: str = Field(default="20/minute")
+
     # Phase B — multipass design generation for budget models.
     # Env override for the multipass router. By DEFAULT (empty value) every
     # budget-tier model (CHEAP_MODELS — currently Haiku, Nano) is routed
