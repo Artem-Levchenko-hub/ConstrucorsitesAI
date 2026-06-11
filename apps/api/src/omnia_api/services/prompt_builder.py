@@ -903,6 +903,16 @@ _ENTITIES_UI = """\
     <AppShell brand="MyCRM" nav={NAV} user={me}
       commands={[{ label: "Создать клиента", href: "/dashboard/clients/new", icon: <Plus /> }]}>
     НЕ верстай свой ⌘K и не ставь cmdk — палитра уже в ките.
+  ▸ ПЛАН / ТРИАЛ-КАПСУЛА — если у продукта есть тарифы (Free/Pro, триал), передай
+    `plan` в <AppShell> — в подвал сайдбара встанет капсула со статусом тарифа
+    (опц. «осталось N дн.» + usage-метр). MVP без оплаты: кнопку Upgrade давай
+    ТОЛЬКО с рабочим onUpgrade (тост «Тарифы скоро» / диалог) — иначе НЕ передавай
+    upgradeHref/onUpgrade, капсула останется статусной (НИКАКИХ мёртвых кнопок):
+    <AppShell brand="MyCRM" nav={NAV} user={me}
+      plan={{ plan: "Free", trialDaysLeft: 14,
+              usage: { used: 3, limit: 10, label: "3 из 10 проектов" },
+              onUpgrade: () => toast("Тарифы скоро") }}>
+    Нет тарифов — НЕ передавай `plan`, подвал не появится.
 
 ▸ ДВЕ РОЛИ — ОПЕРАТОР (admin) vs КЛИЕНТ (user). Решай В НАЧАЛЕ: есть ли у этого
   продукта ДВА типа пользователей?

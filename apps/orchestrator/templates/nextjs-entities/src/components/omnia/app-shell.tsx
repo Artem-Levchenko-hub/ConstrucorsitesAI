@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, Menu, Search } from "lucide-react";
+import { LogOut, Menu, Search, Sparkles } from "lucide-react";
 
 import { cn, initials } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,24 @@ export interface AppShellUser {
   email?: string | null;
 }
 
+/** Plan / trial status capsule for the sidebar footer (Mobbin: Time2book,
+ *  7shifts, Vanta). The MVP has no billing, so the Upgrade button renders ONLY
+ *  when a working handler is given — pass `onUpgrade` (open a «тарифы скоро»
+ *  toast/dialog) or `upgradeHref`; with neither the capsule is status-only and
+ *  never a dead button. */
+export interface PlanInfo {
+  /** Plan name, e.g. "Free", "Старт", "Pro". */
+  plan: string;
+  /** Days left in trial — renders «осталось N дн.» (urgent tint when ≤3). */
+  trialDaysLeft?: number;
+  /** Usage meter; `label` overrides the default «used из limit» caption. */
+  usage?: { used: number; limit: number; label?: string };
+  upgradeHref?: string;
+  onUpgrade?: () => void;
+  /** CTA label, default «Перейти на Pro». */
+  upgradeLabel?: string;
+}
+
 export interface AppShellProps {
   /** App name or a logo node, shown at the top of the sidebar. */
   brand: React.ReactNode;
@@ -49,6 +67,9 @@ export interface AppShellProps {
   /** Extra ⌘K commands beyond navigation (e.g. quick-create actions). The nav
    *  itself is added automatically, so apps get the palette for free. */
   commands?: CommandItem[];
+  /** Optional plan/trial status capsule pinned to the sidebar footer. Omit it
+   *  and the sidebar stays exactly as before — no footer is rendered. */
+  plan?: PlanInfo;
   children: React.ReactNode;
 }
 
@@ -167,6 +188,82 @@ function CommandTrigger({ onOpen }: { onOpen: () => void }) {
   );
 }
 
+/** Sidebar-footer capsule advertising the current plan / trial status, with an
+ *  optional usage meter and Upgrade CTA. Renders the CTA only when it has
+ *  somewhere to go, so the MVP (no billing) never ships a dead button. */
+function PlanCapsule({
+  plan,
+  trialDaysLeft,
+  usage,
+  upgradeHref,
+  onUpgrade,
+  upgradeLabel,
+}: PlanInfo) {
+  const pct =
+    usage && usage.limit > 0
+      ? Math.min(100, Math.max(0, Math.round((usage.used / usage.limit) * 100)))
+      : null;
+  const urgent = typeof trialDaysLeft === "number" && trialDaysLeft <= 3;
+  const hasCta = Boolean(upgradeHref || onUpgrade);
+  const label = upgradeLabel ?? "Перейти на Pro";
+
+  return (
+    <div className="rounded-xl border border-sidebar-border bg-sidebar-accent/50 p-3 shadow-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/80">
+          {plan}
+        </span>
+        {typeof trialDaysLeft === "number" ? (
+          <span
+            className={cn(
+              "shrink-0 text-[11px] font-medium",
+              urgent ? "text-destructive" : "text-sidebar-foreground/60",
+            )}
+          >
+            осталось {trialDaysLeft} дн.
+          </span>
+        ) : null}
+      </div>
+
+      {pct !== null ? (
+        <div className="mt-2">
+          <div
+            className="h-1.5 overflow-hidden rounded-full bg-sidebar-foreground/15"
+            role="progressbar"
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className="h-full rounded-full bg-primary transition-[width] duration-500 motion-reduce:transition-none"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <p className="mt-1 text-[11px] text-sidebar-foreground/60">
+            {usage!.label ?? `${usage!.used} из ${usage!.limit}`}
+          </p>
+        </div>
+      ) : null}
+
+      {hasCta ? (
+        upgradeHref ? (
+          <Button asChild size="sm" className="mt-3 h-9 w-full gap-1.5">
+            <Link href={upgradeHref}>
+              <Sparkles className="size-4" />
+              {label}
+            </Link>
+          </Button>
+        ) : (
+          <Button size="sm" onClick={onUpgrade} className="mt-3 h-9 w-full gap-1.5">
+            <Sparkles className="size-4" />
+            {label}
+          </Button>
+        )
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Responsive application shell — persistent sidebar on desktop (lg+), a slide-in
  * Sheet drawer on mobile, plus a sticky topbar with a ⌘K command palette. Wrap
@@ -186,6 +283,7 @@ export function AppShell({
   title,
   actions,
   commands,
+  plan,
   children,
 }: AppShellProps) {
   const pathname = usePathname() ?? "/";
@@ -213,6 +311,11 @@ export function AppShell({
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col bg-sidebar text-sidebar-foreground lg:flex">
         <Brand brand={brand} />
         <NavLinks nav={nav} pathname={pathname} />
+        {plan ? (
+          <div className="border-t border-sidebar-border p-3">
+            <PlanCapsule {...plan} />
+          </div>
+        ) : null}
       </aside>
 
       <div className="lg:pl-64">
@@ -230,10 +333,18 @@ export function AppShell({
                 <Menu />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="w-72 bg-sidebar p-0 text-sidebar-foreground">
+            <SheetContent
+              side="left"
+              className="flex w-72 flex-col bg-sidebar p-0 text-sidebar-foreground"
+            >
               <SheetTitle className="sr-only">Навигация</SheetTitle>
               <Brand brand={brand} />
               <NavLinks nav={nav} pathname={pathname} onNavigate={() => setOpen(false)} />
+              {plan ? (
+                <div className="border-t border-sidebar-border p-3">
+                  <PlanCapsule {...plan} />
+                </div>
+              ) : null}
             </SheetContent>
           </Sheet>
 

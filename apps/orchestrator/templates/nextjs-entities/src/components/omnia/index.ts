@@ -5,7 +5,13 @@
  *
  *   import { AppShell, PageHeader, StatCard, CrudResource } from "@/components/omnia";
  */
-export { AppShell, type NavItem, type AppShellUser, type AppShellProps } from "./app-shell";
+export {
+  AppShell,
+  type NavItem,
+  type AppShellUser,
+  type AppShellProps,
+  type PlanInfo,
+} from "./app-shell";
 export { PageHeader, type PageHeaderProps } from "./page-header";
 export { StatCard, type StatCardProps } from "./stat-card";
 export { CountUp, type CountUpProps } from "./count-up";
