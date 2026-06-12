@@ -70,6 +70,11 @@ export interface AppShellProps {
   /** Optional plan/trial status capsule pinned to the sidebar footer. Omit it
    *  and the sidebar stays exactly as before — no footer is rendered. */
   plan?: PlanInfo;
+  /** Colour theme for the whole app surface. Omit (or "light") for the default
+   *  clean enterprise light. "dark" flips the entire dashboard to the premium
+   *  dark token set — including portaled overlays (mobile drawer, ⌘K palette,
+   *  menus), because the class is mirrored onto <html>. */
+  theme?: "light" | "dark";
   children: React.ReactNode;
 }
 
@@ -284,11 +289,24 @@ export function AppShell({
   actions,
   commands,
   plan,
+  theme,
   children,
 }: AppShellProps) {
   const pathname = usePathname() ?? "/";
   const [open, setOpen] = React.useState(false);
   const [cmdOpen, setCmdOpen] = useCommandPalette();
+  const dark = theme === "dark";
+
+  // Mirror the dark class onto <html> so Radix portals (mobile drawer, ⌘K
+  // palette, dropdown menus) — which render into <body>, outside the wrapper —
+  // inherit the dark token set too. The wrapper below also carries `dark` so
+  // in-flow content is already dark on the server render (no flash).
+  React.useEffect(() => {
+    if (!dark) return;
+    const root = document.documentElement;
+    root.classList.add("dark");
+    return () => root.classList.remove("dark");
+  }, [dark]);
 
   // Every nav item becomes a "go to" command for free; the app passes extra
   // `commands` for quick actions (e.g. «Создать клиента»).
@@ -306,7 +324,7 @@ export function AppShell({
   );
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className={cn("min-h-screen bg-background", dark && "dark")}>
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col bg-sidebar text-sidebar-foreground lg:flex">
         <Brand brand={brand} />
