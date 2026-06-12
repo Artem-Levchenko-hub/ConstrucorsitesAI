@@ -148,6 +148,72 @@ def test_extract_files_lucide_fix_passes_through_alias_forms() -> None:
     assert extract_files(answer)["src/F.tsx"] == src
 
 
+def test_extract_files_adds_missing_lucide_import() -> None:
+    # The app-killer this fix targets: the writer renders `<Briefcase />` in JSX
+    # but forgets to add it to the existing lucide-react import. `Briefcase` is a
+    # real lucide icon, so the invalid-import fix can't help — at runtime it throws
+    # "Briefcase is not defined" and the whole dashboard crashes. We must add the
+    # used-but-unimported icon to the import deterministically.
+    answer = (
+        '<file path="src/app/dashboard/page.tsx">'
+        'import { TrendingUp } from "lucide-react";\n'
+        "export const F = () => <StatCard icon={<Briefcase />} />;</file>"
+    )
+    out = extract_files(answer)["src/app/dashboard/page.tsx"]
+    # Briefcase joined the existing lucide import (single block, not a 2nd line)
+    assert out.count('from "lucide-react"') == 1
+    assert "Briefcase" in out.split('from "lucide-react"')[0]
+    assert "TrendingUp" in out  # pre-existing icon preserved
+    assert "<Briefcase />" in out  # usage untouched
+
+
+def test_extract_files_adds_lucide_import_when_none_present() -> None:
+    # A file that uses a lucide icon as JSX with NO lucide import at all gets a
+    # fresh import line inserted (after the existing imports).
+    answer = (
+        '<file path="src/app/page.tsx">'
+        'import Link from "next/link";\n'
+        "export const F = () => <Settings />;</file>"
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert 'import { Settings } from "lucide-react";' in out
+    assert "<Settings />" in out
+
+
+def test_extract_files_missing_lucide_skips_names_bound_elsewhere() -> None:
+    # `Badge` is BOTH a real lucide icon and a kit/ui component the writer imports
+    # from "@/components/ui/badge". The used-but-unimported pass must NOT add a
+    # second `Badge` to a lucide import — that would be a duplicate declaration and
+    # break the build worse than before.
+    src = (
+        'import { Badge } from "@/components/ui/badge";\n'
+        "export const F = () => <Badge>new</Badge>;"
+    )
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert 'from "lucide-react"' not in out  # no spurious lucide import injected
+    assert out == src  # byte-identical: Badge is bound elsewhere
+
+
+def test_extract_files_missing_lucide_noop_when_locally_declared() -> None:
+    # A locally-declared component whose name happens to collide with a lucide icon
+    # must not trigger a spurious lucide import.
+    answer = (
+        '<file path="src/app/page.tsx">'
+        "function Settings() { return null; }\n"
+        "export const F = () => <Settings />;</file>"
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert 'from "lucide-react"' not in out
+
+
+def test_extract_files_missing_lucide_scoped_to_source_files() -> None:
+    # A non-source file using `<Briefcase/>` text is left byte-identical.
+    body = "see <Briefcase/> in the docs"
+    answer = f'<file path="NOTES.md">{body}</file>'
+    assert extract_files(answer)["NOTES.md"] == body
+
+
 def test_extract_files_pins_locale_on_bare_to_locale_string() -> None:
     # A bare `.toLocaleString()` resolves to the runtime locale, which differs
     # between the SSR (container Node) and client (browser) passes -> the price

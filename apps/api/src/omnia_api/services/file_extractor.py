@@ -137,6 +137,19 @@ _LUCIDE_IMPORT_BLOCK = re.compile(
 )
 _AS_SPLIT = re.compile(r"\s+as\s+")
 
+# Capitalised JSX opening tags: `<Briefcase`, `<Briefcase/>`, `<Briefcase ... >`.
+# A leading capital is React's component-vs-host-element rule, so this is exactly
+# the set of identifiers that must resolve to a binding at runtime.
+_JSX_TAG = re.compile(r"<([A-Z][A-Za-z0-9]*)")
+# Each import statement's binding clause (everything between `import` and `from`),
+# robust to multiline named-import lists. Used to collect already-bound names.
+_IMPORT_STMT = re.compile(
+    r'import\b(?P<binding>[^;]*?)\bfrom\s*["\'][^"\']+["\']', re.DOTALL
+)
+_IDENT = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+# Local component declarations whose name could shadow a lucide icon.
+_LOCAL_DECL = re.compile(r"\b(?:function|class|const|let|var)\s+([A-Z][A-Za-z0-9]*)")
+
 
 def _fix_invalid_lucide_imports(path: str, body: str) -> str:
     """Alias every invalid lucide import to a real glyph so the build survives.
@@ -176,6 +189,58 @@ def _fix_invalid_lucide_imports(path: str, body: str) -> str:
         )
 
     return _LUCIDE_IMPORT_BLOCK.sub(_rewrite, body)
+
+
+# The inverse failure of the fix above: the writer RENDERS a real lucide icon in
+# JSX (`icon={<Briefcase />}`) but forgets to import it. The name is a valid lucide
+# export, so `_fix_invalid_lucide_imports` leaves it alone — and at runtime React
+# throws "Briefcase is not defined", crashing the whole page (the generated CRM
+# dashboard served a blank client-side-exception screen on exactly this bug). A
+# negative brief rule can't stop the model dropping an import, so we repair it
+# deterministically.
+def _fix_missing_lucide_imports(path: str, body: str) -> str:
+    """Add used-but-unimported lucide icons to the import (R-10 fail-soft).
+
+    A capitalised JSX tag that is a real lucide export but is bound nowhere in the
+    file (no import from any module, no local declaration) would throw
+    ``<Name> is not defined`` at runtime and crash the page. Such names are appended
+    to the existing ``lucide-react`` import block, or a fresh
+    ``import { ... } from "lucide-react"`` line is inserted after the last import.
+    No-op on non-source files and when nothing is missing (byte-identical). Names
+    bound elsewhere — including lucide icons that double as kit/ui components like
+    ``Badge`` — are skipped so we never emit a duplicate declaration."""
+    if not path.endswith(_LUCIDE_FIX_SUFFIXES):
+        return body
+
+    candidates = {
+        m.group(1) for m in _JSX_TAG.finditer(body) if is_valid_lucide_name(m.group(1))
+    }
+    if not candidates:
+        return body
+
+    bound: set[str] = set()
+    for stmt in _IMPORT_STMT.finditer(body):
+        bound.update(_IDENT.findall(stmt.group("binding")))
+    bound.update(_LOCAL_DECL.findall(body))
+
+    missing = sorted(candidates - bound)
+    if not missing:
+        return body
+
+    block = _LUCIDE_IMPORT_BLOCK.search(body)
+    if block is not None:
+        existing = [s.strip() for s in block.group("names").split(",") if s.strip()]
+        merged = " " + ", ".join(existing + missing) + " "
+        return body[: block.start("names")] + merged + body[block.end("names") :]
+
+    new_line = f'import {{ {", ".join(missing)} }} from "lucide-react";'
+    imports = list(_IMPORT_STMT.finditer(body))
+    if not imports:
+        return new_line + "\n" + body
+    nl = body.find("\n", imports[-1].end())
+    if nl == -1:
+        return body + "\n" + new_line
+    return body[: nl + 1] + new_line + "\n" + body[nl + 1 :]
 
 
 # The writer formats prices/dates with a bare `.toLocaleString()` (no locale arg)
@@ -615,6 +680,7 @@ def extract_files(answer: str) -> dict[str, str]:
             raise ValueError(f"file {raw_path} exceeds {MAX_FILE_BYTES} bytes")
         body = _fix_invented_palette_vars(raw_path, body)
         body = _fix_invalid_lucide_imports(raw_path, body)
+        body = _fix_missing_lucide_imports(raw_path, body)
         body = _fix_bare_locale_string(raw_path, body)
         body = _fix_missing_use_client(raw_path, body)
         body = _fix_app_layout_theme(raw_path, body)
