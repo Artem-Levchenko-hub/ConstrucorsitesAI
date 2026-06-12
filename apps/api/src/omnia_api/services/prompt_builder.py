@@ -901,8 +901,13 @@ _ENTITIES_UI = """\
     `nav`. Ничего писать не нужно — она появляется бесплатно. Хочешь быстрые действия
     (напр. «Создать клиента») — передай `commands` в <AppShell>:
     <AppShell brand="MyCRM" nav={NAV} user={me}
-      commands={[{ label: "Создать клиента", href: "/dashboard/clients/new", icon: <Plus /> }]}>
+      commands={[{ label: "Создать клиента",
+        href: "/dashboard/clients?create=1", icon: <Plus /> }]}>
     НЕ верстай свой ⌘K и не ставь cmdk — палитра уже в ките.
+    ⛔ Маршрутов `/dashboard/<сущность>/new` В КИТЕ НЕТ — создание записи это МОДАЛКА на
+    странице списка (<CrudResource> сам её открывает). Любой CTA «создать» ведёт на
+    `/dashboard/<сущность>?create=1` (список откроется и форма создания всплывёт сразу)
+    или на сам список `/dashboard/<сущность>`. Ссылка на `…/new` = 404-тупик, НЕ пиши её.
   ▸ ПЛАН / ТРИАЛ-КАПСУЛА — если у продукта есть тарифы (Free/Pro, триал), передай
     `plan` в <AppShell> — в подвал сайдбара встанет капсула со статусом тарифа
     (опц. «осталось N дн.» + usage-метр). MVP без оплаты: кнопку Upgrade давай
@@ -1073,7 +1078,7 @@ _ENTITIES_UI = """\
         action: { label: "Профиль", href: "/dashboard/settings" } },
       { label: "Добавьте первый товар", description: "Витрина оживёт",
         done: products.length > 0,
-        action: { label: "Добавить", href: "/dashboard/products/new" } },
+        action: { label: "Добавить", href: "/dashboard/products?create=1" } },
       { label: "Пригласите коллегу", done: false },
     ]} />
   • Каждый шаг — РЕАЛЬНОЕ первое действие (создать первую запись / заполнить профиль

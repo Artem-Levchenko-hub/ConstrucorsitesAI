@@ -147,6 +147,18 @@ export function CrudResource({
     setFormOpen(true);
   }
 
+  // Deep-link: reaching the list with `?create=1` pops the create form straight
+  // away, so an onboarding/checklist CTA can land the user on the new-record
+  // form without a dedicated `/new` route (creation lives in the dialog, not a
+  // page). Read from window — client-only, no Suspense boundary needed.
+  React.useEffect(() => {
+    if (!canCreate) return;
+    if (new URLSearchParams(window.location.search).get("create") === "1") {
+      setEditing(null);
+      setFormOpen(true);
+    }
+  }, [canCreate]);
+
   async function handleSubmit(payload: Record<string, unknown>) {
     if (editing) {
       await data.update(editing.id, payload);
