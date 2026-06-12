@@ -57,3 +57,7 @@ coverage/
 **/.env.bak.*
 docker-compose.yml.bak.*
 **/docker-compose.yml.bak.*
+
+# Claude Code local (machine-specific) settings
+.claude/settings.local.json
+.claude/*.lock
