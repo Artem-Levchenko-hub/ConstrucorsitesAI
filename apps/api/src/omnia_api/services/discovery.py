@@ -125,10 +125,12 @@ class DiscoveryResult:
     (run the generator with ``brief`` as the prompt). ``stack`` is the recommended
     stack id; ``message`` on a BUILD is a short friendly "собираю…" note.
 
-    On an ASK, ``choices`` are 0–5 short quick-reply answers the UI renders as
+    On an ASK, ``choices`` are 2–5 short quick-reply answers the UI renders as
     tappable chips beneath the question; ``allow_custom`` (always True) tells the
     UI to keep a free-text "Другое" path open so a chip never traps the user.
-    Empty ``choices`` is fine — the question is just answered by typing.
+    Every ASK lands with chips — the model is steered to provide them and a
+    deterministic stage-keyed floor fills any it omits (V2.1: чипы СРАЗУ на
+    первый промпт, never bare text).
     """
 
     action: str
@@ -177,10 +179,11 @@ _SYSTEM = (
     '{"action":"ask","message":"<один короткий вопрос на русском>",'
     '"choices":["<2–5 коротких вариантов ответа, 1–3 слова каждый>"]}\n'
     "  — choices это подсказки-кнопки под вопросом (например для «Нужна "
-    "админка?» → [\"Да\",\"Нет\"]; для стиля → [\"Премиум\",\"Дружелюбный\","
-    "\"Строгий\"]). Давай их КОГДА ответ сводится к выбору. Если вопрос "
-    "открытый (например «как ты это представляешь?») — верни choices:[] "
-    "(пустой). Пользователь всегда может ответить и своим текстом.\n"
+    "админка?» → [\"Да\",\"Нет\"]; для стиля → [\"Премиум\",\"Дружелюбное\","
+    "\"Строгое\"]). ВСЕГДА давай 2–5 таких вариантов — даже для открытого "
+    "вопроса предложи типовые направления-примеры (например «как "
+    "представляешь стиль?» → [\"Минимализм\",\"Премиум\",\"Ярко\",\"Строго\"]). "
+    "Пользователь всегда может ответить и своим текстом (кнопка «Другое»).\n"
     "Если пора строить:\n"
     '{"action":"build","message":"<короткая фраза: «Отлично, собираю…»>",'
     '"brief":"<сжатый бриф для генератора на русском: тип продукта, цель, '
@@ -191,8 +194,11 @@ _SYSTEM = (
 
 # Deterministic fallback questions + matching quick-reply chips, keyed by how
 # many questions we've already asked (no randomness — keeps the turn resumable).
-# Chips parallel ``_FALLBACK_QUESTIONS`` index-for-index; an empty tuple means
-# "answer by typing" (open question).
+# Chips parallel ``_FALLBACK_QUESTIONS`` index-for-index. Every stage carries a
+# non-empty set: this table is ALSO the chip FLOOR for a model ASK that omitted
+# its own choices (see ``run_discovery``), so a discovery question never lands as
+# bare text (V2.1). The stages mirror the model's general→detail progression, so
+# the floor reads sensibly even under a model-authored question of the same stage.
 _FALLBACK_QUESTIONS: tuple[str, ...] = (
     "Расскажите в двух словах — что за проект и какая у него главная цель?",
     "Кто ваша аудитория и какое настроение ближе — премиум, дружелюбное или строгое?",
@@ -200,10 +206,10 @@ _FALLBACK_QUESTIONS: tuple[str, ...] = (
     "Есть фирменные цвета, логотип или сайт-референс, который вам нравится?",
 )
 _FALLBACK_CHOICES: tuple[tuple[str, ...], ...] = (
-    (),
+    ("Лендинг", "Интернет-магазин", "Приложение с кабинетом", "Портфолио", "Блог"),
     ("Премиум", "Дружелюбное", "Строгое"),
-    (),
-    (),
+    ("Каталог", "Корзина", "Запись/бронь", "Личный кабинет", "Блог"),
+    ("Свои цвета", "На ваш вкус"),
 )
 
 
@@ -384,16 +390,20 @@ async def run_discovery(
                 stack = inferred
         return DiscoveryResult(action=BUILD, message=message, brief=brief, stack=stack)
 
-    # ASK path — one more question (+ optional quick-reply chips).
+    # ASK path — one more question (+ quick-reply chips, always present).
     message = ""
     choices: tuple[str, ...] = ()
     if parsed and action == ASK:
         message = str(parsed.get("message") or "").strip()
         choices = _clean_choices(parsed.get("choices"))
     if not message:
-        # Gateway/parse failed → deterministic question AND its paired chips, so
-        # the fallback turn still offers tappable answers, not just bare text.
+        # Gateway/parse failed → deterministic question for this turn index.
         message = _fallback_question(asked_count)
+    if not choices:
+        # Guarantee the discovery card lands with tappable chips, never bare text
+        # (V2.1 — чипы СРАЗУ на первый промпт). The model often omits choices for
+        # an "open" question; the stage-keyed deterministic floor fills the gap,
+        # model-independent. "Другое" (allow_custom) stays open so it never traps.
         choices = _fallback_choices(asked_count)
     return DiscoveryResult(
         action=ASK, message=message, brief="", stack=stack, choices=choices

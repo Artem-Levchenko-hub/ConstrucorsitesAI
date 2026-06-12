@@ -152,7 +152,12 @@ async def test_ask_returns_model_choices(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result.allow_custom is True  # free-text path always open
 
 
-async def test_ask_open_question_has_no_choices(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_ask_open_question_gets_floor_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """V2.1: a model ASK that omits its own choices (e.g. an open question) must
+    still land with tappable chips — never bare text. The stage-keyed floor fills
+    them in, model-independent, so the discovery card always offers options."""
     _install(
         monkeypatch,
         resp=_gateway_returning(
@@ -161,7 +166,30 @@ async def test_ask_open_question_has_no_choices(monkeypatch: pytest.MonkeyPatch)
     )
     result = await run_discovery([], "идея", asked_count=0)
     assert result.action == ASK
-    assert result.choices == ()
+    assert result.choices  # floor applied — never empty
+    assert "Лендинг" in result.choices  # stage-0 product archetypes
+    assert result.allow_custom is True  # "Другое" keeps free text open
+
+
+async def test_ask_floor_does_not_override_model_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The floor is a backstop only — when the model DID supply choices, those are
+    kept verbatim and the deterministic set never clobbers them."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "ask",
+                    "message": "Нужна тёмная тема?",
+                    "choices": ["Да", "Нет"],
+                }
+            )
+        ),
+    )
+    result = await run_discovery([], "дашборд", asked_count=0)
+    assert result.choices == ("Да", "Нет")  # model choices, not the archetype floor
 
 
 async def test_choices_are_clamped_and_deduped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,6 +233,19 @@ async def test_fallback_question_carries_paired_choices(
     result = await run_discovery([], "идея", asked_count=1)
     assert result.action == ASK
     assert "Премиум" in result.choices
+
+
+async def test_fallback_first_question_carries_archetype_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """V2.1: the very first fallback question (gateway down on the first prompt)
+    must also land with chips — product archetypes — so the discovery card is
+    never bare text even when the gateway is cold."""
+    _install(monkeypatch, exc=RuntimeError("gateway down"))
+    result = await run_discovery([], "идея", asked_count=0)
+    assert result.action == ASK
+    assert result.choices  # never empty on the first turn
+    assert "Интернет-магазин" in result.choices
 
 
 # ─── BUILD path ──────────────────────────────────────────────────────────
