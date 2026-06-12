@@ -279,6 +279,22 @@ def test_api_prompt_routes_to_api_stack() -> None:
     assert _TGBOT_MARKER not in sp
 
 
+def test_entities_public_landing_mandates_real_photos_and_public_access() -> None:
+    """V2.2 niche-3 regression: the nextjs_entities writer used to leave the
+    public landing as gray CSS-gradient placeholders and fetched owner-scoped
+    entities anonymously (→401). The brief must now (a) mandate real
+    ``data-omnia-gen`` photos on the public landing and (b) require
+    ``access:"public"`` for any entity read on the anonymous ``/``."""
+    sp = build_system_prompt("nextjs_entities", image_gen_enabled=True)
+    # (a) public landing is a content site → real generated photos, not placeholders
+    assert "ШОУКЕЙС НА ГЛАВНОЙ" in sp
+    assert "data-omnia-gen" in sp
+    assert "пустых CSS-градиентных плашек" in sp
+    # (b) anon catalog entity must be declared public → no 401 for visitors
+    assert '"access":"public"' in sp
+    assert "анониму 401" in sp
+
+
 def test_backend_templates_skip_visual_blocks() -> None:
     """tgbot/api don't render HTML — visual blocks (layout rigor, design
     kit, visual richness, image generation) MUST NOT appear. They'd waste
