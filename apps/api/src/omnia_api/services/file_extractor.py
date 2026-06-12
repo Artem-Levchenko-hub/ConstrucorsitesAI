@@ -243,6 +243,135 @@ def _fix_missing_lucide_imports(path: str, body: str) -> str:
     return body[: nl + 1] + new_line + "\n" + body[nl + 1 :]
 
 
+# The writer reaches for a `toast` helper and bundles it into ANOTHER module's
+# named import — almost always `@/lib/utils` (`import { formatDate, toast } from
+# "@/lib/utils"`). But the kit's utils module exports no `toast`; toasts come from
+# `sonner` (`import { toast } from "sonner"`, exactly as the kit's own
+# crud-resource/entity-form components do). Turbopack STATICALLY validates named
+# exports and fails the build outright ("Export toast doesn't exist in target
+# module"), so the whole route serves the dev error overlay = a dead section. A
+# brief rule can't dislodge the reflex, so we relocate the misrouted symbol
+# deterministically: drop it from the wrong module's import and (re)add it to its
+# canonical module's import.
+#
+# Only symbols with a KNOWN canonical kit home are relocated (currently `toast`);
+# an unknown invalid name (e.g. a hallucinated `formatPrice` from utils) is left
+# untouched — we never invent a home we can't verify, and dropping it would create
+# an undefined reference (R-10: never worsen). The fix fires only when the symbol is
+# imported from the WRONG module and isn't already imported from the right one.
+_KIT_SYMBOL_CANONICAL_SOURCE: dict[str, str] = {
+    "toast": "sonner",
+}
+_MISROUTE_FIX_SUFFIXES = (".tsx", ".jsx", ".ts")
+# Any `import { a, b as c } from "<module>"` statement (trailing `;` optional).
+# `[^{}]` spans newlines but stops at a nested brace (none in an import list).
+_ANY_NAMED_IMPORT = re.compile(
+    r'import\s+\{(?P<names>[^{}]*)\}\s+from\s+(?P<q>["\'])(?P<module>[^"\']+)(?P=q)\s*;?',
+    re.DOTALL,
+)
+
+
+def _named_import_block(module: str) -> re.Pattern[str]:
+    """Regex matching a named-import block from one specific ``module``."""
+    return re.compile(
+        r"import\s+\{(?P<names>[^{}]*)\}\s+from\s+(?P<q>[\"'])"
+        + re.escape(module)
+        + r"(?P=q)\s*;?",
+        re.DOTALL,
+    )
+
+
+def _iter_specs(names: str) -> list[str]:
+    """Non-empty, stripped specifiers from a named-import brace body."""
+    return [s.strip() for s in names.split(",") if s.strip()]
+
+
+def _imported_name(spec: str) -> str:
+    """The exported name a specifier binds (left of ``as``): ``toast as t`` → ``toast``."""
+    return _AS_SPLIT.split(spec, 1)[0].strip()
+
+
+def _insert_after_last_import(body: str, line: str) -> str:
+    """Insert ``line`` right after the last import statement (or at the top)."""
+    imports = list(_IMPORT_STMT.finditer(body))
+    if not imports:
+        return line + "\n" + body
+    nl = body.find("\n", imports[-1].end())
+    if nl == -1:
+        return body + "\n" + line
+    return body[: nl + 1] + line + "\n" + body[nl + 1 :]
+
+
+def _fix_misrouted_kit_imports(path: str, body: str) -> str:
+    """Relocate a kit symbol imported from the wrong module to its canonical one.
+
+    A symbol with a known canonical home (``toast`` → ``sonner``) imported from a
+    different module fails Turbopack's static export check and kills the route. Such
+    a symbol is dropped from the wrong import and (re)added to its canonical module's
+    import — merged into an existing one, or inserted as a fresh line. No-op unless
+    ``path`` is a generated source file that actually misroutes a known symbol
+    (byte-identical otherwise, R-10 fail-soft); unknown invalid names are untouched."""
+    if not path.endswith(_MISROUTE_FIX_SUFFIXES):
+        return body
+    if not any(sym in body for sym in _KIT_SYMBOL_CANONICAL_SOURCE):
+        return body
+
+    # Symbols already imported from their canonical module — never duplicate those.
+    already: set[str] = set()
+    for m in _ANY_NAMED_IMPORT.finditer(body):
+        for spec in _iter_specs(m.group("names")):
+            name = _imported_name(spec)
+            if _KIT_SYMBOL_CANONICAL_SOURCE.get(name) == m.group("module"):
+                already.add(name)
+
+    relocate: dict[str, list[str]] = {}  # canonical module -> specs to add
+    removed_any = False
+
+    def _strip_wrong(m: re.Match[str]) -> str:
+        nonlocal removed_any
+        module = m.group("module")
+        kept: list[str] = []
+        moved: list[str] = []
+        for spec in _iter_specs(m.group("names")):
+            canonical = _KIT_SYMBOL_CANONICAL_SOURCE.get(_imported_name(spec))
+            if canonical is not None and canonical != module:
+                moved.append(spec)
+            else:
+                kept.append(spec)
+        if not moved:
+            return m.group(0)
+        removed_any = True
+        for spec in moved:
+            name = _imported_name(spec)
+            if name in already:
+                continue  # already imported from canonical → just drop the dup
+            relocate.setdefault(_KIT_SYMBOL_CANONICAL_SOURCE[name], []).append(spec)
+            already.add(name)  # don't relocate the same symbol twice
+        if not kept:
+            return ""  # whole wrong-module import removed
+        return m.group(0).replace(m.group("names"), " " + ", ".join(kept) + " ")
+
+    new_body = _ANY_NAMED_IMPORT.sub(_strip_wrong, body)
+    if not removed_any:
+        return body
+
+    for module, specs in relocate.items():
+        block = _named_import_block(module).search(new_body)
+        if block is not None:
+            existing = _iter_specs(block.group("names"))
+            bound = {_imported_name(s) for s in existing}
+            add = [s for s in specs if _imported_name(s) not in bound]
+            if not add:
+                continue
+            merged = " " + ", ".join(existing + add) + " "
+            new_body = new_body[: block.start("names")] + merged + new_body[block.end("names") :]
+        else:
+            new_body = _insert_after_last_import(
+                new_body, f'import {{ {", ".join(specs)} }} from "{module}";'
+            )
+    return new_body
+
+
 # The writer formats prices/dates with a bare `.toLocaleString()` (no locale arg)
 # on server-rendered landing/page components. The locale then defaults to the
 # RUNTIME's locale, which differs between the SSR pass (the dev container's Node,
@@ -766,6 +895,7 @@ def extract_files(answer: str) -> dict[str, str]:
         body = _fix_invented_palette_vars(raw_path, body)
         body = _fix_invalid_lucide_imports(raw_path, body)
         body = _fix_missing_lucide_imports(raw_path, body)
+        body = _fix_misrouted_kit_imports(raw_path, body)
         body = _fix_bare_locale_string(raw_path, body)
         body = _fix_missing_use_client(raw_path, body)
         body = _fix_dead_auth_links(raw_path, body)

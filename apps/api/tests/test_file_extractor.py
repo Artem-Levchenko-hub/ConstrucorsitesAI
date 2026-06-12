@@ -214,6 +214,102 @@ def test_extract_files_missing_lucide_scoped_to_source_files() -> None:
     assert extract_files(answer)["NOTES.md"] == body
 
 
+# ---------------------------------------------------------------------------
+# extract_files — misrouted kit symbol relocation (`toast` from the wrong module)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_files_relocates_toast_from_utils() -> None:
+    # The exact build-killer: the writer bundles `toast` into the `@/lib/utils`
+    # import, but utils exports no `toast`. Turbopack fails the build ("Export toast
+    # doesn't exist"). The fix drops `toast` from utils (keeping its real exports)
+    # and adds the canonical `import { toast } from "sonner"`.
+    src = (
+        'import { formatDate, toast } from "@/lib/utils";\n'
+        "export const F = () => { toast.success('ok'); return formatDate(0); };"
+    )
+    answer = f'<file path="src/app/(app)/dashboard/classes/page.tsx">{src}</file>'
+    out = extract_files(answer)["src/app/(app)/dashboard/classes/page.tsx"]
+    assert 'import { toast } from "sonner";' in out
+    # utils import survives with its real export, minus the misrouted toast
+    utils_line = next(ln for ln in out.splitlines() if '"@/lib/utils"' in ln)
+    assert "formatDate" in utils_line
+    assert "toast" not in utils_line
+    assert "toast.success('ok')" in out  # usage untouched
+
+
+def test_extract_files_removes_empty_utils_import_when_only_toast() -> None:
+    # `toast` is the ONLY name imported from utils → the whole (now-empty) utils
+    # import is removed, and toast is re-homed to sonner.
+    src = (
+        'import { toast } from "@/lib/utils";\n'
+        "export const F = () => toast('hi');"
+    )
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert 'import { toast } from "sonner";' in out
+    assert '"@/lib/utils"' not in out  # empty wrong-module import dropped
+    assert "toast('hi')" in out
+
+
+def test_extract_files_toast_merges_into_existing_sonner_import() -> None:
+    # A sonner import already exists (for its Toaster). The relocated `toast` merges
+    # into that single line rather than adding a duplicate sonner import.
+    src = (
+        'import { Toaster } from "sonner";\n'
+        'import { toast } from "@/lib/utils";\n'
+        "export const F = () => toast('hi');"
+    )
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert out.count('from "sonner"') == 1  # merged, not duplicated
+    sonner_line = next(ln for ln in out.splitlines() if '"sonner"' in ln)
+    assert "Toaster" in sonner_line and "toast" in sonner_line
+    assert '"@/lib/utils"' not in out
+
+
+def test_extract_files_toast_already_correct_is_byte_identical() -> None:
+    # A correctly-authored file (toast from sonner) passes through unchanged — no
+    # spurious second import, no rewrite.
+    src = (
+        'import { toast } from "sonner";\n'
+        'import { formatDate } from "@/lib/utils";\n'
+        "export const F = () => { toast('hi'); return formatDate(0); };"
+    )
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    assert extract_files(answer)["src/app/page.tsx"] == src
+
+
+def test_extract_files_valid_utils_import_untouched() -> None:
+    # A utils import with only real exports (no misrouted symbol) is byte-identical.
+    src = (
+        'import { formatDate, cn } from "@/lib/utils";\n'
+        "export const F = () => cn(formatDate(0));"
+    )
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    assert extract_files(answer)["src/app/page.tsx"] == src
+
+
+def test_extract_files_misroute_scoped_to_source_files() -> None:
+    # A non-source file mentioning a misrouted import is left byte-identical.
+    body = 'import { toast } from "@/lib/utils";'
+    answer = f'<file path="NOTES.md">{body}</file>'
+    assert extract_files(answer)["NOTES.md"] == body
+
+
+def test_extract_files_relocates_toast_alias_from_utils() -> None:
+    # An aliased misroute (`toast as notify`) keeps the alias when re-homed.
+    src = (
+        'import { toast as notify } from "@/lib/utils";\n'
+        "export const F = () => notify('hi');"
+    )
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert 'import { toast as notify } from "sonner";' in out
+    assert '"@/lib/utils"' not in out
+    assert "notify('hi')" in out
+
+
 def test_extract_files_pins_locale_on_bare_to_locale_string() -> None:
     # A bare `.toLocaleString()` resolves to the runtime locale, which differs
     # between the SSR (container Node) and client (browser) passes -> the price
