@@ -102,6 +102,38 @@ _TAG_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# JSX/TSX expression form — catalog & list images rendered through a .map()
+# carry the prompt as a *braced expression*, not a string literal:
+#   <img data-omnia-gen={`product shot, ${item.img}, luxury furniture`} ... />
+# The literal-only `_TAG_RE` is blind to these, so every card ships an empty
+# ``src`` (the "blank product grid" bug). We match the braced quote/backtick
+# value, strip the ``${…}`` interpolations (unknown at build time) and keep the
+# static descriptors as the prompt. These tags are almost always grouped
+# (data-omnia-gen-group="catalog"), so they collapse to ONE real generation
+# reused across the cards — a real photo, never a blank or gradient slot.
+_TAG_RE_EXPR = re.compile(
+    r"<img\b([^>]*?)\bdata-omnia-gen\s*=\s*\{\s*[`'\"]([^`'\"]+)[`'\"]\s*\}([^>]*?)/?\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# ${...} interpolation inside a JSX template literal — dropped at build time.
+_INTERP_RE = re.compile(r"\$\{[^}]*\}")
+
+
+def _static_prompt_from_expr(raw: str) -> str:
+    """Reduce a JSX template-literal prompt to its static descriptors.
+
+    ``product shot, ${item.img}, luxury furniture`` →
+    ``product shot, luxury furniture``. Drops interpolations and the now-empty
+    comma slots / doubled spaces they leave behind. Returns ``""`` when nothing
+    static remains (caller skips such tags — generating from an empty prompt
+    would only waste a slot)."""
+    s = _INTERP_RE.sub("", raw)
+    s = re.sub(r"\s*,\s*(?=,)", "", s)  # collapse runs of empty comma slots
+    s = re.sub(r"\s{2,}", " ", s)
+    return s.strip().strip(",").strip()
+
+
 # Stock-photo tag — sibling of data-omnia-gen. The "prompt" here is a short
 # keyword phrase ("sushi restaurant interior") searched against Pexels.
 _TAG_RE_PHOTO = re.compile(
@@ -167,6 +199,22 @@ def extract_image_tags(files: dict[str, str]) -> list[ImgTag]:
                     file_path=path,
                     full_match=m.group(0),
                     prompt=m.group(2).strip(),
+                    pre_attrs=m.group(1),
+                    post_attrs=m.group(3),
+                    group=gm.group(1).strip() if gm else None,
+                )
+            )
+        # JSX-expression catalog/list images (data-omnia-gen={`…${x}…`}).
+        for m in _TAG_RE_EXPR.finditer(content):
+            prompt = _static_prompt_from_expr(m.group(2))
+            if not prompt:
+                continue  # nothing static to generate from — leave untouched
+            gm = _GROUP_RE.search(f"{m.group(1)} {m.group(3)}")
+            out.append(
+                ImgTag(
+                    file_path=path,
+                    full_match=m.group(0),
+                    prompt=prompt,
                     pre_attrs=m.group(1),
                     post_attrs=m.group(3),
                     group=gm.group(1).strip() if gm else None,

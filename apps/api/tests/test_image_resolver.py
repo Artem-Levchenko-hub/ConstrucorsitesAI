@@ -91,6 +91,54 @@ def test_openverse_photo_resolved(monkeypatch) -> None:
     assert (resolved, total) == (1, 1)
 
 
+def test_extract_jsx_template_gen_tag() -> None:
+    # Catalog/list images rendered through a .map() carry a JSX *expression*
+    # value: data-omnia-gen={`product shot, ${item.img}, luxury furniture`}.
+    # The build-time resolver must see these too — a string-literal-only regex
+    # leaves every catalog card with an empty src (the "blank product grid"
+    # bug). The interpolation ${...} is dropped (unknown at build time); the
+    # static descriptors become the prompt, group-collapsed to one real image.
+    from omnia_api.services.image_resolver import extract_image_tags
+
+    files = {
+        "src/app/page.tsx": (
+            "{items.map((item) => (\n"
+            '  <img data-omnia-gen-group="catalog" '
+            "data-omnia-gen={`product shot, ${item.img}, luxury furniture, "
+            "soft studio lighting, 85mm`} "
+            'alt={item.name} className="h-full w-full object-cover" />\n'
+            "))}"
+        ),
+    }
+    tags = extract_image_tags(files)
+    assert len(tags) == 1, "JSX-expression data-omnia-gen must be extracted"
+    t = tags[0]
+    assert t.group == "catalog"
+    # Interpolation removed, static descriptors kept, no dangling commas.
+    assert "${" not in t.prompt
+    assert ", ," not in t.prompt
+    assert t.prompt.startswith("product shot")
+    assert "luxury furniture" in t.prompt
+
+
+def test_static_and_jsx_gen_tags_coexist() -> None:
+    # A page mixing a static hero tag and a templated catalog tag must yield
+    # BOTH — the string-literal hero and the JSX-expression catalog card.
+    from omnia_api.services.image_resolver import extract_image_tags
+
+    files = {
+        "page.tsx": (
+            '<img data-omnia-gen="hero interior, premium" alt="hero" />\n'
+            "<img data-omnia-gen={`product shot, ${p.q}, studio`} alt={p.n} />"
+        ),
+    }
+    prompts = sorted(t.prompt for t in extract_image_tags(files))
+    assert len(prompts) == 2
+    assert any(p.startswith("hero interior") for p in prompts)
+    assert any(p.startswith("product shot") for p in prompts)
+    assert all("${" not in p for p in prompts)
+
+
 def test_fetch_stock_photo_off_returns_none(monkeypatch) -> None:
     # The dispatcher is the single seam that knows the provider — "off" yields
     # None so resolve_images strips the tag (no broken <img>).
