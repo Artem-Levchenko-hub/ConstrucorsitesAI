@@ -312,6 +312,88 @@ def _fix_missing_use_client(path: str, body: str) -> str:
     return '"use client";\n\n' + body
 
 
+# The writer wires a public-landing AUTH affordance — "Войти" / "Начать учиться" /
+# a register CTA — to `href="/"` (or "#"), which just reloads the landing: a dead
+# button that breaks the "ноль тупиков / ноль мёртвых кнопок" contract (WOW rubric
+# #8). The kit ALWAYS ships real /signin and /signup routes, and a brief rule
+# already tells the model to use them — yet it recurs across niches (магазин,
+# онлайн-школа) because a positive brief rule can't stop the model defaulting a
+# second auth control to "/". `_fix_dead_internal_links` won't catch it either: "/"
+# resolves to the real landing route, so it isn't a 404. We repair it
+# deterministically: a Link/anchor whose VISIBLE TEXT reads as a login/sign-up
+# affordance AND whose href is the dead self-link ("/", "#", empty) is repointed to
+# /signin (login words) or /signup (register/"start" words). The double guard (auth
+# text AND dead href) leaves every other "/" link — logo, "на главную", #-anchor
+# CTAs (#courses), and variable hrefs (href={link.href}) — byte-identical.
+_AUTH_FIX_SUFFIXES = (".tsx", ".jsx")
+_LOGIN_TEXT = ("войти", "вход", "авторизац", "log in", "login", "sign in", "signin")
+_SIGNUP_TEXT = (
+    "регистрац",
+    "зарегистр",
+    "создать аккаунт",
+    "начать",
+    "начни",
+    "попробовать",
+    "sign up",
+    "signup",
+    "register",
+    "get started",
+)
+_TAG_STRIP = re.compile(r"<[^>]+>")
+_WS = re.compile(r"\s+")
+_AUTH_LINK_EL = re.compile(
+    r"<(?P<tag>Link|a)\b(?P<before>[^>]*?\bhref=)"
+    r"""(?:(?P<q1>["'])(?P<h1>/|#|)(?P=q1)"""
+    r"""|\{\s*(?P<q2>["'])(?P<h2>/|#|)(?P=q2)\s*\})"""
+    r"(?P<after>[^>]*?)>(?P<inner>.*?)</(?P=tag)>",
+    re.DOTALL,
+)
+
+
+def _auth_link_dest(inner_text: str) -> str | None:
+    """`/signin` for a login affordance, `/signup` for a register/start one, else None."""
+    if any(w in inner_text for w in _LOGIN_TEXT):
+        return "/signin"
+    if any(w in inner_text for w in _SIGNUP_TEXT):
+        return "/signup"
+    return None
+
+
+def _fix_dead_auth_links(path: str, body: str) -> str:
+    """Repoint a dead public-landing auth CTA (`href="/"`) to /signin or /signup.
+
+    A ``<Link>``/``<a>`` whose visible text reads as a login or sign-up affordance
+    and whose href is a dead self-link (``/``, ``#``, empty) is a dead button (it
+    just reloads the landing) — it must reach the kit's real /signin or /signup.
+    Every other "/" link (logo, "на главную", populated ``#``-anchors, variable
+    hrefs) fails the text or href guard and is byte-identical. No-op on non-source
+    files (R-10 fail-soft)."""
+    if not path.endswith(_AUTH_FIX_SUFFIXES):
+        return body
+
+    def _rewrite(m: re.Match[str]) -> str:
+        text = _WS.sub(" ", _TAG_STRIP.sub(" ", m.group("inner"))).strip().lower()
+        dest = _auth_link_dest(text)
+        if dest is None:
+            return m.group(0)
+        quote = m.group("q1") or m.group("q2") or '"'
+        return (
+            f"<{m.group('tag')}{m.group('before')}{quote}{dest}{quote}"
+            f"{m.group('after')}>{m.group('inner')}</{m.group('tag')}>"
+        )
+
+    return _AUTH_LINK_EL.sub(_rewrite, body)
+
+
+# Routes the template SHIPS but the model never re-generates in its `<file>`
+# answer: /signin, /signup, /signout. A model-authored link to one of these is
+# CORRECT, but `_collect_routes` only sees generated pages, so without this seed
+# `_fix_dead_internal_links` would treat `href="/signin"` as a dead end and
+# "repair" it to its nearest generated ancestor ("/") — silently turning every
+# correct login link into the very "Войти → /" dead button we're trying to kill.
+_KIT_ROUTES: tuple[tuple[str, ...], ...] = (("signin",), ("signup",), ("signout",))
+
+
 # The writer sometimes wires a CTA to a route it never generates — e.g. a
 # dashboard button `<Link href="/dashboard/appointments/new">` with no
 # `app/(app)/dashboard/appointments/new/page.tsx` in the answer. Clicking it is a
@@ -387,8 +469,11 @@ def _seg_match(target: list[str], pat: list[str]) -> bool:
 
 
 def _collect_routes(files: dict[str, str]) -> list[list[str]]:
-    """Route patterns (segment lists) for every non-empty generated page."""
-    routes: list[list[str]] = []
+    """Route patterns (segment lists) for every non-empty generated page.
+
+    Seeded with the kit-shipped routes (/signin, /signup, /signout) the model
+    links to but never generates, so a correct auth link is never "repaired" away."""
+    routes: list[list[str]] = [list(r) for r in _KIT_ROUTES]
     for key, body in files.items():
         if not body.strip():
             continue  # an emptied page.tsx is a DELETE, not a route
@@ -683,6 +768,7 @@ def extract_files(answer: str) -> dict[str, str]:
         body = _fix_missing_lucide_imports(raw_path, body)
         body = _fix_bare_locale_string(raw_path, body)
         body = _fix_missing_use_client(raw_path, body)
+        body = _fix_dead_auth_links(raw_path, body)
         body = _fix_app_layout_theme(raw_path, body)
         files[raw_path] = body
         if len(files) > MAX_FILES:

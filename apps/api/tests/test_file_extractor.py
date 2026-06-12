@@ -789,3 +789,81 @@ def test_app_theme_guard_scoped_to_app_layout() -> None:
     )
     out = extract_files(answer)["src/app/(app)/page.tsx"]
     assert "<style>" in out
+
+
+# ---------------------------------------------------------------------------
+# _fix_dead_auth_links — landing auth CTA `href="/"` → /signin or /signup
+# ---------------------------------------------------------------------------
+
+
+def test_dead_login_link_rewritten_to_signin() -> None:
+    # The recurring dead button: a "Войти" header link pointed at "/" just reloads
+    # the landing. The kit ships a real /signin route, so it must go there.
+    answer = (
+        '<file path="src/app/page.tsx">'
+        '<Link href="/" className="px-4 py-2">Войти</Link></file>'
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert '<Link href="/signin" className="px-4 py-2">Войти</Link>' in out
+
+
+def test_dead_signup_link_rewritten_to_signup() -> None:
+    # A primary "Начать учиться" CTA at "/" reads as a register/start affordance →
+    # repointed to the kit's /signup.
+    answer = (
+        '<file path="src/app/page.tsx">'
+        '<Link href="/" className="rounded-lg">Начать учиться</Link></file>'
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert '<Link href="/signup" className="rounded-lg">Начать учиться</Link>' in out
+
+
+def test_dead_auth_link_rewritten_when_text_spans_lines() -> None:
+    # Desktop header authors the text on its own line inside the element — the
+    # whitespace-wrapped inner must still be recognised and the href rewritten.
+    answer = (
+        '<file path="src/app/page.tsx">'
+        '<Link href="/" className="text-sm">\n  Войти\n</Link></file>'
+    )
+    out = extract_files(answer)["src/app/page.tsx"]
+    assert 'href="/signin"' in out
+    assert "Войти" in out  # inner content preserved verbatim
+
+
+def test_auth_link_with_real_href_untouched() -> None:
+    # A "Войти" that already points to /signin is correct — never double-rewrite,
+    # and the kit-route seed keeps `_fix_dead_internal_links` from "repairing" it.
+    src = 'import Link from "next/link";\n<Link href="/signin">Войти</Link>'
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    assert extract_files(answer)["src/app/page.tsx"] == src
+
+
+def test_non_auth_root_link_untouched() -> None:
+    # A logo / "на главную" link to "/" is a CORRECT self-link — the auth-text guard
+    # leaves it byte-identical (no register/login word in the visible text).
+    src = '<a href="/" className="brand">CodeCraft</a>\n<a href="/">На главную</a>'
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    assert extract_files(answer)["src/app/page.tsx"] == src
+
+
+def test_hash_anchor_cta_untouched() -> None:
+    # A populated #-anchor ("#courses") is a working in-page jump, not a dead "/" —
+    # left untouched even though the text ("Начать") is a start word.
+    src = '<a href="#courses" className="cta">Начать</a>'
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    assert extract_files(answer)["src/app/page.tsx"] == src
+
+
+def test_variable_href_auth_link_untouched() -> None:
+    # `href={link.href}` is not a dead literal — interpolated hrefs are never
+    # touched (mirrors the dead-internal-links safety contract).
+    src = "<a href={link.href}>Войти</a>"
+    answer = f'<file path="src/app/page.tsx">{src}</file>'
+    assert extract_files(answer)["src/app/page.tsx"] == src
+
+
+def test_dead_auth_link_scoped_to_source_files() -> None:
+    # A markdown file mentioning a dead "Войти" link is left byte-identical.
+    body = 'doc: <a href="/">Войти</a>'
+    answer = f'<file path="README.md">{body}</file>'
+    assert extract_files(answer)["README.md"] == body
