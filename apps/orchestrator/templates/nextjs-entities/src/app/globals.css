@@ -175,6 +175,17 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
+  /* Long Russian compound words («Профессиональный», «Автомобилей») are often
+   * wider than a constrained hero/section column. Without this they overflow
+   * their box and get clipped under the adjacent grid column. Break (and, where
+   * the word has valid points, hyphenate — <html lang="ru"> drives the
+   * dictionary) as a last resort so big headings never clip. Words that already
+   * fit are untouched; only the overflowing word breaks. */
+  h1,
+  h2 {
+    overflow-wrap: break-word;
+    hyphens: auto;
+  }
 }
 
 /* ── Omnia animation utilities (CSS-only, reduced-motion safe) ────────────────
