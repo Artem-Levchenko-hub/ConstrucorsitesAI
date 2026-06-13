@@ -7,6 +7,7 @@ from fastapi import APIRouter, Response, status
 from slugify import slugify
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.deps import (
     CurrentUserDep,
@@ -197,7 +198,26 @@ async def fork_project(
     source = await session.get(Project, project_id)
     if source is None:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    return await perform_fork(session, response, source, current_user)
 
+
+async def perform_fork(
+    session: AsyncSession,
+    response: Response,
+    source: Project,
+    current_user: User | None,
+) -> Project:
+    """Core of the zero-signup fork — shared by the POST ``/fork`` endpoint and
+    the same-origin ``GET /p/<slug>/remix`` link (public.py).
+
+    The cross-origin ``fetch`` the in-page CTA uses is blocked from a deployed
+    container (different origin + ``SameSite=lax`` cookie), so the container
+    viral path needs a top-level-navigation entry that lands on this same logic.
+    Resolving the source is the caller's job (by id vs by slug); everything that
+    mutates state — minting the anon owner, deep-copying the repo, carrying the
+    HEAD snapshot, committing — lives here so the two entrypoints can never
+    drift in isolation behaviour.
+    """
     owner = current_user if current_user is not None else await _ensure_anon_user(
         session, response
     )

@@ -10,10 +10,11 @@ from fastapi import APIRouter, Query, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
-from omnia_api.core.deps import SessionDep
+from omnia_api.core.deps import OptionalUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.routers.projects import perform_fork
 from omnia_api.schemas.project import is_fullstack
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
@@ -440,6 +441,45 @@ async def get_index(
     # Fall through: pre-deploy fullstack OR a static project with no committed
     # index.html yet → branded shell instead of a raw 404 / blank iframe.
     return _preview_shell(project)
+
+
+@router.get("/{slug}/remix", response_class=Response)
+async def remix_project(
+    slug: str,
+    session: SessionDep,
+    response: Response,
+    current_user: OptionalUserDep,
+) -> Response:
+    """Same-origin, no-JS viral "Remix this" entry — top-level navigation forks
+    the shared app and drops the visitor into their own editable workspace.
+
+    The in-page CTA on a *static* /p/<slug> can fork with a same-origin
+    ``fetch`` (apps/api owns that origin). A *deployed container* (fullstack /
+    nextjs_entities) lives on a different origin, and the ``SameSite=lax``
+    session cookie is NOT sent on a cross-origin ``fetch`` — so its CTA links
+    here instead. A top-level GET navigation DOES carry the lax cookie (or none
+    → an anon owner is minted), so the fork lands on the right principal with no
+    CORS and no credentials dance. Reuses ``perform_fork`` (R-04) so isolation
+    behaviour is identical to POST ``/fork``.
+
+    GET is deliberate: a plain ``<a href>`` keeps the loop zero-friction (no JS,
+    works from email/Slack). A link-prefetcher could create a stray anon fork,
+    but anon forks are owner-scoped, zero-balance, and disposable — they never
+    touch the source — so the friction-free win outweighs it.
+    """
+    project, _ = await _resolve_snapshot(session, slug, None)
+    fork = await perform_fork(session, response, project, current_user)
+    redirect = RedirectResponse(
+        url=f"/projects/{fork.id}",
+        status_code=status.HTTP_302_FOUND,
+        headers={"Cache-Control": "no-cache"},
+    )
+    # perform_fork set the anon session cookie on the injected `response`; carry
+    # it onto the redirect we actually return so the remixer stays signed in to
+    # their new ephemeral principal across the navigation.
+    for cookie in response.headers.getlist("set-cookie"):
+        redirect.raw_headers.append((b"set-cookie", cookie.encode("latin-1")))
+    return redirect
 
 
 @router.get("/{slug}/{file_path:path}", response_class=Response)
