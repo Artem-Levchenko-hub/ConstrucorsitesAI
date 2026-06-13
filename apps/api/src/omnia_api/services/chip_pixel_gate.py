@@ -52,11 +52,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .render_settle import goto_and_settle
 from .wow_dom_gate import (
     GATE_HEIGHT,
     GATE_WIDTH,
     Rgb,
-    _settle,
     relative_luminance,
     rgb_to_hsl,
 )
@@ -628,8 +628,7 @@ async def audit_url(
                     reduced_motion="reduce",
                 )
                 try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                    await _settle(page)
+                    await goto_and_settle(page, url, timeout_ms=timeout_ms)
                     return await _audit_page(page, spec)
                 finally:
                     await page.close()
@@ -669,10 +668,7 @@ async def audit_files(
                         reduced_motion="reduce",
                     )
                     try:
-                        await page.goto(
-                            index_uri, wait_until="domcontentloaded", timeout=timeout_ms
-                        )
-                        await _settle(page)
+                        await goto_and_settle(page, index_uri, timeout_ms=timeout_ms)
                         return await _audit_page(page, spec)
                     finally:
                         await page.close()

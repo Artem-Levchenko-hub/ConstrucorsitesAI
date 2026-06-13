@@ -445,18 +445,20 @@ def test_client_rendered_fixture_is_read_after_hydration():
     )
 
 
-def test_audit_harness_waits_for_networkidle_not_domcontentloaded():
-    """Structural ratchet: the render harness must never read at
+def test_audit_harness_routes_through_shared_settle_helper():
+    """Structural ratchet (V1.6 13/5): the render harness must never read at
     ``domcontentloaded`` again — the recurring class that false-failed every live
-    niche. Both ``audit_url`` and ``audit_files`` must settle on network quiescence.
-    Pure source assertion (no browser), so it has teeth even where chromium can't run."""
+    niche. Navigation + settle now live in the single ``render_settle`` helper
+    (``test_render_settle`` enforces the no-direct-``goto`` rule across all legs);
+    here we assert taste routes both audit paths through it. Pure source assertion
+    (no browser), so it has teeth even where chromium can't run."""
     src = Path(g.__file__).read_text(encoding="utf-8")
+    assert "from .render_settle import goto_and_settle" in src, (
+        "taste_gate must import the shared goto_and_settle helper"
+    )
+    assert src.count("goto_and_settle(page,") >= 2, (
+        "both audit_url and audit_files must navigate via goto_and_settle"
+    )
     assert 'wait_until="domcontentloaded"' not in src, (
-        "taste_gate must goto with wait_until='load', not 'domcontentloaded'"
-    )
-    assert src.count('wait_until="load"') >= 2, (
-        "both audit_url and audit_files must goto wait_until='load'"
-    )
-    assert 'wait_for_load_state("networkidle"' in src, (
-        "the settle helper must wait for networkidle so client renders paint first"
+        "taste_gate must never reference domcontentloaded directly"
     )

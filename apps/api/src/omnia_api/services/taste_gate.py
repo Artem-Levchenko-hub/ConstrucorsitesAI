@@ -50,6 +50,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .render_settle import goto_and_settle
+
 if TYPE_CHECKING:
     from playwright.async_api import Page
 
@@ -428,29 +430,6 @@ async def _audit_page(page: Page) -> TasteReport:
     return evaluate_observation(obs)
 
 
-async def _settle(page: Page) -> None:
-    """Best-effort: let a client-rendered app actually paint before we read it.
-
-    The generated apps' public ``/p/<slug>`` page is a Next.js client render — its
-    content (hero, type, imagery) lands *after* ``load``, so reading at
-    ``domcontentloaded`` sees an empty shell and false-fails / false-abstains every
-    live niche (the recurring ``domcontentloaded`` class — V1.6 12/5). Wait for the
-    network to quiesce, fonts to load, then a paint beat. Mirrors ``hierarchy_gate``
-    exactly. Every step is best-effort and never blocks the read (R-10)."""
-    try:
-        await page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
-    try:
-        await page.evaluate("() => document.fonts.ready")
-    except Exception:
-        pass
-    try:
-        await page.wait_for_timeout(900)
-    except Exception:
-        pass
-
-
 async def audit_url(url: str, *, width: int = GATE_WIDTH, timeout_ms: int = 15_000) -> TasteReport:
     """Audit a LIVE url (a running container app / prod ``/p/<slug>``) at ``width``.
 
@@ -468,8 +447,7 @@ async def audit_url(url: str, *, width: int = GATE_WIDTH, timeout_ms: int = 15_0
                     reduced_motion="reduce",
                 )
                 try:
-                    await page.goto(url, wait_until="load", timeout=timeout_ms)
-                    await _settle(page)
+                    await goto_and_settle(page, url, timeout_ms=timeout_ms)
                     return await _audit_page(page)
                 finally:
                     await page.close()
@@ -505,10 +483,7 @@ async def audit_files(
                         reduced_motion="reduce",
                     )
                     try:
-                        await page.goto(
-                            index_uri, wait_until="load", timeout=timeout_ms
-                        )
-                        await _settle(page)
+                        await goto_and_settle(page, index_uri, timeout_ms=timeout_ms)
                         return await _audit_page(page)
                     finally:
                         await page.close()

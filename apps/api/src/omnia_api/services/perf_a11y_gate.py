@@ -52,6 +52,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .render_settle import goto_and_settle
+
 if TYPE_CHECKING:
     from playwright.async_api import Page
 
@@ -425,19 +427,6 @@ async def _audit_page(page: Page) -> PerfA11yReport:
     return evaluate_observation({"metrics": metrics, "axe": axe})
 
 
-async def _settle(page: Page) -> None:
-    """Fonts ready + a paint beat so LCP/CLS observers have settled before we read
-    them. Never blocks the read (R-10)."""
-    try:
-        await page.evaluate("() => document.fonts.ready")
-    except Exception:
-        pass
-    try:
-        await page.wait_for_timeout(900)
-    except Exception:
-        pass
-
-
 async def audit_url(
     url: str, *, width: int = GATE_WIDTH, timeout_ms: int = 20_000
 ) -> PerfA11yReport:
@@ -458,8 +447,7 @@ async def audit_url(
                 )
                 await page.add_init_script(_PERF_INIT_JS)
                 try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                    await _settle(page)
+                    await goto_and_settle(page, url, timeout_ms=timeout_ms)
                     return await _audit_page(page)
                 finally:
                     await page.close()
@@ -496,10 +484,7 @@ async def audit_files(
                     )
                     await page.add_init_script(_PERF_INIT_JS)
                     try:
-                        await page.goto(
-                            index_uri, wait_until="domcontentloaded", timeout=timeout_ms
-                        )
-                        await _settle(page)
+                        await goto_and_settle(page, index_uri, timeout_ms=timeout_ms)
                         return await _audit_page(page)
                     finally:
                         await page.close()
