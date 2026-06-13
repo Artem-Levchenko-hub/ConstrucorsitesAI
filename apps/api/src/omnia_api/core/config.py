@@ -330,14 +330,21 @@ class Settings(BaseSettings):
     # pillar-1 awwwards promise was asserted on ZERO shipping requests. Default ON.
     acceptance_gauntlet_composition_gates: bool = Field(default=True)
     # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
-    # (container-backed), so the composition floor above never touched the
-    # dominant pillar-1 class. After a clean hot-reload + compile-settle, fan the
-    # COMPOSITION_LEGS over the LIVE container URL (omnia-dev-<slug>:3000,
-    # container-to-container, no public egress) and surface a hard_failed as a
-    # quality card. Default ON — taste/hierarchy at desktop width have no 44px
-    # false-positive (proven PASS on real entity apps, 7/5+9/5+14/5). Flip OFF if
-    # the live-render leg ever destabilises the entity build.
-    acceptance_entity_composition_gate: bool = Field(default=True)
+    # (container-backed), so the composition floor never touched the dominant
+    # pillar-1 class. This wires the live-URL path: after a clean hot-reload +
+    # compile-settle, a worker job fans the COMPOSITION_LEGS over the LIVE
+    # container (omnia-dev-<slug>:3000, container-to-container, no public egress)
+    # and surfaces a hard_failed as a quality card.
+    #
+    # Default OFF (calibration-gated, same discipline as render-gates 14/5/0/5):
+    # the FIRST live run against the canonical good entity app (sushi) hard-failed
+    # taste — `font-pairing≥2` rejects single-family designs and the Next DEV
+    # overlay (`__nextjs-Geist`) pollutes the DOM. A hot-path hard-gate would flood
+    # false-positive cards on good apps. The mechanism is proven (renders, scores,
+    # discriminates with precise classes); flip ON once the legs are calibrated for
+    # real entity apps (strip dev-overlay nodes + taste single-family tolerance) —
+    # carried as 16/5b. CLI / niche-E2E always run the legs regardless.
+    acceptance_entity_composition_gate: bool = Field(default=False)
 
     # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
     # Originality: fingerprint each accepted freeform page and penalise the
