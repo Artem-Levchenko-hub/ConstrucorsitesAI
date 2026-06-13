@@ -311,6 +311,16 @@ class Settings(BaseSettings):
     # sharper brief, not a reflexive re-roll. Set = acceptance_min_score (7) to
     # restore the old always-repair-on-borderline behaviour.
     acceptance_repair_floor: int = Field(default=5)
+    # V1.6 keystone — the acceptance gauntlet (`accept_gauntlet.run`) is the ship
+    # decision: `evaluate()` blocks on its findings and the vision verdict is
+    # demoted to advisory. The DETERMINISTIC defect-registry leg always blocks
+    # (cheap, pure, the known-defect ratchet — dead-auth-link, dark-theme-loss,
+    # bad lucide imports, …). The RENDERED legs (wow-dom / perf-a11y / chip-pixel)
+    # each spin up a headless browser, so on the product-default freeform path
+    # they are OFF by default — flip ACCEPTANCE_GAUNTLET_RENDER_GATES=true to add
+    # their teeth to the hot path. The standalone CLI / niche-E2E always runs the
+    # full fan-out (it audits a live container URL, no per-attempt cost).
+    acceptance_gauntlet_render_gates: bool = Field(default=False)
 
     # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
     # Originality: fingerprint each accepted freeform page and penalise the

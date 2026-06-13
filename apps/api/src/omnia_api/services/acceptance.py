@@ -9,12 +9,17 @@ on. Three layers, cheapest first:
                   not blockers: freeform deliberately bends discipline rules,
                   so only true brokenness blocks here.
   2. responsive — render at 375 / 768 / 1440 and reject horizontal overflow.
-  3. vision     — (optional) screenshot → vision model "broken/generic/beautiful".
+  3. gauntlet   — `accept_gauntlet.run` fans every landed quality gate (the
+                  deterministic defect-registry ratchet always; the rendered
+                  wow-dom / perf-a11y / chip-pixel legs when dialed on). This is
+                  the SHIP DECISION since V1.6: a real gauntlet finding blocks.
+  4. vision     — (optional, ADVISORY since V1.6) screenshot → vision model
+                  "broken/generic/beautiful". Feeds feedback; no longer blocks.
 
 This is "rigidity in acceptance, freedom in composition": we don't constrain
 *how* the page is built, we verify the result and feed back what to fix. All
-layers fail SOFT — a render or vision error never hard-fails generation, it
-just drops that layer's signal (R-10).
+layers fail SOFT — a render, vision, or gauntlet error never hard-fails
+generation, it just drops that layer's signal (R-10).
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ import re
 from dataclasses import dataclass
 
 from omnia_api.core.config import get_settings
-from omnia_api.services import originality, vision_audit
+from omnia_api.services import accept_gauntlet, originality, vision_audit
 from omnia_api.services.link_validator import find_dead_links
 from omnia_api.services.ui_audit import audit as ui_audit
 
@@ -96,9 +101,12 @@ def _build_feedback(
     advisory: list[str],
     vision: vision_audit.VisionVerdict,
     originality: list[str] | None = None,
+    gauntlet: list[str] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.extend(structural)
+    if gauntlet:
+        lines.extend(gauntlet)
     if originality:
         lines.extend(originality)
     for w in overflow_widths:
@@ -204,10 +212,10 @@ async def evaluate(
             project_id=project_id,
         )
         vision_ran = not verdict.skipped
-
-    vision_ok = (not vision_ran) or (
-        verdict.verdict != "broken" and verdict.score >= min_score
-    )
+    # Vision is ADVISORY since V1.6 (the gauntlet is the ship decision): its
+    # verdict no longer gates `passed`, it only feeds feedback. `min_score` is
+    # kept on the signature for callers/back-compat.
+    _ = min_score
 
     # ── 5. originality (optional, fail-soft) — Sprint 4 anti-generic ──────
     orig_fp: int | None = None
@@ -221,7 +229,31 @@ async def evaluate(
         )
     originality_ok = orig_issue is None
 
-    passed = structural_ok and responsive_ok and vision_ok and originality_ok
+    # ── 6. acceptance gauntlet — the SHIP DECISION (V1.6 keystone) ────────
+    # The deterministic defect-registry leg always runs (cheap, pure); the
+    # rendered legs are dialed by `acceptance_gauntlet_render_gates` (off by
+    # default on this product-default hot path, see config). We block ship on a
+    # REAL finding (`hard_failed`) — a render flake that merely abstains never
+    # sinks an otherwise-good page (R-10). The vision verdict, formerly a ship
+    # blocker, is now ADVISORY: it only feeds feedback below.
+    gauntlet_lines: list[str] = []
+    gauntlet_classes: list[str] = []
+    gauntlet_ok = True
+    try:
+        gauntlet = await accept_gauntlet.run(
+            files=files,
+            include_rendered=settings.acceptance_gauntlet_render_gates,
+        )
+        if gauntlet.hard_failed:
+            gauntlet_ok = False
+            gauntlet_classes = list(gauntlet.failed_classes)
+            gauntlet_lines = [
+                f"[гейт:{g.gate}] {g.summary}" for g in gauntlet.hard_failed
+            ]
+    except Exception as exc:  # defensive — gauntlet must never hard-fail the gate
+        log.warning("acceptance: gauntlet failed (ignored): %r", exc)
+
+    passed = structural_ok and responsive_ok and originality_ok and gauntlet_ok
 
     feedback = "" if passed else _build_feedback(
         structural,
@@ -229,9 +261,11 @@ async def evaluate(
         advisory,
         verdict,
         originality=[orig_issue] if orig_issue else [],
+        gauntlet=gauntlet_lines,
     )
     issues = tuple(
         structural
+        + gauntlet_classes
         + [f"overflow@{w}px" for w in overflow_widths]
         + ([orig_issue] if orig_issue else [])
         + list(verdict.issues)
@@ -240,9 +274,13 @@ async def evaluate(
         "ok"
         if passed
         else (
-            verdict.verdict
-            if vision_ran
-            else ("generic" if orig_issue else "structural")
+            "broken"
+            if not gauntlet_ok
+            else (
+                verdict.verdict
+                if vision_ran
+                else ("generic" if orig_issue else "structural")
+            )
         )
     )
     return AcceptanceResult(

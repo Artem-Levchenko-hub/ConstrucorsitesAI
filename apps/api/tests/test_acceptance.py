@@ -107,3 +107,37 @@ async def test_evaluate_no_index_html():
     )
     assert not res.passed
     assert res.verdict == "broken"
+
+
+async def test_evaluate_rejects_planted_gauntlet_defect(monkeypatch):
+    """V1.6 keystone: a known defect class (dead-auth-link) is caught by the
+    gauntlet's deterministic leg and BLOCKS ship — proving the gauntlet is wired
+    into the acceptance ship decision, not orphaned. The page is otherwise
+    structurally clean (real <a> href, exactly one <h1>)."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    # Auth CTA pointing at a dead self-link — structurally a live `/`, so the
+    # structural dead-link check passes; only the gauntlet registry catches it.
+    planted = (
+        "<!doctype html><html lang='ru'><head><title>T</title></head><body>"
+        "<h1>Заголовок</h1><a href='/'>Войти</a></body></html>"
+    )
+    res = await acceptance.evaluate(
+        {"index.html": planted}, project_id="p", run_vision=False
+    )
+    assert not res.passed
+    assert any("dead-auth-link" in i for i in res.issues)
+    assert "гейт" in res.feedback.lower()
+
+
+async def test_evaluate_gauntlet_clean_does_not_block(monkeypatch):
+    """A page with no known defect class is not blocked by the gauntlet leg."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    res = await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=False
+    )
+    assert res.passed
+    assert not any("dead-auth-link" in i for i in res.issues)
