@@ -33,24 +33,30 @@ from omnia_api.services import (
     chip_pixel_gate,
     defect_registry,
     perf_a11y_gate,
+    taste_gate,
     wow_dom_gate,
 )
 from omnia_api.services.chip_pixel_gate import FidelitySpec
 
 log = logging.getLogger(__name__)
 
-#: Default audit width — the mobile viewport the rendered gates score at.
+#: Default audit width — the mobile viewport the correctness gates score at.
 GATE_WIDTH = wow_dom_gate.GATE_WIDTH
+#: Desktop width for the taste gate — richness (type scale, multi-width rhythm,
+#: hero imagery) reads where the layout breathes, not collapsed to one column.
+TASTE_WIDTH = taste_gate.GATE_WIDTH
 
 # Gate identifiers, in the order they appear in the verdict table.
 DEFECT_REGISTRY = "defect-registry"
 WOW_DOM = "wow-dom"
 PERF_A11Y = "perf-a11y"
 CHIP_PIXEL = "chip-pixel"
+TASTE = "taste"
 
 #: The rendered gates, in run order. ``defect-registry`` is pure source-scan and
-#: runs first/always; these three need a live DOM (a static file set or a URL).
-RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL)
+#: runs first/always; these need a live DOM (a static file set or a URL). The
+#: correctness three run at the mobile floor; ``taste`` runs at desktop width.
+RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE)
 
 
 @dataclass(frozen=True)
@@ -208,14 +214,17 @@ async def run(
             wow = await wow_dom_gate.audit_url(url, width=width)
             perf = await perf_a11y_gate.audit_url(url, width=width)
             chip = await chip_pixel_gate.audit_url(url, spec, width=width)
+            taste = await taste_gate.audit_url(url, width=TASTE_WIDTH)
         else:
             assert files is not None  # render_expected guarantees index.html
             wow = await wow_dom_gate.audit_files(files, width=width)
             perf = await perf_a11y_gate.audit_files(files, width=width)
             chip = await chip_pixel_gate.audit_files(files, spec, width=width)
+            taste = await taste_gate.audit_files(files, width=TASTE_WIDTH)
         gates.append(_from_rendered(WOW_DOM, wow))
         gates.append(_from_rendered(PERF_A11Y, perf))
         gates.append(_from_rendered(CHIP_PIXEL, chip))
+        gates.append(_from_rendered(TASTE, taste))
 
     return GauntletVerdict(tuple(gates), render_expected=render_expected)
 

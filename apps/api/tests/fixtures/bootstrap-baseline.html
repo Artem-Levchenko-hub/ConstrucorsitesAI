@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Acme Co — Business Solutions</title>
+  <!--
+    Adversarial negative fixture for taste_gate (V1.6 7/5).
+
+    A competent but GENERIC Bootstrap-grade landing page: one system font stack
+    everywhere, a solid-colour "jumbotron" hero with no imagery, a monotone row
+    of identical feature cards. It is fully valid, contrast-clean and responsive
+    — it passes every correctness/safety floor (defect-registry, wow-dom, perf,
+    a11y, chip-pixel). The taste gate MUST still fail it: that is the whole point
+    of pillar 1 — "awwwards from the first generation", not merely "not broken".
+
+    If a future change lets this page PASS taste, the gate has started
+    certifying mediocrity. Keep it red.
+  -->
+  <style>
+    * { box-sizing: border-box; }
+    :root { --bs-primary: #0d6efd; --bs-body: #212529; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--bs-body);
+      line-height: 1.5;
+    }
+    .navbar {
+      display: flex; align-items: center; gap: 1.5rem;
+      padding: 1rem 2rem; background: #f8f9fa; border-bottom: 1px solid #dee2e6;
+    }
+    .navbar .brand { font-size: 1.25rem; font-weight: 700; }
+    .navbar a { color: #212529; text-decoration: none; font-size: 1rem; padding: .5rem; }
+    .container { max-width: 1140px; margin: 0 auto; padding: 0 1.5rem; }
+    /* solid-colour jumbotron hero — NO image / illustration / video */
+    .hero {
+      background: linear-gradient(180deg, #e9ecef 0%, #dee2e6 100%);
+      padding: 5rem 0; text-align: center;
+    }
+    .hero h1 { font-size: 2.5rem; font-weight: 700; margin: 0 0 1rem; }
+    .hero p { font-size: 1.125rem; margin: 0 auto 1.5rem; max-width: 640px; }
+    .btn {
+      display: inline-block; padding: .625rem 1.25rem; border-radius: .375rem;
+      background: var(--bs-primary); color: #fff; text-decoration: none;
+      font-size: 1rem; font-weight: 500; border: none;
+    }
+    section { padding: 4rem 0; }
+    section h2 { font-size: 2rem; font-weight: 700; text-align: center; margin: 0 0 2.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+    .card {
+      border: 1px solid #dee2e6; border-radius: .5rem; padding: 1.5rem; background: #fff;
+    }
+    .card h3 { font-size: 1.25rem; font-weight: 600; margin: 0 0 .75rem; }
+    .card p { font-size: 1rem; color: #495057; margin: 0; }
+    footer { background: #212529; color: #adb5bd; padding: 2rem 0; font-size: .875rem; }
+    footer a { color: #adb5bd; }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <span class="brand">Acme Co</span>
+    <a href="#features">Features</a>
+    <a href="#pricing">Pricing</a>
+    <a href="#about">About</a>
+    <a class="btn" href="/signup" style="margin-left:auto;">Get started</a>
+  </nav>
+
+  <header class="hero">
+    <div class="container">
+      <h1>Business solutions for modern teams</h1>
+      <p>Everything you need to manage your workflow in one simple platform. Reliable, fast and easy to use.</p>
+      <a class="btn" href="/signup">Get started free</a>
+    </div>
+  </header>
+
+  <section id="features">
+    <div class="container">
+      <h2>Why choose us</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Fast setup</h3>
+          <p>Get up and running in minutes with our guided onboarding flow.</p>
+        </article>
+        <article class="card">
+          <h3>Secure by default</h3>
+          <p>Your data is encrypted at rest and in transit, always.</p>
+        </article>
+        <article class="card">
+          <h3>Always available</h3>
+          <p>99.9% uptime backed by a global infrastructure you can rely on.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="pricing">
+    <div class="container">
+      <h2>Simple pricing</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Starter</h3>
+          <p>For individuals getting started. Free forever.</p>
+        </article>
+        <article class="card">
+          <h3>Team</h3>
+          <p>For growing teams that need more power and seats.</p>
+        </article>
+        <article class="card">
+          <h3>Enterprise</h3>
+          <p>For organizations with advanced security needs.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p>&copy; 2026 Acme Co. <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>
+    </div>
+  </footer>
+</body>
+</html>
