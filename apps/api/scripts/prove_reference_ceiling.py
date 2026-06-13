@@ -113,6 +113,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     path = Path(args.adversary)
     if not path.is_file():
+        if args.adversary == str(_DEFAULT_ADVERSARY):
+            # The default adversary is a tests/ fixture, which the prod image
+            # .dockerignores (only the corpus ships under src/). So the baseline
+            # proof's real home is any host with BOTH Chromium and tests/ present
+            # (local dev / CI) — not the stripped container. Abstain cleanly there.
+            print(
+                f"ABSTAIN: default adversary not shipped here ({path} — tests/ is "
+                "dockerignored in the prod image). Run on a host with Chromium + "
+                "tests/ present, or pass --adversary <path in this environment>.",
+                file=sys.stderr,
+            )
+            return 2
         parser.error(f"adversary not found: {path}")
     return asyncio.run(_run(path.read_text(encoding="utf-8")))
 
