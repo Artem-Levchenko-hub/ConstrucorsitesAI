@@ -37,6 +37,10 @@ export default function RootLayout({
             (a drift test keeps them identical). Dormant until the workspace enables it
             over postMessage, so it costs nothing in normal preview/prod use. */}
         <Script src="/omnia-inspector.js" strategy="afterInteractive" />
+        {/* Omnia viral "Remix this" CTA — shown only to a top-level public
+            viewer (hidden inside the owner-workspace iframe); forks the app into
+            a stranger's own editable copy with zero signup. Drift-synced. */}
+        <Script src="/omnia-remix-cta.js" strategy="afterInteractive" />
       </body>
     </html>
   );
