@@ -44,6 +44,11 @@ export type Project = {
   /** Thumbnail of the current snapshot (rendered preview PNG), or null until the
    *  first preview render lands. Shown as the project card's mini preview. */
   preview_url?: string | null;
+  /** V4.1b/V4.2b — the project this one was forked ("Remix this") from, or
+   *  null/absent for organically created projects. Drives the workspace remix
+   *  lineage badge and the viral return-edge attribution. Mirrors
+   *  ProjectPublic.forked_from (apps/api schemas/project.py). */
+  forked_from?: Uuid | null;
 };
 
 export type Snapshot = {

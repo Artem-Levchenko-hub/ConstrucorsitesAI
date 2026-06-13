@@ -155,6 +155,62 @@ async def test_fork_edit_leaves_source_byte_identical(
     assert await db_session.get(Project, source_id) is not None
 
 
+async def test_fork_inherits_design_preset_and_discovery_spec(
+    client: httpx.AsyncClient, db_session
+) -> None:
+    """V4.2b-finish leg (B) — the remix carries the source's design identity.
+
+    The viral return-edge promise is "remix → refined niche, not a blank
+    onboarding": a forked project must land in the composer already steered by
+    the source's onboarding answers, so the first prompt re-generates from a
+    real brief (``discovery_spec``) under the same preset instead of re-asking.
+
+    Inheritance is performed once, at fork time (``perform_fork`` copies both
+    fields onto the fork row), and the generation worker reads the fork's own
+    copied ``design_preset_id`` / ``discovery_spec`` — there is deliberately no
+    second ``forked_from`` lookup in the worker (that would be a divergent
+    source of truth). This test pins that single copy so it can never silently
+    regress to an empty onboarding for the remixer.
+    """
+    await _register(client, "preset-owner@example.com")
+    source_id = await _create_source(client, "Sushi bar landing")
+
+    # Reify the source's onboarding identity (what a real first-build interview
+    # would have persisted) so we can prove the fork inherits it.
+    source_spec = {
+        "tone": "playful",
+        "primary_family": "sans",
+        "dark_mode": True,
+        "sections": ["hero", "menu", "contact"],
+    }
+    source = await db_session.get(Project, source_id)
+    source.design_preset_id = "aurora"
+    source.discovery_spec = source_spec
+    await db_session.commit()
+
+    # A stranger remixes it.
+    client.cookies.clear()
+    r = await client.post(f"/api/projects/{source_id}/fork")
+    assert r.status_code == 201, r.text
+    fork = r.json()
+
+    # Response surfaces the inherited preset + the lineage edge.
+    assert fork["design_preset_id"] == "aurora"
+    assert fork["forked_from"] == source_id
+
+    # The persisted fork row carries the source's full onboarding spec verbatim,
+    # so the worker's context-loader steers generation from the inherited brief.
+    fork_row = await db_session.get(Project, fork["id"])
+    assert fork_row.design_preset_id == "aurora"
+    assert fork_row.discovery_spec == source_spec
+
+    # Source identity is untouched (isolation holds for the design fields too).
+    source_after = await db_session.get(Project, source_id)
+    await db_session.refresh(source_after)
+    assert source_after.design_preset_id == "aurora"
+    assert source_after.discovery_spec == source_spec
+
+
 async def test_fork_nonexistent_project_is_404(client: httpx.AsyncClient) -> None:
     client.cookies.clear()
     r = await client.post("/api/projects/00000000-0000-0000-0000-000000000000/fork")

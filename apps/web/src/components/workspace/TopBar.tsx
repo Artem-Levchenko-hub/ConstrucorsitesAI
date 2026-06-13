@@ -4,10 +4,13 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ChevronDown,
+  GitFork,
   LogOut,
   Settings,
   User as UserIcon,
 } from "lucide-react";
+import { REMIX_BADGE_LABEL } from "@/lib/project-lineage";
+import { Badge } from "@/components/ui/badge";
 import { logoutAction } from "@/app/(auth)/actions";
 import {
   Avatar,
@@ -35,6 +38,7 @@ export function TopBar({
   projectId,
   projectSlug,
   imageGenEnabled,
+  isRemix = false,
   showProjectControls = true,
 }: {
   user: { email: string };
@@ -43,6 +47,9 @@ export function TopBar({
   projectId?: string;
   /** Используется как default repo_name в диалоге «Залить в GitHub». */
   projectSlug?: string;
+  /** V4.2b-finish — project was forked ("Remix this") from another. Renders a
+   *  remix lineage badge next to the project name (viral provenance). */
+  isRemix?: boolean;
   /** Read-only: AI auto-classified design preset for this project. */
   designPresetId?: string;
   designPresetName?: string;
@@ -75,6 +82,16 @@ export function TopBar({
             </Link>
             <span className="text-fg-tertiary">/</span>
             <span className="truncate text-sm font-medium">{projectName}</span>
+            {isRemix && (
+              <Badge
+                variant="accent"
+                title="Этот проект — ремикс другого"
+                className="shrink-0 gap-1"
+              >
+                <GitFork className="h-3 w-3" />
+                {REMIX_BADGE_LABEL}
+              </Badge>
+            )}
           </>
         )}
       </div>
