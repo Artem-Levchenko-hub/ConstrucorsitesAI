@@ -269,6 +269,13 @@ export const BOOTSTRAP_HTML = `<!doctype html>
       window.__omniaImages = {};
       return;
     }
+    // V3.10a — the art-director brief arrived (palette/fonts/motion/sections).
+    // Stash it for the live narration layer (V3.10) to read; transport-only
+    // here, no visible rendering yet.
+    if (data.type === 'omnia:brief') {
+      try { window.__omniaBrief = data.brief || null; } catch (_) {}
+      return;
+    }
     if (data.type !== 'omnia:render') return;
     try {
       render(data.bodyHtml, data.cssText);

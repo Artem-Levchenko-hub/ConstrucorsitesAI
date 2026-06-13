@@ -8,6 +8,7 @@ import {
   extractStreamingBody,
 } from "@/lib/parse-assistant";
 import { buildBootstrap } from "@/lib/streaming-preview-bootstrap";
+import type { StreamBrief } from "@/lib/api/types";
 
 export type StreamingDevice = "mobile" | "tablet" | "desktop";
 
@@ -53,6 +54,17 @@ export function StreamingPreviewFrame({
   // Track which (idx,url) we've already pushed so re-renders don't replay the
   // settle animation; reset when the message changes (new generation).
   const postedRef = useRef<Set<string>>(new Set());
+
+  // V3.10a — the art-director brief for THIS message, populated by
+  // usePromptStream on the `omnia:brief` event (same client-only cache pattern
+  // as streamImages). Forwarded into the iframe so the live render can narrate
+  // the design reasoning (palette/fonts/sections) as the page builds (V3.10).
+  const { data: streamBrief } = useQuery<StreamBrief | null>({
+    queryKey: ["stream-brief", projectId, messageId],
+    queryFn: () => null,
+    enabled: false,
+    initialData: null,
+  });
 
   // Bootstrap srcDoc with the canonical omnia-kit.css linked from the API
   // origin (styling parity with the committed /p/<slug>). Memoised empty-dep
@@ -152,6 +164,17 @@ export function StreamingPreviewFrame({
       win.postMessage({ type: "omnia:image", idx: img.idx, url: img.url }, "*");
     }
   }, [ready, streamImages]);
+
+  // V3.10a — forward the art-director brief into the iframe once both the brief
+  // has arrived and the bootstrap is ready. The bootstrap stores it on
+  // window.__omniaBrief; the visible narration is built on top in V3.10.
+  useEffect(() => {
+    if (!ready || !streamBrief) return;
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "omnia:brief", brief: streamBrief },
+      "*",
+    );
+  }, [ready, streamBrief]);
 
   return (
     <motion.iframe

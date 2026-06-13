@@ -35,6 +35,7 @@ runs on the base freeform prompt alone — a page without the brief beats no pag
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
@@ -43,6 +44,121 @@ from omnia_api.core.config import model_for_role
 from omnia_api.services import pipeline_debug
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.vendor_profiles import vendor_directive
+
+# ─── Brief structuring (V3.10a — BRIEF→CLIENT PLUMBING) ──────────────────────
+# The art-director brief is dense prose in a STRICT format (see the two
+# instruction templates below). Before V3.10a it was dumped debug-only and
+# dropped. To let the live render narrate the design reasoning (Pillar 3 — the
+# "AI рисует" moment), we extract the structured signal the format guarantees —
+# palette HEX, fonts, motion signature, section list — so a single
+# ``omnia:brief`` event can carry it to the client. Pure + deterministic +
+# money-free: regex over the already-streamed text, no extra model call.
+
+# 6- or 3-digit hex. ``\b`` lands cleanly after the trailing hex digit.
+_HEX = r"(#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3})\b"
+# Palette labels → canonical client keys. UPPER-CASE match is deliberate: the
+# brief uses uppercase labels (ФОН/PRIMARY/…) while lowercase ``primary`` /
+# ``текст`` appear in kit-class names and copy — case-sensitivity keeps those
+# out. Order = display order of swatches.
+_PALETTE_LABELS: tuple[tuple[str, str], ...] = (
+    ("bg", "ФОН"),
+    ("text", "ТЕКСТ"),
+    ("primary", "PRIMARY"),
+    ("accent", "АКЦЕНТ"),
+    ("foreground", "FOREGROUND"),
+    ("background", "BACKGROUND"),
+)
+_HEX_ANY_RE = re.compile(_HEX)
+_FONTS_LANDING_RE = re.compile(
+    r'ШРИФТЫ:\s*дисплей\s*"([^"]+)"\s*·\s*текст\s*"([^"]+)"'
+)
+_FONT_APP_RE = re.compile(r"ШРИФТ:\s*(.+)")
+_MOTION_RE = re.compile(r"MOTION-СИГНАТУРА:\s*(.+)")
+# Landing sections: ``[N] <назначение> | id="<anchor>"``.
+_SECTION_LANDING_RE = re.compile(
+    r'^\s*\[(\d+)\]\s*(.+?)\s*\|\s*id="([^"]+)"', re.MULTILINE
+)
+# App/entity nav items: ``- "Дашборд" → "/" (LayoutDashboard)``. The route may
+# be quoted (``"/"``) or bare (``/clients``).
+_NAV_APP_RE = re.compile(
+    r'^\s*-\s*"([^"]+)"\s*→\s*"?(/[^"\s()]*)"?', re.MULTILINE
+)
+
+
+def _extract_palette(brief: str) -> dict[str, str]:
+    """Labelled HEX from the ГЛОБАЛ/ТЕМА block. Falls back to the first few
+    distinct hexes anywhere if no label matched (malformed brief)."""
+    out: dict[str, str] = {}
+    for key, label in _PALETTE_LABELS:
+        m = re.search(re.escape(label) + r"\s*" + _HEX, brief)
+        if m:
+            out[key] = m.group(1)
+    if out:
+        return out
+    seen: list[str] = []
+    for m in _HEX_ANY_RE.finditer(brief):
+        h = m.group(0)
+        if h not in seen:
+            seen.append(h)
+        if len(seen) >= 4:
+            break
+    return {f"color{i + 1}": h for i, h in enumerate(seen)}
+
+
+def _extract_fonts(brief: str) -> dict[str, str]:
+    """``{display, text}``. Landing carries both families; the app brief carries
+    one (``ШРИФТ:``) → mirrored into both keys so a non-empty font is present."""
+    m = _FONTS_LANDING_RE.search(brief)
+    if m:
+        return {"display": m.group(1).strip(), "text": m.group(2).strip()}
+    m = _FONT_APP_RE.search(brief)
+    if not m:
+        return {}
+    line = m.group(1).strip()
+    q = re.search(r'"([^"]+)"', line)
+    if q:
+        name = q.group(1).strip()
+    else:
+        paren = re.search(r"\(([A-Za-zА-Яа-я][\w\s-]+)\)", line)
+        # First parenthesised family (e.g. "(Manrope)"), else the leading token
+        # before any "ИЛИ"/parenthesis the prompt placeholder might leave behind.
+        name = (
+            paren.group(1).strip()
+            if paren
+            else line.split("(")[0].split("ИЛИ")[0].strip()
+        )
+    return {"display": name, "text": name} if name else {}
+
+
+def _extract_sections(brief: str) -> list[dict[str, str]]:
+    """Landing page-sections first; if none (app/entity brief), the sidebar nav
+    items stand in as the screen list."""
+    out = [
+        {"id": m.group(3).strip(), "name": m.group(2).strip()}
+        for m in _SECTION_LANDING_RE.finditer(brief)
+    ]
+    if out:
+        return out
+    return [
+        {"id": m.group(2).strip(), "name": m.group(1).strip()}
+        for m in _NAV_APP_RE.finditer(brief)
+    ]
+
+
+def parse_brief(brief: str | None) -> dict[str, Any] | None:
+    """Structure the art-director brief for the client. ``None`` for an empty
+    brief (fail-soft path) — the caller then emits NO ``omnia:brief`` event,
+    which is exactly the adversarial "without brief" state V3.10a gates against."""
+    brief = (brief or "").strip()
+    if not brief:
+        return None
+    motion_m = _MOTION_RE.search(brief)
+    return {
+        "palette": _extract_palette(brief),
+        "fonts": _extract_fonts(brief),
+        "motion": motion_m.group(1).strip() if motion_m else "",
+        "sections": _extract_sections(brief),
+    }
 
 
 # Pass 1 — the art-director writes a brief, never code. Appended to the last
@@ -440,6 +556,15 @@ async def art_director_writer_generate(
     pipeline_debug.dump(project_id, message_id, "02_brief.md", brief)
     yield {"pass": "art_director", "stage": "end", "chars": len(brief)}
 
+    # V3.10a — surface the structured brief to the client. Until now it was
+    # dumped debug-only and dropped; this is the transport that lets the live
+    # render narrate the art-director's reasoning (palette/fonts/sections) as
+    # the page builds (Pillar 3, V3.10). Empty brief (fail-soft) → no event,
+    # which is the adversarial baseline the gate refutes.
+    structured_brief = parse_brief(brief)
+    if structured_brief is not None:
+        yield {"brief": structured_brief}
+
     # ─── Pass 2: Writer (streams the HTML to the caller) ─────────────────
     yield {"pass": "writer", "stage": "start", "model": writer_model}
     writer_msgs = _build_writer_messages(base_messages, user_prompt, brief, writer_model, template)
@@ -468,4 +593,4 @@ async def art_director_writer_generate(
     yield {"usage": _aggregate_usage(ad_usage, writer_usage)}
 
 
-__all__ = ["art_director_writer_generate"]
+__all__ = ["art_director_writer_generate", "parse_brief"]

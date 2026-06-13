@@ -1737,6 +1737,20 @@ async def _process_prompt(
                             },
                         },
                     )
+                elif "brief" in event:
+                    # V3.10a — surface the art-director brief (palette / fonts /
+                    # motion / sections) to the client on the same channel as
+                    # llm.chunk/llm.pass, so the live render can narrate the
+                    # design reasoning as it builds (Pillar 3 → V3.10). Debug-
+                    # only before; now flows as an event. Lands before llm.done.
+                    await publish_event(
+                        project_id,
+                        "omnia:brief",
+                        {
+                            "message_id": str(assistant_message_id),
+                            **event["brief"],
+                        },
+                    )
 
         # ── Direct image generation — call the GRAPHICS model, not the text LLM.
         # When the user points at a zone and asks for a picture, build a

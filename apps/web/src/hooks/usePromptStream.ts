@@ -9,6 +9,7 @@ import type {
   PassProgress,
   SelectedElement,
   Snapshot,
+  StreamBrief,
   WalletState,
   WsEvent,
 } from "@/lib/api/types";
@@ -280,6 +281,20 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             };
           },
         );
+        return;
+      }
+
+      if (event.type === "omnia:brief") {
+        // V3.10a — stash the art-director brief for THIS message so the
+        // streaming preview can narrate it (palette/fonts/sections) as the page
+        // builds. Client-only cache (no fetch), same pattern as ["stream-images"]
+        // / ["passes"]; read by StreamingPreviewFrame via useQuery(enabled:false).
+        qc.setQueryData<StreamBrief>(["stream-brief", projectId, event.data.message_id], {
+          palette: event.data.palette,
+          fonts: event.data.fonts,
+          motion: event.data.motion,
+          sections: event.data.sections,
+        });
         return;
       }
 

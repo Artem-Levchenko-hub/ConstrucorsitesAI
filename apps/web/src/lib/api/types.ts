@@ -326,6 +326,18 @@ export type PassProgress = {
   completed: MultipassStage[];
 };
 
+/**
+ * V3.10a — structured art-director brief delivered live (see the `omnia:brief`
+ * event below). Cached per-message by usePromptStream and read by
+ * StreamingPreviewFrame to narrate the design as it builds.
+ */
+export type StreamBrief = {
+  palette: Record<string, string>;
+  fonts: { display?: string; text?: string };
+  motion: string;
+  sections: Array<{ id: string; name: string }>;
+};
+
 /** WebSocket events on /api/ws/projects/:id (server → client). */
 export type WsEvent =
   | { type: "snapshot.created"; data: { snapshot: Snapshot } }
@@ -389,6 +401,21 @@ export type WsEvent =
         // Present on `start` for freeform stages (messages.py forwards it from
         // art_director_writer); enables human narration in the build UI.
         model?: string;
+      };
+    }
+  | {
+      // V3.10a — the art-director brief surfaced as a live event. The backend
+      // (art_director_writer.parse_brief) extracts palette HEX / fonts / motion
+      // signature / section list from the Pass-1 brief and fans it out before
+      // llm.done, so the streaming preview can narrate the design reasoning
+      // ("выбираю тёплую палитру… компоную герой") as the page is born (V3.10).
+      type: "omnia:brief";
+      data: {
+        message_id: Uuid;
+        palette: Record<string, string>;
+        fonts: { display?: string; text?: string };
+        motion: string;
+        sections: Array<{ id: string; name: string }>;
       };
     }
   | { type: "wallet.updated"; data: { balance_rub: number } }
