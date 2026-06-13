@@ -75,6 +75,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .render_settle import goto_and_settle
+from .surface_class import is_login_surface
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -161,11 +162,23 @@ class HierarchyReport:
     viewport_width: int
     rendered: bool
     detail: dict[str, Any] = field(default_factory=dict)
+    #: ``"content"`` for a normal landing / dashboard; ``"login"`` when the page
+    #: is a sparse auth surface, in which case the composition rubric is WAIVED
+    #: (the wrong surface to score — V1.6 16/5d) rather than false-failed.
+    surface: str = "content"
 
     @property
     def passed(self) -> bool:
-        """A gate that never rendered ABSTAINS (not pass) — it has no evidence."""
-        return self.rendered and self.score >= MIN_SCORE
+        """A gate that never rendered ABSTAINS (not pass) — it has no evidence.
+
+        A ``login`` surface PASSES as waived: the composition rubric does not
+        apply to a centred auth card (V1.6 16/5d).
+        """
+        if not self.rendered:
+            return False
+        if self.surface == "login":
+            return True
+        return self.score >= MIN_SCORE
 
     @property
     def classes(self) -> tuple[str, ...]:
@@ -182,6 +195,7 @@ class HierarchyReport:
             "score": self.score,
             "max_score": len(CHECKS),
             "viewport_width": self.viewport_width,
+            "surface": self.surface,
             "checks": {c: c not in self.classes for c in CHECKS},
             "detail": self.detail,
         }
@@ -189,6 +203,11 @@ class HierarchyReport:
     def summary(self) -> str:
         if not self.rendered:
             return "hierarchy: ABSTAIN (render harness did not run)"
+        if self.surface == "login":
+            return (
+                "hierarchy: WAIVED (login surface — composition rubric N/A) "
+                f"@ {self.viewport_width}px"
+            )
         if self.passed:
             return (
                 f"hierarchy: {self.score}/{len(CHECKS)} richness checks "
@@ -375,6 +394,15 @@ def evaluate_observation(obs: Obs, *, rendered: bool = True) -> HierarchyReport:
     if not rendered:
         return HierarchyReport((), 0, vw, rendered=False)
 
+    # A sparse, password-bearing auth surface is the WRONG surface for the
+    # composition rubric (no dominant visual, sparse type — a login form is not
+    # a hero). Waive it rather than false-fail a good centred login (V1.6 16/5d).
+    if is_login_surface(obs):
+        return HierarchyReport(
+            (), len(CHECKS), vw, rendered=True, surface="login",
+            detail={"surface": "login", "text_count": len(_text_sizes(obs))},
+        )
+
     findings: list[HierarchyFinding] = []
     findings += _score_type_dominance(obs)
     findings += _score_focal_dominance(obs)
@@ -467,7 +495,11 @@ _AUDIT_JS = r"""
     }));
   }
 
-  return { viewportWidth: vw, viewportHeight: vh, texts, visuals, groups };
+  // A real password input is the intentional-auth tell the surface classifier
+  // reads to waive a sparse login page instead of false-failing it (16/5d).
+  const hasPassword = !!document.querySelector('input[type="password"]');
+
+  return { viewportWidth: vw, viewportHeight: vh, hasPassword, texts, visuals, groups };
 }
 """
 

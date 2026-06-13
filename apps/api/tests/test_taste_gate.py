@@ -103,6 +103,47 @@ def test_fonts_are_surfaced_in_report():
     assert rep.fonts == ("playfair display", "inter")
 
 
+# ── login-surface waiver (V1.6 16/5d) ─────────────────────────────────────────
+
+
+def _login_obs():
+    """A sparse centred auth card — the live crm-ab7e1d login shape (8 above-fold
+    text nodes, a password field). The landing rubric false-fails it on
+    layout-variety + hero-imagery; the gate must WAIVE it, not score it."""
+    return {
+        "viewportWidth": 1440,
+        "viewportHeight": 900,
+        "hasPassword": True,
+        "texts": [
+            _txt(family=BODY, size=24, weight=600, top=200, sample="Войти"),
+            _txt(family=BODY, size=14, top=260, sample="Email"),
+            _txt(family=BODY, size=14, top=320, sample="Пароль"),
+            _txt(family=BODY, size=14, top=380, sample="Войти"),
+        ],
+        "sections": [_sec(width=420, height=360, top=200, hasImage=False)],
+    }
+
+
+def test_login_surface_is_waived_not_failed():
+    rep = evaluate_observation(_login_obs())
+    assert rep.surface == "login"
+    assert rep.passed is True  # waived — landing richness rubric does not apply
+    assert rep.findings == ()
+    assert rep.classes == ()
+    assert "WAIVED" in rep.summary()
+    assert rep.subscore()["surface"] == "login"
+
+
+def test_sparse_page_without_password_is_not_waived():
+    # Same sparse shape, no password field → a broken / blank page, NOT a login:
+    # it must still fail the rubric (teeth against empty renders).
+    obs = _login_obs()
+    obs["hasPassword"] = False
+    rep = evaluate_observation(obs)
+    assert rep.surface == "content"
+    assert rep.passed is False
+
+
 # ── 1. font-pairing ───────────────────────────────────────────────────────────
 
 

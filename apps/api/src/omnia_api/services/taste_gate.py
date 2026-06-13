@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .render_settle import goto_and_settle
+from .surface_class import is_login_surface
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -178,11 +179,23 @@ class TasteReport:
     fonts: tuple[str, ...]
     rendered: bool
     detail: dict[str, Any] = field(default_factory=dict)
+    #: ``"content"`` for a normal landing / dashboard; ``"login"`` when the page
+    #: is a sparse auth surface, in which case the landing richness rubric is
+    #: WAIVED (the wrong surface to score — V1.6 16/5d) rather than false-failed.
+    surface: str = "content"
 
     @property
     def passed(self) -> bool:
-        """A gate that never rendered ABSTAINS (not pass) — it has no evidence."""
-        return self.rendered and self.score >= MIN_SCORE
+        """A gate that never rendered ABSTAINS (not pass) — it has no evidence.
+
+        A ``login`` surface PASSES as waived: the landing richness rubric does
+        not apply to a centred auth card (V1.6 16/5d).
+        """
+        if not self.rendered:
+            return False
+        if self.surface == "login":
+            return True
+        return self.score >= MIN_SCORE
 
     @property
     def classes(self) -> tuple[str, ...]:
@@ -199,6 +212,7 @@ class TasteReport:
             "score": self.score,
             "max_score": len(CHECKS),
             "viewport_width": self.viewport_width,
+            "surface": self.surface,
             "checks": {c: c not in self.classes for c in CHECKS},
             "fonts": list(self.fonts),
             "detail": self.detail,
@@ -207,6 +221,11 @@ class TasteReport:
     def summary(self) -> str:
         if not self.rendered:
             return "taste: ABSTAIN (render harness did not run)"
+        if self.surface == "login":
+            return (
+                "taste: WAIVED (login surface — landing richness rubric N/A) "
+                f"@ {self.viewport_width}px"
+            )
         if self.passed:
             return f"taste: {self.score}/{len(CHECKS)} richness checks @ {self.viewport_width}px"
         lines = [
@@ -427,6 +446,16 @@ def evaluate_observation(obs: Obs, *, rendered: bool = True) -> TasteReport:
     if not rendered:
         return TasteReport((), 0, vw, fonts, rendered=False)
 
+    # A sparse, password-bearing auth surface is the WRONG surface for the
+    # landing richness rubric (no hero, no multi-width rhythm, sparse type).
+    # Waive it rather than false-fail a good centred login (V1.6 16/5d); the
+    # dashboard — the real WOW surface — sits behind auth, unreachable here.
+    if is_login_surface(obs):
+        return TasteReport(
+            (), len(CHECKS), vw, fonts, rendered=True, surface="login",
+            detail={"surface": "login", "above_fold_texts": len(_above_fold_sizes(obs))},
+        )
+
     findings: list[TasteFinding] = []
     findings += _score_font_pairing(obs)
     findings += _score_type_scale(obs)
@@ -540,6 +569,9 @@ _AUDIT_JS = r"""
   return {
     viewportWidth: document.documentElement.clientWidth,
     viewportHeight: document.documentElement.clientHeight,
+    // A real password input is the intentional-auth tell the surface classifier
+    // reads to waive a sparse login page instead of false-failing it (16/5d).
+    hasPassword: !!document.querySelector('input[type="password"]'),
     texts, sections,
   };
 }

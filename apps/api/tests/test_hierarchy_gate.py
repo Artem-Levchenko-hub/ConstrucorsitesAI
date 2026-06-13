@@ -99,6 +99,48 @@ def test_min_score_is_two_of_three():
     assert MIN_SCORE == 2
 
 
+# ── login-surface waiver (V1.6 16/5d) ─────────────────────────────────────────
+
+
+def _login_obs():
+    """A sparse centred auth card — the live crm-ab7e1d login shape (8 above-fold
+    text nodes, a password field, no hero visual). The composition rubric
+    false-fails it on type-dominance + focal-dominance; the gate must WAIVE it."""
+    return {
+        "viewportWidth": 1440,
+        "viewportHeight": 900,
+        "hasPassword": True,
+        "texts": [
+            _txt(size=24, top=200),  # "Войти" heading — only ~1.7× labels
+            _txt(size=14, top=260),
+            _txt(size=14, top=320),
+            _txt(size=14, top=380),
+        ],
+        "visuals": [],  # a form, no hero image
+        "groups": [],
+    }
+
+
+def test_login_surface_is_waived_not_failed():
+    rep = evaluate_observation(_login_obs())
+    assert rep.surface == "login"
+    assert rep.passed is True  # waived — composition rubric does not apply
+    assert rep.findings == ()
+    assert rep.classes == ()
+    assert "WAIVED" in rep.summary()
+    assert rep.subscore()["surface"] == "login"
+
+
+def test_sparse_page_without_password_is_not_waived():
+    # Same sparse shape, no password field → broken / blank page, NOT a login:
+    # it must still fail the rubric (teeth against empty renders).
+    obs = _login_obs()
+    obs["hasPassword"] = False
+    rep = evaluate_observation(obs)
+    assert rep.surface == "content"
+    assert rep.passed is False
+
+
 # ── 1. type-dominance ─────────────────────────────────────────────────────────
 
 
