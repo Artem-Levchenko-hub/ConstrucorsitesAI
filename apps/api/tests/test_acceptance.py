@@ -141,3 +141,57 @@ async def test_evaluate_gauntlet_clean_does_not_block(monkeypatch):
     )
     assert res.passed
     assert not any("dead-auth-link" in i for i in res.issues)
+
+
+def _spy_gauntlet(monkeypatch, captured):
+    """Patch accept_gauntlet.run to record the spec kwarg and return a clean verdict."""
+    from omnia_api.services import accept_gauntlet
+    from omnia_api.services.accept_gauntlet import GauntletVerdict
+
+    async def _run(**kwargs):
+        captured["spec"] = kwargs.get("spec")
+        return GauntletVerdict((), render_expected=False)
+
+    monkeypatch.setattr(accept_gauntlet, "run", _run)
+
+
+async def test_evaluate_wires_discovery_spec_into_gauntlet(monkeypatch):
+    """V2.5.1 — a persisted discovery_spec reifies into a non-empty FidelitySpec
+    handed to the gauntlet (so the chip-pixel leg can assert request↔render)."""
+    from omnia_api.services.chip_pixel_gate import FidelitySpec
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    captured: dict[str, object] = {}
+    _spy_gauntlet(monkeypatch, captured)
+
+    await acceptance.evaluate(
+        {"index.html": _GOOD},
+        project_id="p",
+        run_vision=False,
+        discovery_spec={
+            "dark_mode": True,
+            "primary_family": "violet",
+            "sections": ["catalog"],
+            "tone": "premium",
+        },
+    )
+    spec = captured["spec"]
+    assert isinstance(spec, FidelitySpec)
+    assert spec.dark_mode is True
+    assert spec.primary_family == "violet"
+    assert spec.sections == ("catalog",)
+    assert spec.tone == "premium"
+
+
+async def test_evaluate_no_discovery_spec_keeps_none(monkeypatch):
+    """Back-compat: no discovery_spec → spec=None (the empty-spec no-op the
+    gauntlet already defaults to). Behaviour byte-identical to pre-V2.5."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    captured: dict[str, object] = {}
+    _spy_gauntlet(monkeypatch, captured)
+
+    await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
+    assert captured["spec"] is None

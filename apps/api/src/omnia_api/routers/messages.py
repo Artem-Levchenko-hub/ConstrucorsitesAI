@@ -1327,6 +1327,7 @@ async def _process_prompt(
     project_name = ""
     project_design_preset_id: str | None = None
     project_image_gen_enabled: bool = True
+    project_discovery_spec: dict[str, object] | None = None
 
     try:
         async with factory() as session:
@@ -1341,6 +1342,7 @@ async def _process_prompt(
                 project_name = proj.name or ""
                 project_design_preset_id = proj.design_preset_id
                 project_image_gen_enabled = proj.image_gen_enabled
+                project_discovery_spec = proj.discovery_spec
             res = await session.execute(
                 select(Message)
                 .where(Message.project_id == project_id)
@@ -2851,6 +2853,11 @@ async def _process_prompt(
                             run_originality=(
                                 _acc_settings.use_originality and _gen_mode == "freeform"
                             ),
+                            # V2.5.1 — feed the persisted onboarding answers to the
+                            # chip-pixel fidelity leg so a request↔render mismatch
+                            # (e.g. asked dark, rendered light) is a real finding
+                            # instead of the empty-spec no-op it was before.
+                            discovery_spec=project_discovery_spec,
                         ),
                         timeout=90,
                     )

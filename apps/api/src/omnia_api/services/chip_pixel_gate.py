@@ -248,8 +248,8 @@ class FidelitySpec:
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable form for ``projects.discovery_spec`` (JSONB).
 
-        Round-trips via ``FidelitySpec(**spec.to_dict())`` (``sections`` rebuilt
-        as a tuple by the caller) — the persisted shape downstream gates read.
+        Round-trips via :meth:`from_dict` — the persisted shape downstream gates
+        read back when the gauntlet runs over a built project.
         """
         return {
             "dark_mode": self.dark_mode,
@@ -257,6 +257,27 @@ class FidelitySpec:
             "sections": list(self.sections),
             "tone": self.tone,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> FidelitySpec:
+        """Rebuild a spec from a persisted ``discovery_spec`` JSONB row.
+
+        Inverse of :meth:`to_dict`. Defensive on purpose — a partial or legacy
+        row (missing keys, ``sections`` stored as a bare list) reifies to an
+        abstaining axis rather than raising, so a malformed row degrades to an
+        empty spec (no assertion) instead of sinking the build (R-10).
+        """
+        if not data:
+            return cls()
+        secs = data.get("sections") or ()
+        if isinstance(secs, str):
+            secs = (secs,)
+        return cls(
+            dark_mode=data.get("dark_mode"),
+            primary_family=data.get("primary_family"),
+            sections=tuple(secs),
+            tone=data.get("tone"),
+        )
 
 
 def _canonical_sections(

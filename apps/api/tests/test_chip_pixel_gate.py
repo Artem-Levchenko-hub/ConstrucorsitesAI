@@ -325,3 +325,37 @@ def test_is_empty():
     assert FidelitySpec().is_empty is True
     assert FidelitySpec(dark_mode=False).is_empty is False
     assert FidelitySpec(sections=("catalog",)).is_empty is False
+
+
+# ── V2.5.1 from_dict: rebuild a persisted discovery_spec back into a spec ──────
+
+
+def test_from_dict_round_trips_to_dict():
+    spec = FidelitySpec.from_answers(
+        palette="тёмная + фиолетовый", sections="каталог, контакты", tone="premium"
+    )
+    assert FidelitySpec.from_dict(spec.to_dict()) == spec
+
+
+def test_from_dict_none_and_empty_are_empty_spec():
+    assert FidelitySpec.from_dict(None) == FidelitySpec()
+    assert FidelitySpec.from_dict({}) == FidelitySpec()
+
+
+def test_from_dict_partial_row_abstains_on_missing_axes():
+    # A legacy / partial row carries only some axes — the rest must abstain
+    # (None / empty tuple), never raise.
+    spec = FidelitySpec.from_dict({"dark_mode": True})
+    assert spec.dark_mode is True
+    assert spec.primary_family is None
+    assert spec.sections == ()
+    assert spec.tone is None
+
+
+def test_from_dict_coerces_sections_list_and_str_to_tuple():
+    assert FidelitySpec.from_dict({"sections": ["catalog", "contacts"]}).sections == (
+        "catalog",
+        "contacts",
+    )
+    # A bare string (defensive — should never persist, but must not explode into chars)
+    assert FidelitySpec.from_dict({"sections": "catalog"}).sections == ("catalog",)

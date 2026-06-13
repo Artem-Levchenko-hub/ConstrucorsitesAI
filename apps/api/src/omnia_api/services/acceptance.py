@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 from omnia_api.core.config import get_settings
 from omnia_api.services import accept_gauntlet, originality, vision_audit
+from omnia_api.services.chip_pixel_gate import FidelitySpec
 from omnia_api.services.link_validator import find_dead_links
 from omnia_api.services.ui_audit import audit as ui_audit
 
@@ -139,6 +140,7 @@ async def evaluate(
     min_score: int | None = None,
     widths: tuple[int, ...] | None = None,
     run_originality: bool | None = None,
+    discovery_spec: dict[str, object] | None = None,
 ) -> AcceptanceResult:
     """Run the gate over `files` and return a pass/fail verdict + feedback.
 
@@ -242,9 +244,15 @@ async def evaluate(
     gauntlet_lines: list[str] = []
     gauntlet_classes: list[str] = []
     gauntlet_ok = True
+    # The chip-pixel leg only asserts the axes the user actually steered in
+    # onboarding (V2.5): a persisted `discovery_spec` reifies those answers so
+    # the gate can flag a request↔render mismatch. A None / empty spec asserts
+    # nothing — byte-identical to the pre-V2.5 no-op default.
+    spec = FidelitySpec.from_dict(discovery_spec) if discovery_spec else None
     try:
         gauntlet = await accept_gauntlet.run(
             files=files,
+            spec=spec,
             include_rendered=settings.acceptance_gauntlet_render_gates,
             composition=settings.acceptance_gauntlet_composition_gates,
         )
