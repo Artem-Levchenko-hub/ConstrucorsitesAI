@@ -148,7 +148,7 @@ def _inject_base_href(content: bytes, slug: str) -> bytes:
     # Already has a <base>? Don't add a second — browsers honour only the first.
     if b"<base " in head_slice or b"<base\t" in head_slice or b"<base>" in head_slice:
         return content
-    base_tag = f'\n<base href="/p/{slug}/">'.encode("utf-8")
+    base_tag = f'\n<base href="/p/{slug}/">'.encode()
     head_open = content.find(b"<head")
     if head_open == -1:
         return content
@@ -158,6 +158,86 @@ def _inject_base_href(content: bytes, slug: str) -> bytes:
         return content
     ins = head_close + 1
     return content[:ins] + base_tag + content[ins:]
+
+
+# Viral "Remix this" seam (V4.1b-UI). A stranger on a public share link can fork
+# the app into their OWN editable copy with one click and ZERO signup: the button
+# POSTs to /api/projects/<id>/fork (which mints an anon principal + session cookie
+# via _ensure_anon_user, deep-copies the repo, and returns the fork's id), then we
+# navigate the visitor straight into the workspace at /projects/<fork.id>. The
+# omnia_session cookie just set rides the same-origin redirect (samesite=lax sends
+# it on the top-level GET) so the (app) layout's getSession resolves the anon user
+# and the workspace renders without a login wall — closing pillar 4's viral loop.
+# Injected ONLY into static share pages and ONLY for public viewers (never the
+# workspace's own ?inspect=1 preview, which has its own remix affordances).
+# Self-contained (no CDN), reduced-motion-safe, brand-gradient pill, bottom-right.
+# Authored as a readable UTF-8 str (real Cyrillic, no \x escapes) and encoded to
+# bytes once at import so the rest of the page pipeline stays bytes-in/bytes-out.
+_REMIX_CTA_TEMPLATE = (
+    '<style id="omnia-remix-style">'
+    "#omnia-remix-cta{position:fixed;right:20px;bottom:20px;z-index:2147483000;"
+    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}"
+    "#omnia-remix-btn{display:inline-flex;align-items:center;gap:9px;border:0;"
+    "cursor:pointer;padding:13px 20px;border-radius:9999px;font-size:15px;"
+    "font-weight:600;letter-spacing:-.01em;color:#fff;"
+    "background:linear-gradient(90deg,#818cf8,#c084fc);"
+    "box-shadow:0 8px 28px rgba(99,102,241,.42),0 2px 8px rgba(0,0,0,.18);"
+    "transition:transform .18s ease,box-shadow .18s ease;"
+    "animation:omnia-remix-in .5s cubic-bezier(.16,1,.3,1) both}"
+    "#omnia-remix-btn:hover{transform:translateY(-2px) scale(1.02);"
+    "box-shadow:0 12px 34px rgba(99,102,241,.5),0 3px 10px rgba(0,0,0,.2)}"
+    "#omnia-remix-btn:active{transform:translateY(0) scale(.99)}"
+    "#omnia-remix-btn[disabled]{opacity:.7;cursor:default;transform:none}"
+    "#omnia-remix-btn .omnia-remix-spark{font-size:16px;line-height:1;"
+    "animation:omnia-remix-spin 4s linear infinite}"
+    "@keyframes omnia-remix-in{from{opacity:0;transform:translateY(14px) scale(.96)}"
+    "to{opacity:1;transform:none}}"
+    "@keyframes omnia-remix-spin{to{transform:rotate(360deg)}}"
+    "@media (prefers-reduced-motion:reduce){#omnia-remix-btn,"
+    "#omnia-remix-btn .omnia-remix-spark{animation:none}"
+    "#omnia-remix-btn:hover{transform:none}}"
+    "</style>"
+    '<div id="omnia-remix-cta">'
+    '<button type="button" id="omnia-remix-btn" '
+    'aria-label="Сделать свою версию этого приложения на Omnia.AI">'
+    '<span class="omnia-remix-spark" aria-hidden="true">✦</span>'
+    '<span class="omnia-remix-label">Сделать свою версию</span>'
+    "</button></div>"
+    '<script id="omnia-remix-js">(function(){'
+    'var b=document.getElementById("omnia-remix-btn");if(!b)return;'
+    'b.addEventListener("click",function(){'
+    "if(b.disabled)return;b.disabled=true;"
+    'var l=b.querySelector(".omnia-remix-label");var prev=l?l.textContent:"";'
+    'if(l)l.textContent="Создаём копию…";'
+    'fetch("/api/projects/__PROJECT_ID__/fork",{method:"POST",'
+    'credentials:"include",headers:{Accept:"application/json"}})'
+    '.then(function(r){if(!r.ok)throw new Error("fork "+r.status);return r.json();})'
+    '.then(function(p){window.location.href="/projects/"+p.id;})'
+    '.catch(function(e){b.disabled=false;if(l)l.textContent=prev;'
+    'console.error("[omnia-remix]",e);'
+    'alert("Не удалось создать копию. Попробуйте ещё раз.");});'
+    "});})();</script>"
+).encode()
+
+
+def _inject_remix_cta(content: bytes, project_id: object) -> bytes:
+    """Inline the zero-signup "Remix this" CTA before the last </body>.
+
+    Bytes in, bytes out — the page charset is preserved. Idempotent: a page that
+    already carries the CTA (e.g. re-injection) is returned untouched. The
+    project id is a DB-issued UUID (never user input), so direct substitution is
+    safe. Fallback appends when the page has no </body>.
+    """
+    if b'id="omnia-remix-cta"' in content:
+        return content
+    tag = _REMIX_CTA_TEMPLATE.replace(
+        b"__PROJECT_ID__", str(project_id).encode("ascii")
+    )
+    marker = b"</body>"
+    idx = content.rfind(marker)
+    if idx != -1:
+        return content[:idx] + tag + content[idx:]
+    return content + tag
 
 
 async def _serve_file(project: Project, snapshot: Snapshot, path: str) -> Response:
@@ -341,8 +421,13 @@ async def get_index(
             # generated omnia-kit never loads on public share links.
             content = _inject_base_href(content, slug)
             # Workspace preview opts in with ?inspect=1 to enable select-mode.
+            # Public share viewers (inspect != "1") instead get the zero-signup
+            # "Remix this" CTA — the two are mutually exclusive (the workspace
+            # already owns the project, strangers don't).
             if inspect == "1":
                 content = _inject_inspector(content)
+            else:
+                content = _inject_remix_cta(content, project.id)
             return _file_response("index.html", content)
     # No static entrypoint. For deployed full-stack projects we redirect to
     # the live prod URL so /p/<slug> behaves as a real public share link, not
