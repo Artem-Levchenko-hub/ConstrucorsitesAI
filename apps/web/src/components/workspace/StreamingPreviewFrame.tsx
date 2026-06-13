@@ -8,6 +8,7 @@ import {
   extractStreamingBody,
 } from "@/lib/parse-assistant";
 import { buildBootstrap } from "@/lib/streaming-preview-bootstrap";
+import { briefNarration } from "@/lib/brief-narration";
 import type { StreamBrief } from "@/lib/api/types";
 
 export type StreamingDevice = "mobile" | "tablet" | "desktop";
@@ -119,6 +120,10 @@ export function StreamingPreviewFrame({
   // when the backend has switched to a fallback model mid-stream.
   useEffect(() => {
     if (!ready) return;
+    // Once the art-director brief exists, the V3.10 narration effect below owns
+    // #omnia-status (real, brief-derived "AI is designing" lines). This char-
+    // length heuristic stays only as the pre-brief fallback.
+    if (streamBrief) return;
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     const chars = content.length;
@@ -138,7 +143,35 @@ export function StreamingPreviewFrame({
       status = "AI генерирует код";
     }
     win.postMessage({ type: "omnia:status", text: status }, "*");
-  }, [ready, content, bodyHtml]);
+  }, [ready, content, bodyHtml, streamBrief]);
+
+  // V3.10 — NARRATION-AS-CODESIGNER. The art-director brief arrives BEFORE the
+  // first writer HTML token (V3.10a). Surface its reasoning as a live "AI is
+  // designing" narration: ≥3 human-readable, brief-DERIVED lines (palette HEX /
+  // font name / section names / motion) cadenced into #omnia-status so the user
+  // watches the design happen instead of a frozen "AI пишет ответ". Each line
+  // literally carries a brief value → proves the brief is surfaced, not
+  // re-invented (the falsifiable V3.10 gate). Text-content swaps are not
+  // decorative motion — the reduced-motion-disabled breathe-bar handles that —
+  // so the cadence stays unconditional.
+  useEffect(() => {
+    if (!ready || !streamBrief) return;
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    const lines = briefNarration(streamBrief);
+    if (lines.length === 0) return;
+    const timers: number[] = [];
+    lines.forEach((text, i) => {
+      timers.push(
+        window.setTimeout(() => {
+          win.postMessage({ type: "omnia:status", text }, "*");
+        }, i * 1200),
+      );
+    });
+    return () => {
+      for (const t of timers) window.clearTimeout(t);
+    };
+  }, [ready, streamBrief]);
 
   // New generation: forget what we've posted and clear the iframe's image map
   // so a previous build's photos can't bleed into the new frames (idx reuse).

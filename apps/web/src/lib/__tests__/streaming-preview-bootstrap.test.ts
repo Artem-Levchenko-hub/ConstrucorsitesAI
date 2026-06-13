@@ -140,6 +140,23 @@ describe("streaming-preview bootstrap harness (V3.0b)", () => {
     expect(w.__omniaBrief).toBeNull();
   });
 
+  // ── Гейт (b2): omnia:status РЕНДЕРИТСЯ в #omnia-status (V3.10 render-path) ─
+  // Доказывает, что наррация-строки (StreamingPreviewFrame → briefNarration)
+  // реально попадают в видимый лейбл плейсхолдера, а не теряются.
+  it("(b2) renders an omnia:status narration line into #omnia-status", () => {
+    boot();
+    const label = () =>
+      document.getElementById("omnia-status")?.textContent ?? "";
+    expect(label()).toBe("AI пишет ответ");
+
+    send({ type: "omnia:status", text: "Подбираю палитру — #ff5a36 и #0a0a0a" });
+    expect(label()).toBe("Подбираю палитру — #ff5a36 и #0a0a0a");
+
+    // Следующая строка наррации сменяет предыдущую (последовательная подача).
+    send({ type: "omnia:status", text: "Беру шрифт «Playfair Display»" });
+    expect(label()).toBe("Беру шрифт «Playfair Display»");
+  });
+
   // ── Гейт (c): .reveal остаётся ВИДИМЫМ (грузим kit-CSS, НИКОГДА kit-JS) ───
   it("(c-contract) buildBootstrap links kit CSS and never injects kit JS", () => {
     const out = buildBootstrap("https://api.example.com/");
