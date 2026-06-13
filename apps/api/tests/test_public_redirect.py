@@ -97,3 +97,58 @@ async def test_deployed_prefers_prod_url(monkeypatch) -> None:
     resp = await public._fullstack_redirect(_proj())
     assert resp is not None
     assert resp.headers["location"] == "https://shop.example/"
+
+
+# --- V4.6.1 REDIRECT-LEAK guard ------------------------------------------
+# A share-link stranger must NEVER be redirected into a dev container while the
+# app's FIRST build is still in flight (deploy phase building/swapping, no
+# prod_url yet). The dev container is a half-built shell at that point, so the
+# visitor gets the tasteful "запускается" stub instead (caller's _preview_shell).
+# This is the V4.6 "link-served-before-`phase==done`" class made a permanent
+# deterministic assert.
+
+
+async def test_no_dev_leak_while_building(monkeypatch) -> None:
+    async def building(_pid):
+        return {"phase": "building", "prod_url": None}
+
+    monkeypatch.setattr(public.orchestrator_client, "get_deploy", building)
+
+    async def status(_pid):
+        # Container reports a dev_url, but the first build isn't done — must NOT
+        # leak it to a stranger.
+        return {"state": "running", "dev_url": "https://shop-abc123-dev.example/"}
+
+    monkeypatch.setattr(public.orchestrator_client, "get_status", status)
+    assert await public._fullstack_redirect(_proj()) is None
+
+
+async def test_no_dev_leak_while_swapping(monkeypatch) -> None:
+    async def swapping(_pid):
+        return {"phase": "swapping", "prod_url": None}
+
+    monkeypatch.setattr(public.orchestrator_client, "get_deploy", swapping)
+
+    async def status(_pid):
+        return {"state": "running", "dev_url": "https://shop-abc123-dev.example/"}
+
+    monkeypatch.setattr(public.orchestrator_client, "get_status", status)
+    assert await public._fullstack_redirect(_proj()) is None
+
+
+async def test_redeploy_of_live_app_not_stubbed(monkeypatch) -> None:
+    # Regression boundary: a REDEPLOY of an already-live app reports phase
+    # building but keeps the prior prod_url in the record — the guard must NOT
+    # fire (we never stub a site that is actually live). Falls through to the
+    # dev-preview redirect (existing behaviour), so a redirect is returned.
+    async def redeploy(_pid):
+        return {"phase": "building", "prod_url": "https://shop.example/"}
+
+    monkeypatch.setattr(public.orchestrator_client, "get_deploy", redeploy)
+
+    async def status(_pid):
+        return {"state": "running", "dev_url": "https://shop-abc123-dev.example/"}
+
+    monkeypatch.setattr(public.orchestrator_client, "get_status", status)
+    resp = await public._fullstack_redirect(_proj())
+    assert resp is not None and resp.status_code == 302

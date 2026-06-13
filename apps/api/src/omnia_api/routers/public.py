@@ -242,6 +242,13 @@ _INDEX_CANDIDATES = (
     "out/index.html",
 )
 
+# Deploy phases that mean an image build / traffic swap is actively in flight.
+# While in one of these (and with no prior prod_url), a fullstack share link
+# must NOT leak the half-built dev container to strangers — it falls through to
+# the "запускается" stub instead. Phase contract lives in
+# `orchestrator_client.get_deploy` (queued | building | swapping | done | failed).
+_DEPLOY_IN_FLIGHT_PHASES = frozenset({"building", "swapping"})
+
 
 async def _fullstack_redirect(project: Project) -> Response | None:
     """For a container project (fullstack / nextjs_entities), redirect /p/<slug>
@@ -266,12 +273,21 @@ async def _fullstack_redirect(project: Project) -> Response | None:
     # 1) Canonical public URL once deployed.
     try:
         deploy = await orchestrator_client.get_deploy(project.id)
-        if deploy.get("phase") == "done" and deploy.get("prod_url"):
+        phase = deploy.get("phase")
+        if phase == "done" and deploy.get("prod_url"):
             return RedirectResponse(
                 url=str(deploy["prod_url"]),
                 status_code=status.HTTP_302_FOUND,
                 headers={"Cache-Control": "no-cache"},
             )
+        # First build still in flight (image building / traffic swapping) and no
+        # canonical prod_url yet → the dev container is a half-built shell. A
+        # share-link stranger must see the tasteful "запускается" stub, NOT the
+        # in-flight dev container leaking through (V4.6 link-served-before-done).
+        # A REDEPLOY of an already-live app keeps its prod_url here, so this
+        # never stubs a site that is actually live — only a true first build.
+        if phase in _DEPLOY_IN_FLIGHT_PHASES and not deploy.get("prod_url"):
+            return None
     except Exception as exc:
         # Best-effort: any orchestrator failure (timeout, 5xx, network) must
         # NEVER block /p. Log + fall through to the dev-preview check / shell.
