@@ -24,9 +24,10 @@ Two families of detector:
     empty catalog image). These fire on any file set, including the model's raw
     ``<file>`` answer.
   * KIT-INTEGRITY defects — a shipped kit capability was removed (the AppShell
-    dark-theme prop, the globals.css hero-word-break rule). These fire only when
-    the full provisioned app dir is scanned (the gauntlet's intended input); they
-    no-op when the kit files aren't in the set.
+    dark-theme prop, the globals.css hero-word-break rule, the popover surface
+    tokens the sonner toast paints from). These fire only when the full
+    provisioned app dir is scanned (the gauntlet's intended input); they no-op
+    when the kit files aren't in the set.
 
 Request↔output FIDELITY (did a dark-theme *request* actually reach the
 dashboard) is deliberately out of scope here — that is the chip→pixel gate
@@ -72,6 +73,7 @@ MISROUTED_KIT_IMPORT = "misrouted-kit-import"
 DARK_THEME_NOT_ON_DASHBOARD = "dark-theme-not-on-dashboard"
 RU_HERO_WORD_CLIP = "ru-hero-word-clip"
 EMPTY_PUBLIC_CATALOG = "empty-public-catalog"
+TOAST_POPOVER_TRANSPARENT = "toast-popover-transparent"
 
 DEFECT_CLASSES: tuple[str, ...] = (
     DEAD_AUTH_LINK,
@@ -82,6 +84,7 @@ DEFECT_CLASSES: tuple[str, ...] = (
     DARK_THEME_NOT_ON_DASHBOARD,
     RU_HERO_WORD_CLIP,
     EMPTY_PUBLIC_CATALOG,
+    TOAST_POPOVER_TRANSPARENT,
 )
 
 # File families. Auth CTAs live in JSX *and* in freeform `<a>` HTML.
@@ -331,6 +334,37 @@ def _ru_hero_word_break(files: dict[str, str]) -> list[Defect]:
     return out
 
 
+def _toast_popover_token(files: dict[str, str]) -> list[Defect]:
+    """The themed sonner toast needs the popover surface tokens it paints from.
+
+    ``components/ui/sonner.tsx`` paints the toast surface from ``var(--popover)``
+    / ``var(--popover-foreground)`` (mirrored onto the ``bg-popover`` /
+    ``text-popover-foreground`` utilities). If the kit ships that toast host but a
+    brand re-map of ``:root`` drops those tokens from globals.css, ``--normal-bg``
+    resolves to nothing and every toast renders transparent — unreadable over the
+    page. Kit-integrity check, like the dark-theme prop: fires only when the toast
+    host is in the scanned set; no host shipped (freeform/static app) → no-op.
+    """
+    if not any(p.endswith("components/ui/sonner.tsx") for p in files):
+        return []
+    out: list[Defect] = []
+    for path, body in files.items():
+        if not path.endswith("globals.css"):
+            continue
+        missing = [tok for tok in ("--popover:", "--popover-foreground:") if tok not in body]
+        if missing:
+            out.append(
+                Defect(
+                    TOAST_POPOVER_TRANSPARENT,
+                    path,
+                    "globals.css dropped "
+                    + ", ".join(missing)
+                    + " → sonner toast renders transparent",
+                )
+            )
+    return out
+
+
 # ── orchestration ────────────────────────────────────────────────────────────
 
 # (suffix-scoped output detector) -> applicable suffixes
@@ -345,6 +379,7 @@ _WHOLE_SET_DETECTORS = (
     _invented_palette_vars,
     _dark_theme_capability,
     _ru_hero_word_break,
+    _toast_popover_token,
 )
 
 

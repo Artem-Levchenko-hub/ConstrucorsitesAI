@@ -198,6 +198,35 @@ def test_empty_catalog_reverted_is_red():
     assert dr.EMPTY_PUBLIC_CATALOG in _classes(files)
 
 
+# ── 9. toast-popover-transparent (kit capability) ─────────────────────────────
+
+_SONNER_HOST = "src/components/ui/sonner.tsx"
+
+
+def test_toast_popover_clean_when_tokens_present():
+    files = {
+        _SONNER_HOST: 'style={{"--normal-bg": "var(--popover)"}}',
+        "app/globals.css": ":root{--popover:oklch(1 0 0);--popover-foreground:oklch(0.18 0 0)}",
+    }
+    assert dr.TOAST_POPOVER_TRANSPARENT not in _classes(files)
+
+
+def test_toast_popover_reverted_dropped_token_is_red():
+    # Brand re-map kept --primary but dropped the popover surface tokens the
+    # toast paints from → every toast renders transparent.
+    files = {
+        _SONNER_HOST: 'style={{"--normal-bg": "var(--popover)"}}',
+        "app/globals.css": ":root{--primary:#f00}",
+    }
+    assert dr.TOAST_POPOVER_TRANSPARENT in _classes(files)
+
+
+def test_toast_popover_noop_without_toast_host():
+    # No sonner host shipped (freeform/static app) → nothing to guard.
+    files = {"app/globals.css": ":root{--primary:#f00}"}
+    assert dr.TOAST_POPOVER_TRANSPARENT not in _classes(files)
+
+
 # ── registry contract ─────────────────────────────────────────────────────────
 
 
