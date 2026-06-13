@@ -12,6 +12,7 @@ from pathlib import Path
 
 from omnia_api.services import accept_gauntlet
 from omnia_api.services.chip_pixel_gate import FidelityReport
+from omnia_api.services.hierarchy_gate import HierarchyReport
 from omnia_api.services.perf_a11y_gate import PerfA11yFinding, PerfA11yReport
 from omnia_api.services.taste_gate import TasteReport
 from omnia_api.services.wow_dom_gate import WowDomFinding, WowDomReport
@@ -46,6 +47,10 @@ def _chip(findings=(), *, rendered=True, checked=()):
 
 def _taste(*, score=5, findings=(), rendered=True):
     return TasteReport(tuple(findings), score, 1440, ("inter", "playfair"), rendered=rendered)
+
+
+def _hier(*, score=3, findings=(), rendered=True):
+    return HierarchyReport(tuple(findings), score, 1440, rendered=rendered)
 
 
 # ── 1. deterministic leg, no render ──────────────────────────────────────────
@@ -83,8 +88,9 @@ async def test_empty_inputs_do_not_pass():
 # ── 2. rendered legs (stubbed — no real chromium) ─────────────────────────────
 
 
-def _stub_rendered(monkeypatch, *, wow, perf, chip, taste=None):
+def _stub_rendered(monkeypatch, *, wow, perf, chip, taste=None, hier=None):
     taste = taste if taste is not None else _taste()
+    hier = hier if hier is not None else _hier()
 
     async def _w(files, **kw):
         return wow
@@ -98,10 +104,14 @@ def _stub_rendered(monkeypatch, *, wow, perf, chip, taste=None):
     async def _t(files, **kw):
         return taste
 
+    async def _h(files, **kw):
+        return hier
+
     monkeypatch.setattr(accept_gauntlet.wow_dom_gate, "audit_files", _w)
     monkeypatch.setattr(accept_gauntlet.perf_a11y_gate, "audit_files", _p)
     monkeypatch.setattr(accept_gauntlet.chip_pixel_gate, "audit_files", _c)
     monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _t)
+    monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _h)
 
 
 async def test_all_gates_clean_passes(monkeypatch):
@@ -113,6 +123,7 @@ async def test_all_gates_clean_passes(monkeypatch):
         accept_gauntlet.PERF_A11Y,
         accept_gauntlet.CHIP_PIXEL,
         accept_gauntlet.TASTE,
+        accept_gauntlet.HIERARCHY,
     ]
     assert v.render_expected is True
     assert v.passed is True
@@ -141,6 +152,7 @@ async def test_abstain_fails_strict_but_not_hard(monkeypatch):
         perf=_perf(rendered=False),
         chip=_chip(rendered=False),
         taste=_taste(rendered=False),
+        hier=_hier(rendered=False),
     )
     v = await accept_gauntlet.run(files={"index.html": _CLEAN_HTML})
     assert v.passed is False  # strict: abstain ≠ pass
@@ -183,7 +195,14 @@ _SRC = Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services"
 
 def test_aggregator_imports_every_rendered_gate():
     body = (_SRC / "accept_gauntlet.py").read_text(encoding="utf-8")
-    mods = ("wow_dom_gate", "perf_a11y_gate", "chip_pixel_gate", "taste_gate", "defect_registry")
+    mods = (
+        "wow_dom_gate",
+        "perf_a11y_gate",
+        "chip_pixel_gate",
+        "taste_gate",
+        "hierarchy_gate",
+        "defect_registry",
+    )
     for mod in mods:
         assert mod in body, f"accept_gauntlet must import {mod}"
 
