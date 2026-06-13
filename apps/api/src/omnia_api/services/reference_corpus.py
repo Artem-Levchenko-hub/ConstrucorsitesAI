@@ -58,6 +58,13 @@ RICHNESS_AXES: tuple[str, ...] = TASTE_AXES + HIERARCHY_AXES
 #: hard fail.
 MIN_AXES = 4
 
+#: V1.13c — the mirror of :data:`MIN_AXES` from the adversary's side. A candidate
+#: is BELOW the ceiling exactly when it regresses on more axes than the floor
+#: tolerates, i.e. ``len(RICHNESS_AXES) - MIN_AXES + 1``. Derived (not hardcoded)
+#: so the two thresholds can never drift: ``meets_or_beats`` failing ⟺
+#: ``len(adversary_regressions(...)) >= MIN_REGRESSIONS``.
+MIN_REGRESSIONS = len(RICHNESS_AXES) - MIN_AXES + 1
+
 #: The defect class a below-corpus candidate carries into the gauntlet's
 #: ``failed_classes`` (becomes ``reference:reference-below``).
 BELOW_CLASS = "reference-below"
@@ -108,6 +115,24 @@ def meets_or_beats(
 ) -> bool:
     """True iff ``generated`` holds at least ``min_axes`` of the five axes."""
     return len(axes_met_or_beaten(generated, reference)) >= min_axes
+
+
+def adversary_regressions(
+    candidate: RichnessVector, reference: RichnessVector
+) -> tuple[str, ...]:
+    """Axes where ``reference`` passes but ``candidate`` regresses (V1.13c).
+
+    The complement of :func:`axes_met_or_beaten` projected to the human-readable
+    side: these are the named axes a below-ceiling candidate *loses*, so the
+    adversary-pre-proof can show exactly WHERE a mediocre baseline falls short.
+    By construction ``len(adversary_regressions(c, r)) >= MIN_REGRESSIONS`` is
+    the exact negation of ``meets_or_beats(c, r)`` — one source, no drift.
+    """
+    return tuple(
+        a
+        for a in RICHNESS_AXES
+        if bool(reference.get(a, False)) and not bool(candidate.get(a, False))
+    )
 
 
 @dataclass(frozen=True)
