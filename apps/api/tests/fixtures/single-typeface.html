@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Onest — single-typeface landing</title>
+  <!--
+    Positive fixture for taste_gate (V1.6 16/5b calibration).
+
+    A rich landing that ships ONE chosen webface (Onest) worked across a real
+    weight range — 400 body over an 800 display headline — with a full-bleed
+    image hero, a true type scale and alternating layout bands. This is the
+    modern single-variable-face enterprise look that real entity landings ship
+    (the canonical sushi-restoran app is Onest-only). The taste gate MUST pass
+    it: rejecting single-typeface designs floods the entity hot-path with
+    false-positives, which is exactly what kept the entity composition gate OFF.
+
+    Counterpart to the negative bootstrap-baseline.html (a FLAT system stack that
+    must stay red). If a future change makes THIS page fail font-pairing, the
+    single-family tolerance has regressed — keep it green.
+  -->
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Onest", sans-serif;
+      font-weight: 400;
+      color: #0b0f19;
+      background: #ffffff;
+      line-height: 1.5;
+    }
+    .nav {
+      display: flex; align-items: center; gap: 2rem;
+      padding: 1.25rem 3rem; font-size: 16px; font-weight: 500;
+    }
+    .nav .brand { font-weight: 800; font-size: 20px; margin-right: auto; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+    /* full-bleed image hero — edge to edge, distinct band */
+    .hero {
+      background: #0b0f19; color: #fff; padding: 7rem 0 6rem;
+      position: relative; overflow: hidden;
+    }
+    .hero svg { position: absolute; right: -4rem; top: 2rem; opacity: .5; }
+    .hero h1 { font-size: 56px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 1.25rem; max-width: 16ch; }
+    .hero p { font-size: 20px; font-weight: 400; max-width: 52ch; margin: 0 0 2rem; color: #c7ccd6; }
+    .cta {
+      display: inline-block; padding: .75rem 1.5rem; border-radius: .75rem;
+      background: #fff; color: #0b0f19; text-decoration: none; font-weight: 700; font-size: 16px;
+    }
+    /* contained content band — a narrower column than the full-bleed hero */
+    .features { padding: 5rem 0; }
+    .features h2 { font-size: 32px; font-weight: 700; margin: 0 0 2.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; }
+    .card h3 { font-size: 20px; font-weight: 700; margin: 0 0 .5rem; }
+    .card p { font-size: 16px; font-weight: 400; color: #4b5260; margin: 0; }
+    footer { padding: 3rem 0; font-size: 14px; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">Onest Studio</span>
+    <a href="#work" style="text-decoration:none;color:inherit;">Работы</a>
+    <a href="#about" style="text-decoration:none;color:inherit;">О нас</a>
+    <a class="cta" href="/signup">Начать</a>
+  </nav>
+
+  <header class="hero">
+    <svg width="320" height="320" viewBox="0 0 320 320" aria-hidden="true">
+      <circle cx="160" cy="160" r="150" fill="#3b82f6" />
+      <circle cx="160" cy="160" r="90" fill="#0b0f19" />
+    </svg>
+    <div class="container">
+      <h1>Один шрифт. Бесконечная глубина.</h1>
+      <p>Премиальный single-typeface дизайн, где иерархия рождается из веса и масштаба, а не из десятка случайных гарнитур.</p>
+      <a class="cta" href="/signup">Смотреть работы</a>
+    </div>
+  </header>
+
+  <section class="features" id="work">
+    <div class="container">
+      <h2>Что мы делаем</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Брендинг</h3>
+          <p>Системы идентичности, построенные на одной выразительной гарнитуре.</p>
+        </article>
+        <article class="card">
+          <h3>Веб-дизайн</h3>
+          <p>Интерфейсы, где типографика делает всю тяжёлую работу.</p>
+        </article>
+        <article class="card">
+          <h3>Моушн</h3>
+          <p>Минималистичные анимации, которые удерживают внимание.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">© 2026 Onest Studio</div>
+  </footer>
+</body>
+</html>

@@ -12,7 +12,9 @@ module replaces the vibe with an objective richness floor.
 The five richness checks (each worth one point; the gate FAILS below 4/5)
 ========================================================================
   1. ``font-pairing``   — ≥2 distinct primary font families (a display/body
-                          pairing, not one system stack everywhere).
+                          pairing), OR a single CHOSEN webface worked across a
+                          real weight range (display weight + body weight) — not
+                          one flat system stack everywhere.
   2. ``type-scale``     — ≥3 distinct computed text sizes AND max/min ≥ 2.0
                           (a real typographic scale, not flat body copy).
   3. ``hierarchy``      — the above-the-fold composition has ONE dominant focal
@@ -99,6 +101,45 @@ _MAJOR_SECTION_MIN_H = 160
 # Round sizes to this precision when counting the type scale (computed px are
 # floats; 15.999 and 16.0 are the same step).
 _SIZE_ROUND = 0
+# A single typeface still reads as a deliberate type *system* — not a default
+# stack dropped in everywhere — when it is (a) a CHOSEN webface (not an OS/system
+# default family) AND (b) worked across a real weight range: a heavy display
+# weight over a regular body weight. The modern single-variable-face enterprise
+# look (Onest 700 over Onest 400, Inter 800 over Inter 400) earns the
+# font-pairing point this way; a flat system stack with default bold does not.
+# Calibrated for the entity hot-path (V1.6 16/5b): real entity landings often
+# ship one chosen face, and rejecting them floods false-positives.
+_SINGLE_FAMILY_MIN_WEIGHT_SPREAD = 300
+# Generic / OS-default family tokens — the "no type choice was made" tells. A
+# single one of these never satisfies font-pairing on its own, even with bold.
+_SYSTEM_FAMILIES = frozenset(
+    {
+        "system-ui",
+        "-apple-system",
+        "blinkmacsystemfont",
+        "segoe ui",
+        "sans-serif",
+        "serif",
+        "monospace",
+        "ui-sans-serif",
+        "ui-serif",
+        "ui-monospace",
+        "arial",
+        "helvetica",
+        "helvetica neue",
+        "times",
+        "times new roman",
+        "courier",
+        "courier new",
+    }
+)
+# Framework dev-tooling fonts are not part of the app design: the Next.js dev
+# overlay (toasts, error dialog, build indicator) paints in ``__nextjs-Geist``.
+# Drop families with this prefix before counting, so a LIVE dev container is
+# scored on its real typeface, not the devtools chrome (V1.6 16/5b). The prefix
+# is deliberately narrow — ``next/font`` exposes real family names in prod
+# builds (measured: "manrope", "dm sans"), never ``__nextjs`` hashes.
+_FRAMEWORK_FONT_PREFIXES = ("__nextjs",)
 
 
 # Check ids — the vocabulary of the subscore.
@@ -193,13 +234,29 @@ def normalize_family(family: str | None) -> str:
     return first
 
 
+def _is_framework_family(fam: str) -> bool:
+    """A framework dev-tooling font (e.g. the Next.js dev overlay's Geist) — not
+    part of the app's own type choice, so it must not count toward pairing."""
+    return any(fam.startswith(p) for p in _FRAMEWORK_FONT_PREFIXES)
+
+
 def _distinct_families(obs: Obs) -> list[str]:
     fams: list[str] = []
     for t in obs.get("texts", ()):
         fam = normalize_family(t.get("family"))
-        if fam and fam not in fams:
+        if fam and not _is_framework_family(fam) and fam not in fams:
             fams.append(fam)
     return fams
+
+
+def _family_weights(obs: Obs, family: str) -> set[int]:
+    """Distinct font-weights painted in ``family`` across visible text — a single
+    face worked across a heavy + regular weight is a deliberate type system."""
+    out: set[int] = set()
+    for t in obs.get("texts", ()):
+        if normalize_family(t.get("family")) == family:
+            out.add(int(t.get("weight") or 400))
+    return out
 
 
 def _text_sizes(obs: Obs) -> list[float]:
@@ -248,11 +305,20 @@ def _score_font_pairing(obs: Obs) -> list[TasteFinding]:
     fams = _distinct_families(obs)
     if len(fams) >= 2:
         return []
+    # A single CHOSEN webface, worked across a real weight range (a heavy display
+    # weight over a regular body weight), still reads as a deliberate type system
+    # — the modern single-variable-face enterprise look. A system default stack,
+    # or a single flat weight, does not earn the point.
+    if len(fams) == 1 and fams[0] not in _SYSTEM_FAMILIES:
+        weights = _family_weights(obs, fams[0])
+        if weights and max(weights) - min(weights) >= _SINGLE_FAMILY_MIN_WEIGHT_SPREAD:
+            return []
     shown = fams[0] if fams else "(none)"
     return [
         TasteFinding(
             FONT_PAIRING,
-            f"only {len(fams)} font family ({shown}) — pair a display + body face",
+            f"only {len(fams)} flat font family ({shown}) — pair a display + body "
+            f"face, or work one chosen face across a real weight range",
         )
     ]
 
@@ -402,6 +468,13 @@ _AUDIT_JS = r"""
     }
     return false;
   };
+  // Next.js dev tooling renders an overlay (toasts, build indicator, error
+  // dialog) into the live DEV container DOM. It is devtools chrome, not the app,
+  // so skip any node inside a known dev-overlay container before measuring —
+  // production builds carry none of this (V1.6 16/5b strip).
+  const DEV_OVERLAY_SEL = 'nextjs-portal, [data-nextjs-toast], [data-nextjs-dialog], ' +
+    '[data-nextjs-dialog-overlay], #__next-build-watcher, #__next-prerender-indicator';
+  const inDevOverlay = (el) => !!(el && el.closest && el.closest(DEV_OVERLAY_SEL));
   // A painted (non-transparent) colour — alpha 0 / 'transparent' reads as none.
   const isOpaque = (c) => !!c && c !== 'transparent' && !/,\s*0\s*\)/.test(c);
   const bodyBg = getComputedStyle(document.body).backgroundColor;
@@ -426,7 +499,7 @@ _AUDIT_JS = r"""
     const s = tn.nodeValue.replace(/\s+/g, ' ').trim();
     if (!s) continue;
     const el = tn.parentElement;
-    if (!el || !visible(el)) continue;
+    if (!el || !visible(el) || inDevOverlay(el)) continue;
     const cs = getComputedStyle(el);
     const r = el.getBoundingClientRect();
     texts.push({
@@ -445,7 +518,7 @@ _AUDIT_JS = r"""
   const sel = 'section, header, footer, main, article, ' +
               '[class*="hero" i], [class*="section" i], main > div, body > div';
   document.querySelectorAll(sel).forEach((el) => {
-    if (seen.has(el) || !visible(el)) return;
+    if (seen.has(el) || !visible(el) || inDevOverlay(el)) return;
     seen.add(el);
     const r = el.getBoundingClientRect();
     const img = hasRealImage(el);

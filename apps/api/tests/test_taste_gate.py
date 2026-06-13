@@ -108,8 +108,9 @@ def test_fonts_are_surfaced_in_report():
 
 def test_font_pairing_red_single_family():
     obs = _good_obs()
-    for t in obs["texts"]:
+    for t in obs["texts"]:  # one flat face everywhere — no weight contrast
         t["family"] = BODY
+        t["weight"] = 400
     rep = evaluate_observation(obs)
     assert FONT_PAIRING in rep.classes
     assert rep.score == 4  # only this check drops
@@ -118,6 +119,80 @@ def test_font_pairing_red_single_family():
 def test_font_pairing_clean_two_families():
     rep = evaluate_observation(_good_obs())
     assert FONT_PAIRING not in rep.classes
+
+
+# 16/5b: a single CHOSEN webface worked across a real weight range still reads as
+# a deliberate type system — the modern single-variable-face enterprise look that
+# real entity landings ship (sushi = Onest only). Rejecting it floods the entity
+# hot-path with false-positives. But the tolerance must NOT rescue a flat system
+# stack, nor a single face used at one weight.
+
+
+def test_font_pairing_clean_single_chosen_face_weight_contrast():
+    """One chosen webface (Inter) at a display + body weight earns the point."""
+    obs = _good_obs()
+    obs["texts"] = [
+        _txt(family=BODY, size=48, weight=700, top=120, sample="Headline"),
+        _txt(family=BODY, size=20, weight=400, top=220, sample="lead"),
+        _txt(family=BODY, size=16, weight=400, top=300, sample="body"),
+    ]
+    rep = evaluate_observation(obs)
+    assert FONT_PAIRING not in rep.classes
+
+
+def test_font_pairing_red_single_chosen_face_flat_weight():
+    """The same single face at ONE weight everywhere is flat → still fires."""
+    obs = _good_obs()
+    obs["texts"] = [
+        _txt(family=BODY, size=48, weight=400, top=120),
+        _txt(family=BODY, size=20, weight=400, top=220),
+        _txt(family=BODY, size=16, weight=400, top=300),
+    ]
+    rep = evaluate_observation(obs)
+    assert FONT_PAIRING in rep.classes
+
+
+def test_font_pairing_red_single_system_family_even_with_bold():
+    """A system default stack never earns the point, even with bold headings —
+    this is exactly the bland-Bootstrap failure mode the gate must keep catching."""
+    obs = _good_obs()
+    obs["texts"] = [
+        _txt(family="system-ui", size=48, weight=700, top=120),
+        _txt(family="system-ui", size=20, weight=400, top=220),
+        _txt(family="system-ui", size=16, weight=400, top=300),
+    ]
+    rep = evaluate_observation(obs)
+    assert FONT_PAIRING in rep.classes
+
+
+def test_font_pairing_red_single_face_weight_spread_too_small():
+    """400→600 (spread 200) is regular+semibold, not a display contrast → fires."""
+    obs = _good_obs()
+    obs["texts"] = [
+        _txt(family=BODY, size=48, weight=600, top=120),
+        _txt(family=BODY, size=20, weight=400, top=220),
+        _txt(family=BODY, size=16, weight=400, top=300),
+    ]
+    rep = evaluate_observation(obs)
+    assert FONT_PAIRING in rep.classes
+
+
+def test_framework_dev_overlay_font_is_dropped():
+    """The Next.js dev overlay paints in ``__nextjs-Geist``; it must be stripped
+    before counting families, so a live dev container is scored on its real face.
+    A single real face + the overlay font must NOT read as a two-face pairing."""
+    obs = _good_obs()
+    obs["texts"] = [
+        _txt(family=BODY, size=48, weight=400, top=120),
+        _txt(family=BODY, size=16, weight=400, top=300),
+        _txt(family='"__nextjs-Geist", sans-serif', size=14, weight=400, top=50),
+    ]
+    assert g._distinct_families(obs) == ["inter"]  # overlay face dropped
+    rep = evaluate_observation(obs)
+    # only the real face remains, flat → font-pairing still fires (overlay didn't
+    # spuriously create a pair), and the overlay font is not surfaced.
+    assert FONT_PAIRING in rep.classes
+    assert "__nextjs-geist" not in rep.fonts
 
 
 # ── 2. type-scale ─────────────────────────────────────────────────────────────
@@ -378,8 +453,9 @@ def test_abstain_when_not_rendered():
 
 def test_passed_requires_min_score_boundary():
     obs = _good_obs()
-    for t in obs["texts"]:  # break exactly one check (font) → 4/5
+    for t in obs["texts"]:  # break exactly one check (flat single font) → 4/5
         t["family"] = BODY
+        t["weight"] = 400
     rep = evaluate_observation(obs)
     assert rep.score == MIN_SCORE
     assert rep.passed is True
@@ -393,8 +469,9 @@ def test_three_misses_fail_the_gate():
 
 def test_classes_are_in_canonical_order():
     obs = _good_obs()
-    for t in obs["texts"]:
-        t["family"] = BODY  # font miss
+    for t in obs["texts"]:  # flat single font → font miss
+        t["family"] = BODY
+        t["weight"] = 400
     obs["sections"] = [_sec(width=1140, height=600, top=0, hasImage=False)]  # layout + hero miss
     rep = evaluate_observation(obs)
     assert list(rep.classes) == [c for c in CHECKS if c in rep.classes]
@@ -470,6 +547,27 @@ def test_bootstrap_fixture_renders_below_the_floor():
     assert rep.passed is False, f"adversarial fixture must fail taste: {rep.summary()}"
     assert FONT_PAIRING in rep.classes
     assert HERO_IMAGERY in rep.classes
+
+
+# ── 16/5b: the positive single-typeface fixture must pass for real ─────────────
+
+_SINGLE_FACE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "single-typeface.html"
+
+
+def test_single_typeface_fixture_passes_font_pairing():
+    """The committed single-typeface landing (one chosen webface, Onest, worked
+    across a 400→800 weight range) must clear font-pairing when rendered for real
+    — the entity-hot-path calibration. Without the single-family tolerance this
+    page false-fails, which is what kept the entity composition gate OFF. Abstains
+    (skips) without chromium; runs with teeth in the prod-worker container."""
+    html = _SINGLE_FACE_FIXTURE.read_text(encoding="utf-8")
+    rep = asyncio.run(g.audit_files({"index.html": html}))
+    if not rep.rendered:
+        pytest.skip("no chromium available — verified in prod-worker container")
+    assert FONT_PAIRING not in rep.classes, (
+        f"single chosen face with weight contrast must earn font-pairing: {rep.summary()}"
+    )
+    assert rep.passed is True, f"rich single-typeface landing must pass taste: {rep.summary()}"
 
 
 # ── HARNESS-PARITY (V1.6 12/5): read the painted DOM, not the empty shell ──────
