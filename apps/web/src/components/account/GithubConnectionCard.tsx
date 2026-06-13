@@ -12,7 +12,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, Github, Loader2, Unplug } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,44 @@ import {
   getGithubStatus,
 } from "@/lib/api/github";
 
+/**
+ * Публичный API карточки. Оборачивает внутренний компонент в Suspense, потому что
+ * он читает `useSearchParams` — без границы Next 15 валит prerender всей страницы
+ * (`missing-suspense-with-csr-bailout`). Граница живёт ЗДЕСЬ, у источника, чтобы
+ * любой потребитель `<GithubConnectionCard />` получал защиту автоматически.
+ */
 export function GithubConnectionCard() {
+  return (
+    <Suspense fallback={<GithubConnectionCardFallback />}>
+      <GithubConnectionCardInner />
+    </Suspense>
+  );
+}
+
+/** Каркас на время гидрации границы — повторяет рамку карточки, без серого бокса. */
+function GithubConnectionCardFallback() {
+  return (
+    <Card>
+      <CardHeader className="space-y-1">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Github className="h-4 w-4" />
+          GitHub
+        </CardTitle>
+        <CardDescription>
+          Заливай проекты Omnia.AI в свои репозитории одним кликом.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-2 text-sm text-fg-tertiary">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Проверяем подключение…
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function GithubConnectionCardInner() {
   const qc = useQueryClient();
   const router = useRouter();
   const pathname = usePathname();

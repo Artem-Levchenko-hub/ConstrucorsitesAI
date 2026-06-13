@@ -4,3 +4,6 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 .vercel
+
+# pnpm repo — npm lockfile is a regression (ERR_PNPM_OUTDATED_LOCKFILE on VPS), see commit 882f4fc
+package-lock.json
