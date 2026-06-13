@@ -216,6 +216,116 @@ async def test_empty_catalog_is_a_hard_failure(monkeypatch):
     assert "data:empty-collection" in v.failed_classes
 
 
+# ── 2b. composition-legs decoupled from the touch-leg (V1.6 14/5) ────────────
+# `composition=True` runs the desktop-width COMPOSITION_LEGS (taste + hierarchy)
+# as an ALWAYS-ON hard block, independently of `include_rendered` (which dials
+# the touch/correctness legs — wow-dom @44px etc. — behind calibration 11/5).
+
+
+def _stub_selective(monkeypatch, *, taste=None, hier=None):
+    """Stub ONLY taste+hierarchy audit_files; make every other rendered leg
+    raise so a test can prove the composition path runs nothing else."""
+    taste = taste if taste is not None else _taste()
+    hier = hier if hier is not None else _hier()
+
+    async def _t(files, **kw):
+        return taste
+
+    async def _h(files, **kw):
+        return hier
+
+    async def _boom(*a, **kw):  # pragma: no cover — must never be awaited here
+        raise AssertionError("composition path ran a non-composition leg")
+
+    monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _t)
+    monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _h)
+    monkeypatch.setattr(accept_gauntlet.wow_dom_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.perf_a11y_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.chip_pixel_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.data_gate, "audit_files", _boom)
+
+
+async def test_composition_runs_only_taste_and_hierarchy(monkeypatch):
+    _stub_selective(monkeypatch)
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+    )
+    assert [g.gate for g in v.gates] == [
+        accept_gauntlet.DEFECT_REGISTRY,
+        accept_gauntlet.TASTE,
+        accept_gauntlet.HIERARCHY,
+    ]
+    assert v.render_expected is True
+    assert v.passed is True
+    # the touch/correctness legs are decoupled — they did NOT run
+    assert accept_gauntlet.WOW_DOM not in {g.gate for g in v.gates}
+
+
+async def test_composition_pale_app_hard_fails(monkeypatch):
+    # a deliberately-pale app (bootstrap-baseline-equivalent) is REJECTED by the
+    # composition floor — the falsifiable teeth of 14/5.
+    from omnia_api.services.taste_gate import TasteFinding
+
+    _stub_selective(
+        monkeypatch,
+        taste=_taste(score=2, findings=(TasteFinding("hero-imagery", "solid plate"),)),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+    )
+    assert v.passed is False
+    assert accept_gauntlet.TASTE in {g.gate for g in v.hard_failed}
+    assert "taste:hero-imagery" in v.failed_classes
+
+
+async def test_composition_abstain_is_not_a_hard_failure(monkeypatch):
+    # a flaky composition render abstains — strict fails, hot path is spared.
+    _stub_selective(
+        monkeypatch,
+        taste=_taste(rendered=False),
+        hier=_hier(rendered=False),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+    )
+    assert v.passed is False  # strict: abstain ≠ pass
+    assert v.hard_failed == ()
+    assert {g.gate for g in v.abstained} == {
+        accept_gauntlet.TASTE,
+        accept_gauntlet.HIERARCHY,
+    }
+
+
+async def test_composition_plus_full_render_has_no_duplicate_legs(monkeypatch):
+    # composition union with the full rendered set must not double-run taste/hier.
+    _stub_rendered(monkeypatch, wow=_wow(), perf=_perf(), chip=_chip(checked=("palette-bg",)))
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=True,
+        composition=True,
+    )
+    gates = [g.gate for g in v.gates]
+    assert gates.count(accept_gauntlet.TASTE) == 1
+    assert gates.count(accept_gauntlet.HIERARCHY) == 1
+    assert set(gates) == {accept_gauntlet.DEFECT_REGISTRY, *accept_gauntlet.RENDERED_GATES}
+
+
+def test_composition_legs_are_desktop_width_taste_and_hierarchy():
+    # the constant the decouple hangs on: composition = taste + hierarchy, and
+    # neither is the 44px touch leg.
+    assert accept_gauntlet.COMPOSITION_LEGS == (
+        accept_gauntlet.TASTE,
+        accept_gauntlet.HIERARCHY,
+    )
+    assert accept_gauntlet.WOW_DOM not in accept_gauntlet.COMPOSITION_LEGS
+
+
 # ── 3. wiring: the rendered gates are no longer orphaned ─────────────────────
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services"

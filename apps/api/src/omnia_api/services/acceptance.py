@@ -230,12 +230,15 @@ async def evaluate(
     originality_ok = orig_issue is None
 
     # ── 6. acceptance gauntlet — the SHIP DECISION (V1.6 keystone) ────────
-    # The deterministic defect-registry leg always runs (cheap, pure); the
-    # rendered legs are dialed by `acceptance_gauntlet_render_gates` (off by
-    # default on this product-default hot path, see config). We block ship on a
-    # REAL finding (`hard_failed`) — a render flake that merely abstains never
-    # sinks an otherwise-good page (R-10). The vision verdict, formerly a ship
-    # blocker, is now ADVISORY: it only feeds feedback below.
+    # The deterministic defect-registry leg always runs (cheap, pure). The
+    # COMPOSITION legs (taste + hierarchy, desktop width) are the ALWAYS-ON
+    # richness floor — `acceptance_gauntlet_composition_gates` (default ON, V1.6
+    # 14/5): before it, the pillar-1 awwwards promise gated ZERO shipping
+    # requests. The TOUCH/correctness legs (wow-dom 44px / perf-a11y / chip-pixel
+    # / data) stay behind `acceptance_gauntlet_render_gates` until calibration
+    # (11/5). We block ship on a REAL finding (`hard_failed`) — a render flake
+    # that merely abstains never sinks an otherwise-good page (R-10). The vision
+    # verdict, formerly a ship blocker, is now ADVISORY: it only feeds feedback.
     gauntlet_lines: list[str] = []
     gauntlet_classes: list[str] = []
     gauntlet_ok = True
@@ -243,6 +246,7 @@ async def evaluate(
         gauntlet = await accept_gauntlet.run(
             files=files,
             include_rendered=settings.acceptance_gauntlet_render_gates,
+            composition=settings.acceptance_gauntlet_composition_gates,
         )
         if gauntlet.hard_failed:
             gauntlet_ok = False

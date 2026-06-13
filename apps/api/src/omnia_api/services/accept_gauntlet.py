@@ -65,6 +65,18 @@ DATA = "data"
 #: floor; ``taste`` and ``hierarchy`` run at desktop width.
 RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA)
 
+#: The COMPOSITION legs (V1.6 14/5). Taste + hierarchy score richness — type
+#: scale, focal dominance, layered depth, hero imagery — at DESKTOP width, where
+#: the awwwards promise of pillar 1 actually reads. They have NO 44px-touch
+#: false-positive (that pathology is the wow-dom touch leg, calibration 11/5), so
+#: they are decoupled and run ALWAYS-ON as a hard ship-block via ``composition=``
+#: — independent of ``include_rendered`` (which dials the touch/correctness legs).
+COMPOSITION_LEGS = (TASTE, HIERARCHY)
+#: The TOUCH leg — wow-dom's 44px tap-target check, the one with the 40px
+#: false-positive on good shadcn buttons. Stays behind ``include_rendered`` until
+#: calibration 11/5 tiers it (pass ≥44 / warn 40–44 / fail <40).
+TOUCH_LEGS = (WOW_DOM,)
+
 
 @dataclass(frozen=True)
 class GateVerdict:
@@ -184,6 +196,49 @@ def _from_rendered(gate: str, rep: Any) -> GateVerdict:
     )
 
 
+async def _audit_one(
+    gate: str,
+    *,
+    files: dict[str, str] | None,
+    url: str | None,
+    spec: FidelitySpec,
+    width: int,
+) -> Any:
+    """Render one rendered gate against the live target (url first, else files).
+
+    Each gate's own width is honoured: composition legs (taste/hierarchy) read at
+    desktop width, the correctness/touch legs at the mobile floor.
+    """
+    if url:
+        if gate == WOW_DOM:
+            return await wow_dom_gate.audit_url(url, width=width)
+        if gate == PERF_A11Y:
+            return await perf_a11y_gate.audit_url(url, width=width)
+        if gate == CHIP_PIXEL:
+            return await chip_pixel_gate.audit_url(url, spec, width=width)
+        if gate == TASTE:
+            return await taste_gate.audit_url(url, width=TASTE_WIDTH)
+        if gate == HIERARCHY:
+            return await hierarchy_gate.audit_url(url, width=HIERARCHY_WIDTH)
+        if gate == DATA:
+            return await data_gate.audit_url(url, width=width)
+    else:
+        assert files is not None  # render_expected guarantees a target
+        if gate == WOW_DOM:
+            return await wow_dom_gate.audit_files(files, width=width)
+        if gate == PERF_A11Y:
+            return await perf_a11y_gate.audit_files(files, width=width)
+        if gate == CHIP_PIXEL:
+            return await chip_pixel_gate.audit_files(files, spec, width=width)
+        if gate == TASTE:
+            return await taste_gate.audit_files(files, width=TASTE_WIDTH)
+        if gate == HIERARCHY:
+            return await hierarchy_gate.audit_files(files, width=HIERARCHY_WIDTH)
+        if gate == DATA:
+            return await data_gate.audit_files(files, width=width)
+    raise AssertionError(f"unknown rendered gate: {gate}")  # pragma: no cover
+
+
 async def run(
     files: dict[str, str] | None = None,
     *,
@@ -191,53 +246,53 @@ async def run(
     spec: FidelitySpec | None = None,
     width: int = GATE_WIDTH,
     include_rendered: bool = True,
+    composition: bool = False,
 ) -> GauntletVerdict:
-    """Fan every landed gate over ``files`` and/or a live ``url``.
+    """Fan the selected landed gates over ``files`` and/or a live ``url``.
 
     * ``defect_registry`` runs whenever ``files`` is given (source scan, pure).
-    * the rendered gates (wow-dom, perf-a11y, chip-pixel) run when
-      ``include_rendered`` is set AND there is something to render — a ``url`` or
-      a static set containing ``index.html``. They run **sequentially** (one
-      headless browser at a time) to respect machine RAM.
+    * the rendered legs run when there is something to render — a ``url`` or a
+      static set containing ``index.html``. They run **sequentially** (one
+      headless browser at a time) to respect machine RAM, in ``RENDERED_GATES``
+      order.
 
-    ``include_rendered=False`` lets a hot caller (the freeform acceptance gate on
-    the product-default path) take the cheap deterministic floor without paying
-    for three extra renders; the standalone CLI / niche-E2E keeps the default.
+    Two independent dials pick WHICH rendered legs run (V1.6 14/5 decouple):
 
-    Fail-soft: each rendered gate already abstains on a render error, so this
-    never raises on a flaky page (R-10).
+    * ``include_rendered=True`` (default) runs the full set — wow-dom (incl. the
+      44px touch check), perf-a11y, chip-pixel, taste, hierarchy, data. This is
+      the standalone CLI / niche-E2E contract and stays the back-compat default.
+      ``include_rendered=False`` lets a hot caller take the cheap deterministic
+      floor without paying for the extra renders.
+    * ``composition=True`` adds the desktop-width ``COMPOSITION_LEGS`` (taste +
+      hierarchy) **regardless** of ``include_rendered``. These are the awwwards
+      richness floor with no 44px false-positive, so they are the ALWAYS-ON hard
+      ship-block on the product path while the touch leg stays behind calibration
+      (11/5). Unioning the two dials never double-runs a leg.
+
+    Fail-soft (R-10): each rendered gate already abstains on a render error, so
+    an abstain reports ``passed=False`` but is NOT a ``hard_failed`` — a flaky
+    render never sinks an otherwise-good page on the hot path (see
+    ``GauntletVerdict.hard_failed`` vs the strict ``.passed``).
     """
     gates: list[GateVerdict] = []
 
     if files is not None:
         gates.append(_from_registry(defect_registry.scan(files)))
 
-    render_expected = include_rendered and bool(
-        url or (files is not None and "index.html" in files)
-    )
+    legs: set[str] = set(RENDERED_GATES) if include_rendered else set()
+    if composition:
+        legs |= set(COMPOSITION_LEGS)
+
+    has_target = bool(url or (files is not None and "index.html" in files))
+    render_expected = bool(legs) and has_target
     if render_expected:
         spec = spec or FidelitySpec()
-        if url:
-            wow = await wow_dom_gate.audit_url(url, width=width)
-            perf = await perf_a11y_gate.audit_url(url, width=width)
-            chip = await chip_pixel_gate.audit_url(url, spec, width=width)
-            taste = await taste_gate.audit_url(url, width=TASTE_WIDTH)
-            hierarchy = await hierarchy_gate.audit_url(url, width=HIERARCHY_WIDTH)
-            data = await data_gate.audit_url(url, width=width)
-        else:
-            assert files is not None  # render_expected guarantees index.html
-            wow = await wow_dom_gate.audit_files(files, width=width)
-            perf = await perf_a11y_gate.audit_files(files, width=width)
-            chip = await chip_pixel_gate.audit_files(files, spec, width=width)
-            taste = await taste_gate.audit_files(files, width=TASTE_WIDTH)
-            hierarchy = await hierarchy_gate.audit_files(files, width=HIERARCHY_WIDTH)
-            data = await data_gate.audit_files(files, width=width)
-        gates.append(_from_rendered(WOW_DOM, wow))
-        gates.append(_from_rendered(PERF_A11Y, perf))
-        gates.append(_from_rendered(CHIP_PIXEL, chip))
-        gates.append(_from_rendered(TASTE, taste))
-        gates.append(_from_rendered(HIERARCHY, hierarchy))
-        gates.append(_from_rendered(DATA, data))
+        for gate in RENDERED_GATES:  # stable order; only the selected legs run
+            if gate in legs:
+                rep = await _audit_one(
+                    gate, files=files, url=url, spec=spec, width=width
+                )
+                gates.append(_from_rendered(gate, rep))
 
     return GauntletVerdict(tuple(gates), render_expected=render_expected)
 
@@ -282,8 +337,10 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 __all__ = [
+    "COMPOSITION_LEGS",
     "GATE_WIDTH",
     "RENDERED_GATES",
+    "TOUCH_LEGS",
     "GateVerdict",
     "GauntletVerdict",
     "run",

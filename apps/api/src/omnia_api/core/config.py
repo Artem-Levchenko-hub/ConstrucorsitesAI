@@ -321,6 +321,14 @@ class Settings(BaseSettings):
     # their teeth to the hot path. The standalone CLI / niche-E2E always runs the
     # full fan-out (it audits a live container URL, no per-attempt cost).
     acceptance_gauntlet_render_gates: bool = Field(default=False)
+    # V1.6 14/5 — DECOUPLE the composition floor from the touch leg. Taste +
+    # hierarchy (the COMPOSITION_LEGS) score awwwards richness at DESKTOP width and
+    # have NO 44px-touch false-positive, so they are the ALWAYS-ON hard ship-block
+    # on the product path — separate from the wow-dom touch leg (44px), which stays
+    # behind `acceptance_gauntlet_render_gates` until calibration 11/5. Before this
+    # flag the whole render-half was gated by one switch (default OFF), so the
+    # pillar-1 awwwards promise was asserted on ZERO shipping requests. Default ON.
+    acceptance_gauntlet_composition_gates: bool = Field(default=True)
 
     # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
     # Originality: fingerprint each accepted freeform page and penalise the
