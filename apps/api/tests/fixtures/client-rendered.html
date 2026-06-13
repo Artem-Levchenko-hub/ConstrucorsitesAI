@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Client-rendered shell</title>
+  <style>
+    body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #0f172a; background: #ffffff; }
+    .hero { padding: 64px 48px; background: linear-gradient(135deg, #1e293b, #2563eb); color: #f8fafc; }
+    .hero h1 { font-family: Georgia, "Times New Roman", serif; font-size: 52px; margin: 0 0 16px; }
+    .hero p { font-size: 20px; margin: 0 0 24px; max-width: 560px; }
+    .cta { background: #2563eb; color: #ffffff; border: 0; border-radius: 10px;
+           padding: 14px 28px; font-size: 17px; cursor: pointer; }
+    section { padding: 48px; }
+    section h2 { font-family: Georgia, "Times New Roman", serif; font-size: 32px; margin: 0 0 12px; }
+    section p { font-size: 16px; color: #334155; margin: 0; max-width: 640px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 24px; }
+    .card { background: #f1f5f9; border-radius: 12px; padding: 24px; }
+    .card h3 { font-size: 18px; margin: 0 0 8px; }
+  </style>
+</head>
+<body>
+  <!-- At domcontentloaded this shell is empty — exactly like a Next.js /p/<slug>
+       client render before hydration. Real content is painted after a deferred
+       tick, so a harness that reads at `domcontentloaded`+600ms sees nothing and
+       false-fails / false-abstains; only `load`+networkidle+settle reads it. -->
+  <div id="__next"></div>
+  <script>
+    // Paint the real page after a beat (mimics hydration landing post-load).
+    // 750ms sits ABOVE the old 600ms settle and BELOW the fixed
+    // networkidle(>=500ms)+900ms settle, so the fix is what makes it visible.
+    setTimeout(function () {
+      document.getElementById('__next').innerHTML =
+        '<header class="hero">' +
+        '  <h1>Запусти сайт за один промпт</h1>' +
+        '  <p>Enterprise-уровень с первой генерации: дизайн, бэкенд и деплой под ключ.</p>' +
+        '  <button class="cta">Создать сайт</button>' +
+        '</header>' +
+        '<section>' +
+        '  <h2>Как это работает</h2>' +
+        '  <p>Опиши идею — Omnia соберёт готовое приложение с живым предпросмотром.</p>' +
+        '  <div class="grid">' +
+        '    <div class="card"><h3>Промпт</h3><p>Один запрос на русском языке.</p></div>' +
+        '    <div class="card"><h3>Генерация</h3><p>Дизайн рождается в прямом эфире.</p></div>' +
+        '    <div class="card"><h3>Деплой</h3><p>Шарабельная ссылка за секунды.</p></div>' +
+        '  </div>' +
+        '</section>' +
+        '<section>' +
+        '  <h2>Почему Omnia</h2>' +
+        '  <p>Вкус вшит как правила генератора, а не разовая копия.</p>' +
+        '</section>';
+    }, 750);
+  </script>
+</body>
+</html>

@@ -413,3 +413,50 @@ def test_bootstrap_fixture_renders_below_the_floor():
     assert rep.passed is False, f"adversarial fixture must fail taste: {rep.summary()}"
     assert FONT_PAIRING in rep.classes
     assert HERO_IMAGERY in rep.classes
+
+
+# ── HARNESS-PARITY (V1.6 12/5): read the painted DOM, not the empty shell ──────
+#
+# A Next.js `/p/<slug>` is a client render — its content lands *after* `load`, so a
+# harness reading at `domcontentloaded`+600ms sees an empty shell (above_fold_texts
+# ≈ 0) and false-fails / false-abstains every live niche. The fixed harness waits
+# `load`+networkidle+fonts.ready+900ms and reads the hydrated content. These two
+# tests are the falsifiable gate: behavioural (renders the late-painting fixture)
+# and structural (the source can never regress to `domcontentloaded`).
+
+_CLIENT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "client-rendered.html"
+
+
+def test_client_rendered_fixture_is_read_after_hydration():
+    """The committed late-painting fixture, rendered for real, must be SEEN.
+
+    Empty shell → ``above_fold_texts`` ≈ 0; hydrated content → many. Before the
+    harness-parity fix (read at ``domcontentloaded``+600ms) this is red; after it
+    (``load``+networkidle+settle) the painted hero + sections are read. Abstains
+    (skips) without chromium; runs with teeth in the prod-worker container."""
+    html = _CLIENT_FIXTURE.read_text(encoding="utf-8")
+    rep = asyncio.run(g.audit_files({"index.html": html}))
+    if not rep.rendered:
+        pytest.skip("no chromium available — verified in prod-worker container")
+    # The content is painted ~750ms in; only a `load`+networkidle+settle harness
+    # waits long enough to read it. >3 mirrors the prod sushi-restoran check.
+    assert rep.detail["above_fold_texts"] > 3, (
+        f"harness read the empty shell, not the hydrated DOM: {rep.subscore()}"
+    )
+
+
+def test_audit_harness_waits_for_networkidle_not_domcontentloaded():
+    """Structural ratchet: the render harness must never read at
+    ``domcontentloaded`` again — the recurring class that false-failed every live
+    niche. Both ``audit_url`` and ``audit_files`` must settle on network quiescence.
+    Pure source assertion (no browser), so it has teeth even where chromium can't run."""
+    src = Path(g.__file__).read_text(encoding="utf-8")
+    assert 'wait_until="domcontentloaded"' not in src, (
+        "taste_gate must goto with wait_until='load', not 'domcontentloaded'"
+    )
+    assert src.count('wait_until="load"') >= 2, (
+        "both audit_url and audit_files must goto wait_until='load'"
+    )
+    assert 'wait_for_load_state("networkidle"' in src, (
+        "the settle helper must wait for networkidle so client renders paint first"
+    )

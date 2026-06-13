@@ -6,7 +6,11 @@ CLEAN case (0 findings) and a RED case (exactly that check fires), mirroring the
 defect-registry's falsifiable contract: the floor only goes up.
 """
 
+import asyncio
 import math
+from pathlib import Path
+
+import pytest
 
 from omnia_api.services import wow_dom_gate as g
 from omnia_api.services.wow_dom_gate import (
@@ -303,3 +307,51 @@ def test_luminance_monotonic():
     assert relative_luminance((50.0, 50.0, 50.0)) < relative_luminance((200.0, 200.0, 200.0))
     assert math.isclose(relative_luminance((128.0, 128.0, 128.0)),
                         relative_luminance((128.0, 128.0, 128.0)))
+
+
+# ── HARNESS-PARITY (V1.6 12/5): read the painted DOM, not the empty shell ──────
+#
+# A Next.js `/p/<slug>` is a client render — accent CTAs, sections and colour land
+# *after* `load`, so a harness reading at `domcontentloaded`+600ms sees an empty
+# shell (no fills → 0 accent colours) and reports a hollow PASS that silently
+# un-gates beauty on the hot path. The fixed harness waits `load`+networkidle+
+# fonts.ready+900ms and reads the hydrated content. These two tests are the
+# falsifiable gate: behavioural (renders the late-painting fixture) and structural
+# (the source can never regress to `domcontentloaded`).
+
+_CLIENT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "client-rendered.html"
+
+
+def test_client_rendered_fixture_is_read_after_hydration():
+    """The committed late-painting fixture, rendered for real, must be SEEN.
+
+    Empty shell → 0 accent colours (no painted CTA); hydrated content → the blue
+    CTA is read. Before the harness-parity fix (read at ``domcontentloaded``+600ms)
+    this is red; after it (``load``+networkidle+settle) the painted DOM is read.
+    Abstains (skips) without chromium; runs with teeth in the prod-worker container."""
+    html = _CLIENT_FIXTURE.read_text(encoding="utf-8")
+    rep = asyncio.run(g.audit_files({"index.html": html}))
+    if not rep.rendered:
+        pytest.skip("no chromium available — verified in prod-worker container")
+    # The accent CTA is painted ~750ms in; only a `load`+networkidle+settle harness
+    # waits long enough to read it. An empty shell yields zero accent colours.
+    assert len(rep.accent_colors) >= 1, (
+        f"harness read the empty shell, not the hydrated DOM: {rep.subscore()}"
+    )
+
+
+def test_audit_harness_waits_for_networkidle_not_domcontentloaded():
+    """Structural ratchet: the render harness must never read at
+    ``domcontentloaded`` again — the recurring class that produced hollow PASSes on
+    live niches. Both ``audit_url`` and ``audit_files`` must settle on network
+    quiescence. Pure source assertion (no browser), so it has teeth everywhere."""
+    src = Path(g.__file__).read_text(encoding="utf-8")
+    assert 'wait_until="domcontentloaded"' not in src, (
+        "wow_dom_gate must goto with wait_until='load', not 'domcontentloaded'"
+    )
+    assert src.count('wait_until="load"') >= 2, (
+        "both audit_url and audit_files must goto wait_until='load'"
+    )
+    assert 'wait_for_load_state("networkidle"' in src, (
+        "the settle helper must wait for networkidle so client renders paint first"
+    )

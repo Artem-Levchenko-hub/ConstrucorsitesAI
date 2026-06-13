@@ -548,7 +548,7 @@ async def audit_url(url: str, *, width: int = GATE_WIDTH, timeout_ms: int = 15_0
                     reduced_motion="reduce",
                 )
                 try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    await page.goto(url, wait_until="load", timeout=timeout_ms)
                     await _settle(page)
                     return await _audit_page(page)
                 finally:
@@ -586,7 +586,7 @@ async def audit_files(
                     )
                     try:
                         await page.goto(
-                            index_uri, wait_until="domcontentloaded", timeout=timeout_ms
+                            index_uri, wait_until="load", timeout=timeout_ms
                         )
                         await _settle(page)
                         return await _audit_page(page)
@@ -600,14 +600,25 @@ async def audit_files(
 
 
 async def _settle(page: Page) -> None:
-    """Best-effort: fonts ready + a short Tailwind-JIT/paint beat so computed
-    styles are final before we read them. Never blocks the read (R-10)."""
+    """Best-effort: let a client-rendered app actually paint before we read it.
+
+    The generated apps' public ``/p/<slug>`` page is a Next.js client render — its
+    accent CTAs, sections and colour land *after* ``load``, so reading at
+    ``domcontentloaded`` sees an empty shell and reports a hollow PASS that silently
+    un-gates beauty on the hot path (the recurring ``domcontentloaded`` class —
+    V1.6 12/5). Wait for the network to quiesce, fonts to load, then a
+    Tailwind-JIT/paint beat. Mirrors ``hierarchy_gate`` exactly. Every step is
+    best-effort and never blocks the read (R-10)."""
+    try:
+        await page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
     try:
         await page.evaluate("() => document.fonts.ready")
     except Exception:
         pass
     try:
-        await page.wait_for_timeout(600)
+        await page.wait_for_timeout(900)
     except Exception:
         pass
 
