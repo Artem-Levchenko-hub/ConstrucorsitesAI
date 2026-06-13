@@ -1,18 +1,27 @@
 import asyncio
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 from slugify import slugify
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from omnia_api.core.deps import CurrentUserDep, SessionDep
+from omnia_api.core.deps import (
+    CurrentUserDep,
+    OptionalUserDep,
+    SessionDep,
+    set_session_cookie,
+)
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
+from omnia_api.core.security import create_access_token
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.models.user import User
+from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.project import (
     ProjectCreate,
     ProjectPublic,
@@ -31,12 +40,32 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
+async def _ensure_anon_user(session: SessionDep, response: Response) -> User:
+    """Mint an ephemeral anonymous principal and hand the caller its session.
+
+    Backs the V4.1a anon-project seam: an unauthenticated visitor can create a
+    project owned by this row, then keep editing it via the issued cookie, and
+    later `claim` it onto a real account. The anon user has no credentials and a
+    zero-balance wallet (no free funds given away to a throwaway principal).
+    """
+    anon = User(email=None, password_hash=None, is_anon=True)
+    anon.wallet = Wallet(balance_rub=Decimal("0"))
+    session.add(anon)
+    await session.flush()
+    set_session_cookie(response, create_access_token(anon.id))
+    return anon
+
+
 @router.post("", response_model=ProjectPublic, status_code=status.HTTP_201_CREATED)
 async def create_project(
     payload: ProjectCreate,
     session: SessionDep,
-    current_user: CurrentUserDep,
+    response: Response,
+    current_user: OptionalUserDep,
 ) -> Project:
+    owner = current_user if current_user is not None else await _ensure_anon_user(
+        session, response
+    )
     short_id = uuid4().hex[:6]
     base_slug = slugify(payload.name)[:60] or "project"
     slug = f"{base_slug}-{short_id}"
@@ -55,7 +84,7 @@ async def create_project(
         ) or None
 
     project = Project(
-        owner_id=current_user.id,
+        owner_id=owner.id,
         name=payload.name,
         slug=slug,
         template=payload.template,
@@ -111,6 +140,36 @@ async def create_project(
         },
     )
 
+    return project
+
+
+@router.post("/{project_id}/claim", response_model=ProjectPublic)
+async def claim_project(
+    project_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> Project:
+    """Bind an anonymous-owned project to the authenticated caller (V4.1a).
+
+    The viewer→creator handoff: a visitor builds anonymously, signs up, and
+    claims their work. Re-points ``owner_id`` only — snapshots/messages FK the
+    project id, so all source rows survive untouched. Idempotent if the caller
+    already owns it; a project owned by a *different real* account is 403 (never
+    steal an account-bound project).
+    """
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    if project.owner_id == current_user.id:
+        return project
+
+    owner = await session.get(User, project.owner_id)
+    if owner is None or not owner.is_anon:
+        raise ApiError("forbidden", "project is not claimable", status.HTTP_403_FORBIDDEN)
+
+    project.owner_id = current_user.id
+    await session.commit()
+    await session.refresh(project)
     return project
 
 

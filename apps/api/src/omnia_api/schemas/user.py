@@ -26,6 +26,8 @@ class UserPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    email: EmailStr
+    # Nullable since V4.1a: anonymous principals have no email.
+    email: EmailStr | None = None
+    is_anon: bool = False
     created_at: datetime
     last_login_at: datetime | None = None

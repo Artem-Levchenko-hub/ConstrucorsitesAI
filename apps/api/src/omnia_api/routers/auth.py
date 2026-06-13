@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from omnia_api.core.config import get_settings
-from omnia_api.core.deps import CurrentUserDep, SessionDep
+from omnia_api.core.deps import CurrentUserDep, SessionDep, set_session_cookie
 from omnia_api.core.errors import ApiError
 from omnia_api.core.security import (
     consume_dummy_verify,
@@ -19,20 +19,6 @@ from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.user import UserCreate, UserLogin, UserPublic
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-
-def _set_session_cookie(response: Response, token: str) -> None:
-    settings = get_settings()
-    response.set_cookie(
-        key=settings.jwt_cookie_name,
-        value=token,
-        max_age=settings.jwt_ttl_days * 24 * 3600,
-        httponly=True,
-        secure=settings.jwt_cookie_secure,
-        samesite="lax",
-        path="/",
-        domain=settings.jwt_cookie_domain,
-    )
 
 
 @router.post(
@@ -56,7 +42,7 @@ async def register(payload: UserCreate, response: Response, session: SessionDep)
             status.HTTP_409_CONFLICT,
         ) from e
     await session.refresh(user)
-    _set_session_cookie(response, create_access_token(user.id))
+    set_session_cookie(response, create_access_token(user.id))
     return user
 
 
@@ -64,7 +50,7 @@ async def register(payload: UserCreate, response: Response, session: SessionDep)
 async def login(payload: UserLogin, response: Response, session: SessionDep) -> User:
     result = await session.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
-    if user is None:
+    if user is None or user.password_hash is None:
         await consume_dummy_verify()
         raise ApiError("unauthorized", "invalid credentials", status.HTTP_401_UNAUTHORIZED)
     if not await verify_password(payload.password, user.password_hash):
@@ -72,7 +58,7 @@ async def login(payload: UserLogin, response: Response, session: SessionDep) -> 
     user.last_login_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(user)
-    _set_session_cookie(response, create_access_token(user.id))
+    set_session_cookie(response, create_access_token(user.id))
     return user
 
 

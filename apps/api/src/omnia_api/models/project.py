@@ -26,6 +26,14 @@ class Project(Base):
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     template: Mapped[str] = mapped_column(Text, nullable=False)
     design_preset_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Lineage for the V4.1b "Remix this" fork: the project this one was
+    # deep-copied from. NULL for organically-created projects. Self-FK with
+    # ON DELETE SET NULL so deleting a source leaves its forks intact.
+    forked_from: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     # Reified discovery answers (chip taps + free text) marshalled into a
     # FidelitySpec dict — the design the user steered the onboarding popup
     # toward. NULL = onboarding gave no assertable signal. Downstream gates read
