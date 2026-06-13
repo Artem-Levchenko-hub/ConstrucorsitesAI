@@ -329,6 +329,17 @@ class Settings(BaseSettings):
     # flag the whole render-half was gated by one switch (default OFF), so the
     # pillar-1 awwwards promise was asserted on ZERO shipping requests. Default ON.
     acceptance_gauntlet_composition_gates: bool = Field(default=True)
+    # V2.5.2 — chip-pixel = HARD ship-block (causality bridge). The chip-pixel leg
+    # asserts request↔render fidelity from the user's persisted onboarding answers
+    # (`projects.discovery_spec`, V2.5.0/V2.5.1). It has NO 44px-touch false-positive
+    # and is INERT when there is no spec (asserts nothing → passes), so it runs
+    # ALWAYS-ON — decoupled from `acceptance_gauntlet_render_gates` (which keeps the
+    # wow-dom touch leg behind calibration 11/5). `evaluate()` switches it on only
+    # when a non-empty spec exists, so a chip→pixel mismatch (dark+violet requested,
+    # light+red rendered) hard-fails the ship path; projects without onboarding
+    # answers are byte-identical to before (no extra render). Default ON; flip
+    # ACCEPTANCE_GAUNTLET_FIDELITY_GATE=false to disable if a false-positive surfaces.
+    acceptance_gauntlet_fidelity_gate: bool = Field(default=True)
     # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
     # (container-backed), so the composition floor never touched the dominant
     # pillar-1 class. This wires the live-URL path: after a clean hot-reload +

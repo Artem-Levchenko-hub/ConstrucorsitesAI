@@ -236,8 +236,11 @@ async def evaluate(
     # COMPOSITION legs (taste + hierarchy, desktop width) are the ALWAYS-ON
     # richness floor — `acceptance_gauntlet_composition_gates` (default ON, V1.6
     # 14/5): before it, the pillar-1 awwwards promise gated ZERO shipping
-    # requests. The TOUCH/correctness legs (wow-dom 44px / perf-a11y / chip-pixel
-    # / data) stay behind `acceptance_gauntlet_render_gates` until calibration
+    # requests. The chip-pixel FIDELITY leg is also ALWAYS-ON (V2.5.2) whenever a
+    # non-empty `discovery_spec` exists — `acceptance_gauntlet_fidelity_gate`
+    # (default ON) — so the user's onboarding answers causally gate the render.
+    # The remaining TOUCH/correctness legs (wow-dom 44px / perf-a11y / data) stay
+    # behind `acceptance_gauntlet_render_gates` until calibration
     # (11/5). We block ship on a REAL finding (`hard_failed`) — a render flake
     # that merely abstains never sinks an otherwise-good page (R-10). The vision
     # verdict, formerly a ship blocker, is now ADVISORY: it only feeds feedback.
@@ -249,12 +252,23 @@ async def evaluate(
     # the gate can flag a request↔render mismatch. A None / empty spec asserts
     # nothing — byte-identical to the pre-V2.5 no-op default.
     spec = FidelitySpec.from_dict(discovery_spec) if discovery_spec else None
+    # V2.5.2 — turn the chip-pixel leg into an ALWAYS-ON hard ship-block, but only
+    # when there is a real, non-empty spec to honour. It is decoupled from the
+    # `render_gates` flag (which keeps the wow-dom touch leg behind calibration):
+    # a chip→pixel mismatch (dark+violet requested, light render) now fails ship.
+    # No spec / empty spec → leg stays off → no extra render, behaviour unchanged.
+    fidelity = (
+        settings.acceptance_gauntlet_fidelity_gate
+        and spec is not None
+        and not spec.is_empty
+    )
     try:
         gauntlet = await accept_gauntlet.run(
             files=files,
             spec=spec,
             include_rendered=settings.acceptance_gauntlet_render_gates,
             composition=settings.acceptance_gauntlet_composition_gates,
+            fidelity=fidelity,
         )
         if gauntlet.hard_failed:
             gauntlet_ok = False

@@ -326,6 +326,159 @@ def test_composition_legs_are_desktop_width_taste_and_hierarchy():
     assert accept_gauntlet.WOW_DOM not in accept_gauntlet.COMPOSITION_LEGS
 
 
+# ── 2c. fidelity leg (chip-pixel) decoupled from the touch leg (V2.5.2) ───────
+# `fidelity=True` runs the chip-pixel request↔render check as an ALWAYS-ON hard
+# block, independently of `include_rendered` (which dials the wow-dom touch leg
+# behind calibration 11/5). chip-pixel has NO 44px false-positive and is inert
+# without a spec, so it is the causality ship-block: the user's onboarding answers
+# bite the render. Mirror of the composition decouple (14/5).
+
+
+def _stub_fidelity(monkeypatch, *, chip):
+    """Stub ONLY chip-pixel audit_files; make every other rendered leg raise so a
+    test can prove the fidelity path runs nothing else."""
+
+    async def _c(files, spec, **kw):
+        return chip
+
+    async def _boom(*a, **kw):  # pragma: no cover — must never be awaited here
+        raise AssertionError("fidelity path ran a non-fidelity leg")
+
+    monkeypatch.setattr(accept_gauntlet.chip_pixel_gate, "audit_files", _c)
+    monkeypatch.setattr(accept_gauntlet.wow_dom_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.perf_a11y_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.data_gate, "audit_files", _boom)
+
+
+async def test_fidelity_runs_only_chip_pixel(monkeypatch):
+    _stub_fidelity(monkeypatch, chip=_chip(checked=("palette-bg",)))
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=False,
+        fidelity=True,
+    )
+    assert [g.gate for g in v.gates] == [
+        accept_gauntlet.DEFECT_REGISTRY,
+        accept_gauntlet.CHIP_PIXEL,
+    ]
+    assert v.render_expected is True
+    assert v.passed is True
+    # the touch/correctness/composition legs are decoupled — they did NOT run
+    assert accept_gauntlet.WOW_DOM not in {g.gate for g in v.gates}
+    assert accept_gauntlet.TASTE not in {g.gate for g in v.gates}
+
+
+async def test_fidelity_mismatch_is_a_hard_failure(monkeypatch):
+    # the falsifiable teeth of V2.5.2: a request↔render mismatch hard-fails ship.
+    from omnia_api.services.chip_pixel_gate import FidelityFinding
+
+    _stub_fidelity(
+        monkeypatch,
+        chip=_chip(
+            findings=(FidelityFinding("palette-bg", "asked dark, rendered light"),),
+            checked=("palette-bg",),
+        ),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        fidelity=True,
+    )
+    assert v.passed is False
+    assert accept_gauntlet.CHIP_PIXEL in {g.gate for g in v.hard_failed}
+    assert "chip-pixel:palette-bg" in v.failed_classes
+
+
+async def test_fidelity_compliant_render_passes(monkeypatch):
+    # regression guard: a render that honours the spec still PASSES.
+    _stub_fidelity(
+        monkeypatch,
+        chip=_chip(checked=("palette-bg", "primary-family")),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        fidelity=True,
+    )
+    assert v.passed is True
+    assert v.hard_failed == ()
+
+
+async def test_fidelity_abstain_is_not_a_hard_failure(monkeypatch):
+    # a flaky chip-pixel render abstains — strict fails, the hot path is spared.
+    _stub_fidelity(monkeypatch, chip=_chip(rendered=False))
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        fidelity=True,
+    )
+    assert v.passed is False  # strict: abstain ≠ pass
+    assert v.hard_failed == ()
+    assert {g.gate for g in v.abstained} == {accept_gauntlet.CHIP_PIXEL}
+
+
+async def test_fidelity_off_does_not_run_chip_pixel(monkeypatch):
+    # default fidelity=False with composition on → chip-pixel stays off (the
+    # _stub_selective boom-leg for chip would fire if it ran).
+    _stub_selective(monkeypatch)
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        fidelity=False,
+    )
+    assert accept_gauntlet.CHIP_PIXEL not in {g.gate for g in v.gates}
+
+
+async def test_fidelity_plus_composition_has_no_duplicate_legs(monkeypatch):
+    # union of the fidelity + composition dials runs chip + taste + hierarchy once
+    # each, and nothing from the touch/correctness set (wow/perf/data).
+    async def _c(files, spec, **kw):
+        return _chip(checked=("palette-bg",))
+
+    async def _t(files, **kw):
+        return _taste()
+
+    async def _h(files, **kw):
+        return _hier()
+
+    async def _boom(*a, **kw):  # pragma: no cover
+        raise AssertionError("union ran a touch/correctness leg")
+
+    monkeypatch.setattr(accept_gauntlet.chip_pixel_gate, "audit_files", _c)
+    monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _t)
+    monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _h)
+    monkeypatch.setattr(accept_gauntlet.wow_dom_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.perf_a11y_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.data_gate, "audit_files", _boom)
+
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        fidelity=True,
+    )
+    gates = [g.gate for g in v.gates]
+    assert gates.count(accept_gauntlet.CHIP_PIXEL) == 1
+    assert set(gates) == {
+        accept_gauntlet.DEFECT_REGISTRY,
+        accept_gauntlet.CHIP_PIXEL,
+        accept_gauntlet.TASTE,
+        accept_gauntlet.HIERARCHY,
+    }
+
+
+def test_fidelity_legs_are_chip_pixel_only():
+    # the constant the decouple hangs on: fidelity = chip-pixel, and it is neither
+    # the 44px touch leg nor a composition leg.
+    assert accept_gauntlet.FIDELITY_LEGS == (accept_gauntlet.CHIP_PIXEL,)
+    assert accept_gauntlet.CHIP_PIXEL not in accept_gauntlet.TOUCH_LEGS
+    assert accept_gauntlet.CHIP_PIXEL not in accept_gauntlet.COMPOSITION_LEGS
+
+
 # ── 3. wiring: the rendered gates are no longer orphaned ─────────────────────
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services"

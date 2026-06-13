@@ -82,6 +82,14 @@ COMPOSITION_LEGS = (TASTE, HIERARCHY)
 #: false-positive on good shadcn buttons. Stays behind ``include_rendered`` until
 #: calibration 11/5 tiers it (pass ≥44 / warn 40–44 / fail <40).
 TOUCH_LEGS = (WOW_DOM,)
+#: The FIDELITY leg (V2.5.2) — chip-pixel's request↔render check. Like the
+#: composition legs it has NO 44px-touch false-positive, and it is INERT when the
+#: ``spec`` is None/empty (asserts nothing → passes). So it is the ALWAYS-ON
+#: causality hard ship-block via ``fidelity=`` — independent of ``include_rendered``
+#: (which keeps the touch leg behind calibration 11/5). It only bites when the user
+#: actually steered an axis in onboarding (a persisted ``discovery_spec``), turning
+#: chip taps from cosmetic into a real request↔output contract on the ship path.
+FIDELITY_LEGS = (CHIP_PIXEL,)
 
 
 @dataclass(frozen=True)
@@ -256,6 +264,7 @@ async def run(
     composition_width: int = COMPOSITION_WIDTH,
     include_rendered: bool = True,
     composition: bool = False,
+    fidelity: bool = False,
 ) -> GauntletVerdict:
     """Fan the selected landed gates over ``files`` and/or a live ``url``.
 
@@ -276,7 +285,12 @@ async def run(
       **regardless** of ``include_rendered``. These are the awwwards richness
       floor with no 44px false-positive, so they are the ALWAYS-ON hard ship-block
       on the product path while the touch leg stays behind calibration (11/5).
-      Unioning the two dials never double-runs a leg.
+    * ``fidelity=True`` adds the ``FIDELITY_LEGS`` (chip-pixel) the same way —
+      independent of ``include_rendered``. chip-pixel has no 44px false-positive
+      and is inert without a ``spec`` (asserts nothing → passes), so the caller
+      switches it on only when there is a real ``discovery_spec`` to honour
+      (V2.5.2): a request↔render mismatch then hard-fails the ship path.
+      Unioning the three dials never double-runs a leg.
 
     ``composition_width`` picks the viewport the composition legs render at
     (default desktop ``1440``; ``390`` for the MOBILE dimension — V1.6 15/5). A
@@ -298,6 +312,8 @@ async def run(
     legs: set[str] = set(RENDERED_GATES) if include_rendered else set()
     if composition:
         legs |= set(COMPOSITION_LEGS)
+    if fidelity:
+        legs |= set(FIDELITY_LEGS)
 
     has_target = bool(url or (files is not None and "index.html" in files))
     render_expected = bool(legs) and has_target
@@ -360,6 +376,7 @@ if __name__ == "__main__":  # pragma: no cover
 __all__ = [
     "COMPOSITION_LEGS",
     "COMPOSITION_WIDTH",
+    "FIDELITY_LEGS",
     "GATE_WIDTH",
     "RENDERED_GATES",
     "TOUCH_LEGS",

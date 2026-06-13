@@ -144,12 +144,13 @@ async def test_evaluate_gauntlet_clean_does_not_block(monkeypatch):
 
 
 def _spy_gauntlet(monkeypatch, captured):
-    """Patch accept_gauntlet.run to record the spec kwarg and return a clean verdict."""
+    """Patch accept_gauntlet.run to record its kwargs and return a clean verdict."""
     from omnia_api.services import accept_gauntlet
     from omnia_api.services.accept_gauntlet import GauntletVerdict
 
     async def _run(**kwargs):
         captured["spec"] = kwargs.get("spec")
+        captured["fidelity"] = kwargs.get("fidelity")
         return GauntletVerdict((), render_expected=False)
 
     monkeypatch.setattr(accept_gauntlet, "run", _run)
@@ -195,3 +196,57 @@ async def test_evaluate_no_discovery_spec_keeps_none(monkeypatch):
 
     await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
     assert captured["spec"] is None
+
+
+async def test_evaluate_enables_fidelity_for_nonempty_spec(monkeypatch):
+    """V2.5.2 — a non-empty discovery_spec turns the chip-pixel leg ON as an
+    always-on hard block (fidelity=True), independent of the render-gates flag."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    captured: dict[str, object] = {}
+    _spy_gauntlet(monkeypatch, captured)
+
+    await acceptance.evaluate(
+        {"index.html": _GOOD},
+        project_id="p",
+        run_vision=False,
+        discovery_spec={"dark_mode": True, "primary_family": "violet"},
+    )
+    assert captured["fidelity"] is True
+
+
+async def test_evaluate_disables_fidelity_without_spec(monkeypatch):
+    """Back-compat: no discovery_spec → fidelity OFF → no extra chip-pixel render
+    (byte-identical to pre-V2.5.2)."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    captured: dict[str, object] = {}
+    _spy_gauntlet(monkeypatch, captured)
+
+    await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
+    assert captured["fidelity"] is False
+
+
+async def test_evaluate_disables_fidelity_for_empty_spec(monkeypatch):
+    """An all-null discovery_spec row reifies to an empty spec → asserts nothing →
+    fidelity OFF (no point paying for the render)."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    captured: dict[str, object] = {}
+    _spy_gauntlet(monkeypatch, captured)
+
+    await acceptance.evaluate(
+        {"index.html": _GOOD},
+        project_id="p",
+        run_vision=False,
+        discovery_spec={
+            "dark_mode": None,
+            "primary_family": None,
+            "sections": [],
+            "tone": None,
+        },
+    )
+    assert captured["fidelity"] is False
