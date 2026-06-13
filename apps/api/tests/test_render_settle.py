@@ -3,8 +3,12 @@
 The ``domcontentloaded`` defect-class recurred three times because each render
 leg owned its own navigation + settle. These tests make recurrence impossible:
 
-1. ``goto_and_settle`` is unit-tested once (it navigates at ``load`` and settles
-   on network quiescence + fonts + a paint beat, best-effort).
+1. ``goto_and_settle`` is unit-tested once. It navigates at ``domcontentloaded``
+   — the only readiness signal a live Next **dev** container emits (its ``load``
+   never fires; V1.6 16/5) — then settles on ``load`` (best-effort) + network
+   quiescence + fonts + a paint beat. The empty-shell class is closed by the
+   SETTLE (it waits for ``load`` + networkidle + paint before any read), not by
+   the navigation ``wait_until``.
 2. A falsifiable AST assert fails the moment ANY ``*_gate.py`` calls ``page.goto``
    or passes a ``wait_until`` kwarg directly — all navigation must route through
    ``render_settle.goto_and_settle``.
@@ -72,20 +76,28 @@ class _BoomPage:
 # ── 1. helper behaviour ──────────────────────────────────────────────────────
 
 
-def test_goto_and_settle_navigates_at_load_then_settles():
+def test_goto_and_settle_navigates_at_domcontentloaded_then_settles():
     page = _RecordingPage()
     asyncio.run(rs.goto_and_settle(page, "http://app.local/p/x", timeout_ms=12_345))
 
+    # Navigation gates on domcontentloaded — the only signal a live Next dev
+    # container reliably emits. The empty-shell class is closed by the SETTLE,
+    # not this wait_until (V1.6 16/5).
     assert page.calls[0] == (
         "goto",
         "http://app.local/p/x",
-        {"wait_until": "load", "timeout": 12_345},
-    ), "navigation must use wait_until='load', never 'domcontentloaded'"
-    # settle order: networkidle → fonts.ready → paint beat
+        {"wait_until": "domcontentloaded", "timeout": 12_345},
+    ), "navigation must use wait_until='domcontentloaded' (dev containers never fire load)"
+    # settle order: load (best-effort) → networkidle → fonts.ready → paint beat
+    assert ("load_state", "load") in page.calls
     assert ("load_state", "networkidle") in page.calls
     assert any(c[0] == "evaluate" and "fonts.ready" in c[1] for c in page.calls)
     assert ("timeout", rs.PAINT_BEAT_MS) in page.calls
-    assert page.calls.index(("load_state", "networkidle")) > 0
+    # load is waited BEFORE networkidle, both after navigation
+    assert page.calls.index(("load_state", "load")) > 0
+    assert page.calls.index(("load_state", "load")) < page.calls.index(
+        ("load_state", "networkidle")
+    )
 
 
 def test_settle_is_best_effort_and_never_raises():

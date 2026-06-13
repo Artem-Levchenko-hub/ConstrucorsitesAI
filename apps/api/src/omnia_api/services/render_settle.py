@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from playwright.async_api import Page
 
 # Canonical settle budget — every render leg waits the same way.
+LOAD_TIMEOUT_MS = 4_000
 NETWORKIDLE_TIMEOUT_MS = 8_000
 PAINT_BEAT_MS = 900
 
@@ -34,9 +35,22 @@ PAINT_BEAT_MS = 900
 async def settle(page: Page) -> None:
     """Let a client-rendered app actually paint before a gate reads it.
 
-    Network quiesces → fonts load → one Tailwind-JIT/paint beat. Each step is
-    best-effort and swallows its own failure so a render leg never hard-fails on
-    a flaky settle (R-10)."""
+    ``load`` fires → network quiesces → fonts load → one Tailwind-JIT/paint beat.
+    Each step is best-effort and swallows its own failure so a render leg never
+    hard-fails on a flaky settle (R-10).
+
+    The ``load`` wait is best-effort *on purpose* (V1.6 16/5): a live Next **dev**
+    container (HMR socket + dev overlay keep connections open) NEVER fires the
+    ``load`` event, so gating navigation on it abstained every entity app. A
+    static / published page fires ``load`` near-instantly and this wait returns
+    immediately — so the read still happens after ``load`` exactly as 13/5
+    intended, while a dev container falls through to networkidle + paint beat
+    (empirically reads the full client render, ~100 text nodes, not an empty
+    shell)."""
+    try:
+        await page.wait_for_load_state("load", timeout=LOAD_TIMEOUT_MS)
+    except Exception:
+        pass
     try:
         await page.wait_for_load_state("networkidle", timeout=NETWORKIDLE_TIMEOUT_MS)
     except Exception:
@@ -54,9 +68,14 @@ async def settle(page: Page) -> None:
 async def goto_and_settle(page: Page, url: str, *, timeout_ms: int) -> None:
     """The ONLY sanctioned navigation path for a render leg.
 
-    Navigates with ``wait_until='load'`` (never ``domcontentloaded`` — that is the
-    recurring defect class) then runs the canonical :func:`settle`. The ``goto``
-    itself is *not* wrapped in a try/except: a navigation failure must propagate so
-    the caller's fail-soft handler can record an ABSTAIN (``rendered=False``)."""
-    await page.goto(url, wait_until="load", timeout=timeout_ms)
+    Navigates with ``wait_until='domcontentloaded'`` — the only readiness signal a
+    live Next dev container reliably emits (its ``load`` never fires; see
+    :func:`settle`). ``domcontentloaded`` still raises on a real navigation failure
+    (DNS / connection refused / bad URL), so the caller's fail-soft handler records
+    an ABSTAIN (``rendered=False``); the ``goto`` is *not* wrapped in try/except.
+    The canonical :func:`settle` then waits for ``load`` (best-effort) + network
+    quiescence + fonts + a paint beat, so the client render is fully painted before
+    a gate reads it — closing the original ``domcontentloaded``-empty-shell class
+    (13/5) without abstaining on dev containers (16/5)."""
+    await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
     await settle(page)
