@@ -173,6 +173,110 @@ async def claim_project(
     return project
 
 
+@router.post(
+    "/{project_id}/fork",
+    response_model=ProjectPublic,
+    status_code=status.HTTP_201_CREATED,
+)
+async def fork_project(
+    project_id: UUID,
+    session: SessionDep,
+    response: Response,
+    current_user: OptionalUserDep,
+) -> Project:
+    """Zero-signup instant fork — the viral "Remix this" seam (V4.1b).
+
+    A visitor on ``/p/<slug>`` forks the app into their own editable copy with
+    one request and zero credentials: the fork gets a distinct ``project_id``,
+    an anon owner (or the caller, if already authenticated), a deep-copied git
+    repo on its own MinIO key, and the source's HEAD as its first snapshot so it
+    is immediately previewable/editable. Editing the fork mutates only the fork
+    — the source's repo bytes and rows stay byte-identical (isolation invariant:
+    distinct id, deep-copied repo, no shared rows).
+    """
+    source = await session.get(Project, project_id)
+    if source is None:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+
+    owner = current_user if current_user is not None else await _ensure_anon_user(
+        session, response
+    )
+
+    short_id = uuid4().hex[:6]
+    base_slug = slugify(source.name)[:60] or "project"
+    slug = f"{base_slug}-{short_id}"
+
+    fork = Project(
+        owner_id=owner.id,
+        name=source.name,
+        slug=slug,
+        template=source.template,
+        design_preset_id=source.design_preset_id,
+        discovery_spec=source.discovery_spec,
+        image_gen_enabled=source.image_gen_enabled,
+        forked_from=source.id,
+    )
+    session.add(fork)
+    await session.flush()
+
+    # Deep-copy the source repo onto the fork's own MinIO key. A later commit on
+    # the fork re-uploads only the fork's key → the source stays byte-identical.
+    await asyncio.to_thread(repo_svc.duplicate_repo, source.id, fork.id)
+
+    # Carry the source's HEAD as the fork's first snapshot so it is immediately
+    # previewable. A NEW row keyed to the fork's project_id → source snapshots
+    # are never touched. The preview PNG is immutable, so its key is shared.
+    source_head = (
+        await session.get(Snapshot, source.current_snapshot_id)
+        if source.current_snapshot_id
+        else None
+    )
+    snapshot: Snapshot | None = None
+    if source_head is not None:
+        snapshot = Snapshot(
+            project_id=fork.id,
+            commit_sha=source_head.commit_sha,
+            prompt_text=source_head.prompt_text,
+            model_id=source_head.model_id,
+            preview_key=source_head.preview_key,
+            parent_id=None,
+        )
+        session.add(snapshot)
+        await session.flush()
+        fork.current_snapshot_id = snapshot.id
+
+    try:
+        await session.commit()
+    except IntegrityError as e:
+        await session.rollback()
+        raise ApiError(
+            "conflict", "slug already exists", status.HTTP_409_CONFLICT
+        ) from e
+
+    await session.refresh(fork)
+    if snapshot is not None:
+        await session.refresh(snapshot)
+        await publish_event(
+            fork.id,
+            "snapshot.created",
+            {
+                "snapshot": {
+                    "id": str(snapshot.id),
+                    "project_id": str(snapshot.project_id),
+                    "commit_sha": snapshot.commit_sha,
+                    "prompt_text": snapshot.prompt_text,
+                    "model_id": snapshot.model_id,
+                    "parent_id": None,
+                    "preview_url": preview_public_url(snapshot.preview_key),
+                    "is_rollback_target": snapshot.is_rollback_target,
+                    "created_at": snapshot.created_at.isoformat(),
+                }
+            },
+        )
+
+    return fork
+
+
 @router.get("", response_model=list[ProjectPublic])
 async def list_projects(
     session: SessionDep, current_user: CurrentUserDep

@@ -1,6 +1,7 @@
 """Bare-repo storage поверх MinIO + pygit2.
 
-Каждому проекту соответствует один tar.gz в bucket `projects` под ключом `repos/{project_id}.tar.gz`.
+Каждому проекту соответствует один tar.gz в bucket `projects` под ключом
+`repos/{project_id}.tar.gz`.
 При операции tarball распаковывается во временную папку, pygit2 работает как с обычным репо,
 обратно упаковывается и заливается. Простая реализация — оптимизация (хранить только .git/objects)
 оставлена на потом, когда будет реальная нагрузка.
@@ -17,6 +18,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pygit2
+from minio.commonconfig import CopySource
 from minio.error import S3Error
 
 from omnia_api.core.config import get_settings
@@ -98,6 +100,30 @@ def init_repo(project_id: UUID, template_dir: Path, template_name: str) -> str:
         )
         _upload(project_id, workdir)
         return str(commit_oid)
+
+
+def duplicate_repo(source_id: UUID, dest_id: UUID) -> None:
+    """Deep-copy the source project's bare-repo tarball onto the fork's own key.
+
+    Backs the V4.1b "Remix this" fork: a server-side MinIO copy gives the fork a
+    fully isolated repo object. A later ``commit_files`` on the fork re-uploads
+    only the fork's key, so the source's bytes (its whole git history) stay
+    byte-identical — the isolation invariant. Raises if the source repo is
+    absent (forking a project that never got a repo is a real error).
+    """
+    client = get_minio_client()
+    try:
+        client.copy_object(
+            _bucket(),
+            _repo_key(dest_id),
+            CopySource(_bucket(), _repo_key(source_id)),
+        )
+    except S3Error as e:
+        if e.code in {"NoSuchKey", "NoSuchBucket"}:
+            raise RuntimeError(
+                f"repo for source project {source_id} not found in MinIO"
+            ) from e
+        raise
 
 
 def delete_repo(project_id: UUID) -> None:
