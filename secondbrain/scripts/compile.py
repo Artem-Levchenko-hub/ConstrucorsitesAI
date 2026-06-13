@@ -11,6 +11,7 @@ from pathlib import Path
 from config import CONCEPTS_DIR, CONNECTIONS_DIR, DAILY_DIR, KNOWLEDGE_DIR, ROOT_DIR, now_iso
 from llm_provider import parse_json_from_text, run_llm_text
 from utils import (
+    acquire_single_instance_lock,
     append_log_block,
     ensure_structure,
     extract_wikilinks,
@@ -550,6 +551,14 @@ def compile_daily_log(log_path: Path, state: dict) -> dict:
 
 
 def main() -> int:
+    # Single-instance guard — flush spawns compile.py on every post-COMPILE_AFTER_HOUR
+    # flush, so without this they stack into dozens of concurrent compiles. Safe to
+    # skip: compile re-derives pending work from the ingested-hash state on the next run.
+    compile_lock = acquire_single_instance_lock("compile")
+    if compile_lock is None:
+        print("Another compile instance is already running; skipping.")
+        return 0
+
     ensure_structure()
     parser = argparse.ArgumentParser(description="Compile daily logs into knowledge pages")
     parser.add_argument("--all", action="store_true", help="Force compile all daily logs")

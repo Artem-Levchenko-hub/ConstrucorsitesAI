@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from hashlib import sha256
 from pathlib import Path
 from typing import Iterable
+
+try:
+    import fcntl  # POSIX advisory file locking (this runtime is macOS)
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
 
 from config import (
     CONCEPTS_DIR,
@@ -26,6 +32,39 @@ from config import (
     TEMPLATES_DIR,
     TMP_DIR,
 )
+
+
+def acquire_single_instance_lock(name: str):
+    """Best-effort single-instance guard for background scripts.
+
+    Returns an open file handle when the lock is acquired — the caller MUST keep
+    the returned handle referenced for the lifetime of the run (the lock frees
+    when the handle is closed / the process exits). Returns ``None`` when another
+    instance already holds the lock, in which case the caller should skip the run.
+
+    This stops hook-triggered ``flush.py``/``compile.py`` invocations (the
+    after-response hook fires every turn, and schedulers overlap) from piling up
+    into a process storm. Both scripts are incremental — flush re-reads the most
+    recent turns, compile re-derives work from the ingested-hash state — so a
+    skipped run is always recovered by the next one.
+    """
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = TMP_DIR / f"{name}.lock"
+    handle = open(lock_path, "w", encoding="utf-8")
+    if fcntl is None:  # Windows: no flock available — degrade to no-op guard
+        return handle
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    try:
+        handle.truncate(0)
+        handle.write(str(os.getpid()))
+        handle.flush()
+    except OSError:
+        pass
+    return handle
 
 
 def ensure_structure() -> None:

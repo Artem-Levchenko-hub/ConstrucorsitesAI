@@ -14,7 +14,13 @@ from pathlib import Path
 
 from config import COMPILE_AFTER_HOUR, DAILY_DIR, SCRIPTS_DIR, ROOT_DIR
 from llm_provider import run_llm_text
-from utils import ensure_structure, file_hash, load_flush_state, save_flush_state
+from utils import (
+    acquire_single_instance_lock,
+    ensure_structure,
+    file_hash,
+    load_flush_state,
+    save_flush_state,
+)
 
 os.environ["CLAUDE_INVOKED_BY"] = "secondbrain_flush"
 
@@ -228,6 +234,14 @@ def should_skip_flush(conversation_id: str, transcript_path: Path, event_name: s
 
 
 def main() -> int:
+    # Single-instance guard: if a flush is already running, skip. The after-response
+    # hook fires every turn and schedulers overlap; without this they pile up into a
+    # process storm. Safe to skip — the next flush re-reads recent turns.
+    flush_lock = acquire_single_instance_lock("flush")
+    if flush_lock is None:
+        logging.info("Another flush instance is already running; skipping.")
+        return 0
+
     parser = argparse.ArgumentParser(description="Flush transcript memory into daily log")
     parser.add_argument("--payload-file", required=True, help="Path to hook payload json")
     parser.add_argument("--event", default="sessionEnd", help="Hook event name")
