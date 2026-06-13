@@ -37,9 +37,18 @@ def _txt(family=BODY, size=16, weight=400, top=10, sample="x"):
     return {"family": family, "size": size, "weight": weight, "top": top, "sample": sample}
 
 
-def _sec(width=1140, height=400, top=0, hasImage=False):
-    """A section observation: rect + whether it carries a real image."""
-    return {"width": width, "height": height, "top": top, "hasImage": hasImage}
+def _sec(width=1140, height=400, top=0, hasImage=False, contentWidth=None, fullBleed=False):
+    """A section observation: rect + whether it carries a real image, plus the
+    inner content-column width and full-bleed flag the layout-variety check reads.
+    ``contentWidth`` defaults to the section width (no narrower inner column)."""
+    return {
+        "width": width,
+        "height": height,
+        "top": top,
+        "hasImage": hasImage,
+        "contentWidth": width if contentWidth is None else contentWidth,
+        "fullBleed": fullBleed,
+    }
 
 
 def _good_obs():
@@ -216,6 +225,54 @@ def test_layout_variety_red_single_section():
 def test_layout_variety_clean():
     rep = evaluate_observation(_good_obs())
     assert LAYOUT_VARIETY not in rep.classes
+
+
+def test_layout_variety_clean_via_fullbleed_band():
+    """The dominant real-app pattern: full-width <section>s wrapping a centered
+    max-width container. Every section RECT is the viewport width, so the rhythm
+    lives in the full-bleed hero band, not in section-rect variety. A consistent
+    content column + at least one full-bleed band reads as intentional rhythm."""
+    obs = _good_obs()
+    obs["sections"] = [
+        _sec(width=1440, height=620, top=0, hasImage=True, contentWidth=1280, fullBleed=True),
+        _sec(width=1440, height=480, top=620, hasImage=False, contentWidth=1280, fullBleed=False),
+        _sec(width=1440, height=400, top=1100, hasImage=False, contentWidth=1280, fullBleed=False),
+    ]
+    rep = evaluate_observation(obs)
+    assert LAYOUT_VARIETY not in rep.classes
+
+
+def test_layout_variety_clean_via_inner_content_widths():
+    """Bands at the same OUTER width still vary by INNER content column — a
+    full-width hero next to a constrained text column is real rhythm."""
+    obs = _good_obs()
+    obs["sections"] = [
+        _sec(width=1440, height=620, top=0, hasImage=True, contentWidth=1440, fullBleed=False),
+        _sec(width=1440, height=480, top=620, hasImage=False, contentWidth=1024, fullBleed=False),
+    ]
+    rep = evaluate_observation(obs)
+    assert LAYOUT_VARIETY not in rep.classes
+
+
+def test_layout_variety_red_monotone_no_band():
+    """One content width AND no full-bleed banding → genuinely flat → still fires."""
+    obs = _good_obs()
+    obs["sections"] = [
+        _sec(width=1440, height=600, top=0, hasImage=True, contentWidth=1140, fullBleed=False),
+        _sec(width=1440, height=400, top=600, hasImage=False, contentWidth=1140, fullBleed=False),
+    ]
+    rep = evaluate_observation(obs)
+    assert LAYOUT_VARIETY in rep.classes
+
+
+def test_layout_variety_fullbleed_needs_two_sections():
+    """A lone full-bleed band is not a rhythm — a single section never passes."""
+    obs = _good_obs()
+    obs["sections"] = [
+        _sec(width=1440, height=620, top=0, hasImage=True, contentWidth=1280, fullBleed=True),
+    ]
+    rep = evaluate_observation(obs)
+    assert LAYOUT_VARIETY in rep.classes
 
 
 # ── 5. hero-imagery ───────────────────────────────────────────────────────────

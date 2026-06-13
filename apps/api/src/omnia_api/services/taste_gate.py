@@ -18,8 +18,11 @@ The five richness checks (each worth one point; the gate FAILS below 4/5)
   3. ``hierarchy``      — the above-the-fold composition has ONE dominant focal
                           element: the largest text is ≥1.8× the above-fold
                           median and is not tied by a crowd of equal headings.
-  4. ``layout-variety`` — ≥2 distinct major-section content widths (an
-                          intentional rhythm, not one monotone column of cards).
+  4. ``layout-variety`` — intentional rhythm: ≥2 distinct INNER content-column
+                          widths, OR a full-bleed band (edge-to-edge hero image /
+                          colour) alternating with contained content — not one
+                          monotone column of cards. (Reads the inner content
+                          column, not the outer full-width section rect.)
   5. ``hero-imagery``   — the hero region carries a real image (``<img>`` /
                           ``<svg>`` / ``<video>`` / ``background-image``), not a
                           solid colour plate.
@@ -86,6 +89,10 @@ _MAX_TOP_TIER = 2
 # "variety", but a contained column vs a full-bleed band should.
 _WIDTH_BUCKET_PX = 64
 _MIN_DISTINCT_WIDTHS = 2
+# A full-bleed band only reads as *rhythm* when it sits among other sections —
+# a lone hero is not an alternation. Require at least this many major sections
+# before a full-bleed band can satisfy layout-variety on its own.
+_MIN_BANDED_SECTIONS = 2
 # A section is "major" (a candidate hero / layout band) only when it is at least
 # this tall — skips slivers, nav bars and dividers.
 _MAJOR_SECTION_MIN_H = 160
@@ -223,6 +230,17 @@ def _major_sections(obs: Obs) -> list[dict[str, Any]]:
     ]
 
 
+def _content_width(section: dict[str, Any]) -> float:
+    """Width of a section's INNER content column, not its outer rect.
+
+    Modern layouts wrap a full-width ``<section>`` around a centred max-width
+    container, so every section *rect* is the viewport width and the real rhythm
+    lives one level in. ``contentWidth`` is emitted by the extractor; fall back
+    to the section width for hand-built observations that omit it.
+    """
+    return float(section.get("contentWidth") or section.get("width") or 0)
+
+
 # ── the five richness checks (each returns a finding list — empty == passed) ───
 
 
@@ -295,14 +313,24 @@ def _score_hierarchy(obs: Obs) -> list[TasteFinding]:
 
 def _score_layout_variety(obs: Obs) -> list[TasteFinding]:
     sections = _major_sections(obs)
-    buckets = {_bucket(s["width"]) for s in sections}
+    # Rhythm reads two ways, either of which is an intentional layout: distinct
+    # INNER content-column widths (a constrained text block next to a wide hero),
+    # or a full-bleed band (edge-to-edge hero image / colour) alternating with
+    # contained content. Measuring the outer section rect alone false-fails the
+    # ubiquitous full-width-section + centred-container pattern, where every rect
+    # is the viewport width (the 16/5b calibration: real entity apps scored 1
+    # rect-width and were wrongly flagged monotone).
+    buckets = {_bucket(_content_width(s)) for s in sections}
     if len(buckets) >= _MIN_DISTINCT_WIDTHS:
+        return []
+    full_bleed = sum(1 for s in sections if s.get("fullBleed"))
+    if full_bleed >= 1 and len(sections) >= _MIN_BANDED_SECTIONS:
         return []
     return [
         TasteFinding(
             LAYOUT_VARIETY,
-            f"{len(sections)} major section(s) share {len(buckets)} content width(s) "
-            f"— monotone single-column layout",
+            f"{len(sections)} major section(s), {len(buckets)} content width(s), "
+            f"{full_bleed} full-bleed band(s) — monotone single-column layout",
         )
     ]
 
@@ -374,6 +402,21 @@ _AUDIT_JS = r"""
     }
     return false;
   };
+  // A painted (non-transparent) colour — alpha 0 / 'transparent' reads as none.
+  const isOpaque = (c) => !!c && c !== 'transparent' && !/,\s*0\s*\)/.test(c);
+  const bodyBg = getComputedStyle(document.body).backgroundColor;
+  const vw = document.documentElement.clientWidth;
+  // Width of a section's inner content column — the widest visible descendant
+  // meaningfully narrower than the band itself (the centred max-width wrapper).
+  const innerContentWidth = (el, bandW) => {
+    let inner = 0;
+    const kids = el.querySelectorAll('*');
+    for (let i = 0; i < kids.length && i < 300; i++) {
+      const kr = kids[i].getBoundingClientRect();
+      if (kr.height > 40 && kr.width < bandW * 0.95 && kr.width > inner) inner = kr.width;
+    }
+    return inner > bandW * 0.2 ? inner : bandW;
+  };
 
   // text nodes — painted family / size / weight / vertical position
   const texts = [];
@@ -405,11 +448,19 @@ _AUDIT_JS = r"""
     if (seen.has(el) || !visible(el)) return;
     seen.add(el);
     const r = el.getBoundingClientRect();
+    const img = hasRealImage(el);
+    const bandBg = getComputedStyle(el).backgroundColor;
+    // full-bleed: spans the viewport edge-to-edge AND paints something distinct
+    // (a hero image, or a background colour ≠ the page background).
+    const fullBleed = r.width >= vw * 0.98 &&
+      (img || (isOpaque(bandBg) && bandBg !== bodyBg));
     sections.push({
       width: r.width,
       height: r.height,
       top: r.top,
-      hasImage: hasRealImage(el),
+      hasImage: img,
+      contentWidth: innerContentWidth(el, r.width),
+      fullBleed,
     });
   });
 
