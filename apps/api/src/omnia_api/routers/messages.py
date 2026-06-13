@@ -1390,6 +1390,11 @@ async def _process_prompt(
                     project_name=project_name,
                     template=project_template,
                     first_prompt=prompt_text,
+                    # V2.5-override — the persisted onboarding chips tie-break the
+                    # classifier's LLM-fallback (catalog+cart→retail, booking→
+                    # services, tone disambiguates). Confident industry signal
+                    # still wins first; this only acts on the ambiguous path.
+                    discovery_spec=project_discovery_spec,
                 )
                 # Persist so subsequent prompts skip the classifier entirely.
                 async with factory() as cls_session:

@@ -280,12 +280,58 @@ def _pick_heuristic(scores: dict[str, int]) -> str | None:
     return top_id
 
 
-def _build_classifier_prompt(project_name: str, template: str, first_prompt: str | None) -> str:
+def _format_spec_hint(discovery_spec: dict[str, object] | None) -> str:
+    """Render persisted onboarding chips into a short RU hint for the LLM tie-break.
+
+    V2.5-override — generation-side of the chip→design causality bridge at the
+    classifier. The substring/heuristic passes win FIRST and unchanged (a
+    confident industry signal like «клиника» must keep its industry preset and
+    only have its *aesthetic* honoured downstream by V2.5c); this hint reaches the
+    model ONLY on the genuinely-ambiguous path, where the user's explicit
+    onboarding choices are the strongest remaining industry signal — a
+    catalog+cart section answer leans retail/restaurant, a booking answer leans
+    services/clinic, tone disambiguates law-authority vs kids-playful.
+
+    Empty/absent spec → empty string, so the prompt stays byte-identical to the
+    pre-spec build (no behaviour change when onboarding said nothing).
+    """
+    if not discovery_spec:
+        return ""
+    lines: list[str] = []
+    if fam := discovery_spec.get("primary_family"):
+        lines.append(f"палитра/семейство цвета: {fam}")
+    dark = discovery_spec.get("dark_mode")
+    if dark is True:
+        lines.append("тема: тёмная")
+    elif dark is False:
+        lines.append("тема: светлая")
+    if tone := discovery_spec.get("tone"):
+        lines.append(f"тон: {tone}")
+    secs = discovery_spec.get("sections") or ()
+    if isinstance(secs, (list, tuple)) and secs:
+        lines.append("нужные разделы: " + ", ".join(str(s) for s in secs))
+    if not lines:
+        return ""
+    body = "\n".join(f"  - {ln}" for ln in lines)
+    return (
+        "\n- Пожелания из онбординга (учитывай как ПОДСКАЗКУ при сомнении; "
+        "вертикаль всё равно бери прежде всего из описания):\n"
+        f"{body}"
+    )
+
+
+def _build_classifier_prompt(
+    project_name: str,
+    template: str,
+    first_prompt: str | None,
+    discovery_spec: dict[str, object] | None = None,
+) -> str:
     """Промпт для Haiku-классификатора. Короткий и закрытый."""
     options = "\n".join(
         f"- {pid}: {preset.one_liner}" for pid, preset in PRESETS.items()
     )
     description = first_prompt.strip() if first_prompt else "(нет описания)"
+    spec_hint = _format_spec_hint(discovery_spec)
     return f"""Ты классификатор проектов на дизайн-пресеты.
 
 Доступные пресеты (id: краткое описание):
@@ -294,13 +340,18 @@ def _build_classifier_prompt(project_name: str, template: str, first_prompt: str
 Проект:
 - Название: {project_name}
 - Тип шаблона: {template}
-- Первое описание/промпт: {description}
+- Первое описание/промпт: {description}{spec_hint}
 
 Верни ОДНИМ словом id пресета, который подходит лучше всего.
 Без объяснений, без JSON, без markdown — ТОЛЬКО id из списка выше."""
 
 
-async def _llm_classify(project_name: str, template: str, first_prompt: str | None) -> str | None:
+async def _llm_classify(
+    project_name: str,
+    template: str,
+    first_prompt: str | None,
+    discovery_spec: dict[str, object] | None = None,
+) -> str | None:
     """Спросить Haiku. Вернуть preset_id или None при ошибке/мусоре.
 
     Cold-start retry: proxyapi.ru/anthropic иногда отдаёт пустой стрим на
@@ -308,7 +359,7 @@ async def _llm_classify(project_name: str, template: str, first_prompt: str | No
     Делаем до двух попыток — если первая вернула < 2 символов, ретраим
     один раз. С warmup-loop в gateway это становится крайне редким.
     """
-    prompt = _build_classifier_prompt(project_name, template, first_prompt)
+    prompt = _build_classifier_prompt(project_name, template, first_prompt, discovery_spec)
     messages = [
         {
             "role": "system",
@@ -332,7 +383,7 @@ async def _llm_classify(project_name: str, template: str, first_prompt: str | No
                 if event.get("error"):
                     log.warning("preset classifier llm error: %s", event["error"])
                     return None
-        except Exception:  # noqa: BLE001 — fallback всегда возможен
+        except Exception:
             log.exception("preset classifier llm exception")
             return None
         raw = "".join(chunks).strip()
@@ -350,8 +401,10 @@ async def _llm_classify(project_name: str, template: str, first_prompt: str | No
     # last chance — json-формат
     try:
         data = json.loads(raw)
-        if isinstance(data, dict) and (pid := data.get("preset_id")) in PRESETS:
-            return pid
+        if isinstance(data, dict):
+            pid_val = data.get("preset_id")
+            if isinstance(pid_val, str) and pid_val in PRESETS:
+                return pid_val
     except json.JSONDecodeError:
         pass
     log.info("preset classifier llm returned garbage: %r", raw[:200])
@@ -383,14 +436,23 @@ async def classify_preset(
     project_name: str,
     template: str,
     first_prompt: str | None = None,
+    discovery_spec: dict[str, object] | None = None,
 ) -> str:
     """Главный API. Возвращает preset_id; никогда не падает.
 
     Порядок:
     1. substring-match high-confidence industry fragments (аптек, клиник, …);
     2. heuristic по объединённому ``project_name + first_prompt``;
-    3. LLM-fallback (Haiku) если эвристика амбивалентна;
+    3. LLM-fallback (Haiku) если эвристика амбивалентна — **тут консультируется
+       ``discovery_spec`` (V2.5-override): онбординг-чипы юзера попадают в промпт
+       классификатора как ПОДСКАЗКА для tie-break;
     4. DEFAULT_PRESET_ID.
+
+    ``discovery_spec`` намеренно НЕ переопределяет шаги 1–2: уверенный
+    индустриальный сигнал («клиника») оставляет свой industry-preset, а
+    эстетику чипа честит уже writer (V2.5c). Чип влияет только на
+    действительно амбивалентном пути (где иначе горел бы платный LLM-вызов
+    или DEFAULT).
     """
     combined = f"{project_name or ''}\n{first_prompt or ''}"
 
@@ -409,7 +471,7 @@ async def classify_preset(
         )
         return picked
 
-    llm_pick = await _llm_classify(project_name, template, first_prompt)
+    llm_pick = await _llm_classify(project_name, template, first_prompt, discovery_spec)
     if llm_pick is not None:
         log.info("preset classifier llm picked %s", llm_pick)
         return llm_pick
@@ -438,8 +500,8 @@ def classify_preset_sync(
 
 
 __all__ = [
-    "DEFAULT_PRESET_ID",
     "CLASSIFIER_MODEL",
+    "DEFAULT_PRESET_ID",
     "classify_preset",
     "classify_preset_sync",
 ]
