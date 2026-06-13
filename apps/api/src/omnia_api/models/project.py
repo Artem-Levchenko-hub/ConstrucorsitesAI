@@ -1,9 +1,9 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from omnia_api.models.base import Base
@@ -26,6 +26,11 @@ class Project(Base):
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     template: Mapped[str] = mapped_column(Text, nullable=False)
     design_preset_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Reified discovery answers (chip taps + free text) marshalled into a
+    # FidelitySpec dict — the design the user steered the onboarding popup
+    # toward. NULL = onboarding gave no assertable signal. Downstream gates read
+    # this to check the live render against what was actually picked (V2.5).
+    discovery_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     image_gen_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true", default=True
     )

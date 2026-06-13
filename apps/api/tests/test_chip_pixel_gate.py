@@ -15,6 +15,7 @@ from omnia_api.services.chip_pixel_gate import (
     FidelitySpec,
     evaluate_fidelity,
     family_of_hue,
+    spec_from_discovery,
 )
 
 # Seeded "dark + violet" palette signals: near-black surface, violet CTA (#A855F7).
@@ -249,3 +250,78 @@ def test_subscore_shape():
     assert sub["passed"] is False
     assert PRIMARY_FAMILY in sub["failed"]
     assert "accent_hex" in sub["detected"]
+
+
+# ── V2.5.0 spec_from_discovery / to_dict / is_empty ───────────────────────────
+
+
+def test_spec_from_discovery_round_trip_dark_violet():
+    # The falsifiable round-trip: raw chip text "тёмная + фиолетовый" persisted
+    # → dark_mode True, primary_family violet (the V2.5.0 acceptance criterion).
+    history = [
+        {"role": "assistant", "content": "Какая палитра?"},
+        {"role": "user", "content": "тёмная + фиолетовый"},
+    ]
+    spec = spec_from_discovery(history, latest_prompt="сделай каталог и контакты")
+    assert spec is not None
+    assert spec.dark_mode is True
+    assert spec.primary_family == "violet"
+    assert "catalog" in spec.sections
+    assert "contacts" in spec.sections
+
+
+def test_spec_from_discovery_tone_detected():
+    history = [{"role": "user", "content": "хочу премиум стиль"}]
+    spec = spec_from_discovery(history)
+    assert spec is not None
+    assert spec.tone == "premium"
+
+
+def test_spec_from_discovery_empty_history_is_none():
+    # Adversarial: empty discovery → spec None (must not crash), so the column
+    # persists NULL rather than an empty spec.
+    assert spec_from_discovery([], latest_prompt=None) is None
+    assert spec_from_discovery(None, latest_prompt="") is None
+
+
+def test_spec_from_discovery_no_signal_is_none():
+    # User said things, but nothing maps to an axis → no assertable spec.
+    history = [{"role": "user", "content": "ну сделай что-нибудь нормальное"}]
+    assert spec_from_discovery(history) is None
+
+
+def test_spec_from_discovery_ignores_assistant_turns():
+    # Only the user's own answers are the source of truth — an assistant turn
+    # mentioning "тёмная" must not leak into the spec.
+    history = [
+        {"role": "assistant", "content": "Может тёмная фиолетовая тема?"},
+        {"role": "user", "content": "да"},
+    ]
+    # "да" carries no assertable axis → None (assistant suggestion ignored).
+    assert spec_from_discovery(history) is None
+
+
+def test_to_dict_round_trips_via_constructor():
+    spec = FidelitySpec.from_answers(
+        palette="тёмная + фиолетовый", sections="каталог, контакты", tone="premium"
+    )
+    d = spec.to_dict()
+    assert d == {
+        "dark_mode": True,
+        "primary_family": "violet",
+        "sections": ["catalog", "contacts"],
+        "tone": "premium",
+    }
+    rebuilt = FidelitySpec(
+        dark_mode=d["dark_mode"],
+        primary_family=d["primary_family"],
+        sections=tuple(d["sections"]),
+        tone=d["tone"],
+    )
+    assert rebuilt == spec
+
+
+def test_is_empty():
+    assert FidelitySpec().is_empty is True
+    assert FidelitySpec(dark_mode=False).is_empty is False
+    assert FidelitySpec(sections=("catalog",)).is_empty is False

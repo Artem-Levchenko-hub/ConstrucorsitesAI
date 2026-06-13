@@ -235,6 +235,29 @@ class FidelitySpec:
             tone=(tone.strip().lower() or None) if tone else None,
         )
 
+    @property
+    def is_empty(self) -> bool:
+        """No axis carries an assertable answer — onboarding said nothing."""
+        return (
+            self.dark_mode is None
+            and self.primary_family is None
+            and not self.sections
+            and self.tone is None
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-serialisable form for ``projects.discovery_spec`` (JSONB).
+
+        Round-trips via ``FidelitySpec(**spec.to_dict())`` (``sections`` rebuilt
+        as a tuple by the caller) — the persisted shape downstream gates read.
+        """
+        return {
+            "dark_mode": self.dark_mode,
+            "primary_family": self.primary_family,
+            "sections": list(self.sections),
+            "tone": self.tone,
+        }
+
 
 def _canonical_sections(
     sections: str | list[str] | tuple[str, ...] | None,
@@ -253,6 +276,59 @@ def _canonical_sections(
         if canon and canon not in out:
             out.append(canon)
     return tuple(out)
+
+
+# Tone words (chip labels / free text) → canonical tone token. Conservative on
+# purpose: only an explicit tone word sets the axis, so an undecided onboarding
+# leaves tone NULL rather than guessing from prose (same abstain discipline as
+# the render-time tone gate). Substring match, first hit wins.
+_TONE_ALIASES: tuple[tuple[str, str], ...] = (
+    ("премиум", "premium"), ("premium", "premium"), ("люкс", "premium"), ("luxury", "premium"),
+    ("дружелюб", "friendly"), ("friendly", "friendly"), ("тёпл", "friendly"), ("тепл", "friendly"),
+    ("игрив", "playful"), ("playful", "playful"), ("весёл", "playful"), ("весел", "playful"),
+    ("минимал", "minimal"), ("minimal", "minimal"), ("лаконичн", "minimal"), ("сдержан", "minimal"),
+    ("строг", "corporate"), ("корпоратив", "corporate"), ("corporate", "corporate"),
+    ("делов", "corporate"), ("официальн", "corporate"),
+)
+
+
+def _detect_tone(text: str | None) -> str | None:
+    low = (text or "").lower()
+    for alias, canon in _TONE_ALIASES:
+        if alias in low:
+            return canon
+    return None
+
+
+def spec_from_discovery(
+    history: list[dict[str, str]] | None,
+    latest_prompt: str | None = None,
+) -> FidelitySpec | None:
+    """Marshal raw discovery answers (chip taps + free text) into a spec.
+
+    The user's onboarding turns — their chip taps and any "Другое" free text —
+    are the source of truth for the design they steered toward. We gather every
+    user-role turn plus the newest prompt and reify the palette / sections / tone
+    signal through the same :meth:`FidelitySpec.from_answers` extractor the
+    gauntlet uses (R-04 single source). Returns ``None`` when nothing assertable
+    was said, so an undecided onboarding persists NULL rather than an empty spec.
+    """
+    parts: list[str] = []
+    for m in history or []:
+        if (m.get("role") or "") == "user":
+            content = (m.get("content") or "").strip()
+            if content:
+                parts.append(content)
+    if latest_prompt and latest_prompt.strip():
+        parts.append(latest_prompt.strip())
+    # Comma-join so multi-section answers split cleanly in _canonical_sections.
+    answers = ", ".join(parts)
+    if not answers:
+        return None
+    spec = FidelitySpec.from_answers(
+        palette=answers, sections=answers, tone=_detect_tone(answers)
+    )
+    return None if spec.is_empty else spec
 
 
 # ── public result types ───────────────────────────────────────────────────────
@@ -729,4 +805,5 @@ __all__ = [
     "audit_url",
     "evaluate_fidelity",
     "family_of_hue",
+    "spec_from_discovery",
 ]

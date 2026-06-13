@@ -50,6 +50,7 @@ from omnia_api.services import (
 )
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.art_director_writer import art_director_writer_generate
+from omnia_api.services.chip_pixel_gate import spec_from_discovery
 from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.contrast_guard import enforce_contrast
 from omnia_api.services.director_polish import director_polish_generate
@@ -585,6 +586,18 @@ async def post_prompt(
                     logging.getLogger(__name__).warning(
                         "stack_routing switch failed (static fallback): %r", _sr_exc
                     )
+            # Persist the chip→spec the user steered onboarding toward, so
+            # downstream gates can check the live render against what was picked
+            # (V2.5.0). Set AFTER stack-routing so a routing rollback can't wipe
+            # it; committed with the message rows below. Fail-soft (R-10) — a
+            # marshalling hiccup must never block the build.
+            try:
+                _spec = spec_from_discovery(_history, payload.prompt)
+                project.discovery_spec = _spec.to_dict() if _spec else None
+            except Exception as _ds_exc:
+                logging.getLogger(__name__).warning(
+                    "discovery_spec marshal failed (skipping): %r", _ds_exc
+                )
         # else: ASK — we stream the question below, no generation this turn.
     elif interview_eligible and settings.use_clarify_interview:
         # Legacy batch clarify (fires only with zero prior messages so the
