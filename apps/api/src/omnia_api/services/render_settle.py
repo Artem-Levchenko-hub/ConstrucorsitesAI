@@ -31,6 +31,14 @@ LOAD_TIMEOUT_MS = 4_000
 NETWORKIDLE_TIMEOUT_MS = 8_000
 PAINT_BEAT_MS = 900
 
+# Stranger first-paint budget (V4.0b). NORTH STAR pillar 4: "коллега открыл → за
+# секунды". The share-link first-paint gate asserts a cold incognito visitor sees
+# a contentful paint within this wall — anything slower silently kills k-factor.
+# Single-source R-04 constant: it lives here beside the other paint-timing budgets
+# (not "e.g. 3s" inline) so a gate cannot be satisfied by an arbitrary number and
+# an adversarial fixture (paint > budget) is forced to fail against a fixed bar.
+FIRST_PAINT_BUDGET_MS = 3_000
+
 
 async def settle(page: Page) -> None:
     """Let a client-rendered app actually paint before a gate reads it.
