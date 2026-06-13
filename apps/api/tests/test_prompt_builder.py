@@ -586,3 +586,45 @@ def test_anime_and_kit_js_byte_identical_across_4_templates() -> None:
             for t in ("blank", "blog", "landing", "portfolio")
         ]
         assert files[0] == files[1] == files[2] == files[3], asset
+
+
+# ── V2.5c — discovery_spec steers the freeform/plain build prompt ──────────────
+
+
+def _violet_dark_spec() -> dict:
+    return {
+        "dark_mode": True,
+        "primary_family": "violet",
+        "sections": ["catalog", "contacts"],
+        "tone": None,
+    }
+
+
+def test_build_system_prompt_honours_discovery_spec() -> None:
+    from omnia_api.services.chip_pixel_gate import _FAMILY_HEX
+
+    out = build_system_prompt("fullstack", discovery_spec=_violet_dark_spec())
+    assert "ЯВНЫЙ ВЫБОР ПОЛЬЗОВАТЕЛЯ" in out
+    assert _FAMILY_HEX["violet"] in out          # violet HEX anchor
+    assert "ТЁМНАЯ" in out                        # dark directive
+    assert 'id="catalog"' in out and 'id="contact"' in out  # both sections
+
+
+def test_build_system_prompt_spec_none_is_byte_identical() -> None:
+    # The whole back-compat contract: absent/empty spec → unchanged prompt.
+    base = build_system_prompt("fullstack")
+    assert build_system_prompt("fullstack", discovery_spec=None) == base
+    assert build_system_prompt("fullstack", discovery_spec={}) == base
+
+
+def test_build_system_prompt_spec_directive_precedes_palette_anchor() -> None:
+    # The explicit user choice must sit ABOVE the preset palette anchor so the
+    # model reads it first (and the directive lifts any palette ban on the
+    # chip-picked family).
+    out = build_system_prompt(
+        "fullstack", preset_id="fintech", discovery_spec=_violet_dark_spec()
+    )
+    if "ОБЯЗАТЕЛЬНАЯ ПАЛИТРА И ШРИФТЫ" in out:  # preset resolved → anchor present
+        assert out.index("ЯВНЫЙ ВЫБОР ПОЛЬЗОВАТЕЛЯ") < out.index(
+            "ОБЯЗАТЕЛЬНАЯ ПАЛИТРА И ШРИФТЫ"
+        )

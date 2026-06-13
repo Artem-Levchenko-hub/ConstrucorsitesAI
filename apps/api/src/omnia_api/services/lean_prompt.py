@@ -169,6 +169,7 @@ def build_lean_system_prompt(
     preset_id: str | None,
     skill_brief: dict[str, Any] | None,
     user_prompt: str | None = None,
+    discovery_spec: dict[str, Any] | None = None,
 ) -> str:
     """Compose the lean catalog-mode system prompt.
 
@@ -193,6 +194,21 @@ def build_lean_system_prompt(
     from omnia_api.services.design_presets import PRESETS, format_preset_block
 
     parts: list[str] = [_IDENTITY]
+
+    # V2.5c — generation-side of the chip→design causality bridge for the
+    # catalog/entity writer (the dominant output path). The user's onboarding
+    # chip taps become a hard directive placed at the high-attention START
+    # region, BEFORE the preset block, so the explicit choice outranks the
+    # classifier-picked preset palette. Empty / absent spec → no block →
+    # byte-identical to the pre-V2.5c lean prompt (back-compat).
+    if discovery_spec:
+        from omnia_api.services.chip_pixel_gate import (
+            FidelitySpec,
+            spec_prompt_directive,
+        )
+        _directive = spec_prompt_directive(FidelitySpec.from_dict(discovery_spec))
+        if _directive:
+            parts.append("<user_choice>\n" + _directive + "\n</user_choice>")
 
     if preset_id and preset_id in PRESETS:
         try:
@@ -239,6 +255,7 @@ def build_catalog_messages(
     selected_elements: Sequence[dict[str, Any]] | None,
     preset_id: str | None,
     project_id: str | None,
+    discovery_spec: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """Assemble the full message list for catalog/IR mode.
 
@@ -257,6 +274,7 @@ def build_catalog_messages(
     messages: list[dict[str, str]] = [
         {"role": "system", "content": build_lean_system_prompt(
             preset_id=preset_id, skill_brief=skill_brief, user_prompt=user_prompt,
+            discovery_spec=discovery_spec,
         )},
     ]
     for m in list(history)[-HISTORY_LIMIT:]:

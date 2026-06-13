@@ -128,6 +128,31 @@ _FAMILY_ALIASES: dict[str, str] = {
     "малиновый": "magenta", "magenta": "magenta", "fuchsia": "magenta",
 }
 
+# Representative HEX per family — the swatch the generation-side directive hands
+# the writer so a chip-picked palette lands ON the family band the render-time
+# gate (``family_of_hue`` below) reads back. Each value is hand-tuned to sit at
+# the CENTRE of its family's exclusive sub-range (bands overlap; first match by
+# insertion order wins), so a writer that uses exactly this HEX passes
+# ``PRIMARY_FAMILY`` — closing the loop "writer honours spec → gate agrees".
+# CTA swatches (vivid, mid-lightness), not full palettes — the writer derives
+# shades around the family. R-04: the ONE source both prompt builders read.
+_FAMILY_HEX: dict[str, str] = {
+    "red": "#DA493E",
+    "orange": "#DA8A3E",
+    "amber": "#DACF3E",
+    "yellow": "#C5DA3E",
+    "green": "#45DA3E",
+    "emerald": "#3EDABA",
+    "teal": "#3EC7DA",
+    "cyan": "#3E9EDA",
+    "blue": "#3E5FDA",
+    "indigo": "#683EDA",
+    "violet": "#AA3EDA",
+    "purple": "#DA3ED2",
+    "magenta": "#DA3EAB",
+    "pink": "#DA3E79",
+}
+
 # Canonical section → keyword sets. ``id``/nav-hash are matched against the EN +
 # translit set; visible headings against the RU + EN set. A section counts as
 # present if ANY signal hits — an authored anchor, a nav link, or a heading.
@@ -350,6 +375,68 @@ def spec_from_discovery(
         palette=answers, sections=answers, tone=_detect_tone(answers)
     )
     return None if spec.is_empty else spec
+
+
+def spec_prompt_directive(spec: FidelitySpec | None) -> str:
+    """Render a chip-spec into a top-of-prompt directive the writer must obey.
+
+    The generation-side leg of the causality bridge: the gauntlet already JUDGES
+    a build against ``discovery_spec`` (gate side), but until now the writer never
+    SAW it — a "тёмная тема" chip never reached the prompt, so the writer rendered
+    light, the gate caught the mismatch, regeneration ran on the same raw prompt,
+    and the project entered a deterministic reject loop (gate-teeth without
+    generation-honour = net-negative). This emits the missing directive so a
+    chip-picked axis actually steers generation.
+
+    The block is imperative and ranks the user's explicit chip choice ABOVE the
+    preset palette / brief / training default — those are guesses, a tapped chip
+    is a decision. The palette line names the family AND a concrete HEX
+    (:data:`_FAMILY_HEX`) chosen to land on the same family band ``family_of_hue``
+    reads, so honouring it also satisfies the gate (no honour-but-still-fail).
+
+    Returns ``""`` for ``None`` / empty spec — caller skips the section and the
+    prompt is byte-identical to the pre-V2.5c build (back-compat, R-10).
+    """
+    if spec is None or spec.is_empty:
+        return ""
+    lines = [
+        "ЯВНЫЙ ВЫБОР ПОЛЬЗОВАТЕЛЯ (онбординг-чипы) — ВЫСШИЙ приоритет. Перебивает "
+        "пресет, бриф и любой training-default. Тапнутый чип = решение, а не догадка. "
+        "Реализуй ТОЧНО:"
+    ]
+    if spec.primary_family:
+        hexv = _FAMILY_HEX.get(spec.primary_family)
+        if hexv:
+            lines.append(
+                f"  • Главный акцент (--primary / CTA / ссылки / фокус) = семейство "
+                f"«{spec.primary_family}». Ставь HEX {hexv} (или близкий оттенок ТОГО ЖЕ "
+                f"семейства). Любой запрет на этот цвет в блоке палитры/брифа — СНЯТ: "
+                f"пользователь выбрал его явно."
+            )
+    if spec.dark_mode is True:
+        lines.append(
+            "  • Тема ТЁМНАЯ: фон тёмный (#0A0A0A…#16181D), текст светлый (#E5E7EB+), "
+            'в Tailwind/:root установи dark_mode=true.'
+        )
+    elif spec.dark_mode is False:
+        lines.append(
+            "  • Тема СВЕТЛАЯ: фон светлый (#FFFFFF…#F8FAFC), текст тёмный, dark_mode=false."
+        )
+    if spec.tone:
+        lines.append(
+            f"  • Тон/вайб = «{spec.tone}» — выдержи во всей вёрстке: типографика, "
+            f"плотность, motion, copy."
+        )
+    if spec.sections:
+        rendered = []
+        for canon in spec.sections:
+            kw = _SECTION_KEYWORDS.get(canon)
+            anchor = kw["anchor"][0] if kw else canon
+            rendered.append(f'«{canon}» (<section id="{anchor}"> + видимый заголовок)')
+        lines.append(
+            "  • ОБЯЗАТЕЛЬНЫЕ секции, каждая отдельным блоком: " + ", ".join(rendered) + "."
+        )
+    return "\n".join(lines)
 
 
 # ── public result types ───────────────────────────────────────────────────────

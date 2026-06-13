@@ -128,3 +128,35 @@ def test_build_catalog_messages_returns_system_plus_user() -> None:
     assert msgs[0]["role"] == "system"
     assert msgs[1]["role"] == "user"
     assert "кофейни" in msgs[1]["content"]
+
+
+# ── V2.5c — discovery_spec steers the catalog/entity (dominant) build prompt ───
+
+
+def test_lean_prompt_honours_discovery_spec() -> None:
+    from omnia_api.services.chip_pixel_gate import _FAMILY_HEX
+    from omnia_api.services.lean_prompt import build_lean_system_prompt
+
+    spec = {
+        "dark_mode": True,
+        "primary_family": "violet",
+        "sections": ["catalog", "contacts"],
+        "tone": None,
+    }
+    out = build_lean_system_prompt(preset_id=None, skill_brief=None, discovery_spec=spec)
+    assert "<user_choice>" in out
+    assert _FAMILY_HEX["violet"] in out
+    assert "ТЁМНАЯ" in out
+    assert 'id="catalog"' in out and 'id="contact"' in out
+
+
+def test_lean_prompt_spec_none_is_byte_identical() -> None:
+    from omnia_api.services.lean_prompt import build_lean_system_prompt
+
+    base = build_lean_system_prompt(preset_id=None, skill_brief=None)
+    assert build_lean_system_prompt(
+        preset_id=None, skill_brief=None, discovery_spec=None
+    ) == base
+    assert build_lean_system_prompt(
+        preset_id=None, skill_brief=None, discovery_spec={}
+    ) == base

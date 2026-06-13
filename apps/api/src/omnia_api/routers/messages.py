@@ -1168,6 +1168,7 @@ async def _catalog_fallback_generate(
     user_id: UUID,
     assistant_message_id: UUID,
     current_files: dict[str, str],
+    discovery_spec: dict[str, object] | None = None,
 ) -> dict[str, str] | None:
     """Acceptance fallback — regenerate a page via the catalog/IR path.
 
@@ -1194,6 +1195,9 @@ async def _catalog_fallback_generate(
             selected_elements=selected_elements,
             preset_id=preset_id,
             project_id=str(project_id),
+            # V2.5c — regeneration must honour the same chip-spec the gate judges
+            # against, else reject→regen ignores chips and loops forever (V2.5d).
+            discovery_spec=discovery_spec,
         )
         parts: list[str] = []
         async for ev in stream_chat_completion(
@@ -1420,6 +1424,10 @@ async def _process_prompt(
             # Lean edit-only prompt (preserve everything, surgical <edit>) when
             # the triage routed this to a cheap targeted edit.
             edit_mode=surgical,
+            # V2.5c — generation-side of the chip→design causality bridge: the
+            # persisted onboarding chip choices steer the writer's palette /
+            # theme / sections (the gauntlet already JUDGES against this spec).
+            discovery_spec=project_discovery_spec,
         )
         print(f"[PP] messages_built count={len(messages)} surgical={surgical}", flush=True)
 
@@ -3016,6 +3024,7 @@ async def _process_prompt(
                         user_id=user_id,
                         assistant_message_id=assistant_message_id,
                         current_files=current_files,
+                        discovery_spec=project_discovery_spec,
                     )
                     if _fb_files:
                         _fb_files = {p: c for p, c in _fb_files.items() if p not in KIT_FILES}

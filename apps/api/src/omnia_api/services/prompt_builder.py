@@ -2617,6 +2617,7 @@ def build_system_prompt(
     skill_brief: str | None = None,
     model_id: str | None = None,
     design_tokens_block: str | None = None,
+    discovery_spec: dict[str, Any] | None = None,
 ) -> str:
     """Собрать system prompt под тип проекта.
 
@@ -2662,7 +2663,21 @@ def build_system_prompt(
     # the middle" problem where Haiku 4.5 routinely ignores guidance
     # buried after position #5-6. Anchoring BOTH at the top forces the
     # model to read them before _QUALITY_BAR.
-    design_anchor_parts = [p for p in (palette_anchor, skill_block) if p]
+    # V2.5c — generation-side of the chip→design causality bridge. A persisted
+    # discovery_spec (the user's onboarding chip taps) emits a hard directive that
+    # ranks ABOVE the preset palette / brief, placed FIRST in the anchor so the
+    # model reads the explicit user choice before any guessed palette. Empty /
+    # absent spec → "" → byte-identical to the pre-V2.5c prompt (back-compat).
+    spec_directive = ""
+    if discovery_spec:
+        from omnia_api.services.chip_pixel_gate import (
+            FidelitySpec,
+            spec_prompt_directive,
+        )
+        spec_directive = spec_prompt_directive(FidelitySpec.from_dict(discovery_spec))
+    design_anchor_parts = [
+        p for p in (spec_directive, palette_anchor, skill_block) if p
+    ]
     design_anchor = "\n\n".join(design_anchor_parts) if design_anchor_parts else ""
 
     # Phase A.2 — _DESIGN_KIT is the generic catalog of per-industry
@@ -3357,6 +3372,7 @@ def build_messages(
     project_id: str | None = None,
     model_id: str | None = None,
     edit_mode: bool = False,
+    discovery_spec: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     # Surgical EDIT mode (CHEAP intent on an existing project): a lean,
     # edit-only prompt that forbids rewriting the page or re-rolling the palette.
@@ -3396,6 +3412,7 @@ def build_messages(
             selected_elements=selected_elements,
             preset_id=preset_id,
             project_id=project_id,
+            discovery_spec=discovery_spec,
         )
 
     # Freeform: hand the model project-seeded design tokens (palette+fonts) so
@@ -3433,6 +3450,7 @@ def build_messages(
                 skill_brief=skill_brief,
                 model_id=model_id,
                 design_tokens_block=design_tokens_block,
+                discovery_spec=discovery_spec,
             ),
         }
     ]
