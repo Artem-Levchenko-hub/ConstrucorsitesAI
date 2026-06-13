@@ -53,8 +53,10 @@ async def test_fork_without_auth_creates_anon_owned_copy(
     # Issued a session so the anon forker can keep editing without signing up.
     assert "omnia_session" in r.cookies
 
-    # Isolation assert (1): distinct id + lineage.
+    # Isolation assert (1): distinct id + lineage (exposed in the response AND
+    # persisted, so the client can show provenance / a "back to original" edge).
     assert fork["id"] != source_id
+    assert fork["forked_from"] == source_id
     fork_row = await db_session.get(Project, fork["id"])
     assert str(fork_row.forked_from) == source_id
 

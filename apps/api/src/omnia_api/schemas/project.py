@@ -94,6 +94,10 @@ class ProjectPublic(BaseModel):
     template: Template
     design_preset_id: str | None = None
     image_gen_enabled: bool = True
+    # Lineage for V4.1b "Remix this": the project this one was forked from, or
+    # None for organically created projects. Lets the client show provenance and
+    # a "back to original" / attribution edge (the viral return-loop, V4.2b).
+    forked_from: UUID | None = None
     current_snapshot_id: UUID | None
     # Thumbnail of the current snapshot (its rendered preview PNG), or None until
     # the first preview render lands. Not a mapped column — the projects router
