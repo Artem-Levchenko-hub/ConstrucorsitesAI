@@ -351,6 +351,8 @@
 ## 6. ПРОГРЕСС
 <!-- Итерации отмечают [x]/[~] выше + блок в Логе ниже -->
 
+**★V1.6 слайс 16/5b ч.1 TASTE layout-variety калибровка [~]** (2026-06-13 13:18–14:05 MSK, commit `9d005ab`, prod api+worker, /docs 200). layout-variety читает INNER content-width + full-bleed banding (не outer section-rect) — generator-wide measurement-defect закрыт детерминированно. Live: fitness 3/5→4/5 PASS, freeform 14/5 матрица цела (pale→REJECT, rich→PASS), crm dashboard остаётся FAIL → carve **16/5c** (app-shell-детекция: релакс hero-imagery+section-rhythm для dashboard'ов). Entity composition gate флаг ОСТАЁТСЯ default-OFF до 16/5c (иначе ложные карты на dashboard-аппах).
+
 **★V1.6 слайс 14/5 DECOUPLE composition-legs → always-on hard-block [x]** (2026-06-13 12:10–12:55 MSK, commit `c633528`, prod api+worker @c633528, /docs+front 200). `run(composition=)`+`COMPOSITION_LEGS`/`_audit_one`; config `acceptance_gauntlet_composition_gates=True`; taste/hierarchy hard-block на freeform/catalog `/p/<slug>`. Falsifiable на ЖИВОМ chromium: pale→REJECT, rich→PASS, unreachable→abstain(R-10). Остаток (live контейнер-URL) → карвут 14/5b.
 
 **★V1.8/V1.6-5/5 DEMO-DATA SEEDER суб-слайс 3 NON-EMPTY-DATA АССЕРТ [x]** (2026-06-13 10:25–10:55 MSK, commit `74a66d0`, prod api+worker deployed): `data_gate.py` (рендер-гейт на kit-маркер `data-omnia-collection`/`data-omnia-rows`, empty/thin findings, нет-коллекции→PASS) зафолжен в `accept_gauntlet` (DATA в RENDERED_GATES). 24 unit + 2 chromium-фикстуры; teeth доказаны на live api + prod-worker chromium; kit `data-table.tsx` эмиттит маркер (TSX tsc-clean в образе). 5/5 ассерт = [x]; V1.6-5/5/V1.8 [x] ждут live-gen gauntlet-pass (батч 6/5).
@@ -478,6 +480,21 @@
 **0.1 DONE ✅** (2026-06-09 ~22:05 MSK): A7 PASS вживую. Тест-проект `462af0bb` (slug `a7-zadachi-saas-e2e-ec4081`, nextjs_entities) — контейнер **ОСТАНОВЛЕН** для экономии ресурса (владелец просил беречь сервер). НЕ удалять: **тест-стенд** для Phase **0.3** (разбудить → 502→200) и Phase **2.5** (кликер на full). URL 502 пока не разбудишь — это и есть кейс 0.3. Апп-юзер `taskuser-a7@example.com`/`Taskflow123`. Следующий тик: **0.2** (A5b drizzle FK — нужен СВОЙ drizzle-fullstack тест-апп; A7 на entity-стеке).
 
 ## 7. ЛОГ ИТЕРАЦИЙ
+
+## 2026-06-13 13:18–14:05 MSK — V1.6 СЛАЙС 16/5b ч.1 [~] (TASTE layout-variety калибровка: читает INNER content + full-bleed banding, не outer section-rect — generator-wide measurement-defect закрыт) → carve 16/5c
+
+**Выбор:** stop-gate 13:18 < HARD-STOP 2026-06-16; lock ACQUIRED (cross-machine VPS-мьютекс). sync ff HEAD `4843f85`, 0 IN-FLIGHT, 16/5 = `[~]` → возобновил его карвут **16/5b** (калибровка чтобы entity composition gate можно было включить). Инструментарий: sequential-thinking, live-измерение в worker-контейнере.
+
+**★ROOT-CAUSE (измерено на ЖИВЫХ прод entity-аппах, БЕЗ генерации — free):** запустил `taste_gate.audit_url` из worker против реальных `omnia-app-*` (prod-билды, без dev-overlay). Находки: **fitness-a4c31e 3/5** (FAIL hierarchy+layout-variety), **crm-ab7e1d 3/5** (FAIL layout-variety+hero-imagery). Доминирующий false-positive = **layout-variety** на ОБОИХ. Корень: чек бакетил ширину ВНЕШНЕГО `<section>`-rect, а у вездесущего паттерна full-width-секция+центрированный max-w-контейнер каждый section-rect = ширина вьюпорта → «все секции одной ширины» → ложно «monotone». Docstring говорил «content widths», но мерил section-rect = **measurement-bug**. Вот почему 16/5 зашипился default-OFF.
+
+**Фикс (R-01 deep-module, R-04 single-source; `taste_gate.py` + `test_taste_gate.py`, commit `9d005ab`):** layout-variety теперь читает (а) ВНУТРЕННЮЮ ширину контент-колонки (самый широкий видимый потомок уже band'а) И (б) full-bleed-band сигнал (edge-to-edge hero-картинка / небоди-фон). PASS если ≥2 различных content-width ИЛИ ≥1 full-bleed band среди ≥2 секций. JS-экстрактор эмиттит `contentWidth`+`fullBleed`; Python-скоринг fail-soft на hand-built obs (fallback contentWidth→width). +4 TDD-теста (full-bleed-band pass / inner-width pass / monotone-no-band red / lone-band red), 41 taste-тест зелёный, 33 accept_gauntlet+entity_gate зелёные, ruff+mypy clean.
+
+**Доставка:** push main `9d005ab` → prod ff → api+worker rebuild (exit 0), /docs 200, оба контейнера импортят новые символы. **Live-верификация (worker, прод, без LLM):** (1) **fitness 3/5→4/5 PASS** ✓ (layout-variety→True через full-bleed band; hierarchy всё ещё кусает = отдельный класс, не тронут); (2) **crm 3/5 остаётся FAIL** (layout-variety честно фаярит «1 section, 0 full-bleed» — это dashboard/app-shell, не маркетинг-лендинг → отдельный профиль); (3) **★REGRESSION freeform 14/5 матрица цела:** PALE single-column→0/5 REJECT (layout-variety ВСЁ ЕЩЁ кусает — teeth целы), RICH banded→4/5 PASS. Контракт живого freeform-гейта не сломан.
+
+**★Carve 16/5c (почему флаг ОСТАЁТСЯ OFF):** crm = dashboard — у него ДВА маркетинг-only false-positive (layout-variety single-section + hero-imagery solid-plate), оба от того что рубрика заточена под marketing/landing, а entity hot-path включает app-shell'ы. Чтобы безопасно ВКЛЮЧИТЬ entity composition gate, нужна app-shell-детекция (релакс hero-imagery + section-rhythm для dashboard'ов) — отдельный риск-слайс **16/5c**. Включать флаг сейчас = ложные error-карты на реальных dashboard-аппах (ровно дестабилизация, которой владелец боялся). Этот тик закрыл ОДИН дефект-класс (layout-variety measurement) детерминированно навсегда = храповик +1.
+
+**Resource-guard:** только READ живых контейнеров (HTTP GET+JS eval, как preview-скриншоттер) — НОЛЬ тест-контейнеров создано, клиентские (kofeinia/legomagazin/signal-telekom/crm) НЕ тронуты деструктивно; всё рендеринг в worker'е, локальных браузеров не открывал; RAM VPS 10ГБ. Lock снят. **Следующий:** 16/5c app-shell-детекция ИЛИ 6/5 batch-runner.
+
 
 ## 2026-06-13 14:30–17:30 MSK — V1.6 СЛАЙС 16/5 [~] (ENTITY HOT-PATH composition-gate: live-URL путь ПОСТРОЕН+wired+mechanism-proven, hard-gate default OFF→16/5b) + ★settle root-cause fix (dev-контейнеры не фаярят `load`)
 
