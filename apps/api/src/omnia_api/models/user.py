@@ -49,6 +49,19 @@ class User(Base):
         Integer, nullable=False, server_default="0"
     )
 
+    # Viral-funnel provenance (V4.2b return-edge). Set at registration from the
+    # share-link return path: `signup_source` is a bounded enum ("share_link"
+    # when a stranger came in via a /p/<slug> "Сделай свой" CTA, else NULL for
+    # organic signups), and `referrer_project_id` is the SOURCE project the
+    # visitor was looking at. Both NULL for a blank/organic signup — that NULL is
+    # the falsifiable "the link, not a default, drives provenance" signal. A soft
+    # analytics pointer with no FK: the referrer project may later be deleted
+    # without orphaning this signup row's lineage record.
+    signup_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    referrer_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+
     wallet: Mapped["Wallet"] = relationship(
         back_populates="user",
         uselist=False,

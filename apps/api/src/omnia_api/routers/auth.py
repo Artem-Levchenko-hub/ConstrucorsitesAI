@@ -29,7 +29,14 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 async def register(payload: UserCreate, response: Response, session: SessionDep) -> User:
     settings = get_settings()
     pwd_hash = await hash_password(payload.password)
-    user = User(email=payload.email, password_hash=pwd_hash)
+    user = User(
+        email=payload.email,
+        password_hash=pwd_hash,
+        # Viral-funnel provenance (V4.2b): record where this signup came from so
+        # the share-link return-edge is measurable. Both NULL for organic signups.
+        signup_source=payload.source,
+        referrer_project_id=payload.referrer_project_id,
+    )
     user.wallet = Wallet(balance_rub=Decimal(str(settings.initial_wallet_balance_rub)))
     session.add(user)
     try:
