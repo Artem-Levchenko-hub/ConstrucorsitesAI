@@ -74,6 +74,7 @@ DARK_THEME_NOT_ON_DASHBOARD = "dark-theme-not-on-dashboard"
 RU_HERO_WORD_CLIP = "ru-hero-word-clip"
 EMPTY_PUBLIC_CATALOG = "empty-public-catalog"
 TOAST_POPOVER_TRANSPARENT = "toast-popover-transparent"
+REDUCED_MOTION_MISSING = "reduced-motion-missing"
 
 DEFECT_CLASSES: tuple[str, ...] = (
     DEAD_AUTH_LINK,
@@ -85,6 +86,7 @@ DEFECT_CLASSES: tuple[str, ...] = (
     RU_HERO_WORD_CLIP,
     EMPTY_PUBLIC_CATALOG,
     TOAST_POPOVER_TRANSPARENT,
+    REDUCED_MOTION_MISSING,
 )
 
 # File families. Auth CTAs live in JSX *and* in freeform `<a>` HTML.
@@ -365,6 +367,90 @@ def _toast_popover_token(files: dict[str, str]) -> list[Defect]:
     return out
 
 
+# Hypnotic motion the WCAG opt-out must cover: a `@keyframes` block or an
+# `animation:`/`animation-name:` binding a real (non-none) value. Bare
+# `transition:` (hover lifts, reveals) is not flagged — it is not the sustained,
+# attention-grabbing motion `prefers-reduced-motion` exists to silence, and the
+# shipped kit deliberately ships those transitions outside any media guard.
+_KEYFRAMES_RE = re.compile(r"@(?:-webkit-|-moz-)?keyframes\b")
+_ANIMATION_DECL_RE = re.compile(
+    r"\banimation(?:-name)?\s*:\s*(?!\s*(?:none|inherit|initial|unset)\b)[^;{}]*[A-Za-z0-9]"
+)
+# The two WCAG-safe shapes: gate motion behind `no-preference`, or define it
+# freely and neutralise it under `reduce`.
+_RM_NO_PREF_OPEN = re.compile(r"@media[^{}]*prefers-reduced-motion\s*:\s*no-preference[^{}]*\{")
+_RM_REDUCE_OPEN = re.compile(r"@media[^{}]*prefers-reduced-motion\s*:\s*reduce[^{}]*\{")
+
+
+def _brace_blocks(body: str, opener: re.Pattern[str]) -> list[tuple[int, int]]:
+    """Spans ``[start, end)`` of each brace-balanced block opened by ``opener``.
+
+    Walks from the opener's ``{`` matching nested braces, so a nested ``@keyframes``
+    inside a ``@media`` block is correctly attributed to the outer span.
+    """
+    spans: list[tuple[int, int]] = []
+    n = len(body)
+    for m in opener.finditer(body):
+        depth, i = 1, m.end()
+        while i < n and depth:
+            ch = body[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            i += 1
+        spans.append((m.start(), i))
+    return spans
+
+
+def _reduced_motion_optout(files: dict[str, str]) -> list[Defect]:
+    """Hypnotic CSS motion shipped with no ``prefers-reduced-motion`` opt-out.
+
+    Pillar-3 animations without an opt-out are a live WCAG 2.3.3 regression. A CSS
+    (or inline-``<style>`` HTML) file that declares ``@keyframes``/``animation`` is
+    a defect unless that motion is covered by either WCAG-safe shape: gated behind
+    ``prefers-reduced-motion: no-preference`` (the shipped-kit pattern), or
+    neutralised by a ``prefers-reduced-motion: reduce`` block. A universal reduce
+    reset (``*`` selector) in *any* file silences motion app-wide, so it covers
+    sibling files' animations too. Strip the kit's no-preference wrapper and the
+    now-unguarded ``@keyframes`` go RED — the ratchet the plan demands.
+    """
+    # Global escape hatch: a universal reduce reset anywhere neutralises all motion.
+    for body in files.values():
+        for s, e in _brace_blocks(body, _RM_REDUCE_OPEN):
+            block = body[s:e]
+            if "*" in block and ("animation" in block or "transition" in block):
+                return []
+
+    out: list[Defect] = []
+    for path, body in files.items():
+        if not path.lower().endswith(_CSS_SUFFIXES):
+            continue
+        motion = [m.start() for m in _KEYFRAMES_RE.finditer(body)]
+        motion += [m.start() for m in _ANIMATION_DECL_RE.finditer(body)]
+        if not motion:
+            continue
+        guarded = _brace_blocks(body, _RM_NO_PREF_OPEN)
+        reduce_spans = _brace_blocks(body, _RM_REDUCE_OPEN)
+        unguarded = [
+            p for p in motion if not any(s <= p < e for s, e in guarded + reduce_spans)
+        ]
+        # A same-file reduce block that touches motion neutralises top-level
+        # animation defined outside the no-preference shape.
+        has_local_neutraliser = any(
+            "animation" in body[s:e] or "transition" in body[s:e] for s, e in reduce_spans
+        )
+        if unguarded and not has_local_neutraliser:
+            out.append(
+                Defect(
+                    REDUCED_MOTION_MISSING,
+                    path,
+                    "ships @keyframes/animation with no prefers-reduced-motion opt-out",
+                )
+            )
+    return out
+
+
 # ── orchestration ────────────────────────────────────────────────────────────
 
 # (suffix-scoped output detector) -> applicable suffixes
@@ -380,6 +466,7 @@ _WHOLE_SET_DETECTORS = (
     _dark_theme_capability,
     _ru_hero_word_break,
     _toast_popover_token,
+    _reduced_motion_optout,
 )
 
 

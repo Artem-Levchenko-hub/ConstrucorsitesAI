@@ -227,6 +227,84 @@ def test_toast_popover_noop_without_toast_host():
     assert dr.TOAST_POPOVER_TRANSPARENT not in _classes(files)
 
 
+# ── 10. reduced-motion-missing (WCAG opt-out) ─────────────────────────────────
+
+_ANIM = (
+    "@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}\n"
+    ".x{animation:spin 2s linear infinite}"
+)
+_REDUCE_RESET = (
+    "@media (prefers-reduced-motion: reduce)"
+    "{*{animation:none!important;transition:none!important}}"
+)
+
+
+def test_reduced_motion_clean_no_preference_gating():
+    # The shipped-kit pattern: every @keyframes/animation lives inside a
+    # `prefers-reduced-motion: no-preference` block → nothing animates under reduce.
+    files = {"app/globals.css": "@media (prefers-reduced-motion: no-preference){\n" + _ANIM + "\n}"}
+    assert dr.REDUCED_MOTION_MISSING not in _classes(files)
+
+
+def test_reduced_motion_clean_reduce_neutraliser():
+    # The alternate valid pattern: animate freely, then kill motion under reduce.
+    files = {"app/globals.css": _ANIM + "\n" + _REDUCE_RESET}
+    assert dr.REDUCED_MOTION_MISSING not in _classes(files)
+
+
+def test_reduced_motion_reverted_is_red():
+    # Adversarial fixture: unconditional animation, zero opt-out → must fail.
+    files = {"app/globals.css": _ANIM}
+    assert dr.REDUCED_MOTION_MISSING in _classes(files)
+
+
+def test_reduced_motion_reverted_when_no_preference_wrapper_stripped():
+    # Strip the no-preference @media wrapper → top-level animation, no opt-out → RED.
+    files = {"app/globals.css": _ANIM}
+    assert dr.REDUCED_MOTION_MISSING in _classes(files)
+
+
+def test_reduced_motion_ignores_bare_transition():
+    # Hover transitions (no @keyframes/animation) are not hypnotic motion → no flag.
+    files = {"app/globals.css": ".btn{transition:transform .2s ease, box-shadow .2s ease}"}
+    assert dr.REDUCED_MOTION_MISSING not in _classes(files)
+
+
+def test_reduced_motion_ignores_non_css_files():
+    # JS reading prefers-reduced-motion at runtime is not a CSS opt-out concern.
+    js = "const reduce = matchMedia('(prefers-reduced-motion: reduce)')"
+    files = {"src/components/omnia/count-up.tsx": js}
+    assert dr.REDUCED_MOTION_MISSING not in _classes(files)
+
+
+def test_reduced_motion_universal_reset_covers_other_files():
+    # A universal reduce reset in one file neutralises motion app-wide.
+    files = {
+        "app/globals.css": _REDUCE_RESET,
+        "index.html": "<style>" + _ANIM + "</style>",
+    }
+    assert dr.REDUCED_MOTION_MISSING not in _classes(files)
+
+
+def test_reduced_motion_shipped_kit_globals_is_clean():
+    # Hard regression guard: the real product kit must always pass its own gate.
+    import pathlib
+
+    kit = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "orchestrator"
+        / "templates"
+        / "nextjs-entities"
+        / "src"
+        / "app"
+        / "globals.css"
+    )
+    if not kit.exists():  # pragma: no cover - layout-dependent
+        return
+    files = {"app/globals.css": kit.read_text(encoding="utf-8")}
+    assert dr.REDUCED_MOTION_MISSING not in _classes(files)
+
+
 # ── registry contract ─────────────────────────────────────────────────────────
 
 
