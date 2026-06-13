@@ -251,8 +251,17 @@ async def score_app(
     spec = niche.spec()
     results: list[WidthResult] = []
     for w in widths:
+        # Drive BOTH the correctness floor AND the composition legs at this
+        # viewport: at MOBILE_WIDTH the composition legs (taste + hierarchy) now
+        # render at 390 too (V1.6 15/5), so a desktop-rich / mobile-monotone app
+        # fails the @390 pass instead of silently re-scoring the desktop render.
         verdict = await gauntlet_run(
-            url=url, spec=spec, width=w, composition=True, include_rendered=False
+            url=url,
+            spec=spec,
+            width=w,
+            composition_width=w,
+            composition=True,
+            include_rendered=False,
         )
         results.append(_width_result(w, verdict))
     return RunResult(niche.key, run_index, base_url, route, tuple(results))

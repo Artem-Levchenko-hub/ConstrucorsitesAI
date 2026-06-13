@@ -49,6 +49,12 @@ GATE_WIDTH = wow_dom_gate.GATE_WIDTH
 #: layout breathes, not collapsed to one column.
 TASTE_WIDTH = taste_gate.GATE_WIDTH
 HIERARCHY_WIDTH = hierarchy_gate.GATE_WIDTH
+#: Default viewport the composition legs render at (desktop). Callers that want
+#: the MOBILE dimension — a page rich on desktop but collapsed to a monotone
+#: column at 390px — pass ``composition_width=390`` (V1.6 15/5); niche_batch's
+#: dual-width loop drives exactly that, so its @390 pass is a real second render
+#: rather than a silent duplicate of the desktop score.
+COMPOSITION_WIDTH = TASTE_WIDTH
 
 # Gate identifiers, in the order they appear in the verdict table.
 DEFECT_REGISTRY = "defect-registry"
@@ -203,11 +209,13 @@ async def _audit_one(
     url: str | None,
     spec: FidelitySpec,
     width: int,
+    composition_width: int,
 ) -> Any:
     """Render one rendered gate against the live target (url first, else files).
 
-    Each gate's own width is honoured: composition legs (taste/hierarchy) read at
-    desktop width, the correctness/touch legs at the mobile floor.
+    Each gate's own width is honoured: the composition legs (taste/hierarchy) read
+    at ``composition_width`` (desktop by default; ``390`` for the mobile dimension,
+    V1.6 15/5), the correctness/touch legs at the mobile ``width`` floor.
     """
     if url:
         if gate == WOW_DOM:
@@ -217,9 +225,9 @@ async def _audit_one(
         if gate == CHIP_PIXEL:
             return await chip_pixel_gate.audit_url(url, spec, width=width)
         if gate == TASTE:
-            return await taste_gate.audit_url(url, width=TASTE_WIDTH)
+            return await taste_gate.audit_url(url, width=composition_width)
         if gate == HIERARCHY:
-            return await hierarchy_gate.audit_url(url, width=HIERARCHY_WIDTH)
+            return await hierarchy_gate.audit_url(url, width=composition_width)
         if gate == DATA:
             return await data_gate.audit_url(url, width=width)
     else:
@@ -231,9 +239,9 @@ async def _audit_one(
         if gate == CHIP_PIXEL:
             return await chip_pixel_gate.audit_files(files, spec, width=width)
         if gate == TASTE:
-            return await taste_gate.audit_files(files, width=TASTE_WIDTH)
+            return await taste_gate.audit_files(files, width=composition_width)
         if gate == HIERARCHY:
-            return await hierarchy_gate.audit_files(files, width=HIERARCHY_WIDTH)
+            return await hierarchy_gate.audit_files(files, width=composition_width)
         if gate == DATA:
             return await data_gate.audit_files(files, width=width)
     raise AssertionError(f"unknown rendered gate: {gate}")  # pragma: no cover
@@ -245,6 +253,7 @@ async def run(
     url: str | None = None,
     spec: FidelitySpec | None = None,
     width: int = GATE_WIDTH,
+    composition_width: int = COMPOSITION_WIDTH,
     include_rendered: bool = True,
     composition: bool = False,
 ) -> GauntletVerdict:
@@ -263,11 +272,18 @@ async def run(
       the standalone CLI / niche-E2E contract and stays the back-compat default.
       ``include_rendered=False`` lets a hot caller take the cheap deterministic
       floor without paying for the extra renders.
-    * ``composition=True`` adds the desktop-width ``COMPOSITION_LEGS`` (taste +
-      hierarchy) **regardless** of ``include_rendered``. These are the awwwards
-      richness floor with no 44px false-positive, so they are the ALWAYS-ON hard
-      ship-block on the product path while the touch leg stays behind calibration
-      (11/5). Unioning the two dials never double-runs a leg.
+    * ``composition=True`` adds the ``COMPOSITION_LEGS`` (taste + hierarchy)
+      **regardless** of ``include_rendered``. These are the awwwards richness
+      floor with no 44px false-positive, so they are the ALWAYS-ON hard ship-block
+      on the product path while the touch leg stays behind calibration (11/5).
+      Unioning the two dials never double-runs a leg.
+
+    ``composition_width`` picks the viewport the composition legs render at
+    (default desktop ``1440``; ``390`` for the MOBILE dimension — V1.6 15/5). A
+    page rich on desktop but collapsed to a monotone column on mobile fails the
+    legs at ``390`` while passing at ``1440``; niche_batch's dual-width loop runs
+    both, so its @390 result is a real second render, not a duplicated desktop
+    score. The correctness/touch legs always render at the mobile ``width`` floor.
 
     Fail-soft (R-10): each rendered gate already abstains on a render error, so
     an abstain reports ``passed=False`` but is NOT a ``hard_failed`` — a flaky
@@ -290,7 +306,12 @@ async def run(
         for gate in RENDERED_GATES:  # stable order; only the selected legs run
             if gate in legs:
                 rep = await _audit_one(
-                    gate, files=files, url=url, spec=spec, width=width
+                    gate,
+                    files=files,
+                    url=url,
+                    spec=spec,
+                    width=width,
+                    composition_width=composition_width,
                 )
                 gates.append(_from_rendered(gate, rep))
 
@@ -338,6 +359,7 @@ if __name__ == "__main__":  # pragma: no cover
 
 __all__ = [
     "COMPOSITION_LEGS",
+    "COMPOSITION_WIDTH",
     "GATE_WIDTH",
     "RENDERED_GATES",
     "TOUCH_LEGS",

@@ -103,11 +103,12 @@ def test_select_niches_prefix_and_explicit() -> None:
 
 
 async def test_score_app_runs_every_width_on_resolved_route() -> None:
-    seen: dict = {"urls": [], "widths": []}
+    seen: dict = {"urls": [], "widths": [], "comp_widths": []}
 
     async def _run(**kw):
         seen["urls"].append(kw["url"])
         seen["widths"].append(kw["width"])
+        seen["comp_widths"].append(kw["composition_width"])
         assert kw["composition"] is True and kw["include_rendered"] is False
         return _clean_verdict()
 
@@ -120,6 +121,9 @@ async def test_score_app_runs_every_width_on_resolved_route() -> None:
     assert res.route == "/dashboard"
     assert seen["urls"] == ["http://omnia-dev-fin:3000/dashboard"] * 2
     assert seen["widths"] == [nb.DESKTOP_WIDTH, nb.MOBILE_WIDTH]
+    # composition legs follow the iteration viewport — the @390 pass renders the
+    # richness/hierarchy legs at mobile too (V1.6 15/5), not a desktop duplicate.
+    assert seen["comp_widths"] == [nb.DESKTOP_WIDTH, nb.MOBILE_WIDTH]
     assert res.passed is True
     assert res.min_score == 1.0
 
