@@ -329,6 +329,15 @@ class Settings(BaseSettings):
     # flag the whole render-half was gated by one switch (default OFF), so the
     # pillar-1 awwwards promise was asserted on ZERO shipping requests. Default ON.
     acceptance_gauntlet_composition_gates: bool = Field(default=True)
+    # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
+    # (container-backed), so the composition floor above never touched the
+    # dominant pillar-1 class. After a clean hot-reload + compile-settle, fan the
+    # COMPOSITION_LEGS over the LIVE container URL (omnia-dev-<slug>:3000,
+    # container-to-container, no public egress) and surface a hard_failed as a
+    # quality card. Default ON — taste/hierarchy at desktop width have no 44px
+    # false-positive (proven PASS on real entity apps, 7/5+9/5+14/5). Flip OFF if
+    # the live-render leg ever destabilises the entity build.
+    acceptance_entity_composition_gate: bool = Field(default=True)
 
     # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
     # Originality: fingerprint each accepted freeform page and penalise the

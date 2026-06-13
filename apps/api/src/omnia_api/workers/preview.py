@@ -20,7 +20,7 @@ from omnia_api.core.config import get_settings
 from omnia_api.core.redis import project_channel
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.services import orchestrator_client
+from omnia_api.services import dev_container
 from omnia_api.services import repo as repo_svc
 
 VIEWPORT = {"width": 1280, "height": 800}
@@ -186,29 +186,11 @@ async def capture(
     return out
 
 
-# User dev containers serve Next.js on :3000 inside the container. Their host
-# bind is 127.0.0.1-only, so the worker can't reach them via the host port or
-# the public nginx URL (hairpin NAT). It reaches them container-to-container by
-# name over the shared `omnia-runtime_default` network (the worker joins it in
-# deploy/full/docker-compose.yml) — the same path user containers use for MinIO.
-_DEV_CONTAINER_PORT = 3000
-
-
-async def _resolve_live_url(project_id: UUID) -> str | None:
-    """Container-to-container URL of a *running* dev preview, or ``None`` if it
-    isn't up / can't be located. Fail-soft (R-10): any orchestrator hiccup →
-    ``None`` → the caller just skips the thumbnail this round (a later build /
-    edit snapshot re-enqueues a preview once the container is warm)."""
-    try:
-        status = await orchestrator_client.get_status(project_id)
-    except Exception:
-        return None
-    if status.get("state") != "running":
-        return None
-    name = status.get("container_name")
-    if not isinstance(name, str) or not name:
-        return None
-    return f"http://{name}:{_DEV_CONTAINER_PORT}"
+# Container-to-container URL of a running dev preview now lives in the shared
+# `dev_container` service (R-04 single source — the entity composition gate uses
+# the same builder). Kept as a module-level alias so existing call sites and
+# tests (`preview._resolve_live_url`) are unchanged.
+_resolve_live_url = dev_container.resolve_live_url
 
 
 async def _render_async(snapshot_id: str) -> None:

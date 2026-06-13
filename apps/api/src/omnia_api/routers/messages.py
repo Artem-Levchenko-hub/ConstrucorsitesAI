@@ -74,7 +74,7 @@ from omnia_api.services.llm_client import set_free_generation, stream_chat_compl
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
 from omnia_api.services.prompt_builder import KIT_FILES, build_messages
-from omnia_api.services.queue import enqueue_preview
+from omnia_api.services.queue import enqueue_entity_gate, enqueue_preview
 from omnia_api.services.ui_audit import audit as ui_audit
 from omnia_api.services.ui_audit import format_failures_for_retry
 from omnia_api.services.vendor_profiles import vendor_directive
@@ -3185,6 +3185,23 @@ async def _process_prompt(
                         _spawn_compile_probe(
                             factory, project_id, assistant_message_id, project.slug
                         )
+                    # V1.6 16/5 — assert the awwwards COMPOSITION floor (taste +
+                    # hierarchy) on the LIVE container. Entity apps skip
+                    # acceptance.evaluate, so this worker job is the ONLY place the
+                    # pillar-1 beauty floor gets teeth on the dominant entity class.
+                    # Runs in the worker (the only process that can reach the dev
+                    # container over the runtime network), not here. Independent of
+                    # the compile probe — it surfaces its own quality card.
+                    if (
+                        not drizzle_exit or drizzle_exit in ("0", "n/a")
+                    ) and project.template in ("nextjs_entities", "fullstack"):
+                        if get_settings().acceptance_entity_composition_gate:
+                            await asyncio.to_thread(
+                                enqueue_entity_gate,
+                                assistant_message_id,
+                                project_id,
+                                project.slug,
+                            )
                 except Exception as hot_exc:
                     print(f"[PP] hot_reload failed: {hot_exc!r}", flush=True)
                     await app_errors.publish(

@@ -322,6 +322,9 @@ services:
       USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
       ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}
       FREEFORM_TRAFFIC_PCT: ${FREEFORM_TRAFFIC_PCT:-100}
+      # V1.6 16/5 — composition gate (taste+hierarchy) on the LIVE entity
+      # container. Runs in the worker (on omnia-runtime). Default ON.
+      ACCEPTANCE_ENTITY_COMPOSITION_GATE: ${ACCEPTANCE_ENTITY_COMPOSITION_GATE:-true}
     restart: unless-stopped
     networks:
       - omnia-prod
