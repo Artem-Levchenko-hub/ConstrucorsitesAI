@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Møs — Objects for the slow home</title>
+  <!--
+    V1.13a reference corpus — E-COMMERCE niche.
+
+    Reference source: hand-authored enterprise snapshot, taste inspired by the
+    premium-commerce pattern of Aesop (https://www.aesop.com) and high-end
+    Awwwards shop sites (https://www.awwwards.com/websites/e-commerce/) — a
+    full-bleed editorial hero with a single dominant product visual, then an
+    asymmetric lookbook (a 2-up row + a wide featured banner) rather than a
+    generic 3-up product grid. Offline-renderable distillation; NOT a scraped copy.
+
+    CEILING target. A fresh Omnia generation must meet or beat this richness
+    vector on >= 4/5 axes. Append-only; do not soften.
+  -->
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: #f4f1ec; color: #2b2722;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.5;
+    }
+    .display { font-family: "Georgia", "Times New Roman", serif; }
+    .nav {
+      display: flex; align-items: center; gap: 2rem; padding: 1.5rem 3rem;
+    }
+    .nav .brand { font-family: "Georgia", serif; font-size: 22px; letter-spacing: .12em; }
+    .nav a { font-size: 14px; color: #6f675b; text-decoration: none; }
+    .nav .spacer { margin-left: auto; }
+
+    .hero { position: relative; overflow: hidden; }
+    .hero svg { display: block; width: 100%; height: 440px; }
+    .hero .copy {
+      position: absolute; left: 3rem; top: 50%; transform: translateY(-50%);
+      max-width: 520px;
+    }
+    .hero .copy h1 {
+      font-family: "Georgia", serif; font-size: 60px; line-height: 1.05; margin: 0 0 1rem;
+      color: #211d18;
+    }
+    .hero .copy p { font-size: 18px; color: #4f4a41; margin: 0 0 1.75rem; }
+    .hero .copy a {
+      display: inline-block; background: #211d18; color: #f4f1ec; text-decoration: none;
+      font-size: 14px; letter-spacing: .08em; padding: .8rem 1.6rem; border-radius: 2px;
+    }
+
+    .look {
+      max-width: 1200px; margin: 6rem auto 3rem; padding: 0 3rem;
+      display: grid; grid-template-columns: 1.3fr 1fr; gap: 2.5rem;
+    }
+    .look .item svg { display: block; width: 100%; height: 360px; border-radius: 3px; }
+    .look .item.short svg { height: 280px; }
+    .look .item h3 { font-family: "Georgia", serif; font-size: 24px; margin: 1rem 0 .25rem; }
+    .look .item p { font-size: 15px; color: #6f675b; margin: 0; }
+
+    .featured {
+      max-width: 1200px; margin: 0 auto 7rem; padding: 0 3rem;
+    }
+    .featured .panel {
+      background: #211d18; color: #ece6db; border-radius: 4px; padding: 3.5rem;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; align-items: center;
+    }
+    .featured h2 { font-family: "Georgia", serif; font-size: 38px; margin: 0; }
+    .featured p { font-size: 16px; color: #b6ac9a; }
+    .featured svg { display: block; width: 100%; height: 220px; }
+
+    footer {
+      background: #211d18; color: #9a907e; padding: 3rem; font-size: 14px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">MØS</span>
+    <a href="#">Shop</a>
+    <a href="#">Lookbook</a>
+    <a href="#">Stories</a>
+    <span class="spacer"></span>
+    <a href="#">Cart (0)</a>
+  </nav>
+
+  <header class="hero">
+    <svg viewBox="0 0 1440 440" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="ec-bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#e9e3d6" /><stop offset="1" stop-color="#d8cdb8" />
+        </linearGradient>
+      </defs>
+      <rect width="1440" height="440" fill="url(#ec-bg)" />
+      <ellipse cx="1040" cy="240" rx="240" ry="200" fill="#c2b69c" />
+      <rect x="980" y="120" width="120" height="280" rx="60" fill="#8a7c63" />
+      <ellipse cx="1040" cy="120" rx="60" ry="22" fill="#75684f" />
+      <rect x="1140" y="210" width="90" height="190" rx="20" fill="#a6987c" />
+    </svg>
+    <div class="copy">
+      <h1 class="display">Objects for the slow home.</h1>
+      <p>Stoneware, linen and oak — made in small runs, kept for decades.</p>
+      <a href="#">Shop the collection</a>
+    </div>
+  </header>
+
+  <section class="look">
+    <article class="item">
+      <svg viewBox="0 0 600 360" aria-hidden="true">
+        <rect width="600" height="360" fill="#e7e0d2" />
+        <circle cx="300" cy="180" r="110" fill="#bcae92" />
+        <circle cx="300" cy="180" r="64" fill="#9c8e72" />
+      </svg>
+      <h3 class="display">The Daily Bowl</h3>
+      <p>Glazed stoneware · 4 tones</p>
+    </article>
+    <article class="item short">
+      <svg viewBox="0 0 460 280" aria-hidden="true">
+        <rect width="460" height="280" fill="#ddd3c0" />
+        <rect x="150" y="40" width="160" height="200" rx="12" fill="#b0a282" />
+      </svg>
+      <h3 class="display">Linen throw</h3>
+      <p>Stonewashed · undyed</p>
+    </article>
+  </section>
+
+  <section class="featured">
+    <div class="panel">
+      <div>
+        <h2 class="display">The winter table</h2>
+        <p>A curated set of six pieces for long meals and longer evenings.</p>
+      </div>
+      <svg viewBox="0 0 480 220" aria-hidden="true">
+        <rect width="480" height="220" fill="#2e2920" />
+        <circle cx="120" cy="110" r="60" fill="#c2b69c" />
+        <rect x="220" y="60" width="200" height="100" rx="10" fill="#5a513f" />
+      </svg>
+    </div>
+  </section>
+
+  <footer>© 2026 Møs · Shipped worldwide · Returns within 60 days</footer>
+</body>
+</html>

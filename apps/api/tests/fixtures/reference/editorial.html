@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aperture — The Field Notes</title>
+  <!--
+    V1.13a reference corpus — EDITORIAL niche.
+
+    Reference source: hand-authored enterprise snapshot, taste inspired by the
+    editorial/long-form pattern of Stripe Press (https://press.stripe.com) and
+    Pitchfork-grade magazine layouts on Awwwards
+    (https://www.awwwards.com/websites/editorial/). NOT a scraped copy — an
+    offline-renderable distillation of the pattern so the richness extractor
+    (taste_gate + hierarchy_gate) can measure it at file:// with no network.
+
+    This is a CEILING target, not a floor: a fresh Omnia generation must meet or
+    beat its richness vector on >= 4/5 axes (type-scale, layout-variety,
+    hero-imagery, focal-dominance, asymmetry). Append-only; do not soften.
+  -->
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", Georgia, "Times New Roman", serif;
+      color: #1a1714;
+      background: #faf7f2;
+      line-height: 1.55;
+    }
+    .nav {
+      display: flex; align-items: baseline; gap: 2rem;
+      padding: 1.5rem 3rem; border-bottom: 1px solid #e6ddcf;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    .nav .brand { font-size: 20px; font-weight: 700; letter-spacing: .04em; }
+    .nav a { margin-left: auto; font-size: 14px; color: #6b5d49; text-decoration: none; }
+    .nav a + a { margin-left: 1.5rem; }
+
+    /* full-bleed hero with a single dominant inline-SVG illustration */
+    .hero {
+      position: relative; padding: 0; background: #14110d; color: #f7f1e6;
+      overflow: hidden;
+    }
+    .hero svg { display: block; width: 100%; height: 460px; }
+    .hero .copy {
+      position: absolute; left: 3rem; bottom: 3rem; right: 3rem; max-width: 720px;
+    }
+    .hero .kicker {
+      font-family: system-ui, sans-serif; font-size: 13px; letter-spacing: .22em;
+      text-transform: uppercase; color: #c9a05a; margin: 0 0 1rem;
+    }
+    .hero h1 { font-size: 68px; line-height: 1.02; margin: 0; font-weight: 700; }
+
+    .lede {
+      max-width: 760px; margin: 5rem auto; padding: 0 2rem; font-size: 24px;
+      line-height: 1.5; color: #2c2620;
+    }
+    .lede strong { font-weight: 700; }
+
+    .body {
+      max-width: 1200px; margin: 0 auto 6rem; padding: 0 3rem;
+      display: grid; grid-template-columns: 1.6fr 1fr; gap: 4rem;
+    }
+    .body article p { font-size: 18px; margin: 0 0 1.4rem; }
+    .body h2 {
+      font-size: 36px; margin: 0 0 1.5rem; line-height: 1.1;
+    }
+    .body aside {
+      font-family: system-ui, sans-serif; font-size: 14px; color: #6b5d49;
+      border-left: 3px solid #c9a05a; padding-left: 1.5rem;
+    }
+    .body aside h3 { font-size: 18px; margin: 0 0 .75rem; color: #1a1714; }
+
+    figure { margin: 0 0 6rem; }
+    figure img { display: block; width: 100%; height: auto; }
+    figcaption {
+      font-family: system-ui, sans-serif; font-size: 13px; color: #8a7c66;
+      max-width: 1200px; margin: .75rem auto 0; padding: 0 3rem;
+    }
+    footer {
+      background: #14110d; color: #b9ac96; padding: 3rem;
+      font-family: system-ui, sans-serif; font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">Aperture</span>
+    <a href="#">Essays</a>
+    <a href="#">Archive</a>
+    <a href="#">Subscribe</a>
+  </nav>
+
+  <header class="hero">
+    <svg viewBox="0 0 1440 460" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="ed-g" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#3a2f22" />
+          <stop offset="1" stop-color="#0c0a07" />
+        </linearGradient>
+        <radialGradient id="ed-s" cx="0.7" cy="0.3" r="0.8">
+          <stop offset="0" stop-color="#c9a05a" stop-opacity="0.55" />
+          <stop offset="1" stop-color="#c9a05a" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+      <rect width="1440" height="460" fill="url(#ed-g)" />
+      <circle cx="1010" cy="150" r="320" fill="url(#ed-s)" />
+      <g stroke="#5c4a30" stroke-width="1" opacity="0.5">
+        <path d="M0 360 Q360 280 720 360 T1440 360" fill="none" />
+        <path d="M0 400 Q360 320 720 400 T1440 400" fill="none" />
+        <path d="M0 320 Q360 240 720 320 T1440 320" fill="none" />
+      </g>
+    </svg>
+    <div class="copy">
+      <p class="kicker">Field Notes · Issue 14</p>
+      <h1>The long, slow craft of making things that last.</h1>
+    </div>
+  </header>
+
+  <p class="lede">
+    For a decade we have published <strong>one essay a month</strong> — no more,
+    no less. This is the record of what we learned holding that line.
+  </p>
+
+  <div class="body">
+    <article>
+      <h2>Restraint as a feature</h2>
+      <p>
+        The first instinct of every new contributor is to ship more: more words,
+        more sections, more proof. The discipline that took us years to learn was
+        the opposite — to cut until only the load-bearing idea remained.
+      </p>
+      <p>
+        A page that asks the reader to do less work earns the right to ask for
+        their full attention. That is the whole trade. Everything in our house
+        style descends from it.
+      </p>
+      <p>
+        We measure an essay not by its length but by how little of it a reader
+        could remove without the argument falling over.
+      </p>
+    </article>
+    <aside>
+      <h3>In this issue</h3>
+      <p>On typography as argument.</p>
+      <p>The economics of one-a-month.</p>
+      <p>Why we never added comments.</p>
+      <p>A reading list for slow weeks.</p>
+    </aside>
+  </div>
+
+  <figure>
+    <img alt="archive spread"
+         src="data:image/svg+xml;utf8,&lt;svg xmlns='http://www.w3.org/2000/svg' width='1440' height='420'&gt;&lt;rect width='1440' height='420' fill='%23ece3d4'/&gt;&lt;rect x='120' y='60' width='560' height='300' fill='%23d8c9ad'/&gt;&lt;rect x='760' y='60' width='560' height='300' fill='%23c9a05a'/&gt;&lt;/svg&gt;" />
+    <figcaption>The full archive, rebound by hand each January.</figcaption>
+  </figure>
+
+  <footer>© 2026 Aperture Editions · Set in Iowan Old Style · Published monthly</footer>
+</body>
+</html>

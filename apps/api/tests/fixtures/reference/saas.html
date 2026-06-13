@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cadence — Operations, in one pane</title>
+  <!--
+    V1.13a reference corpus — SaaS niche.
+
+    Reference source: hand-authored enterprise snapshot, taste inspired by the
+    product-landing pattern of Linear (https://linear.app) and Vercel
+    (https://vercel.com) — full-bleed dark hero, single dominant product visual,
+    a bento feature grid of intentionally UNEQUAL tiles. Captured as an
+    offline-renderable distillation so the richness extractor measures it at
+    file:// with no network. NOT a scraped copy.
+
+    CEILING target. A fresh Omnia generation must meet or beat this richness
+    vector on >= 4/5 axes. Append-only; do not soften.
+  -->
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #0b1020; background: #ffffff; line-height: 1.5;
+    }
+    h1, h2, .display { font-family: "Georgia", "Times New Roman", serif; }
+    .nav {
+      display: flex; align-items: center; gap: 2rem; padding: 1.25rem 3rem;
+    }
+    .nav .brand { font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+    .nav a { font-size: 14px; color: #4a536b; text-decoration: none; }
+    .nav .spacer { margin-left: auto; }
+    .nav .cta {
+      background: #0b1020; color: #fff; padding: .55rem 1.1rem; border-radius: 10px;
+      font-size: 14px; font-weight: 600;
+    }
+
+    /* full-bleed hero: one dominant inline-SVG product shot */
+    .hero {
+      background: radial-gradient(120% 100% at 70% 0%, #1b2240 0%, #0b1020 55%);
+      color: #eef2ff; padding: 4.5rem 3rem 0; text-align: center;
+    }
+    .hero h1 { font-size: 64px; line-height: 1.05; margin: 0 auto; max-width: 880px; }
+    .hero p {
+      font-size: 20px; color: #aab4d4; max-width: 620px; margin: 1.5rem auto 2.5rem;
+    }
+    .hero svg { display: block; width: 100%; height: 360px; }
+
+    .bento {
+      max-width: 1200px; margin: 6rem auto; padding: 0 3rem;
+      display: grid; grid-template-columns: 2fr 1fr 1fr;
+      grid-auto-rows: 200px; gap: 1.25rem;
+    }
+    .tile {
+      border: 1px solid #e7eaf3; border-radius: 16px; padding: 1.75rem;
+      background: #f8f9fd; overflow: hidden;
+    }
+    .tile.wide { grid-column: span 2; grid-row: span 2; }
+    .tile.tall { grid-row: span 2; }
+    .tile h3 { font-size: 22px; margin: 0 0 .5rem; font-family: "Georgia", serif; }
+    .tile p { font-size: 15px; color: #5a637e; margin: 0; }
+    .tile svg { display: block; width: 100%; height: 120px; margin-top: 1rem; }
+
+    .band {
+      max-width: 760px; margin: 0 auto 6rem; padding: 0 2rem; text-align: center;
+    }
+    .band h2 { font-size: 40px; margin: 0 0 1rem; }
+    .band p { font-size: 18px; color: #4a536b; }
+
+    footer {
+      background: #0b1020; color: #8b95b5; padding: 3rem; font-size: 14px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">Cadence</span>
+    <a href="#">Product</a>
+    <a href="#">Pricing</a>
+    <a href="#">Docs</a>
+    <span class="spacer"></span>
+    <a class="cta" href="#">Start free</a>
+  </nav>
+
+  <header class="hero">
+    <h1>Every operation, in one pane of glass.</h1>
+    <p>Cadence turns the work scattered across ten tools into one fast, keyboard-driven surface.</p>
+    <svg viewBox="0 0 1200 360" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="sa-card" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#222c4d" /><stop offset="1" stop-color="#161e38" />
+        </linearGradient>
+      </defs>
+      <rect x="120" y="20" width="960" height="360" rx="18" fill="url(#sa-card)" stroke="#33406b" />
+      <rect x="150" y="50" width="220" height="300" rx="10" fill="#1b2342" />
+      <rect x="170" y="74" width="170" height="14" rx="7" fill="#3a4675" />
+      <rect x="170" y="104" width="120" height="14" rx="7" fill="#2c3760" />
+      <rect x="170" y="134" width="150" height="14" rx="7" fill="#2c3760" />
+      <rect x="400" y="50" width="650" height="160" rx="10" fill="#101831" />
+      <polyline points="420,180 520,120 620,150 720,90 820,110 920,60 1020,80"
+                fill="none" stroke="#6c8cff" stroke-width="4" />
+      <rect x="400" y="230" width="310" height="120" rx="10" fill="#101831" />
+      <rect x="740" y="230" width="310" height="120" rx="10" fill="#101831" />
+    </svg>
+  </header>
+
+  <section class="bento">
+    <div class="tile wide">
+      <h3>Live command palette</h3>
+      <p>Jump to any record, action or teammate in a single keystroke.</p>
+      <svg viewBox="0 0 600 120" aria-hidden="true">
+        <rect width="600" height="120" rx="10" fill="#eef1fb" />
+        <rect x="24" y="24" width="552" height="32" rx="8" fill="#fff" stroke="#d6dcf0" />
+        <circle cx="46" cy="40" r="6" fill="#6c8cff" />
+        <rect x="24" y="72" width="360" height="14" rx="7" fill="#d6dcf0" />
+        <rect x="24" y="96" width="240" height="12" rx="6" fill="#e2e7f6" />
+      </svg>
+    </div>
+    <div class="tile tall">
+      <h3>Audit trail</h3>
+      <p>Every change, attributed and reversible.</p>
+    </div>
+    <div class="tile">
+      <h3>SSO</h3>
+      <p>SAML &amp; SCIM on every plan.</p>
+    </div>
+    <div class="tile">
+      <h3>99.99%</h3>
+      <p>Uptime, last 12 months.</p>
+    </div>
+  </section>
+
+  <section class="band">
+    <h2>Built for teams that move first.</h2>
+    <p>Start in minutes, scale to thousands of seats without re-platforming.</p>
+  </section>
+
+  <footer>© 2026 Cadence Labs · SOC 2 Type II · status.cadence.dev</footer>
+</body>
+</html>

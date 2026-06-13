@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Volta — Design & Engineering Studio</title>
+  <!--
+    V1.13a reference corpus — AGENCY niche.
+
+    Reference source: hand-authored enterprise snapshot, taste inspired by the
+    studio-portfolio pattern of Active Theory (https://activetheory.net) and
+    Awwwards "Site of the Day" agency sites
+    (https://www.awwwards.com/websites/agency/) — oversized display type, one
+    dominant hero visual, alternating asymmetric project rows (never a generic
+    3-up card grid). Offline-renderable distillation; NOT a scraped copy.
+
+    CEILING target. A fresh Omnia generation must meet or beat this richness
+    vector on >= 4/5 axes. Append-only; do not soften.
+  -->
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: #0e0e0f; color: #f2f0ec;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.4;
+    }
+    .display { font-family: "Georgia", "Times New Roman", serif; }
+    .nav {
+      display: flex; align-items: center; padding: 1.75rem 3rem;
+      position: relative; z-index: 2;
+    }
+    .nav .brand { font-size: 20px; font-weight: 700; letter-spacing: .1em; }
+    .nav a { margin-left: auto; font-size: 14px; color: #b7b2a8; text-decoration: none; }
+
+    .hero { position: relative; padding: 0; overflow: hidden; }
+    .hero svg { display: block; width: 100%; height: 480px; }
+    .hero .copy {
+      position: absolute; left: 3rem; bottom: 2.5rem; right: 3rem; max-width: 1000px;
+    }
+    .hero .eyebrow {
+      font-size: 13px; letter-spacing: .22em; text-transform: uppercase;
+      color: #ff5a3c; margin: 0 0 1rem;
+    }
+    .hero h1 {
+      margin: 0; max-width: 980px;
+      font-family: "Georgia", serif; font-size: 92px; line-height: .98; color: #fff;
+    }
+
+    .intro {
+      max-width: 780px; margin: 6rem auto; padding: 0 2rem; font-size: 26px;
+      line-height: 1.4; color: #d8d4cb;
+    }
+
+    .work { max-width: 1240px; margin: 0 auto 7rem; padding: 0 3rem; }
+    .case {
+      display: grid; gap: 3rem; align-items: center; margin-bottom: 6rem;
+      grid-template-columns: 1.4fr 1fr;
+    }
+    .case:nth-child(even) { grid-template-columns: 1fr 1.4fr; }
+    .case:nth-child(even) .shot { order: 2; }
+    .case .shot { border-radius: 14px; overflow: hidden; }
+    .case .shot svg { display: block; width: 100%; height: 320px; }
+    .case .meta .tag {
+      font-size: 13px; letter-spacing: .18em; text-transform: uppercase;
+      color: #ff5a3c; margin: 0 0 1rem;
+    }
+    .case .meta h2 { font-family: "Georgia", serif; font-size: 40px; margin: 0 0 1rem; }
+    .case .meta p { font-size: 17px; color: #b7b2a8; max-width: 38ch; }
+
+    footer {
+      border-top: 1px solid #26262a; padding: 3rem; font-size: 14px; color: #8d887e;
+      display: flex; justify-content: space-between;
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">VOLTA</span>
+    <a href="#">Work · Studio · Contact</a>
+  </nav>
+
+  <header class="hero">
+    <svg viewBox="0 0 1440 480" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="ag-g" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0" stop-color="#1a1208" /><stop offset="1" stop-color="#0e0e0f" />
+        </linearGradient>
+      </defs>
+      <rect width="1440" height="480" fill="url(#ag-g)" />
+      <g fill="none" stroke="#ff5a3c" stroke-width="1.5" opacity="0.6">
+        <circle cx="1080" cy="200" r="80" />
+        <circle cx="1080" cy="200" r="150" />
+        <circle cx="1080" cy="200" r="230" />
+      </g>
+      <path d="M120 460 C 360 300 560 420 760 260 S 1180 160 1320 40"
+            fill="none" stroke="#ffb08c" stroke-width="3" opacity="0.8" />
+    </svg>
+    <div class="copy">
+      <p class="eyebrow">Design &amp; engineering studio</p>
+      <h1 class="display">We build the improbable, on schedule.</h1>
+    </div>
+  </header>
+
+  <p class="intro">
+    Volta is a 24-person studio of designers and engineers. We take the brief
+    nobody else will quote and ship it — interfaces, platforms, the occasional
+    impossible deadline.
+  </p>
+
+  <section class="work">
+    <article class="case">
+      <div class="shot">
+        <svg viewBox="0 0 600 320" aria-hidden="true">
+          <rect width="600" height="320" fill="#15171c" />
+          <rect x="40" y="40" width="520" height="60" rx="8" fill="#22252d" />
+          <rect x="40" y="130" width="240" height="150" rx="8" fill="#ff5a3c" opacity="0.85" />
+          <rect x="310" y="130" width="250" height="70" rx="8" fill="#2b2f39" />
+          <rect x="310" y="210" width="250" height="70" rx="8" fill="#2b2f39" />
+        </svg>
+      </div>
+      <div class="meta">
+        <p class="tag">Fintech · Platform</p>
+        <h2 class="display">A trading desk that loads in 400ms</h2>
+        <p>Rebuilt a legacy terminal into a real-time web app handling 12M events a day.</p>
+      </div>
+    </article>
+
+    <article class="case">
+      <div class="shot">
+        <svg viewBox="0 0 600 320" aria-hidden="true">
+          <rect width="600" height="320" fill="#101418" />
+          <circle cx="300" cy="160" r="120" fill="none" stroke="#ffb08c" stroke-width="6" />
+          <circle cx="300" cy="160" r="60" fill="#ff5a3c" opacity="0.85" />
+        </svg>
+      </div>
+      <div class="meta">
+        <p class="tag">Culture · Brand</p>
+        <h2 class="display">An identity that moves with the music</h2>
+        <p>A generative brand system for a festival, driven live by the FOH audio feed.</p>
+      </div>
+    </article>
+  </section>
+
+  <footer>
+    <span>© 2026 Volta Studio</span>
+    <span>Lisbon · Berlin</span>
+  </footer>
+</body>
+</html>
