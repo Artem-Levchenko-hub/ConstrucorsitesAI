@@ -31,6 +31,7 @@ from typing import Any
 
 from omnia_api.services import (
     chip_pixel_gate,
+    data_gate,
     defect_registry,
     hierarchy_gate,
     perf_a11y_gate,
@@ -56,12 +57,13 @@ PERF_A11Y = "perf-a11y"
 CHIP_PIXEL = "chip-pixel"
 TASTE = "taste"
 HIERARCHY = "hierarchy"
+DATA = "data"
 
 #: The rendered gates, in run order. ``defect-registry`` is pure source-scan and
 #: runs first/always; these need a live DOM (a static file set or a URL). The
-#: correctness three run at the mobile floor; ``taste`` and ``hierarchy`` run at
-#: desktop width.
-RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY)
+#: correctness gates (wow-dom, perf-a11y, chip-pixel, data) run at the mobile
+#: floor; ``taste`` and ``hierarchy`` run at desktop width.
+RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA)
 
 
 @dataclass(frozen=True)
@@ -221,6 +223,7 @@ async def run(
             chip = await chip_pixel_gate.audit_url(url, spec, width=width)
             taste = await taste_gate.audit_url(url, width=TASTE_WIDTH)
             hierarchy = await hierarchy_gate.audit_url(url, width=HIERARCHY_WIDTH)
+            data = await data_gate.audit_url(url, width=width)
         else:
             assert files is not None  # render_expected guarantees index.html
             wow = await wow_dom_gate.audit_files(files, width=width)
@@ -228,11 +231,13 @@ async def run(
             chip = await chip_pixel_gate.audit_files(files, spec, width=width)
             taste = await taste_gate.audit_files(files, width=TASTE_WIDTH)
             hierarchy = await hierarchy_gate.audit_files(files, width=HIERARCHY_WIDTH)
+            data = await data_gate.audit_files(files, width=width)
         gates.append(_from_rendered(WOW_DOM, wow))
         gates.append(_from_rendered(PERF_A11Y, perf))
         gates.append(_from_rendered(CHIP_PIXEL, chip))
         gates.append(_from_rendered(TASTE, taste))
         gates.append(_from_rendered(HIERARCHY, hierarchy))
+        gates.append(_from_rendered(DATA, data))
 
     return GauntletVerdict(tuple(gates), render_expected=render_expected)
 

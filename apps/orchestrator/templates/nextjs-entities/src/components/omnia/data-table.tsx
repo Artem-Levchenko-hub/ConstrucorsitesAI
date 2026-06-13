@@ -294,7 +294,8 @@ export function DataTable<T extends { id: string }>({
   // one) from a no-match empty (records exist but a search/filter hid them →
   // the active-filter chips already offer a reset). Gate on the raw count, not
   // `query`, so an empty-result filter tab is also classified correctly.
-  const noRecords = (Array.isArray(rows) ? rows.length : 0) === 0;
+  const rawRowCount = Array.isArray(rows) ? rows.length : 0;
+  const noRecords = rawRowCount === 0;
 
   // Selection is keyed by id so it survives pagination/filter/sort. Derive the
   // selected rows from the current filtered set so it self-prunes to rows that
@@ -382,7 +383,15 @@ export function DataTable<T extends { id: string }>({
   const colCount = visibleColumns.length + (selectable ? 1 : 0) + (rowActions ? 1 : 0);
 
   return (
-    <div className={cn("space-y-3", className)}>
+    // `data-omnia-collection` + `data-omnia-rows` are the stable signal the
+    // acceptance gauntlet's data gate (V1.6 5/5) keys on to prove the demo
+    // seeder filled the catalog — the RAW record count (filter/pagination
+    // independent), so a search box hiding rows never reads as an empty catalog.
+    <div
+      className={cn("space-y-3", className)}
+      data-omnia-collection=""
+      data-omnia-rows={rawRowCount}
+    >
       {(searchable ||
         toolbar ||
         exportable ||

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>Каталог — пуст</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 24px; }
+      .empty { border: 1px dashed #d1d5db; border-radius: 12px; padding: 56px 24px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <h1>Товары</h1>
+    <!-- Mirrors the data-table kit container with the empty-state branch: a real
+         record collection that rendered 0 rows — the defect this gate catches. -->
+    <div data-omnia-collection data-omnia-rows="0">
+      <div class="empty">
+        <p>Пока пусто</p>
+        <p>Здесь появятся записи, как только вы их добавите.</p>
+      </div>
+    </div>
+  </body>
+</html>

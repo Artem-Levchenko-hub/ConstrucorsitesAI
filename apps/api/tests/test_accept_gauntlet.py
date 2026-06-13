@@ -12,6 +12,7 @@ from pathlib import Path
 
 from omnia_api.services import accept_gauntlet
 from omnia_api.services.chip_pixel_gate import FidelityReport
+from omnia_api.services.data_gate import DataFinding, DataReport
 from omnia_api.services.hierarchy_gate import HierarchyReport
 from omnia_api.services.perf_a11y_gate import PerfA11yFinding, PerfA11yReport
 from omnia_api.services.taste_gate import TasteReport
@@ -53,6 +54,10 @@ def _hier(*, score=3, findings=(), rendered=True):
     return HierarchyReport(tuple(findings), score, 1440, rendered=rendered)
 
 
+def _data(*, collections=1, findings=(), rendered=True):
+    return DataReport(tuple(findings), collections, rendered=rendered)
+
+
 # ── 1. deterministic leg, no render ──────────────────────────────────────────
 
 
@@ -88,9 +93,10 @@ async def test_empty_inputs_do_not_pass():
 # ── 2. rendered legs (stubbed — no real chromium) ─────────────────────────────
 
 
-def _stub_rendered(monkeypatch, *, wow, perf, chip, taste=None, hier=None):
+def _stub_rendered(monkeypatch, *, wow, perf, chip, taste=None, hier=None, data=None):
     taste = taste if taste is not None else _taste()
     hier = hier if hier is not None else _hier()
+    data = data if data is not None else _data()
 
     async def _w(files, **kw):
         return wow
@@ -107,11 +113,15 @@ def _stub_rendered(monkeypatch, *, wow, perf, chip, taste=None, hier=None):
     async def _h(files, **kw):
         return hier
 
+    async def _d(files, **kw):
+        return data
+
     monkeypatch.setattr(accept_gauntlet.wow_dom_gate, "audit_files", _w)
     monkeypatch.setattr(accept_gauntlet.perf_a11y_gate, "audit_files", _p)
     monkeypatch.setattr(accept_gauntlet.chip_pixel_gate, "audit_files", _c)
     monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _t)
     monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _h)
+    monkeypatch.setattr(accept_gauntlet.data_gate, "audit_files", _d)
 
 
 async def test_all_gates_clean_passes(monkeypatch):
@@ -124,6 +134,7 @@ async def test_all_gates_clean_passes(monkeypatch):
         accept_gauntlet.CHIP_PIXEL,
         accept_gauntlet.TASTE,
         accept_gauntlet.HIERARCHY,
+        accept_gauntlet.DATA,
     ]
     assert v.render_expected is True
     assert v.passed is True
@@ -153,6 +164,7 @@ async def test_abstain_fails_strict_but_not_hard(monkeypatch):
         chip=_chip(rendered=False),
         taste=_taste(rendered=False),
         hier=_hier(rendered=False),
+        data=_data(rendered=False),
     )
     v = await accept_gauntlet.run(files={"index.html": _CLEAN_HTML})
     assert v.passed is False  # strict: abstain ≠ pass
@@ -188,6 +200,22 @@ async def test_taste_below_floor_is_a_hard_failure(monkeypatch):
     assert "taste:hero-imagery" in v.failed_classes
 
 
+async def test_empty_catalog_is_a_hard_failure(monkeypatch):
+    # the seeded-data assert (V1.6 5/5): a catalog that rendered 0 rows is a real
+    # finding that blocks ship, not a mere abstain.
+    _stub_rendered(
+        monkeypatch,
+        wow=_wow(),
+        perf=_perf(),
+        chip=_chip(checked=("palette-bg",)),
+        data=_data(findings=(DataFinding("empty-collection", "0 rows"),)),
+    )
+    v = await accept_gauntlet.run(files={"index.html": _CLEAN_HTML})
+    assert v.passed is False
+    assert accept_gauntlet.DATA in {g.gate for g in v.hard_failed}
+    assert "data:empty-collection" in v.failed_classes
+
+
 # ── 3. wiring: the rendered gates are no longer orphaned ─────────────────────
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services"
@@ -201,6 +229,7 @@ def test_aggregator_imports_every_rendered_gate():
         "chip_pixel_gate",
         "taste_gate",
         "hierarchy_gate",
+        "data_gate",
         "defect_registry",
     )
     for mod in mods:
