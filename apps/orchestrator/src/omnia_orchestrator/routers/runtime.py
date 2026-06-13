@@ -46,7 +46,12 @@ from omnia_orchestrator.schemas.runtime import (
     WakeRequest,
     WakeResponse,
 )
-from omnia_orchestrator.services import builder, deploy_state, nginx_writer
+from omnia_orchestrator.services import (
+    builder,
+    demo_seed_writer,
+    deploy_state,
+    nginx_writer,
+)
 from omnia_orchestrator.services.compile_status import parse_next_compile_error
 from omnia_orchestrator.services.hibernate import record_activity
 from omnia_orchestrator.services.port_allocator import (
@@ -256,6 +261,11 @@ async def hot_reload(
 
     write_result = await write_files(container_name, payload.files)
 
+    # Seed PUBLIC entity catalogs with demo rows so the first browse screen
+    # isn't an empty-state (NORTH STAR pillars 1 & 4). Idempotent (only fills
+    # empty catalogs) and fail-soft (never raises) — see demo_seed_writer.
+    seeded = await demo_seed_writer.seed_demo_data(payload.project_id, payload.files)
+
     # If the AI touched the DB schema or migrations, push it to Postgres now.
     schema_touched = any(
         p == "src/lib/db/schema.ts" or p.startswith("src/lib/db/migrations/")
@@ -287,6 +297,7 @@ async def hot_reload(
         "written": write_result.get("written", "0"),
         "total_bytes": write_result.get("total_bytes", "0"),
         "dropped": write_result.get("dropped", ""),
+        "seeded": str(sum(seeded.values())),
     }
     if drizzle_result is not None:
         response["drizzle_exit_code"] = drizzle_result["exit_code"]

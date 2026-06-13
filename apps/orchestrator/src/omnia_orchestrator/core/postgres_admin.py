@@ -19,11 +19,14 @@ with mode 0600 so a restart can recover state without re-rotating.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import secrets
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, urlparse
 from uuid import UUID
 
@@ -271,3 +274,93 @@ def load_existing_dsn(project_id: UUID) -> str | None:
         if line.startswith("DATABASE_URL="):
             return line[len("DATABASE_URL=") :]
     return None
+
+
+# ── demo-data seeding ────────────────────────────────────────────────────────
+#
+# A freshly generated app whose primary browse screen is an empty-state is the
+# #1 "won't show a colleague" moment (NORTH STAR pillars 1 & 4). The pure
+# generator (`services.demo_seeder`) turns an entity schema into realistic rows;
+# this writer drops them into the project's `records` table for PUBLIC entities
+# (engine reads ignore `created_by` for those, so the rows are visible to the
+# owner AND to any stranger opening `/p/<slug>`). Owner-scoped entities are
+# intentionally NOT seeded — their rows would filter to `created_by = me` and
+# stay invisible, and an empty "my items" is the correct first state anyway.
+
+# Synthetic row-owner that satisfies the NOT NULL `created_by` FK. No
+# password_hash → it can never log in; it exists only to own demo rows.
+_DEMO_USER_EMAIL = "demo@omnia.local"
+_DEMO_USER_NAME = "Демо"
+
+
+async def _ensure_demo_user(conn: asyncpg.Connection, schema_q: str) -> str:
+    """Insert (or reuse) the synthetic demo-row owner, returning its id."""
+    row = await conn.fetchrow(
+        f"INSERT INTO {schema_q}.users (name, email, role) "
+        f"VALUES ($1, $2, 'user') ON CONFLICT (email) DO NOTHING RETURNING id",
+        _DEMO_USER_NAME,
+        _DEMO_USER_EMAIL,
+    )
+    if row is None:
+        row = await conn.fetchrow(
+            f"SELECT id FROM {schema_q}.users WHERE email = $1", _DEMO_USER_EMAIL
+        )
+    return str(row["id"])
+
+
+async def seed_public_records(
+    project_id: UUID,
+    batches: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> dict[str, int]:
+    """Insert demo rows into a project's `records` table for empty catalogs.
+
+    `batches` maps entity name → pre-generated `data` payloads (the caller has
+    already filtered to PUBLIC entities). For each entity we seed **only when
+    its catalog is currently empty**, so a follow-up generation never
+    duplicates rows or clobbers data the user has started curating (edit-loop
+    safe). Returns ``{entity: inserted_count}`` (0 = skipped because non-empty).
+
+    Runs as the project's own role via ``SET LOCAL ROLE`` so inserts go through
+    the table owner's privileges (Postgres 16 grants the role-creating admin
+    ADMIN membership on roles it created, so the admin pool can assume it). The
+    ``LOCAL`` scope auto-resets at transaction end — no pool contamination.
+    """
+    if not batches:
+        return {}
+    short = _project_short_id(project_id)
+    schema_q = _quote_ident(f"proj_{short}")
+    role_q = _quote_ident(f"proj_{short}_user")
+
+    pool = await _get_admin_pool()
+    inserted: dict[str, int] = {}
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(f"SET LOCAL ROLE {role_q}")
+            demo_user_id = await _ensure_demo_user(conn, schema_q)
+            for entity, rows in batches.items():
+                if not rows:
+                    inserted[entity] = 0
+                    continue
+                existing = await conn.fetchval(
+                    f"SELECT count(*) FROM {schema_q}.records WHERE entity = $1",
+                    entity,
+                )
+                if existing:
+                    inserted[entity] = 0
+                    continue
+                await conn.executemany(
+                    f"INSERT INTO {schema_q}.records (entity, data, created_by) "
+                    f"VALUES ($1, $2::jsonb, $3::uuid)",
+                    [
+                        (entity, json.dumps(r, ensure_ascii=False), demo_user_id)
+                        for r in rows
+                    ],
+                )
+                inserted[entity] = len(rows)
+
+    log.info(
+        "postgres_admin.seeded",
+        project_id=str(project_id),
+        inserted=inserted,
+    )
+    return inserted
