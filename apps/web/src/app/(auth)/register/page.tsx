@@ -5,9 +5,9 @@ import { RegisterForm } from "@/components/auth/RegisterForm";
 export default async function RegisterPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string }>;
+  searchParams: Promise<{ next?: string; source?: string; ref?: string }>;
 }) {
-  const { next } = await searchParams;
+  const { next, source, ref } = await searchParams;
   const loginHref = next ? `/login?next=${encodeURIComponent(next)}` : "/login";
 
   return (
@@ -26,7 +26,7 @@ export default async function RegisterPage({
         </>
       }
     >
-      <RegisterForm next={next} />
+      <RegisterForm next={next} source={source} referrerProjectId={ref} />
     </AuthCard>
   );
 }

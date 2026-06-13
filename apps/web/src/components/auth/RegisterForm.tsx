@@ -6,7 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function RegisterForm({ next }: { next?: string }) {
+export function RegisterForm({
+  next,
+  source,
+  referrerProjectId,
+}: {
+  next?: string;
+  source?: string;
+  referrerProjectId?: string;
+}) {
   const [state, formAction, pending] = useActionState(registerAction, {
     error: null,
   });
@@ -14,6 +22,12 @@ export function RegisterForm({ next }: { next?: string }) {
   return (
     <form action={formAction} className="space-y-4">
       {next && <input type="hidden" name="next" value={next} />}
+      {/* V4.2b return-edge: carry viral-funnel provenance from the URL into the
+          register action. The server action re-validates/sanitizes these. */}
+      {source && <input type="hidden" name="source" value={source} />}
+      {referrerProjectId && (
+        <input type="hidden" name="referrer_project_id" value={referrerProjectId} />
+      )}
 
       <div className="space-y-2">
         <Label htmlFor="email">Email</Label>

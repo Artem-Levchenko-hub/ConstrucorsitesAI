@@ -3,6 +3,11 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import {
+  sanitizeReferrerProjectId,
+  sanitizeSignupSource,
+} from "@/lib/signup-provenance";
+
 type FormState = { error: string | null };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -46,6 +51,7 @@ async function callAuth(
   endpoint: "login" | "register",
   email: string,
   password: string,
+  extra?: Record<string, unknown>,
 ): Promise<string | null> {
   const url = `${apiBaseUrl()}/api/auth/${endpoint}`;
   let response: Response;
@@ -53,7 +59,7 @@ async function callAuth(
     response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, ...extra }),
       cache: "no-store",
     });
   } catch (e) {
@@ -148,7 +154,24 @@ export async function registerAction(
   if (validationError) return { error: validationError };
   if (password !== confirm) return { error: "Пароли не совпадают" };
 
-  const error = await callAuth("register", email, password);
+  // V4.2b return-edge: forward viral-funnel provenance when (and only when) the
+  // URL carried a valid source/ref. Anything malformed is sanitized away so a
+  // junk query param can never turn a good signup into a 422 — it just records
+  // as organic (NULL provenance).
+  const source = sanitizeSignupSource(formData.get("source"));
+  const referrerProjectId = sanitizeReferrerProjectId(
+    formData.get("referrer_project_id"),
+  );
+  const provenance: Record<string, unknown> = {};
+  if (source) provenance.source = source;
+  if (referrerProjectId) provenance.referrer_project_id = referrerProjectId;
+
+  const error = await callAuth(
+    "register",
+    email,
+    password,
+    Object.keys(provenance).length > 0 ? provenance : undefined,
+  );
   if (error) return { error };
   redirect(safeNext(formData.get("next")) ?? "/projects");
 }
