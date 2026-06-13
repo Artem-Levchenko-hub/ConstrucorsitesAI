@@ -11,17 +11,23 @@ onto the five comparison axes the plan names (V1.13):
     type-scale, layout-variety, hero-imagery   (taste_gate)
     focal-dominance, asymmetry                  (hierarchy_gate)
 
-The corpus lives in ``apps/api/tests/fixtures/reference/<niche>.html`` —
-hand-curated enterprise / awwwards snapshots, each citing its source in an HTML
-comment, append-only, owner-approved. The adversarial ``bootstrap-baseline.html``
-(the same fixture the taste gate keeps red) MUST fall below the corpus on these
-axes; that is the falsifiable teeth.
+The corpus lives in ``apps/api/src/omnia_api/services/reference_corpus_data/<niche>.html``
+— hand-curated enterprise / awwwards snapshots, each citing its source in an HTML
+comment, append-only, owner-approved. It sits under ``src/`` (package data) rather
+than ``tests/`` on purpose (V1.13b): the prod api/worker image ``.dockerignore``s
+``tests/``, so a corpus there would be empty at runtime and the gate would abstain
+forever. Shipping it as package data makes the ceiling enforceable in the live
+container. The adversarial ``tests/fixtures/bootstrap-baseline.html`` (the same
+fixture the taste gate keeps red) MUST fall below the corpus on these axes; that is
+the falsifiable teeth — it stays in ``tests/`` because only the test suite needs it.
 
 Money-free, 0 LLM: hand-curation once + a deterministic compare. Only the final
 "a live fresh generation beats the corpus" step needs an owner corpus-run.
 
-V1.13b wires a ``REFERENCE`` leg into ``accept_gauntlet.RENDERED_GATES`` so this
-comparator fans out with the other rendered legs instead of orphaning.
+V1.13b wires a ``REFERENCE`` leg into ``accept_gauntlet`` (the gate runs in
+``RENDERED_GATES`` order, fanned by ``run()`` behind a dedicated ``reference=``
+dial) via :func:`audit_files` / :func:`audit_url` + :class:`ReferenceReport`, so
+this comparator no longer orphans.
 """
 
 from __future__ import annotations
@@ -52,9 +58,15 @@ RICHNESS_AXES: tuple[str, ...] = TASTE_AXES + HIERARCHY_AXES
 #: hard fail.
 MIN_AXES = 4
 
-#: Plan-mandated corpus location: ``apps/api/tests/fixtures/reference``.
-#: ``parents``: [0]=services [1]=omnia_api [2]=src [3]=api.
-CORPUS_DIR = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "reference"
+#: The defect class a below-corpus candidate carries into the gauntlet's
+#: ``failed_classes`` (becomes ``reference:reference-below``).
+BELOW_CLASS = "reference-below"
+
+#: Corpus location — package data shipped with the api/worker image (V1.13b).
+#: It lives next to this module under ``services/reference_corpus_data`` so the
+#: prod image ships it; ``tests/`` is ``.dockerignore``d and would be empty at
+#: runtime (the gate would then abstain forever).
+CORPUS_DIR = Path(__file__).resolve().parent / "reference_corpus_data"
 
 #: ``{axis: passed}`` over exactly :data:`RICHNESS_AXES`.
 RichnessVector = dict[str, bool]
@@ -150,6 +162,19 @@ async def vector_of_html(
     return await vector_of_files({"index.html": html}, width=width)
 
 
+async def vector_of_url(
+    url: str, *, width: int = taste_gate.GATE_WIDTH
+) -> tuple[RichnessVector, bool]:
+    """Render a live ``url`` once per gate and return its five-axis richness
+    vector + whether BOTH gates actually rendered (fail-soft, R-10)."""
+    taste_rep = await taste_gate.audit_url(url, width=width)
+    hier_rep = await hierarchy_gate.audit_url(url, width=hierarchy_gate.GATE_WIDTH)
+    rendered = taste_rep.rendered and hier_rep.rendered
+    taste_checks = taste_rep.subscore()["checks"] if taste_rep.rendered else {}
+    hier_checks = hier_rep.subscore()["checks"] if hier_rep.rendered else {}
+    return richness_vector(taste_checks, hier_checks), rendered
+
+
 def load_corpus(corpus_dir: Path = CORPUS_DIR) -> dict[str, str]:
     """``{niche: html}`` for every ``<niche>.html`` in the corpus (sorted)."""
     if not corpus_dir.is_dir():
@@ -160,19 +185,19 @@ def load_corpus(corpus_dir: Path = CORPUS_DIR) -> dict[str, str]:
     }
 
 
-async def compare_to_corpus(
-    candidate_html: str,
+async def _compare_vector_to_corpus(
+    cand_vec: RichnessVector,
+    cand_rendered: bool,
     *,
-    corpus_dir: Path = CORPUS_DIR,
-    min_axes: int = MIN_AXES,
-    width: int = taste_gate.GATE_WIDTH,
+    corpus_dir: Path,
+    min_axes: int,
+    width: int,
 ) -> list[CorpusComparison]:
-    """Render ``candidate_html`` and every corpus reference, then report a
-    meet-or-beat verdict per niche. The candidate is rendered ONCE and compared
-    against each reference's own vector.
+    """Compare an already-rendered candidate vector against every corpus
+    reference. Shared by :func:`compare_to_corpus` (single HTML) and the gauntlet
+    adapter (:func:`audit_files` / :func:`audit_url`).
     """
     corpus = load_corpus(corpus_dir)
-    cand_vec, cand_rendered = await vector_of_html(candidate_html, width=width)
     out: list[CorpusComparison] = []
     for niche, ref_html in corpus.items():
         ref_vec, ref_rendered = await vector_of_html(ref_html, width=width)
@@ -188,3 +213,113 @@ async def compare_to_corpus(
             )
         )
     return out
+
+
+async def compare_to_corpus(
+    candidate_html: str,
+    *,
+    corpus_dir: Path = CORPUS_DIR,
+    min_axes: int = MIN_AXES,
+    width: int = taste_gate.GATE_WIDTH,
+) -> list[CorpusComparison]:
+    """Render ``candidate_html`` and every corpus reference, then report a
+    meet-or-beat verdict per niche. The candidate is rendered ONCE and compared
+    against each reference's own vector.
+    """
+    cand_vec, cand_rendered = await vector_of_html(candidate_html, width=width)
+    return await _compare_vector_to_corpus(
+        cand_vec, cand_rendered, corpus_dir=corpus_dir, min_axes=min_axes, width=width
+    )
+
+
+# ── gauntlet adapter (V1.13b) ─────────────────────────────────────────────────
+# A gate-report-shaped wrapper so ``accept_gauntlet`` can fan the comparator as
+# the ``REFERENCE`` leg, adapting it through the same ``_from_rendered`` path as
+# the taste/hierarchy/data gates (``.passed`` / ``.rendered`` / ``.classes`` /
+# ``.summary()`` / ``.subscore()``).
+
+
+@dataclass(frozen=True)
+class ReferenceReport:
+    """Aggregate of one candidate-vs-corpus run, shaped like a rendered gate.
+
+    The CEILING claim is strict: the candidate must MEET-OR-BEAT *every* curated
+    reference (i.e. beat the hardest one), so a generation that regresses below
+    the corpus on ≥2 axes against any niche hard-fails. An empty corpus or a
+    render miss yields ``rendered=False`` → ABSTAIN (R-10): the gate never sinks
+    ship on missing evidence, only on a real below-corpus finding.
+    """
+
+    comparisons: tuple[CorpusComparison, ...]
+
+    @property
+    def rendered(self) -> bool:
+        return bool(self.comparisons) and all(c.rendered for c in self.comparisons)
+
+    @property
+    def passed(self) -> bool:
+        return self.rendered and all(c.passed for c in self.comparisons)
+
+    @property
+    def classes(self) -> tuple[str, ...]:
+        # Abstain (not rendered) carries no class — no evidence is not a finding.
+        if not self.rendered or self.passed:
+            return ()
+        return (BELOW_CLASS,)
+
+    def summary(self) -> str:
+        if not self.comparisons:
+            return "reference: ABSTAIN (no corpus to compare against)"
+        if not self.rendered:
+            return "reference: ABSTAIN (a page did not render)"
+        verdict = "MEETS-OR-BEATS" if self.passed else "BELOW"
+        below = [c.niche for c in self.comparisons if not c.passed]
+        tail = "" if not below else f" — below: {', '.join(below)}"
+        return f"reference: {verdict} corpus ({len(self.comparisons)} niches){tail}"
+
+    def subscore(self) -> dict[str, object]:
+        return {
+            "gate": "reference",
+            "passed": self.passed,
+            "rendered": self.rendered,
+            "axes": list(RICHNESS_AXES),
+            "comparisons": [
+                {
+                    "niche": c.niche,
+                    "passed": c.passed,
+                    "met": list(c.met),
+                    "rendered": c.rendered,
+                }
+                for c in self.comparisons
+            ],
+        }
+
+
+async def audit_files(
+    files: dict[str, str],
+    *,
+    width: int = taste_gate.GATE_WIDTH,
+    corpus_dir: Path = CORPUS_DIR,
+    min_axes: int = MIN_AXES,
+) -> ReferenceReport:
+    """Render a static ``{path: html}`` candidate and grade it against the corpus."""
+    cand_vec, cand_rendered = await vector_of_files(files, width=width)
+    comps = await _compare_vector_to_corpus(
+        cand_vec, cand_rendered, corpus_dir=corpus_dir, min_axes=min_axes, width=width
+    )
+    return ReferenceReport(tuple(comps))
+
+
+async def audit_url(
+    url: str,
+    *,
+    width: int = taste_gate.GATE_WIDTH,
+    corpus_dir: Path = CORPUS_DIR,
+    min_axes: int = MIN_AXES,
+) -> ReferenceReport:
+    """Render a live ``url`` candidate and grade it against the corpus."""
+    cand_vec, cand_rendered = await vector_of_url(url, width=width)
+    comps = await _compare_vector_to_corpus(
+        cand_vec, cand_rendered, corpus_dir=corpus_dir, min_axes=min_axes, width=width
+    )
+    return ReferenceReport(tuple(comps))

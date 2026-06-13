@@ -269,6 +269,11 @@ async def evaluate(
             include_rendered=settings.acceptance_gauntlet_render_gates,
             composition=settings.acceptance_gauntlet_composition_gates,
             fidelity=fidelity,
+            # V1.13b CEILING leg — graded against a curated enterprise corpus. OFF
+            # by default (flipping it ON for live generations is the paid owner
+            # corpus-run); it ABSTAINS on an empty corpus / render miss, so even
+            # when enabled it never sinks ship on missing evidence (R-10).
+            reference=settings.acceptance_gauntlet_reference_gate,
         )
         if gauntlet.hard_failed:
             gauntlet_ok = False

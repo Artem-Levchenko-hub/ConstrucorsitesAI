@@ -15,6 +15,11 @@ from omnia_api.services.chip_pixel_gate import FidelityReport
 from omnia_api.services.data_gate import DataFinding, DataReport
 from omnia_api.services.hierarchy_gate import HierarchyReport
 from omnia_api.services.perf_a11y_gate import PerfA11yFinding, PerfA11yReport
+from omnia_api.services.reference_corpus import (
+    RICHNESS_AXES,
+    CorpusComparison,
+    ReferenceReport,
+)
 from omnia_api.services.taste_gate import TYPE_SCALE, TasteFinding, TasteReport
 from omnia_api.services.wow_dom_gate import WowDomFinding, WowDomReport
 
@@ -58,6 +63,24 @@ def _data(*, collections=1, findings=(), rendered=True):
     return DataReport(tuple(findings), collections, rendered=rendered)
 
 
+def _ref(*, passed=True, rendered=True):
+    """A reference-corpus report (V1.13b). ``passed`` → candidate meets-or-beats;
+    not passed → it holds only one axis (below corpus); ``rendered=False`` →
+    abstain (a page / the corpus did not render)."""
+    full = {a: True for a in RICHNESS_AXES}
+    cand = full if passed else {a: (a == RICHNESS_AXES[0]) for a in RICHNESS_AXES}
+    met = tuple(a for a in RICHNESS_AXES if bool(cand[a]) >= bool(full[a]))
+    comp = CorpusComparison(
+        niche="saas",
+        candidate=cand,
+        reference=full,
+        met=met,
+        rendered=rendered,
+        min_axes=4,
+    )
+    return ReferenceReport((comp,))
+
+
 # ── 1. deterministic leg, no render ──────────────────────────────────────────
 
 
@@ -93,10 +116,11 @@ async def test_empty_inputs_do_not_pass():
 # ── 2. rendered legs (stubbed — no real chromium) ─────────────────────────────
 
 
-def _stub_rendered(monkeypatch, *, wow, perf, chip, taste=None, hier=None, data=None):
+def _stub_rendered(monkeypatch, *, wow, perf, chip, taste=None, hier=None, data=None, ref=None):
     taste = taste if taste is not None else _taste()
     hier = hier if hier is not None else _hier()
     data = data if data is not None else _data()
+    ref = ref if ref is not None else _ref()
 
     async def _w(files, **kw):
         return wow
@@ -116,12 +140,16 @@ def _stub_rendered(monkeypatch, *, wow, perf, chip, taste=None, hier=None, data=
     async def _d(files, **kw):
         return data
 
+    async def _r(files, **kw):
+        return ref
+
     monkeypatch.setattr(accept_gauntlet.wow_dom_gate, "audit_files", _w)
     monkeypatch.setattr(accept_gauntlet.perf_a11y_gate, "audit_files", _p)
     monkeypatch.setattr(accept_gauntlet.chip_pixel_gate, "audit_files", _c)
     monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _t)
     monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _h)
     monkeypatch.setattr(accept_gauntlet.data_gate, "audit_files", _d)
+    monkeypatch.setattr(accept_gauntlet.reference_corpus, "audit_files", _r)
 
 
 async def test_all_gates_clean_passes(monkeypatch):
@@ -135,6 +163,7 @@ async def test_all_gates_clean_passes(monkeypatch):
         accept_gauntlet.TASTE,
         accept_gauntlet.HIERARCHY,
         accept_gauntlet.DATA,
+        accept_gauntlet.REFERENCE,
     ]
     assert v.render_expected is True
     assert v.passed is True
@@ -165,6 +194,7 @@ async def test_abstain_fails_strict_but_not_hard(monkeypatch):
         taste=_taste(rendered=False),
         hier=_hier(rendered=False),
         data=_data(rendered=False),
+        ref=_ref(rendered=False),
     )
     v = await accept_gauntlet.run(files={"index.html": _CLEAN_HTML})
     assert v.passed is False  # strict: abstain ≠ pass
@@ -479,6 +509,124 @@ def test_fidelity_legs_are_chip_pixel_only():
     assert accept_gauntlet.CHIP_PIXEL not in accept_gauntlet.COMPOSITION_LEGS
 
 
+# ── 2d. reference CEILING leg decoupled via `reference=` (V1.13b) ────────────
+# `reference=True` runs the pillar-1 CEILING leg as an ALWAYS-ON hard block,
+# independently of `include_rendered`. It grades the candidate against a curated
+# enterprise corpus; a below-corpus generation hard-fails ship, an empty corpus /
+# render miss ABSTAINS (R-10). Mirror of the composition/fidelity decouple.
+
+
+def _stub_reference(monkeypatch, *, ref):
+    """Stub ONLY reference_corpus.audit_files; make every other rendered leg raise
+    so a test can prove the reference path runs nothing else."""
+
+    async def _r(files, **kw):
+        return ref
+
+    async def _boom(*a, **kw):  # pragma: no cover — must never be awaited here
+        raise AssertionError("reference path ran a non-reference leg")
+
+    monkeypatch.setattr(accept_gauntlet.reference_corpus, "audit_files", _r)
+    monkeypatch.setattr(accept_gauntlet.wow_dom_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.perf_a11y_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.chip_pixel_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.data_gate, "audit_files", _boom)
+
+
+async def test_reference_runs_only_reference(monkeypatch):
+    _stub_reference(monkeypatch, ref=_ref())
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=False,
+        fidelity=False,
+        reference=True,
+    )
+    assert [g.gate for g in v.gates] == [
+        accept_gauntlet.DEFECT_REGISTRY,
+        accept_gauntlet.REFERENCE,
+    ]
+    assert v.render_expected is True
+    assert v.passed is True
+
+
+async def test_reference_below_corpus_is_a_hard_failure(monkeypatch):
+    # the falsifiable teeth of V1.13b: a generation below the curated corpus
+    # hard-fails ship with the exact class.
+    _stub_reference(monkeypatch, ref=_ref(passed=False))
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        reference=True,
+    )
+    assert v.passed is False
+    assert accept_gauntlet.REFERENCE in {g.gate for g in v.hard_failed}
+    assert "reference:reference-below" in v.failed_classes
+
+
+async def test_reference_meets_or_beats_passes(monkeypatch):
+    # regression guard: a generation that meets or beats the corpus PASSES.
+    _stub_reference(monkeypatch, ref=_ref(passed=True))
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        reference=True,
+    )
+    assert v.passed is True
+    assert v.hard_failed == ()
+
+
+async def test_reference_abstain_is_not_a_hard_failure(monkeypatch):
+    # an empty corpus / render miss abstains — strict fails, the hot path is spared
+    # (the carry-forward safety: wiring the leg never sinks ship on missing corpus).
+    _stub_reference(monkeypatch, ref=_ref(rendered=False))
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        reference=True,
+    )
+    assert v.passed is False  # strict: abstain ≠ pass
+    assert v.hard_failed == ()
+    assert {g.gate for g in v.abstained} == {accept_gauntlet.REFERENCE}
+
+
+async def test_reference_off_does_not_run(monkeypatch):
+    # default reference=False with composition on → the reference leg stays off
+    # (the _boom leg for reference would fire if it ran).
+    async def _t(files, **kw):
+        return _taste()
+
+    async def _h(files, **kw):
+        return _hier()
+
+    async def _boom(*a, **kw):  # pragma: no cover
+        raise AssertionError("reference ran while reference=False")
+
+    monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _t)
+    monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _h)
+    monkeypatch.setattr(accept_gauntlet.reference_corpus, "audit_files", _boom)
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        reference=False,
+    )
+    assert accept_gauntlet.REFERENCE not in {g.gate for g in v.gates}
+
+
+def test_reference_legs_are_reference_only():
+    # the constant the decouple hangs on: reference is its own leg, in the order
+    # tuple (so run() fans it, not orphaned) but neither a touch nor a composition
+    # nor a fidelity leg.
+    assert accept_gauntlet.REFERENCE_LEGS == (accept_gauntlet.REFERENCE,)
+    assert accept_gauntlet.REFERENCE in accept_gauntlet.RENDERED_GATES
+    assert accept_gauntlet.REFERENCE not in accept_gauntlet.TOUCH_LEGS
+    assert accept_gauntlet.REFERENCE not in accept_gauntlet.COMPOSITION_LEGS
+    assert accept_gauntlet.REFERENCE not in accept_gauntlet.FIDELITY_LEGS
+
+
 # ── 3. wiring: the rendered gates are no longer orphaned ─────────────────────
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services"
@@ -494,6 +642,7 @@ def test_aggregator_imports_every_rendered_gate():
         "hierarchy_gate",
         "data_gate",
         "defect_registry",
+        "reference_corpus",
     )
     for mod in mods:
         assert mod in body, f"accept_gauntlet must import {mod}"

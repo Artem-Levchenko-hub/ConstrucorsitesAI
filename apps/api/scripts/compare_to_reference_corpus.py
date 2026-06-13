@@ -2,11 +2,11 @@
 """V1.13a — CLI: does a candidate page MEET OR BEAT the reference corpus?
 
 A thin wrapper over :mod:`omnia_api.services.reference_corpus` (where the reusable
-comparator lives so V1.13b can wire it into the acceptance gauntlet). Renders a
-candidate HTML file plus every curated reference in
-``apps/api/tests/fixtures/reference/<niche>.html`` and prints a per-niche
-meet-or-beat table over the five richness axes the taste/hierarchy gates already
-score (type-scale, layout-variety, hero-imagery, focal-dominance, asymmetry).
+comparator lives, wired into the acceptance gauntlet as the REFERENCE leg by
+V1.13b). Renders a candidate HTML file plus every curated reference in
+``apps/api/src/omnia_api/services/reference_corpus_data/<niche>.html`` and prints a
+per-niche meet-or-beat table over the five richness axes the taste/hierarchy gates
+already score (type-scale, layout-variety, hero-imagery, focal-dominance, asymmetry).
 
 Exit 1 if the candidate falls below the corpus on ANY niche (i.e. holds fewer
 than ``--min-axes`` of the five axes). Money-free, 0 LLM.

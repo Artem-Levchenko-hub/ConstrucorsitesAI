@@ -35,6 +35,7 @@ from omnia_api.services import (
     defect_registry,
     hierarchy_gate,
     perf_a11y_gate,
+    reference_corpus,
     taste_gate,
     wow_dom_gate,
 )
@@ -64,12 +65,17 @@ CHIP_PIXEL = "chip-pixel"
 TASTE = "taste"
 HIERARCHY = "hierarchy"
 DATA = "data"
+REFERENCE = "reference"
 
 #: The rendered gates, in run order. ``defect-registry`` is pure source-scan and
 #: runs first/always; these need a live DOM (a static file set or a URL). The
 #: correctness gates (wow-dom, perf-a11y, chip-pixel, data) run at the mobile
-#: floor; ``taste`` and ``hierarchy`` run at desktop width.
-RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA)
+#: floor; ``taste``, ``hierarchy`` and ``reference`` run at desktop width.
+#: ``reference`` (V1.13b) is the pillar-1 CEILING leg — the candidate must meet
+#: or beat a curated enterprise corpus; it is a member of the order tuple (so it
+#: is fanned by ``run()`` and not orphaned) but, like a flag-gated gate, only
+#: fires when ``include_rendered`` is on OR the ``reference=`` dial is set.
+RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA, REFERENCE)
 
 #: The COMPOSITION legs (V1.6 14/5). Taste + hierarchy score richness — type
 #: scale, focal dominance, layered depth, hero imagery — at DESKTOP width, where
@@ -90,6 +96,15 @@ TOUCH_LEGS = (WOW_DOM,)
 #: actually steered an axis in onboarding (a persisted ``discovery_spec``), turning
 #: chip taps from cosmetic into a real request↔output contract on the ship path.
 FIDELITY_LEGS = (CHIP_PIXEL,)
+#: The REFERENCE leg (V1.13b) — the pillar-1 CEILING ratchet. It renders the
+#: candidate and a curated enterprise corpus and hard-fails when the candidate
+#: regresses below the corpus on ≥2 of the five richness axes (it reuses the
+#: taste/hierarchy per-axis verdicts, R-04 — no new metric). Like composition and
+#: fidelity it is decoupled from ``include_rendered`` via its own ``reference=``
+#: dial, and it ABSTAINS (never hard-fails) when the corpus is empty or a page
+#: fails to render (R-10), so wiring it is safe even before the owner corpus-run
+#: that flips it on for the live hot path.
+REFERENCE_LEGS = (REFERENCE,)
 
 
 @dataclass(frozen=True)
@@ -238,6 +253,8 @@ async def _audit_one(
             return await hierarchy_gate.audit_url(url, width=composition_width)
         if gate == DATA:
             return await data_gate.audit_url(url, width=width)
+        if gate == REFERENCE:
+            return await reference_corpus.audit_url(url, width=composition_width)
     else:
         assert files is not None  # render_expected guarantees a target
         if gate == WOW_DOM:
@@ -252,6 +269,8 @@ async def _audit_one(
             return await hierarchy_gate.audit_files(files, width=composition_width)
         if gate == DATA:
             return await data_gate.audit_files(files, width=width)
+        if gate == REFERENCE:
+            return await reference_corpus.audit_files(files, width=composition_width)
     raise AssertionError(f"unknown rendered gate: {gate}")  # pragma: no cover
 
 
@@ -265,6 +284,7 @@ async def run(
     include_rendered: bool = True,
     composition: bool = False,
     fidelity: bool = False,
+    reference: bool = False,
 ) -> GauntletVerdict:
     """Fan the selected landed gates over ``files`` and/or a live ``url``.
 
@@ -290,7 +310,13 @@ async def run(
       and is inert without a ``spec`` (asserts nothing → passes), so the caller
       switches it on only when there is a real ``discovery_spec`` to honour
       (V2.5.2): a request↔render mismatch then hard-fails the ship path.
-      Unioning the three dials never double-runs a leg.
+    * ``reference=True`` adds the ``REFERENCE_LEGS`` (the pillar-1 CEILING leg,
+      V1.13b) the same way — independent of ``include_rendered``. It grades the
+      candidate against a curated enterprise corpus and hard-fails a candidate
+      that regresses below the corpus on ≥2 richness axes; it ABSTAINS (never a
+      hard fail) when the corpus is empty or a page does not render, so it is
+      safe to wire before the owner corpus-run that turns it on for the live path.
+      Unioning the dials never double-runs a leg.
 
     ``composition_width`` picks the viewport the composition legs render at
     (default desktop ``1440``; ``390`` for the MOBILE dimension — V1.6 15/5). A
@@ -314,6 +340,8 @@ async def run(
         legs |= set(COMPOSITION_LEGS)
     if fidelity:
         legs |= set(FIDELITY_LEGS)
+    if reference:
+        legs |= set(REFERENCE_LEGS)
 
     has_target = bool(url or (files is not None and "index.html" in files))
     render_expected = bool(legs) and has_target
@@ -378,6 +406,7 @@ __all__ = [
     "COMPOSITION_WIDTH",
     "FIDELITY_LEGS",
     "GATE_WIDTH",
+    "REFERENCE_LEGS",
     "RENDERED_GATES",
     "TOUCH_LEGS",
     "GateVerdict",

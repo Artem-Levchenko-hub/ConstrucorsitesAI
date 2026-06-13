@@ -340,6 +340,17 @@ class Settings(BaseSettings):
     # answers are byte-identical to before (no extra render). Default ON; flip
     # ACCEPTANCE_GAUNTLET_FIDELITY_GATE=false to disable if a false-positive surfaces.
     acceptance_gauntlet_fidelity_gate: bool = Field(default=True)
+    # V1.13b — the pillar-1 CEILING leg (`REFERENCE_LEGS`). Where the composition
+    # legs assert a FLOOR ("no defect class present"), this asserts a CEILING: a
+    # generation must MEET OR BEAT a curated enterprise corpus on the five richness
+    # axes the taste/hierarchy gates already score (R-04, no new metric). It is
+    # decoupled from `acceptance_gauntlet_render_gates` via the `reference=` dial
+    # and ABSTAINS (never hard-fails) when the corpus is empty or a page does not
+    # render (R-10). The wiring + deterministic/live-chromium teeth are money-free
+    # and shipped now; flipping this ON for the live hot path is the PAID owner
+    # corpus-run milestone (a fresh generation must clear the bar without a model
+    # change) — mirror of `acceptance_gauntlet_render_gates` / 16/5f. Default OFF.
+    acceptance_gauntlet_reference_gate: bool = Field(default=False)
     # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
     # (container-backed), so the composition floor never touched the dominant
     # pillar-1 class. This wires the live-URL path: after a clean hot-reload +

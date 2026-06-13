@@ -21,8 +21,11 @@ import pytest
 
 from omnia_api.services import reference_corpus as rc
 from omnia_api.services.reference_corpus import (
+    BELOW_CLASS,
     MIN_AXES,
     RICHNESS_AXES,
+    CorpusComparison,
+    ReferenceReport,
     axes_met_or_beaten,
     meets_or_beats,
     richness_vector,
@@ -134,6 +137,107 @@ def test_corpus_has_at_least_four_sourced_niches():
     assert len(corpus) >= 4, f"corpus too thin: {sorted(corpus)}"
     for niche, html in corpus.items():
         assert "Reference source:" in html, f"{niche}.html does not cite its source"
+
+
+def test_corpus_ships_under_src_not_tests():
+    # V1.13b carry-forward: the prod image .dockerignores tests/, so the corpus
+    # MUST live under src/ (package data) or the runtime gate finds nothing and
+    # abstains forever. Pin the shipped location.
+    assert rc.CORPUS_DIR.name == "reference_corpus_data"
+    parts = rc.CORPUS_DIR.parts
+    assert "src" in parts and "tests" not in parts, rc.CORPUS_DIR
+    assert rc.CORPUS_DIR.is_dir(), f"corpus dir missing: {rc.CORPUS_DIR}"
+
+
+# ── V1.13b: the gauntlet adapter (ReferenceReport) ─────────────────────────────
+# Gate-report shape so accept_gauntlet can fan the comparator as the REFERENCE
+# leg. Deterministic (no chromium): we drive CorpusComparison verdicts directly.
+
+
+def _comp(niche, *, passed, rendered=True):
+    full = {a: True for a in RICHNESS_AXES}
+    cand = full if passed else {a: (a == RICHNESS_AXES[0]) for a in RICHNESS_AXES}
+    met = axes_met_or_beaten(cand, full)
+    return CorpusComparison(
+        niche=niche, candidate=cand, reference=full, met=met, rendered=rendered
+    )
+
+
+def test_report_passes_only_when_every_niche_is_met():
+    rep = ReferenceReport((_comp("saas", passed=True), _comp("agency", passed=True)))
+    assert rep.rendered is True
+    assert rep.passed is True
+    assert rep.classes == ()
+
+
+def test_report_below_any_niche_is_a_hard_finding():
+    # Strict CEILING: beating one reference but falling below another fails — the
+    # candidate must beat the HARDEST reference.
+    rep = ReferenceReport((_comp("saas", passed=True), _comp("agency", passed=False)))
+    assert rep.passed is False
+    assert rep.classes == (BELOW_CLASS,)
+    assert "below: agency" in rep.summary()
+
+
+def test_report_abstains_on_empty_corpus():
+    # The carry-forward safety: no corpus → ABSTAIN (rendered False), and abstain
+    # carries NO class — it is never a hard finding on the hot path.
+    rep = ReferenceReport(())
+    assert rep.rendered is False
+    assert rep.passed is False
+    assert rep.classes == ()
+    assert "ABSTAIN" in rep.summary()
+
+
+def test_report_abstains_on_render_miss():
+    rep = ReferenceReport((_comp("saas", passed=True, rendered=False),))
+    assert rep.rendered is False
+    assert rep.passed is False
+    assert rep.classes == ()
+
+
+def test_subscore_is_machine_readable():
+    rep = ReferenceReport((_comp("saas", passed=False),))
+    sub = rep.subscore()
+    assert sub["gate"] == "reference"
+    assert sub["passed"] is False
+    assert sub["axes"] == list(RICHNESS_AXES)
+    assert sub["comparisons"][0]["niche"] == "saas"
+
+
+def test_audit_files_abstains_when_corpus_empty(monkeypatch):
+    # End-to-end through audit_files with a stubbed-empty corpus: the candidate
+    # renders fine but there is nothing to compare against → abstain, no class.
+    async def _vec(files, **kw):
+        return ({a: True for a in RICHNESS_AXES}, True)
+
+    monkeypatch.setattr(rc, "vector_of_files", _vec)
+    monkeypatch.setattr(rc, "load_corpus", lambda corpus_dir=rc.CORPUS_DIR: {})
+    rep = asyncio.run(rc.audit_files({"index.html": "<html></html>"}))
+    assert rep.rendered is False
+    assert rep.classes == ()
+
+
+def test_audit_files_below_corpus_carries_class(monkeypatch):
+    # A thin candidate vs a full corpus reference → below → reference-below class.
+    thin = {a: (a == RICHNESS_AXES[0]) for a in RICHNESS_AXES}
+    full = {a: True for a in RICHNESS_AXES}
+
+    async def _cand(files, **kw):
+        return (thin, True)
+
+    async def _ref(html, **kw):
+        return (full, True)
+
+    monkeypatch.setattr(rc, "vector_of_files", _cand)
+    monkeypatch.setattr(rc, "vector_of_html", _ref)
+    monkeypatch.setattr(
+        rc, "load_corpus", lambda corpus_dir=rc.CORPUS_DIR: {"saas": "<html></html>"}
+    )
+    rep = asyncio.run(rc.audit_files({"index.html": "<html></html>"}))
+    assert rep.rendered is True
+    assert rep.passed is False
+    assert rep.classes == (BELOW_CLASS,)
 
 
 # ── render teeth (abstain without chromium, real teeth in the container) ───────
