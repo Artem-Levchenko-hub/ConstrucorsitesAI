@@ -50,6 +50,34 @@ async def test_resolve_live_url_orchestrator_error_returns_none(monkeypatch) -> 
     assert await dev_container.resolve_live_url(uuid4()) is None
 
 
+# ── 16/5d route param: the gate can target a content route, not just `/` ───────
+
+
+def test_normalize_route_root_is_no_suffix() -> None:
+    """Root / empty contribute no suffix → default-route URL byte-identical."""
+    assert dev_container._normalize_route("/") == ""
+    assert dev_container._normalize_route("") == ""
+
+
+def test_normalize_route_adds_leading_slash() -> None:
+    assert dev_container._normalize_route("/dashboard") == "/dashboard"
+    assert dev_container._normalize_route("dashboard") == "/dashboard"
+
+
+async def test_resolve_live_url_appends_route(monkeypatch) -> None:
+    async def fake_status(project_id):
+        return {"state": "running", "container_name": "omnia-dev-crm-abc"}
+
+    monkeypatch.setattr(dev_container.orchestrator_client, "get_status", fake_status)
+    assert await dev_container.resolve_live_url(uuid4(), "/dashboard") == (
+        "http://omnia-dev-crm-abc:3000/dashboard"
+    )
+    # default stays byte-identical to the historical bare URL
+    assert await dev_container.resolve_live_url(uuid4()) == (
+        "http://omnia-dev-crm-abc:3000"
+    )
+
+
 def test_container_next_matches_messages_router() -> None:
     """Keep the worker's container-template list in sync with the router's."""
     from omnia_api.routers import messages

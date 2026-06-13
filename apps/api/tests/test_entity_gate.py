@@ -26,7 +26,7 @@ async def test_gate_live_app_disabled_returns_none(monkeypatch) -> None:
     """Flag OFF → no resolve, no render, None."""
     called = {"resolve": False}
 
-    async def _resolve(_pid):
+    async def _resolve(_pid, route="/"):
         called["resolve"] = True
         return "http://omnia-dev-x:3000"
 
@@ -43,7 +43,7 @@ async def test_gate_live_app_unreachable_returns_none(monkeypatch) -> None:
     """Container not running → resolve None → gate None (no gauntlet call)."""
     ran = {"gauntlet": False}
 
-    async def _resolve(_pid):
+    async def _resolve(_pid, route="/"):
         return None
 
     async def _run(**_kw):
@@ -64,8 +64,10 @@ async def test_gate_live_app_runs_composition_only(monkeypatch) -> None:
     seen: dict = {}
     sentinel = object()
 
-    async def _resolve(_pid):
-        return "http://omnia-dev-sushi-abc:3000"
+    async def _resolve(_pid, route="/"):
+        seen["route"] = route
+        base = "http://omnia-dev-sushi-abc:3000"
+        return base if route == "/" else base + route
 
     async def _run(**kw):
         seen.update(kw)
@@ -78,16 +80,18 @@ async def test_gate_live_app_runs_composition_only(monkeypatch) -> None:
     monkeypatch.setattr(entity_gate, "resolve_live_url", _resolve)
     monkeypatch.setattr(entity_gate.accept_gauntlet, "run", _run)
 
-    out = await entity_gate.gate_live_app(uuid4(), "sushi")
+    # the gate forwards the caller's route to resolve_live_url and gates that URL
+    out = await entity_gate.gate_live_app(uuid4(), "sushi", "/dashboard")
     assert out is sentinel
-    assert seen["url"] == "http://omnia-dev-sushi-abc:3000"
+    assert seen["route"] == "/dashboard"
+    assert seen["url"] == "http://omnia-dev-sushi-abc:3000/dashboard"
     assert seen["composition"] is True
     assert seen["include_rendered"] is False  # 44px touch leg stays out
 
 
 async def test_gate_live_app_render_error_returns_none(monkeypatch) -> None:
     """A browser/render hiccup never sinks the build — fail-soft to None."""
-    async def _resolve(_pid):
+    async def _resolve(_pid, route="/"):
         return "http://omnia-dev-x:3000"
 
     async def _boom(**_kw):
@@ -170,6 +174,20 @@ def _patch_publish(monkeypatch) -> list[dict]:
     return published
 
 
+def _patch_route(monkeypatch, *, route: str = "/") -> None:
+    """Stub the 16/5d route-resolve so the worker job never touches the
+    orchestrator / a browser: base URL resolves, route resolves to ``route``."""
+
+    async def _base(_pid, route="/"):
+        return "http://omnia-dev-x:3000"
+
+    async def _route(_base_url, *, candidate_route="/dashboard"):
+        return route
+
+    monkeypatch.setattr(quality.dev_container, "resolve_live_url", _base)
+    monkeypatch.setattr(quality.route_target, "resolve_target_route", _route)
+
+
 async def test_gate_async_disabled_no_publish(monkeypatch) -> None:
     published = _patch_publish(monkeypatch)
     monkeypatch.setattr(
@@ -213,9 +231,10 @@ async def test_gate_async_passing_verdict_no_publish(monkeypatch) -> None:
     async def _status(_pid, *, slug):
         return {"ok": True}
 
-    async def _gate(_pid, _slug):
+    async def _gate(_pid, _slug, _route="/"):
         return SimpleNamespace(hard_failed=(), failed_classes=())
 
+    _patch_route(monkeypatch)
     monkeypatch.setattr(quality.orchestrator_client, "compile_status", _status)
     monkeypatch.setattr(quality.entity_gate, "gate_live_app", _gate)
     await quality._gate_async(str(uuid4()), str(uuid4()), "shop")
@@ -225,6 +244,7 @@ async def test_gate_async_passing_verdict_no_publish(monkeypatch) -> None:
 async def test_gate_async_hard_fail_publishes_card(monkeypatch) -> None:
     _fast_settle(monkeypatch)
     published = _patch_publish(monkeypatch)
+    captured: dict = {}
     mid, pid = uuid4(), uuid4()
     monkeypatch.setattr(
         quality, "get_settings",
@@ -236,14 +256,17 @@ async def test_gate_async_hard_fail_publishes_card(monkeypatch) -> None:
     async def _status(_pid, *, slug):
         return {"ok": True}
 
-    async def _gate(_pid, _slug):
+    async def _gate(_pid, _slug, route="/"):
+        captured["route"] = route
         return SimpleNamespace(
             hard_failed=(object(),), failed_classes=("taste", "hierarchy")
         )
 
+    _patch_route(monkeypatch, route="/dashboard")
     monkeypatch.setattr(quality.orchestrator_client, "compile_status", _status)
     monkeypatch.setattr(quality.entity_gate, "gate_live_app", _gate)
     await quality._gate_async(str(mid), str(pid), "sushi")
+    assert captured["route"] == "/dashboard"  # resolved route reaches the gate
 
     assert len(published) == 1
     card = published[0]
@@ -261,6 +284,15 @@ def test_entity_gate_calls_run_with_composition() -> None:
     src = (_SRC / "services" / "entity_gate.py").read_text(encoding="utf-8")
     assert "composition=True" in src
     assert "include_rendered=False" in src
+
+
+def test_worker_resolves_target_route() -> None:
+    """The worker MUST resolve the WOW/content route (16/5d) before gating —
+    falsifiable de-orphan assert: route_target is wired into the gate path, not
+    left orphaned. Without this the gate scores the bare `/` login wall."""
+    src = (_SRC / "workers" / "quality.py").read_text(encoding="utf-8")
+    assert "route_target.resolve_target_route" in src
+    assert "gate_live_app(pid, slug, route)" in src
 
 
 def test_queue_points_entity_gate_at_worker_job() -> None:

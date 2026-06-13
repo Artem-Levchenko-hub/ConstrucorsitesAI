@@ -33,9 +33,16 @@ from omnia_api.services.accept_gauntlet import GauntletVerdict
 from omnia_api.services.dev_container import resolve_live_url
 
 
-async def gate_live_app(project_id: UUID, slug: str) -> GauntletVerdict | None:
+async def gate_live_app(
+    project_id: UUID, slug: str, route: str = "/"
+) -> GauntletVerdict | None:
     """Run the desktop-width composition legs (taste + hierarchy) against the
     live entity container and return the verdict.
+
+    ``route`` (V1.6 16/5d) selects the surface to score — the caller resolves the
+    WOW/content route via :mod:`route_target` and passes it here, so the gate
+    scores the dashboard / landing rather than the bare ``/`` login wall. The
+    default ``/`` keeps the historical behaviour.
 
     Returns ``None`` (the caller skips the card this round) when the gate is
     disabled, the container isn't reachable, or the gauntlet errors. Only the
@@ -46,7 +53,7 @@ async def gate_live_app(project_id: UUID, slug: str) -> GauntletVerdict | None:
     """
     if not get_settings().acceptance_entity_composition_gate:
         return None
-    url = await resolve_live_url(project_id)
+    url = await resolve_live_url(project_id, route)
     if url is None:
         return None
     try:

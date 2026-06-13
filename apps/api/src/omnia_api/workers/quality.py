@@ -26,7 +26,13 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from omnia_api.core.config import get_settings
-from omnia_api.services import app_errors, entity_gate, orchestrator_client
+from omnia_api.services import (
+    app_errors,
+    dev_container,
+    entity_gate,
+    orchestrator_client,
+    route_target,
+)
 
 #: Bounded wait for Turbopack to finish recompiling after the hot-reload before
 #: we render — mirrors the API compile probe's ~9s budget (3 × 3s).
@@ -61,7 +67,13 @@ async def _gate_async(message_id: str, project_id: str, slug: str) -> None:
     if not await _compile_clean(pid, slug):
         return
 
-    verdict = await entity_gate.gate_live_app(pid, slug)
+    # 16/5d — target the WOW/content surface, not the bare `/` (a login wall for
+    # an auth-gated app). Resolve the bare URL once, probe it for the right route,
+    # then gate that route. Fail-soft: probe resolves to `/` on any hiccup.
+    base = await dev_container.resolve_live_url(pid)
+    route = "/" if base is None else await route_target.resolve_target_route(base)
+
+    verdict = await entity_gate.gate_live_app(pid, slug, route)
     if verdict is None or not verdict.hard_failed:
         return
     print(
