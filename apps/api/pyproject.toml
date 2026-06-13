@@ -52,6 +52,13 @@ packages = ["src/omnia_api"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Every async fixture and test runs on a per-function event loop. The DB engine
+# fixture is function-scoped too (see conftest), so its asyncpg pool is created
+# and used on the same loop — avoids "another operation is in progress" that a
+# session-scoped pool hits when reused from a later test's loop (pytest-asyncio
+# defaults to per-function loops since 0.24). Setting this explicitly also
+# silences the unset-default deprecation warning.
+asyncio_default_fixture_loop_scope = "function"
 addopts = "-q"
 filterwarnings = [
     "ignore::DeprecationWarning:passlib.*",

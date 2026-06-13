@@ -26,8 +26,11 @@ $$ LANGUAGE plpgsql;
 """
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture
 async def test_engine():
+    # Function-scoped: the engine (and its asyncpg pool) is created and used on
+    # the same per-function event loop, and every test gets a freshly
+    # drop_all+create_all'd schema → full isolation, no cross-test leakage.
     test_url = _resolve_test_database_url()
 
     base_url, db_name = test_url.rsplit("/", 1)
