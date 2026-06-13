@@ -15,17 +15,21 @@ The three richness checks (the gate FAILS below 2/3)
                            ``hierarchy`` (which reads the above-fold median at
                            1.8×): a page whose hero is fine but whose body is flat
                            type everywhere fails here where taste passes.
-  2. ``focal-dominance`` — exactly one *visual* element (``<img>`` / ``<svg>`` /
-                           ``<video>`` / ``url()`` ``background-image``) covers
-                           ≥ 25% of the above-the-fold area. Taste only asks
-                           whether the hero *contains* imagery (a 48px icon
-                           counts); this asks for a substantial dominant visual
-                           and rejects two equally-large visuals competing for
-                           the eye. Layout wrappers are skipped by excluding any
-                           visual that contains another visual (a full-bleed
-                           ``background-image`` hero counts as its own focal; a
-                           ``<section>`` that merely wraps the hero ``<img>`` does
-                           not).
+  2. ``focal-dominance`` — the above-the-fold composition has ONE dominant focal
+                           element. That anchor can be *visual* — exactly one
+                           ``<img>`` / ``<svg>`` / ``<video>`` / ``url()``
+                           ``background-image`` covering ≥ 25% of the above-fold
+                           area (layout wrappers skipped by excluding any visual
+                           that contains another visual; two equally-large visuals
+                           competing for the eye fail) — OR *typographic*: a
+                           display-size hero headline (≥ 48px) that towers over the
+                           above-fold body (≥ 2.2× its median). The text-forward
+                           enterprise hero (a 72px headline over a 14px body, no
+                           image) is a real focal anchor; image-only detection
+                           false-failed it (V1.6 16/5c — measured on a live
+                           generated landing). An ordinary 40px section heading is
+                           not display-size and does not earn the point, so the
+                           bootstrap baseline stays below the floor.
   3. ``asymmetry``       — no generic equal-width N-card row: ≥ 3 sibling cards of
                            the same width, height and baseline laid out in a row.
                            This deterministically catches the "generic-AI 3-card
@@ -99,6 +103,15 @@ _TYPE_DOMINANCE_RATIO = 2.2
 _FOCAL_MIN_FRAC = 0.25
 # Exactly this many focal dominants is the single-focal sweet spot.
 _FOCAL_EXACT = 1
+# A focal anchor can also be TYPOGRAPHIC: a display-size hero headline that towers
+# over the above-fold body reads as the single focal element even with no hero
+# image (the text-forward enterprise hero). It must be both display-size — a hero
+# headline, not an ordinary section heading — AND dominant over the body, so a
+# generic page's 40px heading does not earn it (keeps the bootstrap baseline
+# below the floor). Calibrated on a live generated landing (V1.6 16/5c): a 72px
+# headline over a 14px body, zero <img> visuals.
+_FOCAL_TEXT_MIN_PX = 48.0
+_FOCAL_TEXT_RATIO = 2.2
 # Card-row detector — what counts as a "generic equal-width N-card row".
 _CARD_MIN_COUNT = 3
 # Cards shorter than this are buttons / chips / nav links, not content cards.
@@ -198,6 +211,31 @@ def _text_sizes(obs: Obs) -> list[float]:
     return [s for s in sizes if s > 0]
 
 
+def _above_fold_sizes(obs: Obs) -> list[float]:
+    """Painted text sizes whose box intersects the first viewport (above the fold)."""
+    vh = float(obs.get("viewportHeight") or GATE_HEIGHT)
+    out: list[float] = []
+    for t in obs.get("texts", ()):
+        size = float(t.get("size") or 0)
+        top = float(t.get("top", 0))
+        if size > 0 and -size <= top < vh:
+            out.append(size)
+    return out
+
+
+def _has_text_focal_anchor(obs: Obs) -> bool:
+    """A single display-size hero headline that towers over the above-fold body —
+    a typographic focal element when the hero carries no dominant image."""
+    sizes = _above_fold_sizes(obs)
+    if len(sizes) < 2:
+        return False
+    mx = max(sizes)
+    if mx < _FOCAL_TEXT_MIN_PX:
+        return False
+    median = statistics.median(sizes)
+    return bool(median) and mx / median >= _FOCAL_TEXT_RATIO
+
+
 def _focal_dominants(obs: Obs) -> list[dict[str, Any]]:
     """Visual elements that are their own focal block (not a wrapper) and cover at
     least ``_FOCAL_MIN_FRAC`` of the above-the-fold area."""
@@ -289,19 +327,26 @@ def _score_focal_dominance(obs: Obs) -> list[HierarchyFinding]:
     n = len(dominants)
     if n == _FOCAL_EXACT:
         return []
-    if n == 0:
+    if n > _FOCAL_EXACT:
+        # competing visuals is a real composition flaw — a headline does not
+        # paper over it.
         return [
             HierarchyFinding(
                 FOCAL_DOMINANCE,
-                f"no visual covers ≥ {_FOCAL_MIN_FRAC:.0%} of the above-fold area "
-                "— no dominant focal element",
+                f"{n} visuals each cover ≥ {_FOCAL_MIN_FRAC:.0%} of the above-fold area "
+                "— competing focal points, no single anchor",
             )
         ]
+    # n == 0: no dominant visual — a display-size hero headline is also a focal
+    # anchor (the text-forward enterprise hero).
+    if _has_text_focal_anchor(obs):
+        return []
     return [
         HierarchyFinding(
             FOCAL_DOMINANCE,
-            f"{n} visuals each cover ≥ {_FOCAL_MIN_FRAC:.0%} of the above-fold area "
-            "— competing focal points, no single anchor",
+            f"no visual covers ≥ {_FOCAL_MIN_FRAC:.0%} of the above-fold area and no "
+            f"display-size hero headline (≥ {_FOCAL_TEXT_MIN_PX:.0f}px, ≥ "
+            f"{_FOCAL_TEXT_RATIO:.1f}× body) — no dominant focal element",
         )
     ]
 
@@ -340,6 +385,7 @@ def evaluate_observation(obs: Obs, *, rendered: bool = True) -> HierarchyReport:
     detail = {
         "text_count": len(_text_sizes(obs)),
         "focal_dominants": len(_focal_dominants(obs)),
+        "text_anchor": _has_text_focal_anchor(obs),
         "card_row": _find_card_row(obs) is not None,
     }
     return HierarchyReport(tuple(findings), score, vw, rendered=True, detail=detail)

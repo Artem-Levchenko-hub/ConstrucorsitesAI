@@ -161,18 +161,88 @@ def test_focal_dominance_clean_single_visual():
     assert FOCAL_DOMINANCE not in rep.classes
 
 
-def test_focal_dominance_red_no_visual():
+def test_focal_dominance_red_no_visual_and_no_display_hero():
+    # neither a dominant visual NOR a display-size hero headline → no focal anchor.
     obs = _good_obs()
     obs["visuals"] = []
+    obs["texts"] = [_txt(size=40, top=160), _txt(size=16, top=260), _txt(size=16, top=320)]
     rep = evaluate_observation(obs)
-    assert FOCAL_DOMINANCE in rep.classes
+    assert FOCAL_DOMINANCE in rep.classes  # 40px heading < 48px display floor
 
 
-def test_focal_dominance_red_visual_too_small():
+def test_focal_dominance_red_visual_too_small_and_no_display_hero():
     obs = _good_obs()
     obs["visuals"] = [_visual(frac=0.10)]  # a thumbnail, below the 25% floor
+    obs["texts"] = [_txt(size=40, top=160), _txt(size=16, top=260), _txt(size=16, top=320)]
     rep = evaluate_observation(obs)
     assert FOCAL_DOMINANCE in rep.classes
+
+
+# ── 2b. focal-dominance via a display-size TEXT hero (no image) ────────────────
+# Measured on a real generated landing (FitShare): a 72px headline over a 14px
+# body, ZERO <img>/background-image visuals. A towering display headline IS the
+# single focal element even when the hero carries no picture — image-only focal
+# detection false-failed an otherwise awwwards text-forward landing.
+
+
+def test_focal_dominance_text_hero_anchor_passes_without_visual():
+    obs = _good_obs()
+    obs["visuals"] = []  # text-forward hero, no image
+    obs["texts"] = [
+        _txt(size=72, top=120),
+        _txt(size=72, top=200),  # wrapped headline lines — one hero block
+        _txt(size=18, top=300),
+        *[_txt(size=14, top=360 + i * 20) for i in range(6)],
+    ]
+    rep = evaluate_observation(obs)
+    assert FOCAL_DOMINANCE not in rep.classes  # 72px ≥ 48px display, 72/14 ≥ 2.2×
+
+
+def test_focal_dominance_text_anchor_requires_display_size():
+    # an ordinary 40px section heading dominates the body in ratio (40/16 = 2.5×)
+    # but is not a display-size hero → does NOT earn the focal point. This is what
+    # keeps the bootstrap baseline (2.5rem h1) below the floor.
+    obs = _good_obs()
+    obs["visuals"] = []
+    obs["texts"] = [_txt(size=40, top=160), *[_txt(size=16, top=300 + i * 20) for i in range(6)]]
+    rep = evaluate_observation(obs)
+    assert FOCAL_DOMINANCE in rep.classes
+
+
+def test_focal_dominance_text_anchor_requires_dominance_over_body():
+    # everything is display-size (a wall of 56px text) → no SINGLE focal element.
+    obs = _good_obs()
+    obs["visuals"] = []
+    obs["texts"] = [_txt(size=56, top=120 + i * 70) for i in range(6)]
+    rep = evaluate_observation(obs)
+    assert FOCAL_DOMINANCE in rep.classes  # 56/56 = 1.0× < 2.2×
+
+
+def test_focal_dominance_competing_visuals_not_rescued_by_text():
+    # two competing dominant visuals is a real composition flaw — a big headline
+    # does not paper over it; focal-dominance still fires.
+    obs = _good_obs()
+    obs["visuals"] = [_visual(frac=0.30, top=0), _visual(frac=0.28, top=0)]
+    obs["texts"] = [_txt(size=72, top=120), *[_txt(size=14, top=300 + i * 20) for i in range(6)]]
+    rep = evaluate_observation(obs)
+    assert FOCAL_DOMINANCE in rep.classes
+
+
+def test_fitness_like_text_hero_with_feature_grid_passes():
+    # the real FitShare shape end-to-end: a real type scale (type-dominance ✓), a
+    # text-forward hero with no image (focal via text anchor ✓), and a below-fold
+    # 3-card feature row (asymmetry fires). 2/3 → PASS, the false-positive closed.
+    obs = _good_obs()
+    obs["visuals"] = []
+    obs["texts"] = [_txt(size=72, top=120), _txt(size=72, top=200)] + [
+        _txt(size=14, top=300 + i * 18) for i in range(10)
+    ]
+    obs["groups"] = [_row(n=3, w=395, top=1176)]
+    rep = evaluate_observation(obs)
+    assert FOCAL_DOMINANCE not in rep.classes
+    assert ASYMMETRY in rep.classes
+    assert rep.score == 2
+    assert rep.passed is True
 
 
 def test_focal_dominance_red_two_competing_visuals():
@@ -324,7 +394,10 @@ def test_good_page_with_card_grid_still_passes():
 
 def test_two_failures_drop_below_floor():
     obs = _good_obs()
-    obs["visuals"] = []  # focal fails
+    obs["visuals"] = []  # no visual
+    # a 40px heading passes type-dominance (40/16 = 2.5×) but is not a display-size
+    # hero anchor → focal fails; the card row → asymmetry fails. TD✓ FD✗ AS✗ = 1/3.
+    obs["texts"] = [_txt(size=40, top=160), *[_txt(size=16, top=300 + i * 20) for i in range(6)]]
     obs["groups"] = [_row(n=3)]  # asymmetry fails
     rep = evaluate_observation(obs)
     assert rep.score == 1
@@ -333,7 +406,10 @@ def test_two_failures_drop_below_floor():
 
 def test_one_failure_stays_at_floor():
     obs = _good_obs()
-    obs["visuals"] = []  # only focal fails
+    obs["visuals"] = []  # no visual
+    # 40px heading: type-dominance ✓, focal ✗ (not display-size), no card grid so
+    # asymmetry ✓ → only focal fails. 2/3 stays at the floor.
+    obs["texts"] = [_txt(size=40, top=160), *[_txt(size=16, top=300 + i * 20) for i in range(6)]]
     rep = evaluate_observation(obs)
     assert rep.score == 2
     assert rep.passed is True
@@ -365,6 +441,7 @@ def test_subscore_detail_carries_counts():
     sub = evaluate_observation(_bootstrap_obs()).subscore()
     assert sub["detail"]["card_row"] is True
     assert sub["detail"]["focal_dominants"] == 0
+    assert sub["detail"]["text_anchor"] is False  # 40px h1 is not a display hero
 
 
 def test_summary_pass_is_one_line():
