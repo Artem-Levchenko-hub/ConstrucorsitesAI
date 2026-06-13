@@ -15,6 +15,7 @@ import type {
 } from "@/lib/api/types";
 import { sendPrompt } from "@/lib/api/messages";
 import { USE_MOCKS } from "@/lib/api/mocks";
+import { buildJoyTrigger } from "@/lib/joy-moment";
 import { useWorkspaceStore } from "@/store/workspace";
 
 /**
@@ -198,6 +199,23 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
 
       if (event.type === "llm.done") {
+        // V3.8 JOY-MOMENT — read the turn-mode + brief for THIS build BEFORE the
+        // removeQueries below drops them, then fire exactly one reward trigger
+        // (build only; `buildJoyTrigger` returns null for edits). The error path
+        // (`llm.error`) never reaches here, so failures stay celebration-free.
+        const turnMode = qc.getQueryData<string>([
+          "turn-mode",
+          projectId,
+          event.data.message_id,
+        ]);
+        const joyBrief = qc.getQueryData<StreamBrief | null>([
+          "stream-brief",
+          projectId,
+          event.data.message_id,
+        ]);
+        const joy = buildJoyTrigger(event.data.message_id, turnMode, joyBrief);
+        if (joy) qc.setQueryData(["joy", projectId], joy);
+
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>
             m.id === event.data.message_id
