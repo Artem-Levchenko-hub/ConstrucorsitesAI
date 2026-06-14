@@ -418,6 +418,16 @@ class Settings(BaseSettings):
     # for instant rollback to the prior single-shot freeform path (R-10).
     use_art_director_freeform: bool = Field(default=True)
 
+    # Extend the SAME Art-Director → Writer 2-pass to container-backed APP
+    # stacks that have a dedicated .tsx writer variant (currently
+    # `nextjs_entities`, see art_director_writer._APP_TEMPLATES). Without this,
+    # entity/app builds fall through to a bare single-shot .tsx pass — no design
+    # brief, no authoritative theme tokens (hardcoded colours leak), no
+    # `omnia:brief` event (the live narration / swatches stay blank). On = the
+    # flagship enterprise apps get the same art-direction the freeform landings
+    # already get. Kill switch for instant rollback to the single-shot path.
+    use_art_director_entities: bool = Field(default=True)
+
     # ── Surgical edit mode (owner directive 2026-06-06) ───────────────────
     # After the first build, a follow-up that changes ONE thing (a selected
     # element, a recolour, a text swap, "add an intro section") is routed by the

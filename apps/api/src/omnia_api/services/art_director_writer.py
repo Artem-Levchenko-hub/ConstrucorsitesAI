@@ -504,6 +504,16 @@ def _build_writer_messages(
     return msgs
 
 
+def supports_app_brief(template: str | None) -> bool:
+    """True when ``template`` has a dedicated APP art-director + .tsx writer
+    variant (``_ART_DIRECTOR_INSTRUCTION_APP`` / ``_WRITER_INSTRUCTION_TEMPLATE_APP``),
+    so ``art_director_writer_generate`` emits the right artifact — a multi-file
+    React app via ``<file …>`` blocks, NOT a single static ``index.html``. The
+    caller (routers/messages) uses this to let container-backed app stacks run
+    the same 2-pass art-direction the freeform landings get."""
+    return template in _APP_TEMPLATES
+
+
 async def art_director_writer_generate(
     *,
     base_messages: list[dict[str, str]],

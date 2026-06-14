@@ -49,7 +49,10 @@ from omnia_api.services import (
     zone_edit,
 )
 from omnia_api.services import repo as repo_svc
-from omnia_api.services.art_director_writer import art_director_writer_generate
+from omnia_api.services.art_director_writer import (
+    art_director_writer_generate,
+    supports_app_brief,
+)
 from omnia_api.services.chip_pixel_gate import spec_from_discovery
 from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.contrast_guard import enforce_contrast
@@ -1583,13 +1586,24 @@ async def _process_prompt(
                 # always-on for builds; it just avoids feeding HTML to the
                 # catalog/plain JSON parser if freeform is ever switched off.
                 and _gen_mode == "freeform"
-                # Container-backed Next.js apps (fullstack / nextjs_entities) must
-                # be written as .tsx files by the fullstack system prompt — the
-                # freeform art-director writer emits ONE static index.html, the
-                # wrong artifact for a React app (it gets discarded, app stays the
-                # blank template). Keep container apps off the freeform writer so
-                # they fall through to the single-shot .tsx path below.
-                and project_template not in CONTAINER_NEXT
+                # Container-backed stacks WITHOUT a .tsx writer variant
+                # (fullstack / spa) stay off this path: the art-director writer's
+                # default pass emits ONE static index.html, the wrong artifact for
+                # a React app. But app stacks that DO have a dedicated .tsx writer
+                # (nextjs_entities — art_director_writer._APP_TEMPLATES /
+                # _WRITER_INSTRUCTION_TEMPLATE_APP) get the SAME 2-pass art-
+                # direction: an APP brief (oklch theme tokens + IA) → a .tsx writer
+                # that honours it → the omnia:brief event. Without this the
+                # flagship entity apps fell through to a bare single-shot .tsx —
+                # no brief, hardcoded colours, dead narration/swatches. Flag =
+                # instant rollback to that single-shot path.
+                and (
+                    project_template not in CONTAINER_NEXT
+                    or (
+                        _settings.use_art_director_entities
+                        and supports_app_brief(project_template)
+                    )
+                )
             )
             _dp_active = (
                 not force_single_shot
