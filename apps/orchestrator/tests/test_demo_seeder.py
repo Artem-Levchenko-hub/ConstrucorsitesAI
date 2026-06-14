@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from datetime import date
 
+import pytest
+
 from omnia_orchestrator.services import demo_seeder as ds
 
 # ── shared fixtures ──────────────────────────────────────────────────────────
@@ -1024,3 +1026,114 @@ def test_email_handle_pools_are_disjoint_and_ascii() -> None:
     assert not (set(ds._EMAIL_HANDLES_PERSON) & set(ds._EMAIL_HANDLES_BIZ))
     for h in (*ds._EMAIL_HANDLES_PERSON, *ds._EMAIL_HANDLES_BIZ):
         assert h == h.lower() and h.isascii() and h.isalnum()
+
+
+# ── high-level catalog realism regression (RULE-10 wave → ratchet) ────────────
+# The per-field tests above each isolate one FieldShape. These run the FULL
+# storefront catalog the generator actually emits — title, category, price,
+# rating, discount, image, promo-date, email, description correlated on the same
+# rows — and assert EVERY RULE-10 realism class holds JOINTLY across a page, for
+# several wildly different niches. They read the seeder's own source-of-truth
+# maps, so a niche that silently regresses any class (a vitamin in "Косметика",
+# a 197 010 ₽ price, a 1★ rating, an expired promo, a user1234@example.ru) turns
+# this red. This is the orchestrator-source half of the catalog-realism ratchet
+# (the api-side `catalog_coherence_gate` measures the same axes on rendered DOM).
+
+# A realistic public storefront Product entity — every catalog field at once.
+_STOREFRONT_FIELDS: dict[str, dict[str, object]] = {
+    "title": {"type": "string", "required": True},
+    "category": {"type": "enum", "required": True},  # options filled per niche
+    "price": {"type": "number", "required": True},
+    "rating": {"type": "number", "required": True},
+    "discount": {"type": "number", "required": True},
+    "image": {"type": "string", "required": True},
+    "promo_until": {"type": "date", "required": True},
+    "email": {"type": "string", "required": True},
+    "description": {"type": "text", "required": True},
+}
+
+# niche key (a `_DOMAIN_NOUNS` domain) → an ASCII project slug that detects it.
+# Spread on purpose: cafe band is 120–690 ₽, realestate is in the millions —
+# proving the price axis is niche-correct, not a single global formula.
+_CATALOG_NICHES: dict[str, str] = {
+    "pharmacy": "apteka-zdorovie",
+    "cafe": "cafe-zerno-coffee",
+    "furniture": "mebel-store-loft",
+    "realestate": "nedvizhimost-dom",
+    "beauty": "salon-krasoty-nail",
+    "auto": "avtoservis-pro",
+}
+
+
+def _storefront_catalog(
+    domain: str, slug: str, *, seed: str = "p-cat", n: int = 12
+) -> list[dict[str, object]]:
+    """Generate a full storefront page for `domain`, options = its real cats."""
+    options = sorted(set(ds._DOMAIN_NOUN_CATEGORY[domain].values()))
+    fields = dict(_STOREFRONT_FIELDS)
+    fields["category"] = {**fields["category"], "options": options}
+    shape = ds.parse_entity({"name": "Product", "fields": fields})
+    rows = ds.generate_rows(
+        shape.name, shape.fields, count=n, seed=seed, niche=slug
+    )
+    assert ds._detect_domain("Product", shape.fields, slug) == domain
+    return rows
+
+
+@pytest.mark.parametrize("domain,slug", sorted(_CATALOG_NICHES.items()))
+def test_storefront_catalog_is_jointly_realistic(domain: str, slug: str) -> None:
+    """A whole catalog page reads enterprise-real on every RULE-10 axis at once."""
+    rows = _storefront_catalog(domain, slug)
+    assert len(rows) >= 6
+
+    lo, hi, step = ds._DOMAIN_PRICE[domain]
+    cat_map = ds._DOMAIN_NOUN_CATEGORY[domain]
+    desc_map = ds._DOMAIN_NOUN_DESCRIPTION[domain]
+    epoch = date(2026, 6, 1)  # the seeder's fixed demo anchor
+
+    for r in rows:
+        title = r["title"]
+        # #1 niche title — a real product noun, never a "<Label> 5" placeholder.
+        assert title in ds._DOMAIN_NOUNS[domain], (domain, title)
+        assert not re.fullmatch(r"\S+ \d+", title), title
+
+        # #1/#2 price — inside the niche band, on its step, never absurd.
+        assert lo <= r["price"] <= hi, (domain, title, r["price"])
+        assert r["price"] % step == 0, (domain, r["price"])
+
+        # #9 rating — skews high (4–5), no 1★/2★ "bad product" on the page.
+        assert r["rating"] in (4, 5), (domain, r["rating"])
+
+        # #10 discount — believable promo band (5–50 %, 5-pt steps).
+        assert 5 <= r["discount"] <= 50 and r["discount"] % 5 == 0, r["discount"]
+
+        # #3 image — a self-contained data-URI tile, never a broken <img>.
+        assert r["image"].startswith("data:image/svg+xml,"), r["image"][:32]
+
+        # #7 future date — a promo deadline that hasn't already expired.
+        assert date.fromisoformat(r["promo_until"]) > epoch, r["promo_until"]
+
+        # #8 email — the brand domain, never a fake user1234@example.ru.
+        assert "@" in r["email"] and r["email"].endswith(".ru"), r["email"]
+        assert "example" not in r["email"], r["email"]
+
+        # #4/#6a category — agrees with the row's title noun (not miscategorised).
+        assert r["category"] == cat_map[title], (domain, title, r["category"])
+
+        # #5 description — a title-specific blurb, not niche-blind generic praise.
+        assert r["description"] == desc_map[title], (domain, title)
+        assert r["description"] not in ds._DESCRIPTIONS, r["description"]
+
+
+def test_storefront_catalog_is_deterministic() -> None:
+    """The whole realistic page is byte-identical for identical inputs."""
+    a = _storefront_catalog("pharmacy", _CATALOG_NICHES["pharmacy"])
+    b = _storefront_catalog("pharmacy", _CATALOG_NICHES["pharmacy"])
+    assert a == b
+
+
+def test_storefront_catalog_spreads_across_titles_and_categories() -> None:
+    """A realistic page isn't one product repeated — titles and categories vary."""
+    rows = _storefront_catalog("furniture", _CATALOG_NICHES["furniture"], n=12)
+    assert len({r["title"] for r in rows}) >= 3
+    assert len({r["category"] for r in rows}) >= 2
