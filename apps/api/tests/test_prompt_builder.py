@@ -666,3 +666,21 @@ def test_entities_ui_public_home_uses_storefront_hero() -> None:
     assert _ENTITIES_UI.index("StorefrontHero") < _ENTITIES_UI.index(
         '} from "@/components/omnia"'
     )
+
+
+def test_entities_ui_dashboard_loading_never_blank() -> None:
+    # The flagship dashboard must never render a blank screen while data loads:
+    # the generated `if (loading) return null` paints nothing (and, if a fetch
+    # ever rejected, would hang there forever). Guidance must mandate a skeleton
+    # carcass and a caught Promise.all, and DashboardSkeleton must be in the
+    # kit import line so the model can reach it.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "DashboardSkeleton" in _ENTITIES_UI
+    assert "НЕ `return null`" in _ENTITIES_UI
+    # the rule explicitly names the hang risk of an un-caught Promise.all
+    assert ".catch()" in _ENTITIES_UI
+    # DashboardSkeleton must be importable from the kit barrel
+    assert _ENTITIES_UI.index("DashboardSkeleton") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )

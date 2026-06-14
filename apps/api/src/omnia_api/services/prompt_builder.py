@@ -834,8 +834,9 @@ _ENTITIES_UI = """\
 
 ▸ ИМПОРТЫ (готовы, просто используй):
   import { AppShell, PageHeader, DashboardHero, StorefrontHero, StatCard, CountUp,
-           DataTable, CrudResource, GalleryGrid, MediaCard, EntityForm, EmptyState, useEntity,
-           type Column, Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
+           DataTable, CrudResource, GalleryGrid, MediaCard, EntityForm, EmptyState,
+           useEntity, DashboardSkeleton, type Column, Sparkline, TrendArea, BarMini,
+           DonutStat } from "@/components/omnia";
   import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
   // dialog, sheet, tabs, badge, dropdown-menu, table, checkbox, avatar, tooltip, separator …
   import { cn, formatRub, formatDate } from "@/lib/utils";   // formatRub(1234)→"1 234 ₽"
@@ -1169,6 +1170,15 @@ _ENTITIES_UI = """\
   Дашборд С ДИНАМИКОЙ обязан показать ХОТЯ БЫ ОДИН график (TrendArea или BarMini),
   а не только числа. Оттенок графика — класс `text-chart-1..5`. Данные —
   useEntity("Client") или entities.X.list() в useEffect.
+  ★ НИКОГДА не оставляй экран пустым во время загрузки. Пока `loading` — рендери
+  `<DashboardSkeleton />` (или каркас из `<Skeleton>`-блоков), НЕ `return null`:
+  пустой белый экран — худшее первое впечатление, а каркас живёт с первого кадра
+  и не дёргает раскладку, когда придут данные. Пример:
+  `if (loading) return <DashboardSkeleton />;`
+  Несколько сущностей грузишь параллельно — `Promise.all([...])` ОБЯЗАН иметь
+  `.catch()` (или каждую сущность через `useEntity`), иначе один сбой повесит
+  `loading` навсегда. (SDK `list`/`filter` и так не падают — отдают `[]` при
+  ошибке, — но скелетон на время загрузки всё равно обязателен.)
 
 ▸ НАСТРОЙКИ / АККАУНТ — почти каждому аппу с профилем юзера нужен раздел
   /dashboard/settings (страница `src/app/(app)/dashboard/settings/page.tsx`,

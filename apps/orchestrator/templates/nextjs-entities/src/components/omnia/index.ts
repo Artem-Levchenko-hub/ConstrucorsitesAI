@@ -25,6 +25,7 @@ export {
   type StorefrontStat,
 } from "./storefront-hero";
 export { StatCard, type StatCardProps } from "./stat-card";
+export { DashboardSkeleton } from "./dashboard-skeleton";
 export { CountUp, type CountUpProps } from "./count-up";
 export { EmptyState, type EmptyStateProps } from "./empty-state";
 export { DataTable, type Column, type DataTableProps, type FilterTab } from "./data-table";
