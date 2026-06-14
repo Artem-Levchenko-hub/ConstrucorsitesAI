@@ -279,6 +279,12 @@ async def evaluate(
             # corpus-run); it ABSTAINS on an empty corpus / render miss, so even
             # when enabled it never sinks ship on missing evidence (R-10).
             reference=settings.acceptance_gauntlet_reference_gate,
+            # V1.17 — the catalog-realism ratchet. ADVISORY (a non-blocking
+            # quality-card): it surfaces a 0–5 realism score over the rendered
+            # catalog DOM but never blocks ship, and ABSTAINS/WAIVES safely. OFF by
+            # default (it adds one render per gen); flipping it on is how the eight
+            # RULE-10 classes become a live floor once the heuristics earn trust.
+            catalog=settings.acceptance_gauntlet_catalog_gate,
         )
         if gauntlet.hard_failed:
             gauntlet_ok = False

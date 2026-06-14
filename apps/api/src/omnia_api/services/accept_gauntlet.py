@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from omnia_api.services import (
+    catalog_coherence_gate,
     chip_pixel_gate,
     compose_gate,
     data_gate,
@@ -76,16 +77,21 @@ TASTE = "taste"
 HIERARCHY = "hierarchy"
 DATA = "data"
 REFERENCE = "reference"
+CATALOG = "catalog"
 
 #: The rendered gates, in run order. ``defect-registry`` is pure source-scan and
 #: runs first/always; these need a live DOM (a static file set or a URL). The
 #: correctness gates (wow-dom, perf-a11y, chip-pixel, data) run at the mobile
-#: floor; ``taste``, ``hierarchy`` and ``reference`` run at desktop width.
-#: ``reference`` (V1.13b) is the pillar-1 CEILING leg — the candidate must meet
-#: or beat a curated enterprise corpus; it is a member of the order tuple (so it
-#: is fanned by ``run()`` and not orphaned) but, like a flag-gated gate, only
+#: floor; ``taste``, ``hierarchy``, ``reference`` and ``catalog`` run at desktop
+#: width. ``reference`` (V1.13b) is the pillar-1 CEILING leg — the candidate must
+#: meet or beat a curated enterprise corpus; it is a member of the order tuple (so
+#: it is fanned by ``run()`` and not orphaned) but, like a flag-gated gate, only
 #: fires when ``include_rendered`` is on OR the ``reference=`` dial is set.
-RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA, REFERENCE)
+#: ``catalog`` (V1.17) is the catalog-realism ratchet — see ``ADVISORY_GATES``: it
+#: is in the order tuple (so ``run()`` fans it) but is ADVISORY (a non-blocking
+#: quality-card) and runs ONLY behind its own ``catalog=`` dial, never via
+#: ``include_rendered``.
+RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA, REFERENCE, CATALOG)
 
 #: The COMPOSITION legs (V1.6 14/5). Taste + hierarchy score richness — type
 #: scale, focal dominance, layered depth, hero imagery — at DESKTOP width, where
@@ -115,6 +121,23 @@ FIDELITY_LEGS = (CHIP_PIXEL,)
 #: fails to render (R-10), so wiring it is safe even before the owner corpus-run
 #: that flips it on for the live hot path.
 REFERENCE_LEGS = (REFERENCE,)
+#: The CATALOG leg (V1.17) — the catalog-realism ratchet. The eight money-free
+#: RULE-10 demo-seeder fixes (niche titles/price-bands/real images/title↔category/
+#: title↔description/category synonyms/future dates/niche emails) each shipped with
+#: a unit test, but the only gate over the seeder's output, ``data_gate``, measures
+#: ``MIN_ROWS >= 6`` — non-emptiness, never realism, so a NEW niche could silently
+#: regress any class. This leg scores the rendered catalog DOM across those realism
+#: axes (price-band/title↔category/title↔description/image-resolves/date-future),
+#: reusing ``taste_gate``'s JS-extract→Python-score shape (R-04). It is decoupled
+#: from ``include_rendered`` via its own ``catalog=`` dial.
+CATALOG_LEGS = (CATALOG,)
+#: ADVISORY gates surface a quality-card (a score + findings in the table / summary
+#: / subscore) but NEVER block ship — they are excluded from ``hard_failed``, the
+#: strict ``passed`` verdict, and ``failed_classes``. V1.17 folds ``catalog`` in
+#: this way: the realism ratchet teaches without false-rejecting good catalogs
+#: while the niche heuristics earn trust. For every NON-advisory gate this set is
+#: empty, so the keystone's ship semantics are byte-identical.
+ADVISORY_GATES = frozenset({CATALOG})
 
 
 @dataclass(frozen=True)
@@ -146,8 +169,13 @@ class GauntletVerdict:
         Empty (nothing ran) is not a pass — no evidence ≠ ship. A rendered gate
         that abstained reports ``passed=False`` already, so an abstain where we
         waited for a render fails this too (the CLI exit-1 contract).
+
+        ADVISORY gates (V1.17 ``catalog``) are excluded — a non-blocking quality
+        card never decides the strict verdict; a low realism score must not exit
+        the CLI 1 while the niche heuristics earn trust.
         """
-        return bool(self.gates) and all(g.passed for g in self.gates)
+        blocking = tuple(g for g in self.gates if g.gate not in ADVISORY_GATES)
+        return bool(blocking) and all(g.passed for g in blocking)
 
     @property
     def hard_failed(self) -> tuple[GateVerdict, ...]:
@@ -155,9 +183,14 @@ class GauntletVerdict:
 
         The hot path (``acceptance.evaluate``) blocks ship on these only: a flaky
         local render that abstains must not sink an otherwise-good page, but a
-        deterministic defect or a concrete rubric violation must.
+        deterministic defect or a concrete rubric violation must. ADVISORY gates
+        (V1.17 ``catalog``) are excluded — they surface but never block.
         """
-        return tuple(g for g in self.gates if not g.passed and not g.abstained)
+        return tuple(
+            g
+            for g in self.gates
+            if g.gate not in ADVISORY_GATES and not g.passed and not g.abstained
+        )
 
     @property
     def abstained(self) -> tuple[GateVerdict, ...]:
@@ -165,9 +198,16 @@ class GauntletVerdict:
 
     @property
     def failed_classes(self) -> tuple[str, ...]:
-        """Gate-prefixed classes of every non-passing gate (`gate:class`)."""
+        """Gate-prefixed classes of every non-passing gate (`gate:class`).
+
+        ADVISORY gates (V1.17 ``catalog``) are excluded — this list feeds the
+        BLOCKED-ship issue set, so a non-blocking observation must not leak into
+        it; the catalog card's own findings live in its per-gate ``subscore``.
+        """
         out: list[str] = []
         for g in self.gates:
+            if g.gate in ADVISORY_GATES:
+                continue
             for c in g.classes:
                 out.append(f"{g.gate}:{c}")
         return tuple(out)
@@ -380,6 +420,8 @@ async def _audit_one(
             return await data_gate.audit_url(url, width=width)
         if gate == REFERENCE:
             return await reference_corpus.audit_url(url, width=composition_width)
+        if gate == CATALOG:
+            return await catalog_coherence_gate.audit_url(url, width=composition_width)
     else:
         assert files is not None  # render_expected guarantees a target
         if gate == WOW_DOM:
@@ -396,6 +438,8 @@ async def _audit_one(
             return await data_gate.audit_files(files, width=width)
         if gate == REFERENCE:
             return await reference_corpus.audit_files(files, width=composition_width)
+        if gate == CATALOG:
+            return await catalog_coherence_gate.audit_files(files, width=composition_width)
     raise AssertionError(f"unknown rendered gate: {gate}")  # pragma: no cover
 
 
@@ -411,6 +455,7 @@ async def run(
     composition: bool = False,
     fidelity: bool = False,
     reference: bool = False,
+    catalog: bool = False,
     viral: bool = False,
     viral_context: viral_registry.ViralContext | None = None,
     onboarding: bool = False,
@@ -494,6 +539,14 @@ async def run(
       hard fail) when the corpus is empty or a page does not render, so it is
       safe to wire before the owner corpus-run that turns it on for the live path.
       Unioning the dials never double-runs a leg.
+    * ``catalog=True`` adds the ``CATALOG_LEGS`` (the V1.17 catalog-realism
+      ratchet) — independent of ``include_rendered`` and ADVISORY: it surfaces a
+      realism quality-card (a 0–5 score + the fired axes in the table / summary /
+      subscore) but NEVER blocks ship (excluded from ``hard_failed`` / strict
+      ``passed`` / ``failed_classes``). It ABSTAINS on a render miss and WAIVES a
+      page with no catalog grid (R-10), so wiring it is safe everywhere; the hot
+      path leaves it OFF until the owner flips it on, while the CLI / paid-run
+      manifest fold it in to watch the eight RULE-10 classes stay a floor.
 
     ``composition_width`` picks the viewport the composition legs render at
     (default desktop ``1440``; ``390`` for the MOBILE dimension — V1.6 15/5). A
@@ -567,13 +620,23 @@ async def run(
     if edit:
         gates.append(_from_edit(edit_registry.scan(edit_context)))
 
-    legs: set[str] = set(RENDERED_GATES) if include_rendered else set()
+    # ``include_rendered`` fans the BLOCKING rendered legs only; advisory legs
+    # (V1.17 ``catalog``) never ride the broad dial — they run solely behind their
+    # own switch, so a hot caller that flips ``include_rendered`` on never silently
+    # pays for the advisory render.
+    legs: set[str] = (
+        {g for g in RENDERED_GATES if g not in ADVISORY_GATES}
+        if include_rendered
+        else set()
+    )
     if composition:
         legs |= set(COMPOSITION_LEGS)
     if fidelity:
         legs |= set(FIDELITY_LEGS)
     if reference:
         legs |= set(REFERENCE_LEGS)
+    if catalog:
+        legs |= set(CATALOG_LEGS)
 
     has_target = bool(url or (files is not None and "index.html" in files))
     render_expected = bool(legs) and has_target
@@ -619,10 +682,10 @@ def _main(argv: list[str]) -> int:  # pragma: no cover — thin CLI wrapper
     target = argv[1] if len(argv) > 1 else "."
     spec = _parse_spec(argv)
     if target.startswith(("http://", "https://")):
-        verdict = asyncio.run(run(url=target, spec=spec))
+        verdict = asyncio.run(run(url=target, spec=spec, catalog=True))
     else:
         files = defect_registry._read_tree(target)
-        verdict = asyncio.run(run(files=files, spec=spec, compose=True))
+        verdict = asyncio.run(run(files=files, spec=spec, compose=True, catalog=True))
     print(verdict.summary())
     return 0 if verdict.passed else 1
 
@@ -634,6 +697,8 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 __all__ = [
+    "ADVISORY_GATES",
+    "CATALOG_LEGS",
     "COMPOSE",
     "COMPOSITION_LEGS",
     "COMPOSITION_WIDTH",

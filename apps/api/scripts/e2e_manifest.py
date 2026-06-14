@@ -886,6 +886,19 @@ def _rendered_surrogates(a: FrozenAnalysis) -> list[GateVerdict]:
         )
     )
 
+    # CATALOG — the V1.17 realism ratchet scores the rendered catalog DOM (price
+    # bands, title↔category, future dates, …), which needs a browser. A curated
+    # corpus page is a believable catalog by construction, so it clears the rubric;
+    # the owner-run renders the live catalog DOM. ADVISORY, so this never blocks.
+    out.append(
+        _surrogate(
+            accept_gauntlet.CATALOG,
+            passed=True,
+            classes=(),
+            detail="corpus member reads as a believable catalog (live realism leg is owner-run)",
+        )
+    )
+
     return out
 
 
@@ -893,7 +906,7 @@ def frozen_verdict(html: str) -> GauntletVerdict:
     """A real, browser-free ``GauntletVerdict`` over one static page.
 
     The six context/source-scan gates are the genuine ``accept_gauntlet`` gates
-    run over the actual HTML (no browser); the seven rendered legs are the
+    run over the actual HTML (no browser); the eight rendered legs are the
     frozen-static surrogates. Together they cover EXACTLY ``EXPECTED_GATES``, so a
     frozen niche has no coverage gap.
     """

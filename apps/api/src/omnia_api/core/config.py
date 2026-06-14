@@ -372,6 +372,21 @@ class Settings(BaseSettings):
     # this flag ON without a recorded passing milestone turns the suite RED. Mirror
     # of `acceptance_gauntlet_render_gates` / 16/5e. Default OFF.
     acceptance_gauntlet_reference_gate: bool = Field(default=False)
+    # V1.17 — the catalog-realism ratchet (`CATALOG_LEGS`). The eight money-free
+    # RULE-10 demo-seeder fixes (niche titles, price-bands, real images,
+    # title↔category, title↔description, category synonyms, future dates, niche
+    # emails) each shipped with a unit test, but the only gate over the seeder's
+    # output, `data_gate`, measures MIN_ROWS>=6 — non-emptiness, never realism, so a
+    # NEW niche could silently regress any class. This leg scores the rendered
+    # catalog DOM across those realism axes (mirroring taste_gate's
+    # JS-extract→Python-score shape, R-04). It is ADVISORY (a non-blocking
+    # quality-card): it surfaces a 0–5 score + the fired axes in the gauntlet table /
+    # subscore but NEVER blocks ship, and it ABSTAINS on a render miss / WAIVES a
+    # non-catalog page (R-10), so wiring it is safe everywhere. Default OFF on the
+    # hot path — it adds one headless render per generation, so the owner flips it on
+    # (or the paid-run manifest folds it in) once the niche heuristics have earned
+    # trust; the CLI folds it in already.
+    acceptance_gauntlet_catalog_gate: bool = Field(default=False)
     # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
     # (container-backed), so the composition floor never touched the dominant
     # pillar-1 class. This wires the live-URL path: after a clean hot-reload +
@@ -638,7 +653,8 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # served by the direct vsegpt provider — proxyapi's DeepSeek surface 404s,
     # vsegpt is the only working route (apps/llm-gateway providers/vsegpt.py).
     "classify":     "deepseek-chat",  # pick 1 of N presets
-    "director":     "deepseek-v4-pro-thinking",    # catalog ORCHESTRATOR (dormant in freeform) — was Sonnet/proxyapi, now vsegpt
+    # catalog ORCHESTRATOR (dormant in freeform) — was Sonnet/proxyapi, now vsegpt
+    "director":     "deepseek-v4-pro-thinking",
     "polish":       "deepseek-chat",  # writes the real PageIR content (RU copy)
     # proxyapi.ru FULLY RETIRED (owner 2026-06-02). The acceptance-gate VISION
     # judge now runs on Gemini 3 Flash Preview via vsegpt (DeepSeek has no vision
