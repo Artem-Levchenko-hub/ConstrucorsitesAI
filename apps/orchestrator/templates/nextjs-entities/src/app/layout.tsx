@@ -4,6 +4,7 @@ import Script from "next/script";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { share } from "./omnia-share";
+import { brief as omniaBrief } from "./omnia-brief";
 
 /* Default type system. Manrope = clean geometric-humanist UI sans with full
  * Cyrillic; JetBrains Mono = data/figures. The art-director may swap these per
@@ -65,6 +66,23 @@ export default function RootLayout({
             viewer (hidden inside the owner-workspace iframe); forks the app into
             a stranger's own editable copy with zero signup. Drift-synced. */}
         <Script src="/omnia-remix-cta.js" strategy="afterInteractive" />
+        {/* Per-project art-director brief baked at build time → window.__omniaBrief,
+            so the reveal below plays on the SHARED public surface (a stranger
+            opening the live or forked app), not only inside the workspace iframe.
+            Set synchronously here, before the afterInteractive narration script
+            runs. `<` escaped so a section name / motion can't break the tag.
+            Null on the un-generated template → nothing rendered, reveal inert. */}
+        {omniaBrief ? (
+          <script
+            id="omnia-brief-data"
+            dangerouslySetInnerHTML={{
+              __html: `window.__omniaBrief=${JSON.stringify(omniaBrief).replace(
+                /</g,
+                "\\u003c",
+              )};`,
+            }}
+          />
+        ) : null}
         {/* Omnia brief-narration — turns the art-director brief (forwarded by
             the workspace over postMessage, or baked onto window.__omniaBrief)
             into a short "AI is designing" reveal so every generated surface is

@@ -2950,6 +2950,32 @@ async def _process_prompt(
             except Exception as _share_exc:
                 print(f"[PP] share_meta skipped: {_share_exc!r}", flush=True)
 
+        # ── Baked brief → public surface (v2.21 #1A, pillar 3+4) — BEFORE commit ──
+        # The freeform static /p/<slug> narrates its own birth (baked into
+        # index.html further below). The ENTITY hot-path (≈80% of apps) did NOT:
+        # its /p/<slug> 302-redirects to the LIVE app on another origin, whose
+        # public/omnia-brief-narration.js only ever received the brief via the
+        # workspace iframe's postMessage — so a stranger opening the shared (or
+        # forked) app saw a finished UI, SILENT. Bake the art-director brief onto
+        # window.__omniaBrief (src/app/omnia-brief.ts → layout.tsx, the .tsx
+        # analogue of share_meta's omnia-share.ts) so the SAME reveal plays for a
+        # stranger. Fail-soft: no/empty brief leaves the template's `null` default
+        # and the reveal stays inert. Side-effect-free; idempotent on the file.
+        _bm_brief = state.get("brief")
+        if (
+            files
+            and not surgical
+            and project_template in ("nextjs_entities", "fullstack")
+            and isinstance(_bm_brief, dict)
+        ):
+            try:
+                from omnia_api.services.brief_narration import inject_brief_module
+
+                files = inject_brief_module(files, _bm_brief)
+                print("[PP] brief_module baked into omnia-brief.ts", flush=True)
+            except Exception as _bm_exc:
+                print(f"[PP] brief_module skipped err={_bm_exc!r}", flush=True)
+
         # ── Structure audit (entity/app builds) — non-blocking smoke detector ─
         # Entity/fullstack apps skip the acceptance gate (container-backed), so we
         # at least LOG drift from the app-UI doctrine (hardcoded colours, fixed-px

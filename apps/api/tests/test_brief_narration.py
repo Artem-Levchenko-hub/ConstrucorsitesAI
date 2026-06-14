@@ -14,7 +14,13 @@ from __future__ import annotations
 
 import json
 
-from omnia_api.services.brief_narration import brief_lines, inject_brief_narration
+from omnia_api.services.brief_narration import (
+    BRIEF_MODULE_PATH,
+    brief_lines,
+    build_brief_payload,
+    inject_brief_module,
+    inject_brief_narration,
+)
 
 _FULL_BRIEF = {
     "palette": {
@@ -104,3 +110,62 @@ def test_inject_appends_when_no_head_or_body() -> None:
     out = inject_brief_narration("<div>bare</div>", _FULL_BRIEF)
     assert out.startswith("<div>bare</div>")
     assert "window.__omniaBrief=" in out
+
+
+# ── Baked brief module (v2.21 #1A) — the ENTITY/container analogue ──────────
+# A container project's /p/<slug> 302-redirects to the LIVE app on another
+# origin, so the brief can't be injected into served HTML; it has to ride into
+# the app's own source as src/app/omnia-brief.ts (like share_meta bakes
+# omnia-share.ts), which layout.tsx turns into window.__omniaBrief.
+
+
+def test_build_brief_payload_trims_to_narration_fields() -> None:
+    """Only palette / fonts(display,text) / section names / motion survive — and
+    the trimmed payload narrates IDENTICALLY to the full brief."""
+    payload = build_brief_payload(_FULL_BRIEF)
+    assert payload is not None
+    assert set(payload) <= {"palette", "fonts", "sections", "motion"}
+    assert payload["palette"] == _FULL_BRIEF["palette"]
+    assert payload["fonts"] == {"display": "Playfair Display", "text": "Inter"}
+    # sections reduced to {name} only (the `id` is dropped), order preserved.
+    assert payload["sections"] == [
+        {"name": n} for n in ("Геро", "Меню", "О нас", "Галерея", "Контакты")
+    ]
+    assert payload["motion"] == _FULL_BRIEF["motion"]
+    # Falsifiable: the trimmed carrier yields the same lines as the full brief.
+    assert brief_lines(payload) == brief_lines(_FULL_BRIEF)
+
+
+def test_build_brief_payload_none_when_nothing_to_narrate() -> None:
+    assert build_brief_payload(None) is None
+    assert build_brief_payload({}) is None
+    assert build_brief_payload({"palette": {"x": "not-a-hex"}, "sections": []}) is None
+
+
+def test_inject_brief_module_writes_consumable_ts_module() -> None:
+    files = {"src/app/page.tsx": "export default function Page(){return null}"}
+    out = inject_brief_module(files, _FULL_BRIEF)
+    assert BRIEF_MODULE_PATH in out
+    mod = out[BRIEF_MODULE_PATH]
+    assert "export const brief: Record<string, unknown> | null = " in mod
+    # The literal is valid JSON equal to the trimmed payload.
+    json_text = mod.split(" = ", 1)[1].rsplit(";", 1)[0].strip()
+    assert json.loads(json_text) == build_brief_payload(_FULL_BRIEF)
+    # Untouched sibling files carry through.
+    assert out["src/app/page.tsx"] == files["src/app/page.tsx"]
+
+
+def test_inject_brief_module_is_side_effect_free() -> None:
+    files = {"a.ts": "x"}
+    out = inject_brief_module(files, _FULL_BRIEF)
+    assert BRIEF_MODULE_PATH not in files  # input dict not mutated
+    assert BRIEF_MODULE_PATH in out
+
+
+def test_inject_brief_module_noop_keeps_template_default() -> None:
+    """No narration lines → module NOT written (the template's null default,
+    which renders the reveal inert, is left in place)."""
+    files = {"a.ts": "x"}
+    assert inject_brief_module(files, None) == files
+    assert inject_brief_module(files, {"palette": {"x": "bad"}}) == files
+    assert BRIEF_MODULE_PATH not in inject_brief_module(files, {})
