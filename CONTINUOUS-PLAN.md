@@ -613,6 +613,22 @@
 
 ## 7. ЛОГ ИТЕРАЦИЙ
 
+## 2026-06-14 11:09–11:15 MSK — RULE-10 #10: BELIEVABLE DISCOUNT BAND В DEMO-SEEDER — конец «Скидка 0%/97%» на каталог-карте [x] (generator-quality §0.10; prod-deployed + LIVE-verified на задеплоенном бинарнике, money-free)
+
+**Выбор.** Stop-gate 11:09 < HARD-STOP 2026-06-17 10:17 → работаю. Lock ACQUIRED (cross-machine mkdir-mutex lh-server, RUN MacBook-Air-Roman). Sync ff-only (HEAD f60317c). 0 IN-FLIGHT. OWNER §0.10 (КАЧЕСТВО ГЕНЕРАТОРА, НЕ новые ворота — V1.16 captured-corpus scaffold из v2.16-пикапа = money-free прокси-задача, явно исключена §0.10) → взял ЯВНО названный follow-up из лога RULE-10 #9: кандидат (a) discount-percent.
+
+**Root cause / код-факт.** `demo_seeder._demo_number` percent-ветка (`demo_seeder.py:1120`) эмитила `_hash_int(...) % 101` = равномерно 0–100 для ВСЕХ `_PERCENT_TOKENS`, включая `discount`/`скидк`. На каталог-карте это даёт «Скидка 0%» (бессмысленно) и «Скидка 97%» (читается как скам) → каталог выглядит сломанным на первом экране (столп 1). Defect-класс «uniform 0–100 discount».
+
+**Фикс (1 файл `demo_seeder.py`, pure-function, детерминизм + model-independence сохранены, R-01/R-04).** Выделил `_DISCOUNT_TOKENS = (discount, скидк, sale, распродаж)` из `_PERCENT_TOKENS` (percent/процент/progress/прогресс остались). Новая ветка ПЕРЕД percent: `5 + hash%10*5` = round 5–50% band (шаг 5, никогда 0, никогда абсурд). **★Ключ: progress/процент НЕ тронут** — progress-бар легитимно достигает 0/100, discount-band не должен в него течь.
+
+**TDD-first.** `test_discount_field_is_believable_band` (red: discount=43,24,52,29… → фикс: все 5≤v≤50, %5==0) + `test_discount_band_does_not_touch_progress` (progress всё ещё <5 и non-mult-5 = доказывает 0-100 нетронут — старый `test_percent…0-100` слишком слаб, 5-50⊂0-100). red→фикс→**83/83 demo_seeder green** (был 81). ruff+mypy clean. Полная orchestrator-сюита: 216 passed, 3 pre-existing fail (`test_provisioner` нужен `/opt/omnia-runtime` — прод-путь, отсутствует на Mac; память `api-suite-preexisting-failures`/`local-machine-workflow`, НЕ регрессия).
+
+**Доставка.** commit `774e97f` → push origin main `f60317c..774e97f` → prod `git merge --ff-only` + `systemctl restart omnia-orchestrator` → active.
+
+**LIVE-верификация (money-free, 0 LLM, ЗАДЕПЛОЕННЫЙ бинарник).** `.venv/bin/python` в `/opt/omnia/apps/orchestrator` (30 сидов×12 строк): **discount min 5 / max 50 / all%5==0 / 0 ниже 5**; **sale min 5 / max 50 / all%5==0**; **progress min 0 / max 100 / достигает <5 / non-mult-5** (нетронут). Front https://constructor.lead-generator.ru → **200**, orchestrator-логи 0 реальных ошибок (только benign `hibernate.pubsub_unavailable` Redis cold-start warning, не от меня). Диф меняет лишь числовое значение (plain-text badge на карте, как category/date/email #4–#9) → output-путь browser-proven в #1/#3/#5/#6a, платный ген не нужен (прецедент #4/#7/#8/#9). Клиентские аппы засеяны ДО правки, не ре-сидятся. Resource-guard: 0 тест-контейнеров, осиротевшие headless убиты, замок снят. Откат не нужен.
+
+**Follow-up money-free (RULE-10 #11, кандидаты):** (e) person-сущности вне `_PERSON_ENTITY_HINT` (Мастер/Барбер/Специалист) → name-поле получает service-noun вместо ФИО (расширить hint); (b) reference/FK-семантика (требует id-сбора, риск многофайловой правки). **[x]:** uniform-0–100 discount устранён end-to-end на задеплоенном бинарнике.
+
 ## 2026-06-14 10:46–11:08 MSK — V1.17 СЛАЙС 2 [~→ostatok]: catalog-гейт ВШИТ в accept_gauntlet как ADVISORY non-blocking quality-card (push+deploy api/worker, health 200, money-free/0 LLM)
 **Выбор.** Stop-gate 10:46 < HARD-STOP 2026-06-17 10:17 → работаю. Lock ACQUIRED (cross-machine mkdir-mutex lh-server, RUN MacBook-Air-Roman). Sync ff-only (HEAD 0306235). 0 IN-FLIGHT. ПИКАП v2.16 #1 = V1.17; CORE-гейт уже [~] шипнут (`c5bd544`), но модуль был МЁРТВЫМ кодом (ноль импортёров). Взял первый из «ОСТАТОК»: фолд в `accept_gauntlet` + `e2e_manifest` — делает ратчет ЖИВЫМ.
 **Задача.** `catalog_coherence_gate.py` (5 осей реализма, 32 теста) существовал, но ничто его не звало → 8 RULE-10-классов НЕ меряются на ship-path. Вшить в keystone-гейт КАК non-blocking quality-card (дизайн V1.17: карточка, не hard-stop).
