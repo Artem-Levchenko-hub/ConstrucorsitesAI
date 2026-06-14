@@ -834,9 +834,10 @@ _ENTITIES_UI = """\
 
 ▸ ИМПОРТЫ (готовы, просто используй):
   import { AppShell, PageHeader, DashboardHero, StorefrontHero, StorefrontSection,
-           FeatureCard, PricingPlans, StatCard, CountUp, DataTable, CrudResource, GalleryGrid,
-           MediaCard, EntityForm, EmptyState, useEntity, DashboardSkeleton,
-           type Column, Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
+           FeatureCard, PricingPlans, TestimonialWall, StatCard, CountUp, DataTable,
+           CrudResource, GalleryGrid, MediaCard, EntityForm, EmptyState, useEntity,
+           DashboardSkeleton, type Column, Sparkline, TrendArea, BarMini, DonutStat
+           } from "@/components/omnia";
   import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
   // dialog, sheet, tabs, badge, dropdown-menu, table, checkbox, avatar, tooltip, separator …
   import { cn, formatRub, formatDate } from "@/lib/utils";   // formatRub(1234)→"1 234 ₽"
@@ -898,8 +899,9 @@ _ENTITIES_UI = """\
        </StorefrontSection>
      Все строки — из БРИФА ниши (реальные услуги/цифры/выгоды), НЕ «Преимущество 1».
      Заголовки секций = <h2> (единственный <h1> несёт <StorefrontHero>). `columns` — ТОЛЬКО
-     для сетки <FeatureCard>; для отзывов / FAQ опусти `columns` и сверстай содержимое сам
-     внутри секции. Иконки <FeatureCard> — из lucide, ОСМЫСЛЕННЫЕ под пункт.
+     для сетки <FeatureCard>; для отзывов используй <TestimonialWall> (ниже), для FAQ опусти
+     `columns` и сверстай содержимое сам внутри секции. Иконки <FeatureCard> — из lucide,
+     ОСМЫСЛЕННЫЕ под пункт.
   ▸ ЦЕНЫ / ТАРИФЫ — <PricingPlans> (готовый кит, НЕ верстай прайс-таблицу сырьём). Когда
      у ниши есть пакеты / подписки / тарифы (SaaS, абонементы, услуги, членство) — дай
      секцию цен через <PricingPlans>: бренд-осознанный ряд тарифов, где ОДИН рекомендованный
@@ -927,6 +929,26 @@ _ENTITIES_UI = """\
        </StorefrontSection>
      Цены/тарифы/фичи — из БРИФА ниши (реальные пакеты и суммы в ₽), НЕ «Тариф 1». `cta.href`
      — рабочий (/signin / #якорь), ноль «#»-тупиков. Нет тарифов у ниши — секцию НЕ выдумывай.
+  ▸ ОТЗЫВЫ / СОЦ-ДОКАЗАТЕЛЬСТВО — <TestimonialWall> (готовый кит, НЕ верстай карточки отзывов
+     сырьём). Почти у каждой публичной ниши есть секция «нас рекомендуют» — дай её через
+     <TestimonialWall>: бренд-осознанная сетка карточек-цитат (декоративная фирменная кавычка +
+     опц. звёзды + футер с аватаром-или-инициалами + имя/роль), как Savee/Contra/Whop/Google.
+     Положи внутрь <StorefrontSection> БЕЗ `columns` (компонент сам держит адаптивную сетку
+     2–4 отзыва). Каждый отзыв: `quote` (один честный абзац), `name`, `role`, опц. `rating` 1–5,
+     опц. `avatar` (`data-omnia-gen` портрет — иначе мягкий fallback на инициалы).
+       <StorefrontSection id="отзывы" eyebrow="Отзывы" title="Нас рекомендуют"
+         lead="Что говорят пациенты после лечения." align="center">
+         <TestimonialWall items={[
+           { quote: "Записалась утром — приняли в тот же день. Лечение без боли, всё объяснили.",
+             name: "Анна Котова", role: "Пациентка", rating: 5 },
+           { quote: "Прозрачные цены и аккуратная работа. Веду сюда всю семью второй год.",
+             name: "Игорь Лебедев", role: "Пациент", rating: 5 },
+           { quote: "Детский стоматолог — золото. Ребёнок впервые пошёл к врачу без слёз.",
+             name: "Мария Зайцева", role: "Мама пациента", rating: 5 },
+         ]} />
+       </StorefrontSection>
+     Отзывы — ПРАВДОПОДОБНЫ под нишу (реальные сценарии, имена, роли из БРИФА), НЕ «Отзыв 1».
+     Чередуй с соседней секцией через `tint` для ритма. Нет смысла в отзывах у ниши — не выдумывай.
   ▸ ВИТРИНА / ШОУКЕЙС НА ГЛАВНОЙ. Публичная «/» — КОНТЕНТНЫЙ лендинг: соблюдай
     _IMAGE_GEN_ON ПОЛНОСТЬЮ — hero-фон + 3–6 контентных фото секций через
     `data-omnia-gen` (повторяющиеся карточки — общим `data-omnia-gen-group`). Лендинг

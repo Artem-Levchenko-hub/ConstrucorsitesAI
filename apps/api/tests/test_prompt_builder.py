@@ -714,6 +714,29 @@ def test_entities_ui_public_home_uses_pricing_plans() -> None:
     )
 
 
+def test_entities_ui_public_home_uses_testimonial_wall() -> None:
+    # Social proof is a genuinely distinct premium pattern (quote-forward cards
+    # with a brand quote-mark, star rating and an avatar-or-initials footer) — it
+    # must anchor on the <TestimonialWall> kit primitive instead of hand-rolled
+    # testimonial cards, and the primitive must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "TestimonialWall" in _ENTITIES_UI
+    # the testimonial rule names the section it owns
+    assert "ОТЗЫВЫ / СОЦ-ДОКАЗАТЕЛЬСТВО" in _ENTITIES_UI
+    # the old "hand-roll testimonials yourself" guidance is gone — the FAQ branch
+    # keeps the manual fallback, but testimonials now route to the kit primitive
+    assert "для отзывов используй <TestimonialWall>" in _ENTITIES_UI
+    # it sits in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("TestimonialWall") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("TestimonialWall") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
 def test_entities_ui_dashboard_loading_never_blank() -> None:
     # The flagship dashboard must never render a blank screen while data loads:
     # the generated `if (loading) return null` paints nothing (and, if a fetch

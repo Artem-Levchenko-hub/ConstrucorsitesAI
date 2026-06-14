@@ -36,6 +36,11 @@ export {
   type PricingPlansProps,
   type PricingPlan,
 } from "./pricing-plans";
+export {
+  TestimonialWall,
+  type TestimonialWallProps,
+  type Testimonial,
+} from "./testimonial-wall";
 export { StatCard, type StatCardProps } from "./stat-card";
 export { DashboardSkeleton } from "./dashboard-skeleton";
 export { CountUp, type CountUpProps } from "./count-up";
