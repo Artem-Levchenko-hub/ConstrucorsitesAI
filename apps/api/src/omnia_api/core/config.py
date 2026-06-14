@@ -693,6 +693,13 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "art_director": "kimi-k2.6",
     "freeform_writer": "deepseek-v4-pro",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
+    # Onboarding question planner (owner rule 13 #1). A small structured meta-call
+    # (NOT generation), and it runs INSIDE the 30s POST /prompt budget, so it needs
+    # a FAST, reliable model — deepseek-chat's cold-start regularly took >22s here
+    # and timed out, which dropped onboarding to the generic hardcoded batch (the
+    # exact bug rule 13 flagged). Haiku returns the tailored batch in ~3s with
+    # strict JSON. Swap via ROLE_MODELS env (e.g. discovery_plan=gpt-5-nano).
+    "discovery_plan": "claude-haiku-4-5",
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.

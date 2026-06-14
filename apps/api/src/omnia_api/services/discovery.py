@@ -507,7 +507,10 @@ async def plan_discovery_questions(prompt: str) -> list[PlannedQuestion]:
         {"role": "user", "content": (prompt or "").strip()[:4000] or "(пусто)"},
     ]
     payload = {
-        "model": model_for_role("edit"),
+        # A FAST, reliable model — this call sits inside the POST /prompt budget
+        # and a cold-start timeout drops onboarding to the generic batch (owner
+        # rule 13 #1). The dedicated ``discovery_plan`` role keeps it swappable.
+        "model": model_for_role("discovery_plan"),
         "messages": convo,
         "max_tokens": 900,
         "stream": False,
