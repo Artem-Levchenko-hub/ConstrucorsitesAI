@@ -320,6 +320,15 @@ class Settings(BaseSettings):
     # sharper brief, not a reflexive re-roll. Set = acceptance_min_score (7) to
     # restore the old always-repair-on-borderline behaviour.
     acceptance_repair_floor: int = Field(default=5)
+    # OWNER 2026-06-14 — AUTOMATIC FULL-PAGE REGENERATION OFF (default False).
+    # The owner saw a build auto-"перегенерирую с рабочими ссылками" mid-session
+    # and ruled: NEVER auto-regenerate the whole page — only deterministic
+    # inline/targeted edits. When False, both auto re-roll paths are suppressed:
+    # (1) the dead-link LLM re-roll (the inline href fixer still runs — that's a
+    # targeted edit, kept), and (2) the acceptance-gate repair re-roll (the gate
+    # still EVALUATES and publishes its advisory verdict, but never re-rolls —
+    # `_max_acc` is forced to 0). Flip to True only to restore auto-repair.
+    auto_regenerate_enabled: bool = Field(default=False)
     # V1.6 keystone — the acceptance gauntlet (`accept_gauntlet.run`) is the ship
     # decision: `evaluate()` blocks on its findings and the vision verdict is
     # demoted to advisory. The DETERMINISTIC defect-registry leg always blocks

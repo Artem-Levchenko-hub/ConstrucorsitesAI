@@ -2503,7 +2503,14 @@ async def _process_prompt(
                 dead = post_inline
             else:
                 dead = []
-            if len(dead) > _DEAD_LINK_LLM_THRESHOLD:
+            # OWNER 2026-06-14: auto full-page regeneration is OFF by default
+            # (auto_regenerate_enabled). The inline href fixer above already ran
+            # (a targeted edit, kept); the LLM re-roll regenerates whole files, so
+            # it only fires when auto-regen is explicitly re-enabled.
+            if (
+                get_settings().auto_regenerate_enabled
+                and len(dead) > _DEAD_LINK_LLM_THRESHOLD
+            ):
                 print(f"[PP] dead_links remain={len(dead)} -> LLM repair pass", flush=True)
                 prior_answer = accumulated
                 notice = (
@@ -2985,8 +2992,12 @@ async def _process_prompt(
             # the judge must NOT loop many times — 1 iteration is the whole point).
             # Otherwise keep score-only (0 repairs) / max-retries as before.
             _design_judge = _acc_settings.use_design_judge
+            # OWNER 2026-06-14: with auto_regenerate_enabled OFF the gate still
+            # EVALUATES (advisory verdict published) but never re-rolls — 0 repairs.
             _max_acc = (
-                1
+                0
+                if not _acc_settings.auto_regenerate_enabled
+                else 1
                 if _design_judge
                 else 0
                 if _acc_settings.acceptance_score_only
