@@ -613,6 +613,22 @@
 
 ## 7. ЛОГ ИТЕРАЦИЙ
 
+## 2026-06-14 11:16–11:4x MSK — V1.17 СЛАЙС 3 [x→ostatok]: HIGH-LEVEL CATALOG-REALISM РЕГРЕСС в orchestrator — RULE-10 волна стала ратчетом У ИСТОЧНИКА сидера (push-only, money-free/0 LLM/browser-free)
+
+**Выбор.** Stop-gate 11:16 < HARD-STOP 2026-06-17 10:17 → работаю. Lock ACQUIRED (cross-machine mkdir-mutex lh-server, RUN MacBook-Air-Roman). Sync ff-only (HEAD ef14825). V1.17 IN-FLIGHT ([~], пикап v2.16 #1): CORE-гейт `c5bd544` + фолд в accept_gauntlet `1703d3e` шипнуты; взял первый из «ОСТАТОК»: high-level `test_demo_seeder` регресс.
+
+**Задача / пробел.** Per-field юнит-тесты сидера каждый ИЗОЛИРУЕТ один `FieldShape`. НИ ОДИН не генерит ПОЛНЫЙ каталог (title+category+price+rating+discount+image+promo-date+email+description на ОДНИХ строках) и не проверяет, что ВСЕ RULE-10 классы держатся ВМЕСТЕ на странице через РАЗНЫЕ ниши. Без этого новая ниша может молча вернуть класс на реальной мульти-поле карточке, а изолированные тесты этого не заметят.
+
+**Сделано (1 файл `apps/orchestrator/tests/test_demo_seeder.py`, +113, test-only).** `_storefront_catalog(domain, slug)` строит реалистичный storefront Product (9 каталог-полей) с enum-опциями = реальный набор категорий ниши, генерит страницу. `test_storefront_catalog_is_jointly_realistic` параметризован по 6 нишам (pharmacy/cafe/furniture/realestate/beauty/auto — спред нарочно: cafe 120–690₽ vs realestate в миллионах) и на КАЖДОЙ строке ассертит ВСЕ оси РАЗОМ, читая source-of-truth карты сидера (`_DOMAIN_NOUN_CATEGORY/_DESCRIPTION/_DOMAIN_PRICE`): #1 niche-title (не плейсхолдер), #1/#2 price-band+step, #9 rating∈4-5, #10 discount 5-50%/шаг5, #3 image data-URI, #7 future promo-date, #8 brand-email (не example.ru), #4/#6a title↔category, #5 title↔description (не generic praise). +`test_storefront_catalog_is_deterministic` + `…spreads_across_titles_and_categories`. Это orchestrator-source половина ратчета (api-side `catalog_coherence_gate` мерит те же оси на rendered DOM).
+
+**Гейты (ВСЕ зелёные).** ruff ✓ (test-файл). pytest **91/91 test_demo_seeder** (был 83, +8). Полная orchestrator-сюита **224 passed** (был 216, +8), 3 fail = pre-existing `test_provisioner` (нужен прод-путь `/opt/omnia-runtime`, отсутствует на Mac — память `api-suite-preexisting-failures`/`local-machine-workflow`, прецедент лога RULE-10 #10 «216 passed, 3 pre-existing»). mypy src: 2 ошибки = pre-existing в `postgres_admin.py`/`runtime.py` (НЕ мои файлы — диф test-only, src не тронут). Мой хелпер аннотирован → 0 новых no-untyped-def.
+
+**★Адверсар-доказательство зубов (monkeypatch, money-free).** Реинтродукция СТАРЫХ дефектов в `_demo_number`/`_demo_date`/correlation: uniform rating %5+1 → 8 строк <4 пойманы; 0-100 discount → 9 нарушений band пойманы; expired promo-date → 12 пойманы; broken correlation (label_field=None) → 8 category-mismatch + 12 description-mismatch пойманы. Каждая ось РЕАЛЬНО fire на planted-defect — не вакуум-грин.
+
+**Доставка.** commit `22a648b` → push origin main `ef14825..22a648b`. **Деплой НЕ нужен** — test-only, runtime byte-identical (ничто на работающем пути не изменено). Браузер-E2E N/A — изменение не наблюдаемо ни на одной browser-поверхности (прецедент V1.17 CORE/SLICE-2); falsifiable-доказательство = адверсар-teeth-сюита + зелёная сюита. Resource-guard: 0 тест-контейнеров, осиротевшие headless убиты, замок снят.
+
+**ОСТАТОК V1.17 (след. слайс, ПЛАТНЫЙ/owner-run):** (3) ★V1.16 captured-corpus + owner-флип `acceptance_gauntlet_catalog_gate=true` (требует ген живого аппа). Money-free спина V1.17 = ИСЧЕРПАНА (CORE+accept_gauntlet-fold+seeder-source-регресс). Next money-free пикап v2.16: V1.16 captured-corpus scaffold → V2.13 clarify-spec-bridge.
+
 ## 2026-06-14 11:09–11:15 MSK — RULE-10 #10: BELIEVABLE DISCOUNT BAND В DEMO-SEEDER — конец «Скидка 0%/97%» на каталог-карте [x] (generator-quality §0.10; prod-deployed + LIVE-verified на задеплоенном бинарнике, money-free)
 
 **Выбор.** Stop-gate 11:09 < HARD-STOP 2026-06-17 10:17 → работаю. Lock ACQUIRED (cross-machine mkdir-mutex lh-server, RUN MacBook-Air-Roman). Sync ff-only (HEAD f60317c). 0 IN-FLIGHT. OWNER §0.10 (КАЧЕСТВО ГЕНЕРАТОРА, НЕ новые ворота — V1.16 captured-corpus scaffold из v2.16-пикапа = money-free прокси-задача, явно исключена §0.10) → взял ЯВНО названный follow-up из лога RULE-10 #9: кандидат (a) discount-percent.
