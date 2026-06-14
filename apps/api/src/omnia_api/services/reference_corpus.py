@@ -58,6 +58,13 @@ RICHNESS_AXES: tuple[str, ...] = TASTE_AXES + HIERARCHY_AXES
 #: hard fail.
 MIN_AXES = 4
 
+#: V1.13c — the mirror of :data:`MIN_AXES` from the adversary's side. A candidate
+#: is BELOW the ceiling exactly when it regresses on more axes than the floor
+#: tolerates, i.e. ``len(RICHNESS_AXES) - MIN_AXES + 1``. Derived (not hardcoded)
+#: so the two thresholds can never drift: ``meets_or_beats`` failing ⟺
+#: ``len(adversary_regressions(...)) >= MIN_REGRESSIONS``.
+MIN_REGRESSIONS = len(RICHNESS_AXES) - MIN_AXES + 1
+
 #: The defect class a below-corpus candidate carries into the gauntlet's
 #: ``failed_classes`` (becomes ``reference:reference-below``).
 BELOW_CLASS = "reference-below"
@@ -108,6 +115,24 @@ def meets_or_beats(
 ) -> bool:
     """True iff ``generated`` holds at least ``min_axes`` of the five axes."""
     return len(axes_met_or_beaten(generated, reference)) >= min_axes
+
+
+def adversary_regressions(
+    candidate: RichnessVector, reference: RichnessVector
+) -> tuple[str, ...]:
+    """Axes where ``reference`` passes but ``candidate`` regresses (V1.13c).
+
+    The complement of :func:`axes_met_or_beaten` projected to the human-readable
+    side: these are the named axes a below-ceiling candidate *loses*, so the
+    adversary-pre-proof can show exactly WHERE a mediocre baseline falls short.
+    By construction ``len(adversary_regressions(c, r)) >= MIN_REGRESSIONS`` is
+    the exact negation of ``meets_or_beats(c, r)`` — one source, no drift.
+    """
+    return tuple(
+        a
+        for a in RICHNESS_AXES
+        if bool(reference.get(a, False)) and not bool(candidate.get(a, False))
+    )
 
 
 @dataclass(frozen=True)
@@ -292,6 +317,44 @@ class ReferenceReport:
                 }
                 for c in self.comparisons
             ],
+        }
+
+    @property
+    def niches_met(self) -> int:
+        """How many corpus niches the candidate meets-or-beats (V1.13c score).
+
+        Unlike :attr:`passed` — the strict CEILING that demands beating EVERY niche —
+        this is a CONTINUOUS ratchet signal: a generation that clears 3 of 4 niches
+        is visibly close to the curated enterprise bar. It powers the non-blocking
+        quality-card advisory while the gate is OFF.
+        """
+        return sum(1 for c in self.comparisons if c.passed)
+
+    def advisory_card(self) -> dict[str, object]:
+        """A NON-blocking quality-card score — never a ship-block (V1.13c).
+
+        The reference gate is OFF on the live path until the owner corpus-run flips
+        it (the falsifiable milestone — ``scripts/reference_flip_milestone.py``).
+        Until then the corpus still yields a useful continuous signal: how close
+        THIS generation came to the ceiling. This card carries that signal with
+        ``blocking=False`` so a worker can surface "reference: X/N niches met"
+        as advice without the gate ever sinking ship (R-10). An abstain (empty
+        corpus or render miss) carries no number — no evidence is not a low score.
+        """
+        total = len(self.comparisons)
+        met = self.niches_met
+        usable = self.rendered and total > 0
+        return {
+            "signal": "reference",
+            "blocking": False,
+            "rendered": self.rendered,
+            "met": met,
+            "total": total,
+            "summary": (
+                f"reference: {met}/{total} niches met"
+                if usable
+                else "reference: advisory unavailable (abstain)"
+            ),
         }
 
 

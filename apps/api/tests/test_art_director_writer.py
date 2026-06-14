@@ -107,3 +107,19 @@ def test_brief_failure_is_fail_soft() -> None:
     deltas = [e["delta"] for e in events if "delta" in e]
     assert deltas == ["<html>PAGE</html>"]
     assert not any("error" in e for e in events)
+
+
+def test_app_art_director_prescribes_screen_archetypes() -> None:
+    # Composition lever (pickup #2): the APP art-director must classify the niche
+    # into one of four screen archetypes upfront, not default every app to a
+    # command-center dashboard. All four names + the no-kanban guard must survive.
+    instr = adw._ART_DIRECTOR_INSTRUCTION_APP
+    assert "АРХЕТИП ГЛАВНОГО ЭКРАНА" in instr
+    for name in ("КОМАНД-ЦЕНТР", "ВИТРИНА-КАТАЛОГ", "ДОСЬЕ-ФОКУС", "ТРЕКЕР-ПОТОК"):
+        assert name in instr, f"archetype {name} dropped from app art-director"
+    # the main screen is no longer hard-wired to DashboardHero for every niche
+    assert "по выбранному архетипу" in adw._ART_DIRECTOR_INSTRUCTION_APP.lower() or (
+        "по АРХЕТИПУ" in adw._WRITER_INSTRUCTION_TEMPLATE_APP
+    )
+    # kanban guard: no hand-rolled board (the kit has no Board component)
+    assert "канбан" in instr.lower()

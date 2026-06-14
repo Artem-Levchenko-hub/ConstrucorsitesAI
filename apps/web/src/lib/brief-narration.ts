@@ -14,11 +14,14 @@ import type { StreamBrief } from "@/lib/api/types";
  * гейтит V3.10a; наррация-слой тогда молчит, остаётся pre-brief эвристика).
  */
 
-const HEX_RE = /^#[0-9a-fA-F]{3,8}$/;
+/** Валидный CSS-HEX (#rgb…#rrggbbaa). Экспортирован — V3.4 brief-swatches
+ * переиспользует тот же фильтр (R-04, один источник «что считается цветом»). */
+export const HEX_RE = /^#[0-9a-fA-F]{3,8}$/;
 
 /** Приоритет роли цвета: акцент → primary → фон → остальное (строка ведёт
- * самым характерным цветом). */
-function paletteRole(key: string): number {
+ * самым характерным цветом). Экспортирован — V3.4 brief-swatches сортирует
+ * свотчи тем же порядком ролей (R-04). */
+export function paletteRole(key: string): number {
   const u = key.toUpperCase();
   if (u.includes("АКЦЕНТ") || u.includes("ACCENT")) return 0;
   if (u.includes("PRIMARY")) return 1;

@@ -3,6 +3,7 @@
 import type { Project } from "@/lib/api/types";
 import { useWorkspaceStore } from "@/store/workspace";
 import { ChatPanel } from "./ChatPanel";
+import { JoyBurst } from "./JoyBurst";
 import { PreviewFrame } from "./PreviewFrame";
 import { Timeline } from "./Timeline";
 
@@ -28,8 +29,10 @@ export function Workspace({ project }: { project: Project }) {
           <ChatPanel projectId={project.id} projectSlug={project.slug} />
         )}
       </div>
-      <div className="min-h-0">
+      <div className="relative min-h-0">
         <PreviewFrame project={project} />
+        {/* V3.8 — бренд-цветная reward-нота поверх preview на build-complete. */}
+        <JoyBurst projectId={project.id} />
       </div>
       <div className="min-h-0 overflow-hidden">
         {!timelineCollapsed && <Timeline project={project} />}

@@ -377,6 +377,43 @@ def spec_from_discovery(
     return None if spec.is_empty else spec
 
 
+def compile_build_spec(prompt: str) -> FidelitySpec:
+    """Reify a single raw build prompt into a :class:`FidelitySpec`, no chips, no LLM.
+
+    The zero-question intent compiler (V2.12): the North Star's pillar 2 says the
+    best onboarding is its *absence* when intent is already clear. A rich prompt
+    like «тёмный минималистичный лендинг с каталогом и отзывами на фиолетовом»
+    carries the same design decisions a chip interview would extract — so we read
+    them straight from the text, deterministically, through the **same**
+    :meth:`FidelitySpec.from_answers` / :func:`_detect_tone` extractors the chip
+    flow and the render-time gate use (R-04 single source). No new parsing rules,
+    no guessing: a word that isn't a known palette / section / tone alias is
+    ignored, never invented.
+
+    Always returns a spec (never ``None``); an unsteerable prompt («сделай сайт»)
+    reifies to an empty spec (:attr:`FidelitySpec.is_empty`) — paired with
+    :func:`spec_confidence` this is the "is the intent clear enough to skip the
+    popup?" signal. Mirrors :func:`spec_from_discovery` but on a single string and
+    without the ``None``-on-empty collapse, so callers can score the axis count.
+    """
+    return spec_from_discovery(None, prompt) or FidelitySpec()
+
+
+def spec_confidence(spec: FidelitySpec) -> int:
+    """How many independent intent axes the prompt pinned down (0–4).
+
+    One point each for a decided theme, an accent family, a tone, and *any*
+    sections (sections score once — it's a single "did we learn the structure?"
+    signal, not a per-section tally, so a three-section prompt doesn't outweigh a
+    palette+theme+tone one). Higher = the prompt steered more of the design on its
+    own; the zero-question short-circuit fires only above a conservative floor so
+    a thin one-axis hint still earns an onboarding question.
+    """
+    return int(spec.dark_mode is not None) + int(bool(spec.primary_family)) + int(
+        bool(spec.sections)
+    ) + int(spec.tone is not None)
+
+
 def spec_prompt_directive(spec: FidelitySpec | None) -> str:
     """Render a chip-spec into a top-of-prompt directive the writer must obey.
 
@@ -911,7 +948,9 @@ __all__ = [
     "FidelitySpec",
     "audit_files",
     "audit_url",
+    "compile_build_spec",
     "evaluate_fidelity",
     "family_of_hue",
+    "spec_confidence",
     "spec_from_discovery",
 ]

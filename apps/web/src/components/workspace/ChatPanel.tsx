@@ -8,11 +8,22 @@ import type { SelectedElement } from "@/lib/api/types";
 import { ChatMessage } from "./ChatMessage";
 import { PromptInput } from "./PromptInput";
 import { DiscoveryChips } from "./DiscoveryChips";
+import { DiscoveryFrame } from "./DiscoveryFrame";
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
 
-type DiscoveryChoices = { choices: string[]; allowCustom: boolean };
+type DiscoveryChoices = {
+  choices: string[];
+  allowCustom: boolean;
+  multiSelect: boolean;
+  // Onboarding-frame metadata (NORTH STAR pillar 2): position in the planned
+  // batch + the inferred niche, so the question renders as a guided popup
+  // («Вопрос N из M» + niche banner) instead of a bare chat row.
+  questionIndex?: number | null;
+  questionTotal?: number | null;
+  niche?: string | null;
+};
 
 export function ChatPanel({
   projectId,
@@ -53,14 +64,19 @@ export function ChatPanel({
     submit(prompt, modelId, []);
   };
 
-  // Discovery chip tapped → submit it as the user's answer to the question.
+  // Discovery chip tapped (or an inline «Другое» answer) → submit it as the
+  // user's answer to the question. Used by both single-select and the joined
+  // multi-select «Готово» submission (the card builds the combined string).
   const handlePickChoice = (choice: string) => {
     submit(choice, modelId, []);
   };
 
-  // «Другое» chip → hand the user the free-text input instead of a preset.
-  const handleCustom = () => {
-    inputRef.current?.focus();
+  // «Я готов — постройте сейчас» — leave the onboarding popup early and build now.
+  // Submitting an explicit build-now phrase trips the server's wants_build_now
+  // floor, so the next turn generates instead of asking another question. The
+  // user is never trapped in the interview (NORTH STAR pillar 2 — явный skip).
+  const handleSkip = () => {
+    submit("Постройте сейчас", modelId, []);
   };
 
   // Determine streaming state from data: an assistant message with
@@ -153,12 +169,20 @@ export function ChatPanel({
         ))}
 
         {chips && chips.choices.length > 0 && (
-          <DiscoveryChips
-            choices={chips.choices}
-            allowCustom={chips.allowCustom}
-            onPick={handlePickChoice}
-            onCustom={handleCustom}
-          />
+          <DiscoveryFrame
+            key={lastAssistantId}
+            niche={chips.niche ?? null}
+            questionIndex={chips.questionIndex ?? null}
+            questionTotal={chips.questionTotal ?? null}
+            onSkip={handleSkip}
+          >
+            <DiscoveryChips
+              choices={chips.choices}
+              allowCustom={chips.allowCustom}
+              multiSelect={chips.multiSelect}
+              onPick={handlePickChoice}
+            />
+          </DiscoveryFrame>
         )}
       </div>
 

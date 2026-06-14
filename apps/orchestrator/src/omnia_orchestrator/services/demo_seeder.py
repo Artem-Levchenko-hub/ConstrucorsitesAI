@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 # Row-count policy: every entity gets at least MIN_ROWS so the browse screen is
 # never empty (the gate floor), capped at MAX_ROWS so a seeded catalog still
@@ -62,6 +63,20 @@ _PERSON_NAMES: tuple[str, ...] = (
     "Михаил Павлов",
     "Татьяна Козлова",
     "Николай Степанов",
+)
+
+# Email local-parts (see `_demo_email`). A person entity's email reads as a
+# personal mailbox (a translit of the `_PERSON_NAMES` first names); any other
+# entity gets a business mailbox. Both are pure-ASCII so they're valid local
+# parts on the slug-derived domain. The two pools are kept disjoint (asserted in
+# tests) so the entity-kind branch is observable.
+_EMAIL_HANDLES_PERSON: tuple[str, ...] = (
+    "anna", "dmitriy", "elena", "sergey", "mariya", "aleksey",
+    "olga", "ivan", "natalya", "andrey", "ekaterina", "pavel",
+    "yuliya", "mihail", "tatyana", "nikolay",
+)
+_EMAIL_HANDLES_BIZ: tuple[str, ...] = (
+    "info", "zakaz", "sales", "office", "hello", "shop", "client", "support",
 )
 
 _COMPANIES: tuple[str, ...] = (
@@ -114,7 +129,10 @@ _LABELS: tuple[str, ...] = (
     "Дельта",
 )
 
-# Short, neutral sentences for `text` fields — believable notes/descriptions.
+# Operational sentences for note/comment `text` fields — believable internal
+# notes on a record (a task, an order). These read as back-office workflow copy,
+# so they're WRONG on a public catalog card; `description`-style fields route to
+# `_DESCRIPTIONS` instead (see `_demo_text`).
 _SENTENCES: tuple[str, ...] = (
     "Уточнить детали с клиентом до конца недели.",
     "Подготовлено по стандартному регламенту, готово к работе.",
@@ -126,12 +144,519 @@ _SENTENCES: tuple[str, ...] = (
     "Запланирован повторный контакт через несколько дней.",
 )
 
+# Catalog blurbs for `description`-style `text` fields — copy that reads right on
+# a *public, browsable* card (product / dish / service / listing) and is never
+# absurd for any niche, unlike the operational `_SENTENCES`.
+_DESCRIPTIONS: tuple[str, ...] = (
+    "Популярный выбор — часто заказывают.",
+    "Проверенное качество, всегда в наличии.",
+    "Рекомендуем обратить внимание на этот вариант.",
+    "Отличное соотношение цены и качества.",
+    "Хит продаж в своей категории.",
+    "Доступно к заказу прямо сейчас.",
+    "Свежее поступление этой недели.",
+    "Ограниченное предложение — успейте оформить.",
+)
+
 _STATUS_WORDS: tuple[str, ...] = (
     "Новый",
     "В работе",
     "Завершён",
     "На паузе",
     "Согласование",
+)
+
+# ── Niche-aware catalog nouns ────────────────────────────────────────────────
+# A model-independent seeder can still be *niche-realistic*: when an entity's own
+# vocabulary (name, field names, enum options) or the project slug confidently
+# names a domain, the catalog's primary label (title/name) draws a real product
+# from that domain instead of the placeholder "<Label> <n>" form. Detection is
+# high-precision-or-nothing: an unrecognised niche falls back to the safe demo
+# label rather than risk a confidently-wrong noun (a pharmacy showing "Капучино").
+
+_DOMAIN_NOUNS: dict[str, tuple[str, ...]] = {
+    "pharmacy": (
+        "Витамин D3 2000 МЕ", "Омега-3 1000 мг", "Магний B6", "Цинк пиколинат",
+        "Морской коллаген", "Пробиотик комплекс", "Мелатонин 3 мг",
+        "Гиалуроновая кислота", "Витамин C 900 мг", "Железо хелат",
+        "Куркумин экстракт", "Коэнзим Q10", "Крем увлажняющий SPF30",
+        "Маска тканевая",
+    ),
+    "clinic": (
+        "Консультация терапевта", "УЗИ брюшной полости", "Общий анализ крови",
+        "Приём стоматолога", "Вакцинация", "ЭКГ с расшифровкой",
+        "Лечебный массаж", "Физиотерапия", "Приём кардиолога", "МРТ позвоночника",
+        "Осмотр офтальмолога", "Профессиональная чистка зубов",
+    ),
+    "beauty": (
+        "Женская стрижка", "Окрашивание в один тон", "Маникюр с покрытием",
+        "Педикюр аппаратный", "Укладка", "Ламинирование ресниц",
+        "Коррекция бровей", "Спа-уход для лица", "Массаж лица", "Депиляция воском",
+        "Дневной макияж", "Мужская барбер-стрижка",
+    ),
+    "fitness": (
+        "Персональная тренировка", "Групповое занятие", "Йога для начинающих",
+        "Пилатес", "Сайкл", "Кроссфит", "Бокс", "Стретчинг",
+        "Абонемент на месяц", "Функциональный тренинг", "Плавание", "TRX",
+    ),
+    "auto": (
+        "Замена масла и фильтров", "Шиномонтаж", "Диагностика двигателя",
+        "Развал-схождение", "Замена тормозных колодок", "Полировка кузова",
+        "Химчистка салона", "Замена ремня ГРМ", "Заправка кондиционера",
+        "Компьютерная диагностика", "Замена аккумулятора", "Антикоррозийная обработка",
+    ),
+    "cafe": (
+        "Капучино", "Латте", "Раф ванильный", "Эспрессо", "Флэт уайт",
+        "Чизкейк Нью-Йорк", "Тирамису", "Круассан с миндалём", "Сэндвич клаб",
+        "Поке-боул", "Смузи манго-маракуйя", "Матча латте",
+    ),
+    "restaurant": (
+        "Ролл «Филадельфия»", "Ролл «Калифорния»", "Унаги маки", "Темпура ролл",
+        "Сяке нигири", "Том ям с креветками", "Удон с курицей", "Гёдза",
+        "Спайси лосось", "Чука салат", "Мисо суп", "Сет «Токио»",
+    ),
+    "furniture": (
+        "Угловой диван «Осло»", "Кресло «Лофт»", "Шкаф-купе", "Кровать двуспальная",
+        "Комод на 4 ящика", "Обеденный стол", "Стеллаж открытый", "Тумба под ТВ",
+        "Пуф мягкий", "Кухонный гарнитур", "Полка навесная", "Зеркало напольное",
+    ),
+    "travel": (
+        "Тур в Турцию, всё включено", "Тур в ОАЭ", "Обзорная экскурсия",
+        "Авиабилеты туда-обратно", "Отель 5★ на берегу", "Морской круиз",
+        "Тур в Грузию", "Сафари-тур", "Горнолыжный тур", "Виза под ключ",
+        "Индивидуальный трансфер", "Страховка путешественника",
+    ),
+    "education": (
+        "Курс «Python с нуля»", "Разговорный английский", "Подготовка к ЕГЭ",
+        "Математика для школьников", "Курс рисования", "Робототехника",
+        "Шахматы для детей", "Основы дизайна", "Уроки вокала",
+        "Программирование для детей", "Скорочтение", "Занятия с логопедом",
+    ),
+    "realestate": (
+        "1-комн. квартира", "2-комн. квартира", "Студия", "Таунхаус",
+        "Загородный дом", "Апартаменты", "Коммерческое помещение",
+        "Земельный участок", "Пентхаус", "3-комн. квартира", "Машино-место",
+        "Офис в центре",
+    ),
+}
+
+# Each catalog noun's category, used to keep a row's `category` enum coherent with
+# its title (a "Витамин C" row must not land in "Косметика"). The value is a
+# representative category word; it's matched against the entity's *own* enum
+# options by substring/stem (`_match_category_option`), so it need not equal them
+# exactly — and when no option matches, the seeder falls back to the index-cycle
+# (high-precision-or-nothing). Every noun in `_DOMAIN_NOUNS` MUST appear here
+# (asserted in tests) so a newly added noun can't silently decorrelate.
+_DOMAIN_NOUN_CATEGORY: dict[str, dict[str, str]] = {
+    "pharmacy": {
+        "Витамин D3 2000 МЕ": "Витамины", "Омега-3 1000 мг": "БАДы",
+        "Магний B6": "Витамины", "Цинк пиколинат": "БАДы",
+        "Морской коллаген": "БАДы", "Пробиотик комплекс": "БАДы",
+        "Мелатонин 3 мг": "БАДы", "Гиалуроновая кислота": "БАДы",
+        "Витамин C 900 мг": "Витамины", "Железо хелат": "БАДы",
+        "Куркумин экстракт": "БАДы", "Коэнзим Q10": "БАДы",
+        "Крем увлажняющий SPF30": "Косметика", "Маска тканевая": "Косметика",
+    },
+    "clinic": {
+        "Консультация терапевта": "Консультации", "УЗИ брюшной полости": "Диагностика",
+        "Общий анализ крови": "Анализы", "Приём стоматолога": "Стоматология",
+        "Вакцинация": "Процедуры", "ЭКГ с расшифровкой": "Диагностика",
+        "Лечебный массаж": "Процедуры", "Физиотерапия": "Процедуры",
+        "Приём кардиолога": "Консультации", "МРТ позвоночника": "Диагностика",
+        "Осмотр офтальмолога": "Консультации",
+        "Профессиональная чистка зубов": "Стоматология",
+    },
+    "beauty": {
+        "Женская стрижка": "Волосы", "Окрашивание в один тон": "Волосы",
+        "Маникюр с покрытием": "Ногти", "Педикюр аппаратный": "Ногти",
+        "Укладка": "Волосы", "Ламинирование ресниц": "Брови и ресницы",
+        "Коррекция бровей": "Брови и ресницы", "Спа-уход для лица": "Лицо",
+        "Массаж лица": "Лицо", "Депиляция воском": "Тело",
+        "Дневной макияж": "Макияж", "Мужская барбер-стрижка": "Волосы",
+    },
+    "fitness": {
+        "Персональная тренировка": "Тренировки", "Групповое занятие": "Групповые",
+        "Йога для начинающих": "Йога", "Пилатес": "Групповые", "Сайкл": "Групповые",
+        "Кроссфит": "Тренировки", "Бокс": "Единоборства", "Стретчинг": "Групповые",
+        "Абонемент на месяц": "Абонементы", "Функциональный тренинг": "Тренировки",
+        "Плавание": "Бассейн", "TRX": "Тренировки",
+    },
+    "auto": {
+        "Замена масла и фильтров": "Техобслуживание", "Шиномонтаж": "Шины",
+        "Диагностика двигателя": "Диагностика", "Развал-схождение": "Шины",
+        "Замена тормозных колодок": "Техобслуживание", "Полировка кузова": "Кузов",
+        "Химчистка салона": "Мойка", "Замена ремня ГРМ": "Техобслуживание",
+        "Заправка кондиционера": "Техобслуживание",
+        "Компьютерная диагностика": "Диагностика",
+        "Замена аккумулятора": "Техобслуживание", "Антикоррозийная обработка": "Кузов",
+    },
+    "cafe": {
+        "Капучино": "Кофе", "Латте": "Кофе", "Раф ванильный": "Кофе",
+        "Эспрессо": "Кофе", "Флэт уайт": "Кофе", "Чизкейк Нью-Йорк": "Десерты",
+        "Тирамису": "Десерты", "Круассан с миндалём": "Выпечка",
+        "Сэндвич клаб": "Еда", "Поке-боул": "Еда",
+        "Смузи манго-маракуйя": "Напитки", "Матча латте": "Напитки",
+    },
+    "restaurant": {
+        "Ролл «Филадельфия»": "Роллы", "Ролл «Калифорния»": "Роллы",
+        "Унаги маки": "Роллы", "Темпура ролл": "Роллы", "Сяке нигири": "Суши",
+        "Том ям с креветками": "Супы", "Удон с курицей": "Горячее",
+        "Гёдза": "Горячее", "Спайси лосось": "Роллы", "Чука салат": "Салаты",
+        "Мисо суп": "Супы", "Сет «Токио»": "Сеты",
+    },
+    "furniture": {
+        "Угловой диван «Осло»": "Диваны", "Кресло «Лофт»": "Кресла",
+        "Шкаф-купе": "Шкафы", "Кровать двуспальная": "Кровати",
+        "Комод на 4 ящика": "Хранение", "Обеденный стол": "Столы",
+        "Стеллаж открытый": "Хранение", "Тумба под ТВ": "Хранение",
+        "Пуф мягкий": "Кресла", "Кухонный гарнитур": "Кухни",
+        "Полка навесная": "Хранение", "Зеркало напольное": "Декор",
+    },
+    "travel": {
+        "Тур в Турцию, всё включено": "Туры", "Тур в ОАЭ": "Туры",
+        "Обзорная экскурсия": "Экскурсии", "Авиабилеты туда-обратно": "Билеты",
+        "Отель 5★ на берегу": "Отели", "Морской круиз": "Круизы",
+        "Тур в Грузию": "Туры", "Сафари-тур": "Туры", "Горнолыжный тур": "Туры",
+        "Виза под ключ": "Услуги", "Индивидуальный трансфер": "Услуги",
+        "Страховка путешественника": "Услуги",
+    },
+    "education": {
+        "Курс «Python с нуля»": "Программирование", "Разговорный английский": "Языки",
+        "Подготовка к ЕГЭ": "Школьникам", "Математика для школьников": "Школьникам",
+        "Курс рисования": "Творчество", "Робототехника": "Программирование",
+        "Шахматы для детей": "Детям", "Основы дизайна": "Творчество",
+        "Уроки вокала": "Творчество", "Программирование для детей": "Программирование",
+        "Скорочтение": "Детям", "Занятия с логопедом": "Детям",
+    },
+    "realestate": {
+        "1-комн. квартира": "Квартиры", "2-комн. квартира": "Квартиры",
+        "Студия": "Студии", "Таунхаус": "Дома", "Загородный дом": "Дома",
+        "Апартаменты": "Апартаменты", "Коммерческое помещение": "Коммерческая",
+        "Земельный участок": "Участки", "Пентхаус": "Апартаменты",
+        "3-комн. квартира": "Квартиры", "Машино-место": "Коммерческая",
+        "Офис в центре": "Коммерческая",
+    },
+}
+
+# Real LLM-generated category enums rarely use the exact curated word — an apteka
+# enum reads «Препараты / Органика», not «Витамины / БАДы». For each curated
+# category (the values of `_DOMAIN_NOUN_CATEGORY`) this maps domain-scoped
+# alternative words a real enum is likely to use instead, tried *after* the
+# curated word so the most specific option still wins when present. Synonyms are
+# kept ≥5 chars (asserted in tests) so they can never collide with an unrelated
+# option as a stray substring. A curated category with no safe synonym simply has
+# no key here — it then relies on the curated word matching directly, else the
+# index-cycle fallback (high-precision-or-nothing, zero regression).
+_CATEGORY_SYNONYMS: dict[str, dict[str, tuple[str, ...]]] = {
+    "pharmacy": {
+        "Витамины": ("Препараты", "Лекарства", "Медикаменты"),
+        "БАДы": ("Добавки", "Препараты", "Органика", "Лекарства"),
+        "Косметика": ("Красота", "Гигиена"),
+    },
+    "clinic": {
+        "Консультации": ("Приёмы", "Специалисты"),
+        "Диагностика": ("Обследования", "Исследования"),
+        "Анализы": ("Лаборатория", "Лабораторные"),
+        "Стоматология": ("Зубные",),
+        "Процедуры": ("Лечение", "Терапия"),
+    },
+    "beauty": {
+        "Волосы": ("Парикмахерские", "Стрижки", "Окрашивание", "Причёски"),
+        "Ногти": ("Маникюр", "Педикюр"),
+        "Лицо": ("Косметология", "Уходовые"),
+        "Тело": ("Депиляция", "Массаж"),
+        "Макияж": ("Визаж",),
+    },
+    "fitness": {
+        "Тренировки": ("Персональные", "Силовые", "Тренинг"),
+        "Групповые": ("Занятия", "Классы"),
+        "Йога": ("Пилатес", "Растяжка"),
+        "Единоборства": ("Боевые",),
+        "Абонементы": ("Членство", "Абонемент"),
+        "Бассейн": ("Плавание", "Аквазона"),
+    },
+    "auto": {
+        "Техобслуживание": ("Ремонт", "Обслуживание", "Сервис"),
+        "Шины": ("Шиномонтаж", "Колёса", "Диски"),
+        "Диагностика": ("Проверка", "Компьютерная"),
+        "Кузов": ("Покраска", "Кузовной", "Детейлинг"),
+        "Мойка": ("Автомойка", "Химчистка", "Уборка"),
+    },
+    "cafe": {
+        "Кофе": ("Напитки", "Бариста"),
+        "Десерты": ("Сладкое", "Сладости"),
+        "Выпечка": ("Пекарня", "Багеты"),
+        "Еда": ("Завтраки", "Закуски", "Сэндвичи", "Обеды", "Бранч"),
+        "Напитки": ("Смузи", "Лимонады"),
+    },
+    "restaurant": {
+        "Супы": ("Бульоны", "Первые"),
+        "Горячее": ("Горячие", "Вторые", "Основные"),
+        "Салаты": ("Закуски", "Холодные"),
+        "Сеты": ("Комбо", "Наборы"),
+    },
+    "furniture": {
+        "Диваны": ("Мягкая",),
+        "Кресла": ("Стулья",),
+        "Шкафы": ("Хранение", "Гардеробные"),
+        "Кровати": ("Спальня", "Спальни"),
+        "Хранение": ("Стеллажи", "Комоды", "Тумбы"),
+        "Столы": ("Столовая",),
+        "Кухни": ("Кухонная",),
+        "Декор": ("Аксессуары", "Зеркала", "Освещение"),
+    },
+    "travel": {
+        "Туры": ("Путёвки", "Пакетные", "Отдых"),
+        "Экскурсии": ("Прогулки",),
+        "Билеты": ("Авиабилеты", "Перелёты"),
+        "Отели": ("Размещение", "Проживание", "Гостиницы"),
+        "Круизы": ("Морские",),
+        "Услуги": ("Страхование", "Дополнительно", "Трансфер"),
+    },
+    "education": {
+        "Программирование": ("Разработка", "Технологии"),
+        "Языки": ("Английский", "Лингвистика"),
+        "Школьникам": ("Подготовка", "Экзамены"),
+        "Творчество": ("Искусство", "Рисование"),
+        "Детям": ("Дошкольникам", "Развитие"),
+    },
+    "realestate": {
+        "Квартиры": ("Новостройки", "Вторичка"),
+        "Студии": ("Квартиры", "Малометражки"),
+        "Дома": ("Коттеджи", "Загородная"),
+        "Апартаменты": ("Элитное", "Премиум"),
+        "Коммерческая": ("Офисы", "Коммерция"),
+        "Участки": ("Земельные", "Участок"),
+    },
+}
+
+# Each catalog noun's short, *product-describing* blurb, used to keep a row's
+# `description` coherent with its title (a "Витамин C 900 мг" card must read
+# "Антиоксидант и поддержка иммунитета", not the generic "Хит продаж"). When the
+# domain is known and the row carries a niche noun, a `description`-style text
+# field draws this real one-liner instead of the niche-blind `_DESCRIPTIONS`
+# praise pool; an unknown niche keeps the safe generic copy (byte-identical
+# fallback). Every noun in `_DOMAIN_NOUNS` MUST appear here (asserted in tests)
+# so a newly added noun can't silently fall back to generic praise.
+_DOMAIN_NOUN_DESCRIPTION: dict[str, dict[str, str]] = {
+    "pharmacy": {
+        "Витамин D3 2000 МЕ": "Поддержка иммунитета и крепких костей.",
+        "Омега-3 1000 мг": "Жирные кислоты для сердца и сосудов.",
+        "Магний B6": "Снимает усталость, поддерживает нервную систему.",
+        "Цинк пиколинат": "Для иммунитета, кожи и волос.",
+        "Морской коллаген": "Упругость кожи и здоровье суставов.",
+        "Пробиотик комплекс": "Живые бактерии для здоровой микрофлоры.",
+        "Мелатонин 3 мг": "Помогает быстрее засыпать и высыпаться.",
+        "Гиалуроновая кислота": "Глубокое увлажнение кожи изнутри.",
+        "Витамин C 900 мг": "Антиоксидант и поддержка иммунитета.",
+        "Железо хелат": "Легко усваивается, против анемии.",
+        "Куркумин экстракт": "Природная поддержка суставов и печени.",
+        "Коэнзим Q10": "Энергия клеток и здоровье сердца.",
+        "Крем увлажняющий SPF30": "Увлажнение и защита от солнца.",
+        "Маска тканевая": "Экспресс-увлажнение кожи за 15 минут.",
+    },
+    "clinic": {
+        "Консультация терапевта": "Первичный осмотр и план лечения.",
+        "УЗИ брюшной полости": "Безболезненная диагностика внутренних органов.",
+        "Общий анализ крови": "Базовая проверка состояния здоровья.",
+        "Приём стоматолога": "Осмотр, чистка и план лечения зубов.",
+        "Вакцинация": "Сезонная и плановая защита от инфекций.",
+        "ЭКГ с расшифровкой": "Проверка работы сердца за 10 минут.",
+        "Лечебный массаж": "Снимает напряжение в спине и шее.",
+        "Физиотерапия": "Ускоряет восстановление после травм.",
+        "Приём кардиолога": "Диагностика и лечение сердца и сосудов.",
+        "МРТ позвоночника": "Точная диагностика без облучения.",
+        "Осмотр офтальмолога": "Проверка зрения и здоровья глаз.",
+        "Профессиональная чистка зубов": "Удаление налёта и камня ультразвуком.",
+    },
+    "beauty": {
+        "Женская стрижка": "Стрижка и укладка под ваш стиль.",
+        "Окрашивание в один тон": "Стойкий ровный цвет и уход.",
+        "Маникюр с покрытием": "Аккуратные ногти и стойкий гель-лак.",
+        "Педикюр аппаратный": "Ухоженные стопы без распаривания.",
+        "Укладка": "Праздничная или повседневная укладка.",
+        "Ламинирование ресниц": "Изгиб и объём без наращивания.",
+        "Коррекция бровей": "Форма по типу лица и окрашивание.",
+        "Спа-уход для лица": "Глубокое очищение и увлажнение кожи.",
+        "Массаж лица": "Тонус кожи и здоровый цвет лица.",
+        "Депиляция воском": "Гладкая кожа на несколько недель.",
+        "Дневной макияж": "Естественный образ на каждый день.",
+        "Мужская барбер-стрижка": "Стрижка и моделирование бороды.",
+    },
+    "fitness": {
+        "Персональная тренировка": "Индивидуальная программа с тренером.",
+        "Групповое занятие": "Энергичная тренировка в компании.",
+        "Йога для начинающих": "Гибкость, дыхание и спокойствие.",
+        "Пилатес": "Укрепление мышц кора и осанки.",
+        "Сайкл": "Кардио на велотренажёрах под музыку.",
+        "Кроссфит": "Функциональная нагрузка высокой интенсивности.",
+        "Бокс": "Техника ударов и хорошая форма.",
+        "Стретчинг": "Растяжка для гибкости и расслабления.",
+        "Абонемент на месяц": "Безлимитный доступ в зал на 30 дней.",
+        "Функциональный тренинг": "Сила и выносливость для жизни.",
+        "Плавание": "Тренировка всего тела в бассейне.",
+        "TRX": "Тренировка с собственным весом на петлях.",
+    },
+    "auto": {
+        "Замена масла и фильтров": "Плановое ТО за 40 минут.",
+        "Шиномонтаж": "Сезонная смена и балансировка колёс.",
+        "Диагностика двигателя": "Поиск неисправностей по всем системам.",
+        "Развал-схождение": "Точная регулировка углов колёс.",
+        "Замена тормозных колодок": "Безопасное торможение, надёжные детали.",
+        "Полировка кузова": "Восстановление блеска и защита лака.",
+        "Химчистка салона": "Глубокая чистка обивки и пластика.",
+        "Замена ремня ГРМ": "Профилактика дорогого ремонта двигателя.",
+        "Заправка кондиционера": "Прохлада в салоне даже в жару.",
+        "Компьютерная диагностика": "Считывание ошибок электронных блоков.",
+        "Замена аккумулятора": "Подбор и установка нового АКБ.",
+        "Антикоррозийная обработка": "Защита кузова от ржавчины.",
+    },
+    "cafe": {
+        "Капучино": "Эспрессо с нежной молочной пенкой.",
+        "Латте": "Мягкий кофе с большим количеством молока.",
+        "Раф ванильный": "Сливочный кофе с ванилью.",
+        "Эспрессо": "Насыщенный классический шот.",
+        "Флэт уайт": "Двойной эспрессо и тонкий слой пенки.",
+        "Чизкейк Нью-Йорк": "Нежный сырный десерт на песочной основе.",
+        "Тирамису": "Кофейный десерт с маскарпоне.",
+        "Круассан с миндалём": "Хрустящая выпечка с миндальным кремом.",
+        "Сэндвич клаб": "Сытный сэндвич с курицей и беконом.",
+        "Поке-боул": "Свежая миска с рыбой и овощами.",
+        "Смузи манго-маракуйя": "Освежающий фруктовый микс.",
+        "Матча латте": "Японский зелёный чай с молоком.",
+    },
+    "restaurant": {
+        "Ролл «Филадельфия»": "Лосось, сливочный сыр и рис.",
+        "Ролл «Калифорния»": "Краб, авокадо и икра тобико.",
+        "Унаги маки": "Ролл с копчёным угрём и соусом.",
+        "Темпура ролл": "Хрустящий обжаренный ролл.",
+        "Сяке нигири": "Свежий лосось на рисе.",
+        "Том ям с креветками": "Острый тайский суп на кокосе.",
+        "Удон с курицей": "Толстая лапша вок с овощами.",
+        "Гёдза": "Японские жареные пельмени.",
+        "Спайси лосось": "Острый ролл с лососем и соусом.",
+        "Чука салат": "Маринованные водоросли с ореховым соусом.",
+        "Мисо суп": "Классический японский суп с тофу.",
+        "Сет «Токио»": "Ассорти роллов для компании.",
+    },
+    "furniture": {
+        "Угловой диван «Осло»": "Вместительный диван с механизмом сна.",
+        "Кресло «Лофт»": "Мягкое кресло для гостиной.",
+        "Шкаф-купе": "Вместительный шкаф с зеркальными дверями.",
+        "Кровать двуспальная": "Кровать с ортопедическим основанием.",
+        "Комод на 4 ящика": "Компактное хранение для спальни.",
+        "Обеденный стол": "Прочный стол для всей семьи.",
+        "Стеллаж открытый": "Полки для книг и декора.",
+        "Тумба под ТВ": "Подставка с местом для техники.",
+        "Пуф мягкий": "Доп. место и подставка для ног.",
+        "Кухонный гарнитур": "Полный комплект мебели для кухни.",
+        "Полка навесная": "Стильное хранение на стене.",
+        "Зеркало напольное": "Большое зеркало в полный рост.",
+    },
+    "travel": {
+        "Тур в Турцию, всё включено": "Отдых на море с питанием.",
+        "Тур в ОАЭ": "Пляжи, шопинг и небоскрёбы.",
+        "Обзорная экскурсия": "Главные достопримечательности за один день.",
+        "Авиабилеты туда-обратно": "Удобные рейсы по выгодной цене.",
+        "Отель 5★ на берегу": "Первая линия и сервис премиум-класса.",
+        "Морской круиз": "Несколько стран за одно путешествие.",
+        "Тур в Грузию": "Горы, вино и гостеприимство.",
+        "Сафари-тур": "Дикая природа и фотоохота.",
+        "Горнолыжный тур": "Склоны, прокат и проживание.",
+        "Виза под ключ": "Оформление документов без хлопот.",
+        "Индивидуальный трансфер": "Встреча в аэропорту и доставка.",
+        "Страховка путешественника": "Защита здоровья в поездке.",
+    },
+    "education": {
+        "Курс «Python с нуля»": "Программирование с нуля до проектов.",
+        "Разговорный английский": "Свободная речь в реальных ситуациях.",
+        "Подготовка к ЕГЭ": "Системная подготовка к экзаменам.",
+        "Математика для школьников": "Понятные объяснения и практика.",
+        "Курс рисования": "От базовых техник к своим работам.",
+        "Робототехника": "Конструирование и программирование роботов.",
+        "Шахматы для детей": "Логика и концентрация через игру.",
+        "Основы дизайна": "Композиция, цвет и типографика.",
+        "Уроки вокала": "Постановка голоса и дыхания.",
+        "Программирование для детей": "Первые программы и игры.",
+        "Скорочтение": "Читать быстрее и запоминать больше.",
+        "Занятия с логопедом": "Коррекция речи и произношения.",
+    },
+    "realestate": {
+        "1-комн. квартира": "Уютная квартира для пары или одного.",
+        "2-комн. квартира": "Просторное жильё для семьи.",
+        "Студия": "Компактная планировка без лишних стен.",
+        "Таунхаус": "Дом в ряду с собственным входом.",
+        "Загородный дом": "Свой дом с участком за городом.",
+        "Апартаменты": "Современное жильё с инфраструктурой.",
+        "Коммерческое помещение": "Готово под магазин или офис.",
+        "Земельный участок": "Земля под строительство дома.",
+        "Пентхаус": "Видовая квартира на верхнем этаже.",
+        "3-комн. квартира": "Просторная квартира для большой семьи.",
+        "Машино-место": "Парковка в крытом паркинге.",
+        "Офис в центре": "Помещение для бизнеса в центре города.",
+    },
+}
+
+# Per-domain catalog-price band as (low, high, step) in whole roubles. A generic
+# money formula (990 … 199 990) is absurd per-niche — a vitamin at 197 010 ₽, a
+# coffee at 150 000 ₽. When the domain is known, an item's *price* is drawn from
+# a hand-calibrated band rounded to `step`, so the first catalog a user sees is
+# priced like the real market. Only true per-item price fields use this (see
+# `_PRICE_TOKENS`); business-metric money (salary, revenue) keeps the generic
+# band. Every domain in `_DOMAIN_NOUNS` MUST appear here (asserted in tests).
+_DOMAIN_PRICE: dict[str, tuple[int, int, int]] = {
+    "pharmacy": (190, 3490, 10),       # supplements, cosmetics
+    "clinic": (700, 9000, 50),         # consultations … MRI
+    "beauty": (500, 6000, 50),         # salon services
+    "fitness": (450, 6000, 50),        # sessions, monthly pass
+    "auto": (600, 18000, 100),         # oil change … timing belt
+    "cafe": (120, 690, 10),            # coffee, desserts
+    "restaurant": (220, 1900, 10),     # rolls, hot dishes, sets
+    "furniture": (2900, 129000, 100),  # shelf … kitchen unit
+    "travel": (9900, 250000, 1000),    # excursion … all-inclusive tour
+    "education": (1900, 49000, 100),   # single lesson … full course
+    "realestate": (1990000, 32000000, 10000),  # studio … penthouse
+}
+
+# Base gradient hue (0–360) per domain for image-field tiles (see `_demo_image`),
+# so a pharmacy's photos trend clinical teal, a cafe's warm amber, a salon's pink.
+# Unknown domain → a hash-derived hue. Domains mirror `_DOMAIN_NOUNS`.
+_DOMAIN_HUE: dict[str, int] = {
+    "pharmacy": 158, "clinic": 200, "beauty": 330, "fitness": 22,
+    "auto": 215, "cafe": 32, "restaurant": 8, "furniture": 35,
+    "travel": 192, "education": 250, "realestate": 210,
+}
+
+# (domain, substring tokens) in PRIORITY order — first hit wins. Order resolves
+# overlaps deliberately: pharmacy before beauty (so the pharmacy enum word
+# "Косметика" doesn't read as a salon), pharmacy/clinic split on stock vs. visit
+# vocabulary. Tokens are deliberately specific — bare "авто" (matches "автор") or
+# bare "космет" (matches both niches) are avoided to keep detection high-precision.
+_DOMAIN_TOKENS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pharmacy", ("aptek", "аптек", "pharma", "фарма", "препарат", "витамин",
+                  "лекарств", "medication", "prescription", "dosage", "бад ", "бады")),
+    ("clinic", ("klinik", "клиник", "clinic", "медцентр", "поликлиник",
+                "стоматолог", "dental", "терапевт", "пациент", "patient", "диагноз")),
+    ("beauty", ("салон красот", "beauty", "маникюр", "педикюр", "барбер", "barber",
+                "парикмахер", "стрижк", "ногт", "бьюти",
+                "krasot", "manikur", "pedikur", "parikmaher", "strizhk", "nail")),
+    ("fitness", ("фитнес", "fitness", "спортзал", "sportzal", "gym", "тренировк",
+                 "workout", "йог", "пилатес", "кроссфит", "trenirov", "yoga")),
+    ("auto", ("автосервис", "avtoservis", "шиномонтаж", "автомойк", "avtomoyk",
+              " сто ", "запчаст", "car wash", "моторист", "детейлинг")),
+    ("restaurant", ("ресторан", "restaurant", "restoran", "суши", "sushi", "пицц",
+                    "pizza", "бургер", "burger", "роллы", "доставка еды")),
+    ("cafe", ("кофейн", "kofein", "кофе", "coffee", "cafe", "кафе", "бариста",
+              "латте", "капучино", "пекарн", "кондитер", "десерт")),
+    ("furniture", ("мебел", "mebel", "furniture", "диван", "шкаф", "шоурум",
+                   "shourum", "showroom", "интерьер")),
+    ("travel", ("турагент", "turagent", "travel", "путешеств", "экскурс",
+                "авиабилет", "туроператор", "тур ")),
+    ("education", ("школа", "школ ", "курсы", "course", "обучен", "education",
+                   "репетитор", "ученик", "преподавател", "уроки", "академи",
+                   "kursy", " kurs ", "shkol", "obuchen", "repetitor", "uchebn")),
+    ("realestate", ("недвиж", "nedvizh", "realestate", "realty", "квартир",
+                    "апартамент", "новостройк", "застройщик")),
 )
 
 # Field-name token groups (lowercased substring match). Order matters: the first
@@ -143,24 +668,133 @@ _PERSON_TOKENS = (
     "employee", "сотрудник", "patient", "пациент", "doctor", "врач",
     "member", "участник", "owner", "владелец", "lead", "лид",
 )
+# Profession FIELD names — the person performing/serving the row on a *thing*
+# entity (a salon "Услуга" with a «Мастер» column, a clinic service with a
+# «Специалист», a delivery order with a «Курьер»). The entity itself is a thing,
+# so `_is_person_entity` is False; without this the column shows a service-noun /
+# generic label instead of a ФИО (mirrors the entity-level promotion in #12).
+# Kept SEPARATE from `_PERSON_TOKENS` (which feeds the unguarded pre-label group):
+# applied only through the negative-guarded `_field_is_person`, so a venue/org
+# superstring field («мастерская», «агентство», «название_мастерской») is never
+# promoted and still resolves to its niche label.
+# NB: agent-nouns ending in «-тель» (водитель/исполнитель/учитель/преподаватель)
+# are intentionally absent — bare «тел» is a phone token, so they resolve to a
+# phone number one branch earlier. Promoting them needs the phone token tightened
+# (its own regression surface) → deferred as a separate follow-up.
+_PROFESSION_FIELD_TOKENS = (
+    "master", "мастер", "barber", "барбер", "specialist", "специалист",
+    "stylist", "стилист", "trainer", "тренер", "instructor", "инструктор",
+    "парикмахер", "teacher", "консультант", "consultant", "performer",
+    "продавец", "курьер", "риелтор", "риэлтор",
+)
 _COMPANY_TOKENS = ("company", "компания", "организац", "firm", "фирма", "бренд", "brand")
 _EMAIL_TOKENS = ("email", "e-mail", "почта", "mail")
 _PHONE_TOKENS = ("phone", "телефон", "тел", "mobile", "моб")
 _CITY_TOKENS = ("city", "город", "town")
 _ADDRESS_TOKENS = ("address", "адрес", "улица", "street")
 _URL_TOKENS = ("url", "link", "ссылка", "website", "сайт")
+# An image/photo field — emit a self-contained SVG data-URI tile (`_demo_image`),
+# never a text placeholder that renders as a broken <img> on the first screen.
+# Checked before `_URL_TOKENS` so an `image_url` field becomes an image, not a link.
+_IMAGE_TOKENS = (
+    "image", "img", "photo", "picture", "avatar", "cover", "thumbnail",
+    "thumb", "фото", "изображен", "картинк", "обложк", "аватар", "превью",
+)
 _MONEY_TOKENS = (
     "price", "цена", "amount", "сумма", "cost", "стоим", "total", "итог",
     "salary", "окл-", "оклад", "revenue", "выручка", "budget", "бюджет",
 )
+# The per-item *price* subset of money fields — these get the niche price band
+# (`_DOMAIN_PRICE`). Order/inventory totals and business metrics (amount, total,
+# salary, revenue, budget) are deliberately excluded: they're not catalog prices
+# and a niche item band would misprice them.
+_PRICE_TOKENS = ("price", "цена", "cost", "стоим", "тариф")
+# A "was"/"before-discount" price field (старая цена, old_price, цена до скидки).
+# It's also a price field, so it's matched FIRST inside the price branch and seeded
+# strictly ABOVE the row's current price — a struck-through tag below the sale price
+# is a discount that raises the cost, the most obvious catalog lie (pillar 1).
+# Tokens are deliberately tight: "скидк" alone is excluded so a current "цена со
+# скидкой" (the sale price itself) is NOT misread as the old price.
+_OLD_PRICE_TOKENS = (
+    "стар", "old", "была", "было", "regular", "обычн", "original", "ориг",
+    "до_скидк", "до скидк", "доскидк", "без_скидк", "без скидк", "безскидк",
+)
 _RATING_TOKENS = ("rating", "рейтинг", "score", "оценка", "stars", "звёзд", "звезд")
 _AGE_TOKENS = ("age", "возраст")
-_PERCENT_TOKENS = ("percent", "процент", "progress", "прогресс", "discount", "скидк")
+_PERCENT_TOKENS = ("percent", "процент", "progress", "прогресс")
+# Discount/sale fields get a believable promo band, NOT a raw 0–100 sweep:
+# "Скидка 0%" is pointless and "97%" reads as a scam (pillar 1).
+_DISCOUNT_TOKENS = ("discount", "скидк", "sale", "распродаж")
 _COUNT_TOKENS = (
     "count", "количество", "qty", "quantity", "кол-", "stock", "остаток",
     "views", "просмотр", "likes", "лайк",
 )
 _STATUS_TOKENS = ("status", "статус", "state", "состояние", "stage", "этап")
+# A product/article code — render a real SKU ("ART-4821"), not a placeholder word.
+_CODE_TOKENS = ("sku", "артикул", "barcode", "штрихкод", "vendor_code", "vendorcode")
+# A public-catalog description (vs. an internal operational note) — routes the
+# `text` value to catalog blurbs instead of back-office sentences.
+_DESC_TOKENS = (
+    "description", "описание", "about", "о товаре", "о продукте", "summary",
+    "краткое", "подробн", "характеристик", "состав", "tagline", "слоган",
+)
+# Fields that hold an entity's primary human label — these get a niche product
+# noun when the domain is known. A non-label string field keeps the safe demo
+# label so an unrelated field never turns into a product noun.
+_LABEL_FIELD_TOKENS = (
+    "title", "name", "название", "наименование", "заголовок", "товар",
+    "продукт", "product", "услуга", "service", "блюдо", "позиция", "model",
+    "модель",
+)
+# A catalog *category/type* enum field — its value should match the row's title
+# noun (see `_DOMAIN_NOUN_CATEGORY`). Deliberately excludes status/state vocabulary
+# so a status enum keeps the plain index spread. Correlation only fires when an
+# option actually matches, so a broad token like "тип" is safe (no match → cycle).
+_CATEGORY_FIELD_TOKENS = (
+    "categ", "категор", "group", "группа", "раздел", "рубрик", "rubric",
+    "вид", "kind", "section", "тип", "type",
+)
+# Date-field names that point FORWARD in time — a deadline, booking, delivery,
+# promo-expiry, upcoming event. A past date there reads as already expired on the
+# first catalog screen ("Акция до 12.02" when it's June), so we seed a near-future
+# date instead. High-precision-or-nothing: no marker → byte-identical past
+# behaviour (creation/registration/birth dates stay in the past), 0 regression.
+_FUTURE_DATE_TOKENS = (
+    "expir", "deadline", "delivery", "shipping", "arriv", "booking", "reserv",
+    "appoint", "schedul", "upcoming", "valid", "until", "event",
+    "истек", "истёк", "срок", "годност", "дедлайн", "доставк", "отгрузк",
+    "прибыт", "поступл", "брон", "сеанс", "меропр", "событ", "концерт",
+    "предстоящ", "заплан", "акци", "промо", "действ",
+)
+# A *negative*-polarity boolean — archived / hidden / blocked / out-of-stock /
+# negated-positive ("неактивен", "недоступен"). Most rows should NOT carry it, so
+# it skews FALSE-heavy. Checked BEFORE the positive group so a negated word
+# ("недоступ" contains "доступ") classifies by its real meaning, not its stem.
+_BOOL_NEGATIVE_TOKENS = (
+    "снят", "архив", "заблок", "удал", "скрыт", "забан", "неактив", "недоступ",
+    "выключ", "запрещ", "archived", "disabled", "hidden", "deleted", "banned",
+    "blocked", "inactive", "unavailable", "out_of_stock", "outofstock",
+)
+# A *positive*-polarity boolean — in-stock / active / published / featured /
+# verified. On a fresh catalog most rows should read available, so a neutral
+# ⅓-true mix puts a "Нет в наличии" / "Снят с продажи" flag on ⅔ of cards — a
+# dead-store look on the first screen (pillar 1, mirrors the rating skew). These
+# skew TRUE-heavy. High-precision-or-nothing: an unrecognised boolean keeps the
+# neutral mix → byte-identical, 0 regression.
+_BOOL_POSITIVE_TOKENS = (
+    "налич", "доступ", "актив", "опубликов", "включ", "хит",
+    "новинк", "рекоменд", "верифиц", "подтвержд", "available", "in_stock",
+    "instock", "active", "published", "enabled", "featured", "visible",
+    "verified",
+)
+# String-field token groups that outrank the niche-noun branch in `_demo_string`.
+# A label field only becomes a product noun when none of these match first — the
+# same precedence is reused to find the row's primary label field for category
+# correlation, so the two paths can never disagree about which field is the title.
+_PRE_LABEL_TOKEN_GROUPS = (
+    _IMAGE_TOKENS, _CODE_TOKENS, _EMAIL_TOKENS, _PHONE_TOKENS, _CITY_TOKENS,
+    _ADDRESS_TOKENS, _URL_TOKENS, _COMPANY_TOKENS, _STATUS_TOKENS, _PERSON_TOKENS,
+)
 
 
 @dataclass(frozen=True)
@@ -189,6 +823,24 @@ _PERSON_ENTITY_HINT = (
     "client", "customer", "student", "patient", "employee", "manager",
     "user", "contact", "lead", "author", "member", "doctor", "person",
     "клиент", "пациент", "сотрудник", "ученик", "студент", "пользователь",
+    # Profession nouns — a salon/clinic/gym/realty app models its staff as these.
+    # A team page must show a ФИО, not a service-noun, in the name column.
+    "barber", "specialist", "stylist", "trainer", "instructor", "teacher",
+    "consultant", "agent", "guest",
+    "мастер", "барбер", "специалист", "врач", "парикмахер", "стилист",
+    "тренер", "инструктор", "преподаватель", "учитель", "консультант",
+    "агент", "риелтор", "риэлтор", "водитель", "курьер", "продавец",
+    "гость", "посетитель",
+)
+# Venue / event / org names that merely *contain* a profession noun as a
+# substring but model a place or thing, never a person — checked FIRST so the
+# substring match in `_models_person` can't promote them (mirrors the
+# negative-token-first polarity guard used for boolean flags). `мастерск` also
+# covers `Мастерская` (workshop); `парикмахерск` covers `Парикмахерская`.
+_NON_PERSON_ENTITY_HINT = (
+    "мастер-класс", "мастеркласс", "мастерск", "masterclass", "master class",
+    "master-class", "парикмахерск", "барбершоп", "barbershop", "barber shop",
+    "barber-shop", "агентств", "agency",
 )
 
 
@@ -240,6 +892,7 @@ def generate_rows(
     count: int,
     seed: str,
     references: Mapping[str, Sequence[str]] | None = None,
+    niche: str | None = None,
 ) -> list[dict[str, Any]]:
     """Generate `count` deterministic demo `data` payloads for one entity.
 
@@ -248,13 +901,54 @@ def generate_rows(
     `reference` fields draw an id from `references[target_entity]` when supplied,
     else they're left null (the seeding order that fills those pools is a later
     slice's concern). Output is stable for identical arguments.
+
+    `niche` is an optional free-text hint (the project slug or prompt) that, with
+    the entity's own vocabulary, lets the seeder pick *niche-realistic* catalog
+    titles. When no domain is recognised the output is byte-identical to the
+    niche-less path — so this never regresses an unknown niche.
     """
     refs = references or {}
+    domain = _detect_domain(entity, fields, niche)
+    # The app's own brand domain for email fields (`anna@salon-krasoty.ru`),
+    # derived from the slug. None for a niche-less / non-ASCII-slug call → email
+    # keeps its byte-identical legacy form (0 regression).
+    email_domain = _email_domain(niche)
+    # The field whose title noun a `category` enum should agree with (only when a
+    # niche is known — otherwise there's no noun to correlate against).
+    label_field = _primary_label_field(entity, fields) if domain else None
+    # The row's *current* price field — its value anchors a sibling "was"/old-price
+    # field so the struck-through tag always sits above the sale price.
+    price_field = _current_price_field(fields) if domain else None
+    # The row's struck-through "was" price field — its value anchors a sibling
+    # `discount` badge so the badge equals the real old→current drop.
+    old_price_field = _old_price_field(fields) if domain else None
     rows: list[dict[str, Any]] = []
     for i in range(max(0, count)):
+        row_category: str | None = None
+        row_description: str | None = None
+        if domain is not None and label_field is not None:
+            noun = _niche_noun(domain, seed, entity, label_field, i)
+            row_category = _DOMAIN_NOUN_CATEGORY.get(domain, {}).get(noun)
+            row_description = _DOMAIN_NOUN_DESCRIPTION.get(domain, {}).get(noun)
+        row_price: int | None = None
+        if domain is not None and price_field is not None:
+            row_price = _niche_price(domain, seed, entity, price_field, i)
+        # The exact "was" value the old-price field will carry (same seed/name/index
+        # as _demo_number derives) → the discount badge can mirror its real drop.
+        row_old_price: int | None = None
+        if domain is not None and old_price_field is not None and row_price is not None:
+            row_old_price = _old_price_from(
+                row_price, domain, seed, entity, old_price_field, i
+            )
         row: dict[str, Any] = {}
         for fname, fshape in fields.items():
-            value = _field_value(entity, fname, fshape, seed=seed, index=i, refs=refs)
+            value = _field_value(
+                entity, fname, fshape, seed=seed, index=i, refs=refs,
+                domain=domain, row_category=row_category,
+                row_description=row_description, row_price=row_price,
+                row_old_price=row_old_price,
+                email_domain=email_domain,
+            )
             if value is None and not fshape.required:
                 # Skip optional nulls (e.g. a reference with no pool) — leaving
                 # the key out matches how the app would store an omitted field.
@@ -262,6 +956,117 @@ def generate_rows(
             row[fname] = value
         rows.append(row)
     return rows
+
+
+def _detect_domain(
+    entity: str, fields: Mapping[str, FieldShape], niche: str | None
+) -> str | None:
+    """Infer a catalog domain from the niche hint plus the entity's own
+    vocabulary (name, field names, enum options). High-precision-or-nothing:
+    returns the first domain whose token appears, else None (safe fallback)."""
+    parts: list[str] = [niche or "", entity]
+    for fname, fshape in fields.items():
+        parts.append(fname)
+        parts.extend(fshape.options)
+    signal = " " + " ".join(parts).lower() + " "
+    for domain, tokens in _DOMAIN_TOKENS:
+        if any(t in signal for t in tokens):
+            return domain
+    return None
+
+
+def _takes_niche_noun(entity: str, key: str) -> bool:
+    """Whether a string field named `key` resolves to a niche catalog noun in
+    `_demo_string` — true only when it's a label field that no higher-precedence
+    group (image/code/email/…/person) claims first. Lowercased `key` expected."""
+    if any(_has_token(key, group) for group in _PRE_LABEL_TOKEN_GROUPS):
+        return False
+    if _is_person_entity(entity, key):
+        return False
+    return _has_token(key, _LABEL_FIELD_TOKENS)
+
+
+def _primary_label_field(
+    entity: str, fields: Mapping[str, FieldShape]
+) -> str | None:
+    """The first string field that carries the entity's catalog title — the one
+    whose niche noun a `category` enum should agree with. None when no field
+    qualifies (e.g. a person entity, or no title-like field)."""
+    for fname, fshape in fields.items():
+        if fshape.type == "string" and _takes_niche_noun(entity, fname.lower()):
+            return fname
+    return None
+
+
+def _current_price_field(
+    fields: Mapping[str, FieldShape]
+) -> str | None:
+    """The number field holding the row's *current* (sale) price — the first
+    price field that is NOT a "was"/before-discount field. A sibling old-price
+    field is then seeded above it. None when no plain price field exists (a lone
+    old-price field has nothing to sit above → keeps the plain band)."""
+    for fname, fshape in fields.items():
+        key = fname.lower()
+        if (
+            fshape.type == "number"
+            and _has_token(key, _PRICE_TOKENS)
+            and not _has_token(key, _OLD_PRICE_TOKENS)
+        ):
+            return fname
+    return None
+
+
+def _old_price_field(
+    fields: Mapping[str, FieldShape]
+) -> str | None:
+    """The number field holding the struck-through "was"/before-discount price.
+    Its row value anchors a sibling `discount`/`скидка` badge so the badge reads
+    the real old→current drop, not an independent band that contradicts the two
+    displayed prices. None when no such field exists (the badge keeps its band)."""
+    for fname, fshape in fields.items():
+        key = fname.lower()
+        if (
+            fshape.type == "number"
+            and _has_token(key, _PRICE_TOKENS)
+            and _has_token(key, _OLD_PRICE_TOKENS)
+        ):
+            return fname
+    return None
+
+
+def _niche_noun(
+    domain: str, seed: str, entity: str, fname: str, index: int
+) -> str:
+    """The catalog noun for one row: spread by index off a seed-varied start so a
+    page of rows is distinct. Single source for both the title value and the
+    category it correlates with."""
+    pool = _DOMAIN_NOUNS[domain]
+    start = _hash_int(seed, entity, fname) % len(pool)
+    return pool[(start + index) % len(pool)]
+
+
+def _category_candidates(domain: str | None, primary: str) -> tuple[str, ...]:
+    """The row's curated category word plus domain-scoped synonyms a real enum is
+    likely to use instead (a pharmacy «Витамины» also reads as «Препараты»). The
+    curated word comes first so the most specific option wins when present."""
+    if not domain:
+        return (primary,)
+    return (primary, *_CATEGORY_SYNONYMS.get(domain, {}).get(primary, ()))
+
+
+def _match_category_option(options: Sequence[str], category: str) -> str | None:
+    """The enum option that best names `category`, or None if none does. Matches
+    case-insensitively by containment (either way) or a shared 5-char stem (so
+    "Десерты" ≈ "Десерт"), keeping correlation high-precision — an unrelated set
+    of options yields None and the caller keeps the plain index spread."""
+    c = category.lower()
+    for opt in options:
+        o = opt.lower()
+        if c in o or o in c:
+            return opt
+        if len(c) >= 5 and len(o) >= 5 and c[:5] == o[:5]:
+            return opt
+    return None
 
 
 # ── value derivation ─────────────────────────────────────────────────────────
@@ -275,6 +1080,12 @@ def _field_value(
     seed: str,
     index: int,
     refs: Mapping[str, Sequence[str]],
+    domain: str | None = None,
+    row_category: str | None = None,
+    row_description: str | None = None,
+    row_price: int | None = None,
+    row_old_price: int | None = None,
+    email_domain: str | None = None,
 ) -> Any:
     key = fname.lower()
 
@@ -287,30 +1098,74 @@ def _field_value(
     if fshape.type == "enum":
         if not fshape.options:
             return None
-        # Cycle by index so a catalog spreads across every option deterministically.
+        # A category/type enum agrees with the row's title noun when an option
+        # matches it — so a "Витамин C" row reads "Витамины", not "Косметика".
+        if row_category and _has_token(key, _CATEGORY_FIELD_TOKENS):
+            for cand in _category_candidates(domain, row_category):
+                match = _match_category_option(fshape.options, cand)
+                if match is not None:
+                    return match
+        # Otherwise cycle by index so a catalog spreads across every option.
         return fshape.options[index % len(fshape.options)]
 
     if fshape.type == "boolean":
-        # ~⅓ true, deterministic — a mix reads more real than all-false.
-        return _hash_int(seed, entity, fname, index) % 3 == 0
+        # A neutral flag reads more real as a ~⅓-true mix. But a *polar* flag must
+        # look believable on a fresh catalog: an in-stock/active flag false on ⅔
+        # of cards reads as a dead store, an archived/hidden flag true on ⅓ reads
+        # as a junk catalog (pillar 1, mirrors the rating skew). Skew positive
+        # flags true-heavy, negative flags false-heavy; an unrecognised boolean
+        # keeps the neutral mix → byte-identical. Negative is checked first so a
+        # negated positive ("недоступен" ⊃ "доступ") is classified by its meaning.
+        h = _hash_int(seed, entity, fname, index)
+        if _has_token(key, _BOOL_NEGATIVE_TOKENS):
+            return h % 4 == 0  # ~¼ true: most rows are NOT archived/blocked
+        if _has_token(key, _BOOL_POSITIVE_TOKENS):
+            return h % 4 != 0  # ~¾ true: most rows are available/active
+        return h % 3 == 0
 
     if fshape.type == "date":
         return _demo_date(seed, entity, fname, index)
 
     if fshape.type == "number":
-        return _demo_number(key, seed, entity, fname, index)
+        return _demo_number(
+            key, seed, entity, fname, index, domain, row_price, row_old_price
+        )
 
     if fshape.type == "text":
+        # A public-catalog `description` reads as catalog copy; an operational
+        # `notes`/`comment` keeps the back-office sentences.
+        if _has_token(key, _DESC_TOKENS):
+            # A recognised niche → a real product-describing line that agrees
+            # with this row's title noun ("Антиоксидант…" for a Vitamin C row),
+            # not the niche-blind praise pool. Unknown niche / no noun → generic.
+            if row_description is not None:
+                return row_description
+            return _pick(_DESCRIPTIONS, seed, entity, fname, index)
         return _pick(_SENTENCES, seed, entity, fname, index)
 
     # string (and any unknown type, coerced to string upstream)
-    return _demo_string(entity, key, seed, fname, index)
+    return _demo_string(entity, key, seed, fname, index, domain, email_domain)
 
 
-def _demo_string(entity: str, key: str, seed: str, fname: str, index: int) -> str:
+def _demo_string(
+    entity: str,
+    key: str,
+    seed: str,
+    fname: str,
+    index: int,
+    domain: str | None = None,
+    email_domain: str | None = None,
+) -> str:
+    if _has_token(key, _IMAGE_TOKENS):
+        # A real, always-rendering tile — not a placeholder word the browser would
+        # try to load as an image src and show broken.
+        return _demo_image(entity, seed, fname, index, domain)
+    if _has_token(key, _CODE_TOKENS):
+        # A real-looking SKU/article code, not a placeholder word.
+        prefix = "ART" if _has_token(key, ("артикул", "vendor")) else "SKU"
+        return f"{prefix}-{_hash_int(seed, entity, fname, index, 'c') % 9000 + 1000}"
     if _has_token(key, _EMAIL_TOKENS):
-        first = _hash_int(seed, entity, fname, index, "u")
-        return f"user{first % 9000 + 1000}@example.ru"
+        return _demo_email(entity, seed, fname, index, email_domain)
     if _has_token(key, _PHONE_TOKENS):
         n = _hash_int(seed, entity, fname, index, "p")
         return f"+7 (9{n % 100:02d}) {n // 100 % 1000:03d}-{n % 100:02d}-{n // 7 % 100:02d}"
@@ -326,20 +1181,123 @@ def _demo_string(entity: str, key: str, seed: str, fname: str, index: int) -> st
         return _pick(_COMPANIES, seed, entity, fname, index)
     if _has_token(key, _STATUS_TOKENS):
         return _pick(_STATUS_WORDS, seed, entity, fname, index)
-    if _has_token(key, _PERSON_TOKENS) or _is_person_entity(entity, key):
+    if _field_is_person(key) or _is_person_entity(entity, key):
         return _pick(_PERSON_NAMES, seed, entity, fname, index)
+    # The entity's primary label in a recognised niche → a real catalog product.
+    if domain is not None and _takes_niche_noun(entity, key):
+        return _niche_noun(domain, seed, entity, fname, index)
     # A "thing" label: <Entity-label> «Adjective» — always on-topic, clearly demo.
     return f"{_pick(_LABELS, seed, entity, fname, index)} {index + 1}"
 
 
-def _demo_number(key: str, seed: str, entity: str, fname: str, index: int) -> int:
+def _demo_email(
+    entity: str, seed: str, fname: str, index: int, email_domain: str | None
+) -> str:
+    """A believable demo email. A `user1234@example.ru` placeholder is the most
+    obviously fake value left on a contact card; when the app's slug gives a
+    brand domain we use it (`anna@salon-krasoty.ru`), with a name-like handle for
+    person entities and a business mailbox otherwise. No brand domain (niche-less
+    or non-ASCII slug) → the byte-identical legacy form, so nothing regresses."""
+    if email_domain is None:
+        first = _hash_int(seed, entity, fname, index, "u")
+        return f"user{first % 9000 + 1000}@example.ru"
+    pool = _EMAIL_HANDLES_PERSON if _entity_is_person(entity) else _EMAIL_HANDLES_BIZ
+    return f"{_pick(pool, seed, entity, fname, index)}@{email_domain}"
+
+
+def _demo_image(
+    entity: str, seed: str, fname: str, index: int, domain: str | None
+) -> str:
+    """A self-contained SVG data-URI tile for an image/photo field.
+
+    An image field left as a text placeholder ("Элемент 1") renders as a *broken
+    image* on the first catalog screen — the single most WOW-killing defect a
+    fresh app can show. A random external stock photo is no better: an unrelated
+    landscape on a vitamin card reads as wrong as the placeholder, and adds a
+    network dependency. Instead we emit a deterministic, niche-tinted gradient
+    tile inline as a `data:` URI — it always renders (plain <img> and next/image,
+    no network, no `remotePatterns`), looks intentional, and varies per row so a
+    page isn't eight identical tiles.
+    """
+    base = _DOMAIN_HUE.get(domain or "", _hash_int(seed, entity, fname) % 360)
+    h1 = (base + index * 23) % 360
+    h2 = (h1 + 28) % 360
+    cx = 120 + _hash_int(seed, entity, fname, index, "x") % 360
+    cy = 60 + _hash_int(seed, entity, fname, index, "y") % 280
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='600' height='400'>"
+        "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+        f"<stop offset='0' stop-color='hsl({h1},58%,56%)'/>"
+        f"<stop offset='1' stop-color='hsl({h2},64%,42%)'/>"
+        "</linearGradient></defs>"
+        "<rect width='600' height='400' fill='url(#g)'/>"
+        f"<circle cx='{cx}' cy='{cy}' r='150' fill='#ffffff' fill-opacity='0.12'/>"
+        "</svg>"
+    )
+    return "data:image/svg+xml," + quote(svg, safe="")
+
+
+def _niche_price(
+    domain: str, seed: str, entity: str, fname: str, index: int
+) -> int:
+    """A real-market current price for this niche, on the band's round step."""
+    lo, hi, step = _DOMAIN_PRICE[domain]
+    buckets = (hi - lo) // step + 1
+    return lo + _hash_int(seed, entity, fname, index) % buckets * step
+
+
+def _old_price_from(
+    current: int, domain: str, seed: str, entity: str, fname: str, index: int
+) -> int:
+    """A believable "was" price: the current price marked up by a round 10–40 %
+    discount, snapped to the niche band's step and never equal-or-below it (a
+    struck-through tag must sit ABOVE the sale price)."""
+    _, _, step = _DOMAIN_PRICE[domain]
+    pct = 1 + _hash_int(seed, entity, fname, index, "old") % 4  # 10 … 40 %
+    old = round(current / (1 - pct / 10) / step) * step
+    if old <= current:  # rounding collapsed it — bump one step above the sale price
+        old = (current // step + 1) * step
+    return old
+
+
+def _demo_number(
+    key: str,
+    seed: str,
+    entity: str,
+    fname: str,
+    index: int,
+    domain: str | None = None,
+    row_price: int | None = None,
+    row_old_price: int | None = None,
+) -> int:
+    if domain is not None and _has_token(key, _PRICE_TOKENS):
+        if row_price is not None and _has_token(key, _OLD_PRICE_TOKENS):
+            # A "was"/before-discount field → sit above the row's current price.
+            return _old_price_from(row_price, domain, seed, entity, fname, index)
+        # A real-market price for this niche, rounded to the band's step.
+        return _niche_price(domain, seed, entity, fname, index)
     if _has_token(key, _MONEY_TOKENS):
-        # Round-ish rouble amounts, 990 … ~199 990.
+        # Round-ish rouble amounts, 990 … ~199 990 (generic / unknown niche).
         return (_hash_int(seed, entity, fname, index) % 200 + 1) * 990
     if _has_token(key, _RATING_TOKENS):
-        return _hash_int(seed, entity, fname, index) % 5 + 1
+        # A fresh demo catalog should look *appealing*: a uniform 1–5 spread puts
+        # a 1★/2★ "bad product" on ~40% of cards — broken-looking on the first
+        # screen (pillar 1). Real catalogs cluster ratings at the top, so we skew
+        # to a believable 4–5 band (≈¾ five-star, ¼ four-star), never below 4.
+        # Kept integer so a star-widget that renders `Array(rating)` can't crash.
+        return 4 if _hash_int(seed, entity, fname, index) % 4 == 0 else 5
     if _has_token(key, _AGE_TOKENS):
         return _hash_int(seed, entity, fname, index) % 53 + 18
+    if _has_token(key, _DISCOUNT_TOKENS):
+        # When the same card strikes through a "was" price, the badge must equal
+        # the REAL old→current drop — a band value would contradict the two prices
+        # the user can subtract on screen (1100→1000 under a "Скидка 35%" tag is a
+        # catalog lie, pillar 1). Guard at ≥1% so a near-equal pair never prints 0%.
+        if row_old_price is not None and row_price is not None and row_old_price > row_price:
+            return max(1, round((row_old_price - row_price) / row_old_price * 100))
+        # No struck price to mirror → real promos cluster at round 5–50% in 5-point
+        # steps so a standalone "Скидка N%" badge is still believable.
+        return 5 + _hash_int(seed, entity, fname, index) % 10 * 5
     if _has_token(key, _PERCENT_TOKENS):
         return _hash_int(seed, entity, fname, index) % 101
     if _has_token(key, _COUNT_TOKENS):
@@ -348,10 +1306,16 @@ def _demo_number(key: str, seed: str, entity: str, fname: str, index: int) -> in
 
 
 def _demo_date(seed: str, entity: str, fname: str, index: int) -> str:
-    # Spread across the last ~120 days, anchored on a FIXED epoch so output is
+    # Spread across a ~120-day window, anchored on a FIXED epoch so output is
     # reproducible (no wall-clock — that would break determinism in tests/CI).
     base = datetime(2026, 6, 1, tzinfo=UTC)
-    days = _hash_int(seed, entity, fname, index) % 120
+    h = _hash_int(seed, entity, fname, index)
+    if _has_token(fname.lower(), _FUTURE_DATE_TOKENS):
+        # Forward-looking field (deadline / booking / delivery / promo-until):
+        # a past date reads as expired, so seed a near-future date (~2 weeks to
+        # ~3.5 months out) that stays ahead of the demo period.
+        return (base + timedelta(days=14 + h % 90)).date().isoformat()
+    days = h % 120
     return (base - timedelta(days=days)).date().isoformat()
 
 
@@ -372,12 +1336,60 @@ def _has_token(key: str, tokens: tuple[str, ...]) -> bool:
     return any(t in key for t in tokens)
 
 
+def _models_person(entity: str) -> bool:
+    """Whether the entity itself models a person (Client, Doctor, Мастер,
+    Барбер …). A venue/event/org that merely contains a profession noun as a
+    substring (Мастер-класс, Парикмахерская, Агентство) is excluded first, so
+    the substring match below can't promote it."""
+    e = entity.lower()
+    if any(h in e for h in _NON_PERSON_ENTITY_HINT):
+        return False
+    return any(h in e for h in _PERSON_ENTITY_HINT)
+
+
+def _entity_is_person(entity: str) -> bool:
+    """Whether the entity models a person — used to pick a personal vs. business
+    email mailbox."""
+    return _models_person(entity)
+
+
+def _email_domain(niche: str | None) -> str | None:
+    """The app's brand email domain (`salon-krasoty.ru`) from its slug, or None
+    when no usable ASCII brand is present (Cyrillic-only hint, empty, or absent)
+    — the caller then keeps the legacy `example.ru` form. Collapses repeated
+    hyphens and caps the label at 24 chars on a hyphen boundary so the domain
+    stays readable."""
+    if not niche:
+        return None
+    slug = _slugish(niche)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    slug = slug.strip("-")
+    # `_slugish` returns "item" for an all-non-ASCII string — treat that (and any
+    # too-short / letter-less result) as "no brand" and fall back.
+    if slug == "item" or len(slug) < 3 or not any(c.isalpha() for c in slug):
+        return None
+    if len(slug) > 24:
+        slug = slug[:24].rsplit("-", 1)[0] or slug[:24]
+    return f"{slug}.ru"
+
+
 def _is_person_entity(entity: str, key: str) -> bool:
     # Only treat a bare name/title as a person when the ENTITY itself is a person.
     if not _has_token(key, ("name", "имя", "title", "название", "заголовок", "фио")):
         return False
-    e = entity.lower()
-    return any(h in e for h in _PERSON_ENTITY_HINT)
+    return _models_person(entity)
+
+
+def _field_is_person(key: str) -> bool:
+    """Whether the field NAME itself denotes a person (a generic person token like
+    `client`, or a profession performing the row like `мастер`/`специалист`).
+    Venue/org superstrings («мастерская», «агентство», «название_мастерской») are
+    excluded first by the shared negative guard so they keep their niche label,
+    not a ФИО (mirrors the entity-level polarity guard in `_models_person`)."""
+    if any(h in key for h in _NON_PERSON_ENTITY_HINT):
+        return False
+    return _has_token(key, _PERSON_TOKENS) or _has_token(key, _PROFESSION_FIELD_TOKENS)
 
 
 def _slugish(text: str) -> str:

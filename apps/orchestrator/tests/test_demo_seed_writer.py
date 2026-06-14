@@ -44,20 +44,25 @@ def test_build_batches_seeds_public_entity_with_floor_rows() -> None:
     assert all("title" in row and "price" in row for row in batches["Product"])
 
 
-def test_build_batches_skips_owner_and_admin_entities() -> None:
+def test_build_batches_seeds_public_and_admin_but_skips_owner() -> None:
+    """Owner entities filter per-viewer — an empty "my items" is the correct
+    first state, so they stay unseeded. Admin entities feed the operator's
+    back-office dashboard, and the FIRST signup is now the admin operator
+    (auth.roleForNewUser excludes the password-less demo owner) → admin rows
+    DO show on first paint and must be seeded, or the dashboard hero reads 0."""
     files = {
         "entities/Task.json": _entity_json(
             "Task", "owner", {"title": {"type": "string"}}
         ),
-        "entities/Audit.json": _entity_json(
-            "Audit", "admin", {"note": {"type": "text"}}
+        "entities/Order.json": _entity_json(
+            "Order", "admin", {"amount": {"type": "number"}}
         ),
         "entities/Course.json": _entity_json(
             "Course", "public", {"title": {"type": "string"}}
         ),
     }
     batches = demo_seed_writer._build_batches(PROJECT_ID, files)
-    assert set(batches) == {"Course"}
+    assert set(batches) == {"Course", "Order"}
 
 
 def test_build_batches_ignores_non_entity_and_fieldless_files() -> None:

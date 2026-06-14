@@ -129,7 +129,57 @@ def test_adversary_shape_falls_below_full_reference():
     assert meets_or_beats(adversary, ref) is False
 
 
+# ── V1.13c: adversary-pre-proof helper (named regressions, no threshold drift) ─
+
+
+def test_min_regressions_is_the_exact_mirror_of_min_axes():
+    # A candidate is below the ceiling exactly when it loses more axes than the
+    # floor tolerates — derived, never hardcoded, so the two can't drift.
+    assert rc.MIN_REGRESSIONS == len(RICHNESS_AXES) - MIN_AXES + 1
+    assert rc.MIN_REGRESSIONS == 2
+
+
+def test_adversary_regressions_names_the_lost_axes():
+    ref = _vec()
+    gen = _vec(asymmetry=False, **{"hero-imagery": False})  # loses 2 axes
+    lost = rc.adversary_regressions(gen, ref)
+    assert set(lost) == {"hero-imagery", "asymmetry"}
+    # Order follows the canonical RICHNESS_AXES, not insertion.
+    assert list(lost) == [a for a in RICHNESS_AXES if a in {"hero-imagery", "asymmetry"}]
+
+
+def test_adversary_regressions_is_the_negation_of_meets_or_beats():
+    # The whole proof rests on this equivalence: "regresses on >= MIN_REGRESSIONS
+    # axes" must mean exactly the same as "does NOT meet or beat".
+    ref = _vec()
+    for gen in (
+        _vec(),  # holds all → meets
+        _vec(asymmetry=False),  # 1 regression → still meets
+        _vec(asymmetry=False, **{"hero-imagery": False}),  # 2 → below
+        {a: (a == RICHNESS_AXES[0]) for a in RICHNESS_AXES},  # adversary shape
+    ):
+        below = len(rc.adversary_regressions(gen, ref)) >= rc.MIN_REGRESSIONS
+        assert below is (not meets_or_beats(gen, ref)), gen
+
+
+def test_adversary_holds_floor_when_reference_is_weak():
+    # If the reference itself fails an axis, the adversary failing the same axis
+    # is NOT a regression (you can't fall below a floor that isn't there).
+    weak_ref = _vec(asymmetry=False, **{"hero-imagery": False})
+    adversary = {a: (a == RICHNESS_AXES[0]) for a in RICHNESS_AXES}
+    lost = rc.adversary_regressions(adversary, weak_ref)
+    assert "asymmetry" not in lost and "hero-imagery" not in lost
+    assert set(lost) == {"layout-variety", "focal-dominance"}
+
+
 # ── corpus is curated, sourced and append-only ─────────────────────────────────
+
+
+def test_corpus_is_the_four_frozen_niches():
+    # V1.13c pins the frozen reference set so it can never silently shrink below
+    # the four niches the ceiling de-risk was proven against.
+    corpus = rc.load_corpus()
+    assert {"editorial", "saas", "agency", "ecommerce"} <= set(corpus)
 
 
 def test_corpus_has_at_least_four_sourced_niches():
@@ -203,6 +253,51 @@ def test_subscore_is_machine_readable():
     assert sub["passed"] is False
     assert sub["axes"] == list(RICHNESS_AXES)
     assert sub["comparisons"][0]["niche"] == "saas"
+
+
+# ── V1.13c: the NON-blocking advisory score (flip-runbook companion) ───────────
+# A continuous "X/N niches met" signal that surfaces while the strict gate is OFF.
+# It must never read as a ship-block, and an abstain must carry no number.
+
+
+def test_niches_met_counts_passing_comparisons():
+    rep = ReferenceReport(
+        (
+            _comp("saas", passed=True),
+            _comp("agency", passed=False),
+            _comp("editorial", passed=True),
+        )
+    )
+    assert rep.niches_met == 2  # passed: saas + editorial
+    assert rep.passed is False  # strict ceiling still fails on agency
+
+
+def test_advisory_card_is_never_blocking():
+    rep = ReferenceReport((_comp("saas", passed=True), _comp("agency", passed=False)))
+    card = rep.advisory_card()
+    assert card["blocking"] is False
+    assert card["met"] == 1
+    assert card["total"] == 2
+    assert card["summary"] == "reference: 1/2 niches met"
+
+
+def test_advisory_card_full_clear_reports_all_met():
+    rep = ReferenceReport((_comp("saas", passed=True), _comp("agency", passed=True)))
+    card = rep.advisory_card()
+    assert card["met"] == 2 and card["total"] == 2
+    assert card["summary"] == "reference: 2/2 niches met"
+
+
+def test_advisory_card_abstains_with_no_number():
+    # Empty corpus → abstain: no evidence is NOT a zero score (it would read as a
+    # failing generation when it is really an un-measured one).
+    empty = ReferenceReport(())
+    card = empty.advisory_card()
+    assert card["rendered"] is False
+    assert card["summary"] == "reference: advisory unavailable (abstain)"
+    # A render miss is the same: rendered False ⇒ advisory unavailable.
+    miss = ReferenceReport((_comp("saas", passed=True, rendered=False),))
+    assert miss.advisory_card()["summary"] == "reference: advisory unavailable (abstain)"
 
 
 def test_audit_files_abstains_when_corpus_empty(monkeypatch):
@@ -281,3 +376,36 @@ def test_bootstrap_baseline_falls_below_the_corpus():
             f"bootstrap baseline must fall below the corpus, but beat {c.niche}: "
             f"{c.summary()}"
         )
+
+
+def test_bootstrap_baseline_regresses_at_least_two_axes_per_niche():
+    """V1.13c adversary-pre-proof — the explicit, named-axis teeth.
+
+    ``test_bootstrap_baseline_falls_below_the_corpus`` proves the baseline does
+    not *meet or beat* the corpus; this proves the stronger, falsifiable claim the
+    paid-flip de-risk needs: the baseline REGRESSES on at least ``MIN_REGRESSIONS``
+    of the five richness axes against EVERY frozen niche, naming which axes. If a
+    future change lets the baseline hold the floor on any niche, the ceiling would
+    certify mediocrity and flipping ``reference_gate`` would be unsafe — fail loud.
+    """
+    base_html = _BASELINE.read_text(encoding="utf-8")
+    adv_vec, adv_rendered = _render_vec(base_html)
+    if not adv_rendered:
+        pytest.skip("no chromium available — verified in prod-worker container")
+    corpus = rc.load_corpus()
+    assert corpus, "no reference corpus found"
+    proven = 0
+    for niche, ref_html in corpus.items():
+        ref_vec, ref_rendered = _render_vec(ref_html)
+        if not ref_rendered:
+            continue
+        regressed = rc.adversary_regressions(adv_vec, ref_vec)
+        proven += 1
+        assert len(regressed) >= rc.MIN_REGRESSIONS, (
+            f"baseline must regress on >= {rc.MIN_REGRESSIONS} axes vs {niche}, "
+            f"but only lost {len(regressed)}: {list(regressed)} "
+            f"(ref={ref_vec}, adversary={adv_vec})"
+        )
+    # The render path actually exercised the proof on every rendered niche — a
+    # silent all-abstain must not read as green.
+    assert proven >= 1, "no reference niche rendered — proof did not run"

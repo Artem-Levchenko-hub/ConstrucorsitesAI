@@ -267,6 +267,11 @@ async def evaluate(
             files=files,
             spec=spec,
             include_rendered=settings.acceptance_gauntlet_render_gates,
+            # V3.3 — the money-free composition FLOOR. A pure source-scan that
+            # hard-fails a catastrophically flat freeform page before any paid
+            # render or the advisory vision pass; INERT on entity stacks (no
+            # standalone index.html), so it never sinks the live hot path.
+            compose=settings.acceptance_gauntlet_compose_gate,
             composition=settings.acceptance_gauntlet_composition_gates,
             fidelity=fidelity,
             # V1.13b CEILING leg — graded against a curated enterprise corpus. OFF
@@ -274,6 +279,12 @@ async def evaluate(
             # corpus-run); it ABSTAINS on an empty corpus / render miss, so even
             # when enabled it never sinks ship on missing evidence (R-10).
             reference=settings.acceptance_gauntlet_reference_gate,
+            # V1.17 — the catalog-realism ratchet. ADVISORY (a non-blocking
+            # quality-card): it surfaces a 0–5 realism score over the rendered
+            # catalog DOM but never blocks ship, and ABSTAINS/WAIVES safely. OFF by
+            # default (it adds one render per gen); flipping it on is how the eight
+            # RULE-10 classes become a live floor once the heuristics earn trust.
+            catalog=settings.acceptance_gauntlet_catalog_gate,
         )
         if gauntlet.hard_failed:
             gauntlet_ok = False

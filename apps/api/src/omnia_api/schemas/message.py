@@ -85,3 +85,16 @@ class PromptResponse(BaseModel):
     # ("Другое") path stays open. Empty on build/edit turns (no chips to show).
     choices: list[str] = Field(default_factory=list)
     allow_custom: bool = True
+    # True when several chips can apply at once (e.g. "какие разделы нужны?") —
+    # the UI renders the chips as toggles + a «Готово» button so the user picks a
+    # set in one turn (NORTH STAR pillar 2 — мультивыбор). False on single-answer
+    # questions and on build/edit turns.
+    multi_select: bool = False
+    # Onboarding-popup framing (NORTH STAR pillar 2): the 1-based position of the
+    # question being asked and how many the planned batch holds, so the workspace
+    # frames discovery as a guided popup with a «Вопрос N из M» counter — plus the
+    # inferred niche label for the framing banner. None on build/edit turns and on
+    # the legacy per-question path (no upfront plan → unknown total).
+    question_index: int | None = None
+    question_total: int | None = None
+    niche: str | None = None

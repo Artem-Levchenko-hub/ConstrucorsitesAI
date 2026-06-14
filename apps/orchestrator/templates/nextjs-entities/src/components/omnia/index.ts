@@ -13,10 +13,28 @@ export {
   type PlanInfo,
 } from "./app-shell";
 export { PageHeader, type PageHeaderProps } from "./page-header";
+export {
+  DashboardHero,
+  type DashboardHeroProps,
+  type HeroStat,
+} from "./dashboard-hero";
+export {
+  StorefrontHero,
+  type StorefrontHeroProps,
+  type StorefrontCta,
+  type StorefrontStat,
+} from "./storefront-hero";
 export { StatCard, type StatCardProps } from "./stat-card";
 export { CountUp, type CountUpProps } from "./count-up";
 export { EmptyState, type EmptyStateProps } from "./empty-state";
 export { DataTable, type Column, type DataTableProps, type FilterTab } from "./data-table";
+export {
+  GalleryGrid,
+  type GalleryGridProps,
+  type GalleryItem,
+  MediaCard,
+  type MediaCardProps,
+} from "./gallery-grid";
 export {
   EntityForm,
   type FieldSpec,
@@ -24,6 +42,11 @@ export {
   type EntityFormProps,
 } from "./entity-form";
 export { CrudResource, type CrudResourceProps } from "./crud-resource";
+export {
+  RecordDetail,
+  type RecordDetailProps,
+  type DetailField,
+} from "./record-detail";
 export {
   SettingsShell,
   type SettingsShellProps,

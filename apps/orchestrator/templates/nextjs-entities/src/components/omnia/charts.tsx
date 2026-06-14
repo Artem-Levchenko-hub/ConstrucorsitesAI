@@ -14,6 +14,12 @@ import { cn } from "@/lib/utils";
  * track light/dark mode automatically. Set the hue with a `text-chart-*`
  * class on the chart (default: `text-chart-1`).
  *
+ * On first paint each chart draws itself in — the line strokes left to right,
+ * the area fills up behind it, bars grow from their baseline, the ring sweeps to
+ * its value (the "living dashboard" touch). It's pure CSS (globals.css), so the
+ * charts stay server components and motion-averse users get the final frame
+ * instantly. Nothing to wire — it just happens wherever a chart renders.
+ *
  *   <Sparkline data={[3, 5, 4, 8, 6, 11]} />
  *   <TrendArea data={revenueByDay} className="text-chart-2" />
  *   <BarMini data={[{ label: "Север", value: 42 }, …]} />
@@ -80,6 +86,8 @@ export function Sparkline({
         aria-hidden="true"
       >
         <path
+          className="omnia-chart-draw"
+          pathLength={1}
           d={d}
           stroke="currentColor"
           strokeWidth={1.75}
@@ -122,8 +130,12 @@ export function TrendArea({ data, label, height = 64, className }: TrendAreaProp
         preserveAspectRatio="none"
         aria-hidden="true"
       >
-        {area ? <path d={area} fill="currentColor" fillOpacity={0.12} /> : null}
+        {area ? (
+          <path className="omnia-chart-fill" d={area} fill="currentColor" fillOpacity={0.12} />
+        ) : null}
         <path
+          className="omnia-chart-draw"
+          pathLength={1}
           d={line}
           stroke="currentColor"
           strokeWidth={2}
@@ -165,10 +177,11 @@ export function BarMini({ data, label, className }: BarMiniProps) {
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-muted">
             <div
-              className="h-full rounded-full"
+              className="omnia-chart-grow h-full rounded-full"
               style={{
                 width: `${Math.max(2, (d.value / max) * 100)}%`,
                 backgroundColor: `var(--chart-${(i % 5) + 1})`,
+                animationDelay: `${i * 0.08}s`,
               }}
             />
           </div>
@@ -206,12 +219,16 @@ export function DonutStat({ value, pct, label, size = 112, className }: DonutSta
       className={cn("inline-flex flex-col items-center gap-2 text-primary", className)}
     >
       <div
-        className="relative grid place-items-center rounded-full"
-        style={{
-          width: size,
-          height: size,
-          background: `conic-gradient(currentColor ${clamped}%, var(--muted) ${clamped}% 100%)`,
-        }}
+        className="omnia-donut-sweep relative grid place-items-center rounded-full"
+        style={
+          {
+            width: size,
+            height: size,
+            "--omnia-pct": `${clamped}%`,
+            background:
+              "conic-gradient(currentColor var(--omnia-pct), var(--muted) var(--omnia-pct) 100%)",
+          } as React.CSSProperties
+        }
       >
         <div
           className="grid place-items-center rounded-full bg-card text-center"

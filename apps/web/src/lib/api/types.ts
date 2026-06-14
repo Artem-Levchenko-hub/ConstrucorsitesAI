@@ -208,6 +208,18 @@ export type PromptResponse = {
   // type-checks.
   choices?: string[];
   allow_custom?: boolean;
+  // True when several chips can apply at once — the UI renders toggle chips + a
+  // «Готово» button so the user picks a set in one turn (мультивыбор). Optional →
+  // older API still type-checks; absent defaults to single-select.
+  multi_select?: boolean;
+  // Onboarding-popup framing (NORTH STAR pillar 2): the 1-based position of this
+  // question and the planned batch size, so the workspace frames discovery as a
+  // guided popup with a «Вопрос N из M» counter — plus the inferred niche label
+  // for the framing banner. Absent on build/edit turns and the legacy
+  // per-question path (no upfront plan → unknown total) → older API type-checks.
+  question_index?: number | null;
+  question_total?: number | null;
+  niche?: string | null;
 };
 
 export type ApiErrorCode =

@@ -234,6 +234,13 @@ async def perform_fork(
         design_preset_id=source.design_preset_id,
         discovery_spec=source.discovery_spec,
         image_gen_enabled=source.image_gen_enabled,
+        # V4.9 — the fork's first surface is a byte-copy of the source's HEAD,
+        # so the source's floor verdict applies to it verbatim. Carrying the
+        # flag makes the viral pool transitively floor-gated: a fork is itself
+        # re-shareable only if the app it copied cleared the beauty floor (the
+        # V4.7 fork-tree invariant). The fork's own gate re-stamps it on the
+        # first re-generation/edit.
+        viral_eligible=source.viral_eligible,
         forked_from=source.id,
     )
     session.add(fork)

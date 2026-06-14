@@ -272,6 +272,15 @@ class Settings(BaseSettings):
     # bypassed. Kill switch for instant rollback to the batch clarify (R-10):
     # USE_PROGRESSIVE_DISCOVERY=false.
     use_progressive_discovery: bool = Field(default=True)
+    # Batch discovery (2026-06-14, owner rule 13 #1 — NORTH STAR pillar 2). Within
+    # progressive discovery, plan the WHOLE set of 3–4 product-tailored questions
+    # in ONE upfront gateway pass (right after the first prompt), persist them on
+    # `Project.discovery_plan`, then serve one per turn with NO further gateway
+    # call — instant between steps, no per-question minute-long wait, and every
+    # question is about the user's actual product (not a generic "тип сайта"
+    # timeout fallback). Kill switch (R-10): USE_BATCH_DISCOVERY=false reverts to
+    # the per-question conversational discovery.
+    use_batch_discovery: bool = Field(default=True)
     # Auto stack-routing (2026-06-09, owner P1 — last mile of zero-friction).
     # When progressive discovery decides to BUILD and recommends a container
     # stack (fullstack / nextjs_entities) for a still-static project, the server
@@ -340,6 +349,16 @@ class Settings(BaseSettings):
     # answers are byte-identical to before (no extra render). Default ON; flip
     # ACCEPTANCE_GAUNTLET_FIDELITY_GATE=false to disable if a false-positive surfaces.
     acceptance_gauntlet_fidelity_gate: bool = Field(default=True)
+    # V3.3 — the money-free COMPOSITION FLOOR (`compose=` dial). A pure source-scan
+    # (no render, no model) that hard-fails a catastrophically flat freeform
+    # `index.html` — one uniform type size, no section rhythm, no hero — BEFORE any
+    # paid render or the advisory vision pass. The floors are catastrophe-only, so a
+    # real enterprise generation never trips them, and the scan is INERT (a passing
+    # no-op) on a set with no standalone HTML page (entity/fullstack stacks, judged
+    # by the rendered taste/hierarchy legs). It runs ALWAYS-ON on the hot path —
+    # decoupled from `acceptance_gauntlet_render_gates`. Default ON; flip
+    # ACCEPTANCE_GAUNTLET_COMPOSE_GATE=false to disable if a false-positive surfaces.
+    acceptance_gauntlet_compose_gate: bool = Field(default=True)
     # V1.13b — the pillar-1 CEILING leg (`REFERENCE_LEGS`). Where the composition
     # legs assert a FLOOR ("no defect class present"), this asserts a CEILING: a
     # generation must MEET OR BEAT a curated enterprise corpus on the five richness
@@ -347,10 +366,36 @@ class Settings(BaseSettings):
     # decoupled from `acceptance_gauntlet_render_gates` via the `reference=` dial
     # and ABSTAINS (never hard-fails) when the corpus is empty or a page does not
     # render (R-10). The wiring + deterministic/live-chromium teeth are money-free
-    # and shipped now; flipping this ON for the live hot path is the PAID owner
-    # corpus-run milestone (a fresh generation must clear the bar without a model
-    # change) — mirror of `acceptance_gauntlet_render_gates` / 16/5f. Default OFF.
+    # and shipped now.
+    #
+    # FLIP-RUNBOOK (V1.13c — the PAID owner corpus-run, made falsifiable). Do NOT
+    # flip this to True by eye. The flip is permitted iff `scripts/
+    # reference_flip_milestone.py --mode gate` exits 0, which proves all three:
+    #   1. CANDIDATES CLEAR — N>=1 fresh generations (no model change, no manual
+    #      edits) each MEET-OR-BEAT every curated corpus niche.
+    #   2. ADVERSARY BELOW (teeth) — the known-mediocre baseline regresses on >= 2
+    #      of the five richness axes against EVERY niche (`prove_reference_ceiling`).
+    #   3. CORPUS PRESENT — the frozen reference corpus is non-empty.
+    # Owner: generate the candidates, run `--mode gate`, then flip + commit the
+    # `--out` report. CI runs `--mode guard` (via test_reference_flip_milestone):
+    # this flag ON without a recorded passing milestone turns the suite RED. Mirror
+    # of `acceptance_gauntlet_render_gates` / 16/5e. Default OFF.
     acceptance_gauntlet_reference_gate: bool = Field(default=False)
+    # V1.17 — the catalog-realism ratchet (`CATALOG_LEGS`). The eight money-free
+    # RULE-10 demo-seeder fixes (niche titles, price-bands, real images,
+    # title↔category, title↔description, category synonyms, future dates, niche
+    # emails) each shipped with a unit test, but the only gate over the seeder's
+    # output, `data_gate`, measures MIN_ROWS>=6 — non-emptiness, never realism, so a
+    # NEW niche could silently regress any class. This leg scores the rendered
+    # catalog DOM across those realism axes (mirroring taste_gate's
+    # JS-extract→Python-score shape, R-04). It is ADVISORY (a non-blocking
+    # quality-card): it surfaces a 0–5 score + the fired axes in the gauntlet table /
+    # subscore but NEVER blocks ship, and it ABSTAINS on a render miss / WAIVES a
+    # non-catalog page (R-10), so wiring it is safe everywhere. Default OFF on the
+    # hot path — it adds one headless render per generation, so the owner flips it on
+    # (or the paid-run manifest folds it in) once the niche heuristics have earned
+    # trust; the CLI folds it in already.
+    acceptance_gauntlet_catalog_gate: bool = Field(default=False)
     # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
     # (container-backed), so the composition floor never touched the dominant
     # pillar-1 class. This wires the live-URL path: after a clean hot-reload +
@@ -396,6 +441,16 @@ class Settings(BaseSettings):
     # build regardless of model tier (no plain/catalog downgrade). Kill switch
     # for instant rollback to the prior single-shot freeform path (R-10).
     use_art_director_freeform: bool = Field(default=True)
+
+    # Extend the SAME Art-Director → Writer 2-pass to container-backed APP
+    # stacks that have a dedicated .tsx writer variant (currently
+    # `nextjs_entities`, see art_director_writer._APP_TEMPLATES). Without this,
+    # entity/app builds fall through to a bare single-shot .tsx pass — no design
+    # brief, no authoritative theme tokens (hardcoded colours leak), no
+    # `omnia:brief` event (the live narration / swatches stay blank). On = the
+    # flagship enterprise apps get the same art-direction the freeform landings
+    # already get. Kill switch for instant rollback to the single-shot path.
+    use_art_director_entities: bool = Field(default=True)
 
     # ── Surgical edit mode (owner directive 2026-06-06) ───────────────────
     # After the first build, a follow-up that changes ONE thing (a selected
@@ -607,7 +662,8 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # served by the direct vsegpt provider — proxyapi's DeepSeek surface 404s,
     # vsegpt is the only working route (apps/llm-gateway providers/vsegpt.py).
     "classify":     "deepseek-chat",  # pick 1 of N presets
-    "director":     "deepseek-v4-pro-thinking",    # catalog ORCHESTRATOR (dormant in freeform) — was Sonnet/proxyapi, now vsegpt
+    # catalog ORCHESTRATOR (dormant in freeform) — was Sonnet/proxyapi, now vsegpt
+    "director":     "deepseek-v4-pro-thinking",
     "polish":       "deepseek-chat",  # writes the real PageIR content (RU copy)
     # proxyapi.ru FULLY RETIRED (owner 2026-06-02). The acceptance-gate VISION
     # judge now runs on Gemini 3 Flash Preview via vsegpt (DeepSeek has no vision
@@ -637,6 +693,13 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "art_director": "kimi-k2.6",
     "freeform_writer": "deepseek-v4-pro",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
+    # Onboarding question planner (owner rule 13 #1). A small structured meta-call
+    # (NOT generation), and it runs INSIDE the 30s POST /prompt budget, so it needs
+    # a FAST, reliable model — deepseek-chat's cold-start regularly took >22s here
+    # and timed out, which dropped onboarding to the generic hardcoded batch (the
+    # exact bug rule 13 flagged). Haiku returns the tailored batch in ~3s with
+    # strict JSON. Swap via ROLE_MODELS env (e.g. discovery_plan=gpt-5-nano).
+    "discovery_plan": "claude-haiku-4-5",
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
@@ -49,7 +50,10 @@ from omnia_api.services import (
     zone_edit,
 )
 from omnia_api.services import repo as repo_svc
-from omnia_api.services.art_director_writer import art_director_writer_generate
+from omnia_api.services.art_director_writer import (
+    art_director_writer_generate,
+    supports_app_brief,
+)
 from omnia_api.services.chip_pixel_gate import spec_from_discovery
 from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.contrast_guard import enforce_contrast
@@ -59,8 +63,12 @@ from omnia_api.services.discovery import (
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
+    infer_niche_label,
+    plan_discovery_questions,
     run_discovery,
+    serve_planned_question,
     wants_build_now,
+    zero_question_build,
 )
 from omnia_api.services.file_extractor import (
     UnsafePathError,
@@ -407,6 +415,60 @@ def _compose_build_prompt(result: DiscoveryResult) -> str:
     return brief
 
 
+async def _batch_discovery_turn(
+    project: Project,
+    history: list[dict[str, str]],
+    prompt: str,
+    *,
+    asked_count: int,
+    force_build: bool,
+) -> DiscoveryResult:
+    """Batch discovery (owner rule 13 #1 — NORTH STAR pillar 2).
+
+    On the FIRST turn we plan the WHOLE set of product-tailored questions in ONE
+    upfront gateway pass (unless the prompt is rich enough to skip the popup
+    entirely) and stash it on ``project.discovery_plan`` (committed with the
+    message rows by the caller). Every turn then SERVES the next pre-computed
+    question with NO further gateway call — zero wait between steps. Once the plan
+    is exhausted (all questions answered) — or the user forces it — we build,
+    reusing ``run_discovery``'s battle-tested brief/stack compilation.
+
+    Never raises (R-10): ``plan_discovery_questions`` degrades to a deterministic
+    batch, and the exhausted/forced path delegates to the fail-soft builder.
+    """
+    if force_build:
+        return await run_discovery(
+            history, prompt, asked_count=asked_count, force_build=True
+        )
+    # Plan once, on the first turn, when nothing is stashed yet. A first prompt
+    # that already pins the design wins the zero-question shortcut and never gets
+    # a plan (the popup never appears).
+    if asked_count == 0 and not project.discovery_plan:
+        zero = zero_question_build(history, prompt)
+        if zero is not None:
+            return zero
+        questions = await plan_discovery_questions(prompt)
+        project.discovery_plan = [q.to_dict() for q in questions]
+    ask = serve_planned_question(project.discovery_plan or [], asked_count)
+    if ask is not None:
+        # Name the niche for the onboarding-frame banner from the product idea —
+        # the first user message (the idea) when we're past question 1, else this
+        # very prompt. Deterministic; an unrecognised idea yields "" (no suffix).
+        idea = next(
+            (
+                m["content"]
+                for m in history
+                if m.get("role") == "user" and m.get("content")
+            ),
+            "",
+        ) or prompt
+        return replace(ask, niche=infer_niche_label(idea))
+    # Plan exhausted — every question answered → build from the full Q&A.
+    return await run_discovery(
+        history, prompt, asked_count=asked_count, force_build=True
+    )
+
+
 async def _ensure_owner(session: SessionDep, project_id: UUID, user_id: UUID) -> Project:
     project = await session.get(Project, project_id)
     if project is None or project.owner_id != user_id:
@@ -561,12 +623,24 @@ async def post_prompt(
             {"role": m.role, "content": m.content} for m in _rows if m.content
         ]
         _asked = sum(1 for m in _rows if m.role == "assistant")
-        discovery_result = await run_discovery(
-            _history,
-            payload.prompt,
-            asked_count=_asked,
-            force_build=wants_build_now(payload.prompt),
-        )
+        if settings.use_batch_discovery:
+            # Plan all 3–4 product-tailored questions in ONE upfront pass, then
+            # serve them with zero per-question wait (owner rule 13 #1). The plan
+            # is stashed on ``project`` and persisted by the commit below.
+            discovery_result = await _batch_discovery_turn(
+                project,
+                _history,
+                payload.prompt,
+                asked_count=_asked,
+                force_build=wants_build_now(payload.prompt),
+            )
+        else:
+            discovery_result = await run_discovery(
+                _history,
+                payload.prompt,
+                asked_count=_asked,
+                force_build=wants_build_now(payload.prompt),
+            )
         if discovery_result.action == DISCOVERY_BUILD:
             # Build now — the compiled brief (with the recommended stack folded in)
             # becomes the generator's prompt; the raw idea stays as the user turn.
@@ -697,15 +771,30 @@ async def post_prompt(
         assert discovery_result is not None  # discovery_ask ⇒ result exists
         ask_choices = list(discovery_result.choices)
         allow_custom = discovery_result.allow_custom
+        multi_select = discovery_result.multi_select
+        # Onboarding-frame metadata (pillar 2): «Вопрос N из M» + niche banner.
+        # 0 → None so the workspace hides the counter on the legacy per-question
+        # path (no upfront plan → unknown total).
+        question_index = discovery_result.question_index or None
+        question_total = discovery_result.question_total or None
+        niche = discovery_result.niche or None
     else:
         ask_choices = []
         allow_custom = True
+        multi_select = False
+        question_index = None
+        question_total = None
+        niche = None
     return PromptResponse(
         message_id=assistant_msg.id,
         snapshot_id=None,
         mode=turn_mode,
         choices=ask_choices,
         allow_custom=allow_custom,
+        multi_select=multi_select,
+        question_index=question_index,
+        question_total=question_total,
+        niche=niche,
     )
 
 
@@ -1583,13 +1672,24 @@ async def _process_prompt(
                 # always-on for builds; it just avoids feeding HTML to the
                 # catalog/plain JSON parser if freeform is ever switched off.
                 and _gen_mode == "freeform"
-                # Container-backed Next.js apps (fullstack / nextjs_entities) must
-                # be written as .tsx files by the fullstack system prompt — the
-                # freeform art-director writer emits ONE static index.html, the
-                # wrong artifact for a React app (it gets discarded, app stays the
-                # blank template). Keep container apps off the freeform writer so
-                # they fall through to the single-shot .tsx path below.
-                and project_template not in CONTAINER_NEXT
+                # Container-backed stacks WITHOUT a .tsx writer variant
+                # (fullstack / spa) stay off this path: the art-director writer's
+                # default pass emits ONE static index.html, the wrong artifact for
+                # a React app. But app stacks that DO have a dedicated .tsx writer
+                # (nextjs_entities — art_director_writer._APP_TEMPLATES /
+                # _WRITER_INSTRUCTION_TEMPLATE_APP) get the SAME 2-pass art-
+                # direction: an APP brief (oklch theme tokens + IA) → a .tsx writer
+                # that honours it → the omnia:brief event. Without this the
+                # flagship entity apps fell through to a bare single-shot .tsx —
+                # no brief, hardcoded colours, dead narration/swatches. Flag =
+                # instant rollback to that single-shot path.
+                and (
+                    project_template not in CONTAINER_NEXT
+                    or (
+                        _settings.use_art_director_entities
+                        and supports_app_brief(project_template)
+                    )
+                )
             )
             _dp_active = (
                 not force_single_shot
@@ -2793,6 +2893,23 @@ async def _process_prompt(
                     print(f"[PP] stripped_unresolved_img_tags={_stripped}", flush=True)
             except Exception as _strip_exc:
                 print(f"[PP] strip_unresolved skipped: {_strip_exc!r}", flush=True)
+
+        # ── Entity theme-token guard — deterministic, BEFORE the audit ────────
+        # Cheap writer models leak raw neutral utilities (text-gray-800,
+        # bg-gray-100, bg-white) instead of theme tokens, so the app freezes grey
+        # and ignores the art-director's --primary/--foreground. Rewrite them to
+        # tokens here (the .tsx analogue of palette_guard) so the shipped app
+        # actually re-themes and the audit's hardcoded-colour class clears.
+        # Semantic status colours (green/yellow/red) are left untouched.
+        if files and not surgical and project_template in ("nextjs_entities", "fullstack"):
+            try:
+                from omnia_api.services.entity_theme import tokenize_neutrals
+
+                files, _tok_n = tokenize_neutrals(files)
+                if _tok_n:
+                    print(f"[PP] entity_theme tokenized={_tok_n} neutral utils", flush=True)
+            except Exception as _tok_exc:
+                print(f"[PP] entity_theme skipped: {_tok_exc!r}", flush=True)
 
         # ── Structure audit (entity/app builds) — non-blocking smoke detector ─
         # Entity/fullstack apps skip the acceptance gate (container-backed), so we

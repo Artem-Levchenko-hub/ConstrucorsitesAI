@@ -15,7 +15,8 @@ import {
   Type,
   type LucideIcon,
 } from "lucide-react";
-import type { MultipassStage, PassProgress } from "@/lib/api/types";
+import type { MultipassStage, PassProgress, StreamBrief } from "@/lib/api/types";
+import { briefSectionPlan, briefSwatches } from "@/lib/brief-swatches";
 import { cn } from "@/lib/utils";
 
 /**
@@ -96,6 +97,70 @@ function shortModel(model: string): string {
   return model.split("/").pop() ?? model;
 }
 
+/**
+ * V3.4 — SURFACING the art-director brief as visible "AI рисует" cards. The
+ * brief arrives BEFORE the first writer-HTML token (V3.10a), so the user sees
+ * THIS build's chosen palette (real colour chips carrying the brief's own HEX)
+ * and its section plan while the page is still being written. Renders only with
+ * ≥3 brief-derived swatches (the V3.4 gate); silent otherwise. Under
+ * `prefers-reduced-motion` the entrance animation is skipped.
+ */
+function BriefReveal({
+  brief,
+  reduced,
+}: {
+  brief: StreamBrief | null | undefined;
+  reduced: boolean | null;
+}) {
+  const swatches = briefSwatches(brief);
+  if (swatches.length < 3) return null;
+  const sections = briefSectionPlan(brief);
+  return (
+    <motion.div
+      role="group"
+      aria-label="Дизайн-бриф: палитра и секции"
+      initial={reduced ? false : { opacity: 0, y: -2 }}
+      animate={reduced ? undefined : { opacity: 1, y: 0 }}
+      transition={{ duration: 0.22 }}
+      className="mb-2.5 border-b border-border-subtle pb-2.5"
+    >
+      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide text-fg-tertiary">
+        <Palette aria-hidden className="h-3 w-3 text-accent" />
+        Палитра проекта
+      </div>
+      <ul className="flex flex-wrap items-center gap-1.5">
+        {swatches.map((s) => (
+          <li
+            key={s.hex}
+            className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface-overlay/60 py-1 pl-1 pr-2"
+          >
+            <span
+              aria-hidden
+              className="h-4 w-4 shrink-0 rounded border border-black/10"
+              style={{ backgroundColor: s.hex }}
+            />
+            <span className="font-mono text-[10px] leading-none text-fg-secondary">
+              <span className="text-fg-tertiary">{s.label}</span>{" "}
+              <span className="tabular-nums">{s.hex}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {sections.length > 0 && (
+        <div className="mt-1.5 flex min-w-0 items-start gap-1.5">
+          <LayoutTemplate
+            aria-hidden
+            className="mt-0.5 h-3 w-3 shrink-0 text-fg-tertiary"
+          />
+          <p className="min-w-0 text-[11px] leading-4 text-fg-tertiary">
+            {sections.join(" · ")}
+          </p>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 export function PassProgressBar({
   projectId,
   messageId,
@@ -112,6 +177,15 @@ export function PassProgressBar({
     enabled: false,
     staleTime: Infinity,
   });
+  // V3.4 — the art-director brief for THIS message (same client-only cache as
+  // StreamingPreviewFrame, populated by usePromptStream on `omnia:brief`). Drives
+  // the brief-reveal swatches; arrives before the first writer-HTML token.
+  const { data: streamBrief } = useQuery<StreamBrief | null>({
+    queryKey: ["stream-brief", projectId, messageId],
+    queryFn: () => null,
+    enabled: false,
+    initialData: null,
+  });
 
   if (!progress) return null;
 
@@ -125,6 +199,7 @@ export function PassProgressBar({
   if (reduced) {
     return (
       <div className="min-w-0 max-w-full overflow-hidden rounded-md border border-border-subtle bg-surface-raised px-2.5 py-2">
+        <BriefReveal brief={streamBrief} reduced={reduced} />
         <div className="mb-1.5 flex min-w-0 items-center gap-2 font-mono text-[11px] text-fg-tertiary">
           <span className="shrink-0">генерация</span>
           <span className="shrink-0 tabular-nums">
@@ -162,6 +237,7 @@ export function PassProgressBar({
       transition={{ duration: 0.2 }}
       className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border-subtle bg-surface-raised px-3 py-2.5"
     >
+      <BriefReveal brief={streamBrief} reduced={reduced} />
       <div className="mb-2 flex min-w-0 items-center gap-2 font-mono text-[11px] text-fg-tertiary">
         <Sparkles aria-hidden className="h-3 w-3 shrink-0 text-accent" />
         <span className="shrink-0">Omnia собирает</span>

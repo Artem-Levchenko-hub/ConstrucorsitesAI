@@ -11,6 +11,11 @@ importer (this module's subject, `accept_gauntlet`).
 from pathlib import Path
 
 from omnia_api.services import accept_gauntlet
+from omnia_api.services.catalog_coherence_gate import (
+    CHECKS,
+    CatalogFinding,
+    CatalogReport,
+)
 from omnia_api.services.chip_pixel_gate import FidelityReport
 from omnia_api.services.data_gate import DataFinding, DataReport
 from omnia_api.services.hierarchy_gate import HierarchyReport
@@ -79,6 +84,15 @@ def _ref(*, passed=True, rendered=True):
         min_axes=4,
     )
     return ReferenceReport((comp,))
+
+
+def _cat(*, score=5, findings=(), rendered=True, surface="catalog", rows=6):
+    """A catalog-realism report (V1.17). ``score`` is the 0–5 realism axes clean;
+    ``findings`` are the fired axes; ``rendered=False`` → abstain; ``surface='none'``
+    → waived (no catalog grid on the page)."""
+    return CatalogReport(
+        tuple(findings), score, 1440, rows, rendered=rendered, surface=surface
+    )
 
 
 # ── 1. deterministic leg, no render ──────────────────────────────────────────
@@ -199,7 +213,11 @@ async def test_abstain_fails_strict_but_not_hard(monkeypatch):
     v = await accept_gauntlet.run(files={"index.html": _CLEAN_HTML})
     assert v.passed is False  # strict: abstain ≠ pass
     assert v.hard_failed == ()  # but not a hard finding
-    assert {g.gate for g in v.abstained} == set(accept_gauntlet.RENDERED_GATES)
+    # include_rendered fans the BLOCKING rendered legs only — the advisory catalog
+    # leg (V1.17) stays off unless its own dial is set, so it is not in abstained.
+    assert {g.gate for g in v.abstained} == (
+        set(accept_gauntlet.RENDERED_GATES) - accept_gauntlet.ADVISORY_GATES
+    )
 
 
 async def test_perf_finding_surfaces(monkeypatch):
@@ -343,7 +361,12 @@ async def test_composition_plus_full_render_has_no_duplicate_legs(monkeypatch):
     gates = [g.gate for g in v.gates]
     assert gates.count(accept_gauntlet.TASTE) == 1
     assert gates.count(accept_gauntlet.HIERARCHY) == 1
-    assert set(gates) == {accept_gauntlet.DEFECT_REGISTRY, *accept_gauntlet.RENDERED_GATES}
+    # include_rendered fans the BLOCKING rendered legs; the advisory catalog leg
+    # (V1.17) stays off without its own dial.
+    assert set(gates) == {
+        accept_gauntlet.DEFECT_REGISTRY,
+        *(g for g in accept_gauntlet.RENDERED_GATES if g not in accept_gauntlet.ADVISORY_GATES),
+    }
 
 
 def test_composition_legs_are_desktop_width_taste_and_hierarchy():
@@ -627,6 +650,170 @@ def test_reference_legs_are_reference_only():
     assert accept_gauntlet.REFERENCE not in accept_gauntlet.FIDELITY_LEGS
 
 
+# ── catalog-realism ratchet (V1.17) — ADVISORY, non-blocking quality-card ─────
+# The eight RULE-10 demo-seeder fixes become a permanent floor: the gate scores
+# the rendered catalog DOM, but as an ADVISORY card — it SURFACES (table/summary/
+# subscore) yet NEVER blocks ship (out of hard_failed / strict passed /
+# failed_classes). These prove both halves: it fans + surfaces, and it is inert
+# on the ship decision.
+
+
+def _stub_catalog(monkeypatch, *, cat):
+    async def _cat_audit(files, **kw):
+        return cat
+
+    async def _boom(*a, **kw):  # pragma: no cover — must never be awaited here
+        raise AssertionError("catalog path ran a non-catalog leg")
+
+    monkeypatch.setattr(accept_gauntlet.catalog_coherence_gate, "audit_files", _cat_audit)
+    monkeypatch.setattr(accept_gauntlet.wow_dom_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.perf_a11y_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.chip_pixel_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.data_gate, "audit_files", _boom)
+    monkeypatch.setattr(accept_gauntlet.reference_corpus, "audit_files", _boom)
+
+
+async def test_catalog_runs_only_catalog(monkeypatch):
+    _stub_catalog(monkeypatch, cat=_cat())
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=False,
+        fidelity=False,
+        catalog=True,
+    )
+    assert [g.gate for g in v.gates] == [
+        accept_gauntlet.DEFECT_REGISTRY,
+        accept_gauntlet.CATALOG,
+    ]
+    assert v.render_expected is True
+    assert v.passed is True  # clean registry + clean catalog
+
+
+async def test_catalog_finding_is_advisory_not_a_hard_failure(monkeypatch):
+    # the heart of V1.17: a real realism defect surfaces BUT never blocks ship.
+    findings = (CatalogFinding(CHECKS[0], "197010₽ among ~1490₽ siblings"),)
+    _stub_catalog(monkeypatch, cat=_cat(score=4, findings=findings))
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        catalog=True,
+    )
+    # advisory: a failing catalog card does NOT sink the strict verdict, is NOT a
+    # hard failure, and does NOT leak into the blocked-ship issue list.
+    assert v.passed is True
+    assert v.hard_failed == ()
+    assert all(not c.startswith("catalog:") for c in v.failed_classes)
+    # ...but the card SURFACES: its per-gate subscore carries the realism score.
+    cat_sub = next(g for g in v.subscore()["gates"] if g["gate"] == "catalog")
+    assert cat_sub["score"] == 4
+    assert CHECKS[0] in cat_sub["findings"][0]["check"]
+
+
+async def test_catalog_finding_does_not_sink_an_otherwise_clean_run(monkeypatch):
+    # composition passes (taste+hierarchy) while catalog fires — ship still green.
+    async def _t(files, **kw):
+        return _taste()
+
+    async def _h(files, **kw):
+        return _hier()
+
+    async def _cat_audit(files, **kw):
+        return _cat(score=2, findings=(CatalogFinding(CHECKS[4], "акция до 2020"),))
+
+    monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _t)
+    monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _h)
+    monkeypatch.setattr(accept_gauntlet.catalog_coherence_gate, "audit_files", _cat_audit)
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        catalog=True,
+    )
+    assert accept_gauntlet.CATALOG in {g.gate for g in v.gates}
+    assert v.passed is True
+    assert v.hard_failed == ()
+
+
+async def test_catalog_abstain_is_not_a_hard_failure(monkeypatch):
+    # a render miss abstains — advisory, so it never sinks the hot path either.
+    _stub_catalog(monkeypatch, cat=_cat(rendered=False))
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        catalog=True,
+    )
+    assert v.hard_failed == ()
+    assert accept_gauntlet.CATALOG in {g.gate for g in v.abstained}
+
+
+async def test_catalog_off_does_not_run(monkeypatch):
+    # default catalog=False with composition on → the catalog leg stays off.
+    async def _t(files, **kw):
+        return _taste()
+
+    async def _h(files, **kw):
+        return _hier()
+
+    async def _boom(*a, **kw):  # pragma: no cover
+        raise AssertionError("catalog ran while catalog=False")
+
+    monkeypatch.setattr(accept_gauntlet.taste_gate, "audit_files", _t)
+    monkeypatch.setattr(accept_gauntlet.hierarchy_gate, "audit_files", _h)
+    monkeypatch.setattr(accept_gauntlet.catalog_coherence_gate, "audit_files", _boom)
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        catalog=False,
+    )
+    assert accept_gauntlet.CATALOG not in {g.gate for g in v.gates}
+
+
+async def test_catalog_not_fanned_by_include_rendered(monkeypatch):
+    # the decouple: even the broad include_rendered dial must NOT pull the advisory
+    # leg in — only its own catalog= switch does.
+    _stub_rendered(monkeypatch, wow=_wow(), perf=_perf(), chip=_chip(checked=("palette-bg",)))
+
+    async def _boom(*a, **kw):  # pragma: no cover
+        raise AssertionError("catalog ran via include_rendered without its dial")
+
+    monkeypatch.setattr(accept_gauntlet.catalog_coherence_gate, "audit_files", _boom)
+    v = await accept_gauntlet.run(files={"index.html": _CLEAN_HTML})  # include_rendered=True
+    assert accept_gauntlet.CATALOG not in {g.gate for g in v.gates}
+
+
+def test_catalog_legs_are_catalog_only_and_advisory():
+    assert accept_gauntlet.CATALOG_LEGS == (accept_gauntlet.CATALOG,)
+    assert accept_gauntlet.CATALOG in accept_gauntlet.RENDERED_GATES
+    assert accept_gauntlet.ADVISORY_GATES == frozenset({accept_gauntlet.CATALOG})
+    assert accept_gauntlet.CATALOG not in accept_gauntlet.TOUCH_LEGS
+    assert accept_gauntlet.CATALOG not in accept_gauntlet.COMPOSITION_LEGS
+    assert accept_gauntlet.CATALOG not in accept_gauntlet.FIDELITY_LEGS
+    assert accept_gauntlet.CATALOG not in accept_gauntlet.REFERENCE_LEGS
+
+
+def test_advisory_exclusion_is_a_noop_without_an_advisory_gate():
+    # back-compat guard: for every NON-advisory gate the ship semantics are
+    # byte-identical — a hard-failing real gate still fails passed + hard_failed.
+    gates = (
+        accept_gauntlet.GateVerdict(
+            gate=accept_gauntlet.TASTE,
+            passed=False,
+            abstained=False,
+            classes=("hero-imagery",),
+            summary="x",
+            subscore={"gate": "taste"},
+        ),
+    )
+    v = accept_gauntlet.GauntletVerdict(gates, render_expected=True)
+    assert v.passed is False
+    assert {g.gate for g in v.hard_failed} == {accept_gauntlet.TASTE}
+    assert v.failed_classes == ("taste:hero-imagery",)
+
+
 # ── 3. wiring: the rendered gates are no longer orphaned ─────────────────────
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services"
@@ -643,6 +830,7 @@ def test_aggregator_imports_every_rendered_gate():
         "data_gate",
         "defect_registry",
         "reference_corpus",
+        "catalog_coherence_gate",
     )
     for mod in mods:
         assert mod in body, f"accept_gauntlet must import {mod}"

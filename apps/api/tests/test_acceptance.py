@@ -3,11 +3,18 @@
 from omnia_api.services import acceptance
 from omnia_api.services.acceptance import _structural_issues
 
+# A minimal but properly-COMPOSED clean page: one <h1>, a live anchor, a real
+# type scale (h1 + h2) and section rhythm (header + section + footer). It clears
+# the V3.3 compose floor (≥2 type sizes, ≥3 sections, a hero) — a page below that
+# floor reads as flat, not "enterprise with one generation", and is meant to fail.
 _GOOD = (
-    "<!doctype html><html lang='ru'><head><title>T</title></head><body>"
-    "<h1>Заголовок</h1>"
-    "<a href='#contacts'>Связаться</a>"
+    "<!doctype html><html lang='ru'><head><title>T</title>"
+    "<style>h1{font-size:3rem}h2{font-size:1.5rem}</style></head><body>"
+    "<header><h1>Заголовок</h1>"
+    "<a href='#contacts'>Связаться</a></header>"
+    "<section id='features'><h2>Возможности</h2><p>Описание</p></section>"
     "<section id='contacts'>x</section>"
+    "<footer><p>© 2026</p></footer>"
     "</body></html>"
 )
 

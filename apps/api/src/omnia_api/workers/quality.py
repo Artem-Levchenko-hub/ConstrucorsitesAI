@@ -26,7 +26,9 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from omnia_api.core.config import get_settings
+from omnia_api.models.project import Project
 from omnia_api.services import (
+    accept_gauntlet,
     app_errors,
     dev_container,
     entity_gate,
@@ -74,25 +76,38 @@ async def _gate_async(message_id: str, project_id: str, slug: str) -> None:
     route = "/" if base is None else await route_target.resolve_target_route(base)
 
     verdict = await entity_gate.gate_live_app(pid, slug, route)
-    if verdict is None or not verdict.hard_failed:
+    if verdict is None:
         return
-    print(
-        f"[quality] entity composition hard-fail {slug}: "
-        f"{list(verdict.failed_classes)}",
-        flush=True,
-    )
 
     engine = create_async_engine(settings.database_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        await app_errors.publish(
-            factory,
-            pid,
-            mid,
-            category="runtime",
-            title="Дизайн ниже планки качества",
-            detail=entity_gate.describe_failure(verdict),
-        )
+        # V4.9 — stamp the beauty-floor verdict onto the project so its forks
+        # inherit viral eligibility (perform_fork). Only write on a CLEAN
+        # measurement: if any leg abstained (a flaky render), leave the prior
+        # value rather than demote a good app on a hiccup (R-10 fail-soft).
+        if not verdict.abstained:
+            eligible = accept_gauntlet.viral_eligible_from_verdict(verdict)
+            async with factory() as session:
+                project = await session.get(Project, pid)
+                if project is not None and project.viral_eligible != eligible:
+                    project.viral_eligible = eligible
+                    await session.commit()
+
+        if verdict.hard_failed:
+            print(
+                f"[quality] entity composition hard-fail {slug}: "
+                f"{list(verdict.failed_classes)}",
+                flush=True,
+            )
+            await app_errors.publish(
+                factory,
+                pid,
+                mid,
+                category="runtime",
+                title="Дизайн ниже планки качества",
+                detail=entity_gate.describe_failure(verdict),
+            )
     finally:
         await engine.dispose()
 

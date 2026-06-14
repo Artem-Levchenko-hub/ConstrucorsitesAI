@@ -23,11 +23,20 @@ from dataclasses import dataclass
 import httpx
 
 from omnia_api.core.config import get_settings, model_for_role
+from omnia_api.services.chip_pixel_gate import compile_build_spec, spec_confidence
 
 log = logging.getLogger(__name__)
 
 ASK = "ask"
 BUILD = "build"
+
+# Zero-question floor (V2.12 / North Star pillar 2 — "the best onboarding is its
+# absence when intent is clear"). When the user's VERY FIRST prompt already pins
+# at least this many concrete design axes (theme / accent / sections / tone), the
+# intent is unambiguous enough to build immediately — no popup, no gateway call.
+# A conservative ≥2: a thin one-axis hint ("на тёмном фоне") still earns one
+# question, only a genuinely steered prompt skips the interview.
+_ZERO_QUESTION_MIN_AXES = 2
 
 # Stacks the discovery may recommend. ``static`` builds immediately with no
 # container; the container stacks (``fullstack`` / ``nextjs_entities`` / ``spa``)
@@ -131,6 +140,13 @@ class DiscoveryResult:
     Every ASK lands with chips — the model is steered to provide them and a
     deterministic stage-keyed floor fills any it omits (V2.1: чипы СРАЗУ на
     первый промпт, never bare text).
+
+    ``multi_select`` is True when several chips can sensibly apply at once (e.g.
+    "какие разделы нужны?") — the UI then renders the chips as toggles plus a
+    «Готово» button so the user picks a SET in one go instead of one chip per
+    turn (NORTH STAR pillar 2 — мультивыбор). The model may flag it; a
+    deterministic keyword floor (:func:`_infer_multi_select`) catches the
+    inherently multi-answer questions it omits, so it is model-independent.
     """
 
     action: str
@@ -139,12 +155,103 @@ class DiscoveryResult:
     stack: str
     choices: tuple[str, ...] = ()
     allow_custom: bool = True
+    multi_select: bool = False
+    # Onboarding-popup framing (NORTH STAR pillar 2): the 1-based position of this
+    # question in the planned batch and the batch size, so the workspace can frame
+    # discovery as a guided popup with a «Вопрос N из M» counter instead of a bare
+    # chat row. 0/0 on a BUILD turn and on the legacy per-question path (no upfront
+    # plan → unknown total).
+    question_index: int = 0
+    question_total: int = 0
+    # Short human niche label inferred from the product idea (e.g. «школа /
+    # образование») for the framing banner «Давайте разберёмся под вашу идею: …».
+    # Empty when the idea matches no known niche (banner then shows no suffix).
+    niche: str = ""
+
+
+# Niche → short Russian banner label, matched by lowered-substring stems on the
+# product idea. Model-independent (a fixed lookup, no gateway call) so the
+# onboarding frame names the niche the same way every run. First match wins;
+# order most-specific → general. Unrecognised idea → "" (generic banner). Used
+# only for the framing banner, so a miss is cosmetic, never a dead-end.
+_NICHE_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "школа / образование",
+        ("школ", "гимназ", "лице", "сош", "мбоу", "образоват", "ученик", "учебн", "обучен"),
+    ),
+    (
+        "клиника / медицина",
+        ("клиник", "медицин", "стоматолог", "больниц", "пациент", " врач", "врача"),
+    ),
+    ("салон красоты", ("салон красот", "парикмахер", "барбершоп", "маникюр", "косметолог")),
+    ("фитнес / спорт", ("фитнес", "спортзал", "тренаж", " йог", "тренировк", "спорт-клуб")),
+    ("кафе / ресторан", ("ресторан", "кафе", "пиццери", "кофейн", "доставка еды", "меню")),
+    ("автосервис", ("автосервис", "автомастер", "шиномонтаж", "ремонт авто", "сто ")),
+    ("недвижимость", ("недвижим", "квартир", "застройщик", "аренда жил")),
+    ("туризм / путешествия", ("турагент", "путешеств", " тур ", "отел", "бронирован")),
+    ("мероприятия / события", ("конференц", "мероприят", "событи", "билет", "афиш")),
+    (
+        "интернет-магазин",
+        ("магазин", "shop", "e-comm", "ecommerce", "товар", "каталог", "маркетплейс"),
+    ),
+    ("CRM / управление", ("crm", "црм", "воронк", "сделк", "пайплайн", "лид")),
+    ("портфолио", ("портфолио", "резюме", "мои работы")),
+    ("блог / медиа", ("блог", "журнал", "новостн", "медиа", "стат")),
+)
+
+
+def infer_niche_label(text: str) -> str:
+    """Map a product idea to a short niche label for the onboarding-frame banner.
+
+    Deterministic and LLM-free — a fixed substring lookup over lowered text, so
+    every run frames the same idea identically. Returns "" when nothing matches;
+    the banner then shows its generic phrasing with no niche suffix (never a
+    dead-end). Cosmetic only — does not steer the build."""
+    low = (text or "").lower()
+    for label, stems in _NICHE_LABELS:
+        if any(stem in low for stem in stems):
+            return label
+    return ""
 
 
 def wants_build_now(prompt: str) -> bool:
     """True when the user explicitly asked to skip questions and build."""
     text = (prompt or "").strip().lower()
     return any(sig in text for sig in _BUILD_NOW_SIGNALS)
+
+
+def zero_question_build(
+    history: list[dict[str, str]], latest_prompt: str
+) -> DiscoveryResult | None:
+    """V2.12 zero-question floor: if the FIRST prompt already pins ≥
+    ``_ZERO_QUESTION_MIN_AXES`` concrete design axes (theme / accent / sections /
+    tone), build straight away — the popup never appears and we skip the gateway
+    round-trip entirely. Returns the BUILD result, or None when the prompt is too
+    thin and a question is genuinely needed. Deterministic and LLM-free.
+
+    Shared by the per-question :func:`run_discovery` and the batch planner so
+    both paths honour the same "best onboarding is its absence" floor (North Star
+    pillar 2) — extracted so neither can drift from the other.
+    """
+    spec = compile_build_spec(latest_prompt or "")
+    if spec_confidence(spec) < _ZERO_QUESTION_MIN_AXES:
+        return None
+    brief = _fallback_brief(history, latest_prompt)
+    intent_text = "\n".join(
+        [*(m.get("content") or "" for m in history), latest_prompt or ""]
+    )
+    stack = _infer_stack_from_text(intent_text) or _DEFAULT_STACK
+    log.info(
+        "discovery: zero-question build (%d intent axes pinned, stack=%s)",
+        spec_confidence(spec),
+        stack,
+    )
+    return DiscoveryResult(
+        action=BUILD,
+        message="Понял задумку — собираю первый вариант. Это займёт минуту.",
+        brief=brief,
+        stack=stack,
+    )
 
 
 _SYSTEM = (
@@ -177,13 +284,18 @@ _SYSTEM = (
     "ФОРМАТ ОТВЕТА — СТРОГО один JSON-объект на одной строке, без пояснений и кода.\n"
     "Если спрашиваешь:\n"
     '{"action":"ask","message":"<один короткий вопрос на русском>",'
-    '"choices":["<2–5 коротких вариантов ответа, 1–3 слова каждый>"]}\n'
+    '"choices":["<2–5 коротких вариантов ответа, 1–3 слова каждый>"],'
+    '"multiSelect":false}\n'
     "  — choices это подсказки-кнопки под вопросом (например для «Нужна "
     "админка?» → [\"Да\",\"Нет\"]; для стиля → [\"Премиум\",\"Дружелюбное\","
     "\"Строгое\"]). ВСЕГДА давай 2–5 таких вариантов — даже для открытого "
     "вопроса предложи типовые направления-примеры (например «как "
     "представляешь стиль?» → [\"Минимализм\",\"Премиум\",\"Ярко\",\"Строго\"]). "
     "Пользователь всегда может ответить и своим текстом (кнопка «Другое»).\n"
+    "  — multiSelect:true СТАВЬ, когда уместно выбрать НЕСКОЛЬКО вариантов "
+    "сразу (например «какие разделы нужны?» → можно отметить и каталог, и "
+    "блог, и контакты). Для вопросов с одним ответом (тон, да/нет, тип "
+    "продукта) ставь multiSelect:false или опусти поле.\n"
     "Если пора строить:\n"
     '{"action":"build","message":"<короткая фраза: «Отлично, собираю…»>",'
     '"brief":"<сжатый бриф для генератора на русском: тип продукта, цель, '
@@ -256,6 +368,28 @@ def _clean_choices(raw: object) -> tuple[str, ...]:
     return tuple(out)
 
 
+# Questions that are inherently multi-answer — "which sections / features /
+# pages do you need?" — naturally take a SET, not one chip per turn. We detect
+# them on the QUESTION TEXT (lowered substrings, RU stems + EN) so the same
+# floor fires for a model-authored question AND the deterministic fallback,
+# model-independent. Tone / yes-no / single-choice questions stay single-select.
+_MULTI_SELECT_HINTS: frozenset[str] = frozenset(
+    {
+        "раздел", "возможност", "функци", "секци", "страниц", "фич",
+        "что должно быть", "что нужно на сайт", "какие блоки",
+        "sections", "features", "pages",
+    }
+)
+
+
+def _infer_multi_select(message: str) -> bool:
+    """True when the question text reads as an inherently multi-answer question
+    (which sections / features / pages) — the UI should offer toggle chips +
+    «Готово» so the user picks several at once. Deterministic, model-independent."""
+    haystack = (message or "").lower()
+    return any(hint in haystack for hint in _MULTI_SELECT_HINTS)
+
+
 def _fallback_brief(history: list[dict[str, str]], latest_prompt: str) -> str:
     """Compile a build brief from the raw conversation when the model can't —
     so a forced/capped build still has the full context to work from."""
@@ -293,6 +427,195 @@ def _parse(raw: str) -> dict[str, object] | None:
     return obj if isinstance(obj, dict) else None
 
 
+# ── Batch discovery plan (NORTH STAR pillar 2 / owner rule 13 #1) ────────────
+# The progressive interview costs ONE gateway round-trip PER question, so the
+# user waits ~a minute BETWEEN questions and (on a discovery timeout) the first
+# question degrades to a generic "какой тип сайта" instead of one about THEIR
+# product. The batch path fixes both: ONE upfront pass reads the first prompt and
+# plans the WHOLE set of 3–4 questions, tailored to that product; they are
+# persisted and then served with ZERO further gateway calls — instant between
+# steps. On the single upfront call failing, we degrade to a MEANINGFUL batch
+# (general→detail), never a lone generic question.
+
+# Cap the batch so onboarding never turns into an inquisition; mirrors the
+# "обычно 2–4 вопроса" steer. Stays ≤ MAX_DISCOVERY_QUESTIONS.
+_PLAN_MAX_QUESTIONS = 4
+_MAX_QUESTION_LEN = 200
+
+_PLAN_SYSTEM = (
+    "Ты — продуктовый дизайнер Omnia.AI. Пользователь прислал ПЕРВЫЙ запрос на "
+    "сайт/приложение. Прежде чем строить, надо задать ему 3–4 КОРОТКИХ "
+    "уточняющих вопроса — но НЕ дженерик, а ЗАТОЧЕННЫХ ИМЕННО под его продукт.\n\n"
+    "ПРАВИЛА:\n"
+    "1. Вопросы конкретно про ЭТОТ продукт. Пример: запрос «сайт школы МБОУ СОШ "
+    "15» → спрашивай про ступени/классы, что разместить (расписание, новости, "
+    "электронный журнал, приём в 1 класс), нужен ли вход для родителей, стиль — "
+    "а НЕ дженерик «какой тип сайта». Запрос «магазин кофе» → про ассортимент, "
+    "доставку, опт/розницу, тон бренда.\n"
+    "2. Двигайся от сути к деталям: суть/главная цель → аудитория/наполнение → "
+    "ключевые разделы/функции → стиль/цвета/референс.\n"
+    "3. Каждый вопрос — ОДНА короткая фраза, с 2–5 вариантами-подсказками "
+    "(1–3 слова каждый). Пользователь всегда сможет вписать свой ответ.\n"
+    "4. multiSelect:true для вопросов, где уместно выбрать НЕСКОЛЬКО вариантов "
+    "(разделы / функции / что разместить); false для одиночных (тон, да/нет).\n\n"
+    "ФОРМАТ — СТРОГО один JSON-объект на одной строке, без пояснений и кода:\n"
+    '{"questions":[{"message":"<вопрос>","choices":["<вариант>","<вариант>"],'
+    '"multiSelect":false},{"message":"...","choices":["..."],"multiSelect":true}]}'
+)
+
+
+@dataclass(frozen=True)
+class PlannedQuestion:
+    """One pre-computed discovery question (text + quick-reply chips). The whole
+    set is planned in a single upfront pass and persisted, then served one at a
+    time with no further gateway call (``serve_planned_question``)."""
+
+    message: str
+    choices: tuple[str, ...]
+    allow_custom: bool = True
+    multi_select: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        """JSON-safe form for persistence on ``Project.discovery_plan``."""
+        return {
+            "message": self.message,
+            "choices": list(self.choices),
+            "allow_custom": self.allow_custom,
+            "multi_select": self.multi_select,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> PlannedQuestion | None:
+        """Rebuild from a persisted dict; None when it carries no question text."""
+        if not isinstance(raw, dict):
+            return None
+        message = str(raw.get("message") or "").strip()
+        if not message:
+            return None
+        choices = tuple(
+            str(c) for c in (raw.get("choices") or []) if isinstance(c, str)
+        )
+        return cls(
+            message=message,
+            choices=choices,
+            allow_custom=bool(raw.get("allow_custom", True)),
+            multi_select=bool(raw.get("multi_select", False)),
+        )
+
+
+def _plan_fallback() -> list[PlannedQuestion]:
+    """Deterministic, MEANINGFUL batch when the single upfront pass fails — the
+    stage-keyed general→detail questions (суть → аудитория → разделы → стиль),
+    each with its paired chips. Not a lone generic question (owner rule 13 #1)."""
+    return [
+        PlannedQuestion(
+            message=_FALLBACK_QUESTIONS[i],
+            choices=_FALLBACK_CHOICES[i],
+            multi_select=_infer_multi_select(_FALLBACK_QUESTIONS[i]),
+        )
+        for i in range(len(_FALLBACK_QUESTIONS))
+    ]
+
+
+def _questions_from_parsed(parsed: dict[str, object] | None) -> list[PlannedQuestion]:
+    """Normalise the model's ``{"questions":[…]}`` into ≤ ``_PLAN_MAX_QUESTIONS``
+    clean questions. Each lands with chips (the stage floor fills an omitted set)
+    and a model-independent multi-select flag (``_infer_multi_select`` catches a
+    question the model forgot to flag). Junk / wrong shape → empty (caller uses
+    the deterministic batch)."""
+    if not isinstance(parsed, dict):
+        return []
+    raw = parsed.get("questions")
+    if not isinstance(raw, list):
+        return []
+    out: list[PlannedQuestion] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        message = str(item.get("message") or "").strip()[:_MAX_QUESTION_LEN].strip()
+        if not message:
+            continue
+        choices = _clean_choices(item.get("choices"))
+        if not choices:
+            choices = _fallback_choices(len(out))
+        multi = bool(item.get("multiSelect")) or _infer_multi_select(message)
+        out.append(
+            PlannedQuestion(message=message, choices=choices, multi_select=multi)
+        )
+        if len(out) >= _PLAN_MAX_QUESTIONS:
+            break
+    return out
+
+
+async def plan_discovery_questions(prompt: str) -> list[PlannedQuestion]:
+    """ONE upfront gateway pass → the WHOLE batch of 3–4 product-tailored
+    questions. Never raises: any gateway/parse failure degrades to the
+    deterministic general→detail batch (:func:`_plan_fallback`) so onboarding
+    always lands a sensible set of questions, never a single generic one.
+
+    The single call gets a generous budget (one pass replaces N per-question
+    round-trips), but stays under the client's ``POST /prompt`` timeout so a cold
+    gateway degrades to the batch fallback within the window (R-10 fail fast)."""
+    settings = get_settings()
+    url = f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions"
+    convo = [
+        {"role": "system", "content": _PLAN_SYSTEM},
+        {"role": "user", "content": (prompt or "").strip()[:4000] or "(пусто)"},
+    ]
+    payload = {
+        # A FAST, reliable model — this call sits inside the POST /prompt budget
+        # and a cold-start timeout drops onboarding to the generic batch (owner
+        # rule 13 #1). The dedicated ``discovery_plan`` role keeps it swappable.
+        "model": model_for_role("discovery_plan"),
+        "messages": convo,
+        "max_tokens": 900,
+        "stream": False,
+    }
+    parsed: dict[str, object] | None = None
+    try:
+        async with httpx.AsyncClient(timeout=22.0) as client:
+            resp = await client.post(url, json=payload)
+        if resp.status_code < 400:
+            body = resp.json()
+            content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
+            parsed = _parse(content)
+        else:
+            log.warning("discovery plan: gateway %d — using batch fallback", resp.status_code)
+    except Exception as exc:
+        log.warning("discovery plan: gateway error (batch fallback): %r", exc)
+    questions = _questions_from_parsed(parsed)
+    if not questions:
+        questions = _plan_fallback()
+    return questions
+
+
+def serve_planned_question(
+    plan: object, asked_count: int
+) -> DiscoveryResult | None:
+    """Serve the pre-computed question at cursor ``asked_count`` as an ASK turn —
+    NO gateway call (instant). Returns None when the plan is exhausted (the caller
+    then builds from the gathered answers) or malformed. The multi-select floor
+    re-fires on serve so a persisted question stays correct even if it was stored
+    before the inference rule existed."""
+    if not isinstance(plan, list) or asked_count >= len(plan):
+        return None
+    q = PlannedQuestion.from_dict(plan[asked_count])
+    if q is None:
+        return None
+    choices = q.choices or _fallback_choices(asked_count)
+    return DiscoveryResult(
+        action=ASK,
+        message=q.message,
+        brief="",
+        stack=_DEFAULT_STACK,
+        choices=choices,
+        allow_custom=q.allow_custom,
+        multi_select=q.multi_select or _infer_multi_select(q.message),
+        question_index=asked_count + 1,
+        question_total=len(plan),
+    )
+
+
 async def run_discovery(
     history: list[dict[str, str]],
     latest_prompt: str,
@@ -312,6 +635,17 @@ async def run_discovery(
     """
     capped = asked_count >= MAX_DISCOVERY_QUESTIONS
     must_build = force_build or capped
+
+    # Zero-question intent compile (V2.12). On the FIRST turn, if the raw prompt
+    # already pins enough design axes, build straight away — the popup never
+    # appears and we skip the gateway round-trip entirely (shared floor, see
+    # ``zero_question_build``). Gated to ``asked_count == 0`` so it never cuts an
+    # interview already in flight, and to non-forced/non-capped so the
+    # explicit/forced paths keep their own brief-compilation.
+    if not must_build and asked_count == 0:
+        zq = zero_question_build(history, latest_prompt)
+        if zq is not None:
+            return zq
 
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions"
@@ -393,9 +727,11 @@ async def run_discovery(
     # ASK path — one more question (+ quick-reply chips, always present).
     message = ""
     choices: tuple[str, ...] = ()
+    model_multi = False
     if parsed and action == ASK:
         message = str(parsed.get("message") or "").strip()
         choices = _clean_choices(parsed.get("choices"))
+        model_multi = bool(parsed.get("multiSelect"))
     if not message:
         # Gateway/parse failed → deterministic question for this turn index.
         message = _fallback_question(asked_count)
@@ -405,8 +741,18 @@ async def run_discovery(
         # an "open" question; the stage-keyed deterministic floor fills the gap,
         # model-independent. "Другое" (allow_custom) stays open so it never traps.
         choices = _fallback_choices(asked_count)
+    # Multi-select when the model flagged it OR the question text reads as an
+    # inherently multi-answer one (which sections/features) — the deterministic
+    # floor catches a model that omitted the flag, and fires for the fallback
+    # "разделы/возможности" question too (NORTH STAR pillar 2 — мультивыбор).
+    multi_select = model_multi or _infer_multi_select(message)
     return DiscoveryResult(
-        action=ASK, message=message, brief="", stack=stack, choices=choices
+        action=ASK,
+        message=message,
+        brief="",
+        stack=stack,
+        choices=choices,
+        multi_select=multi_select,
     )
 
 
@@ -415,6 +761,10 @@ __all__ = [
     "BUILD",
     "MAX_DISCOVERY_QUESTIONS",
     "DiscoveryResult",
+    "PlannedQuestion",
+    "plan_discovery_questions",
     "run_discovery",
+    "serve_planned_question",
     "wants_build_now",
+    "zero_question_build",
 ]

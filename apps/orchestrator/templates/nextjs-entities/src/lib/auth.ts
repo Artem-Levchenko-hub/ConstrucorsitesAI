@@ -28,7 +28,7 @@
  */
 
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, isNotNull } from "drizzle-orm";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
@@ -138,10 +138,21 @@ export async function hashPassword(plain: string): Promise<string> {
  *  the rule lives in ONE place. Fail-soft: any error → "user" (never hand out
  *  admin on a glitch). The email unique index remains the real race guard;
  *  a brand-new app being signed into twice at the exact same instant is the
- *  only window for a double-admin, which is harmless for a single-operator MVP. */
+ *  only window for a double-admin, which is harmless for a single-operator MVP.
+ *
+ *  ★ Only LOGINNABLE accounts count toward "is this the first user". A freshly
+ *  generated app is pre-seeded with a synthetic demo-row owner (`demo@omnia.local`,
+ *  `password_hash IS NULL` — it can never log in, it only owns demo catalog rows).
+ *  If that synthetic row counted, the FIRST REAL operator would be demoted to
+ *  "user" and their admin dashboard (`access:"admin"` Orders/Inquiries) would
+ *  render BLANK — so we exclude password-less rows and the operator gets admin. */
 export async function roleForNewUser(): Promise<"admin" | "user"> {
   try {
-    const [row] = await db.select({ id: users.id }).from(users).limit(1);
+    const [row] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(isNotNull(users.passwordHash))
+      .limit(1);
     return row ? "user" : "admin";
   } catch {
     return "user";

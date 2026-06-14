@@ -39,8 +39,26 @@ class Project(Base):
     # toward. NULL = onboarding gave no assertable signal. Downstream gates read
     # this to check the live render against what was actually picked (V2.5).
     discovery_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Pre-computed onboarding question batch (owner rule 13 #1 — NORTH STAR pillar
+    # 2). One upfront LLM pass plans all 3–4 product-tailored questions right after
+    # the first prompt; they live here (list of {message, choices, allow_custom,
+    # multi_select}) and are served one per turn with NO further gateway call —
+    # zero wait between questions. NULL = batch path not used (or a zero-question
+    # immediate build), so discovery falls back to per-question conversation.
+    discovery_plan: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     image_gen_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true", default=True
+    )
+    # V4.9 — the beauty floor's verdict on this project's SHARED surface. TRUE
+    # once a composition gate scored a render of it as floor-green (taste +
+    # hierarchy, plus first-paint when the stranger-cold path measures it). A
+    # zero-signup fork inherits this from its source (perform_fork), so the
+    # viral pool is transitively gated — a fork is re-shareable only if the app
+    # it copied cleared the floor. Default FALSE: unscored ≠ vouched for.
+    viral_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
     )
     current_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
