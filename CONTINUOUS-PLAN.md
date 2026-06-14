@@ -665,6 +665,29 @@
 
 ## 7. ЛОГ ИТЕРАЦИЙ
 
+## 2026-06-14 14:42–15:4x MSK — ★BIG-WIN: ОНБОРДИНГ-БАТЧ — ВСЕ ВОПРОСЫ ОДНИМ ПРОХОДОМ, 0 ОЖИДАНИЯ МЕЖДУ НИМИ + ЗАТОЧЕНЫ ПОД ПРОМПТ (NORTH STAR столп 2, rule 13 #1 — последний кусок) [x] (EYES desktop+mobile WOW ≈8.5/10; LIVE на проде 3 ниши: tailored+instant; prod api/worker deployed migration 0016 /health 200 + front 200)
+
+**Контекст/выбор (rule 12/13).** `git log --grep=★BIG-WIN -1` → онбординг-карта #2/#3 только что (14:40 MSK, <3ч) → такт свеж. rule 13 = СЛЕДУЮЩИЙ ★BIG-WIN наивысший приоритет пока не закрыт; #2/#3 (frontend) уже зашиплены, остался **#1 БАТЧ-ВОПРОСЫ (backend, ядро)** — он и был EXECUTOR-NEXT-PICKUP #1 (v2.18). Взял его целиком.
+
+**Проблема (rule 13 диагноз).** Прогрессив-discovery делал ОДИН вызов LLM НА КАЖДЫЙ вопрос (`run_discovery` → gateway → 1 вопрос) → юзер ждёт ~минуту МЕЖДУ вопросами; а на ReadTimeout discovery падал на захардкоженный generic-fallback «Лендинг/Магазин/…» вместо вопросов про ЕГО продукт.
+
+**Сделано (1 связная победа, 7 файлов).** `discovery.py`: `PlannedQuestion` (dataclass + to_dict/from_dict) + `plan_discovery_questions(prompt)` — ОДИН upfront-проход планирует ВЕСЬ батч 3–4 заточенных вопроса (от сути к деталям, multiSelect где уместно, choices-floor, cap 4); `serve_planned_question(plan, asked_count)` — отдаёт следующий предсчитанный вопрос БЕЗ вызова gateway (чистая, 0.04–0.12 мс); вынес общий `zero_question_build` floor (используют и батч, и per-question). `messages.py`: `_batch_discovery_turn` планирует/персистит/отдаёт, на исчерпании плана делегирует `run_discovery(force_build)` для брифа/стека; за флагом `use_batch_discovery` (default ON). `project.py`+migration 0016: nullable JSONB `discovery_plan`. `config.py`: флаг + новая роль `discovery_plan→claude-haiku-4-5`. **Frontend НЕ тронут** — чипы/inline-«Другое»/мультивыбор уже несут форму PromptResponse (#2/#3); батч лишь кормит их быстрее и по теме.
+
+**Корневой фикс (живой прод-чек вскрыл).** Первый прод-прогон плана дал ReadTimeout (РОВНО баг rule 13): план шёл на `model_for_role("edit")`=deepseek-chat, чей COLD-старт генерации 900 токенов >22с → timeout → generic-fallback. Замер на проде: и Haiku, и deepseek дают идеально заточенный батч (про ступени/расписание/электронный журнал/приём/вход родителей) за <3с КОГДА тёплые — проблема чисто в cold-латентности deepseek. Завёл роль `discovery_plan→claude-haiku-4-5` (~3с, строгий JSON, надёжно), swappable через ROLE_MODELS. Meaningful batch-fallback остаётся.
+
+**Гейт (зелено).** api: ruff чисто на моих файлах; mypy 185 = origin baseline (0 НОВЫХ — проверено worktree-диффом origin/main); pytest test_discovery 43/43 (13 НОВЫХ TDD: tailored batch / cap / fail-soft batch / zero-gateway serve advance+exhaust / multi-select floor / zero-question floor); вся сюита коллектится без ошибок. Локального Postgres нет (эта Mac = code+deploy) → DB-фикстур-тесты не гонял (известный env-лимит, не регресс).
+
+**LIVE-верификация (rule 13 #1, money-free кроме 3 sparing Haiku-планов).** На ЗАДЕПЛОЕННОМ бинарнике, реальный прод-gateway:
+- «сайт школы МБОУ СОШ 15» → Q0 «Какие классы учатся в школе?» / Q1 «Что важнее всего разместить?» [Расписание/Новости/Приём в 1 класс/Электронный журнал/Контакты] multi✓ / Q2 «Нужен ли вход для родителей и учеников?» / Q3 «Какой стиль ближе?» — ПО ТЕМЕ, от сути к деталям.
+- «стоматологическая клиника» → услуги / онлайн-запись+телеконсультации / аудитория / стиль бренда.
+- «доставка крафтового кофе по подписке» → гео-охват / что показать / гибкая⇄фиксированная подписка / тон бренда.
+- ZERO-WAIT: serve всех 4 вопросов = 0.04–0.12 мс БЕЗ gateway (предсчитано) — на всех 3 нишах.
+EYES: онбординг-карта с РЕАЛЬНЫМ школьным батчем отрендерена desktop+mobile (мультивыбор на «что разместить» с ✓ + «Готово · N», inline «Другое», чип «Другое») — WOW ≈8.5/10. Рендер-компонент `DiscoveryChips` БАЙТ-идентичен #2/#3 (eyes-verified 14:40); батч лишь меняет данные. Локальный `next dev` не поднимал — free RAM ~1.3 ГБ (<3 ГБ resource-guard §6, владелец просил беречь бокс).
+
+**Доставка.** Код `cf85a4b` (батч) + `0fdcd3d` (haiku-фикс) на origin+prod. Прод: `git merge --ff-only` → build api → `alembic upgrade head` (0015→0016, столбец `discovery_plan` живой в проде) → `compose up -d --build api worker`. Health: api `/health` 200, worker Up, front 200, 0 ошибок в логе. Миграция применена ДО рестарта нового кода (one-off `compose run` на новом образе) → ноль окна new-code/old-schema.
+
+**Заметка для памяти.** rule 13 #1 ЗАКРЫТ → весь онбординг-редизайн (rule 13 #1/#2/#3/#4) shipped. ReadTimeout-первопричина = deepseek cold-старт на длинной генерации — паттерн на будущее: latency-критичные in-request LLM-вызовы → быстрая модель (Haiku), не deepseek. EXECUTOR-NEXT-PICKUP теперь #2: арт-директор компоновки (10×-выход из грайнда).
+
 ## 2026-06-14 14:1x–14:5x MSK — ★BIG-WIN: ОНБОРДИНГ-КАРТА — INLINE «ДРУГОЕ» + МУЛЬТИВЫБОР (NORTH STAR столп 2, rule 13 #2/#3) [x] (EYES desktop+mobile WOW ≈8.5/10; prod api/worker/web deployed /health 200 + front 200)
 
 **Контекст/выбор (rule 12/13).** `git log --grep=★BIG-WIN -1` → RecordDetail ~8 мин назад (<3ч) → дедлайн-такт свеж. НО rule 13 = СЛЕДУЮЩИЙ ★BIG-WIN, наивысший приоритет пока не закрыт: редизайн онбординга (столп 2). Взял frontend-видимую половину (#2 inline «Другое» + #3 мультивыбор) как landable ★BIG-WIN; #1 батч-вопросы (бо́льшая архитектурная правка) — следующий тик.
