@@ -35,6 +35,7 @@ from omnia_api.services import (
     data_gate,
     defect_registry,
     hierarchy_gate,
+    onboarding_registry,
     perf_a11y_gate,
     reference_corpus,
     taste_gate,
@@ -62,6 +63,7 @@ COMPOSITION_WIDTH = TASTE_WIDTH
 # Gate identifiers, in the order they appear in the verdict table.
 DEFECT_REGISTRY = "defect-registry"
 COMPOSE = "compose"
+ONBOARDING = "onboarding"
 VIRAL = "viral"
 WOW_DOM = "wow-dom"
 PERF_A11Y = "perf-a11y"
@@ -273,6 +275,24 @@ def _from_viral(rep: viral_registry.ViralReport) -> GateVerdict:
     )
 
 
+def _from_onboarding(rep: onboarding_registry.OnboardingReport) -> GateVerdict:
+    """Adapt the onboarding registry (V2.7) — a pure context-scan, like the viral one.
+
+    It never abstains: a turn with no ASK card to judge (a BUILD turn, an empty
+    context) is INERT and reports ``passed=True`` (nothing to judge ≠ a flaky
+    render with no evidence). Its chip-hygiene verdict is single-sourced on
+    :func:`discovery._clean_choices` (R-04).
+    """
+    return GateVerdict(
+        gate=ONBOARDING,
+        passed=rep.passed,
+        abstained=False,  # pure context-scan — its evidence is always present
+        classes=rep.classes,
+        summary=rep.summary(),
+        subscore=rep.subscore(),
+    )
+
+
 def _from_rendered(gate: str, rep: Any) -> GateVerdict:
     """Adapt a rendered gate's report (wow/perf/chip — same shape) to a verdict.
 
@@ -352,6 +372,8 @@ async def run(
     reference: bool = False,
     viral: bool = False,
     viral_context: viral_registry.ViralContext | None = None,
+    onboarding: bool = False,
+    onboarding_context: onboarding_registry.OnboardingContext | None = None,
 ) -> GauntletVerdict:
     """Fan the selected landed gates over ``files`` and/or a live ``url``.
 
@@ -375,6 +397,14 @@ async def run(
       empty context, so it never false-fails; a fork is not a generation, so it is
       independent of ``files`` and exercised by the synthetic viral-loop (V4.7) /
       the paid-run manifest, not the per-gen ship path.
+
+    * ``onboarding=True`` adds the V2.7 onboarding defect-registry — also a pure
+      context-scan (no render, no LLM). It scores the ``onboarding_context`` (one
+      discovery ASK turn) against the pillar-2 invariants — bare-text question,
+      trapped-no-«Другое», dirty chips — single-sourcing the chip-hygiene verdict
+      on ``discovery._clean_choices`` (R-04). It is INERT on a BUILD / empty /
+      ``None`` context, so it never false-fails; an onboarding turn is not a
+      generation, so it is independent of ``files``.
 
     Two independent dials pick WHICH rendered legs run (V1.6 14/5 decouple):
 
@@ -433,6 +463,17 @@ async def run(
     # it is independent of ``files`` (a share/fork episode is not a generation).
     if viral:
         gates.append(_from_viral(viral_registry.scan(viral_context)))
+
+    # V2.7 — the money-free onboarding defect-registry. Like the viral registry it
+    # is a pure CONTEXT-scan (no render, no LLM): it scores one discovery ASK turn
+    # (the ``onboarding_context``) against the falsifiable pillar-2 invariants —
+    # bare-text question, trapped-no-«Другое», dirty chips — single-sourcing the
+    # chip-hygiene verdict on ``discovery._clean_choices`` (R-04). It is INERT (a
+    # passing no-op) on a BUILD / empty / None context, so wiring it is safe on
+    # every path; an onboarding turn is not a generation, so it is independent of
+    # ``files`` and exercised by the pillar-2 finish (V2.9) / the paid-run manifest.
+    if onboarding:
+        gates.append(_from_onboarding(onboarding_registry.scan(onboarding_context)))
 
     legs: set[str] = set(RENDERED_GATES) if include_rendered else set()
     if composition:
