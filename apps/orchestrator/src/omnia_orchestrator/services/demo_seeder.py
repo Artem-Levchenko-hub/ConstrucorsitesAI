@@ -225,6 +225,27 @@ _DOMAIN_NOUNS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Per-domain catalog-price band as (low, high, step) in whole roubles. A generic
+# money formula (990 … 199 990) is absurd per-niche — a vitamin at 197 010 ₽, a
+# coffee at 150 000 ₽. When the domain is known, an item's *price* is drawn from
+# a hand-calibrated band rounded to `step`, so the first catalog a user sees is
+# priced like the real market. Only true per-item price fields use this (see
+# `_PRICE_TOKENS`); business-metric money (salary, revenue) keeps the generic
+# band. Every domain in `_DOMAIN_NOUNS` MUST appear here (asserted in tests).
+_DOMAIN_PRICE: dict[str, tuple[int, int, int]] = {
+    "pharmacy": (190, 3490, 10),       # supplements, cosmetics
+    "clinic": (700, 9000, 50),         # consultations … MRI
+    "beauty": (500, 6000, 50),         # salon services
+    "fitness": (450, 6000, 50),        # sessions, monthly pass
+    "auto": (600, 18000, 100),         # oil change … timing belt
+    "cafe": (120, 690, 10),            # coffee, desserts
+    "restaurant": (220, 1900, 10),     # rolls, hot dishes, sets
+    "furniture": (2900, 129000, 100),  # shelf … kitchen unit
+    "travel": (9900, 250000, 1000),    # excursion … all-inclusive tour
+    "education": (1900, 49000, 100),   # single lesson … full course
+    "realestate": (1990000, 32000000, 10000),  # studio … penthouse
+}
+
 # (domain, substring tokens) in PRIORITY order — first hit wins. Order resolves
 # overlaps deliberately: pharmacy before beauty (so the pharmacy enum word
 # "Косметика" doesn't read as a salon), pharmacy/clinic split on stock vs. visit
@@ -276,6 +297,11 @@ _MONEY_TOKENS = (
     "price", "цена", "amount", "сумма", "cost", "стоим", "total", "итог",
     "salary", "окл-", "оклад", "revenue", "выручка", "budget", "бюджет",
 )
+# The per-item *price* subset of money fields — these get the niche price band
+# (`_DOMAIN_PRICE`). Order/inventory totals and business metrics (amount, total,
+# salary, revenue, budget) are deliberately excluded: they're not catalog prices
+# and a niche item band would misprice them.
+_PRICE_TOKENS = ("price", "цена", "cost", "стоим", "тариф")
 _RATING_TOKENS = ("rating", "рейтинг", "score", "оценка", "stars", "звёзд", "звезд")
 _AGE_TOKENS = ("age", "возраст")
 _PERCENT_TOKENS = ("percent", "процент", "progress", "прогресс", "discount", "скидк")
@@ -464,7 +490,7 @@ def _field_value(
         return _demo_date(seed, entity, fname, index)
 
     if fshape.type == "number":
-        return _demo_number(key, seed, entity, fname, index)
+        return _demo_number(key, seed, entity, fname, index, domain)
 
     if fshape.type == "text":
         # A public-catalog `description` reads as catalog copy; an operational
@@ -513,9 +539,16 @@ def _demo_string(
     return f"{_pick(_LABELS, seed, entity, fname, index)} {index + 1}"
 
 
-def _demo_number(key: str, seed: str, entity: str, fname: str, index: int) -> int:
+def _demo_number(
+    key: str, seed: str, entity: str, fname: str, index: int, domain: str | None = None
+) -> int:
+    if domain is not None and _has_token(key, _PRICE_TOKENS):
+        # A real-market price for this niche, rounded to the band's step.
+        lo, hi, step = _DOMAIN_PRICE[domain]
+        buckets = (hi - lo) // step + 1
+        return lo + _hash_int(seed, entity, fname, index) % buckets * step
     if _has_token(key, _MONEY_TOKENS):
-        # Round-ish rouble amounts, 990 … ~199 990.
+        # Round-ish rouble amounts, 990 … ~199 990 (generic / unknown niche).
         return (_hash_int(seed, entity, fname, index) % 200 + 1) * 990
     if _has_token(key, _RATING_TOKENS):
         return _hash_int(seed, entity, fname, index) % 5 + 1

@@ -433,3 +433,60 @@ def test_non_label_string_field_keeps_label_form_not_a_product_noun() -> None:
     # title is a real product, color stays a neutral demo label
     assert all(r["title"] in ds._DOMAIN_NOUNS["pharmacy"] for r in rows)
     assert all(r["color"] not in ds._DOMAIN_NOUNS["pharmacy"] for r in rows)
+
+
+# ── niche-aware price realism (a vitamin must not cost 197 010 ₽) ─────────────
+
+
+def test_every_noun_domain_has_a_price_band() -> None:
+    """No catalog domain may ship with the generic 990…199 990 band — that is the
+    exact defect (a supplement priced at 197 010 ₽) this slice exists to kill."""
+    assert set(ds._DOMAIN_NOUNS) <= set(ds._DOMAIN_PRICE)
+
+
+def test_pharmacy_price_is_realistic_not_absurd() -> None:
+    f = _fields(price={"type": "number", "required": True})
+    rows = ds.generate_rows("Product", f, count=12, seed="s", niche="apteka")
+    lo, hi, _ = ds._DOMAIN_PRICE["pharmacy"]
+    assert all(lo <= r["price"] <= hi for r in rows), [r["price"] for r in rows]
+    # the headline bug: nothing in a pharmacy catalog reaches five-figure rubles
+    assert all(r["price"] < 10_000 for r in rows), [r["price"] for r in rows]
+
+
+def test_realestate_price_is_in_the_millions() -> None:
+    f = _fields(price={"type": "number", "required": True})
+    rows = ds.generate_rows("Flat", f, count=12, seed="s", niche="недвижимость")
+    assert all(r["price"] >= 1_000_000 for r in rows), [r["price"] for r in rows]
+
+
+def test_domain_price_respects_its_step() -> None:
+    f = _fields(price={"type": "number", "required": True})
+    rows = ds.generate_rows("Tour", f, count=12, seed="s", niche="турагентство")
+    lo, hi, step = ds._DOMAIN_PRICE["travel"]
+    assert all((r["price"] - lo) % step == 0 for r in rows), [r["price"] for r in rows]
+    assert all(lo <= r["price"] <= hi for r in rows)
+
+
+def test_price_without_domain_is_byte_identical_to_legacy_formula() -> None:
+    """Unknown niche → no band → the original 990-multiple formula, unchanged."""
+    f = _fields(price={"type": "number", "required": True})
+    rows = ds.generate_rows("Widget", f, count=8, seed="s", niche="zzz-unknownixx")
+    assert all(r["price"] % 990 == 0 and r["price"] > 0 for r in rows)
+    # and identical to the truly niche-less call
+    plain = ds.generate_rows("Widget", f, count=8, seed="s")
+    assert [r["price"] for r in rows] == [r["price"] for r in plain]
+
+
+def test_business_metric_money_keeps_generic_band_even_in_a_niche() -> None:
+    """A `salary`/`revenue` field is not a catalog item price — it must NOT inherit
+    a niche item band (a realtor's salary is not 30 000 000 ₽)."""
+    f = _fields(salary={"type": "number", "required": True})
+    rows = ds.generate_rows("Employee", f, count=8, seed="s", niche="недвижимость")
+    assert all(r["salary"] % 990 == 0 for r in rows), [r["salary"] for r in rows]
+
+
+def test_domain_price_is_deterministic() -> None:
+    f = _fields(price={"type": "number", "required": True})
+    a = ds.generate_rows("Dish", f, count=8, seed="p1", niche="sushi-restoran")
+    b = ds.generate_rows("Dish", f, count=8, seed="p1", niche="sushi-restoran")
+    assert [r["price"] for r in a] == [r["price"] for r in b]
