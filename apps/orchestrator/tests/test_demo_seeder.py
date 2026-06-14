@@ -490,3 +490,63 @@ def test_domain_price_is_deterministic() -> None:
     a = ds.generate_rows("Dish", f, count=8, seed="p1", niche="sushi-restoran")
     b = ds.generate_rows("Dish", f, count=8, seed="p1", niche="sushi-restoran")
     assert [r["price"] for r in a] == [r["price"] for r in b]
+
+
+# ── image fields render a real tile, never a broken <img> ────────────────────
+
+
+def test_image_field_is_a_data_uri_not_a_placeholder() -> None:
+    """An `image` field must be a real, renderable src — not "<Label> 1" the
+    browser would load as an image and show broken."""
+    f = _fields(image={"type": "string", "required": True})
+    rows = ds.generate_rows("Product", f, count=6, seed="s")
+    assert all(r["image"].startswith("data:image/svg+xml,") for r in rows)
+    assert all("Элемент" not in r["image"] for r in rows)
+
+
+def test_image_field_decodes_to_valid_svg() -> None:
+    from urllib.parse import unquote
+
+    f = _fields(photo={"type": "string", "required": True})
+    rows = ds.generate_rows("Product", f, count=3, seed="s")
+    for r in rows:
+        svg = unquote(r["photo"].split(",", 1)[1])
+        assert svg.startswith("<svg") and svg.endswith("</svg>")
+        assert "linearGradient" in svg
+
+
+def test_image_aliases_all_detected() -> None:
+    """photo / avatar / cover / фото / image_url all route to a tile."""
+    f = _fields(
+        photo={"type": "string"},
+        avatar={"type": "string"},
+        cover={"type": "string"},
+        фото={"type": "string"},
+        image_url={"type": "string"},
+    )
+    rows = ds.generate_rows("Item", f, count=4, seed="s", niche="cafe")
+    for r in rows:
+        for key in ("photo", "avatar", "cover", "фото", "image_url"):
+            assert r[key].startswith("data:image/svg+xml,"), (key, r[key])
+
+
+def test_image_dedicated_type_coerces_and_gets_a_tile() -> None:
+    """A field declared `type: image` (not in the valid set) coerces to string and
+    still gets a tile, not a placeholder."""
+    f = _fields(picture={"type": "image", "required": True})
+    rows = ds.generate_rows("Product", f, count=3, seed="s")
+    assert all(r["picture"].startswith("data:image/svg+xml,") for r in rows)
+
+
+def test_image_tiles_are_deterministic() -> None:
+    f = _fields(image={"type": "string", "required": True})
+    a = ds.generate_rows("Product", f, count=6, seed="s", niche="apteka")
+    b = ds.generate_rows("Product", f, count=6, seed="s", niche="apteka")
+    assert [r["image"] for r in a] == [r["image"] for r in b]
+
+
+def test_image_tiles_vary_across_a_page() -> None:
+    """A catalog page must not show eight identical tiles."""
+    f = _fields(image={"type": "string", "required": True})
+    rows = ds.generate_rows("Product", f, count=8, seed="s")
+    assert len({r["image"] for r in rows}) > 1

@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 # Row-count policy: every entity gets at least MIN_ROWS so the browse screen is
 # never empty (the gate floor), capped at MAX_ROWS so a seeded catalog still
@@ -246,6 +247,15 @@ _DOMAIN_PRICE: dict[str, tuple[int, int, int]] = {
     "realestate": (1990000, 32000000, 10000),  # studio … penthouse
 }
 
+# Base gradient hue (0–360) per domain for image-field tiles (see `_demo_image`),
+# so a pharmacy's photos trend clinical teal, a cafe's warm amber, a salon's pink.
+# Unknown domain → a hash-derived hue. Domains mirror `_DOMAIN_NOUNS`.
+_DOMAIN_HUE: dict[str, int] = {
+    "pharmacy": 158, "clinic": 200, "beauty": 330, "fitness": 22,
+    "auto": 215, "cafe": 32, "restaurant": 8, "furniture": 35,
+    "travel": 192, "education": 250, "realestate": 210,
+}
+
 # (domain, substring tokens) in PRIORITY order — first hit wins. Order resolves
 # overlaps deliberately: pharmacy before beauty (so the pharmacy enum word
 # "Косметика" doesn't read as a salon), pharmacy/clinic split on stock vs. visit
@@ -293,6 +303,13 @@ _PHONE_TOKENS = ("phone", "телефон", "тел", "mobile", "моб")
 _CITY_TOKENS = ("city", "город", "town")
 _ADDRESS_TOKENS = ("address", "адрес", "улица", "street")
 _URL_TOKENS = ("url", "link", "ссылка", "website", "сайт")
+# An image/photo field — emit a self-contained SVG data-URI tile (`_demo_image`),
+# never a text placeholder that renders as a broken <img> on the first screen.
+# Checked before `_URL_TOKENS` so an `image_url` field becomes an image, not a link.
+_IMAGE_TOKENS = (
+    "image", "img", "photo", "picture", "avatar", "cover", "thumbnail",
+    "thumb", "фото", "изображен", "картинк", "обложк", "аватар", "превью",
+)
 _MONEY_TOKENS = (
     "price", "цена", "amount", "сумма", "cost", "стоим", "total", "итог",
     "salary", "окл-", "оклад", "revenue", "выручка", "budget", "бюджет",
@@ -505,6 +522,10 @@ def _field_value(
 def _demo_string(
     entity: str, key: str, seed: str, fname: str, index: int, domain: str | None = None
 ) -> str:
+    if _has_token(key, _IMAGE_TOKENS):
+        # A real, always-rendering tile — not a placeholder word the browser would
+        # try to load as an image src and show broken.
+        return _demo_image(entity, seed, fname, index, domain)
     if _has_token(key, _CODE_TOKENS):
         # A real-looking SKU/article code, not a placeholder word.
         prefix = "ART" if _has_token(key, ("артикул", "vendor")) else "SKU"
@@ -537,6 +558,38 @@ def _demo_string(
         return pool[(start + index) % len(pool)]
     # A "thing" label: <Entity-label> «Adjective» — always on-topic, clearly demo.
     return f"{_pick(_LABELS, seed, entity, fname, index)} {index + 1}"
+
+
+def _demo_image(
+    entity: str, seed: str, fname: str, index: int, domain: str | None
+) -> str:
+    """A self-contained SVG data-URI tile for an image/photo field.
+
+    An image field left as a text placeholder ("Элемент 1") renders as a *broken
+    image* on the first catalog screen — the single most WOW-killing defect a
+    fresh app can show. A random external stock photo is no better: an unrelated
+    landscape on a vitamin card reads as wrong as the placeholder, and adds a
+    network dependency. Instead we emit a deterministic, niche-tinted gradient
+    tile inline as a `data:` URI — it always renders (plain <img> and next/image,
+    no network, no `remotePatterns`), looks intentional, and varies per row so a
+    page isn't eight identical tiles.
+    """
+    base = _DOMAIN_HUE.get(domain or "", _hash_int(seed, entity, fname) % 360)
+    h1 = (base + index * 23) % 360
+    h2 = (h1 + 28) % 360
+    cx = 120 + _hash_int(seed, entity, fname, index, "x") % 360
+    cy = 60 + _hash_int(seed, entity, fname, index, "y") % 280
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='600' height='400'>"
+        "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+        f"<stop offset='0' stop-color='hsl({h1},58%,56%)'/>"
+        f"<stop offset='1' stop-color='hsl({h2},64%,42%)'/>"
+        "</linearGradient></defs>"
+        "<rect width='600' height='400' fill='url(#g)'/>"
+        f"<circle cx='{cx}' cy='{cy}' r='150' fill='#ffffff' fill-opacity='0.12'/>"
+        "</svg>"
+    )
+    return "data:image/svg+xml," + quote(svg, safe="")
 
 
 def _demo_number(
