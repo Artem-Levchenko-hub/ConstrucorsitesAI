@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "loft-preview",
+      "runtimeExecutable": "ssh",
+      "runtimeArgs": ["-N", "-L", "8746:127.0.0.1:3278", "lh-server"],
+      "port": 8746
+    },
+    {
+      "name": "sfh-preview",
+      "runtimeExecutable": "ssh",
+      "runtimeArgs": ["-N", "-L", "8748:127.0.0.1:39111", "lh-server"],
+      "port": 8748
+    },
+    {
+      "name": "authcheck-preview",
+      "runtimeExecutable": "ssh",
+      "runtimeArgs": ["-N", "-L", "8753:127.0.0.1:3399", "lh-server"],
+      "port": 8753
+    },
+    {
+      "name": "web-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "apps/web", "run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "bn-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4599", "--directory", "/tmp/omnia-bn-harness"],
+      "port": 4599
+    }
+  ]
+}
