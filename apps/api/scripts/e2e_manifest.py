@@ -6,7 +6,8 @@ subscore (v2.13 keystone).
 The problem this solves (the NORTH-STAR gap, named by six review lenses): the
 whole visible/viral/causality layer — narration (V3.10), brief swatches (V3.4),
 joy (V3.8), chip→pixel (V2.5b), fork param-inherit (V4.2b), fork lineage (V4.7),
-the eight composition/quality gates (``accept_gauntlet``) — shipped as *isolated*
+viral-eligibility (V4.9, the pillar-1→4 floor bridge), the eight
+composition/quality gates (``accept_gauntlet``) — shipped as *isolated*
 money-free unit-proofs. Each is green in a vacuum; none has ever been composed
 into ONE live chain and watched play out. A unit gate cannot catch the cross-cut
 regression (narration lags the render / swatches desync from the painted page /
@@ -95,15 +96,20 @@ SWATCHES = "swatches"  # V3.4 — the art-director brief's hex swatches shown in
 JOY = "joy"  # V3.8 — the brand-coloured reward note on build-complete
 PARAM_INHERIT = "param-inherit"  # V4.2b — a fork inherits design_preset_id + discovery_spec
 FORK_LINEAGE = "fork-lineage"  # V4.7 — the forked_from chain is walkable to the root
+VIRAL_ELIGIBLE = "viral-eligible"  # V4.9 — pillar-1→4 bridge: seeds the pool only if floor-green
 
 #: Observation stages, in table order. ``param-inherit`` and ``fork-lineage`` are
 #: INERT (a passing no-op) on a root niche — there is nothing upstream to inherit.
+#: ``viral-eligible`` is a DERIVED bridge stage (V4.9): it reuses the injected
+#: gauntlet verdict (no new field, no new metric) to certify whether this niche's
+#: shared surface is floor-green enough to seed the viral pool — pillar 1 → 4.
 OBSERVATION_STAGES: tuple[str, ...] = (
     NARRATION,
     SWATCHES,
     JOY,
     PARAM_INHERIT,
     FORK_LINEAGE,
+    VIRAL_ELIGIBLE,
 )
 
 GATE_KIND = "gate"
@@ -486,6 +492,49 @@ def observation_stage_results(obs: ManifestObservation) -> list[StageResult]:
     return out
 
 
+def viral_eligible_stage(verdict: GauntletVerdict | None) -> StageResult:
+    """Fold the V4.9 viral-eligibility predicate as a derived manifest stage.
+
+    The pillar-1 → pillar-4 bridge: a niche's shared surface may seed the viral
+    pool — its zero-signup forks inherit the right to be re-shared — only when it
+    is itself floor-green. This reuses the production predicate
+    ``accept_gauntlet.viral_eligible_from_verdict`` verbatim (R-04 — no new metric,
+    the truth still lives in its own module); the manifest only gives that
+    isolated unit-proof a composed home in the one live chain.
+
+    Abstain vs hard-fail mirrors the gauntlet (R-10): a run with no gauntlet, or
+    whose taste/hierarchy floor never produced evidence (a flaky / uncaptured
+    leg), ABSTAINS — we cannot vouch for a surface we never scored, and no
+    evidence is never a defect. When the floor WAS measured and a real gate
+    finding keeps the surface ineligible, the stage HARD-FAILS: a genuine
+    pillar-1 defect closes the door to virality.
+    """
+    if verdict is None:
+        return StageResult(
+            VIRAL_ELIGIBLE, OBSERVATION_KIND, False, True, (),
+            "viral-eligible: no gauntlet captured",
+        )
+    if accept_gauntlet.viral_eligible_from_verdict(verdict):
+        return StageResult(
+            VIRAL_ELIGIBLE, OBSERVATION_KIND, True, False, (),
+            "shared surface is floor-green → viral-eligible (pillar 1 → 4)",
+        )
+    # Ineligible. Distinguish an unproven floor (abstain — cannot vouch, not a
+    # defect) from a real finding (hard-fail — a measured pillar-1 defect).
+    by_gate = {g.gate: g for g in verdict.gates}
+    floor = (by_gate.get(accept_gauntlet.TASTE), by_gate.get(accept_gauntlet.HIERARCHY))
+    floor_unproven = any(g is None or g.abstained for g in floor)
+    if floor_unproven and not verdict.hard_failed:
+        return StageResult(
+            VIRAL_ELIGIBLE, OBSERVATION_KIND, False, True, (),
+            "viral-eligible: taste/hierarchy floor unproven → cannot vouch",
+        )
+    return StageResult(
+        VIRAL_ELIGIBLE, OBSERVATION_KIND, False, False, ("not-viral-eligible",),
+        "shared surface not floor-green → disqualified from the viral pool",
+    )
+
+
 # ── The staged harness ───────────────────────────────────────────────────────
 
 
@@ -499,7 +548,11 @@ def fold_niche(obs: ManifestObservation, *, capture: CaptureFn = null_capture) -
     is attached to every stage and one video ref to the niche.
     """
     target = assert_safe_target(obs.url) if obs.url else None
-    raw = gate_stage_results(obs.gauntlet) + observation_stage_results(obs)
+    raw = (
+        gate_stage_results(obs.gauntlet)
+        + observation_stage_results(obs)
+        + [viral_eligible_stage(obs.gauntlet)]
+    )
     stages = tuple(
         StageResult(
             stage=s.stage,

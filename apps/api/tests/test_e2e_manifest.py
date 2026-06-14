@@ -175,6 +175,77 @@ def test_uncaptured_observation_field_abstains_not_hard_fails() -> None:
     assert not niche.passed()
 
 
+# ── V4.9 viral-eligible: the derived pillar-1 → pillar-4 bridge stage ──────────
+
+
+def test_viral_eligible_stage_is_present_once_in_every_niche_row() -> None:
+    verdict = em.run_manifest(em.mock_corpus())
+    for n in verdict.niches:
+        ve = [s for s in n.stages if s.stage == em.VIRAL_ELIGIBLE]
+        assert len(ve) == 1
+        assert ve[0].kind == em.OBSERVATION_KIND
+
+
+def test_viral_eligible_passes_on_a_floor_green_verdict() -> None:
+    s = em.viral_eligible_stage(em.synthetic_verdict())
+    assert s.passed and not s.abstained and not s.hard_failed
+
+
+def test_viral_eligible_abstains_when_no_gauntlet_captured() -> None:
+    s = em.viral_eligible_stage(None)
+    assert s.abstained and not s.passed and not s.hard_failed
+
+
+@pytest.mark.parametrize("floor_leg", [accept_gauntlet.TASTE, accept_gauntlet.HIERARCHY])
+def test_viral_eligible_hard_fails_on_a_real_floor_finding(floor_leg: str) -> None:
+    # A measured pillar-1 defect (taste/hierarchy carries a finding) → a real
+    # disqualification, not an abstain.
+    s = em.viral_eligible_stage(em.synthetic_verdict(fail=[floor_leg]))
+    assert s.hard_failed and not s.passed and not s.abstained
+    assert "not-viral-eligible" in s.classes
+
+
+@pytest.mark.parametrize("floor_leg", [accept_gauntlet.TASTE, accept_gauntlet.HIERARCHY])
+def test_viral_eligible_abstains_on_an_unproven_floor(floor_leg: str) -> None:
+    # A flaky / uncaptured floor leg cannot vouch — but it is not a defect.
+    s = em.viral_eligible_stage(em.synthetic_verdict(abstain=[floor_leg]))
+    assert s.abstained and not s.passed and not s.hard_failed
+
+
+def test_viral_eligible_hard_fails_when_a_nonfloor_gate_has_a_finding() -> None:
+    # Floor is green but another gate carries a real finding → ineligible, and a
+    # real finding hard-fails (no door to virality for a defective surface).
+    s = em.viral_eligible_stage(em.synthetic_verdict(fail=[accept_gauntlet.WOW_DOM]))
+    assert s.hard_failed and not s.passed and not s.abstained
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"fail": [accept_gauntlet.TASTE]},
+        {"fail": [accept_gauntlet.WOW_DOM]},
+        {"abstain": [accept_gauntlet.HIERARCHY]},
+        {"fail": [accept_gauntlet.VIRAL]},
+    ],
+)
+def test_viral_eligible_stage_parity_with_production_predicate(kwargs: dict) -> None:
+    """The stage passes iff the production V4.9 predicate vouches — R-04 fidelity."""
+    verdict = em.synthetic_verdict(**kwargs)
+    s = em.viral_eligible_stage(verdict)
+    assert s.passed == accept_gauntlet.viral_eligible_from_verdict(verdict)
+
+
+def test_floor_defect_sinks_both_its_gate_and_the_viral_bridge() -> None:
+    # End-to-end: a taste defect hard-fails the taste gate AND the derived bridge,
+    # and the unified run fails — the bridge never masks a real floor defect.
+    obs = em.mock_observation(nb.CORPUS[0], defects=[accept_gauntlet.TASTE])
+    niche = em.run_manifest([obs]).niches[0]
+    failed = {s.stage for s in niche.hard_failed}
+    assert accept_gauntlet.TASTE in failed
+    assert em.VIRAL_ELIGIBLE in failed
+
+
 # ── capture seam is driven once per stage + once per niche video ──────────────
 
 
