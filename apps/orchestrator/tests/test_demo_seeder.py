@@ -787,3 +787,102 @@ def test_match_category_option_handles_stem_and_substring() -> None:
     assert m(("Десерты и выпечка", "Кофе"), "Десерты") == "Десерты и выпечка"  # substring
     assert m(("Десерт", "Кофе"), "Десерты") == "Десерт"  # stem (5-char prefix)
     assert m(("Хиты", "Новинки"), "Витамины") is None  # no match → fall back
+
+
+# ── category synonyms (RULE-10 #6a): real LLM enums use «Препараты», not the ─────
+# curated «Витамины» — synonyms bridge the gap so coherence survives the real
+# vocabulary, not just the curated one.
+
+
+def test_pharmacy_real_world_category_enum_matches_via_synonyms() -> None:
+    """A real apteka enum reads «Препараты / Косметика / Приборы» — none equal the
+    curated «Витамины»/«БАДы», yet a vitamin must still land in «Препараты» and
+    never in the «Приборы» (devices) bucket no product targets."""
+    raw = {
+        "name": "Product",
+        "access": "public",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "category": {
+                "type": "enum",
+                "options": ["Препараты", "Косметика", "Приборы"],
+                "required": True,
+            },
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(shape.name, shape.fields, count=14, seed="s")
+    saw_drug = saw_cosmetic = saw_device = False
+    for r in rows:
+        title, cat = r["title"], r["category"]
+        assert cat in ("Препараты", "Косметика", "Приборы")
+        if title.startswith("Витамин") or "Омега" in title or "Магний" in title:
+            assert cat == "Препараты", (title, cat)
+            saw_drug = True
+        if "Крем" in title or "Маска" in title:
+            assert cat == "Косметика", (title, cat)
+            saw_cosmetic = True
+        if cat == "Приборы":
+            saw_device = True
+    assert saw_drug and saw_cosmetic
+    assert not saw_device  # no catalog item is a device → that bucket never shows
+
+
+def test_synonym_used_only_when_no_direct_option_matches() -> None:
+    """Coffee drinks fall to «Напитки» (a «Кофе» synonym) when the enum has no
+    «Кофе» option — but the most specific option still wins when present."""
+    no_coffee = {
+        "name": "Position",
+        "access": "public",
+        "fields": {
+            "name": {"type": "string", "required": True},
+            "категория": {
+                "type": "enum",
+                "options": ["Напитки", "Десерты", "Выпечка"],
+                "required": True,
+            },
+        },
+    }
+    shape = ds.parse_entity(no_coffee)
+    rows = ds.generate_rows(shape.name, shape.fields, count=12, seed="c", niche="kofeinia")
+    coffee = {"Капучино", "Латте", "Раф ванильный", "Эспрессо", "Флэт уайт"}
+    for r in rows:
+        if r["name"] in coffee:
+            assert r["категория"] == "Напитки", (r["name"], r["категория"])
+
+
+def test_synonyms_never_override_a_direct_primary_match() -> None:
+    """When the curated «Кофе» option exists, coffee lands there — the «Напитки»
+    synonym must not steal it (primary tried first)."""
+    raw = {
+        "name": "Position",
+        "access": "public",
+        "fields": {
+            "name": {"type": "string", "required": True},
+            "категория": {
+                "type": "enum",
+                "options": ["Кофе", "Напитки", "Десерты"],
+                "required": True,
+            },
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(shape.name, shape.fields, count=12, seed="c", niche="kofeinia")
+    coffee = {"Капучино", "Латте", "Раф ванильный", "Эспрессо", "Флэт уайт"}
+    for r in rows:
+        if r["name"] in coffee:
+            assert r["категория"] == "Кофе", (r["name"], r["категория"])
+
+
+def test_category_synonyms_are_well_formed() -> None:
+    """Sync guard: every domain has a synonym map; every key is a real curated
+    category; every synonym is ≥5 chars so it can never collide with an unrelated
+    option as a stray substring (the matcher uses substring/stem)."""
+    assert set(ds._CATEGORY_SYNONYMS) == set(ds._DOMAIN_NOUN_CATEGORY)
+    for domain, syn in ds._CATEGORY_SYNONYMS.items():
+        valid = set(ds._DOMAIN_NOUN_CATEGORY[domain].values())
+        for primary, words in syn.items():
+            assert primary in valid, (domain, primary)
+            assert words, (domain, primary)  # no empty tuples — drop the key instead
+            for w in words:
+                assert len(w) >= 5, (domain, primary, w)

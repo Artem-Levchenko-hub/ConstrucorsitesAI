@@ -324,6 +324,98 @@ _DOMAIN_NOUN_CATEGORY: dict[str, dict[str, str]] = {
     },
 }
 
+# Real LLM-generated category enums rarely use the exact curated word — an apteka
+# enum reads «Препараты / Органика», not «Витамины / БАДы». For each curated
+# category (the values of `_DOMAIN_NOUN_CATEGORY`) this maps domain-scoped
+# alternative words a real enum is likely to use instead, tried *after* the
+# curated word so the most specific option still wins when present. Synonyms are
+# kept ≥5 chars (asserted in tests) so they can never collide with an unrelated
+# option as a stray substring. A curated category with no safe synonym simply has
+# no key here — it then relies on the curated word matching directly, else the
+# index-cycle fallback (high-precision-or-nothing, zero regression).
+_CATEGORY_SYNONYMS: dict[str, dict[str, tuple[str, ...]]] = {
+    "pharmacy": {
+        "Витамины": ("Препараты", "Лекарства", "Медикаменты"),
+        "БАДы": ("Добавки", "Препараты", "Органика", "Лекарства"),
+        "Косметика": ("Красота", "Гигиена"),
+    },
+    "clinic": {
+        "Консультации": ("Приёмы", "Специалисты"),
+        "Диагностика": ("Обследования", "Исследования"),
+        "Анализы": ("Лаборатория", "Лабораторные"),
+        "Стоматология": ("Зубные",),
+        "Процедуры": ("Лечение", "Терапия"),
+    },
+    "beauty": {
+        "Волосы": ("Парикмахерские", "Стрижки", "Окрашивание", "Причёски"),
+        "Ногти": ("Маникюр", "Педикюр"),
+        "Лицо": ("Косметология", "Уходовые"),
+        "Тело": ("Депиляция", "Массаж"),
+        "Макияж": ("Визаж",),
+    },
+    "fitness": {
+        "Тренировки": ("Персональные", "Силовые", "Тренинг"),
+        "Групповые": ("Занятия", "Классы"),
+        "Йога": ("Пилатес", "Растяжка"),
+        "Единоборства": ("Боевые",),
+        "Абонементы": ("Членство", "Абонемент"),
+        "Бассейн": ("Плавание", "Аквазона"),
+    },
+    "auto": {
+        "Техобслуживание": ("Ремонт", "Обслуживание", "Сервис"),
+        "Шины": ("Шиномонтаж", "Колёса", "Диски"),
+        "Диагностика": ("Проверка", "Компьютерная"),
+        "Кузов": ("Покраска", "Кузовной", "Детейлинг"),
+        "Мойка": ("Автомойка", "Химчистка", "Уборка"),
+    },
+    "cafe": {
+        "Кофе": ("Напитки", "Бариста"),
+        "Десерты": ("Сладкое", "Сладости"),
+        "Выпечка": ("Пекарня", "Багеты"),
+        "Еда": ("Завтраки", "Закуски", "Сэндвичи", "Обеды", "Бранч"),
+        "Напитки": ("Смузи", "Лимонады"),
+    },
+    "restaurant": {
+        "Супы": ("Бульоны", "Первые"),
+        "Горячее": ("Горячие", "Вторые", "Основные"),
+        "Салаты": ("Закуски", "Холодные"),
+        "Сеты": ("Комбо", "Наборы"),
+    },
+    "furniture": {
+        "Диваны": ("Мягкая",),
+        "Кресла": ("Стулья",),
+        "Шкафы": ("Хранение", "Гардеробные"),
+        "Кровати": ("Спальня", "Спальни"),
+        "Хранение": ("Стеллажи", "Комоды", "Тумбы"),
+        "Столы": ("Столовая",),
+        "Кухни": ("Кухонная",),
+        "Декор": ("Аксессуары", "Зеркала", "Освещение"),
+    },
+    "travel": {
+        "Туры": ("Путёвки", "Пакетные", "Отдых"),
+        "Экскурсии": ("Прогулки",),
+        "Билеты": ("Авиабилеты", "Перелёты"),
+        "Отели": ("Размещение", "Проживание", "Гостиницы"),
+        "Круизы": ("Морские",),
+        "Услуги": ("Страхование", "Дополнительно", "Трансфер"),
+    },
+    "education": {
+        "Программирование": ("Разработка", "Технологии"),
+        "Языки": ("Английский", "Лингвистика"),
+        "Школьникам": ("Подготовка", "Экзамены"),
+        "Творчество": ("Искусство", "Рисование"),
+        "Детям": ("Дошкольникам", "Развитие"),
+    },
+    "realestate": {
+        "Квартиры": ("Новостройки", "Вторичка"),
+        "Студии": ("Квартиры", "Малометражки"),
+        "Дома": ("Коттеджи", "Загородная"),
+        "Апартаменты": ("Элитное", "Премиум"),
+        "Коммерческая": ("Офисы", "Коммерция"),
+        "Участки": ("Земельные", "Участок"),
+    },
+}
+
 # Each catalog noun's short, *product-describing* blurb, used to keep a row's
 # `description` coherent with its title (a "Витамин C 900 мг" card must read
 # "Антиоксидант и поддержка иммунитета", not the generic "Хит продаж"). When the
@@ -798,6 +890,15 @@ def _niche_noun(
     return pool[(start + index) % len(pool)]
 
 
+def _category_candidates(domain: str | None, primary: str) -> tuple[str, ...]:
+    """The row's curated category word plus domain-scoped synonyms a real enum is
+    likely to use instead (a pharmacy «Витамины» also reads as «Препараты»). The
+    curated word comes first so the most specific option wins when present."""
+    if not domain:
+        return (primary,)
+    return (primary, *_CATEGORY_SYNONYMS.get(domain, {}).get(primary, ()))
+
+
 def _match_category_option(options: Sequence[str], category: str) -> str | None:
     """The enum option that best names `category`, or None if none does. Matches
     case-insensitively by containment (either way) or a shared 5-char stem (so
@@ -842,9 +943,10 @@ def _field_value(
         # A category/type enum agrees with the row's title noun when an option
         # matches it — so a "Витамин C" row reads "Витамины", not "Косметика".
         if row_category and _has_token(key, _CATEGORY_FIELD_TOKENS):
-            match = _match_category_option(fshape.options, row_category)
-            if match is not None:
-                return match
+            for cand in _category_candidates(domain, row_category):
+                match = _match_category_option(fshape.options, cand)
+                if match is not None:
+                    return match
         # Otherwise cycle by index so a catalog spreads across every option.
         return fshape.options[index % len(fshape.options)]
 
