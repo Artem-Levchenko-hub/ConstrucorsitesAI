@@ -49,6 +49,8 @@ def test_static_prompt_includes_landing_section_kit() -> None:
             "header-nav",  # v2.22 #3 — the page FRAME (sticky nav) is now kit, not hand-rolled
             "hero-centered",  # v2.22 #2 — the hero (rubric crit. 5) is now kit, not hand-rolled
             "hero-split",
+            "hero-editorial",  # v2.23 #1 — archetype hero: type-as-graphic (Bold Studio/Kinetic/portfolio)
+            "hero-cinematic",  # v2.23 #1 — archetype hero: full-bleed photo-art (Apple Tech/luxury/premium)
             "logos-strip",  # v2.22 #3 — social-proof band, kit-sourced
             "features-grid",
             "pricing-plans",
