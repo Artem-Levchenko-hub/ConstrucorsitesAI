@@ -668,6 +668,30 @@ def test_entities_ui_public_home_uses_storefront_hero() -> None:
     )
 
 
+def test_entities_ui_public_home_uses_storefront_section() -> None:
+    # The connective marketing tissue BELOW the hero (services / value props /
+    # features / pricing / FAQ) is the biggest hand-rolled, variable-quality
+    # region on the most shareable surface. Guidance must anchor it on the
+    # <StorefrontSection> + <FeatureCard> kit primitives (brand-palette-driven,
+    # model-independent) instead of raw Tailwind, and both must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "StorefrontSection" in _ENTITIES_UI
+    assert "FeatureCard" in _ENTITIES_UI
+    # the section rule names the below-hero region it owns
+    assert "СЕКЦИИ ПОД ГЕРОЕМ" in _ENTITIES_UI
+    # section headings must be <h2> (the single <h1> stays on the hero)
+    assert "Заголовки секций = <h2>" in _ENTITIES_UI
+    # both primitives sit in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("StorefrontSection") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # both must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("FeatureCard") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
 def test_entities_ui_dashboard_loading_never_blank() -> None:
     # The flagship dashboard must never render a blank screen while data loads:
     # the generated `if (loading) return null` paints nothing (and, if a fetch

@@ -833,10 +833,10 @@ _ENTITIES_UI = """\
 СОБИРАЙ ИЗ НЕГО, не лепи кнопки/таблицы/сайдбары сырым Tailwind.
 
 ▸ ИМПОРТЫ (готовы, просто используй):
-  import { AppShell, PageHeader, DashboardHero, StorefrontHero, StatCard, CountUp,
-           DataTable, CrudResource, GalleryGrid, MediaCard, EntityForm, EmptyState,
-           useEntity, DashboardSkeleton, type Column, Sparkline, TrendArea, BarMini,
-           DonutStat } from "@/components/omnia";
+  import { AppShell, PageHeader, DashboardHero, StorefrontHero, StorefrontSection,
+           FeatureCard, StatCard, CountUp, DataTable, CrudResource, GalleryGrid,
+           MediaCard, EntityForm, EmptyState, useEntity, DashboardSkeleton,
+           type Column, Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
   import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
   // dialog, sheet, tabs, badge, dropdown-menu, table, checkbox, avatar, tooltip, separator …
   import { cn, formatRub, formatDate } from "@/lib/utils";   // formatRub(1234)→"1 234 ₽"
@@ -878,6 +878,28 @@ _ENTITIES_UI = """\
      hero-кадр (кит сам кропнет в рамку); нет фото (🎨 off) — опусти media=, баннер
      остаётся типографикой-first. CTA href — ТОЛЬКО рабочие (/signin, /dashboard,
      #якорь-секции), ноль «#»-тупиков. align="center" — когда хочешь центр-композицию.
+  ▸ СЕКЦИИ ПОД ГЕРОЕМ — <StorefrontSection> + <FeatureCard> (готовый кит, НЕ верстай
+     маркетинг-секции сырым Tailwind). Это связующая ткань публичной «/» ниже первого
+     экрана: возможности / услуги / преимущества / «как это работает» / отзывы / цены /
+     FAQ. <StorefrontSection> держит ритм enterprise-лендинга (единый max-width, крупные
+     вертикальные отступы, eyebrow + <h2> + lead), а с `columns={2|3|4}` сам раскладывает
+     детей в бренд-осознанную stagger-сетку. <FeatureCard> — карточка ценности (бренд-чип
+     с иконкой + заголовок + строка-две), опц. `media=` (фото-вперёд), `badge=`, `href=`/
+     `cta=`. Чередуй `tint` на каждой второй секции — страница получает дыхание.
+       <StorefrontSection id="услуги" eyebrow="Что мы делаем" title="Услуги клиники"
+         lead="От профилактики до имплантации — щадяще и прозрачно по цене."
+         align="center" columns={3}>
+         <FeatureCard icon={<Smile />} title="Гигиена и профилактика"
+           description="Чистка, фторирование, контроль каждые 6 месяцев." />
+         <FeatureCard icon={<Stethoscope />} title="Лечение кариеса"
+           description="Безболезненно под местной анестезией за один визит." />
+         <FeatureCard icon={<Sparkles />} title="Эстетика и отбеливание"
+           description="Виниры и отбеливание ZOOM с гарантией результата." />
+       </StorefrontSection>
+     Все строки — из БРИФА ниши (реальные услуги/цифры/выгоды), НЕ «Преимущество 1».
+     Заголовки секций = <h2> (единственный <h1> несёт <StorefrontHero>). `columns` — ТОЛЬКО
+     для сетки <FeatureCard>; для прайс-таблицы / отзывов / FAQ опусти `columns` и сверстай
+     содержимое сам внутри секции. Иконки <FeatureCard> — из lucide, ОСМЫСЛЕННЫЕ под пункт.
   ▸ ВИТРИНА / ШОУКЕЙС НА ГЛАВНОЙ. Публичная «/» — КОНТЕНТНЫЙ лендинг: соблюдай
     _IMAGE_GEN_ON ПОЛНОСТЬЮ — hero-фон + 3–6 контентных фото секций через
     `data-omnia-gen` (повторяющиеся карточки — общим `data-omnia-gen-group`). Лендинг

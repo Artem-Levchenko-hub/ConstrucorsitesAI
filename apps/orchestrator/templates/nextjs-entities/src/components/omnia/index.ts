@@ -25,6 +25,12 @@ export {
   type StorefrontCta,
   type StorefrontStat,
 } from "./storefront-hero";
+export {
+  StorefrontSection,
+  type StorefrontSectionProps,
+  FeatureCard,
+  type FeatureCardProps,
+} from "./storefront-section";
 export { StatCard, type StatCardProps } from "./stat-card";
 export { DashboardSkeleton } from "./dashboard-skeleton";
 export { CountUp, type CountUpProps } from "./count-up";
