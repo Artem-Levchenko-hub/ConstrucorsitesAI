@@ -36,17 +36,20 @@ log = structlog.get_logger("omnia_orchestrator.demo_seed_writer")
 _ENTITY_PREFIX = "entities/"
 _ENTITY_SUFFIX = ".json"
 
-# Only PUBLIC entities yield rows everyone can see. `admin` rows need an admin
-# session (default new users are role "user"), `owner` rows filter to the
-# viewer — neither shows in the first-paint catalog, so seeding them is wasted.
-_SEEDABLE_ACCESS = frozenset({"public"})
+# PUBLIC rows everyone sees; ADMIN rows the operator's back-office dashboard
+# reads. The first signup is now the admin operator (auth.roleForNewUser skips
+# the password-less demo owner), so admin entities (Orders/Inquiries) DO show on
+# first paint — seeding them keeps the dashboard hero from reading a dead "0 ₽".
+# `owner` rows filter per-viewer (an empty "my items" is the right first state),
+# so they stay unseeded — demo-owned owner rows would be invisible anyway.
+_SEEDABLE_ACCESS = frozenset({"public", "admin"})
 
 
 def _build_batches(
     project_id: UUID, files: Mapping[str, str], niche: str | None = None
 ) -> dict[str, list[dict[str, Any]]]:
     """Parse the entity schemas in `files` and generate demo rows for each
-    PUBLIC entity. The project id is the deterministic seed, so the same app
+    seedable (public + admin) entity. The project id is the deterministic seed, so the same app
     yields byte-identical demo data on every run and machine. `niche` (the app
     slug) lets the seeder pick niche-realistic catalog titles."""
     seed = str(project_id)
