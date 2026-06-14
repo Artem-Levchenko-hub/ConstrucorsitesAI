@@ -34,6 +34,7 @@ from omnia_api.services import (
     compose_gate,
     data_gate,
     defect_registry,
+    edit_registry,
     hierarchy_gate,
     onboarding_registry,
     perf_a11y_gate,
@@ -66,6 +67,7 @@ DEFECT_REGISTRY = "defect-registry"
 COMPOSE = "compose"
 ONBOARDING = "onboarding"
 RENDER = "render"
+EDIT = "edit"
 VIRAL = "viral"
 WOW_DOM = "wow-dom"
 PERF_A11Y = "perf-a11y"
@@ -313,6 +315,25 @@ def _from_render(rep: render_registry.RenderReport) -> GateVerdict:
     )
 
 
+def _from_edit(rep: edit_registry.EditReport) -> GateVerdict:
+    """Adapt the edit-loop registry (V1.11) — a pure context-scan, like the render one.
+
+    It never abstains: a turn that is not an edit (no BEFORE/AFTER pair to compare,
+    an empty context) is INERT and reports ``passed=True`` (nothing to compare ≠ a
+    flaky render with no evidence). Its iteration-regression verdict is single-sourced
+    on the gauntlet's own ``passed_classes`` and the snapshot path's section
+    signatures (R-04).
+    """
+    return GateVerdict(
+        gate=EDIT,
+        passed=rep.passed,
+        abstained=False,  # pure context-scan — its evidence is always present
+        classes=rep.classes,
+        summary=rep.summary(),
+        subscore=rep.subscore(),
+    )
+
+
 def _from_rendered(gate: str, rep: Any) -> GateVerdict:
     """Adapt a rendered gate's report (wow/perf/chip — same shape) to a verdict.
 
@@ -396,6 +417,8 @@ async def run(
     onboarding_context: onboarding_registry.OnboardingContext | None = None,
     render: bool = False,
     render_context: render_registry.RenderContext | None = None,
+    edit: bool = False,
+    edit_context: edit_registry.EditContext | None = None,
 ) -> GauntletVerdict:
     """Fan the selected landed gates over ``files`` and/or a live ``url``.
 
@@ -436,6 +459,17 @@ async def run(
       ``art_director_writer.parse_brief`` (R-04). It is INERT on a no-brief / empty /
       ``None`` context, so it never false-fails; a brief is not a file set, so it is
       independent of ``files``.
+
+    * ``edit=True`` adds the V1.11 edit-loop regression registry — also a pure
+      context-scan (no render, no LLM). It scores ONE edit turn (the
+      ``edit_context``'s BEFORE gen-1 + AFTER post-edit snapshots) against the
+      iteration invariants — a previously-clean gauntlet class regressing, an
+      untargeted section mutating as collateral, the rollback snapshot failing to
+      restore the gen-1 surface — single-sourcing the verdict on the gauntlet's own
+      ``passed_classes`` and the snapshot path's section signatures (R-04). It is
+      INERT on a non-edit (no BEFORE/AFTER pair) / empty / ``None`` context, so it
+      never false-fails; an edit turn is not a first generation, so it is independent
+      of ``files`` and exercised by the iteration ratchet / the paid-run manifest.
 
     Two independent dials pick WHICH rendered legs run (V1.6 14/5 decouple):
 
@@ -518,6 +552,20 @@ async def run(
     # paid-run manifest, not the per-gen ship path.
     if render:
         gates.append(_from_render(render_registry.scan(render_context)))
+
+    # V1.11 — the money-free edit-loop regression registry. Like the render registry
+    # it is a pure CONTEXT-scan (no render, no LLM): it scores ONE edit turn (the
+    # ``edit_context``'s BEFORE gen-1 + AFTER post-edit snapshots) against the
+    # falsifiable iteration invariants — a previously-clean gauntlet class regressing,
+    # an untargeted section mutating as collateral, the rollback snapshot failing to
+    # restore the gen-1 surface — single-sourcing the verdict on the gauntlet's own
+    # ``passed_classes`` and the snapshot path's section signatures (R-04). It is
+    # INERT (a passing no-op) on a non-edit / empty / None context, so wiring it is
+    # safe on every path; an edit turn is not a first generation, so it is independent
+    # of ``files`` and exercised by the iteration ratchet / the paid-run manifest, not
+    # the per-gen ship path.
+    if edit:
+        gates.append(_from_edit(edit_registry.scan(edit_context)))
 
     legs: set[str] = set(RENDERED_GATES) if include_rendered else set()
     if composition:
