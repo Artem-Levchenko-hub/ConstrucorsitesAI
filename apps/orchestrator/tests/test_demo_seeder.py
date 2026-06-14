@@ -225,6 +225,49 @@ def test_thing_entity_name_is_not_a_person() -> None:
     assert all(r["name"] not in ds._PERSON_NAMES for r in rows)
 
 
+# ── person-profession entities (RULE-10 #12) ─────────────────────────────────
+# Russian SMB niches model staff as profession entities — `Мастер`, `Барбер`,
+# `Специалист`, `Парикмахер`, `Стилист`, `Тренер`… These read as people, so a
+# team/staff page must show a ФИО ("Анна Смирнова"), not a service-noun
+# ("Окрашивание 1") in the name column, and a personal email mailbox. But the
+# substring match must NOT promote venue/event/org superstrings (`Мастер-класс`,
+# `Парикмахерская`, `Барбершоп`, `Агентство`, `Мастерская`) to people.
+
+
+@pytest.mark.parametrize(
+    "entity",
+    [
+        "Мастер", "Барбер", "Специалист", "Врач", "Парикмахер", "Стилист",
+        "Тренер", "Инструктор", "Преподаватель", "Консультант", "Агент",
+        "Barber", "Specialist", "Stylist", "Trainer",
+    ],
+)
+def test_person_profession_entity_name_is_a_person(entity: str) -> None:
+    f = _fields(name={"type": "string", "required": True})
+    rows = ds.generate_rows(entity, f, count=6, seed="s", niche="salon-krasoty")
+    assert all(r["name"] in ds._PERSON_NAMES for r in rows), entity
+
+
+def test_person_profession_entity_email_is_personal_handle() -> None:
+    f = _fields(email={"type": "string", "required": True})
+    rows = ds.generate_rows("Мастер", f, count=10, seed="s", niche="salon-krasoty")
+    locals_ = [r["email"].split("@")[0] for r in rows]
+    assert all(loc in ds._EMAIL_HANDLES_PERSON for loc in locals_)
+
+
+@pytest.mark.parametrize(
+    "entity",
+    ["Мастер-класс", "Мастеркласс", "Парикмахерская", "Барбершоп",
+     "Агентство", "Мастерская", "Masterclass"],
+)
+def test_venue_event_org_entity_is_not_a_person(entity: str) -> None:
+    """The negative guard keeps a venue/event/org that merely *contains* a
+    profession noun from being mistaken for a person."""
+    f = _fields(name={"type": "string", "required": True})
+    rows = ds.generate_rows(entity, f, count=6, seed="s", niche="salon-krasoty")
+    assert all(r["name"] not in ds._PERSON_NAMES for r in rows), entity
+
+
 def test_city_field_from_pool() -> None:
     f = _fields(city={"type": "string", "required": True})
     rows = ds.generate_rows("Order", f, count=6, seed="s")

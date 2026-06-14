@@ -794,6 +794,24 @@ _PERSON_ENTITY_HINT = (
     "client", "customer", "student", "patient", "employee", "manager",
     "user", "contact", "lead", "author", "member", "doctor", "person",
     "клиент", "пациент", "сотрудник", "ученик", "студент", "пользователь",
+    # Profession nouns — a salon/clinic/gym/realty app models its staff as these.
+    # A team page must show a ФИО, not a service-noun, in the name column.
+    "barber", "specialist", "stylist", "trainer", "instructor", "teacher",
+    "consultant", "agent", "guest",
+    "мастер", "барбер", "специалист", "врач", "парикмахер", "стилист",
+    "тренер", "инструктор", "преподаватель", "учитель", "консультант",
+    "агент", "риелтор", "риэлтор", "водитель", "курьер", "продавец",
+    "гость", "посетитель",
+)
+# Venue / event / org names that merely *contain* a profession noun as a
+# substring but model a place or thing, never a person — checked FIRST so the
+# substring match in `_models_person` can't promote them (mirrors the
+# negative-token-first polarity guard used for boolean flags). `мастерск` also
+# covers `Мастерская` (workshop); `парикмахерск` covers `Парикмахерская`.
+_NON_PERSON_ENTITY_HINT = (
+    "мастер-класс", "мастеркласс", "мастерск", "masterclass", "master class",
+    "master-class", "парикмахерск", "барбершоп", "barbershop", "barber shop",
+    "barber-shop", "агентств", "agency",
 )
 
 
@@ -1194,11 +1212,21 @@ def _has_token(key: str, tokens: tuple[str, ...]) -> bool:
     return any(t in key for t in tokens)
 
 
-def _entity_is_person(entity: str) -> bool:
-    """Whether the entity itself models a person (Client, Doctor, Employee …) —
-    used to pick a personal vs. business email mailbox."""
+def _models_person(entity: str) -> bool:
+    """Whether the entity itself models a person (Client, Doctor, Мастер,
+    Барбер …). A venue/event/org that merely contains a profession noun as a
+    substring (Мастер-класс, Парикмахерская, Агентство) is excluded first, so
+    the substring match below can't promote it."""
     e = entity.lower()
+    if any(h in e for h in _NON_PERSON_ENTITY_HINT):
+        return False
     return any(h in e for h in _PERSON_ENTITY_HINT)
+
+
+def _entity_is_person(entity: str) -> bool:
+    """Whether the entity models a person — used to pick a personal vs. business
+    email mailbox."""
+    return _models_person(entity)
 
 
 def _email_domain(niche: str | None) -> str | None:
@@ -1226,8 +1254,7 @@ def _is_person_entity(entity: str, key: str) -> bool:
     # Only treat a bare name/title as a person when the ENTITY itself is a person.
     if not _has_token(key, ("name", "имя", "title", "название", "заголовок", "фио")):
         return False
-    e = entity.lower()
-    return any(h in e for h in _PERSON_ENTITY_HINT)
+    return _models_person(entity)
 
 
 def _slugish(text: str) -> str:
