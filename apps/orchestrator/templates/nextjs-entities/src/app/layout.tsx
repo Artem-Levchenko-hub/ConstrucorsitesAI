@@ -65,6 +65,11 @@ export default function RootLayout({
             viewer (hidden inside the owner-workspace iframe); forks the app into
             a stranger's own editable copy with zero signup. Drift-synced. */}
         <Script src="/omnia-remix-cta.js" strategy="afterInteractive" />
+        {/* Omnia brief-narration — turns the art-director brief (forwarded by
+            the workspace over postMessage, or baked onto window.__omniaBrief)
+            into a short "AI is designing" reveal so every generated surface is
+            born vocal, not silent. Inert without a brief. Drift-synced. */}
+        <Script src="/omnia-brief-narration.js" strategy="afterInteractive" />
       </body>
     </html>
   );

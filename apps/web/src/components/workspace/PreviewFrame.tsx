@@ -30,7 +30,7 @@ import { useWorkspaceStore } from "@/store/workspace";
 import { useInspectorStore } from "@/store/inspector";
 import { useStyleEditStore } from "@/store/styleEdit";
 import { toast } from "sonner";
-import type { Project, Snapshot, TurnMode } from "@/lib/api/types";
+import type { Project, Snapshot, StreamBrief, TurnMode } from "@/lib/api/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shortSha, cn, formatRelativeTime } from "@/lib/utils";
 import { StreamingPreviewFrame } from "./StreamingPreviewFrame";
@@ -99,6 +99,18 @@ export function PreviewFrame({ project }: { project: Project }) {
   const { data: messages } = useQuery({
     queryKey: ["messages", project.id],
     queryFn: () => listMessages(project.id),
+  });
+  // Art-director brief for the latest message (cached by usePromptStream on the
+  // `omnia:brief` event — same client-only key the streaming freeform preview
+  // reads). We forward it into the live entity/fullstack container below so the
+  // generated app narrates its own birth (omnia-brief-narration.js); otherwise
+  // entity surfaces are born silent — the brief reaches only the workspace chat.
+  const briefMsgId = messages?.[messages.length - 1]?.id ?? "";
+  const { data: streamBrief } = useQuery<StreamBrief | null>({
+    queryKey: ["stream-brief", project.id, briefMsgId],
+    queryFn: () => null,
+    enabled: false,
+    initialData: null,
   });
 
   // Fullstack projects (V2 Phase A) preview a live Next.js dev container,
@@ -447,7 +459,29 @@ export function PreviewFrame({ project }: { project: Project }) {
         150,
       );
     }
-  }, [frameKey, inspectMode, styleMode, postToPreview]);
+    // Replay the birth narration on (re)load if the brief is already here.
+    if (streamBrief) {
+      window.setTimeout(
+        () => postToPreview({ type: "omnia:brief", brief: streamBrief }),
+        150,
+      );
+    }
+  }, [frameKey, inspectMode, styleMode, streamBrief, postToPreview]);
+
+  // Forward the art-director brief into the live container so the generated app
+  // plays its "AI is designing" reveal (omnia-brief-narration.js). Cross-origin
+  // send is fine — only reads are blocked. The brief can land before OR after
+  // the iframe loads, so we post on every relevant change plus retry once for a
+  // listener that registered late (afterInteractive script on a fresh frame).
+  useEffect(() => {
+    if (!fullstackLive || !streamBrief) return;
+    postToPreview({ type: "omnia:brief", brief: streamBrief });
+    const retry = window.setTimeout(
+      () => postToPreview({ type: "omnia:brief", brief: streamBrief }),
+      900,
+    );
+    return () => window.clearTimeout(retry);
+  }, [fullstackLive, streamBrief, iframeKey, postToPreview]);
 
   // Пока ассистент стримит ответ — показываем долгоживущий streaming iframe
   // (StreamingPreviewFrame) с morphdom-патчингом. Когда llm.done приходит и
