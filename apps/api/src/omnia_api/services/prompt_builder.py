@@ -834,7 +834,8 @@ _ENTITIES_UI = """\
 
 ▸ ИМПОРТЫ (готовы, просто используй):
   import { AppShell, PageHeader, DashboardHero, StorefrontHero, StorefrontSection,
-           FeatureCard, PricingPlans, TestimonialWall, FaqAccordion, StatCard, CountUp, DataTable,
+           FeatureCard, PricingPlans, TestimonialWall, FaqAccordion, CtaBand,
+           StatCard, CountUp, DataTable,
            CrudResource, GalleryGrid, MediaCard, EntityForm, EmptyState, useEntity,
            DashboardSkeleton, type Column, Sparkline, TrendArea, BarMini, DonutStat
            } from "@/components/omnia";
@@ -970,6 +971,24 @@ _ENTITIES_UI = """\
        </StorefrontSection>
      Вопросы/ответы — из БРИФА ниши (реальные сомнения клиента и честные ответы), НЕ «Вопрос 1».
      Чередуй `tint` с соседней секцией для ритма. Нет смысла в FAQ у ниши — секцию не выдумывай.
+  ▸ ФИНАЛЬНЫЙ ПРИЗЫВ / CTA-БЭНД — <CtaBand> (готовый кит, НЕ верстай финальный призыв сырьём).
+     Лендинг ОБЯЗАН закрываться конверсионным аккордом — полноэкранным НАСЫЩЕННЫМ
+     бренд-бэндом у подвала (OpenTable / OpenPhone / Blue Apron / Tripadvisor): один
+     смелый призыв + строка-нудж + ОДИН яркий CTA. Это единственная full-bleed
+     ИНВЕРТИРОВАННАЯ (на бренд-цвете) секция кита — её паттерн осознанно ОТЛИЧЕН от
+     светлых контентных секций выше, читается как кульминация, не «ещё одна сетка».
+     Ставь его ПРЯМО на «/» (НЕ внутрь <StorefrontSection> — компонент сам держит свой
+     full-bleed бэнд), ПОСЛЕДНИМ блоком ПЕРЕД футером. Бренд-осознан: панель/акценты из
+     `--primary`/`--accent` (тот же компонент = разный бренд под нишу).
+       <CtaBand eyebrow="Готовы начать?" title="Запишитесь на приём сегодня"
+         subtitle="Свободные окна на этой неделе — выберите время за минуту."
+         primaryCta={{ label: "Записаться онлайн", href: "/signin" }}
+         secondaryCta={{ label: "Услуги и цены", href: "#цены" }}
+         note="Без предоплаты • Отмена в любой момент" />
+     Заголовок/призыв/CTA — из БРИФА ниши (реальное действие), НЕ «Призыв 1». `tone="brand"`
+     (по умолч.) = насыщенный бэнд; `tone="soft"` — когда герой уже насыщен (не два тяжёлых
+     бэнда). `href` CTA — рабочий (/signin / #якорь), ноль «#»-тупиков. Заголовок = <h2>
+     (единственный <h1> несёт <StorefrontHero>).
   ▸ ВИТРИНА / ШОУКЕЙС НА ГЛАВНОЙ. Публичная «/» — КОНТЕНТНЫЙ лендинг: соблюдай
     _IMAGE_GEN_ON ПОЛНОСТЬЮ — hero-фон + 3–6 контентных фото секций через
     `data-omnia-gen` (повторяющиеся карточки — общим `data-omnia-gen-group`). Лендинг

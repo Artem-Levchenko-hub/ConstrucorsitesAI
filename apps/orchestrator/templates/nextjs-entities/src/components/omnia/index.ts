@@ -46,6 +46,11 @@ export {
   type FaqAccordionProps,
   type FaqItem,
 } from "./faq-accordion";
+export {
+  CtaBand,
+  type CtaBandProps,
+  type CtaBandAction,
+} from "./cta-band";
 export { StatCard, type StatCardProps } from "./stat-card";
 export { DashboardSkeleton } from "./dashboard-skeleton";
 export { CountUp, type CountUpProps } from "./count-up";

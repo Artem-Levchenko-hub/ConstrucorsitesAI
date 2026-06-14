@@ -761,6 +761,28 @@ def test_entities_ui_public_home_uses_faq_accordion() -> None:
     )
 
 
+def test_entities_ui_public_home_uses_cta_band() -> None:
+    # The closing call-to-action is a genuinely distinct premium pattern (the only
+    # full-bleed, inverted, brand-saturated band in the kit — the page's conversion
+    # climax) — it must anchor on the <CtaBand> kit primitive instead of a
+    # hand-rolled final CTA, and the primitive must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "CtaBand" in _ENTITIES_UI
+    # the CTA rule names the section it owns
+    assert "ФИНАЛЬНЫЙ ПРИЗЫВ / CTA-БЭНД" in _ENTITIES_UI
+    # it explicitly tells the model NOT to hand-roll the final CTA
+    assert "НЕ верстай финальный призыв сырьём" in _ENTITIES_UI
+    # it sits in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("CtaBand") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("CtaBand") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
 def test_entities_ui_dashboard_loading_never_blank() -> None:
     # The flagship dashboard must never render a blank screen while data loads:
     # the generated `if (loading) return null` paints nothing (and, if a fetch
