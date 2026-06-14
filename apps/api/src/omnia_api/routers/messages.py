@@ -54,7 +54,7 @@ from omnia_api.services.art_director_writer import (
     art_director_writer_generate,
     supports_app_brief,
 )
-from omnia_api.services.chip_pixel_gate import spec_from_discovery
+from omnia_api.services.chip_pixel_gate import spec_from_discovery, spec_preview
 from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.contrast_guard import enforce_contrast
 from omnia_api.services.director_polish import director_polish_generate
@@ -474,7 +474,11 @@ async def _batch_discovery_turn(
         # far back as «✓ …» chips above the next question, so the loop visibly
         # reacts to what the user said.
         recap = recap_labels(gather_answers(history, prompt, asked_count))
-        return replace(ask, niche=niche, recap=recap)
+        # LIVE design-preview (pillars 2×3 — «покажи ЧТО построим»): resolve the
+        # cumulative answers into design tokens so the popup paints a mini-hero
+        # that morphs turn-by-turn. Same spec_from_discovery the gauntlet uses.
+        design_preview = spec_preview(spec_from_discovery(history, prompt))
+        return replace(ask, niche=niche, recap=recap, design_preview=design_preview)
     # Plan exhausted — every question answered → build from the full Q&A.
     return await run_discovery(
         history, prompt, asked_count=asked_count, force_build=True
@@ -791,6 +795,7 @@ async def post_prompt(
         question_total = discovery_result.question_total or None
         niche = discovery_result.niche or None
         recap = list(discovery_result.recap)
+        design_preview = discovery_result.design_preview
     else:
         ask_choices = []
         allow_custom = True
@@ -799,6 +804,7 @@ async def post_prompt(
         question_total = None
         niche = None
         recap = []
+        design_preview = None
     return PromptResponse(
         message_id=assistant_msg.id,
         snapshot_id=None,
@@ -810,6 +816,7 @@ async def post_prompt(
         question_total=question_total,
         niche=niche,
         recap=recap,
+        design_preview=design_preview,
     )
 
 

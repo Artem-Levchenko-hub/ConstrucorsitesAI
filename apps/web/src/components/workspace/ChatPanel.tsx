@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PanelLeftClose } from "lucide-react";
 import { listMessages } from "@/lib/api/messages";
-import type { SelectedElement } from "@/lib/api/types";
+import type { DesignPreview, SelectedElement } from "@/lib/api/types";
 import { ChatMessage } from "./ChatMessage";
 import { PromptInput } from "./PromptInput";
 import { DiscoveryChips } from "./DiscoveryChips";
@@ -25,6 +25,8 @@ type DiscoveryChoices = {
   niche?: string | null;
   // Answer-recap chips of what the user has said so far (pillar 2 — «вас услышали»).
   recap?: string[] | null;
+  // LIVE design-preview tokens (pillars 2×3 — «покажи ЧТО построим»).
+  designPreview?: DesignPreview | null;
 };
 
 export function ChatPanel({
@@ -184,6 +186,7 @@ export function ChatPanel({
             questionIndex={chips.questionIndex ?? null}
             questionTotal={chips.questionTotal ?? null}
             recap={chips.recap ?? null}
+            designPreview={chips.designPreview ?? null}
             onSkip={handleSkip}
           >
             <DiscoveryChips

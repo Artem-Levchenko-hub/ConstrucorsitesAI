@@ -642,6 +642,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             questionTotal: resp.question_total ?? null,
             niche: resp.niche ?? null,
             recap: resp.recap ?? [],
+            // LIVE design-preview (pillars 2×3): tokens the answers steer toward,
+            // so DiscoveryFrame can paint a mini-hero that morphs turn-by-turn.
+            designPreview: resp.design_preview ?? null,
           });
         }
       } catch (e) {

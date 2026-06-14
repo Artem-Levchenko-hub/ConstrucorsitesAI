@@ -19,6 +19,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -177,6 +178,13 @@ class DiscoveryResult:
     # reacts to what they said. Empty on the first turn (nothing answered yet) and
     # on BUILD turns.
     recap: tuple[str, ...] = ()
+    # Onboarding LIVE design-preview (NORTH STAR pillars 2×3 — «покажи ЧТО
+    # построим»): the resolved design tokens (accent hex/family, theme, tone,
+    # sections) the gathered answers steer toward, so the popup can paint a live
+    # mini-hero that morphs on every answer instead of only echoing words. Shape
+    # is :func:`chip_pixel_gate.spec_preview`'s payload (or None when nothing
+    # design-relevant has been decided). None on the first turn and on BUILD turns.
+    design_preview: dict[str, Any] | None = None
 
 
 # Niche → short Russian banner label, matched by lowered-substring stems on the

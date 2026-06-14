@@ -224,6 +224,28 @@ export type PromptResponse = {
   // chips of the answers gathered so far. Absent on the first question and on
   // build/edit turns → older API still type-checks.
   recap?: string[] | null;
+  // Onboarding LIVE design-preview (NORTH STAR pillars 2×3 — «покажи ЧТО
+  // построим»): resolved design tokens the gathered answers steer toward, so the
+  // popup paints a live mini-hero that morphs on every answer instead of only
+  // echoing words. Absent on the first question and on build/edit turns → older
+  // API still type-checks. Mirrors api chip_pixel_gate.spec_preview's payload.
+  design_preview?: DesignPreview | null;
+};
+
+// Resolved design tokens for the onboarding live-preview mini-hero (pillars 2×3).
+// Each axis is optional/nullable — the popup only paints what the user has
+// decided so far (an undecided axis falls back to the UI's own neutral).
+export type DesignPreview = {
+  // Concrete accent HEX (e.g. "#AA3EDA"), or null until a colour family is picked.
+  accent?: string | null;
+  // The accent colour family name (e.g. "violet"), or null.
+  accent_family?: string | null;
+  // Dark canvas (true) / light canvas (false), or null when theme is undecided.
+  dark_mode?: boolean | null;
+  // Canonical tone token (premium / friendly / playful / minimal / corporate).
+  tone?: string | null;
+  // Canonical section keys the build will include (catalog / testimonials / …).
+  sections?: string[] | null;
 };
 
 export type ApiErrorCode =

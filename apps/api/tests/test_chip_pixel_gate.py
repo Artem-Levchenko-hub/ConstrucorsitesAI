@@ -18,6 +18,7 @@ from omnia_api.services.chip_pixel_gate import (
     family_of_hue,
     spec_confidence,
     spec_from_discovery,
+    spec_preview,
 )
 
 # Seeded "dark + violet" palette signals: near-black surface, violet CTA (#A855F7).
@@ -106,6 +107,59 @@ def test_from_answers_unknown_palette_word_ignored():
     spec = FidelitySpec.from_answers(palette="нечто непонятное")
     assert spec.primary_family is None
     assert spec.dark_mode is None
+
+
+# ── live design-preview payload (onboarding pillar 2×3) ────────────────────────
+
+
+def test_spec_preview_none_and_empty_abstain():
+    assert spec_preview(None) is None
+    assert spec_preview(FidelitySpec()) is None
+
+
+def test_spec_preview_resolves_family_to_hex():
+    prev = spec_preview(FidelitySpec(primary_family="violet"))
+    assert prev is not None
+    assert prev["accent_family"] == "violet"
+    # Same _FAMILY_HEX table the writer-directive + gate use (single source).
+    assert prev["accent"] == "#AA3EDA"
+
+
+def test_spec_preview_carries_all_axes():
+    prev = spec_preview(
+        FidelitySpec(
+            dark_mode=True,
+            primary_family="emerald",
+            sections=("catalog", "testimonials"),
+            tone="premium",
+        )
+    )
+    assert prev == {
+        "accent": "#3EDABA",
+        "accent_family": "emerald",
+        "dark_mode": True,
+        "tone": "premium",
+        "sections": ["catalog", "testimonials"],
+    }
+
+
+def test_spec_preview_accent_none_when_family_undecided():
+    # A theme-only answer still previews (dark canvas), accent falls back to UI.
+    prev = spec_preview(FidelitySpec(dark_mode=True))
+    assert prev is not None
+    assert prev["accent"] is None
+    assert prev["dark_mode"] is True
+
+
+def test_spec_preview_morphs_with_answers():
+    # Pillar-2 causality: each gathered answer changes the preview payload.
+    one = spec_preview(spec_from_discovery([], "тёмный сайт"))
+    history = [{"role": "user", "content": "тёмный сайт"}]
+    two = spec_preview(spec_from_discovery(history, "фиолетовый акцент"))
+    assert one is not None and two is not None
+    assert one.get("accent_family") is None
+    assert two["accent_family"] == "violet"
+    assert two["dark_mode"] is True
 
 
 # ── the headline contract: fixed render, swap the spec → verdict flips ─────────

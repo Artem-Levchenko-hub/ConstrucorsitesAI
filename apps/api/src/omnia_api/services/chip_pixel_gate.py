@@ -377,6 +377,33 @@ def spec_from_discovery(
     return None if spec.is_empty else spec
 
 
+def spec_preview(spec: FidelitySpec | None) -> dict[str, Any] | None:
+    """Resolve a chip-spec into a small live-preview payload for the onboarding UI.
+
+    The onboarding popup gathers design axes turn by turn; this marshals the
+    CUMULATIVE :class:`FidelitySpec` into the handful of resolved tokens the
+    workspace needs to paint a live mini-hero that morphs on every answer —
+    «покажи ЧТО построим», not just «эхо что сказал» (NORTH STAR pillars 2×3).
+
+    Resolves ``primary_family`` to its concrete accent HEX through the SAME
+    :data:`_FAMILY_HEX` table the writer-directive and gate use (R-04 single
+    source), so the preview swatch lands on the exact accent the build will get.
+    ``accent`` is ``None`` when no family is decided yet (the UI falls back to its
+    own neutral accent). Returns ``None`` for a ``None`` / empty spec (nothing
+    decided yet → the popup shows no preview), so an undecided first question
+    stays clean and the preview only appears once an axis is actually steered.
+    """
+    if spec is None or spec.is_empty:
+        return None
+    return {
+        "accent": _FAMILY_HEX.get(spec.primary_family or ""),
+        "accent_family": spec.primary_family,
+        "dark_mode": spec.dark_mode,
+        "tone": spec.tone,
+        "sections": list(spec.sections),
+    }
+
+
 def compile_build_spec(prompt: str) -> FidelitySpec:
     """Reify a single raw build prompt into a :class:`FidelitySpec`, no chips, no LLM.
 

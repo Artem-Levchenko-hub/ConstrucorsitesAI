@@ -102,3 +102,10 @@ class PromptResponse(BaseModel):
     # chips of the answers gathered so far, so the popup echoes what the user
     # said back at them. Empty on the first question and on build/edit turns.
     recap: list[str] = Field(default_factory=list)
+    # Onboarding LIVE design-preview (NORTH STAR pillars 2×3 — «покажи ЧТО
+    # построим»): resolved design tokens the gathered answers steer toward —
+    # {accent (hex|null), accent_family, dark_mode, tone, sections} — so the popup
+    # paints a live mini-hero that morphs on every answer instead of only echoing
+    # the words back. None on the first question, on build/edit turns, and whenever
+    # no design axis has been decided yet.
+    design_preview: dict[str, object] | None = None
