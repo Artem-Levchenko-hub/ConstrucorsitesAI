@@ -147,10 +147,23 @@ def test_money_field_is_positive_number() -> None:
     assert all(isinstance(r["price"], int) and r["price"] > 0 for r in rows)
 
 
-def test_rating_field_is_one_to_five() -> None:
+def test_rating_field_skews_high_and_appealing() -> None:
+    # A fresh demo catalog should look appealing: a uniform 1–5 spread put a 1★/2★
+    # "bad product" on ~40% of cards (a WOW-killer on the first screen). Ratings
+    # must cluster at the top — 4–5, never below 4, kept integer so a star-widget
+    # that renders `Array(rating)` can't crash on a fractional value.
+    for fname in ("rating", "рейтинг", "оценка", "stars", "звёзд"):
+        f = _fields(**{fname: {"type": "number", "required": True}})
+        rows = ds.generate_rows("Review", f, count=12, seed="s")
+        assert rows, fname
+        assert all(isinstance(r[fname], int) for r in rows), fname
+        assert all(4 <= r[fname] <= 5 for r in rows), fname
+    # …and across many seeds the top value (5) actually dominates, so the catalog
+    # reads as well-reviewed rather than mediocre.
     f = _fields(rating={"type": "number", "required": True})
-    rows = ds.generate_rows("Review", f, count=12, seed="s")
-    assert all(1 <= r["rating"] <= 5 for r in rows)
+    spread = [r["rating"] for s in range(40)
+              for r in ds.generate_rows("Review", f, count=12, seed=f"s{s}")]
+    assert spread.count(5) > spread.count(4)
 
 
 def test_percent_field_is_zero_to_hundred() -> None:

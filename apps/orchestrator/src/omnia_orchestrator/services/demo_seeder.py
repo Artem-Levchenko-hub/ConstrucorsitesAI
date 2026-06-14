@@ -1109,7 +1109,12 @@ def _demo_number(
         # Round-ish rouble amounts, 990 … ~199 990 (generic / unknown niche).
         return (_hash_int(seed, entity, fname, index) % 200 + 1) * 990
     if _has_token(key, _RATING_TOKENS):
-        return _hash_int(seed, entity, fname, index) % 5 + 1
+        # A fresh demo catalog should look *appealing*: a uniform 1–5 spread puts
+        # a 1★/2★ "bad product" on ~40% of cards — broken-looking on the first
+        # screen (pillar 1). Real catalogs cluster ratings at the top, so we skew
+        # to a believable 4–5 band (≈¾ five-star, ¼ four-star), never below 4.
+        # Kept integer so a star-widget that renders `Array(rating)` can't crash.
+        return 4 if _hash_int(seed, entity, fname, index) % 4 == 0 else 5
     if _has_token(key, _AGE_TOKENS):
         return _hash_int(seed, entity, fname, index) % 53 + 18
     if _has_token(key, _PERCENT_TOKENS):
