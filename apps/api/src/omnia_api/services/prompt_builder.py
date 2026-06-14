@@ -833,8 +833,8 @@ _ENTITIES_UI = """\
 СОБИРАЙ ИЗ НЕГО, не лепи кнопки/таблицы/сайдбары сырым Tailwind.
 
 ▸ ИМПОРТЫ (готовы, просто используй):
-  import { AppShell, PageHeader, DashboardHero, StatCard, CountUp, DataTable,
-           CrudResource, GalleryGrid, MediaCard, EntityForm, EmptyState, useEntity,
+  import { AppShell, PageHeader, DashboardHero, StorefrontHero, StatCard, CountUp,
+           DataTable, CrudResource, GalleryGrid, MediaCard, EntityForm, EmptyState, useEntity,
            type Column, Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
   import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
   // dialog, sheet, tabs, badge, dropdown-menu, table, checkbox, avatar, tooltip, separator …
@@ -852,6 +852,31 @@ _ENTITIES_UI = """\
      ❌ НИКОГДА index.html / <!DOCTYPE> / <html> / <body>: это Next.js, статический
      index.html он ИГНОРИРУЕТ (его не видно, «/» отдаёт 404). Главная = ТОЛЬКО
      src/app/page.tsx как React-компонент. Тащи сюда всё качество лендингов.
+  ▸ ПЕРВЫЙ ЭКРАН ГЛАВНОЙ — <StorefrontHero> (готовый кит, НЕ верстай hero сырьём).
+     Это публичный двойник <DashboardHero>: фуллскрин-баннер с ОДНИМ доминантным
+     оффером, единым бренд-glow (берёт `--primary`/`--accent` палитры — тот же
+     компонент читается как РАЗНЫЙ бренд под нишу), главным CTA и тихой полосой 1–3
+     proof-цифр. Ставь его ПЕРВЫМ в page.tsx, он рендерит единственный публичный
+     <h1>; дальше — твои контентные секции (возможности / меню / услуги / отзывы /
+     цены / FAQ). НЕ дублируй второй <h1>.
+       <StorefrontHero
+         badge="Запись онлайн" eyebrow="Стоматология в центре"
+         title="Здоровая улыбка без страха и очередей"
+         subtitle="Щадящее лечение и прозрачные цены — запишитесь онлайн за минуту."
+         primaryCta={{ label: "Записаться", href: "/signin" }}
+         secondaryCta={{ label: "Услуги и цены", href: "#услуги" }}
+         stats={[{ value: "8 лет", label: "на рынке" },
+                 { value: "4.9★", label: "оценка" },
+                 { value: "12 000+", label: "пациентов" }]}
+         media={<img data-omnia-gen="english prompt: modern dental clinic interior, daylight, 35mm"
+           alt="Интерьер клиники"
+           style={{ background: "linear-gradient(135deg,var(--primary),var(--accent))" }} />}
+       />
+     ВСЕ строки CTA/eyebrow/title/subtitle/stats — из БРИФА ниши (реальный оффер,
+     реальные цифры-доверие), НЕ «Lorem»/«Заголовок». media= — ОДИН `data-omnia-gen`
+     hero-кадр (кит сам кропнет в рамку); нет фото (🎨 off) — опусти media=, баннер
+     остаётся типографикой-first. CTA href — ТОЛЬКО рабочие (/signin, /dashboard,
+     #якорь-секции), ноль «#»-тупиков. align="center" — когда хочешь центр-композицию.
   ▸ ВИТРИНА / ШОУКЕЙС НА ГЛАВНОЙ. Публичная «/» — КОНТЕНТНЫЙ лендинг: соблюдай
     _IMAGE_GEN_ON ПОЛНОСТЬЮ — hero-фон + 3–6 контентных фото секций через
     `data-omnia-gen` (повторяющиеся карточки — общим `data-omnia-gen-group`). Лендинг

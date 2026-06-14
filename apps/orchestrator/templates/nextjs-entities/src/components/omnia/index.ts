@@ -18,6 +18,12 @@ export {
   type DashboardHeroProps,
   type HeroStat,
 } from "./dashboard-hero";
+export {
+  StorefrontHero,
+  type StorefrontHeroProps,
+  type StorefrontCta,
+  type StorefrontStat,
+} from "./storefront-hero";
 export { StatCard, type StatCardProps } from "./stat-card";
 export { CountUp, type CountUpProps } from "./count-up";
 export { EmptyState, type EmptyStateProps } from "./empty-state";

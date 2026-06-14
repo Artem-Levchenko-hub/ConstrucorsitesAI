@@ -646,3 +646,23 @@ def test_entities_ui_brief_selects_screen_archetype() -> None:
     )
     # no hand-rolled kanban (kit has no Board component)
     assert "Канбан-доски в ките НЕТ" in _ENTITIES_UI
+
+
+def test_entities_ui_public_home_uses_storefront_hero() -> None:
+    # Pickup P1: the public «/» landing must anchor on the StorefrontHero kit
+    # primitive (brand-palette-driven, model-independent) instead of hand-rolled
+    # raw-Tailwind heroes — so the most shareable surface is enterprise-grade on
+    # the first generation. The component must also be in the kit import line.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "StorefrontHero" in _ENTITIES_UI
+    # it's offered as the public counterpart of DashboardHero (cabinet hero)
+    assert "ПЕРВЫЙ ЭКРАН ГЛАВНОЙ" in _ENTITIES_UI
+    # the guidance sits in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("StorefrontHero") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # it must be importable from the kit barrel (appears in the import line)
+    assert _ENTITIES_UI.index("StorefrontHero") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
