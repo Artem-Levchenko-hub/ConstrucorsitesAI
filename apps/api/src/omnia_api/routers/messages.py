@@ -700,15 +700,18 @@ async def post_prompt(
         assert discovery_result is not None  # discovery_ask ⇒ result exists
         ask_choices = list(discovery_result.choices)
         allow_custom = discovery_result.allow_custom
+        multi_select = discovery_result.multi_select
     else:
         ask_choices = []
         allow_custom = True
+        multi_select = False
     return PromptResponse(
         message_id=assistant_msg.id,
         snapshot_id=None,
         mode=turn_mode,
         choices=ask_choices,
         allow_custom=allow_custom,
+        multi_select=multi_select,
     )
 
 

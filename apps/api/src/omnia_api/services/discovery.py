@@ -140,6 +140,13 @@ class DiscoveryResult:
     Every ASK lands with chips — the model is steered to provide them and a
     deterministic stage-keyed floor fills any it omits (V2.1: чипы СРАЗУ на
     первый промпт, never bare text).
+
+    ``multi_select`` is True when several chips can sensibly apply at once (e.g.
+    "какие разделы нужны?") — the UI then renders the chips as toggles plus a
+    «Готово» button so the user picks a SET in one go instead of one chip per
+    turn (NORTH STAR pillar 2 — мультивыбор). The model may flag it; a
+    deterministic keyword floor (:func:`_infer_multi_select`) catches the
+    inherently multi-answer questions it omits, so it is model-independent.
     """
 
     action: str
@@ -148,6 +155,7 @@ class DiscoveryResult:
     stack: str
     choices: tuple[str, ...] = ()
     allow_custom: bool = True
+    multi_select: bool = False
 
 
 def wants_build_now(prompt: str) -> bool:
@@ -186,13 +194,18 @@ _SYSTEM = (
     "ФОРМАТ ОТВЕТА — СТРОГО один JSON-объект на одной строке, без пояснений и кода.\n"
     "Если спрашиваешь:\n"
     '{"action":"ask","message":"<один короткий вопрос на русском>",'
-    '"choices":["<2–5 коротких вариантов ответа, 1–3 слова каждый>"]}\n'
+    '"choices":["<2–5 коротких вариантов ответа, 1–3 слова каждый>"],'
+    '"multiSelect":false}\n'
     "  — choices это подсказки-кнопки под вопросом (например для «Нужна "
     "админка?» → [\"Да\",\"Нет\"]; для стиля → [\"Премиум\",\"Дружелюбное\","
     "\"Строгое\"]). ВСЕГДА давай 2–5 таких вариантов — даже для открытого "
     "вопроса предложи типовые направления-примеры (например «как "
     "представляешь стиль?» → [\"Минимализм\",\"Премиум\",\"Ярко\",\"Строго\"]). "
     "Пользователь всегда может ответить и своим текстом (кнопка «Другое»).\n"
+    "  — multiSelect:true СТАВЬ, когда уместно выбрать НЕСКОЛЬКО вариантов "
+    "сразу (например «какие разделы нужны?» → можно отметить и каталог, и "
+    "блог, и контакты). Для вопросов с одним ответом (тон, да/нет, тип "
+    "продукта) ставь multiSelect:false или опусти поле.\n"
     "Если пора строить:\n"
     '{"action":"build","message":"<короткая фраза: «Отлично, собираю…»>",'
     '"brief":"<сжатый бриф для генератора на русском: тип продукта, цель, '
@@ -263,6 +276,28 @@ def _clean_choices(raw: object) -> tuple[str, ...]:
         if len(out) >= _MAX_CHOICES:
             break
     return tuple(out)
+
+
+# Questions that are inherently multi-answer — "which sections / features /
+# pages do you need?" — naturally take a SET, not one chip per turn. We detect
+# them on the QUESTION TEXT (lowered substrings, RU stems + EN) so the same
+# floor fires for a model-authored question AND the deterministic fallback,
+# model-independent. Tone / yes-no / single-choice questions stay single-select.
+_MULTI_SELECT_HINTS: frozenset[str] = frozenset(
+    {
+        "раздел", "возможност", "функци", "секци", "страниц", "фич",
+        "что должно быть", "что нужно на сайт", "какие блоки",
+        "sections", "features", "pages",
+    }
+)
+
+
+def _infer_multi_select(message: str) -> bool:
+    """True when the question text reads as an inherently multi-answer question
+    (which sections / features / pages) — the UI should offer toggle chips +
+    «Готово» so the user picks several at once. Deterministic, model-independent."""
+    haystack = (message or "").lower()
+    return any(hint in haystack for hint in _MULTI_SELECT_HINTS)
 
 
 def _fallback_brief(history: list[dict[str, str]], latest_prompt: str) -> str:
@@ -430,9 +465,11 @@ async def run_discovery(
     # ASK path — one more question (+ quick-reply chips, always present).
     message = ""
     choices: tuple[str, ...] = ()
+    model_multi = False
     if parsed and action == ASK:
         message = str(parsed.get("message") or "").strip()
         choices = _clean_choices(parsed.get("choices"))
+        model_multi = bool(parsed.get("multiSelect"))
     if not message:
         # Gateway/parse failed → deterministic question for this turn index.
         message = _fallback_question(asked_count)
@@ -442,8 +479,18 @@ async def run_discovery(
         # an "open" question; the stage-keyed deterministic floor fills the gap,
         # model-independent. "Другое" (allow_custom) stays open so it never traps.
         choices = _fallback_choices(asked_count)
+    # Multi-select when the model flagged it OR the question text reads as an
+    # inherently multi-answer one (which sections/features) — the deterministic
+    # floor catches a model that omitted the flag, and fires for the fallback
+    # "разделы/возможности" question too (NORTH STAR pillar 2 — мультивыбор).
+    multi_select = model_multi or _infer_multi_select(message)
     return DiscoveryResult(
-        action=ASK, message=message, brief="", stack=stack, choices=choices
+        action=ASK,
+        message=message,
+        brief="",
+        stack=stack,
+        choices=choices,
+        multi_select=multi_select,
     )
 
 

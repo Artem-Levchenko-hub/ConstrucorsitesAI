@@ -208,6 +208,10 @@ export type PromptResponse = {
   // type-checks.
   choices?: string[];
   allow_custom?: boolean;
+  // True when several chips can apply at once — the UI renders toggle chips + a
+  // «Готово» button so the user picks a set in one turn (мультивыбор). Optional →
+  // older API still type-checks; absent defaults to single-select.
+  multi_select?: boolean;
 };
 
 export type ApiErrorCode =

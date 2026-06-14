@@ -636,6 +636,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["discovery-choices", projectId, message_id], {
             choices: resp.choices,
             allowCustom: resp.allow_custom ?? true,
+            multiSelect: resp.multi_select ?? false,
           });
         }
       } catch (e) {

@@ -192,6 +192,80 @@ async def test_ask_floor_does_not_override_model_choices(
     assert result.choices == ("Да", "Нет")  # model choices, not the archetype floor
 
 
+# ─── multi-select (NORTH STAR pillar 2 — мультивыбор) ────────────────────
+
+
+def test_infer_multi_select_fires_on_section_questions() -> None:
+    """Inherently multi-answer questions (which sections / features / pages) read
+    as multi-select; single-answer ones (tone, yes/no) do not."""
+    from omnia_api.services.discovery import _infer_multi_select
+
+    assert _infer_multi_select("Какие разделы нужны на сайте?")
+    assert _infer_multi_select("Какие возможности должны быть?")
+    assert _infer_multi_select("Which sections do you need?")
+    assert not _infer_multi_select("Нужна тёмная тема?")
+    assert not _infer_multi_select("Какой тон ближе — премиум или дружелюбный?")
+    assert not _infer_multi_select("")
+
+
+async def test_ask_model_flag_sets_multi_select(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model that flags ``multiSelect:true`` carries through to the result."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "ask",
+                    "message": "Что выберешь?",  # text alone wouldn't trip the floor
+                    "choices": ["A", "B", "C"],
+                    "multiSelect": True,
+                }
+            )
+        ),
+    )
+    result = await run_discovery([], "идея", asked_count=0)
+    assert result.action == ASK
+    assert result.multi_select is True
+
+
+async def test_ask_floor_infers_multi_select_from_question_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even when the model omits the flag, a sections/features question is detected
+    as multi-select from its text — model-independent (the fallback question for the
+    sections stage gets it too)."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "ask",
+                    "message": "Какие разделы обязательно нужны?",
+                    "choices": ["Каталог", "Блог", "Контакты"],
+                }
+            )
+        ),
+    )
+    result = await run_discovery([], "магазин", asked_count=2)
+    assert result.multi_select is True
+
+
+async def test_ask_single_answer_question_is_not_multi_select(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A yes/no or tone question stays single-select (no flag, no keyword)."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {"action": "ask", "message": "Нужна админка?", "choices": ["Да", "Нет"]}
+            )
+        ),
+    )
+    result = await run_discovery([], "crm", asked_count=0)
+    assert result.multi_select is False
+
+
 async def test_choices_are_clamped_and_deduped(monkeypatch: pytest.MonkeyPatch) -> None:
     """Untrusted model output: ≤5 chips, length-capped, de-duped, junk dropped."""
     _install(

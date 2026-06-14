@@ -12,7 +12,11 @@ import { usePromptStream } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
 
-type DiscoveryChoices = { choices: string[]; allowCustom: boolean };
+type DiscoveryChoices = {
+  choices: string[];
+  allowCustom: boolean;
+  multiSelect: boolean;
+};
 
 export function ChatPanel({
   projectId,
@@ -53,14 +57,11 @@ export function ChatPanel({
     submit(prompt, modelId, []);
   };
 
-  // Discovery chip tapped → submit it as the user's answer to the question.
+  // Discovery chip tapped (or an inline «Другое» answer) → submit it as the
+  // user's answer to the question. Used by both single-select and the joined
+  // multi-select «Готово» submission (the card builds the combined string).
   const handlePickChoice = (choice: string) => {
     submit(choice, modelId, []);
-  };
-
-  // «Другое» chip → hand the user the free-text input instead of a preset.
-  const handleCustom = () => {
-    inputRef.current?.focus();
   };
 
   // Determine streaming state from data: an assistant message with
@@ -154,10 +155,11 @@ export function ChatPanel({
 
         {chips && chips.choices.length > 0 && (
           <DiscoveryChips
+            key={lastAssistantId}
             choices={chips.choices}
             allowCustom={chips.allowCustom}
+            multiSelect={chips.multiSelect}
             onPick={handlePickChoice}
-            onCustom={handleCustom}
           />
         )}
       </div>
