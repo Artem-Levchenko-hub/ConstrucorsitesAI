@@ -19,6 +19,7 @@ from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.core.security import create_access_token
+from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
@@ -31,6 +32,8 @@ from omnia_api.schemas.project import (
 )
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.design_presets import PRESETS
+from omnia_api.services.fork_recap import build_fork_recap
 from omnia_api.services.preset_classifier import classify_preset_sync
 from omnia_api.services.queue import enqueue_preview
 
@@ -271,6 +274,29 @@ async def perform_fork(
         session.add(snapshot)
         await session.flush()
         fork.current_snapshot_id = snapshot.id
+
+    # Land the remixer in a WARM workspace (NORTH STAR pillar 4): seed ONE
+    # assistant recap that names what they forked, echoes its captured design
+    # DNA, and offers one-tap starter edits. Without this the fork has zero chat
+    # rows and the client shows the cold generic "Поговорим о вашем сайте" empty
+    # state. Pure + LLM-free, so it never adds a build cost or a failure surface.
+    # tokens_out=0 (not NULL) keeps the client from treating the seed as a live
+    # mid-stream reply; tokens_in stays NULL so no "0 tokens" footer renders.
+    preset_name = (
+        PRESETS[source.design_preset_id].name
+        if source.design_preset_id and source.design_preset_id in PRESETS
+        else None
+    )
+    session.add(
+        Message(
+            project_id=fork.id,
+            role="assistant",
+            content=build_fork_recap(source.name, source.discovery_spec, preset_name),
+            model_id=None,
+            tokens_in=None,
+            tokens_out=0,
+        )
+    )
 
     try:
         await session.commit()

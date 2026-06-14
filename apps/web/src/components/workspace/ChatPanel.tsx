@@ -66,6 +66,12 @@ export function ChatPanel({
     submit(prompt, modelId, []);
   };
 
+  // A fork recap card's one-tap starter edit → submit it as the remixer's first
+  // prompt through the normal pipeline (the warm first move, pillar 4).
+  const handleSuggest = (prompt: string) => {
+    submit(prompt, modelId, []);
+  };
+
   // Discovery chip tapped (or an inline «Другое» answer) → submit it as the
   // user's answer to the question. Used by both single-select and the joined
   // multi-select «Готово» submission (the card builds the combined string).
@@ -167,6 +173,7 @@ export function ChatPanel({
             streaming={m.id === streamingId}
             projectId={projectId}
             onFix={handleFix}
+            onSuggest={handleSuggest}
           />
         ))}
 

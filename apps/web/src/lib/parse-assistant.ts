@@ -31,12 +31,21 @@ export type AssistantPart =
       fixable: boolean;
       body: string;
       closed: boolean;
+    }
+  // Hot-fork recap (`<remix name=… dna=…>` with one starter-edit per body line).
+  // Mirrors apps/api/src/omnia_api/services/fork_recap.py — the warm seed message
+  // a remixer lands on. Rendered as a RemixRecapCard, not raw text.
+  | {
+      kind: "remix";
+      name: string;
+      dna: string;
+      suggestions: string[];
     };
 
-// Matches the opening tag of a file / edit / app-error block. The attribute
-// string is captured generically (group 2) and parsed per-tag below.
-// Mirrors apps/api file_extractor.py (`<file>`/`<edit>`) + app_errors.py.
-const BLOCK_OPEN = /<(file|edit|app-error)\b([^>]*)>/g;
+// Matches the opening tag of a file / edit / app-error / remix block. The
+// attribute string is captured generically (group 2) and parsed per-tag below.
+// Mirrors apps/api file_extractor.py (`<file>`/`<edit>`) + app_errors.py + fork_recap.py.
+const BLOCK_OPEN = /<(file|edit|app-error|remix)\b([^>]*)>/g;
 
 function getAttr(attrs: string, name: string): string | null {
   const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
@@ -44,11 +53,23 @@ function getAttr(attrs: string, name: string): string | null {
 }
 
 function makePart(
-  tag: "file" | "edit" | "app-error",
+  tag: "file" | "edit" | "app-error" | "remix",
   attrs: string,
   body: string,
   closed: boolean,
 ): AssistantPart {
+  if (tag === "remix") {
+    return {
+      kind: "remix",
+      name: getAttr(attrs, "name") ?? "проект",
+      dna: getAttr(attrs, "dna") ?? "",
+      // One starter-edit prompt per non-empty body line (see fork_recap.py).
+      suggestions: body
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    };
+  }
   if (tag === "app-error") {
     return {
       kind: "app-error",
@@ -78,7 +99,7 @@ export function parseAssistantContent(content: string): AssistantPart[] {
   BLOCK_OPEN.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = BLOCK_OPEN.exec(content)) !== null) {
-    const tag = match[1] as "file" | "edit" | "app-error";
+    const tag = match[1] as "file" | "edit" | "app-error" | "remix";
     const attrs = match[2];
     const openStart = match.index;
     const openEnd = openStart + match[0].length;

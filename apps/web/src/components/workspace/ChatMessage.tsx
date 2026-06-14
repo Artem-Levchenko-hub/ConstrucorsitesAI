@@ -30,6 +30,7 @@ import {
 } from "@/lib/parse-assistant";
 import { SelectedChips } from "./SelectedChips";
 import { PassProgressBar } from "./PassProgressBar";
+import { RemixRecapCard } from "./RemixRecapCard";
 
 // The onboarding quiz folds its answers into the user prompt after this marker
 // (see OnboardingQuiz.compile). We split on it to render the answers as chips
@@ -45,6 +46,7 @@ export function ChatMessage({
   streaming,
   projectId,
   onFix,
+  onSuggest,
 }: {
   message: Message;
   streaming?: boolean;
@@ -58,6 +60,9 @@ export function ChatMessage({
   /** Submit a follow-up "fix this error" prompt (wired from the error card's
    *  «Починить» button). Omitted in replays / screenshots → button hidden. */
   onFix?: (prompt: string) => void;
+  /** Submit a starter-edit prompt from a fork recap card's one-tap chips.
+   *  Omitted in replays / screenshots → chips render non-interactive. */
+  onSuggest?: (prompt: string) => void;
 }) {
   const isUser = message.role === "user";
   const quiz = isUser ? parseQuizBrief(message.content) : null;
@@ -109,6 +114,14 @@ export function ChatMessage({
             parts.map((p, i) =>
               p.kind === "text" ? (
                 <AssistantText key={i} text={p.text} streaming={!!streaming} />
+              ) : p.kind === "remix" ? (
+                <RemixRecapCard
+                  key={i}
+                  name={p.name}
+                  dna={p.dna}
+                  suggestions={p.suggestions}
+                  onSuggest={onSuggest}
+                />
               ) : p.kind === "app-error" ? (
                 <AppErrorCard key={i} part={p} onFix={onFix} />
               ) : (
