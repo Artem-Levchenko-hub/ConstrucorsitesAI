@@ -357,9 +357,20 @@ class Settings(BaseSettings):
     # decoupled from `acceptance_gauntlet_render_gates` via the `reference=` dial
     # and ABSTAINS (never hard-fails) when the corpus is empty or a page does not
     # render (R-10). The wiring + deterministic/live-chromium teeth are money-free
-    # and shipped now; flipping this ON for the live hot path is the PAID owner
-    # corpus-run milestone (a fresh generation must clear the bar without a model
-    # change) — mirror of `acceptance_gauntlet_render_gates` / 16/5f. Default OFF.
+    # and shipped now.
+    #
+    # FLIP-RUNBOOK (V1.13c — the PAID owner corpus-run, made falsifiable). Do NOT
+    # flip this to True by eye. The flip is permitted iff `scripts/
+    # reference_flip_milestone.py --mode gate` exits 0, which proves all three:
+    #   1. CANDIDATES CLEAR — N>=1 fresh generations (no model change, no manual
+    #      edits) each MEET-OR-BEAT every curated corpus niche.
+    #   2. ADVERSARY BELOW (teeth) — the known-mediocre baseline regresses on >= 2
+    #      of the five richness axes against EVERY niche (`prove_reference_ceiling`).
+    #   3. CORPUS PRESENT — the frozen reference corpus is non-empty.
+    # Owner: generate the candidates, run `--mode gate`, then flip + commit the
+    # `--out` report. CI runs `--mode guard` (via test_reference_flip_milestone):
+    # this flag ON without a recorded passing milestone turns the suite RED. Mirror
+    # of `acceptance_gauntlet_render_gates` / 16/5e. Default OFF.
     acceptance_gauntlet_reference_gate: bool = Field(default=False)
     # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
     # (container-backed), so the composition floor never touched the dominant

@@ -319,6 +319,44 @@ class ReferenceReport:
             ],
         }
 
+    @property
+    def niches_met(self) -> int:
+        """How many corpus niches the candidate meets-or-beats (V1.13c score).
+
+        Unlike :attr:`passed` — the strict CEILING that demands beating EVERY niche —
+        this is a CONTINUOUS ratchet signal: a generation that clears 3 of 4 niches
+        is visibly close to the curated enterprise bar. It powers the non-blocking
+        quality-card advisory while the gate is OFF.
+        """
+        return sum(1 for c in self.comparisons if c.passed)
+
+    def advisory_card(self) -> dict[str, object]:
+        """A NON-blocking quality-card score — never a ship-block (V1.13c).
+
+        The reference gate is OFF on the live path until the owner corpus-run flips
+        it (the falsifiable milestone — ``scripts/reference_flip_milestone.py``).
+        Until then the corpus still yields a useful continuous signal: how close
+        THIS generation came to the ceiling. This card carries that signal with
+        ``blocking=False`` so a worker can surface "reference: X/N niches met"
+        as advice without the gate ever sinking ship (R-10). An abstain (empty
+        corpus or render miss) carries no number — no evidence is not a low score.
+        """
+        total = len(self.comparisons)
+        met = self.niches_met
+        usable = self.rendered and total > 0
+        return {
+            "signal": "reference",
+            "blocking": False,
+            "rendered": self.rendered,
+            "met": met,
+            "total": total,
+            "summary": (
+                f"reference: {met}/{total} niches met"
+                if usable
+                else "reference: advisory unavailable (abstain)"
+            ),
+        }
+
 
 async def audit_files(
     files: dict[str, str],

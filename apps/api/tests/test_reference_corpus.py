@@ -255,6 +255,51 @@ def test_subscore_is_machine_readable():
     assert sub["comparisons"][0]["niche"] == "saas"
 
 
+# ── V1.13c: the NON-blocking advisory score (flip-runbook companion) ───────────
+# A continuous "X/N niches met" signal that surfaces while the strict gate is OFF.
+# It must never read as a ship-block, and an abstain must carry no number.
+
+
+def test_niches_met_counts_passing_comparisons():
+    rep = ReferenceReport(
+        (
+            _comp("saas", passed=True),
+            _comp("agency", passed=False),
+            _comp("editorial", passed=True),
+        )
+    )
+    assert rep.niches_met == 2  # passed: saas + editorial
+    assert rep.passed is False  # strict ceiling still fails on agency
+
+
+def test_advisory_card_is_never_blocking():
+    rep = ReferenceReport((_comp("saas", passed=True), _comp("agency", passed=False)))
+    card = rep.advisory_card()
+    assert card["blocking"] is False
+    assert card["met"] == 1
+    assert card["total"] == 2
+    assert card["summary"] == "reference: 1/2 niches met"
+
+
+def test_advisory_card_full_clear_reports_all_met():
+    rep = ReferenceReport((_comp("saas", passed=True), _comp("agency", passed=True)))
+    card = rep.advisory_card()
+    assert card["met"] == 2 and card["total"] == 2
+    assert card["summary"] == "reference: 2/2 niches met"
+
+
+def test_advisory_card_abstains_with_no_number():
+    # Empty corpus → abstain: no evidence is NOT a zero score (it would read as a
+    # failing generation when it is really an un-measured one).
+    empty = ReferenceReport(())
+    card = empty.advisory_card()
+    assert card["rendered"] is False
+    assert card["summary"] == "reference: advisory unavailable (abstain)"
+    # A render miss is the same: rendered False ⇒ advisory unavailable.
+    miss = ReferenceReport((_comp("saas", passed=True, rendered=False),))
+    assert miss.advisory_card()["summary"] == "reference: advisory unavailable (abstain)"
+
+
 def test_audit_files_abstains_when_corpus_empty(monkeypatch):
     # End-to-end through audit_files with a stubbed-empty corpus: the candidate
     # renders fine but there is nothing to compare against → abstain, no class.
