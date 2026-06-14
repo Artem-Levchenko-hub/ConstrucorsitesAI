@@ -834,7 +834,7 @@ _ENTITIES_UI = """\
 
 ▸ ИМПОРТЫ (готовы, просто используй):
   import { AppShell, PageHeader, DashboardHero, StorefrontHero, StorefrontSection,
-           FeatureCard, StatCard, CountUp, DataTable, CrudResource, GalleryGrid,
+           FeatureCard, PricingPlans, StatCard, CountUp, DataTable, CrudResource, GalleryGrid,
            MediaCard, EntityForm, EmptyState, useEntity, DashboardSkeleton,
            type Column, Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
   import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
@@ -898,8 +898,35 @@ _ENTITIES_UI = """\
        </StorefrontSection>
      Все строки — из БРИФА ниши (реальные услуги/цифры/выгоды), НЕ «Преимущество 1».
      Заголовки секций = <h2> (единственный <h1> несёт <StorefrontHero>). `columns` — ТОЛЬКО
-     для сетки <FeatureCard>; для прайс-таблицы / отзывов / FAQ опусти `columns` и сверстай
-     содержимое сам внутри секции. Иконки <FeatureCard> — из lucide, ОСМЫСЛЕННЫЕ под пункт.
+     для сетки <FeatureCard>; для отзывов / FAQ опусти `columns` и сверстай содержимое сам
+     внутри секции. Иконки <FeatureCard> — из lucide, ОСМЫСЛЕННЫЕ под пункт.
+  ▸ ЦЕНЫ / ТАРИФЫ — <PricingPlans> (готовый кит, НЕ верстай прайс-таблицу сырьём). Когда
+     у ниши есть пакеты / подписки / тарифы (SaaS, абонементы, услуги, членство) — дай
+     секцию цен через <PricingPlans>: бренд-осознанный ряд тарифов, где ОДИН рекомендованный
+     (`highlighted`) выделен фирменной градиент-рамкой + приподнят + бейджем (Stripe/Linear/
+     Framer-паттерн). Положи внутрь <StorefrontSection> БЕЗ `columns` (компонент сам держит
+     адаптивную сетку 2–4 тарифа). Каждый план: `name`, крупная `price` + `period`, строка
+     `description`, чеклист `features` (галочки в бренд-цвете), рабочий `cta`.
+       <StorefrontSection id="цены" eyebrow="Тарифы" title="Прозрачные цены"
+         lead="Без скрытых платежей — выберите формат под задачу." align="center" tint>
+         <PricingPlans plans={[
+           { name: "Разовый визит", price: "2 900 ₽", period: "за визит",
+             description: "Для знакомства с клиникой.",
+             features: ["Осмотр и консультация", "План лечения", "Снимок в подарок"],
+             cta: { label: "Записаться", href: "/signin" } },
+           { name: "Годовое наблюдение", price: "19 900 ₽", period: "/ год", highlighted: true,
+             description: "Самый выбираемый формат.",
+             features: ["Всё из разового", "2 чистки в год",
+                        "Скидка 15% на лечение", "Приоритетная запись"],
+             cta: { label: "Оформить", href: "/signin" } },
+           { name: "Семейный", price: "34 900 ₽", period: "/ год",
+             description: "Наблюдение для всей семьи.",
+             features: ["До 4 человек", "Детский стоматолог", "Выездная диагностика"],
+             cta: { label: "Обсудить", href: "/signin" } },
+         ]} />
+       </StorefrontSection>
+     Цены/тарифы/фичи — из БРИФА ниши (реальные пакеты и суммы в ₽), НЕ «Тариф 1». `cta.href`
+     — рабочий (/signin / #якорь), ноль «#»-тупиков. Нет тарифов у ниши — секцию НЕ выдумывай.
   ▸ ВИТРИНА / ШОУКЕЙС НА ГЛАВНОЙ. Публичная «/» — КОНТЕНТНЫЙ лендинг: соблюдай
     _IMAGE_GEN_ON ПОЛНОСТЬЮ — hero-фон + 3–6 контентных фото секций через
     `data-omnia-gen` (повторяющиеся карточки — общим `data-omnia-gen-group`). Лендинг

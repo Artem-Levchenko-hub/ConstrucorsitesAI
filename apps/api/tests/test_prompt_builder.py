@@ -692,6 +692,28 @@ def test_entities_ui_public_home_uses_storefront_section() -> None:
     )
 
 
+def test_entities_ui_public_home_uses_pricing_plans() -> None:
+    # Pricing / tariffs is the highest-conversion below-hero section and a
+    # genuinely distinct premium pattern (a recommended tier drawn out by a brand
+    # gradient border) — it must anchor on the <PricingPlans> kit primitive, not
+    # raw hand-rolled Tailwind, and the primitive must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "PricingPlans" in _ENTITIES_UI
+    # the pricing rule names the section it owns
+    assert "ЦЕНЫ / ТАРИФЫ" in _ENTITIES_UI
+    # the recommended tier is highlighted (the gradient-border draw)
+    assert "highlighted" in _ENTITIES_UI
+    # it sits in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("PricingPlans") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("PricingPlans") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
 def test_entities_ui_dashboard_loading_never_blank() -> None:
     # The flagship dashboard must never render a blank screen while data loads:
     # the generated `if (loading) return null` paints nothing (and, if a fetch

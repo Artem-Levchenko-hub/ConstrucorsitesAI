@@ -31,6 +31,11 @@ export {
   FeatureCard,
   type FeatureCardProps,
 } from "./storefront-section";
+export {
+  PricingPlans,
+  type PricingPlansProps,
+  type PricingPlan,
+} from "./pricing-plans";
 export { StatCard, type StatCardProps } from "./stat-card";
 export { DashboardSkeleton } from "./dashboard-skeleton";
 export { CountUp, type CountUpProps } from "./count-up";
