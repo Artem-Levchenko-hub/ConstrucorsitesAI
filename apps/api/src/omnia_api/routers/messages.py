@@ -1856,6 +1856,11 @@ async def _process_prompt(
                     # llm.chunk/llm.pass, so the live render can narrate the
                     # design reasoning as it builds (Pillar 3 → V3.10). Debug-
                     # only before; now flows as an event. Lands before llm.done.
+                    # v2.21 #1(A): also stash it so the deterministic pre-commit
+                    # step can BAKE it into the shared static page → a stranger
+                    # on /p/<slug> sees the same birth reveal (ONE BRIEF, EVERY
+                    # SURFACE). See services/brief_narration.inject_brief_narration.
+                    state["brief"] = event["brief"]
                     await publish_event(
                         project_id,
                         "omnia:brief",
@@ -3244,6 +3249,34 @@ async def _process_prompt(
                     project_id, assistant_message_id,
                     "08_post_palette_guard.html", files.get("index.html", ""),
                 )
+
+        # ── Brief-narration bake (v2.21 #1A, pillar 3+4) — BEFORE commit ──
+        # The most-shared public surface (freeform static /p/<slug>) was born
+        # SILENT: a colleague pasting the link saw a finished page, none of the
+        # "AI is designing this" reveal that hooks the viral loop. Bake the
+        # art-director brief + a self-contained reveal into index.html so the
+        # shared link plays the SAME birth narration for a stranger (the brief
+        # reached only the workspace/iframe before). Freeform only — container
+        # apps (nextjs_entities/fullstack) 302-redirect to a live app on another
+        # origin where the template's own omnia-brief-narration.js handles it.
+        # Fail-soft + idempotent (services/brief_narration); 0-line brief = no-op.
+        _bn_brief = state.get("brief")
+        if (
+            files
+            and not surgical
+            and _gen_mode == "freeform"
+            and isinstance(_bn_brief, dict)
+            and files.get("index.html")
+        ):
+            try:
+                from omnia_api.services.brief_narration import inject_brief_narration
+
+                files["index.html"] = inject_brief_narration(
+                    files["index.html"], _bn_brief
+                )
+                print("[PP] brief_narration baked into index.html", flush=True)
+            except Exception as _bn_exc:
+                print(f"[PP] brief_narration skipped err={_bn_exc!r}", flush=True)
 
         new_snapshot_id: UUID | None = None
         if files:
