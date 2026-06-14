@@ -334,6 +334,27 @@ def test_niche_from_slug_drives_titles_when_fields_are_generic() -> None:
     assert all(r["title"] in ds._DOMAIN_NOUNS["auto"] for r in rows)
 
 
+def test_transliterated_slugs_are_detected() -> None:
+    """App slugs are Latin transliterations of a Russian niche — detection must
+    fire on those, not only on the Cyrillic field vocabulary."""
+    f = _fields(title={"type": "string", "required": True})
+    cases = {
+        "sait-apteki-v-barnaule": "pharmacy",
+        "kalibrovka-klinika-crm": "clinic",
+        "kalibrovka-kofeinia": "cafe",
+        "sushi-restoran": "restaurant",
+        "mebelnyi-shourum": "furniture",
+        "turagentstvo": "travel",
+        "avtoservis-qa": "auto",
+        "sait-sportzala": "fitness",
+        "salon-krasoty-moskva": "beauty",
+        "kursy-anglijskogo": "education",
+        "agentstvo-nedvizhimosti": "realestate",
+    }
+    for slug, expected in cases.items():
+        assert ds._detect_domain("Item", f, slug) == expected, slug
+
+
 def test_unknown_niche_falls_back_to_safe_demo_label() -> None:
     """No detected domain → keep the existing clearly-demo label (no regression,
     never a confidently-wrong noun)."""
