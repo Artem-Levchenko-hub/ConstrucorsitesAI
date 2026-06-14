@@ -46,6 +46,8 @@ def test_static_prompt_includes_landing_section_kit() -> None:
         sp = build_system_prompt(tmpl)
         assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" in sp, tmpl
         for variant in (
+            "hero-centered",  # v2.22 #2 — the hero (rubric crit. 5) is now kit, not hand-rolled
+            "hero-split",
             "features-grid",
             "pricing-plans",
             "testimonial-wall",

@@ -658,7 +658,8 @@ _LANDING_SECTION_KIT = """\
 StorefrontSection / FeatureCard / PricingPlans / TestimonialWall / FaqAccordion /
 CtaBand) — форкнутый магазин и его лендинг выглядят ИДЕНТИЧНО. Ты меняешь ТОЛЬКО
 копирайт, иконки и палитру; разметку, ритм, иерархию, адаптив и вход-анимацию кита
-НЕ трогаешь. Hero и нетиповые секции ниши пишешь сам по брифу и краф-флору.
+НЕ трогаешь. Hero — тоже из кита: БЕРИ один из двух снипетов ниже (hero-centered |
+hero-split). Нетиповые секции ниши пишешь сам по брифу и краф-флору.
 
 ▸ ПАЛИТРА-ЯКОРЬ (контракт кита — задай ОДИН раз в общем <style>, снипеты читают vars;
   это тот же `--primary`/`--accent`-контракт, что у entity-аппов → форк выглядит так же):
@@ -685,6 +686,68 @@ CtaBand) — форкнутый магазин и его лендинг выгл
         <p class="mt-4 text-lg leading-relaxed" style="color:var(--muted)">Лид одной-двумя строками — из брифа.</p>
       </div>
       <!-- контент-снипет ниже -->
+    </div>
+  </section>
+
+▸ HERO-CENTERED (ПЕРВЫЙ ЭКРАН, spotlight — двойник топ-лендингов Mobbin StackAI / Langdock /
+  Fireflies / Visitors: бейдж → крупный 2-строчный заголовок → лид → ПАРА CTA → микро-trust →
+  продукт-кадр в браузер-рамке ПОД ними). Дефолт для продукта / SaaS / бизнеса / услуги. Сам
+  себе full-bleed (НЕ внутрь обёртки-секции). Mobile: всё в столбик, CTA на всю ширину, 0 h-scroll:
+  <section id="hero" class="relative overflow-hidden pt-28 pb-20 md:pt-36 md:pb-28" style="background:var(--bg)">
+    <div class="absolute inset-0 opacity-[0.06]" aria-hidden="true" style="background:radial-gradient(58% 50% at 50% 0%,var(--primary),transparent)"></div>
+    <div class="relative max-w-3xl mx-auto px-6 text-center">
+      <span class="reveal inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-semibold tracking-wide"
+            style="background:var(--card);border:1px solid var(--line);color:var(--muted)">
+        <span class="h-1.5 w-1.5 rounded-full" style="background:var(--primary)"></span>Короткий ярлык-нудж из брифа
+      </span>
+      <h1 class="reveal mt-7 text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-[1.05]" style="color:var(--ink)" data-reveal-delay="1">Большое обещание ниши<br class="hidden sm:block"> в две короткие строки</h1>
+      <p class="reveal mt-6 text-lg md:text-xl leading-relaxed" style="color:var(--muted)" data-reveal-delay="2">Лид одной-двумя строками: для кого и какой результат он получает.</p>
+      <div class="reveal mt-9 flex flex-col sm:flex-row justify-center gap-3" data-reveal-delay="3">
+        <a href="/signin" class="press inline-flex justify-center rounded-xl px-7 py-3.5 font-semibold text-white" style="background:var(--primary);box-shadow:0 14px 32px -8px color-mix(in srgb,var(--primary) 45%,transparent)">Главный CTA</a>
+        <a href="#features" class="press inline-flex justify-center rounded-xl px-7 py-3.5 font-semibold" style="background:var(--card);border:1px solid var(--line);color:var(--ink)">Вторичный CTA</a>
+      </div>
+      <p class="reveal mt-5 text-sm" style="color:var(--muted)" data-reveal-delay="4">Микро-trust из брифа: без предоплаты · 1000+ клиентов</p>
+    </div>
+    <!-- ПРОДУКТ-КАДР в браузер-рамке: с фото (🎨 on) — замени заглушку-<div> на
+         <img data-omnia-gen="EN-prompt: продукт/сцена/свет/ракурс" class="block w-full aspect-[16/9] object-cover" alt="…">;
+         без фото — оставь абстрактную заливку (НЕ рисуй предметы вектором руками) -->
+    <div class="reveal relative max-w-5xl mx-auto px-6 mt-14" data-reveal-delay="5">
+      <div class="depth-3 rounded-2xl overflow-hidden" style="background:var(--card);border:1px solid var(--line)">
+        <div class="flex items-center gap-1.5 px-4 py-3" style="border-bottom:1px solid var(--line)">
+          <span class="h-3 w-3 rounded-full" style="background:var(--line)"></span><span class="h-3 w-3 rounded-full" style="background:var(--line)"></span><span class="h-3 w-3 rounded-full" style="background:var(--line)"></span>
+        </div>
+        <div class="aspect-[16/9] w-full" style="background:linear-gradient(135deg,color-mix(in srgb,var(--primary) 16%,var(--card)),var(--card))"></div>
+      </div>
+    </div>
+  </section>
+
+▸ HERO-SPLIT (ПЕРВЫЙ ЭКРАН, асимметрия — двойник Mobbin Fibery / Time2book: текст слева,
+  продукт-кадр справа). Бери, когда есть сильный продукт-кадр/фото и нужна «рабочая» подача.
+  Mobile: текст, под ним кадр (0 h-scroll). lg:2 колонки:
+  <section id="hero" class="relative overflow-hidden pt-28 pb-20 md:pt-32 md:pb-28" style="background:var(--bg)">
+    <div class="relative max-w-6xl mx-auto px-6 grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
+      <div>
+        <span class="reveal inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-semibold tracking-wide"
+              style="background:var(--card);border:1px solid var(--line);color:var(--muted)">
+          <span class="h-1.5 w-1.5 rounded-full" style="background:var(--primary)"></span>Короткий ярлык из брифа
+        </span>
+        <h1 class="reveal mt-7 text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.05]" style="color:var(--ink)" data-reveal-delay="1">Главный заголовок-обещание ниши</h1>
+        <p class="reveal mt-6 text-lg leading-relaxed" style="color:var(--muted)" data-reveal-delay="2">Лид 1–2 строки: для кого и какой результат.</p>
+        <div class="reveal mt-9 flex flex-col sm:flex-row gap-3" data-reveal-delay="3">
+          <a href="/signin" class="press inline-flex justify-center rounded-xl px-7 py-3.5 font-semibold text-white" style="background:var(--primary);box-shadow:0 14px 32px -8px color-mix(in srgb,var(--primary) 45%,transparent)">Главный CTA</a>
+          <a href="#features" class="press inline-flex justify-center rounded-xl px-7 py-3.5 font-semibold" style="background:var(--card);border:1px solid var(--line);color:var(--ink)">Вторичный CTA</a>
+        </div>
+        <p class="reveal mt-5 text-sm" style="color:var(--muted)" data-reveal-delay="4">Микро-trust из брифа</p>
+      </div>
+      <div class="reveal relative" data-reveal-delay="2">
+        <div class="depth-3 rounded-2xl overflow-hidden" style="background:var(--card);border:1px solid var(--line)">
+          <div class="flex items-center gap-1.5 px-4 py-3" style="border-bottom:1px solid var(--line)">
+            <span class="h-3 w-3 rounded-full" style="background:var(--line)"></span><span class="h-3 w-3 rounded-full" style="background:var(--line)"></span><span class="h-3 w-3 rounded-full" style="background:var(--line)"></span>
+          </div>
+          <!-- с фото: <img data-omnia-gen="EN-prompt продукта/сцены" class="block w-full aspect-[4/3] object-cover" alt="…"> -->
+          <div class="aspect-[4/3] w-full" style="background:linear-gradient(135deg,color-mix(in srgb,var(--primary) 18%,var(--card)),var(--card))"></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -792,10 +855,11 @@ CtaBand) — форкнутый магазин и его лендинг выгл
 
 ПРАВИЛО СБОРКИ (ЖЕЛЕЗНО): секцию из этого кита — БЕРИ снипет 1:1, подставляй только копию,
 иконки и числа из брифа; разметку/классы/ритм/адаптив НЕ переписывай. Для каждой такой
-секции бриф называет KIT-вариант (features-grid | pricing-plans | testimonial-wall |
-faq-accordion | cta-band) — ставь именно его снипет. Нет подходящего снипета (hero,
-нетиповая секция ниши) — верстай сам по брифу. РОВНО ОДНА .btn-cta-primary на страницу
-(главный CTA в cta-band ИЛИ герое). Вход-анимация (.reveal + data-reveal-delay) уже в
+секции бриф называет KIT-вариант (hero-centered | hero-split | features-grid | pricing-plans |
+testimonial-wall | faq-accordion | cta-band) — ставь именно его снипет. Нет подходящего снипета
+(нетиповая секция ниши, редакционный/агентский hero) — верстай сам по брифу. РОВНО ОДНА
+.btn-cta-primary на страницу — это CTA в cta-band; CTA в hero-снипете — сплошная бренд-кнопка
+БЕЗ .btn-cta-primary (синглтон-маркер остаётся за cta-band). Вход-анимация (.reveal + data-reveal-delay) уже в
 снипетах — НЕ снимай её, она и есть «живой» каскадный вход секций (reduced-motion-safe)."""
 
 _FULLSTACK_STACK = """\
