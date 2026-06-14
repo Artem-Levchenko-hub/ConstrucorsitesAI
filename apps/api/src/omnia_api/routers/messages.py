@@ -63,8 +63,12 @@ from omnia_api.services.discovery import (
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
+    confident_enough_to_build,
+    cumulative_idea,
+    gather_answers,
     infer_niche_label,
     plan_discovery_questions,
+    recap_labels,
     run_discovery,
     serve_planned_question,
     wants_build_now,
@@ -449,20 +453,28 @@ async def _batch_discovery_turn(
             return zero
         questions = await plan_discovery_questions(prompt)
         project.discovery_plan = [q.to_dict() for q in questions]
+    # LIVE niche (pillar 2 causality): re-infer on the CUMULATIVE answers (idea +
+    # every reply), not just the first prompt, so the badge sharpens turn-by-turn
+    # as the conversation reveals more. Deterministic; unrecognised → "" (no
+    # suffix).
+    niche = infer_niche_label(cumulative_idea(history, prompt))
+    # Confidence-skip (pillar 2 — «лучший онбординг — его отсутствие»): once the
+    # gathered answers pin a recognised niche + ≥2 design axes, build now instead
+    # of asking the rest of the batch — the decisive user gets a shorter path.
+    # Fail-soft: an unclear interview keeps serving the planned questions.
+    if confident_enough_to_build(
+        history, prompt, asked_count=asked_count, niche=niche
+    ) and serve_planned_question(project.discovery_plan or [], asked_count) is not None:
+        return await run_discovery(
+            history, prompt, asked_count=asked_count, force_build=True
+        )
     ask = serve_planned_question(project.discovery_plan or [], asked_count)
     if ask is not None:
-        # Name the niche for the onboarding-frame banner from the product idea —
-        # the first user message (the idea) when we're past question 1, else this
-        # very prompt. Deterministic; an unrecognised idea yields "" (no suffix).
-        idea = next(
-            (
-                m["content"]
-                for m in history
-                if m.get("role") == "user" and m.get("content")
-            ),
-            "",
-        ) or prompt
-        return replace(ask, niche=infer_niche_label(idea))
+        # Answer-recap (pillar 2 — «вас услышали»): echo the answers gathered so
+        # far back as «✓ …» chips above the next question, so the loop visibly
+        # reacts to what the user said.
+        recap = recap_labels(gather_answers(history, prompt, asked_count))
+        return replace(ask, niche=niche, recap=recap)
     # Plan exhausted — every question answered → build from the full Q&A.
     return await run_discovery(
         history, prompt, asked_count=asked_count, force_build=True
@@ -778,6 +790,7 @@ async def post_prompt(
         question_index = discovery_result.question_index or None
         question_total = discovery_result.question_total or None
         niche = discovery_result.niche or None
+        recap = list(discovery_result.recap)
     else:
         ask_choices = []
         allow_custom = True
@@ -785,6 +798,7 @@ async def post_prompt(
         question_index = None
         question_total = None
         niche = None
+        recap = []
     return PromptResponse(
         message_id=assistant_msg.id,
         snapshot_id=None,
@@ -795,6 +809,7 @@ async def post_prompt(
         question_index=question_index,
         question_total=question_total,
         niche=niche,
+        recap=recap,
     )
 
 

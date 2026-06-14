@@ -220,6 +220,10 @@ export type PromptResponse = {
   question_index?: number | null;
   question_total?: number | null;
   niche?: string | null;
+  // Onboarding LIVE-causality (pillar 2 — «вас услышали»): short «✓ …» recap
+  // chips of the answers gathered so far. Absent on the first question and on
+  // build/edit turns → older API still type-checks.
+  recap?: string[] | null;
 };
 
 export type ApiErrorCode =

@@ -23,8 +23,12 @@ from omnia_api.services.discovery import (
     MAX_DISCOVERY_QUESTIONS,
     PlannedQuestion,
     _infer_stack_from_text,
+    confident_enough_to_build,
+    cumulative_idea,
+    gather_answers,
     infer_niche_label,
     plan_discovery_questions,
+    recap_labels,
     run_discovery,
     serve_planned_question,
     wants_build_now,
@@ -821,3 +825,93 @@ def test_zero_question_build_skips_popup_for_rich_prompt() -> None:
 def test_zero_question_build_returns_none_for_thin_prompt() -> None:
     """A thin prompt needs a question — the floor must not over-trigger."""
     assert zero_question_build([], "сделай сайт") is None
+
+
+# ─── Onboarding LIVE-causality (pillar 2): recap + live niche + confidence-skip ─
+
+
+def test_cumulative_idea_joins_all_user_text() -> None:
+    """The cumulative idea is the product idea PLUS every answer (+ latest), so a
+    later answer can sharpen the niche the first prompt left vague."""
+    history = [
+        {"role": "user", "content": "сайт для бизнеса"},
+        {"role": "assistant", "content": "Чем занимаетесь?"},
+        {"role": "user", "content": "доставка еды"},
+    ]
+    text = cumulative_idea(history, "ещё нужно меню")
+    assert "сайт для бизнеса" in text
+    assert "доставка еды" in text
+    assert "меню" in text
+
+
+def test_live_niche_sharpens_on_later_answer() -> None:
+    """A vague first prompt yields no niche; once «доставка еды» arrives the
+    cumulative re-inference surfaces «кафе / ресторан» — the badge shifts live."""
+    assert infer_niche_label("сайт для бизнеса") == ""
+    history = [
+        {"role": "user", "content": "сайт для бизнеса"},
+        {"role": "assistant", "content": "Чем занимаетесь?"},
+    ]
+    sharpened = infer_niche_label(cumulative_idea(history, "доставка еды"))
+    assert sharpened == "кафе / ресторан"
+
+
+def test_gather_answers_excludes_idea_and_includes_latest() -> None:
+    """Answers gathered so far = user turns after the idea, plus the latest prompt
+    (the answer to the previous question, not yet in history)."""
+    history = [
+        {"role": "user", "content": "магазин косметики"},
+        {"role": "assistant", "content": "Какой тон?"},
+        {"role": "user", "content": "Премиум"},
+        {"role": "assistant", "content": "Какие разделы?"},
+    ]
+    answers = gather_answers(history, "Каталог, Корзина", asked_count=2)
+    assert answers == ("Премиум", "Каталог, Корзина")
+
+
+def test_gather_answers_empty_on_first_turn() -> None:
+    """On the very first turn (idea only) nothing has been answered yet."""
+    assert gather_answers([], "магазин косметики", asked_count=0) == ()
+
+
+def test_recap_labels_clip_and_cap() -> None:
+    """Recap chips collapse whitespace, clip overly long answers, and keep only
+    the newest ≤3 so the narrow chat panel never floods."""
+    labels = recap_labels(("a", "b", "c", "d"))
+    assert labels == ("b", "c", "d")  # newest 3
+    long = recap_labels(("очень длинный ответ который точно не влезает в чип",))
+    assert long[0].endswith("…") and len(long[0]) <= 28
+
+
+def test_confidence_skip_fires_on_decisive_answers() -> None:
+    """≥2 answers pinning a recognised niche + ≥2 design axes → build early."""
+    history = [
+        {"role": "user", "content": "магазин косметики"},
+        {"role": "assistant", "content": "Тон?"},
+        {"role": "user", "content": "тёмный премиум"},
+        {"role": "assistant", "content": "Разделы?"},
+    ]
+    assert confident_enough_to_build(
+        history, "каталог и отзывы", asked_count=2, niche="интернет-магазин"
+    )
+
+
+def test_confidence_skip_holds_when_niche_unknown() -> None:
+    """No recognised niche → keep asking, even with pinned axes (fail-soft)."""
+    history = [
+        {"role": "user", "content": "что-то непонятное"},
+        {"role": "assistant", "content": "Тон?"},
+        {"role": "user", "content": "тёмный премиум"},
+        {"role": "assistant", "content": "Разделы?"},
+    ]
+    assert not confident_enough_to_build(
+        history, "каталог и отзывы", asked_count=2, niche=""
+    )
+
+
+def test_confidence_skip_holds_early_in_interview() -> None:
+    """Never cut an interview the user has barely begun (asked_count < 2)."""
+    history = [{"role": "user", "content": "магазин косметики"}]
+    assert not confident_enough_to_build(
+        history, "тёмный премиум каталог", asked_count=1, niche="интернет-магазин"
+    )

@@ -98,3 +98,7 @@ class PromptResponse(BaseModel):
     question_index: int | None = None
     question_total: int | None = None
     niche: str | None = None
+    # Onboarding LIVE-causality (pillar 2 — «вас услышали»): short «✓ …» recap
+    # chips of the answers gathered so far, so the popup echoes what the user
+    # said back at them. Empty on the first question and on build/edit turns.
+    recap: list[str] = Field(default_factory=list)

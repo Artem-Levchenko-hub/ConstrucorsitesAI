@@ -23,7 +23,11 @@ from dataclasses import dataclass
 import httpx
 
 from omnia_api.core.config import get_settings, model_for_role
-from omnia_api.services.chip_pixel_gate import compile_build_spec, spec_confidence
+from omnia_api.services.chip_pixel_gate import (
+    compile_build_spec,
+    spec_confidence,
+    spec_from_discovery,
+)
 
 log = logging.getLogger(__name__)
 
@@ -167,6 +171,12 @@ class DiscoveryResult:
     # образование») for the framing banner «Давайте разберёмся под вашу идею: …».
     # Empty when the idea matches no known niche (banner then shows no suffix).
     niche: str = ""
+    # Onboarding LIVE-causality (NORTH STAR pillar 2 — «вас услышали»): short
+    # labels of the answers gathered so far (chip taps / free text), newest last,
+    # so the popup can echo «✓ …» recap chips back at the user and prove the loop
+    # reacts to what they said. Empty on the first turn (nothing answered yet) and
+    # on BUILD turns.
+    recap: tuple[str, ...] = ()
 
 
 # Niche → short Russian banner label, matched by lowered-substring stems on the
@@ -212,6 +222,105 @@ def infer_niche_label(text: str) -> str:
         if any(stem in low for stem in stems):
             return label
     return ""
+
+
+# ── Onboarding LIVE-causality (NORTH STAR pillar 2) ──────────────────────────
+# The interview was inert: the niche badge was inferred once from the first
+# prompt, the next question never reacted to prior answers, and nothing echoed
+# back what the user said. These pure helpers make the loop visibly causal — a
+# live niche badge (re-inferred on the CUMULATIVE answers) and an answer-recap
+# strip — without any extra gateway call.
+
+_MAX_RECAP_ITEMS = 3
+_MAX_RECAP_LEN = 28
+
+
+def _user_contents(history: list[dict[str, str]] | None) -> list[str]:
+    """Every non-empty user-role turn, in order — the idea then each answer."""
+    return [
+        (m.get("content") or "").strip()
+        for m in (history or [])
+        if (m.get("role") or "") == "user" and (m.get("content") or "").strip()
+    ]
+
+
+def cumulative_idea(
+    history: list[dict[str, str]] | None, latest_prompt: str
+) -> str:
+    """All user-supplied text so far (the idea + every answer), newline-joined.
+
+    Basis for LIVE niche re-inference: :func:`infer_niche_label` is re-run on
+    THIS (not just the first prompt), so the badge sharpens as the conversation
+    reveals more — a vague «сайт для бизнеса» that later mentions «доставка еды»
+    surfaces «кафе / ресторан». Deterministic; the latest prompt rides last."""
+    parts = list(_user_contents(history))
+    latest = (latest_prompt or "").strip()
+    if latest:
+        parts.append(latest)
+    return "\n".join(parts)
+
+
+def gather_answers(
+    history: list[dict[str, str]] | None,
+    latest_prompt: str,
+    asked_count: int,
+) -> tuple[str, ...]:
+    """The user's answers to discovery questions so far (chip taps / free text),
+    newest last. The FIRST user message is the product idea, not an answer, so it
+    is excluded. On the very first turn (``asked_count == 0``) nothing has been
+    answered yet → empty. The latest prompt is the answer to the previous
+    question (not yet in ``history``), so it rides last once the interview is in
+    flight. Pure — drives the answer-recap card."""
+    answers = list(_user_contents(history)[1:])  # drop the idea
+    if asked_count >= 1:
+        latest = (latest_prompt or "").strip()
+        if latest:
+            answers.append(latest)
+    return tuple(answers)
+
+
+def recap_labels(answers: tuple[str, ...]) -> tuple[str, ...]:
+    """Compact the gathered answers into ≤3 short recap chips (newest-last), each
+    whitespace-collapsed and length-clipped, so the onboarding can echo «✓ …»
+    back at the user without flooding the narrow chat panel."""
+    out: list[str] = []
+    for a in answers[-_MAX_RECAP_ITEMS:]:
+        label = " ".join(a.split())
+        if len(label) > _MAX_RECAP_LEN:
+            label = label[: _MAX_RECAP_LEN - 1].rstrip() + "…"
+        if label:
+            out.append(label)
+    return tuple(out)
+
+
+# Confidence-skip floor (pillar 2 — «лучший онбординг — его отсутствие»). Once
+# the gathered answers have pinned a RECOGNISED niche AND ≥ this many design axes,
+# the interview knows enough — it builds instead of asking the remaining planned
+# questions. Conservative: requires real engagement (≥2 answered) so a decisive
+# user gets a shorter path while an undecided one keeps the full batch.
+_CONFIDENCE_SKIP_MIN_ANSWERS = 2
+_CONFIDENCE_SKIP_MIN_AXES = 2
+
+
+def confident_enough_to_build(
+    history: list[dict[str, str]] | None,
+    latest_prompt: str,
+    *,
+    asked_count: int,
+    niche: str,
+) -> bool:
+    """True when the gathered answers already pin a recognised niche + ≥2 design
+    axes — the confident user has steered enough, so the popup should build now
+    rather than ask the rest of the batch (NORTH STAR pillar 2 confidence-skip).
+
+    Pure + deterministic + fail-soft: reuses the same :func:`spec_from_discovery`
+    extractor the gauntlet uses (R-04 single source); an unclear interview returns
+    False and the full batch continues. Gated to ``asked_count >= 2`` so it can
+    never cut an interview the user has barely begun."""
+    if asked_count < _CONFIDENCE_SKIP_MIN_ANSWERS or not niche:
+        return False
+    spec = spec_from_discovery(history, latest_prompt)
+    return spec is not None and spec_confidence(spec) >= _CONFIDENCE_SKIP_MIN_AXES
 
 
 def wants_build_now(prompt: str) -> bool:
@@ -762,7 +871,12 @@ __all__ = [
     "MAX_DISCOVERY_QUESTIONS",
     "DiscoveryResult",
     "PlannedQuestion",
+    "confident_enough_to_build",
+    "cumulative_idea",
+    "gather_answers",
+    "infer_niche_label",
     "plan_discovery_questions",
+    "recap_labels",
     "run_discovery",
     "serve_planned_question",
     "wants_build_now",

@@ -641,6 +641,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             questionIndex: resp.question_index ?? null,
             questionTotal: resp.question_total ?? null,
             niche: resp.niche ?? null,
+            recap: resp.recap ?? [],
           });
         }
       } catch (e) {

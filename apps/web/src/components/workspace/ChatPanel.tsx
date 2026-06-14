@@ -23,6 +23,8 @@ type DiscoveryChoices = {
   questionIndex?: number | null;
   questionTotal?: number | null;
   niche?: string | null;
+  // Answer-recap chips of what the user has said so far (pillar 2 — «вас услышали»).
+  recap?: string[] | null;
 };
 
 export function ChatPanel({
@@ -174,6 +176,7 @@ export function ChatPanel({
             niche={chips.niche ?? null}
             questionIndex={chips.questionIndex ?? null}
             questionTotal={chips.questionTotal ?? null}
+            recap={chips.recap ?? null}
             onSkip={handleSkip}
           >
             <DiscoveryChips
