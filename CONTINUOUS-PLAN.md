@@ -613,6 +613,20 @@
 
 ## 7. ЛОГ ИТЕРАЦИЙ
 
+## 2026-06-14 10:26–10:5x MSK — RULE-10 #9: BELIEVABLE RATING В DEMO-SEEDER — конец 1★/2★ «плохого товара» на первом каталог-экране [x] (generator-quality §0.10; prod-deployed + LIVE-verified на задеплоенном бинарнике, money-free)
+
+**Выбор.** Stop-gate 10:26 < HARD-STOP 2026-06-17 08:26 → работаю. Lock ACQUIRED (cross-machine mkdir-mutex lh-server, RUN MacBook-Air-Roman). Sync ff-only (HEAD 6a12f0a). 0 IN-FLIGHT. OWNER §0.10 (качество генератора, НЕ новые ворота) → продолжаю RULE-10 серию. Скан каталог-карты на `_demo_number`-дефекты: **rating** = `hash%5+1` (равномерно 1–5) → ~40% карточек с 1★/2★ на свежем демо. Самый видимый после image/title/price элемент. Кандидат discount-percent оставлен на #10 (реже).
+
+**Root cause.** `_demo_number` rating-ветка эмитила `_hash_int(...) % 5 + 1` = равномерно {1..5} для rating/score/stars/оценка. Свежий каталог должен быть ПРИВЛЕКАТЕЛЬНЫМ — каталог, где 2/5 товаров «1★», читается как сломанный (столп-1 WOW). Defect-класс «uniform low-skew rating».
+
+**Фикс (1 файл `demo_seeder.py`, pure-function, детерминизм сохранён, R-01/R-04/R-05).** rating-ветка → `4 if hash%4==0 else 5` = 4–5 band (≈¾ пятёрок), никогда < 4. INTEGER намеренно: star-widget `Array(rating)` не упадёт на дробном (render-safety). Однострочная замена, сигнатуры не тронуты.
+
+**TDD-first.** `test_rating_field_skews_high_and_appealing` (red): rating/рейтинг/оценка/stars/звёзд → int + 4≤r≤5 + 5 доминирует на 40 сидах. Старый `test_rating_field_is_one_to_five` заменён (инвариант — подмножество нового). red→фикс→**81/81 demo_seeder green**, **92/92 с writer**. ruff+mypy clean.
+
+**LIVE-верификация (money-free, 0 LLM, ЗАДЕПЛОЕННЫЙ бинарник).** Push @dfefd21 → prod `merge --ff-only` + `systemctl restart omnia-orchestrator` → active. Задеплоенный модуль (30 сидов×12 строк): **min 4, max 5, below4=0, 5s=278, 4s=82**. Output-путь browser-proven в #1/#3/#5/#6a; диф меняет лишь числовое значение (как category/date/email #4–#8) → платный ген не нужен, прецедент #4/#7/#8. Клиентские аппы засеяны ДО правки, НЕ ре-сидятся → deployed-binary proof = корректная верификация seeder-internal pure-function. Resource-guard: 0 тест-контейнеров, замок снят.
+
+**Follow-up money-free (RULE-10 #10):** (a) **discount-percent** 0–100 → «Скидка 0%/97%» absurd → believable 5–50% ветка (не трогая progress); (e) person-сущности вне `_PERSON_ENTITY_HINT` (Мастер/Барбер) → name=service-noun; (b) reference/FK (id-сбор, риск). **[x]:** uniform-low rating устранён.
+
 ## 2026-06-14 10:15–10:3x MSK — RULE-10 #8: NICHE-AWARE EMAIL В DEMO-SEEDER — конец `user1234@example.ru` на контакт-карте [x] (generator-quality §0.10; prod-deployed + LIVE-verified на задеплоенном бинарнике, money-free)
 
 **Выбор.** Stop-gate 10:15 < HARD-STOP 2026-06-17 08:26 → работаю. Lock ACQUIRED (cross-machine mkdir-mutex lh-server, RUN MacBook-Air-Roman). Sync ff-only (up to date, HEAD afdfd43). 0 IN-FLIGHT. OWNER §0.10 (качество генератора, НЕ новые ворота — V1.6/16/5f = ВОРОТА, явно исключены) → беру ЯВНО названный follow-up из RULE-10 #5/#6/#7-логов. Кандидат (b) reference/FK — РЕДОК на PUBLIC-каталоге (leaf Product/Service несут enum-категорию, не reference; references к owner-сущностям не сидятся вовсе) + фикс требует риск. многофайловой правки DB-write пути (id-сбор) → отвергнут. Кандидат (d) phone/email: phone УЖЕ валидный RU-формат `+7 (9XX) XXX-XX-XX` → ОК; email = `user1234@example.ru` (учебный fake-домен) = самое очевидно-фейковое значение на любой контакт/специалист-карте → ВЗЯТ.
