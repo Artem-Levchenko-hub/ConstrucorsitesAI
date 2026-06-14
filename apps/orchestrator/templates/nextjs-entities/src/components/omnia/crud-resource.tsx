@@ -5,6 +5,7 @@ import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { type ListParams, type Row } from "@/lib/sdk";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,6 +18,7 @@ import {
 import { PageHeader } from "./page-header";
 import { DataTable, type Column, type FilterTab } from "./data-table";
 import { GalleryGrid, type GalleryItem, type MediaCardProps } from "./gallery-grid";
+import { RecordDetail } from "./record-detail";
 import { EntityForm, type FieldSpec } from "./entity-form";
 import { useEntity } from "./use-entity";
 
@@ -95,6 +97,12 @@ function displayValue(value: unknown): React.ReactNode {
   if (value == null || value === "") return <span className="text-muted-foreground">—</span>;
   if (typeof value === "boolean") return value ? "Да" : "Нет";
   return String(value);
+}
+
+/** Render one column's cell for the detail view — its custom `render` if any,
+ *  else the same plain value the table would show. */
+function renderCell(col: Column<Row>, row: Row): React.ReactNode {
+  return col.render ? col.render(row) : displayValue(row[col.key]);
 }
 
 /**
@@ -375,24 +383,36 @@ export function CrudResource({
 
       {/* Row detail (read view) */}
       <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
+        <DialogContent
+          className={cn(
+            "max-h-[85vh] overflow-y-auto",
+            media ? "sm:max-w-3xl" : "sm:max-w-lg",
+          )}
+        >
+          <DialogHeader className="sr-only">
+            {/* Required for a11y; the visible heading lives in <RecordDetail>. */}
             <DialogTitle>{title ? `${title}: запись` : "Запись"}</DialogTitle>
           </DialogHeader>
           {viewing ? (
-            <dl className="divide-y divide-border">
-              {columns.map((col) => (
-                <div
-                  key={col.key}
-                  className="grid grid-cols-1 gap-1 py-2.5 text-sm sm:grid-cols-[10rem_1fr] sm:gap-3"
-                >
-                  <dt className="text-muted-foreground">{col.header}</dt>
-                  <dd className="font-medium break-words">
-                    {col.render ? col.render(viewing) : displayValue(viewing[col.key])}
-                  </dd>
-                </div>
-              ))}
-            </dl>
+            <RecordDetail
+              title={
+                media
+                  ? media.title(viewing)
+                  : columns[0]
+                    ? renderCell(columns[0], viewing)
+                    : (title ?? "Запись")
+              }
+              eyebrow={media?.subtitle?.(viewing)}
+              image={media?.image?.(viewing)}
+              badge={media?.badge?.(viewing)}
+              price={media?.price?.(viewing)}
+              metaRight={media?.metaRight?.(viewing)}
+              aspect={media?.aspect}
+              fields={columns.slice(1).map((col) => ({
+                label: col.header,
+                value: renderCell(col, viewing),
+              }))}
+            />
           ) : null}
           {canEdit || canDelete ? (
             <DialogFooter>

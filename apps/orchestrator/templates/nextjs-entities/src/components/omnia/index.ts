@@ -37,6 +37,11 @@ export {
 } from "./entity-form";
 export { CrudResource, type CrudResourceProps } from "./crud-resource";
 export {
+  RecordDetail,
+  type RecordDetailProps,
+  type DetailField,
+} from "./record-detail";
+export {
   SettingsShell,
   type SettingsShellProps,
   type SettingsNavItem,
