@@ -278,6 +278,55 @@ def test_current_price_field_unaffected_by_an_old_price_sibling() -> None:
     assert [r["цена"] for r in paired] == [r["цена"] for r in lone]
 
 
+# ── discount badge matches the struck-through prices (RULE-10 #15) ───────────
+# When a card shows BOTH a struck "was" price and a "Скидка N%" badge, the badge
+# must equal the real old→current drop. Seeded independently, the badge (a 5–50%
+# band) contradicts the two displayed prices — e.g. 1100→1000 struck (a true ~9%
+# off) under a "Скидка 35%" tag. That arithmetic mismatch on the first screen is
+# a catalog lie (pillar 1): a sceptical user does the subtraction in their head.
+
+
+def test_discount_badge_matches_the_real_old_to_current_drop() -> None:
+    f = _fields(
+        название={"type": "string", "required": True},
+        цена={"type": "number", "required": True},
+        старая_цена={"type": "number", "required": True},
+        скидка={"type": "number", "required": True},
+    )
+    rows = ds.generate_rows("Товар", f, count=12, seed="s", niche="аптека")
+    assert rows
+    for r in rows:
+        old, cur, disc = r["старая_цена"], r["цена"], r["скидка"]
+        assert old > cur, r  # precondition from the old-price ratchet
+        expected = max(1, round((old - cur) / old * 100))
+        assert disc == expected, r
+        assert 1 <= disc <= 60, r  # always a believable promo, never 0 / absurd
+
+
+def test_discount_without_an_old_price_keeps_the_believable_band() -> None:
+    # No struck "was" price to be consistent with → the discount keeps its plain
+    # 5–50% band exactly as before (high-precision-or-nothing, 0 regression).
+    paired = ds.generate_rows(
+        "Товар",
+        _fields(
+            цена={"type": "number", "required": True},
+            старая_цена={"type": "number", "required": True},
+            скидка={"type": "number", "required": True},
+        ),
+        count=12, seed="s", niche="аптека")
+    lone = ds.generate_rows(
+        "Товар",
+        _fields(
+            цена={"type": "number", "required": True},
+            скидка={"type": "number", "required": True},
+        ),
+        count=12, seed="s", niche="аптека")
+    band = [r["скидка"] for r in lone]
+    assert all(5 <= v <= 50 and v % 5 == 0 for v in band), band
+    # and the coupled discount is genuinely the ratio, not the band value
+    assert [r["скидка"] for r in paired] != band
+
+
 # ── string heuristics (model-independent realism) ────────────────────────────
 
 

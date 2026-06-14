@@ -919,6 +919,9 @@ def generate_rows(
     # The row's *current* price field — its value anchors a sibling "was"/old-price
     # field so the struck-through tag always sits above the sale price.
     price_field = _current_price_field(fields) if domain else None
+    # The row's struck-through "was" price field — its value anchors a sibling
+    # `discount` badge so the badge equals the real old→current drop.
+    old_price_field = _old_price_field(fields) if domain else None
     rows: list[dict[str, Any]] = []
     for i in range(max(0, count)):
         row_category: str | None = None
@@ -930,12 +933,20 @@ def generate_rows(
         row_price: int | None = None
         if domain is not None and price_field is not None:
             row_price = _niche_price(domain, seed, entity, price_field, i)
+        # The exact "was" value the old-price field will carry (same seed/name/index
+        # as _demo_number derives) → the discount badge can mirror its real drop.
+        row_old_price: int | None = None
+        if domain is not None and old_price_field is not None and row_price is not None:
+            row_old_price = _old_price_from(
+                row_price, domain, seed, entity, old_price_field, i
+            )
         row: dict[str, Any] = {}
         for fname, fshape in fields.items():
             value = _field_value(
                 entity, fname, fshape, seed=seed, index=i, refs=refs,
                 domain=domain, row_category=row_category,
                 row_description=row_description, row_price=row_price,
+                row_old_price=row_old_price,
                 email_domain=email_domain,
             )
             if value is None and not fshape.required:
@@ -1005,6 +1016,24 @@ def _current_price_field(
     return None
 
 
+def _old_price_field(
+    fields: Mapping[str, FieldShape]
+) -> str | None:
+    """The number field holding the struck-through "was"/before-discount price.
+    Its row value anchors a sibling `discount`/`скидка` badge so the badge reads
+    the real old→current drop, not an independent band that contradicts the two
+    displayed prices. None when no such field exists (the badge keeps its band)."""
+    for fname, fshape in fields.items():
+        key = fname.lower()
+        if (
+            fshape.type == "number"
+            and _has_token(key, _PRICE_TOKENS)
+            and _has_token(key, _OLD_PRICE_TOKENS)
+        ):
+            return fname
+    return None
+
+
 def _niche_noun(
     domain: str, seed: str, entity: str, fname: str, index: int
 ) -> str:
@@ -1055,6 +1084,7 @@ def _field_value(
     row_category: str | None = None,
     row_description: str | None = None,
     row_price: int | None = None,
+    row_old_price: int | None = None,
     email_domain: str | None = None,
 ) -> Any:
     key = fname.lower()
@@ -1097,7 +1127,9 @@ def _field_value(
         return _demo_date(seed, entity, fname, index)
 
     if fshape.type == "number":
-        return _demo_number(key, seed, entity, fname, index, domain, row_price)
+        return _demo_number(
+            key, seed, entity, fname, index, domain, row_price, row_old_price
+        )
 
     if fshape.type == "text":
         # A public-catalog `description` reads as catalog copy; an operational
@@ -1236,6 +1268,7 @@ def _demo_number(
     index: int,
     domain: str | None = None,
     row_price: int | None = None,
+    row_old_price: int | None = None,
 ) -> int:
     if domain is not None and _has_token(key, _PRICE_TOKENS):
         if row_price is not None and _has_token(key, _OLD_PRICE_TOKENS):
@@ -1256,8 +1289,14 @@ def _demo_number(
     if _has_token(key, _AGE_TOKENS):
         return _hash_int(seed, entity, fname, index) % 53 + 18
     if _has_token(key, _DISCOUNT_TOKENS):
-        # Real promos cluster at round 5–50% — seed that band in 5-point steps
-        # so a "Скидка N%" badge is always believable (never 0, never absurd).
+        # When the same card strikes through a "was" price, the badge must equal
+        # the REAL old→current drop — a band value would contradict the two prices
+        # the user can subtract on screen (1100→1000 under a "Скидка 35%" tag is a
+        # catalog lie, pillar 1). Guard at ≥1% so a near-equal pair never prints 0%.
+        if row_old_price is not None and row_price is not None and row_old_price > row_price:
+            return max(1, round((row_old_price - row_price) / row_old_price * 100))
+        # No struck price to mirror → real promos cluster at round 5–50% in 5-point
+        # steps so a standalone "Скидка N%" badge is still believable.
         return 5 + _hash_int(seed, entity, fname, index) % 10 * 5
     if _has_token(key, _PERCENT_TOKENS):
         return _hash_int(seed, entity, fname, index) % 101
