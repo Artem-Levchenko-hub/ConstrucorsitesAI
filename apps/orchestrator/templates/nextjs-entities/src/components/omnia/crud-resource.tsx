@@ -16,8 +16,27 @@ import {
 } from "@/components/ui/dialog";
 import { PageHeader } from "./page-header";
 import { DataTable, type Column, type FilterTab } from "./data-table";
+import { GalleryGrid, type GalleryItem, type MediaCardProps } from "./gallery-grid";
 import { EntityForm, type FieldSpec } from "./entity-form";
 import { useEntity } from "./use-entity";
+
+/**
+ * Row→card mapping for the gallery view. Each accessor pulls one field off a
+ * record; only `title` is required. Keep `image` pointing at the record's
+ * image/photo/cover field (the seeder fills those with ready-to-render tiles).
+ */
+export interface MediaMap {
+  image?: (row: Row) => string | undefined;
+  title: (row: Row) => React.ReactNode;
+  subtitle?: (row: Row) => React.ReactNode;
+  /** Prominent footer value, e.g. `formatRub(row.price)`. */
+  price?: (row: Row) => React.ReactNode;
+  /** Overlay pill on the image, e.g. a status or «Хит». */
+  badge?: (row: Row) => React.ReactNode;
+  /** Quiet footer-right value, e.g. a rating. */
+  metaRight?: (row: Row) => React.ReactNode;
+  aspect?: MediaCardProps["aspect"];
+}
 
 export interface CrudResourceProps {
   entity: string;
@@ -60,6 +79,14 @@ export interface CrudResourceProps {
   canEdit?: boolean;
   canDelete?: boolean;
   createLabel?: string;
+  /**
+   * Render the collection as an image-forward card grid instead of a table —
+   * for visual niches a gallery sells better than rows of text (каталог,
+   * недвижимость, меню, портфолио, события). Requires `media`. Default "table".
+   */
+  view?: "table" | "gallery";
+  /** Row→card mapping for `view="gallery"`. Ignored in table view. */
+  media?: MediaMap;
 }
 
 /** Plain display of a raw field value in the detail card — mirrors the table's
@@ -105,6 +132,8 @@ export function CrudResource({
   canEdit = true,
   canDelete = true,
   createLabel = "Создать",
+  view = "table",
+  media,
 }: CrudResourceProps) {
   const allowBulk = selectable ?? canDelete;
   // Make every column sortable by default so operators can order a managed list
@@ -234,6 +263,34 @@ export function CrudResource({
         )
       : undefined;
 
+  const useGallery = view === "gallery" && !!media;
+
+  // Build the card models once per row set. Search keywords fold the searchable
+  // columns' raw text so the gallery's search box matches the same fields the
+  // table would, even when a column renders a custom (non-string) node.
+  const keywordKeys = searchKeys ?? columns.map((c) => c.key);
+  const galleryItems: GalleryItem[] = React.useMemo(() => {
+    if (!useGallery || !media) return [];
+    return data.rows.map((row) => ({
+      id: row.id,
+      image: media.image?.(row),
+      title: media.title(row),
+      subtitle: media.subtitle?.(row),
+      price: media.price?.(row),
+      badge: media.badge?.(row),
+      metaRight: media.metaRight?.(row),
+      aspect: media.aspect,
+      onClick: rowDetail ? () => setViewing(row) : undefined,
+      actions: rowActions ? rowActions(row) : undefined,
+      keywords: keywordKeys
+        .map((k) => {
+          const v = (row as Record<string, unknown>)[k];
+          return v == null ? "" : String(v);
+        })
+        .join(" "),
+    }));
+  }, [useGallery, media, data.rows, rowDetail, rowActions, keywordKeys]);
+
   return (
     <div>
       {title ? (
@@ -242,6 +299,22 @@ export function CrudResource({
         <div className="mb-4 flex justify-end">{createButton}</div>
       ) : null}
 
+      {useGallery ? (
+        <GalleryGrid
+          items={galleryItems}
+          loading={data.loading}
+          searchable={searchable}
+          pageSize={pageSize}
+          emptyAction={
+            canCreate ? (
+              <Button onClick={openCreate}>
+                <Plus />
+                {createLabel}
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : (
       <DataTable
         columns={tableColumns}
         rows={data.rows}
@@ -282,6 +355,7 @@ export function CrudResource({
           ) : undefined
         }
       />
+      )}
 
       {/* Create / edit */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>

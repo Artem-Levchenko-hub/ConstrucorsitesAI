@@ -23,6 +23,13 @@ export { CountUp, type CountUpProps } from "./count-up";
 export { EmptyState, type EmptyStateProps } from "./empty-state";
 export { DataTable, type Column, type DataTableProps, type FilterTab } from "./data-table";
 export {
+  GalleryGrid,
+  type GalleryGridProps,
+  type GalleryItem,
+  MediaCard,
+  type MediaCardProps,
+} from "./gallery-grid";
+export {
   EntityForm,
   type FieldSpec,
   type FieldKind,

@@ -834,8 +834,8 @@ _ENTITIES_UI = """\
 
 ▸ ИМПОРТЫ (готовы, просто используй):
   import { AppShell, PageHeader, DashboardHero, StatCard, CountUp, DataTable,
-           CrudResource, EntityForm, EmptyState, useEntity, type Column,
-           Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
+           CrudResource, GalleryGrid, MediaCard, EntityForm, EmptyState, useEntity,
+           type Column, Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
   import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
   // dialog, sheet, tabs, badge, dropdown-menu, table, checkbox, avatar, tooltip, separator …
   import { cn, formatRub, formatDate } from "@/lib/utils";   // formatRub(1234)→"1 234 ₽"
@@ -1005,6 +1005,30 @@ _ENTITIES_UI = """\
   Поля формы (kind): text | textarea | number | boolean | date | select(+options) |
   reference(+refEntity — сам грузит опции связанной сущности) | image(+сам заливает
   через uploadFile). Колонкам можно render для бейджей/денег/дат.
+  ▸ ВИЗУАЛЬНЫЕ НИШИ → ГАЛЕРЕЯ, НЕ ТАБЛИЦА. Если сущность «продаётся глазами» —
+    товары/каталог, недвижимость, меню/блюда, портфолио/работы, события, авто,
+    туры — коллекция из текстовых строк выглядит бедно. Покажи СЕТКУ КАРТОЧЕК С
+    ОБЛОЖКОЙ (как Airbnb/Shopify/Booking): у <CrudResource> поставь `view="gallery"`
+    и `media`-маппинг (CRUD/поиск/детальная карточка работают как обычно):
+      <CrudResource
+        entity="Product" title="Каталог" createLabel="Добавить товар"
+        view="gallery"
+        media={{
+          image:     (r) => r.image as string,        // поле image/photo/cover — сидер даёт плитку
+          title:     (r) => String(r.name),
+          subtitle:  (r) => String(r.category ?? ""),
+          price:     (r) => formatRub(Number(r.price)),
+          badge:     (r) => (r.isHit ? "Хит" : undefined),
+          metaRight: (r) => (r.rating ? `★ ${r.rating}` : undefined),
+        }}
+        columns={[ /* те же колонки — нужны форме/детальной карточке/поиску */ ]}
+        fields={[ /* … включая поле kind:"image" для обложки … */ ]}
+      />
+    Заведи у такой сущности поле `image`/`photo`/`cover` (kind:"image") — сидер
+    заполнит его готовой обложкой, а без картинки карточка покажет аккуратную
+    плашку-заглушку (НЕ битую картинку). Самосборно — <GalleryGrid items={…}
+    searchable /> из <MediaCard>. Карточки сами всплывают каскадом и мягко
+    зумят обложку на ховере (живой WOW-каталог из одной генерации).
   ▸ БЫСТРЫЙ ФИЛЬТР (сегменты) — если у сущности есть поле-статус/категория (status,
     stage, type…), ДОБАВЬ `filterField` + `filterTabs` — над таблицей появится
     сегмент-переключатель «Все / <значения>» (как в Linear/Stripe), мгновенная
