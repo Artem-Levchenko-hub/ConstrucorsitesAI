@@ -737,6 +737,30 @@ def test_entities_ui_public_home_uses_testimonial_wall() -> None:
     )
 
 
+def test_entities_ui_public_home_uses_faq_accordion() -> None:
+    # FAQ is a genuinely distinct premium pattern (an interactive brand-tinted
+    # accordion with a rotating chevron and a smoothly sliding answer) — it must
+    # anchor on the <FaqAccordion> kit primitive instead of a hand-rolled list of
+    # <details>, and the primitive must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "FaqAccordion" in _ENTITIES_UI
+    # the FAQ rule names the section it owns
+    assert "FAQ / ЧАСТЫЕ ВОПРОСЫ" in _ENTITIES_UI
+    # the old "hand-roll the FAQ content yourself" guidance is gone — FAQ now
+    # routes to the kit primitive
+    assert "сверстай содержимое сам" not in _ENTITIES_UI
+    assert "для FAQ —" in _ENTITIES_UI
+    # it sits in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("FaqAccordion") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("FaqAccordion") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
 def test_entities_ui_dashboard_loading_never_blank() -> None:
     # The flagship dashboard must never render a blank screen while data loads:
     # the generated `if (loading) return null` paints nothing (and, if a fetch

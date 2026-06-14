@@ -41,6 +41,11 @@ export {
   type TestimonialWallProps,
   type Testimonial,
 } from "./testimonial-wall";
+export {
+  FaqAccordion,
+  type FaqAccordionProps,
+  type FaqItem,
+} from "./faq-accordion";
 export { StatCard, type StatCardProps } from "./stat-card";
 export { DashboardSkeleton } from "./dashboard-skeleton";
 export { CountUp, type CountUpProps } from "./count-up";

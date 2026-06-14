@@ -834,7 +834,7 @@ _ENTITIES_UI = """\
 
 ▸ ИМПОРТЫ (готовы, просто используй):
   import { AppShell, PageHeader, DashboardHero, StorefrontHero, StorefrontSection,
-           FeatureCard, PricingPlans, TestimonialWall, StatCard, CountUp, DataTable,
+           FeatureCard, PricingPlans, TestimonialWall, FaqAccordion, StatCard, CountUp, DataTable,
            CrudResource, GalleryGrid, MediaCard, EntityForm, EmptyState, useEntity,
            DashboardSkeleton, type Column, Sparkline, TrendArea, BarMini, DonutStat
            } from "@/components/omnia";
@@ -899,9 +899,8 @@ _ENTITIES_UI = """\
        </StorefrontSection>
      Все строки — из БРИФА ниши (реальные услуги/цифры/выгоды), НЕ «Преимущество 1».
      Заголовки секций = <h2> (единственный <h1> несёт <StorefrontHero>). `columns` — ТОЛЬКО
-     для сетки <FeatureCard>; для отзывов используй <TestimonialWall> (ниже), для FAQ опусти
-     `columns` и сверстай содержимое сам внутри секции. Иконки <FeatureCard> — из lucide,
-     ОСМЫСЛЕННЫЕ под пункт.
+     для сетки <FeatureCard>; для отзывов используй <TestimonialWall> (ниже), для FAQ —
+     <FaqAccordion> (ниже). Иконки <FeatureCard> — из lucide, ОСМЫСЛЕННЫЕ под пункт.
   ▸ ЦЕНЫ / ТАРИФЫ — <PricingPlans> (готовый кит, НЕ верстай прайс-таблицу сырьём). Когда
      у ниши есть пакеты / подписки / тарифы (SaaS, абонементы, услуги, членство) — дай
      секцию цен через <PricingPlans>: бренд-осознанный ряд тарифов, где ОДИН рекомендованный
@@ -949,6 +948,28 @@ _ENTITIES_UI = """\
        </StorefrontSection>
      Отзывы — ПРАВДОПОДОБНЫ под нишу (реальные сценарии, имена, роли из БРИФА), НЕ «Отзыв 1».
      Чередуй с соседней секцией через `tint` для ритма. Нет смысла в отзывах у ниши — не выдумывай.
+  ▸ FAQ / ЧАСТЫЕ ВОПРОСЫ — <FaqAccordion> (готовый кит, НЕ верстай список <details>/раскрывашек
+     сырьём). Почти у каждой публичной ниши есть «частые вопросы» — дай их через <FaqAccordion>:
+     бренд-осознанный аккордеон, где открытая строка приподнимается в фирменно-тонированную
+     карточку, шеврон поворачивается, ответ плавно раскрывается (Google Maps / Spotify / Coursera /
+     Navan-паттерн). Положи внутрь <StorefrontSection> БЕЗ `columns` (компонент сам держит
+     одноколоночный ритм max-w-3xl). Первый вопрос открыт по умолчанию (`defaultOpen={0}`, страница
+     не «мёртвая»; передай `null` для свёрнутого старта; `allowMultiple` — открыть несколько разом).
+     Каждый пункт:
+     `question` (одна честная строка), `answer` (1–2 коротких абзаца).
+       <StorefrontSection id="faq" eyebrow="Вопросы" title="Частые вопросы"
+         lead="Коротко о записи, ценах и гарантии." align="center" tint>
+         <FaqAccordion items={[
+           { question: "Нужно ли записываться заранее?",
+             answer: "Да, онлайн-запись занимает минуту — выберите врача и удобное время." },
+           { question: "Больно ли лечить зубы у вас?",
+             answer: "Лечим под анестезией — боли не почувствуете даже в сложных случаях." },
+           { question: "Даёте ли вы гарантию на работу?",
+             answer: "На все виды лечения действует гарантия до 2 лет, прописанная в договоре." },
+         ]} />
+       </StorefrontSection>
+     Вопросы/ответы — из БРИФА ниши (реальные сомнения клиента и честные ответы), НЕ «Вопрос 1».
+     Чередуй `tint` с соседней секцией для ритма. Нет смысла в FAQ у ниши — секцию не выдумывай.
   ▸ ВИТРИНА / ШОУКЕЙС НА ГЛАВНОЙ. Публичная «/» — КОНТЕНТНЫЙ лендинг: соблюдай
     _IMAGE_GEN_ON ПОЛНОСТЬЮ — hero-фон + 3–6 контентных фото секций через
     `data-omnia-gen` (повторяющиеся карточки — общим `data-omnia-gen-group`). Лендинг
