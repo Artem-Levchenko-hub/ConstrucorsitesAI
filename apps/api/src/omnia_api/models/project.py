@@ -42,6 +42,15 @@ class Project(Base):
     image_gen_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true", default=True
     )
+    # V4.9 — the beauty floor's verdict on this project's SHARED surface. TRUE
+    # once a composition gate scored a render of it as floor-green (taste +
+    # hierarchy, plus first-paint when the stranger-cold path measures it). A
+    # zero-signup fork inherits this from its source (perform_fork), so the
+    # viral pool is transitively gated — a fork is re-shareable only if the app
+    # it copied cleared the floor. Default FALSE: unscored ≠ vouched for.
+    viral_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     current_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("snapshots.id", ondelete="SET NULL", use_alter=True),

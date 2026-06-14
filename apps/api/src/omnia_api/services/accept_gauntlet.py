@@ -197,6 +197,33 @@ class GauntletVerdict:
         }
 
 
+def viral_eligible_from_verdict(verdict: GauntletVerdict) -> bool:
+    """Certify a project's shared surface against the beauty floor (V4.9).
+
+    The bridge from pillar 1 (WOW design) to pillar 4 (virality): a project may
+    enter the viral pool — its zero-signup forks inherit the right to be
+    re-shared — only when the surface a stranger sees is itself floor-green.
+
+    The contract (reuses the existing per-gate verdicts, R-04 — no new metric):
+
+    * ``taste`` AND ``hierarchy`` must have been MEASURED and PASSED. These are
+      the awwwards floor of pillar 1; a surface we never scored on them cannot
+      be vouched for, so a missing or abstained leg is never eligible (mirrors
+      ``GauntletVerdict.passed`` — no evidence ≠ a pass).
+    * NO gate may carry a real finding. When the ``viral`` leg ran (it folds
+      first-paint over the served surface), a hard-fail there disqualifies too —
+      so the stranger-cold path adds first-paint as a hard requirement, while
+      the authenticated entity gate certifies on taste+hierarchy alone. Abstains
+      (a flaky render of an optional leg) are tolerated; the caller decides
+      whether to write the verdict on a flaky run (see ``workers.quality``).
+    """
+    by_gate = {g.gate: g for g in verdict.gates}
+    floor = (by_gate.get(TASTE), by_gate.get(HIERARCHY))
+    if any(g is None or g.abstained or not g.passed for g in floor):
+        return False
+    return not verdict.hard_failed
+
+
 def _from_registry(rep: defect_registry.DefectReport) -> GateVerdict:
     return GateVerdict(
         gate=DEFECT_REGISTRY,
