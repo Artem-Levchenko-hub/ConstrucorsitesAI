@@ -709,6 +709,16 @@ _MONEY_TOKENS = (
 # salary, revenue, budget) are deliberately excluded: they're not catalog prices
 # and a niche item band would misprice them.
 _PRICE_TOKENS = ("price", "цена", "cost", "стоим", "тариф")
+# A "was"/"before-discount" price field (старая цена, old_price, цена до скидки).
+# It's also a price field, so it's matched FIRST inside the price branch and seeded
+# strictly ABOVE the row's current price — a struck-through tag below the sale price
+# is a discount that raises the cost, the most obvious catalog lie (pillar 1).
+# Tokens are deliberately tight: "скидк" alone is excluded so a current "цена со
+# скидкой" (the sale price itself) is NOT misread as the old price.
+_OLD_PRICE_TOKENS = (
+    "стар", "old", "была", "было", "regular", "обычн", "original", "ориг",
+    "до_скидк", "до скидк", "доскидк", "без_скидк", "без скидк", "безскидк",
+)
 _RATING_TOKENS = ("rating", "рейтинг", "score", "оценка", "stars", "звёзд", "звезд")
 _AGE_TOKENS = ("age", "возраст")
 _PERCENT_TOKENS = ("percent", "процент", "progress", "прогресс")
@@ -906,6 +916,9 @@ def generate_rows(
     # The field whose title noun a `category` enum should agree with (only when a
     # niche is known — otherwise there's no noun to correlate against).
     label_field = _primary_label_field(entity, fields) if domain else None
+    # The row's *current* price field — its value anchors a sibling "was"/old-price
+    # field so the struck-through tag always sits above the sale price.
+    price_field = _current_price_field(fields) if domain else None
     rows: list[dict[str, Any]] = []
     for i in range(max(0, count)):
         row_category: str | None = None
@@ -914,12 +927,16 @@ def generate_rows(
             noun = _niche_noun(domain, seed, entity, label_field, i)
             row_category = _DOMAIN_NOUN_CATEGORY.get(domain, {}).get(noun)
             row_description = _DOMAIN_NOUN_DESCRIPTION.get(domain, {}).get(noun)
+        row_price: int | None = None
+        if domain is not None and price_field is not None:
+            row_price = _niche_price(domain, seed, entity, price_field, i)
         row: dict[str, Any] = {}
         for fname, fshape in fields.items():
             value = _field_value(
                 entity, fname, fshape, seed=seed, index=i, refs=refs,
                 domain=domain, row_category=row_category,
-                row_description=row_description, email_domain=email_domain,
+                row_description=row_description, row_price=row_price,
+                email_domain=email_domain,
             )
             if value is None and not fshape.required:
                 # Skip optional nulls (e.g. a reference with no pool) — leaving
@@ -966,6 +983,24 @@ def _primary_label_field(
     qualifies (e.g. a person entity, or no title-like field)."""
     for fname, fshape in fields.items():
         if fshape.type == "string" and _takes_niche_noun(entity, fname.lower()):
+            return fname
+    return None
+
+
+def _current_price_field(
+    fields: Mapping[str, FieldShape]
+) -> str | None:
+    """The number field holding the row's *current* (sale) price — the first
+    price field that is NOT a "was"/before-discount field. A sibling old-price
+    field is then seeded above it. None when no plain price field exists (a lone
+    old-price field has nothing to sit above → keeps the plain band)."""
+    for fname, fshape in fields.items():
+        key = fname.lower()
+        if (
+            fshape.type == "number"
+            and _has_token(key, _PRICE_TOKENS)
+            and not _has_token(key, _OLD_PRICE_TOKENS)
+        ):
             return fname
     return None
 
@@ -1019,6 +1054,7 @@ def _field_value(
     domain: str | None = None,
     row_category: str | None = None,
     row_description: str | None = None,
+    row_price: int | None = None,
     email_domain: str | None = None,
 ) -> Any:
     key = fname.lower()
@@ -1061,7 +1097,7 @@ def _field_value(
         return _demo_date(seed, entity, fname, index)
 
     if fshape.type == "number":
-        return _demo_number(key, seed, entity, fname, index, domain)
+        return _demo_number(key, seed, entity, fname, index, domain, row_price)
 
     if fshape.type == "text":
         # A public-catalog `description` reads as catalog copy; an operational
@@ -1169,14 +1205,44 @@ def _demo_image(
     return "data:image/svg+xml," + quote(svg, safe="")
 
 
+def _niche_price(
+    domain: str, seed: str, entity: str, fname: str, index: int
+) -> int:
+    """A real-market current price for this niche, on the band's round step."""
+    lo, hi, step = _DOMAIN_PRICE[domain]
+    buckets = (hi - lo) // step + 1
+    return lo + _hash_int(seed, entity, fname, index) % buckets * step
+
+
+def _old_price_from(
+    current: int, domain: str, seed: str, entity: str, fname: str, index: int
+) -> int:
+    """A believable "was" price: the current price marked up by a round 10–40 %
+    discount, snapped to the niche band's step and never equal-or-below it (a
+    struck-through tag must sit ABOVE the sale price)."""
+    _, _, step = _DOMAIN_PRICE[domain]
+    pct = 1 + _hash_int(seed, entity, fname, index, "old") % 4  # 10 … 40 %
+    old = round(current / (1 - pct / 10) / step) * step
+    if old <= current:  # rounding collapsed it — bump one step above the sale price
+        old = (current // step + 1) * step
+    return old
+
+
 def _demo_number(
-    key: str, seed: str, entity: str, fname: str, index: int, domain: str | None = None
+    key: str,
+    seed: str,
+    entity: str,
+    fname: str,
+    index: int,
+    domain: str | None = None,
+    row_price: int | None = None,
 ) -> int:
     if domain is not None and _has_token(key, _PRICE_TOKENS):
+        if row_price is not None and _has_token(key, _OLD_PRICE_TOKENS):
+            # A "was"/before-discount field → sit above the row's current price.
+            return _old_price_from(row_price, domain, seed, entity, fname, index)
         # A real-market price for this niche, rounded to the band's step.
-        lo, hi, step = _DOMAIN_PRICE[domain]
-        buckets = (hi - lo) // step + 1
-        return lo + _hash_int(seed, entity, fname, index) % buckets * step
+        return _niche_price(domain, seed, entity, fname, index)
     if _has_token(key, _MONEY_TOKENS):
         # Round-ish rouble amounts, 990 … ~199 990 (generic / unknown niche).
         return (_hash_int(seed, entity, fname, index) % 200 + 1) * 990

@@ -197,6 +197,87 @@ def test_discount_band_does_not_touch_progress() -> None:
     assert any(v % 5 != 0 for v in spread)  # not snapped to the 5-step band
 
 
+# ── old-price coherence (the struck-through "was" price) ─────────────────────
+
+
+@pytest.mark.parametrize(
+    "old_name",
+    ["старая_цена", "old_price", "цена_до_скидки", "обычная_цена", "цена_была"],
+)
+def test_old_price_sits_above_the_current_price(old_name: str) -> None:
+    # A product card that strikes through a "was" price must keep it ABOVE the
+    # current price. Seeded independently, the old price can land below the sale
+    # price → a discount that *raises* the cost, the most obvious catalog lie a
+    # fresh app can show on its first screen (pillar 1).
+    f = _fields(**{
+        "название": {"type": "string", "required": True},
+        "цена": {"type": "number", "required": True},
+        old_name: {"type": "number", "required": True},
+    })
+    rows = ds.generate_rows("Товар", f, count=12, seed="s", niche="аптека")
+    assert rows
+    for r in rows:
+        assert r[old_name] > r["цена"], (old_name, r)
+
+
+def test_old_price_lands_on_the_niche_band_step() -> None:
+    # The "was" price stays on the niche band's round step, so it reads like a
+    # real price tag, not an odd derived number.
+    f = _fields(
+        название={"type": "string", "required": True},
+        цена={"type": "number", "required": True},
+        старая_цена={"type": "number", "required": True},
+    )
+    rows = ds.generate_rows("Товар", f, count=12, seed="s", niche="аптека")
+    _, _, step = ds._DOMAIN_PRICE["pharmacy"]
+    assert all(r["старая_цена"] % step == 0 for r in rows)
+
+
+def test_old_price_without_a_current_price_keeps_the_plain_band() -> None:
+    # An old-price field with no sibling current price has nothing to sit above,
+    # so the markup must NOT fire — it keeps the plain niche band (0 regression).
+    f = _fields(старая_цена={"type": "number", "required": True})
+    rows = ds.generate_rows("Товар", f, count=12, seed="s", niche="аптека")
+    expected = [ds._niche_price("pharmacy", "s", "Товар", "старая_цена", i)
+                for i in range(12)]
+    assert [r["старая_цена"] for r in rows] == expected
+
+
+def test_old_price_unknown_niche_is_untouched() -> None:
+    # No recognised domain → no band → the markup path must not fire; the generic
+    # money values stay deterministic and independent of any sibling price.
+    paired = ds.generate_rows(
+        "Товар",
+        _fields(
+            цена={"type": "number", "required": True},
+            старая_цена={"type": "number", "required": True},
+        ),
+        count=8, seed="s")
+    lone = ds.generate_rows(
+        "Товар",
+        _fields(старая_цена={"type": "number", "required": True}),
+        count=8, seed="s")
+    # same field name, no niche → identical generic value with or without a sibling
+    assert [r["старая_цена"] for r in paired] == [r["старая_цена"] for r in lone]
+
+
+def test_current_price_field_unaffected_by_an_old_price_sibling() -> None:
+    # Adding a "was" field must not move the current price — it stays exactly the
+    # plain niche-band value it had alone.
+    paired = ds.generate_rows(
+        "Товар",
+        _fields(
+            цена={"type": "number", "required": True},
+            старая_цена={"type": "number", "required": True},
+        ),
+        count=10, seed="s", niche="аптека")
+    lone = ds.generate_rows(
+        "Товар",
+        _fields(цена={"type": "number", "required": True}),
+        count=10, seed="s", niche="аптека")
+    assert [r["цена"] for r in paired] == [r["цена"] for r in lone]
+
+
 # ── string heuristics (model-independent realism) ────────────────────────────
 
 
