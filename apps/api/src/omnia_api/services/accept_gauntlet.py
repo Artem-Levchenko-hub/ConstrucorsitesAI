@@ -38,6 +38,7 @@ from omnia_api.services import (
     onboarding_registry,
     perf_a11y_gate,
     reference_corpus,
+    render_registry,
     taste_gate,
     viral_registry,
     wow_dom_gate,
@@ -64,6 +65,7 @@ COMPOSITION_WIDTH = TASTE_WIDTH
 DEFECT_REGISTRY = "defect-registry"
 COMPOSE = "compose"
 ONBOARDING = "onboarding"
+RENDER = "render"
 VIRAL = "viral"
 WOW_DOM = "wow-dom"
 PERF_A11Y = "perf-a11y"
@@ -293,6 +295,24 @@ def _from_onboarding(rep: onboarding_registry.OnboardingReport) -> GateVerdict:
     )
 
 
+def _from_render(rep: render_registry.RenderReport) -> GateVerdict:
+    """Adapt the render registry (V3.12) — a pure context-scan, like the onboarding one.
+
+    It never abstains: a turn with no brief to narrate (a non-generation turn, an
+    empty context) is INERT and reports ``passed=True`` (nothing to narrate ≠ a
+    flaky render with no evidence). Its narratable-payload verdict is single-sourced
+    on :func:`art_director_writer.parse_brief` (R-04).
+    """
+    return GateVerdict(
+        gate=RENDER,
+        passed=rep.passed,
+        abstained=False,  # pure context-scan — its evidence is always present
+        classes=rep.classes,
+        summary=rep.summary(),
+        subscore=rep.subscore(),
+    )
+
+
 def _from_rendered(gate: str, rep: Any) -> GateVerdict:
     """Adapt a rendered gate's report (wow/perf/chip — same shape) to a verdict.
 
@@ -374,6 +394,8 @@ async def run(
     viral_context: viral_registry.ViralContext | None = None,
     onboarding: bool = False,
     onboarding_context: onboarding_registry.OnboardingContext | None = None,
+    render: bool = False,
+    render_context: render_registry.RenderContext | None = None,
 ) -> GauntletVerdict:
     """Fan the selected landed gates over ``files`` and/or a live ``url``.
 
@@ -405,6 +427,15 @@ async def run(
       on ``discovery._clean_choices`` (R-04). It is INERT on a BUILD / empty /
       ``None`` context, so it never false-fails; an onboarding turn is not a
       generation, so it is independent of ``files``.
+
+    * ``render=True`` adds the V3.12 render defect-registry — also a pure
+      context-scan (no render, no LLM). It scores the ``render_context`` (one
+      rendered generation turn's art-director brief) against the pillar-3
+      invariants — silent render, swatchless render, motionless render —
+      single-sourcing the narratable-payload verdict on
+      ``art_director_writer.parse_brief`` (R-04). It is INERT on a no-brief / empty /
+      ``None`` context, so it never false-fails; a brief is not a file set, so it is
+      independent of ``files``.
 
     Two independent dials pick WHICH rendered legs run (V1.6 14/5 decouple):
 
@@ -474,6 +505,19 @@ async def run(
     # ``files`` and exercised by the pillar-2 finish (V2.9) / the paid-run manifest.
     if onboarding:
         gates.append(_from_onboarding(onboarding_registry.scan(onboarding_context)))
+
+    # V3.12 — the money-free render defect-registry. Like the onboarding registry it
+    # is a pure CONTEXT-scan (no render, no LLM): it scores one rendered generation
+    # turn (the ``render_context``'s art-director brief) against the falsifiable
+    # pillar-3 invariants — silent render, swatchless render, motionless render —
+    # single-sourcing the narratable-payload verdict on
+    # ``art_director_writer.parse_brief`` (R-04), the exact payload the ``omnia:brief``
+    # event ships to the client. It is INERT (a passing no-op) on a no-brief / empty /
+    # None context, so wiring it is safe on every path; a brief is not a file set, so
+    # it is independent of ``files`` and exercised by the pillar-3 finish / the
+    # paid-run manifest, not the per-gen ship path.
+    if render:
+        gates.append(_from_render(render_registry.scan(render_context)))
 
     legs: set[str] = set(RENDERED_GATES) if include_rendered else set()
     if composition:
