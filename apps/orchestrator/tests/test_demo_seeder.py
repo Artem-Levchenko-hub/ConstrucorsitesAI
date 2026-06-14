@@ -388,6 +388,91 @@ def test_notes_field_still_uses_operational_sentences() -> None:
     assert all(r["notes"] in ds._SENTENCES for r in rows)
 
 
+# ── title ↔ description coherence (a niche card describes the actual item) ──────
+
+
+def test_every_domain_noun_has_a_description() -> None:
+    """Sync guard: every catalog noun maps to a product-describing blurb, so a
+    freshly added noun can never silently fall back to the generic praise pool."""
+    assert set(ds._DOMAIN_NOUN_DESCRIPTION) == set(ds._DOMAIN_NOUNS)
+    for domain, nouns in ds._DOMAIN_NOUNS.items():
+        mapping = ds._DOMAIN_NOUN_DESCRIPTION[domain]
+        for noun in nouns:
+            assert noun in mapping, (domain, noun)
+            assert mapping[noun], (domain, noun)  # non-empty
+            # a real description, not a recycled generic-praise line
+            assert mapping[noun] not in ds._DESCRIPTIONS, (domain, noun)
+
+
+def test_pharmacy_description_correlates_with_title() -> None:
+    """In a recognised niche the `description` describes the row's own product —
+    a Vitamin C card reads its real blurb, never the niche-blind praise pool."""
+    raw = {
+        "name": "Product",
+        "access": "public",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "description": {"type": "text", "required": True},
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(
+        shape.name, shape.fields, count=12, seed="s", niche="apteka-online"
+    )
+    saw_known = False
+    for r in rows:
+        expected = ds._DOMAIN_NOUN_DESCRIPTION["pharmacy"].get(r["title"])
+        assert expected is not None, r["title"]  # every pharmacy noun is mapped
+        assert r["description"] == expected, (r["title"], r["description"])
+        assert r["description"] not in ds._DESCRIPTIONS  # not generic praise
+        saw_known = True
+    assert saw_known
+
+
+def test_description_falls_back_to_generic_when_niche_unknown() -> None:
+    """Unknown niche → byte-identical to the pre-existing generic-pool behaviour
+    (no regression for catalogs whose domain we can't confidently name)."""
+    f = _fields(description={"type": "text", "required": True})
+    rows = ds.generate_rows(
+        "Widget", f, count=8, seed="s", niche="zzz-unknownixx"
+    )
+    assert all(r["description"] in ds._DESCRIPTIONS for r in rows)
+
+
+def test_notes_field_uses_operational_sentences_even_in_a_niche() -> None:
+    """The per-noun description only routes `description`-style fields — an
+    operational `notes` field keeps the back-office sentences in every niche."""
+    raw = {
+        "name": "Product",
+        "access": "public",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "notes": {"type": "text", "required": True},
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(
+        shape.name, shape.fields, count=8, seed="s", niche="apteka-online"
+    )
+    assert all(r["notes"] in ds._SENTENCES for r in rows)
+    assert all(r["notes"] not in ds._DOMAIN_NOUN_DESCRIPTION["pharmacy"].values()
+               for r in rows)
+
+
+def test_description_correlation_is_deterministic() -> None:
+    raw = {
+        "name": "Product",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "description": {"type": "text", "required": True},
+        },
+    }
+    shape = ds.parse_entity(raw)
+    a = ds.generate_rows(shape.name, shape.fields, count=10, seed="p1", niche="cafe")
+    b = ds.generate_rows(shape.name, shape.fields, count=10, seed="p1", niche="cafe")
+    assert a == b
+
+
 def test_sku_field_is_a_code_not_a_label() -> None:
     f = _fields(sku={"type": "string", "required": True})
     rows = ds.generate_rows("Product", f, count=8, seed="s")
