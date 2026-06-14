@@ -132,8 +132,13 @@
     if (document.getElementById("omnia-bn-style")) return;
     var style = document.createElement("style");
     style.id = "omnia-bn-style";
+    // Hypnotic birth reveal (pillar 3): a living brand-tinted aura drifts behind
+    // a glass card; a radar-ping orb "thinks", the palette weaves in on a drawn
+    // thread with a sheen sweep, a progress bar fills over the reveal, and each
+    // cadenced line wipes an accent underline. Every motion is keyed off the
+    // brief's --omnia-bn-accent and force-settles under reduced-motion.
     style.textContent =
-      "#" + OVERLAY_ID + "{position:fixed;inset:0;z-index:2147482000;" +
+      "#" + OVERLAY_ID + "{position:fixed;inset:0;z-index:2147482000;overflow:hidden;" +
       "display:flex;align-items:center;justify-content:center;" +
       "background:radial-gradient(120% 120% at 50% 0%,rgba(15,18,28,.82),rgba(8,10,16,.94));" +
       "backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);" +
@@ -141,33 +146,73 @@
       "opacity:0;transition:opacity .5s ease}" +
       "#" + OVERLAY_ID + ".omnia-bn-in{opacity:1}" +
       "#" + OVERLAY_ID + ".omnia-bn-out{opacity:0}" +
-      "#" + OVERLAY_ID + " .omnia-bn-card{width:min(440px,86vw);" +
-      "padding:30px 30px 32px;border-radius:22px;color:#f3f5fb;" +
-      "background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03));" +
+      "#" + OVERLAY_ID + " .omnia-bn-aura{position:absolute;inset:-25%;pointer-events:none;" +
+      "background:radial-gradient(38% 38% at 30% 32%,var(--omnia-bn-accent,#818cf8) 0,transparent 60%)," +
+      "radial-gradient(34% 34% at 72% 66%,var(--omnia-bn-accent,#818cf8) 0,transparent 62%);" +
+      "opacity:.20;filter:blur(48px);animation:omnia-bn-drift 9s ease-in-out infinite alternate}" +
+      "#" + OVERLAY_ID + " .omnia-bn-card{position:relative;width:min(440px,86vw);" +
+      "padding:28px 30px 30px;border-radius:22px;color:#f3f5fb;" +
+      "background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.03));" +
       "border:1px solid rgba(255,255,255,.12);" +
       "box-shadow:0 30px 80px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.08)}" +
-      "#" + OVERLAY_ID + " .omnia-bn-head{display:flex;align-items:center;gap:10px;" +
-      "font-size:13px;font-weight:600;letter-spacing:.01em;color:#aab2c8;margin-bottom:18px}" +
-      "#" + OVERLAY_ID + " .omnia-bn-dot{width:9px;height:9px;border-radius:9999px;" +
+      "#" + OVERLAY_ID + " .omnia-bn-card::before{content:'';position:absolute;left:24px;right:24px;top:0;" +
+      "height:1px;background:linear-gradient(90deg,transparent,var(--omnia-bn-accent,#818cf8),transparent);opacity:.6}" +
+      "#" + OVERLAY_ID + " .omnia-bn-head{display:flex;align-items:center;gap:11px;" +
+      "font-size:13px;font-weight:600;letter-spacing:.01em;color:#aab2c8;margin-bottom:16px}" +
+      "#" + OVERLAY_ID + " .omnia-bn-dot{position:relative;width:9px;height:9px;border-radius:9999px;" +
       "background:var(--omnia-bn-accent,#818cf8);box-shadow:0 0 14px var(--omnia-bn-accent,#818cf8);" +
       "animation:omnia-bn-pulse 1.4s ease-in-out infinite}" +
-      "#" + OVERLAY_ID + " .omnia-bn-swatches{display:flex;gap:8px;margin-bottom:18px}" +
-      "#" + OVERLAY_ID + " .omnia-bn-sw{width:34px;height:34px;border-radius:10px;" +
+      "#" + OVERLAY_ID + " .omnia-bn-dot::before,#" + OVERLAY_ID + " .omnia-bn-dot::after{content:'';" +
+      "position:absolute;inset:0;border-radius:9999px;border:1px solid var(--omnia-bn-accent,#818cf8);" +
+      "animation:omnia-bn-ping 2s cubic-bezier(.2,.6,.3,1) infinite}" +
+      "#" + OVERLAY_ID + " .omnia-bn-dot::after{animation-delay:1s}" +
+      "#" + OVERLAY_ID + " .omnia-bn-prog{position:relative;height:2px;border-radius:2px;margin-bottom:18px;" +
+      "background:rgba(255,255,255,.08);overflow:hidden}" +
+      "#" + OVERLAY_ID + " .omnia-bn-prog>i{display:block;height:100%;width:100%;transform-origin:left;transform:scaleX(0);" +
+      "background:linear-gradient(90deg,transparent,var(--omnia-bn-accent,#818cf8));" +
+      "animation:omnia-bn-fill linear forwards}" +
+      "#" + OVERLAY_ID + " .omnia-bn-swatches{position:relative;display:flex;gap:8px;margin-bottom:18px}" +
+      "#" + OVERLAY_ID + " .omnia-bn-swatches::before{content:'';position:absolute;left:4px;right:4px;top:50%;height:1px;" +
+      "transform:translateY(-50%) scaleX(0);transform-origin:left;opacity:.5;" +
+      "background:linear-gradient(90deg,var(--omnia-bn-accent,#818cf8),transparent);" +
+      "animation:omnia-bn-thread .7s ease-out .1s forwards}" +
+      "#" + OVERLAY_ID + " .omnia-bn-sw{position:relative;width:34px;height:34px;border-radius:10px;overflow:hidden;" +
       "border:1px solid rgba(255,255,255,.18);box-shadow:0 4px 14px rgba(0,0,0,.3);" +
       "opacity:0;transform:scale(.5) translateY(6px);" +
-      "animation:omnia-bn-pop .5s cubic-bezier(.16,1,.3,1) forwards}" +
-      "#" + OVERLAY_ID + " .omnia-bn-line{display:flex;align-items:flex-start;gap:10px;" +
-      "font-size:15px;line-height:1.5;color:#e7eaf3;margin-top:11px;" +
+      "animation:omnia-bn-pop .5s cubic-bezier(.16,1,.3,1) var(--omnia-d,0ms) forwards}" +
+      "#" + OVERLAY_ID + " .omnia-bn-sw::after{content:'';position:absolute;inset:0;" +
+      "background:linear-gradient(115deg,transparent 32%,rgba(255,255,255,.5) 50%,transparent 68%);" +
+      "transform:translateX(-130%);animation:omnia-bn-sheen 1.5s ease-in-out calc(var(--omnia-d,0ms) + 280ms) 1}" +
+      "#" + OVERLAY_ID + " .omnia-bn-line{position:relative;display:flex;align-items:flex-start;gap:10px;" +
+      "font-size:15px;line-height:1.5;color:#e7eaf3;margin-top:11px;padding-bottom:3px;" +
       "opacity:0;transform:translateY(8px);" +
-      "animation:omnia-bn-rise .55s cubic-bezier(.16,1,.3,1) forwards}" +
+      "animation:omnia-bn-rise .55s cubic-bezier(.16,1,.3,1) var(--omnia-d,0ms) forwards}" +
       "#" + OVERLAY_ID + " .omnia-bn-line::before{content:'';flex:0 0 auto;margin-top:8px;" +
-      "width:6px;height:6px;border-radius:9999px;background:var(--omnia-bn-accent,#818cf8)}" +
+      "width:6px;height:6px;border-radius:9999px;background:var(--omnia-bn-accent,#818cf8);" +
+      "box-shadow:0 0 8px var(--omnia-bn-accent,#818cf8)}" +
+      "#" + OVERLAY_ID + " .omnia-bn-line::after{content:'';position:absolute;left:16px;bottom:0;height:1px;" +
+      "width:calc(100% - 16px);transform:scaleX(0);transform-origin:left;opacity:.42;" +
+      "background:linear-gradient(90deg,var(--omnia-bn-accent,#818cf8),transparent);" +
+      "animation:omnia-bn-underline .5s ease-out calc(var(--omnia-d,0ms) + 200ms) forwards}" +
       "@keyframes omnia-bn-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.82)}}" +
       "@keyframes omnia-bn-pop{to{opacity:1;transform:none}}" +
       "@keyframes omnia-bn-rise{to{opacity:1;transform:none}}" +
+      "@keyframes omnia-bn-drift{0%{transform:translate(-3%,-2%) scale(1)}100%{transform:translate(4%,3%) scale(1.12)}}" +
+      "@keyframes omnia-bn-ping{0%{opacity:.6;transform:scale(1)}100%{opacity:0;transform:scale(3.4)}}" +
+      "@keyframes omnia-bn-fill{to{transform:scaleX(1)}}" +
+      "@keyframes omnia-bn-thread{to{transform:translateY(-50%) scaleX(1)}}" +
+      "@keyframes omnia-bn-sheen{0%{transform:translateX(-130%)}60%,100%{transform:translateX(130%)}}" +
+      "@keyframes omnia-bn-underline{to{transform:scaleX(1)}}" +
       "@media (prefers-reduced-motion:reduce){#" + OVERLAY_ID + "{transition:none}" +
-      "#" + OVERLAY_ID + " .omnia-bn-dot,#" + OVERLAY_ID + " .omnia-bn-sw," +
-      "#" + OVERLAY_ID + " .omnia-bn-line{animation:none;opacity:1;transform:none}}";
+      "#" + OVERLAY_ID + " .omnia-bn-aura{animation:none;opacity:.16}" +
+      "#" + OVERLAY_ID + " .omnia-bn-dot{animation:none}" +
+      "#" + OVERLAY_ID + " .omnia-bn-dot::before,#" + OVERLAY_ID + " .omnia-bn-dot::after{animation:none;opacity:0}" +
+      "#" + OVERLAY_ID + " .omnia-bn-prog>i{animation:none;transform:scaleX(1)}" +
+      "#" + OVERLAY_ID + " .omnia-bn-swatches::before{animation:none;transform:translateY(-50%) scaleX(1)}" +
+      "#" + OVERLAY_ID + " .omnia-bn-sw{animation:none;opacity:1;transform:none}" +
+      "#" + OVERLAY_ID + " .omnia-bn-sw::after{animation:none;opacity:0}" +
+      "#" + OVERLAY_ID + " .omnia-bn-line{animation:none;opacity:1;transform:none}" +
+      "#" + OVERLAY_ID + " .omnia-bn-line::after{animation:none;transform:scaleX(1)}}";
     (document.head || document.documentElement).appendChild(style);
   }
 
@@ -203,6 +248,9 @@
     var swatches = pickHexes(brief.palette || {}, 5);
     var accent = swatches.length ? swatches[0] : "#818cf8";
     var reduced = reducedMotion();
+    var step = 850;
+    var base = swatches.length ? 360 : 60;
+    var total = reduced ? 1500 : base + lines.length * step + 1100;
 
     var overlay = document.createElement("div");
     overlay.id = OVERLAY_ID;
@@ -212,6 +260,12 @@
     overlay.style.setProperty("--omnia-bn-accent", accent);
     // Click anywhere to skip the reveal.
     overlay.addEventListener("click", remove);
+
+    // Living brand-tinted aura behind the card — the "alive, being-born" depth.
+    var aura = document.createElement("div");
+    aura.className = "omnia-bn-aura";
+    aura.setAttribute("aria-hidden", "true");
+    overlay.appendChild(aura);
 
     var card = document.createElement("div");
     card.className = "omnia-bn-card";
@@ -227,6 +281,15 @@
     head.appendChild(headText);
     card.appendChild(head);
 
+    // Progress bar fills over the whole reveal — forward momentum toward "done".
+    var prog = document.createElement("div");
+    prog.className = "omnia-bn-prog";
+    prog.setAttribute("aria-hidden", "true");
+    var progFill = document.createElement("i");
+    if (!reduced) progFill.style.animationDuration = total + "ms";
+    prog.appendChild(progFill);
+    card.appendChild(prog);
+
     if (swatches.length) {
       var row = document.createElement("div");
       row.className = "omnia-bn-swatches";
@@ -234,21 +297,19 @@
         var sw = document.createElement("span");
         sw.className = "omnia-bn-sw";
         sw.style.background = hex;
-        if (!reduced) sw.style.animationDelay = 120 + i * 90 + "ms";
+        if (!reduced) sw.style.setProperty("--omnia-d", 120 + i * 90 + "ms");
         row.appendChild(sw);
       });
       card.appendChild(row);
     }
 
-    var step = 850;
-    var base = swatches.length ? 360 : 60;
     lines.forEach(function (text, i) {
       var line = document.createElement("div");
       line.className = "omnia-bn-line";
       var span = document.createElement("span");
       span.textContent = text;
       line.appendChild(span);
-      if (!reduced) line.style.animationDelay = base + i * step + "ms";
+      if (!reduced) line.style.setProperty("--omnia-d", base + i * step + "ms");
       card.appendChild(line);
     });
 
@@ -258,7 +319,6 @@
     void overlay.offsetWidth;
     overlay.classList.add("omnia-bn-in");
 
-    var total = reduced ? 1500 : base + lines.length * step + 1100;
     dismissTimer = window.setTimeout(remove, total);
   }
 

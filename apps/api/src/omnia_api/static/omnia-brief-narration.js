@@ -121,29 +121,66 @@
     if (document.getElementById("omnia-bn-style")) return;
     var s = document.createElement("style");
     s.id = "omnia-bn-style";
+    // Hypnotic birth reveal (pillar 3): living brand-tinted aura, a radar-ping
+    // "thinking" orb, a palette that weaves in on a drawn thread with a sheen
+    // sweep, a progress bar that fills over the reveal, and accent underline
+    // wipes per line. Mirrors the entity template's omnia-brief-narration.js
+    // (short class names here; same motion + brief-keyed --bn accent).
     s.textContent =
-      "#" + ID + "{position:fixed;inset:0;z-index:2147482000;display:flex;align-items:center;justify-content:center;" +
+      "#" + ID + "{position:fixed;inset:0;z-index:2147482000;overflow:hidden;display:flex;align-items:center;justify-content:center;" +
       "background:radial-gradient(120% 120% at 50% 0%,rgba(15,18,28,.82),rgba(8,10,16,.94));" +
       "backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);" +
       "font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif);" +
       "opacity:0;transition:opacity .5s ease}" +
       "#" + ID + ".in{opacity:1}#" + ID + ".out{opacity:0}" +
-      "#" + ID + " .c{width:min(440px,86vw);padding:30px 30px 32px;border-radius:22px;color:#f3f5fb;" +
-      "background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03));" +
+      "#" + ID + " .au{position:absolute;inset:-25%;pointer-events:none;" +
+      "background:radial-gradient(38% 38% at 30% 32%,var(--bn,#818cf8) 0,transparent 60%)," +
+      "radial-gradient(34% 34% at 72% 66%,var(--bn,#818cf8) 0,transparent 62%);" +
+      "opacity:.20;filter:blur(48px);animation:bndrift 9s ease-in-out infinite alternate}" +
+      "#" + ID + " .c{position:relative;width:min(440px,86vw);padding:28px 30px 30px;border-radius:22px;color:#f3f5fb;" +
+      "background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.03));" +
       "border:1px solid rgba(255,255,255,.12);box-shadow:0 30px 80px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.08)}" +
-      "#" + ID + " .h{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600;color:#aab2c8;margin-bottom:18px}" +
-      "#" + ID + " .dt{width:9px;height:9px;border-radius:9999px;background:var(--bn,#818cf8);" +
+      "#" + ID + " .c::before{content:'';position:absolute;left:24px;right:24px;top:0;height:1px;" +
+      "background:linear-gradient(90deg,transparent,var(--bn,#818cf8),transparent);opacity:.6}" +
+      "#" + ID + " .h{display:flex;align-items:center;gap:11px;font-size:13px;font-weight:600;color:#aab2c8;margin-bottom:16px}" +
+      "#" + ID + " .dt{position:relative;width:9px;height:9px;border-radius:9999px;background:var(--bn,#818cf8);" +
       "box-shadow:0 0 14px var(--bn,#818cf8);animation:bnp 1.4s ease-in-out infinite}" +
-      "#" + ID + " .sw{display:flex;gap:8px;margin-bottom:18px}" +
-      "#" + ID + " .sw>i{width:34px;height:34px;border-radius:10px;border:1px solid rgba(255,255,255,.18);" +
-      "box-shadow:0 4px 14px rgba(0,0,0,.3);opacity:0;transform:scale(.5) translateY(6px);animation:bnpop .5s cubic-bezier(.16,1,.3,1) forwards}" +
-      "#" + ID + " .ln{display:flex;align-items:flex-start;gap:10px;font-size:15px;line-height:1.5;color:#e7eaf3;margin-top:11px;" +
-      "opacity:0;transform:translateY(8px);animation:bnr .55s cubic-bezier(.16,1,.3,1) forwards}" +
-      "#" + ID + " .ln::before{content:'';flex:0 0 auto;margin-top:8px;width:6px;height:6px;border-radius:9999px;background:var(--bn,#818cf8)}" +
+      "#" + ID + " .dt::before,#" + ID + " .dt::after{content:'';position:absolute;inset:0;border-radius:9999px;" +
+      "border:1px solid var(--bn,#818cf8);animation:bnping 2s cubic-bezier(.2,.6,.3,1) infinite}" +
+      "#" + ID + " .dt::after{animation-delay:1s}" +
+      "#" + ID + " .pg{position:relative;height:2px;border-radius:2px;margin-bottom:18px;background:rgba(255,255,255,.08);overflow:hidden}" +
+      "#" + ID + " .pg>i{display:block;height:100%;width:100%;transform-origin:left;transform:scaleX(0);" +
+      "background:linear-gradient(90deg,transparent,var(--bn,#818cf8));animation:bnfill linear forwards}" +
+      "#" + ID + " .sw{position:relative;display:flex;gap:8px;margin-bottom:18px}" +
+      "#" + ID + " .sw::before{content:'';position:absolute;left:4px;right:4px;top:50%;height:1px;" +
+      "transform:translateY(-50%) scaleX(0);transform-origin:left;opacity:.5;" +
+      "background:linear-gradient(90deg,var(--bn,#818cf8),transparent);animation:bnthread .7s ease-out .1s forwards}" +
+      "#" + ID + " .sw>i{position:relative;width:34px;height:34px;border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,.18);" +
+      "box-shadow:0 4px 14px rgba(0,0,0,.3);opacity:0;transform:scale(.5) translateY(6px);" +
+      "animation:bnpop .5s cubic-bezier(.16,1,.3,1) var(--omnia-d,0ms) forwards}" +
+      "#" + ID + " .sw>i::after{content:'';position:absolute;inset:0;" +
+      "background:linear-gradient(115deg,transparent 32%,rgba(255,255,255,.5) 50%,transparent 68%);" +
+      "transform:translateX(-130%);animation:bnsheen 1.5s ease-in-out calc(var(--omnia-d,0ms) + 280ms) 1}" +
+      "#" + ID + " .ln{position:relative;display:flex;align-items:flex-start;gap:10px;font-size:15px;line-height:1.5;color:#e7eaf3;margin-top:11px;padding-bottom:3px;" +
+      "opacity:0;transform:translateY(8px);animation:bnr .55s cubic-bezier(.16,1,.3,1) var(--omnia-d,0ms) forwards}" +
+      "#" + ID + " .ln::before{content:'';flex:0 0 auto;margin-top:8px;width:6px;height:6px;border-radius:9999px;background:var(--bn,#818cf8);box-shadow:0 0 8px var(--bn,#818cf8)}" +
+      "#" + ID + " .ln::after{content:'';position:absolute;left:16px;bottom:0;height:1px;width:calc(100% - 16px);" +
+      "transform:scaleX(0);transform-origin:left;opacity:.42;background:linear-gradient(90deg,var(--bn,#818cf8),transparent);" +
+      "animation:bnund .5s ease-out calc(var(--omnia-d,0ms) + 200ms) forwards}" +
       "@keyframes bnp{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.82)}}" +
       "@keyframes bnpop{to{opacity:1;transform:none}}@keyframes bnr{to{opacity:1;transform:none}}" +
-      "@media (prefers-reduced-motion:reduce){#" + ID + "{transition:none}#" + ID +
-      " .dt,#" + ID + " .sw>i,#" + ID + " .ln{animation:none;opacity:1;transform:none}}";
+      "@keyframes bndrift{0%{transform:translate(-3%,-2%) scale(1)}100%{transform:translate(4%,3%) scale(1.12)}}" +
+      "@keyframes bnping{0%{opacity:.6;transform:scale(1)}100%{opacity:0;transform:scale(3.4)}}" +
+      "@keyframes bnfill{to{transform:scaleX(1)}}@keyframes bnthread{to{transform:translateY(-50%) scaleX(1)}}" +
+      "@keyframes bnsheen{0%{transform:translateX(-130%)}60%,100%{transform:translateX(130%)}}" +
+      "@keyframes bnund{to{transform:scaleX(1)}}" +
+      "@media (prefers-reduced-motion:reduce){#" + ID + "{transition:none}" +
+      "#" + ID + " .au{animation:none;opacity:.16}#" + ID + " .dt{animation:none}" +
+      "#" + ID + " .dt::before,#" + ID + " .dt::after{animation:none;opacity:0}" +
+      "#" + ID + " .pg>i{animation:none;transform:scaleX(1)}" +
+      "#" + ID + " .sw::before{animation:none;transform:translateY(-50%) scaleX(1)}" +
+      "#" + ID + " .sw>i{animation:none;opacity:1;transform:none}#" + ID + " .sw>i::after{animation:none;opacity:0}" +
+      "#" + ID + " .ln{animation:none;opacity:1;transform:none}#" + ID + " .ln::after{animation:none;transform:scaleX(1)}}";
     (document.head || document.documentElement).appendChild(s);
   }
 
@@ -167,12 +204,20 @@
     var sw = hexes(brief.palette || {}, 5);
     var ac = sw.length ? sw[0] : "#818cf8";
     var rm = reduced();
+    var step = 850;
+    var base = sw.length ? 360 : 60;
+    var total = rm ? 1500 : base + L.length * step + 1100;
     var o = document.createElement("div");
     o.id = ID;
     o.setAttribute("role", "status");
     o.setAttribute("aria-live", "polite");
     o.style.setProperty("--bn", ac);
     o.addEventListener("click", remove);
+    // Living brand-tinted aura behind the card — the "alive, being-born" depth.
+    var au = document.createElement("div");
+    au.className = "au";
+    au.setAttribute("aria-hidden", "true");
+    o.appendChild(au);
     var c = document.createElement("div");
     c.className = "c";
     var h = document.createElement("div");
@@ -185,26 +230,32 @@
     h.appendChild(dt);
     h.appendChild(ht);
     c.appendChild(h);
+    // Progress bar fills over the whole reveal — forward momentum toward "done".
+    var pg = document.createElement("div");
+    pg.className = "pg";
+    pg.setAttribute("aria-hidden", "true");
+    var pgi = document.createElement("i");
+    if (!rm) pgi.style.animationDuration = total + "ms";
+    pg.appendChild(pgi);
+    c.appendChild(pg);
     if (sw.length) {
       var r = document.createElement("div");
       r.className = "sw";
       sw.forEach(function (hx, i) {
         var b = document.createElement("i");
         b.style.background = hx;
-        if (!rm) b.style.animationDelay = 120 + i * 90 + "ms";
+        if (!rm) b.style.setProperty("--omnia-d", 120 + i * 90 + "ms");
         r.appendChild(b);
       });
       c.appendChild(r);
     }
-    var step = 850;
-    var base = sw.length ? 360 : 60;
     L.forEach(function (tx, i) {
       var ln = document.createElement("div");
       ln.className = "ln";
       var sp = document.createElement("span");
       sp.textContent = tx;
       ln.appendChild(sp);
-      if (!rm) ln.style.animationDelay = base + i * step + "ms";
+      if (!rm) ln.style.setProperty("--omnia-d", base + i * step + "ms");
       c.appendChild(ln);
     });
     o.appendChild(c);
@@ -214,7 +265,6 @@
     try {
       sessionStorage.setItem(KEY, sig(brief));
     } catch (_) {}
-    var total = rm ? 1500 : base + L.length * step + 1100;
     timer = setTimeout(remove, total);
   }
 
