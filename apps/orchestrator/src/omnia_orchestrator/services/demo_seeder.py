@@ -692,7 +692,10 @@ _MONEY_TOKENS = (
 _PRICE_TOKENS = ("price", "цена", "cost", "стоим", "тариф")
 _RATING_TOKENS = ("rating", "рейтинг", "score", "оценка", "stars", "звёзд", "звезд")
 _AGE_TOKENS = ("age", "возраст")
-_PERCENT_TOKENS = ("percent", "процент", "progress", "прогресс", "discount", "скидк")
+_PERCENT_TOKENS = ("percent", "процент", "progress", "прогресс")
+# Discount/sale fields get a believable promo band, NOT a raw 0–100 sweep:
+# "Скидка 0%" is pointless and "97%" reads as a scam (pillar 1).
+_DISCOUNT_TOKENS = ("discount", "скидк", "sale", "распродаж")
 _COUNT_TOKENS = (
     "count", "количество", "qty", "quantity", "кол-", "stock", "остаток",
     "views", "просмотр", "likes", "лайк",
@@ -1117,6 +1120,10 @@ def _demo_number(
         return 4 if _hash_int(seed, entity, fname, index) % 4 == 0 else 5
     if _has_token(key, _AGE_TOKENS):
         return _hash_int(seed, entity, fname, index) % 53 + 18
+    if _has_token(key, _DISCOUNT_TOKENS):
+        # Real promos cluster at round 5–50% — seed that band in 5-point steps
+        # so a "Скидка N%" badge is always believable (never 0, never absurd).
+        return 5 + _hash_int(seed, entity, fname, index) % 10 * 5
     if _has_token(key, _PERCENT_TOKENS):
         return _hash_int(seed, entity, fname, index) % 101
     if _has_token(key, _COUNT_TOKENS):

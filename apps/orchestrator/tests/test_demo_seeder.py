@@ -172,6 +172,29 @@ def test_percent_field_is_zero_to_hundred() -> None:
     assert all(0 <= r["progress"] <= 100 for r in rows)
 
 
+def test_discount_field_is_believable_band() -> None:
+    # A "Скидка 0%" badge is pointless and "97%" reads as a scam — a fresh
+    # catalog must show believable promos. Discount fields land on a round
+    # 5–50% band (steps of 5), never 0, never absurdly high (pillar 1).
+    for fname in ("discount", "скидка", "sale"):
+        f = _fields(**{fname: {"type": "number", "required": True}})
+        rows = ds.generate_rows("Product", f, count=12, seed="s")
+        vals = [r[fname] for r in rows]
+        assert all(5 <= v <= 50 and v % 5 == 0 for v in vals), (fname, vals)
+
+
+def test_discount_band_does_not_touch_progress() -> None:
+    # `progress`/`процент` stay a full 0–100 sweep — a progress bar legitimately
+    # reaches 0 or 100, so the discount band must not bleed into it.
+    spread = [r["progress"] for s in range(40)
+              for r in ds.generate_rows(
+                  "Enrollment",
+                  _fields(progress={"type": "number", "required": True}),
+                  count=12, seed=f"s{s}")]
+    assert min(spread) < 5  # reaches below the discount floor
+    assert any(v % 5 != 0 for v in spread)  # not snapped to the 5-step band
+
+
 # ── string heuristics (model-independent realism) ────────────────────────────
 
 
