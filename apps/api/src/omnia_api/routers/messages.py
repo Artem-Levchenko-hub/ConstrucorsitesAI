@@ -2911,6 +2911,33 @@ async def _process_prompt(
             except Exception as _tok_exc:
                 print(f"[PP] entity_theme skipped: {_tok_exc!r}", flush=True)
 
+        # ── Branded share-card (P2, pillar 4) — deterministic, BEFORE commit ──
+        # The entity template's <head> is a static «Omnia project», so every
+        # shared /p/<slug> link unfurls brand-less. Derive a {title, tagline,
+        # accent} card from the project name + prompt + palette and inject it as
+        # src/app/omnia-share.ts, which the template's generateMetadata +
+        # opengraph-image route consume → a branded unfurl per niche, 0 model
+        # cost. Fail-soft: any error leaves the template's neutral default card.
+        if files and not surgical and project_template in ("nextjs_entities", "fullstack"):
+            try:
+                from omnia_api.services.design_tokens import tokens_for_project
+                from omnia_api.services.share_meta import (
+                    build_share_card,
+                    inject_share_module,
+                )
+
+                _accent = tokens_for_project(
+                    str(project_id), industry_hint=project_design_preset_id
+                ).palette.primary
+                async with factory() as _share_session:
+                    _proj = await _share_session.get(Project, project_id)
+                    _proj_name = _proj.name if _proj else None
+                _card = build_share_card(_proj_name, prompt_text, _accent)
+                files = inject_share_module(files, _card)
+                print(f"[PP] share_meta card title={_card.title!r}", flush=True)
+            except Exception as _share_exc:
+                print(f"[PP] share_meta skipped: {_share_exc!r}", flush=True)
+
         # ── Structure audit (entity/app builds) — non-blocking smoke detector ─
         # Entity/fullstack apps skip the acceptance gate (container-backed), so we
         # at least LOG drift from the app-UI doctrine (hardcoded colours, fixed-px

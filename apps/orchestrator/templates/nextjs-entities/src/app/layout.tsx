@@ -3,6 +3,7 @@ import { Manrope, JetBrains_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
+import { share } from "./omnia-share";
 
 /* Default type system. Manrope = clean geometric-humanist UI sans with full
  * Cyrillic; JetBrains Mono = data/figures. The art-director may swap these per
@@ -18,10 +19,33 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
-export const metadata: Metadata = {
-  title: "Omnia project",
-  description: "Made with Omnia.AI",
-};
+/* Per-project <head>. Title / description / share-card come from the generated
+ * `omnia-share.ts` (services/share_meta.py) so every shared /p/<slug> link
+ * unfurls as a branded card — the project's real name + niche over a brand-accent
+ * og:image — instead of a generic «Omnia project». `metadataBase` (the public
+ * origin) makes the auto-wired opengraph-image URL absolute for crawlers. */
+export function generateMetadata(): Metadata {
+  const description = share.tagline
+    ? `${share.title} — ${share.tagline}. Создано на Omnia.AI`
+    : `${share.title}. Создано на Omnia.AI`;
+  const origin = process.env.AUTH_URL;
+  return {
+    metadataBase: origin ? new URL(origin) : undefined,
+    title: share.title,
+    description,
+    openGraph: {
+      title: share.title,
+      description,
+      type: "website",
+      siteName: share.title,
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: share.title,
+      description,
+    },
+  };
+}
 
 export default function RootLayout({
   children,
