@@ -628,3 +628,21 @@ def test_build_system_prompt_spec_directive_precedes_palette_anchor() -> None:
         assert out.index("ЯВНЫЙ ВЫБОР ПОЛЬЗОВАТЕЛЯ") < out.index(
             "ОБЯЗАТЕЛЬНАЯ ПАЛИТРА И ШРИФТЫ"
         )
+
+
+def test_entities_ui_brief_selects_screen_archetype() -> None:
+    # Composition lever (pickup #2): the entity-app kit brief must force an
+    # upfront screen-archetype choice so visual / record-centric niches stop
+    # defaulting to a command-center dashboard. Reaches both the base path and
+    # the art-director writer pass (which carries _ENTITIES_UI as system prompt).
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "АРХЕТИП ГЛАВНОГО ЭКРАНА" in _ENTITIES_UI
+    for name in ("КОМАНД-ЦЕНТР", "ВИТРИНА-КАТАЛОГ", "ДОСЬЕ-ФОКУС", "ТРЕКЕР-ПОТОК"):
+        assert name in _ENTITIES_UI, f"archetype {name} dropped from _ENTITIES_UI"
+    # archetype block sits ABOVE the dashboard recipe (it reframes it)
+    assert _ENTITIES_UI.index("АРХЕТИП ГЛАВНОГО ЭКРАНА") < _ENTITIES_UI.index(
+        "рецепт архетипа"
+    )
+    # no hand-rolled kanban (kit has no Board component)
+    assert "Канбан-доски в ките НЕТ" in _ENTITIES_UI
