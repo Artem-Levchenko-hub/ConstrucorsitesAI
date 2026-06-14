@@ -31,21 +31,42 @@ from omnia_api.services import accept_gauntlet  # noqa: E402
 # ── stage taxonomy is well-formed and anchored to the real gate universe ──────
 
 
-def test_expected_gates_cover_the_full_accept_gauntlet_universe() -> None:
-    """De-orphan guard: every real gate id is represented exactly once.
+def _live_gate_universe() -> set[str]:
+    """The gate ids ``accept_gauntlet.run()`` actually fans, derived LIVE.
 
-    If a gate is added to ``accept_gauntlet`` it must appear here or the manifest
-    would silently never check it — that is exactly the orphan failure this
-    keystone exists to prevent.
+    Every BOOLEAN dial on ``run()``'s signature is introspected and turned on, then
+    run is driven over an empty file set with no target: each pure context-scan gate
+    fires (every one is INERT-passing on an empty/``None`` context) while NO rendered
+    leg fans (no ``index.html`` / url → ``render_expected`` is False). Money-free by
+    construction — 0 LLM, 0 browser. A gate added to ``run()`` behind ANY dial
+    therefore shows up here automatically, so it physically cannot be silently
+    dropped from ``EXPECTED_GATES``. The rendered legs need a real target to fan, so
+    they are anchored to their own ``RENDERED_GATES`` constant (un-orphanable — the
+    same tuple is spread into ``EXPECTED_GATES``).
     """
-    expected = set(em.EXPECTED_GATES)
-    real = {
-        accept_gauntlet.DEFECT_REGISTRY,
-        accept_gauntlet.COMPOSE,
-        accept_gauntlet.VIRAL,
-        *accept_gauntlet.RENDERED_GATES,
+    import asyncio
+    import inspect
+
+    bool_dials = {
+        name: True
+        for name, p in inspect.signature(accept_gauntlet.run).parameters.items()
+        if isinstance(p.default, bool)
     }
-    assert expected == real
+    verdict = asyncio.run(accept_gauntlet.run(files={}, **bool_dials))
+    return {g.gate for g in verdict.gates} | set(accept_gauntlet.RENDERED_GATES)
+
+
+def test_expected_gates_cover_the_full_accept_gauntlet_universe() -> None:
+    """De-orphan guard: ``EXPECTED_GATES`` == the live gate universe ``run()`` fans.
+
+    Derived from a real ``accept_gauntlet.run()`` drive (every dial on, money-free)
+    rather than a hand-maintained literal — so a gate added to the gauntlet but
+    forgotten here turns this RED instead of being silently never checked. That
+    silent orphan is exactly the failure this keystone exists to prevent, and it had
+    itself happened: ``onboarding`` (V2.7), ``render`` (V3.12) and ``edit`` (V1.11)
+    all fanned in ``run()`` yet were absent from ``EXPECTED_GATES``.
+    """
+    assert set(em.EXPECTED_GATES) == _live_gate_universe()
     # No duplicates in the ordered tuple.
     assert len(em.EXPECTED_GATES) == len(set(em.EXPECTED_GATES))
 
@@ -95,6 +116,9 @@ def test_every_stage_gets_a_screenshot_and_each_niche_a_video() -> None:
         accept_gauntlet.TASTE,
         accept_gauntlet.VIRAL,
         accept_gauntlet.COMPOSE,
+        accept_gauntlet.ONBOARDING,
+        accept_gauntlet.RENDER,
+        accept_gauntlet.EDIT,
     ],
 )
 def test_injected_defect_hard_fails_its_stage_and_the_run(defect: str) -> None:
@@ -334,7 +358,8 @@ def test_subscore_round_trips_through_json() -> None:
 
 
 def test_wow_score_reflects_passed_fraction() -> None:
-    # one hard fail among (10 gates + 5 obs) = 14/15 passed → 9.3/10
+    # one hard fail among the full stage set (every gate + every observation) →
+    # (total-1)/total mapped onto the 0–10 rubric.
     obs = em.mock_observation(nb.CORPUS[0], defects=[em.JOY])
     niche = em.run_manifest([obs]).niches[0]
     total = len(em.EXPECTED_GATES) + len(em.OBSERVATION_STAGES)

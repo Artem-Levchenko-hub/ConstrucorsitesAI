@@ -74,18 +74,25 @@ from omnia_api.services.accept_gauntlet import GateVerdict, GauntletVerdict  # n
 
 # ── Stage taxonomy ───────────────────────────────────────────────────────────
 
-#: The full gate universe a complete manifest run must cover. This is the
-#: "parser over RENDERED_GATES" the brief asks for, anchored to the real
-#: ``accept_gauntlet`` gate ids (R-04): the source-scan floors (defect-registry,
-#: compose), the viral context-scan, and the seven rendered legs. A gate present
-#: here but ABSENT from a run's ``GauntletVerdict`` is a coverage gap (abstain) —
-#: this tuple is what keeps a silently-dropped gate from passing unnoticed.
+#: The full gate universe a complete manifest run must cover, in ``run()`` emission
+#: order. This is the "parser over RENDERED_GATES" the brief asks for, anchored to
+#: the real ``accept_gauntlet`` gate ids (R-04): the source-scan floors
+#: (defect-registry, compose), the four context-scan registries (viral, onboarding,
+#: render, edit — V4.6/V2.7/V3.12/V1.11), and the seven rendered legs. A gate
+#: present here but ABSENT from a run's ``GauntletVerdict`` is a coverage gap
+#: (abstain) — this tuple is what keeps a silently-dropped gate from passing
+#: unnoticed. The de-orphan guard ``test_e2e_manifest`` derives this set LIVE from
+#: ``accept_gauntlet.run()`` (every dial on), so a future gate that fans in ``run()``
+#: but is missing here turns the guard RED — it cannot silently orphan.
 EXPECTED_GATES: tuple[str, ...] = (
     accept_gauntlet.DEFECT_REGISTRY,
     accept_gauntlet.COMPOSE,
+    accept_gauntlet.VIRAL,
+    accept_gauntlet.ONBOARDING,
+    accept_gauntlet.RENDER,
+    accept_gauntlet.EDIT,
     # WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA, REFERENCE
     *accept_gauntlet.RENDERED_GATES,
-    accept_gauntlet.VIRAL,
 )
 
 # The visible/viral-layer proofs that are NOT modelled as accept_gauntlet gates —
