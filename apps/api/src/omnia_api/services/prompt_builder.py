@@ -833,8 +833,8 @@ _ENTITIES_UI = """\
 СОБИРАЙ ИЗ НЕГО, не лепи кнопки/таблицы/сайдбары сырым Tailwind.
 
 ▸ ИМПОРТЫ (готовы, просто используй):
-  import { AppShell, PageHeader, StatCard, CountUp, DataTable, CrudResource,
-           EntityForm, EmptyState, useEntity, type Column,
+  import { AppShell, PageHeader, DashboardHero, StatCard, CountUp, DataTable,
+           CrudResource, EntityForm, EmptyState, useEntity, type Column,
            Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
   import { Button } from "@/components/ui/button";   // + card, input, textarea, select,
   // dialog, sheet, tabs, badge, dropdown-menu, table, checkbox, avatar, tooltip, separator …
@@ -1047,16 +1047,30 @@ _ENTITIES_UI = """\
     Хэндмейд <EmptyState>: тёплый ДОМЕННЫЙ заголовок (не «Нет данных») + ровно ОДНА
     primary-кнопка, создающая первую запись.
 
-▸ ДАШБОРД — собери из кита: ряд <StatCard> (KPI) + ГРАФИК динамики + свежие записи
-  через <DataTable>. Главному KPI дай `accent` (тонкая верхняя линия акцентом) —
-  ровно ОДНОМУ. В карточку можно вложить мини-тренд через `chart`:
-  <PageHeader eyebrow="Обзор" title="Дашборд" description="Ключевые показатели" />
+▸ ДАШБОРД — НЕ плоский ряд одинаковых плиток. Открывай ОДНИМ <DashboardHero> —
+  это hero-зона дашборда уровня Linear/Vercel/Stripe: ОДНА доминантная метрика
+  набрана крупно + мягкое акцент-свечение для глубины + опц. широкий тренд +
+  тихая полоска второстепенных чисел. <DashboardHero> ЗАМЕНЯЕТ <PageHeader> на
+  дашборде (САМ рисует <h1> — не ставь оба, один <h1> на экран). Под ним — ряд
+  ВТОРОСТЕПЕННЫХ <StatCard> + свежие записи через <DataTable>:
+  <DashboardHero
+    eyebrow="Обзор" title="Дашборд"
+    metricLabel="Выручка за месяц"
+    metric={<CountUp value={revenue} suffix=" ₽" />}
+    trend={{ value: "+12%", positive: true }}
+    chart={<TrendArea data={byDay} className="text-chart-1" />}
+    stats={[
+      { label: "Клиентов", value: <CountUp value={clients.length} /> },
+      { label: "Открытых сделок", value: openDeals.length },
+    ]} />
   <div className="stagger grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-    <StatCard accent label="Выручка" icon={<TrendingUp />}
-      value={<CountUp value={total} suffix=" ₽" />}
-      trend={{ value: "+12%", positive: true }} chart={<Sparkline data={[4, 6, 5, 8, 7, 11]} />} />
-    <StatCard label="Клиентов" value={<CountUp value={clients.length} />} icon={<Users />} />
+    <StatCard label="Конверсия" value="24%" icon={<Target />} />
+    <StatCard label="Средний чек" value={<CountUp value={avg} suffix=" ₽" />} icon={<Receipt />} />
   </div>
+  ★ ОДНА доминанта на экран: фокусную метрику несёт <DashboardHero>, поэтому
+  второстепенным <StatCard> `accent` уже НЕ давай (две доминанты = ни одной).
+  Нет осмысленной «главной» метрики (чистый трекер/заметки) — <DashboardHero>
+  необязателен, тогда <PageHeader> + ряд <StatCard> как раньше.
   ЖИВЫЕ ЧИСЛА: главные KPI оборачивай в <CountUp value={n} /> — число «накручивается»
   с 0 при загрузке (reduced-motion-safe, SSR отдаёт финал). Один-два на дашборд, не на
   каждую плитку. `suffix=" ₽"`/`suffix="%"`, `decimals` для дробных.

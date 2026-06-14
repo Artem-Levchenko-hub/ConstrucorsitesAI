@@ -13,6 +13,11 @@ export {
   type PlanInfo,
 } from "./app-shell";
 export { PageHeader, type PageHeaderProps } from "./page-header";
+export {
+  DashboardHero,
+  type DashboardHeroProps,
+  type HeroStat,
+} from "./dashboard-hero";
 export { StatCard, type StatCardProps } from "./stat-card";
 export { CountUp, type CountUpProps } from "./count-up";
 export { EmptyState, type EmptyStateProps } from "./empty-state";
