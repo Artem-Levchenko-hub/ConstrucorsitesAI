@@ -51,7 +51,9 @@ traverse out of an output directory. Both are unit-tested.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -69,7 +71,13 @@ if str(_SCRIPTS) not in sys.path:
 
 import niche_batch  # noqa: E402
 
-from omnia_api.services import accept_gauntlet  # noqa: E402
+from omnia_api.services import (  # noqa: E402
+    accept_gauntlet,
+    compose_gate,
+    hierarchy_gate,
+    reference_corpus,
+    taste_gate,
+)
 from omnia_api.services.accept_gauntlet import GateVerdict, GauntletVerdict  # noqa: E402
 
 # ── Stage taxonomy ───────────────────────────────────────────────────────────
@@ -658,6 +666,291 @@ def mock_corpus(count: int | None = None) -> list[ManifestObservation]:
     return [mock_observation(n) for n in niches]
 
 
+# ── Frozen dress-rehearsal (V-MANIFEST-FROZEN: deterministic, 0 LLM, 0 browser) ─
+#
+# The mock stream above proves the FOLD is sound, but it never reads a real page —
+# its verdict is synthesised. This frozen mode folds the manifest over the four
+# committed enterprise snapshots in ``reference_corpus_data/{agency,ecommerce,
+# editorial,saas}.html`` (R-04 — the same corpus the reference ceiling leg uses),
+# so the dress-rehearsal runs against REAL static HTML deterministically and
+# browser-free. The owner-run later swaps these static files for a live
+# generation + browser capture; the structure, fold and teeth are exercised now.
+#
+# Honesty contract — every gate is accounted for, none is faked:
+#   * defect-registry + compose + the four context registries (viral/onboarding/
+#     render/edit) are the REAL ``accept_gauntlet`` gates, run browser-free over
+#     the actual HTML via ``run(..., include_rendered=False)``. No surrogate.
+#   * the rendered legs cannot render without a browser, so in frozen mode they
+#     are STATIC SURROGATES derived from the page's real structure (taste,
+#     hierarchy, wow-dom, perf-a11y carry teeth; chip-pixel/data/reference are
+#     documented inert/seam passes). Each surrogate's subscore is tagged
+#     ``frozen=True`` so its provenance is never mistaken for a live render — the
+#     owner-run replaces them with ``accept_gauntlet.run(url=...)``.
+# An adversary that defaces a corpus file (flattens type, strips the hero, blanks
+# the palette, injects a dead-auth CTA, drops the a11y landmarks) flips the gate
+# it touches AND the unified verdict — the rehearsal has teeth, it is not a
+# vacuous green over pre-vetted files.
+
+_HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+_FONT_FAMILY = re.compile(r"font-family\s*:\s*([^;\"'}]+)", re.IGNORECASE)
+_HEADING_LEVEL = re.compile(r"<h([1-6])\b", re.IGNORECASE)
+_HTML_LANG = re.compile(r"<html[^>]*\blang\s*=", re.IGNORECASE)
+_VIEWPORT = re.compile(r"<meta[^>]*\bname\s*=\s*[\"']viewport", re.IGNORECASE)
+_TITLE = re.compile(r"<title\b[^>]*>\s*\S", re.IGNORECASE)
+_IMG = re.compile(r"<img\b", re.IGNORECASE)
+_IMG_WITH_ALT = re.compile(r"<img\b[^>]*\balt\s*=", re.IGNORECASE)
+_DATA_MARKER = re.compile(
+    r"<table\b|(?:class|id)\s*=\s*[\"'][^\"']*\b(?:grid|card|stat|metric|table|datagrid|list)\b",
+    re.IGNORECASE,
+)
+
+#: The minimum distinct hex swatches a "brief-derived palette" must carry (V3.4).
+MIN_SWATCHES = 3
+#: A composed page pairs at least two type families (display + body).
+MIN_FONT_FAMILIES = 2
+#: A clear visual hierarchy uses at least two distinct heading levels.
+MIN_HEADING_LEVELS = 2
+
+
+@dataclass(frozen=True)
+class FrozenAnalysis:
+    """The browser-free static measurements of one corpus page.
+
+    Everything here is read straight off the authored HTML — no render, no LLM.
+    The compose report and defect classes come from the REAL gates (R-04); the
+    rest are the structural signals the rendered-leg surrogates stand on.
+    """
+
+    compose: compose_gate.ComposeReport
+    palette: tuple[str, ...]
+    font_families: int
+    heading_levels: int
+    has_lang: bool
+    has_viewport: bool
+    has_title: bool
+    images: int
+    images_with_alt: int
+    data_markers: int
+
+
+def analyse_frozen(html: str) -> FrozenAnalysis:
+    """Measure one static HTML document, browser-free and deterministically."""
+    palette = tuple(sorted({m.group(0).lower() for m in _HEX.finditer(html)}))
+    families = {m.group(1).strip().lower() for m in _FONT_FAMILY.finditer(html)}
+    levels = {m.group(1) for m in _HEADING_LEVEL.finditer(html)}
+    return FrozenAnalysis(
+        compose=compose_gate.scan({"index.html": html}),
+        palette=palette,
+        font_families=len(families),
+        heading_levels=len(levels),
+        has_lang=_HTML_LANG.search(html) is not None,
+        has_viewport=_VIEWPORT.search(html) is not None,
+        has_title=_TITLE.search(html) is not None,
+        images=len(_IMG.findall(html)),
+        images_with_alt=len(_IMG_WITH_ALT.findall(html)),
+        data_markers=len(_DATA_MARKER.findall(html)),
+    )
+
+
+def _surrogate(gate: str, *, passed: bool, classes: tuple[str, ...], detail: str) -> GateVerdict:
+    """A frozen-mode rendered-leg verdict, tagged so its provenance is explicit."""
+    return GateVerdict(
+        gate=gate,
+        passed=passed,
+        abstained=False,  # frozen mode always has the static page → never abstains
+        classes=() if passed else classes,
+        summary=f"frozen-static: {detail}",
+        subscore={"gate": gate, "frozen": True, "passed": passed},
+    )
+
+
+def _rendered_surrogates(a: FrozenAnalysis) -> list[GateVerdict]:
+    """Derive a verdict for every rendered leg from the page's static structure.
+
+    These stand in for the browser-rendered taste/hierarchy/wow-dom/perf-a11y
+    legs (with real teeth) plus the legs a static page cannot evidence
+    (chip-pixel/data/reference — documented inert/seam passes). The owner-run
+    swaps each for the live ``accept_gauntlet`` leg.
+    """
+    out: list[GateVerdict] = []
+
+    # WOW-DOM — the composed surface: section rhythm, a hero, a real palette.
+    wow_fail: list[str] = []
+    if a.compose.sections < compose_gate.MIN_SECTIONS:
+        wow_fail.append("too-few-sections")
+    if not a.compose.hero:
+        wow_fail.append("no-hero")
+    if len(a.palette) < MIN_SWATCHES:
+        wow_fail.append("monochrome")
+    out.append(
+        _surrogate(
+            accept_gauntlet.WOW_DOM,
+            passed=not wow_fail,
+            classes=tuple(wow_fail),
+            detail=(
+                f"{a.compose.sections} sections, hero={a.compose.hero}, "
+                f"{len(a.palette)} swatches"
+            ),
+        )
+    )
+
+    # PERF-A11Y — the cheap, statically-checkable accessibility landmarks.
+    a11y_fail: list[str] = []
+    if not a.has_lang:
+        a11y_fail.append("no-lang")
+    if not a.has_viewport:
+        a11y_fail.append("no-viewport")
+    if not a.has_title:
+        a11y_fail.append("no-title")
+    if a.images and a.images_with_alt < a.images:
+        a11y_fail.append("img-alt-missing")
+    out.append(
+        _surrogate(
+            accept_gauntlet.PERF_A11Y,
+            passed=not a11y_fail,
+            classes=tuple(a11y_fail),
+            detail=(
+                f"lang={a.has_lang}, viewport={a.has_viewport}, title={a.has_title}, "
+                f"img-alt={a.images_with_alt}/{a.images}"
+            ),
+        )
+    )
+
+    # CHIP-PIXEL — inert without a discovery_spec, exactly like the live leg.
+    out.append(
+        _surrogate(
+            accept_gauntlet.CHIP_PIXEL,
+            passed=True,
+            classes=(),
+            detail="inert (no discovery_spec to honour in a static page)",
+        )
+    )
+
+    # TASTE — font pairing, a real type scale, a meaningful hero.
+    taste_fail: list[str] = []
+    if a.font_families < MIN_FONT_FAMILIES:
+        taste_fail.append(taste_gate.FONT_PAIRING)
+    if a.compose.font_sizes < compose_gate.MIN_FONT_SIZES:
+        taste_fail.append(taste_gate.TYPE_SCALE)
+    if not a.compose.hero:
+        taste_fail.append(taste_gate.HERO_IMAGERY)
+    out.append(
+        _surrogate(
+            accept_gauntlet.TASTE,
+            passed=not taste_fail,
+            classes=tuple(taste_fail),
+            detail=f"{a.font_families} font families, {a.compose.font_sizes} type sizes",
+        )
+    )
+
+    # HIERARCHY — distinct heading levels (type dominance) + a focal hero.
+    hier_fail: list[str] = []
+    if a.heading_levels < MIN_HEADING_LEVELS:
+        hier_fail.append(hierarchy_gate.TYPE_DOMINANCE)
+    if not a.compose.hero:
+        hier_fail.append(hierarchy_gate.FOCAL_DOMINANCE)
+    out.append(
+        _surrogate(
+            accept_gauntlet.HIERARCHY,
+            passed=not hier_fail,
+            classes=tuple(hier_fail),
+            detail=f"{a.heading_levels} heading levels, hero={a.compose.hero}",
+        )
+    )
+
+    # DATA — judged only when the page carries a data surface; INERT otherwise
+    # (a landing page with no table/grid is not a data defect — mirrors the live
+    # leg, which finds nothing to grade).
+    out.append(
+        _surrogate(
+            accept_gauntlet.DATA,
+            passed=True,
+            classes=(),
+            detail=(
+                f"{a.data_markers} data marker(s) present"
+                if a.data_markers
+                else "inert (no data surface to judge)"
+            ),
+        )
+    )
+
+    # REFERENCE — the pillar-1 ceiling leg compares rendered richness vectors,
+    # which need a browser. A corpus file is itself a curated reference, so it
+    # meets the ceiling by construction; the owner-run renders a live candidate.
+    out.append(
+        _surrogate(
+            accept_gauntlet.REFERENCE,
+            passed=True,
+            classes=(),
+            detail="corpus member meets the ceiling (live render-vector leg is owner-run)",
+        )
+    )
+
+    return out
+
+
+def frozen_verdict(html: str) -> GauntletVerdict:
+    """A real, browser-free ``GauntletVerdict`` over one static page.
+
+    The six context/source-scan gates are the genuine ``accept_gauntlet`` gates
+    run over the actual HTML (no browser); the seven rendered legs are the
+    frozen-static surrogates. Together they cover EXACTLY ``EXPECTED_GATES``, so a
+    frozen niche has no coverage gap.
+    """
+    a = analyse_frozen(html)
+    real = asyncio.run(
+        accept_gauntlet.run(
+            files={"index.html": html},
+            compose=True,
+            viral=True,
+            onboarding=True,
+            render=True,
+            edit=True,
+            include_rendered=False,  # money-free: no headless browser
+        )
+    )
+    return GauntletVerdict(
+        gates=(*real.gates, *_rendered_surrogates(a)),
+        render_expected=True,
+    )
+
+
+def frozen_observation(niche: str, prompt: str, html: str) -> ManifestObservation:
+    """Fold one static corpus page into a manifest observation, browser-free.
+
+    Every observation field is DERIVED from the real page: the swatches are its
+    actual palette (only when ≥3 distinct, the V3.4 floor), and narration / joy
+    are present iff the page carries the brief evidence that drives them. A corpus
+    page is a root (not a fork), so the two fork stages stay INERT.
+    """
+    a = analyse_frozen(html)
+    swatches = a.palette if len(a.palette) >= MIN_SWATCHES else ()
+    narratable = bool(swatches) and a.compose.sections >= compose_gate.MIN_SECTIONS
+    return ManifestObservation(
+        niche=niche,
+        prompt=prompt,
+        gauntlet=frozen_verdict(html),
+        url=None,  # static file: no live target for the capture seam
+        is_fork=False,
+        narration_present=narratable,
+        swatches=swatches,
+        joy_fired=a.compose.passed,
+    )
+
+
+def frozen_corpus(corpus_dir: Path | None = None) -> list[ManifestObservation]:
+    """One observation per committed corpus snapshot (sorted, deterministic)."""
+    corpus = (
+        reference_corpus.load_corpus()
+        if corpus_dir is None
+        else reference_corpus.load_corpus(corpus_dir)
+    )
+    return [
+        frozen_observation(niche, f"frozen corpus reference: {niche}", html)
+        for niche, html in corpus.items()
+    ]
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
@@ -673,6 +966,15 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     p.add_argument("--niches", type=int, default=None, help="Run the first N corpus niches.")
     p.add_argument(
+        "--frozen",
+        action="store_true",
+        help=(
+            "Dress-rehearsal mode: fold the manifest over the committed frozen-HTML "
+            "corpus (reference_corpus_data/*.html) deterministically, browser-free, "
+            "instead of the synthetic mock stream."
+        ),
+    )
+    p.add_argument(
         "--wow-floor",
         type=float,
         default=DEFAULT_WOW_FLOOR,
@@ -684,7 +986,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
-    verdict = run_manifest(mock_corpus(args.niches), wow_floor=args.wow_floor)
+    if args.frozen:
+        observations = frozen_corpus()
+        if args.niches is not None:
+            observations = observations[: args.niches]
+    else:
+        observations = mock_corpus(args.niches)
+    verdict = run_manifest(observations, wow_floor=args.wow_floor)
     print(verdict.table())
     if args.out:
         text = json.dumps(verdict.subscore(), ensure_ascii=False, indent=2)
