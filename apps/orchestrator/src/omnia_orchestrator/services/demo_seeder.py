@@ -708,6 +708,18 @@ _CATEGORY_FIELD_TOKENS = (
     "categ", "категор", "group", "группа", "раздел", "рубрик", "rubric",
     "вид", "kind", "section", "тип", "type",
 )
+# Date-field names that point FORWARD in time — a deadline, booking, delivery,
+# promo-expiry, upcoming event. A past date there reads as already expired on the
+# first catalog screen ("Акция до 12.02" when it's June), so we seed a near-future
+# date instead. High-precision-or-nothing: no marker → byte-identical past
+# behaviour (creation/registration/birth dates stay in the past), 0 regression.
+_FUTURE_DATE_TOKENS = (
+    "expir", "deadline", "delivery", "shipping", "arriv", "booking", "reserv",
+    "appoint", "schedul", "upcoming", "valid", "until", "event",
+    "истек", "истёк", "срок", "годност", "дедлайн", "доставк", "отгрузк",
+    "прибыт", "поступл", "брон", "сеанс", "меропр", "событ", "концерт",
+    "предстоящ", "заплан", "акци", "промо", "действ",
+)
 # String-field token groups that outrank the niche-noun branch in `_demo_string`.
 # A label field only becomes a product noun when none of these match first — the
 # same precedence is reused to find the row's primary label field for category
@@ -1069,10 +1081,16 @@ def _demo_number(
 
 
 def _demo_date(seed: str, entity: str, fname: str, index: int) -> str:
-    # Spread across the last ~120 days, anchored on a FIXED epoch so output is
+    # Spread across a ~120-day window, anchored on a FIXED epoch so output is
     # reproducible (no wall-clock — that would break determinism in tests/CI).
     base = datetime(2026, 6, 1, tzinfo=UTC)
-    days = _hash_int(seed, entity, fname, index) % 120
+    h = _hash_int(seed, entity, fname, index)
+    if _has_token(fname.lower(), _FUTURE_DATE_TOKENS):
+        # Forward-looking field (deadline / booking / delivery / promo-until):
+        # a past date reads as expired, so seed a near-future date (~2 weeks to
+        # ~3.5 months out) that stays ahead of the demo period.
+        return (base + timedelta(days=14 + h % 90)).date().isoformat()
+    days = h % 120
     return (base - timedelta(days=days)).date().isoformat()
 
 

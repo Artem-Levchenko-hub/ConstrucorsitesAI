@@ -107,6 +107,37 @@ def test_date_field_is_iso_date() -> None:
         date.fromisoformat(r["due"])
 
 
+# The seeder anchors dates on this fixed epoch (no wall-clock → reproducible).
+_DATE_EPOCH = date(2026, 6, 1)
+
+
+def test_forward_looking_date_field_is_in_the_future() -> None:
+    # A field whose name points forward in time (deadline / booking / delivery /
+    # promo-until) must NOT seed an already-expired past date on the catalog card.
+    for fname in ("deadline", "delivery_date", "акция_до", "бронь", "valid_until"):
+        f = _fields(**{fname: {"type": "date", "required": True}})
+        rows = ds.generate_rows("Item", f, count=8, seed="s")
+        assert rows, fname
+        assert all(date.fromisoformat(r[fname]) > _DATE_EPOCH for r in rows), fname
+
+
+def test_backward_looking_date_field_stays_in_the_past() -> None:
+    # High-precision-or-nothing: a creation/registration/birth date has no future
+    # marker → byte-identical past behaviour (the common case, 0 regression).
+    for fname in ("created_at", "дата_регистрации", "order_date", "дата_рождения"):
+        f = _fields(**{fname: {"type": "date", "required": True}})
+        rows = ds.generate_rows("Record", f, count=8, seed="s")
+        assert rows, fname
+        assert all(date.fromisoformat(r[fname]) <= _DATE_EPOCH for r in rows), fname
+
+
+def test_forward_date_field_is_deterministic() -> None:
+    f = _fields(deadline={"type": "date", "required": True})
+    a = ds.generate_rows("Item", f, count=8, seed="proj-7")
+    b = ds.generate_rows("Item", f, count=8, seed="proj-7")
+    assert a == b
+
+
 # ── number heuristics ────────────────────────────────────────────────────────
 
 
