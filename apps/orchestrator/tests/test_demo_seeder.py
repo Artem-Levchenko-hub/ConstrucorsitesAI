@@ -268,6 +268,48 @@ def test_venue_event_org_entity_is_not_a_person(entity: str) -> None:
     assert all(r["name"] not in ds._PERSON_NAMES for r in rows), entity
 
 
+# ── profession FIELDS on a thing entity (RULE-10 #13) ────────────────────────
+# A thing entity (a Service/Product) often carries the person performing the row
+# in a column — a salon «Услуга» with a «Мастер», a clinic service with a
+# «Специалист», a delivery «Заказ» with a «Курьер». The entity is a thing, so
+# `_is_person_entity` is False; without a field-level profession check the column
+# shows a service-noun / generic label instead of a ФИО. The shared negative
+# guard keeps a venue/org field («мастерская», «агентство») as its label.
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["мастер", "специалист", "стилист", "тренер", "парикмахер", "барбер",
+     "инструктор", "продавец", "курьер", "риелтор",
+     "master", "specialist", "stylist", "trainer"],
+)
+def test_profession_field_on_thing_entity_is_a_person(field: str) -> None:
+    f = _fields(**{field: {"type": "string", "required": True}})
+    rows = ds.generate_rows("Услуга", f, count=6, seed="s", niche="salon-krasoty")
+    assert all(r[field] in ds._PERSON_NAMES for r in rows), field
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["мастерская", "название_мастерской", "агентство", "мастеркласс"],
+)
+def test_venue_org_field_is_not_a_person(field: str) -> None:
+    """The shared negative guard keeps a field that merely *contains* a profession
+    noun (a workshop/agency attribute) from becoming a ФИО."""
+    f = _fields(**{field: {"type": "string", "required": True}})
+    rows = ds.generate_rows("Услуга", f, count=6, seed="s", niche="salon-krasoty")
+    assert all(r[field] not in ds._PERSON_NAMES for r in rows), field
+
+
+def test_label_field_with_workshop_superstring_keeps_its_niche_noun() -> None:
+    """A real label field whose name *contains* a venue superstring
+    («название_мастерской») must still resolve to a niche/label value, not be
+    silently blanked — proves the guard only suppresses person-promotion."""
+    f = _fields(название_мастерской={"type": "string", "required": True})
+    rows = ds.generate_rows("Услуга", f, count=6, seed="s", niche="salon-krasoty")
+    assert all(r["название_мастерской"] for r in rows)
+
+
 def test_city_field_from_pool() -> None:
     f = _fields(city={"type": "string", "required": True})
     rows = ds.generate_rows("Order", f, count=6, seed="s")

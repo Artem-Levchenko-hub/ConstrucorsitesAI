@@ -668,6 +668,25 @@ _PERSON_TOKENS = (
     "employee", "сотрудник", "patient", "пациент", "doctor", "врач",
     "member", "участник", "owner", "владелец", "lead", "лид",
 )
+# Profession FIELD names — the person performing/serving the row on a *thing*
+# entity (a salon "Услуга" with a «Мастер» column, a clinic service with a
+# «Специалист», a delivery order with a «Курьер»). The entity itself is a thing,
+# so `_is_person_entity` is False; without this the column shows a service-noun /
+# generic label instead of a ФИО (mirrors the entity-level promotion in #12).
+# Kept SEPARATE from `_PERSON_TOKENS` (which feeds the unguarded pre-label group):
+# applied only through the negative-guarded `_field_is_person`, so a venue/org
+# superstring field («мастерская», «агентство», «название_мастерской») is never
+# promoted and still resolves to its niche label.
+# NB: agent-nouns ending in «-тель» (водитель/исполнитель/учитель/преподаватель)
+# are intentionally absent — bare «тел» is a phone token, so they resolve to a
+# phone number one branch earlier. Promoting them needs the phone token tightened
+# (its own regression surface) → deferred as a separate follow-up.
+_PROFESSION_FIELD_TOKENS = (
+    "master", "мастер", "barber", "барбер", "specialist", "специалист",
+    "stylist", "стилист", "trainer", "тренер", "instructor", "инструктор",
+    "парикмахер", "teacher", "консультант", "consultant", "performer",
+    "продавец", "курьер", "риелтор", "риэлтор",
+)
 _COMPANY_TOKENS = ("company", "компания", "организац", "firm", "фирма", "бренд", "brand")
 _EMAIL_TOKENS = ("email", "e-mail", "почта", "mail")
 _PHONE_TOKENS = ("phone", "телефон", "тел", "mobile", "моб")
@@ -1094,7 +1113,7 @@ def _demo_string(
         return _pick(_COMPANIES, seed, entity, fname, index)
     if _has_token(key, _STATUS_TOKENS):
         return _pick(_STATUS_WORDS, seed, entity, fname, index)
-    if _has_token(key, _PERSON_TOKENS) or _is_person_entity(entity, key):
+    if _field_is_person(key) or _is_person_entity(entity, key):
         return _pick(_PERSON_NAMES, seed, entity, fname, index)
     # The entity's primary label in a recognised niche → a real catalog product.
     if domain is not None and _takes_niche_noun(entity, key):
@@ -1255,6 +1274,17 @@ def _is_person_entity(entity: str, key: str) -> bool:
     if not _has_token(key, ("name", "имя", "title", "название", "заголовок", "фио")):
         return False
     return _models_person(entity)
+
+
+def _field_is_person(key: str) -> bool:
+    """Whether the field NAME itself denotes a person (a generic person token like
+    `client`, or a profession performing the row like `мастер`/`специалист`).
+    Venue/org superstrings («мастерская», «агентство», «название_мастерской») are
+    excluded first by the shared negative guard so they keep their niche label,
+    not a ФИО (mirrors the entity-level polarity guard in `_models_person`)."""
+    if any(h in key for h in _NON_PERSON_ENTITY_HINT):
+        return False
+    return _has_token(key, _PERSON_TOKENS) or _has_token(key, _PROFESSION_FIELD_TOKENS)
 
 
 def _slugish(text: str) -> str:
