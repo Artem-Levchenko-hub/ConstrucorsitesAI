@@ -46,13 +46,16 @@ def test_static_prompt_includes_landing_section_kit() -> None:
         sp = build_system_prompt(tmpl)
         assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" in sp, tmpl
         for variant in (
+            "header-nav",  # v2.22 #3 — the page FRAME (sticky nav) is now kit, not hand-rolled
             "hero-centered",  # v2.22 #2 — the hero (rubric crit. 5) is now kit, not hand-rolled
             "hero-split",
+            "logos-strip",  # v2.22 #3 — social-proof band, kit-sourced
             "features-grid",
             "pricing-plans",
             "testimonial-wall",
             "faq-accordion",
             "cta-band",
+            "footer-rich",  # v2.22 #3 — the page FRAME (footer) is now kit, not hand-rolled
         ):
             assert variant in sp, f"{variant} missing in {tmpl}"
         assert "--primary" in sp and "--card" in sp  # palette-anchor contract
