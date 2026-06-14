@@ -340,6 +340,16 @@ class Settings(BaseSettings):
     # answers are byte-identical to before (no extra render). Default ON; flip
     # ACCEPTANCE_GAUNTLET_FIDELITY_GATE=false to disable if a false-positive surfaces.
     acceptance_gauntlet_fidelity_gate: bool = Field(default=True)
+    # V3.3 — the money-free COMPOSITION FLOOR (`compose=` dial). A pure source-scan
+    # (no render, no model) that hard-fails a catastrophically flat freeform
+    # `index.html` — one uniform type size, no section rhythm, no hero — BEFORE any
+    # paid render or the advisory vision pass. The floors are catastrophe-only, so a
+    # real enterprise generation never trips them, and the scan is INERT (a passing
+    # no-op) on a set with no standalone HTML page (entity/fullstack stacks, judged
+    # by the rendered taste/hierarchy legs). It runs ALWAYS-ON on the hot path —
+    # decoupled from `acceptance_gauntlet_render_gates`. Default ON; flip
+    # ACCEPTANCE_GAUNTLET_COMPOSE_GATE=false to disable if a false-positive surfaces.
+    acceptance_gauntlet_compose_gate: bool = Field(default=True)
     # V1.13b — the pillar-1 CEILING leg (`REFERENCE_LEGS`). Where the composition
     # legs assert a FLOOR ("no defect class present"), this asserts a CEILING: a
     # generation must MEET OR BEAT a curated enterprise corpus on the five richness

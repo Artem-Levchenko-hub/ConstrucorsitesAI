@@ -267,6 +267,11 @@ async def evaluate(
             files=files,
             spec=spec,
             include_rendered=settings.acceptance_gauntlet_render_gates,
+            # V3.3 — the money-free composition FLOOR. A pure source-scan that
+            # hard-fails a catastrophically flat freeform page before any paid
+            # render or the advisory vision pass; INERT on entity stacks (no
+            # standalone index.html), so it never sinks the live hot path.
+            compose=settings.acceptance_gauntlet_compose_gate,
             composition=settings.acceptance_gauntlet_composition_gates,
             fidelity=fidelity,
             # V1.13b CEILING leg — graded against a curated enterprise corpus. OFF

@@ -31,6 +31,7 @@ from typing import Any
 
 from omnia_api.services import (
     chip_pixel_gate,
+    compose_gate,
     data_gate,
     defect_registry,
     hierarchy_gate,
@@ -59,6 +60,7 @@ COMPOSITION_WIDTH = TASTE_WIDTH
 
 # Gate identifiers, in the order they appear in the verdict table.
 DEFECT_REGISTRY = "defect-registry"
+COMPOSE = "compose"
 WOW_DOM = "wow-dom"
 PERF_A11Y = "perf-a11y"
 CHIP_PIXEL = "chip-pixel"
@@ -209,6 +211,22 @@ def _from_registry(rep: defect_registry.DefectReport) -> GateVerdict:
     )
 
 
+def _from_compose(rep: compose_gate.ComposeReport) -> GateVerdict:
+    """Adapt the compose floor (V3.3) — a pure source-scan, like the registry.
+
+    It never abstains: a set with no standalone HTML page is INERT and reports
+    ``passed=True`` (nothing to judge ≠ a flaky render with no evidence).
+    """
+    return GateVerdict(
+        gate=COMPOSE,
+        passed=rep.passed,
+        abstained=False,  # pure source-scan — its evidence is always present
+        classes=rep.classes,
+        summary=rep.summary(),
+        subscore=rep.subscore(),
+    )
+
+
 def _from_rendered(gate: str, rep: Any) -> GateVerdict:
     """Adapt a rendered gate's report (wow/perf/chip — same shape) to a verdict.
 
@@ -282,6 +300,7 @@ async def run(
     width: int = GATE_WIDTH,
     composition_width: int = COMPOSITION_WIDTH,
     include_rendered: bool = True,
+    compose: bool = False,
     composition: bool = False,
     fidelity: bool = False,
     reference: bool = False,
@@ -293,6 +312,12 @@ async def run(
       static set containing ``index.html``. They run **sequentially** (one
       headless browser at a time) to respect machine RAM, in ``RENDERED_GATES``
       order.
+
+    * ``compose=True`` adds the V3.3 composition FLOOR — a pure source-scan (no
+      render) that hard-fails a catastrophically flat freeform ``index.html`` (one
+      type size / no section rhythm / no hero) before any paid render or the
+      advisory vision pass. It is INERT on a set with no standalone HTML page
+      (entity stacks), so it never false-positives the live hot path.
 
     Two independent dials pick WHICH rendered legs run (V1.6 14/5 decouple):
 
@@ -334,6 +359,14 @@ async def run(
 
     if files is not None:
         gates.append(_from_registry(defect_registry.scan(files)))
+        # V3.3 — the money-free composition floor. Like the defect registry it is a
+        # pure source-scan (no render), so it runs BEFORE the rendered legs and its
+        # finding lands in ``hard_failed`` — hard-blocking a catastrophically flat
+        # page before any paid render or the advisory vision pass. It is INERT (a
+        # passing no-op) on a set with no standalone ``index.html`` (entity stacks,
+        # judged by the rendered legs), so wiring it is safe on every path.
+        if compose:
+            gates.append(_from_compose(compose_gate.scan(files)))
 
     legs: set[str] = set(RENDERED_GATES) if include_rendered else set()
     if composition:
@@ -390,7 +423,7 @@ def _main(argv: list[str]) -> int:  # pragma: no cover — thin CLI wrapper
         verdict = asyncio.run(run(url=target, spec=spec))
     else:
         files = defect_registry._read_tree(target)
-        verdict = asyncio.run(run(files=files, spec=spec))
+        verdict = asyncio.run(run(files=files, spec=spec, compose=True))
     print(verdict.summary())
     return 0 if verdict.passed else 1
 
@@ -402,6 +435,7 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 __all__ = [
+    "COMPOSE",
     "COMPOSITION_LEGS",
     "COMPOSITION_WIDTH",
     "FIDELITY_LEGS",
