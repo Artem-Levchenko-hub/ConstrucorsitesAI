@@ -604,6 +604,22 @@
 
 ## 7. ЛОГ ИТЕРАЦИЙ
 
+## 2026-06-14 10:03–10:4x MSK — RULE-10 #7: FUTURE-AWARE DATE-ПОЛЯ В DEMO-SEEDER — конец «акция до» в прошлом на каталог-карте [x] (generator-quality §0.10; prod-deployed + LIVE-verified на задеплоенном бинарнике, money-free)
+
+**Выбор.** Stop-gate 10:03 < HARD-STOP 2026-06-17 08:26 → работаю. Lock ACQUIRED (cross-machine mkdir-mutex lh-server, RUN MacBook-Air-Roman). Sync ff-only (up to date). OWNER §0.10 (качество генератора, НЕ новые ворота — V1.6/16/5f = ВОРОТА, явно исключены) → беру ЯВНО названный follow-up из RULE-10 #4/#6a-логов: кандидат (c) «date-поля каталога все в прошлом».
+
+**Root cause / код-факт.** `demo_seeder._demo_date` сидил КАЖДОЕ date-поле в прошлом (`base 2026-06-01 - hash%120` дней → ~02.02–01.06). Для поля с forward-семантикой («акция до»/«доставка»/«бронь»/«срок действия»/«поступление»/«мероприятие») прошлая дата читается как ПРОСРОЧЕННАЯ на ПЕРВОМ каталог-экране — «Акция до 12.02.2026» в июне = мёртвое предложение (бьёт столп-1 WOW). Defect-класс «niche-blind date direction».
+
+**Фикс (детерминир., model-independent, минимальный диф 1 src + 1 test, R-04, high-precision-or-nothing).** Новый `_FUTURE_DATE_TOKENS` (forward-маркеры имени поля: expir/deadline/delivery/booking/valid/until/event + рус. истек/срок/годност/доставк/брон/сеанс/меропр/событ/акци/промо/действ/…). `_demo_date` при матче маркера сидит near-future (`base + 14 + hash%90` дней → ~2 нед…3.5 мес вперёд, остаётся впереди demo-периода); НЕТ маркера → байт-идентичный прошлый путь (`base - hash%120`). Creation/registration/birth/order-даты (нет маркера) → 0 регрессии. Один и тот же hash для обеих веток → детерминизм сохранён.
+
+**TDD-first.** 3 теста (red→green): forward-маркер-поле > эпохи (deadline/delivery_date/акция_до/бронь/valid_until), backward-поле ≤ эпохи (created_at/дата_регистрации/order_date/дата_рождения — regression-guard), forward-детерминизм байт-идентичен. **73/73 demo_seeder** (был 70), 84/84 seeder-набор, ruff+mypy clean. 3 `test_provisioner` fail = pre-existing env (нет `/opt/omnia-runtime` на Mac), не мой диф.
+
+**Доставка.** commit `65f858c` → push origin main ✓ → prod `cd /opt/omnia && git ff-only` → `sudo systemctl restart omnia-orchestrator` → active, `/health` 200.
+
+**LIVE-верификация (money-free, 0 LLM, на ЗАДЕПЛОЕННОМ prod-бинарнике).** `.venv/bin/python` в `/opt/omnia/apps/orchestrator` против realistic Promo-сущности (title + акция_до + delivery_date + created_at + дата_регистрации), niche=internet-magazin, 8 строк: **акция_до→2026-07-22**, delivery_date→2026-08-20 (оба FUTURE), created_at→2026-03-21, дата_регистрации→2026-02-03 (оба PAST). FORWARD_ALL_FUTURE: True, CREATION_ALL_PAST: True, `_FUTURE_DATE_TOKENS` присутствует в задеплоенном коде. Output-путь (`demo_seed_writer`→`generate_rows`, niche threaded) уже browser-proven в RULE-10 #1/#3/#5/#6a (re-seed→reload→каталог рендерит); мой диф меняет лишь date-ЗНАЧЕНИЕ, доказанное когерентным на проде (даты — plain text в карточке, как category/description в #4/#5) → новый browser-ген (=платный) не нужен, прецедент #4. Resource-guard: 0 тест-контейнеров создано, клиентские аппы не тронуты, VPS-замок снят.
+
+**Follow-up money-free (RULE-10 #8, кандидаты):** (b) reference/FK-поля без семантики (order.product_id мог бы коррелировать с ценой/категорией строки); (d) phone/email-поля каталога — niche-aware форматы. **[x]:** expired-«акция до» на каталог-карте устранён end-to-end на задеплоенном бинарнике.
+
 ## 2026-06-14 09:46–10:3x MSK — RULE-10 #6a: CATEGORY-СИНОНИМЫ В DEMO-SEEDER — витамин → «Препараты», не случайные «Приборы»/«Органика» [x] (generator-quality §0.10; prod-deployed + LIVE-verified на РЕАЛЬНОМ apteki-аппе через браузер, money-free)
 
 **Выбор.** Stop-gate 09:46 < HARD-STOP 2026-06-17 08:26 → работаю. Lock ACQUIRED (cross-machine mkdir-mutex lh-server, RUN MacBook-Air-Roman). Sync ff-only (up to date). OWNER §0.10 (качество генератора, НЕ новые ворота) перебивает «бери первый [ ] из §5★» (V1.6/16/5f = ВОРОТА, явно исключены) → беру ЯВНО названный next из RULE-10 #5-лога, follow-up (a): `_DOMAIN_NOUN_CATEGORY` repr-слова не покрывают реальные enum'ы.
