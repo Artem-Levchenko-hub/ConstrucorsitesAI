@@ -36,6 +36,40 @@ def test_static_prompt_includes_style_and_animation_kit() -> None:
     assert ".grain-heavy" in sp  # film-grain family
 
 
+def test_static_prompt_includes_landing_section_kit() -> None:
+    # v2.22 #1 — THE LEVER: freeform landings now carry the premium section kit
+    # (the prod-default surface that a colleague shares), mirroring the entity
+    # kit's StorefrontSection/PricingPlans/… so a forked store + its landing
+    # look identical. The header + every kit-variant id + the palette-anchor
+    # contract must be present in the static branch.
+    for tmpl in ("landing", "portfolio", "blog", "blank"):
+        sp = build_system_prompt(tmpl)
+        assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" in sp, tmpl
+        for variant in (
+            "features-grid",
+            "pricing-plans",
+            "testimonial-wall",
+            "faq-accordion",
+            "cta-band",
+        ):
+            assert variant in sp, f"{variant} missing in {tmpl}"
+        assert "--primary" in sp and "--card" in sp  # palette-anchor contract
+
+
+def test_landing_section_kit_survives_budget_trim() -> None:
+    # The section kit is THE design lever — it must reach cheap writers too
+    # (deepseek/haiku). Only _DETAILS_KIT is dropped for budget; the kit stays.
+    sp = build_system_prompt("landing", model_id="haiku")
+    assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" in sp
+
+
+def test_entity_prompt_excludes_landing_section_kit() -> None:
+    # Entity apps have their OWN section kit (_ENTITIES_UI React components);
+    # the freeform HTML doubles must not leak in and confuse the .tsx writer.
+    ep = build_system_prompt("nextjs_entities")
+    assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" not in ep
+
+
 def test_fullstack_prompt_excludes_static_kit() -> None:
     fs = build_system_prompt("fullstack")
     assert "assets/omnia-kit.css" not in fs

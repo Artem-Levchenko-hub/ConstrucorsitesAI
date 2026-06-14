@@ -650,6 +650,154 @@ assets/omnia-kit.js — они управляются Omnia и НЕ входят
 меру: 2–4 акцента на секцию. Перед выдачей проверь: кит подключён на каждой
 странице, нужные хуки проставлены, kit-файлы не в ответе, v3-классы использованы."""
 
+_LANDING_SECTION_KIT = """\
+КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА — ГОТОВЫЕ БЛОКИ (повторяющиеся маркетинг-секции НЕ
+верстаются с нуля). Преимущества, цены, отзывы, FAQ, финальный призыв повторяются
+на КАЖДОМ лендинге — НЕ изобретай их разметку заново каждый билд. СОБИРАЙ их из этих
+готовых HTML-двойников кита: тот же дизайн-ДНК, что у контейнер-аппов Omnia (entity
+StorefrontSection / FeatureCard / PricingPlans / TestimonialWall / FaqAccordion /
+CtaBand) — форкнутый магазин и его лендинг выглядят ИДЕНТИЧНО. Ты меняешь ТОЛЬКО
+копирайт, иконки и палитру; разметку, ритм, иерархию, адаптив и вход-анимацию кита
+НЕ трогаешь. Hero и нетиповые секции ниши пишешь сам по брифу и краф-флору.
+
+▸ ПАЛИТРА-ЯКОРЬ (контракт кита — задай ОДИН раз в общем <style>, снипеты читают vars;
+  это тот же `--primary`/`--accent`-контракт, что у entity-аппов → форк выглядит так же):
+  :root{
+    --primary:#HEX;   /* бренд-акцент: CTA, иконки, цифры, рекоменд-тариф */
+    --accent:#HEX;    /* вторичный акцент, дозой */
+    --ink:#HEX;       /* основной текст (почти чёрный) */
+    --bg:#HEX;        /* фон страницы (почти белый ИЛИ тёмный по вайбу) */
+    --card:#HEX;      /* поверхность карточки (на тон отличается от --bg) */
+    --muted:#HEX;     /* приглушённый текст (лиды, подписи) */
+    --line:#HEX;      /* тонкие границы/разделители */
+  }
+  HEX — ТЕ ЖЕ, что в брифе. Снипеты используют style="color:var(--ink)" /
+  bg-[color:var(--card)] и т.п. — один снипет = РАЗНЫЙ бренд под нишу.
+
+▸ ОБЁРТКА СЕКЦИИ (ритм enterprise-лендинга: единый контейнер max-w-6xl, крупные
+  вертикальные отступы, eyebrow + <h2> + lead). Чередуй фон var(--bg)/var(--card) на
+  соседних секциях — страница дышит:
+  <section id="ANCHOR" class="py-24 md:py-32" style="background:var(--bg)">
+    <div class="max-w-6xl mx-auto px-6">
+      <div class="max-w-2xl mx-auto text-center reveal">
+        <p class="text-xs font-semibold tracking-[0.18em] uppercase" style="color:var(--primary)">EYEBROW</p>
+        <h2 class="mt-3 text-3xl md:text-4xl font-bold tracking-tight" style="color:var(--ink)">Заголовок секции</h2>
+        <p class="mt-4 text-lg leading-relaxed" style="color:var(--muted)">Лид одной-двумя строками — из брифа.</p>
+      </div>
+      <!-- контент-снипет ниже -->
+    </div>
+  </section>
+
+▸ FEATURES-GRID (преимущества / услуги / возможности — двойник StorefrontSection+FeatureCard).
+  Карточка ценности: бренд-чип с lucide-иконкой + заголовок + строка-две. Адаптив
+  grid-cols-1 → sm:2 → lg:3 (на мобиле столбик, 0 h-scroll). Каскадный вход data-reveal-delay:
+  <div class="mt-14 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="reveal hover-lift depth-2 rounded-2xl p-7" data-reveal-delay="1"
+         style="background:var(--card);border:1px solid var(--line)">
+      <span class="inline-flex h-12 w-12 items-center justify-center rounded-xl"
+            style="background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--primary)">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><!-- lucide-путь под смысл --></svg>
+      </span>
+      <h3 class="mt-5 text-xl font-semibold" style="color:var(--ink)">Заголовок ценности</h3>
+      <p class="mt-2 leading-relaxed" style="color:var(--muted)">Одна-две строки конкретной выгоды.</p>
+    </div>
+    <!-- ещё карточки: data-reveal-delay="2","3","4"… (по нарастающей для каскада) -->
+  </div>
+
+▸ PRICING-PLANS (тарифы / пакеты / абонементы — двойник PricingPlans). Ряд карточек,
+  РОВНО ОДНА рекомендованная (`highlighted`) выделена бренд-градиент-рамкой + приподнята
+  (-translate-y) + бейджем. Адаптив grid-cols-1 → md:3. Обычный план:
+  <div class="mt-14 grid gap-6 md:grid-cols-3 items-start">
+    <div class="reveal depth-2 rounded-2xl p-8 flex flex-col" data-reveal-delay="1"
+         style="background:var(--card);border:1px solid var(--line)">
+      <h3 class="text-lg font-semibold" style="color:var(--ink)">Название тарифа</h3>
+      <p class="mt-1 text-sm" style="color:var(--muted)">Короткое описание тарифа.</p>
+      <p class="mt-5 text-4xl font-bold" style="color:var(--ink)">2 900 ₽<span class="text-base font-normal" style="color:var(--muted)"> / визит</span></p>
+      <ul class="mt-6 space-y-3 text-sm flex-1" style="color:var(--ink)">
+        <li class="flex gap-2"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--primary)" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Пункт тарифа из брифа</li>
+      </ul>
+      <a href="/signin" class="mt-8 inline-flex justify-center rounded-xl px-6 py-3 font-semibold press"
+         style="border:1px solid var(--primary);color:var(--primary)">Выбрать</a>
+    </div>
+    <!-- РЕКОМЕНДОВАННЫЙ тариф (по центру): обёртка-градиент-рамка + приподнят + бейдж -->
+    <div class="reveal rounded-2xl p-[2px] md:-translate-y-3" data-reveal-delay="2"
+         style="background:linear-gradient(135deg,var(--primary),var(--accent))">
+      <div class="rounded-[14px] p-8 h-full flex flex-col relative" style="background:var(--card)">
+        <span class="absolute -top-3 left-8 rounded-full px-3 py-1 text-xs font-semibold text-white"
+              style="background:var(--primary)">Популярный</span>
+        <h3 class="text-lg font-semibold" style="color:var(--ink)">Название тарифа</h3>
+        <p class="mt-1 text-sm" style="color:var(--muted)">Самый выбираемый формат.</p>
+        <p class="mt-5 text-4xl font-bold" style="color:var(--ink)">19 900 ₽<span class="text-base font-normal" style="color:var(--muted)"> / год</span></p>
+        <ul class="mt-6 space-y-3 text-sm flex-1" style="color:var(--ink)"><!-- пункты как выше --></ul>
+        <a href="/signin" class="btn-cta-primary mt-8 inline-flex justify-center rounded-xl px-6 py-3 font-semibold text-white"
+           style="background:var(--primary)">Оформить</a>
+      </div>
+    </div>
+    <!-- третий обычный план -->
+  </div>
+
+▸ TESTIMONIAL-WALL (отзывы / соц-доказательство — двойник TestimonialWall). Карточка-цитата:
+  декоративная фирменная кавычка + опц. звёзды + футер аватар-или-инициалы + имя/роль.
+  Адаптив grid-cols-1 → md:3. Каскадный вход:
+  <div class="mt-14 grid gap-6 md:grid-cols-3">
+    <figure class="reveal depth-2 rounded-2xl p-7 flex flex-col" data-reveal-delay="1"
+            style="background:var(--card);border:1px solid var(--line)">
+      <span class="text-5xl leading-none font-serif" style="color:color-mix(in srgb,var(--primary) 35%,transparent)" aria-hidden="true">&rdquo;</span>
+      <div class="mt-1 flex gap-0.5" style="color:var(--primary)" aria-label="5 из 5">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 2 3 6.9 7.5.6-5.7 5 1.7 7.4L12 18l-6.5 3.9 1.7-7.4-5.7-5 7.5-.6z"/></svg><!-- ×rating -->
+      </div>
+      <blockquote class="mt-3 flex-1 leading-relaxed" style="color:var(--ink)">«Честный отзыв одним абзацем из брифа.»</blockquote>
+      <figcaption class="mt-6 flex items-center gap-3">
+        <span class="flex h-10 w-10 items-center justify-center rounded-full font-semibold text-white"
+              style="background:var(--primary)">АК</span>
+        <span><span class="block font-semibold" style="color:var(--ink)">Имя Фамилия</span>
+              <span class="block text-sm" style="color:var(--muted)">Роль</span></span>
+      </figcaption>
+    </figure>
+    <!-- ещё отзывы: data-reveal-delay="2","3" -->
+  </div>
+
+▸ FAQ-ACCORDION (частые вопросы — двойник FaqAccordion). Использует ХУКИ кита
+  (.faq/.faq-item/.faq-question/.faq-answer — JS раскрытия УЖЕ в omnia-kit.js, свой НЕ пиши).
+  Бренд-тонированная карточка, шеврон поворачивается. Один столбик max-w-3xl:
+  <div class="faq mt-12 max-w-3xl mx-auto space-y-3">
+    <div class="faq-item reveal rounded-xl overflow-hidden" data-reveal-delay="1"
+         style="background:var(--card);border:1px solid var(--line)">
+      <button class="faq-question flex w-full items-center justify-between gap-4 px-6 py-5 text-left font-medium" style="color:var(--ink)">
+        <span>Вопрос из брифа?</span>
+        <svg class="faq-chevron shrink-0 transition-transform" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--primary)" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="faq-answer px-6 pb-5 leading-relaxed" style="color:var(--muted)">Честный ответ 1–2 абзаца из брифа.</div>
+    </div>
+    <!-- ещё вопросы -->
+  </div>
+
+▸ CTA-BAND (финальный призыв — двойник CtaBand). ЕДИНСТВЕННАЯ full-bleed ИНВЕРТИРОВАННАЯ
+  (на бренд-цвете) секция = конверсионная кульминация ПЕРЕД футером. Один смелый призыв +
+  строка-нудж + ОДИН яркий контрастный CTA. НЕ внутрь обёртки-секции — сам себе full-bleed:
+  <section class="relative overflow-hidden py-24 md:py-28" style="background:var(--primary)">
+    <div class="absolute inset-0 opacity-20" style="background:radial-gradient(60% 80% at 70% 20%,var(--accent),transparent)" aria-hidden="true"></div>
+    <div class="relative max-w-3xl mx-auto px-6 text-center reveal">
+      <p class="text-sm font-semibold tracking-[0.18em] uppercase text-white/70">Готовы начать?</p>
+      <h2 class="mt-3 text-4xl md:text-5xl font-bold tracking-tight text-white">Смелый финальный призыв</h2>
+      <p class="mt-4 text-lg text-white/80">Строка-нудж: одна причина действовать сейчас.</p>
+      <div class="mt-9 flex flex-wrap justify-center gap-4">
+        <a href="/signin" class="btn-cta-primary press inline-flex rounded-xl bg-white px-8 py-4 font-semibold" style="color:var(--primary)">Главный CTA</a>
+        <a href="#цены" class="inline-flex rounded-xl px-8 py-4 font-semibold text-white" style="border:1px solid rgba(255,255,255,.4)">Вторичный</a>
+      </div>
+      <p class="mt-5 text-sm text-white/60">Микро-нудж • без предоплаты</p>
+    </div>
+  </section>
+
+ПРАВИЛО СБОРКИ (ЖЕЛЕЗНО): секцию из этого кита — БЕРИ снипет 1:1, подставляй только копию,
+иконки и числа из брифа; разметку/классы/ритм/адаптив НЕ переписывай. Для каждой такой
+секции бриф называет KIT-вариант (features-grid | pricing-plans | testimonial-wall |
+faq-accordion | cta-band) — ставь именно его снипет. Нет подходящего снипета (hero,
+нетиповая секция ниши) — верстай сам по брифу. РОВНО ОДНА .btn-cta-primary на страницу
+(главный CTA в cta-band ИЛИ герое). Вход-анимация (.reveal + data-reveal-delay) уже в
+снипетах — НЕ снимай её, она и есть «живой» каскадный вход секций (reduced-motion-safe)."""
+
 _FULLSTACK_STACK = """\
 СТЕК — FULL-STACK ПРИЛОЖЕНИЕ (режим включён, потому что проект на Next.js — на
 VPS уже крутится dev-контейнер с Postgres и Drizzle, пользуйся ими свободно).
@@ -3025,6 +3173,7 @@ def build_system_prompt(
             _FUNCTIONAL_CONTRACT,
             _STATIC_STACK,
             _ANIMATION_KIT,
+            _LANDING_SECTION_KIT,
             _SELF_CHECK,
             _PALETTE_TAIL_REMINDER,
             _RESPONSE,
