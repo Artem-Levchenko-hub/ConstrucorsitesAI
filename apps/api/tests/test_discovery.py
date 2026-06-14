@@ -23,6 +23,7 @@ from omnia_api.services.discovery import (
     MAX_DISCOVERY_QUESTIONS,
     PlannedQuestion,
     _infer_stack_from_text,
+    infer_niche_label,
     plan_discovery_questions,
     run_discovery,
     serve_planned_question,
@@ -770,6 +771,38 @@ def test_serve_handles_malformed_plan() -> None:
     assert serve_planned_question(None, 0) is None
     assert serve_planned_question("not a list", 0) is None
     assert serve_planned_question([{"no_message": True}], 0) is None
+
+
+def test_serve_carries_question_index_and_total() -> None:
+    """Each served question knows its 1-based position and the batch size so the
+    workspace can frame «Вопрос N из M» (NORTH STAR pillar 2 onboarding popup)."""
+    plan = _sample_plan()  # two questions
+    first = serve_planned_question(plan, 0)
+    second = serve_planned_question(plan, 1)
+    assert first is not None and (first.question_index, first.question_total) == (1, 2)
+    assert second is not None and (second.question_index, second.question_total) == (
+        2,
+        2,
+    )
+
+
+# ─── infer_niche_label (pure, model-free framing banner) ─────────────────────
+
+
+def test_infer_niche_label_recognises_common_niches() -> None:
+    """The framing banner names the niche from the product idea — deterministic
+    substring lookup, no gateway call (pillar 2 onboarding frame)."""
+    assert infer_niche_label("сайт школы МБОУ СОШ 15") == "школа / образование"
+    assert infer_niche_label("интернет-магазин товаров для дома") == "интернет-магазин"
+    assert infer_niche_label("сайт стоматологической клиники") == "клиника / медицина"
+    assert infer_niche_label("CRM для отдела продаж") == "CRM / управление"
+
+
+def test_infer_niche_label_empty_for_unknown_idea() -> None:
+    """An unrecognised idea yields "" so the banner shows no dangling suffix
+    (cosmetic only — never a dead-end)."""
+    assert infer_niche_label("что-то совершенно непонятное и абстрактное") == ""
+    assert infer_niche_label("") == ""
 
 
 # ─── zero_question_build (shared floor) ──────────────────────────────────────

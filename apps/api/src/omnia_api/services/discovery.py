@@ -156,6 +156,62 @@ class DiscoveryResult:
     choices: tuple[str, ...] = ()
     allow_custom: bool = True
     multi_select: bool = False
+    # Onboarding-popup framing (NORTH STAR pillar 2): the 1-based position of this
+    # question in the planned batch and the batch size, so the workspace can frame
+    # discovery as a guided popup with a «Вопрос N из M» counter instead of a bare
+    # chat row. 0/0 on a BUILD turn and on the legacy per-question path (no upfront
+    # plan → unknown total).
+    question_index: int = 0
+    question_total: int = 0
+    # Short human niche label inferred from the product idea (e.g. «школа /
+    # образование») for the framing banner «Давайте разберёмся под вашу идею: …».
+    # Empty when the idea matches no known niche (banner then shows no suffix).
+    niche: str = ""
+
+
+# Niche → short Russian banner label, matched by lowered-substring stems on the
+# product idea. Model-independent (a fixed lookup, no gateway call) so the
+# onboarding frame names the niche the same way every run. First match wins;
+# order most-specific → general. Unrecognised idea → "" (generic banner). Used
+# only for the framing banner, so a miss is cosmetic, never a dead-end.
+_NICHE_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "школа / образование",
+        ("школ", "гимназ", "лице", "сош", "мбоу", "образоват", "ученик", "учебн", "обучен"),
+    ),
+    (
+        "клиника / медицина",
+        ("клиник", "медицин", "стоматолог", "больниц", "пациент", " врач", "врача"),
+    ),
+    ("салон красоты", ("салон красот", "парикмахер", "барбершоп", "маникюр", "косметолог")),
+    ("фитнес / спорт", ("фитнес", "спортзал", "тренаж", " йог", "тренировк", "спорт-клуб")),
+    ("кафе / ресторан", ("ресторан", "кафе", "пиццери", "кофейн", "доставка еды", "меню")),
+    ("автосервис", ("автосервис", "автомастер", "шиномонтаж", "ремонт авто", "сто ")),
+    ("недвижимость", ("недвижим", "квартир", "застройщик", "аренда жил")),
+    ("туризм / путешествия", ("турагент", "путешеств", " тур ", "отел", "бронирован")),
+    ("мероприятия / события", ("конференц", "мероприят", "событи", "билет", "афиш")),
+    (
+        "интернет-магазин",
+        ("магазин", "shop", "e-comm", "ecommerce", "товар", "каталог", "маркетплейс"),
+    ),
+    ("CRM / управление", ("crm", "црм", "воронк", "сделк", "пайплайн", "лид")),
+    ("портфолио", ("портфолио", "резюме", "мои работы")),
+    ("блог / медиа", ("блог", "журнал", "новостн", "медиа", "стат")),
+)
+
+
+def infer_niche_label(text: str) -> str:
+    """Map a product idea to a short niche label for the onboarding-frame banner.
+
+    Deterministic and LLM-free — a fixed substring lookup over lowered text, so
+    every run frames the same idea identically. Returns "" when nothing matches;
+    the banner then shows its generic phrasing with no niche suffix (never a
+    dead-end). Cosmetic only — does not steer the build."""
+    low = (text or "").lower()
+    for label, stems in _NICHE_LABELS:
+        if any(stem in low for stem in stems):
+            return label
+    return ""
 
 
 def wants_build_now(prompt: str) -> bool:
@@ -555,6 +611,8 @@ def serve_planned_question(
         choices=choices,
         allow_custom=q.allow_custom,
         multi_select=q.multi_select or _infer_multi_select(q.message),
+        question_index=asked_count + 1,
+        question_total=len(plan),
     )
 
 

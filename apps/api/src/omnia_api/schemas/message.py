@@ -90,3 +90,11 @@ class PromptResponse(BaseModel):
     # set in one turn (NORTH STAR pillar 2 — мультивыбор). False on single-answer
     # questions and on build/edit turns.
     multi_select: bool = False
+    # Onboarding-popup framing (NORTH STAR pillar 2): the 1-based position of the
+    # question being asked and how many the planned batch holds, so the workspace
+    # frames discovery as a guided popup with a «Вопрос N из M» counter — plus the
+    # inferred niche label for the framing banner. None on build/edit turns and on
+    # the legacy per-question path (no upfront plan → unknown total).
+    question_index: int | None = None
+    question_total: int | None = None
+    niche: str | None = None

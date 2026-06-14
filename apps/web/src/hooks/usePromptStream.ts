@@ -637,6 +637,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             choices: resp.choices,
             allowCustom: resp.allow_custom ?? true,
             multiSelect: resp.multi_select ?? false,
+            // Onboarding-frame metadata (pillar 2): «Вопрос N из M» + niche banner.
+            questionIndex: resp.question_index ?? null,
+            questionTotal: resp.question_total ?? null,
+            niche: resp.niche ?? null,
           });
         }
       } catch (e) {

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
@@ -62,6 +63,7 @@ from omnia_api.services.discovery import (
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
+    infer_niche_label,
     plan_discovery_questions,
     run_discovery,
     serve_planned_question,
@@ -449,7 +451,18 @@ async def _batch_discovery_turn(
         project.discovery_plan = [q.to_dict() for q in questions]
     ask = serve_planned_question(project.discovery_plan or [], asked_count)
     if ask is not None:
-        return ask
+        # Name the niche for the onboarding-frame banner from the product idea —
+        # the first user message (the idea) when we're past question 1, else this
+        # very prompt. Deterministic; an unrecognised idea yields "" (no suffix).
+        idea = next(
+            (
+                m["content"]
+                for m in history
+                if m.get("role") == "user" and m.get("content")
+            ),
+            "",
+        ) or prompt
+        return replace(ask, niche=infer_niche_label(idea))
     # Plan exhausted — every question answered → build from the full Q&A.
     return await run_discovery(
         history, prompt, asked_count=asked_count, force_build=True
@@ -759,10 +772,19 @@ async def post_prompt(
         ask_choices = list(discovery_result.choices)
         allow_custom = discovery_result.allow_custom
         multi_select = discovery_result.multi_select
+        # Onboarding-frame metadata (pillar 2): «Вопрос N из M» + niche banner.
+        # 0 → None so the workspace hides the counter on the legacy per-question
+        # path (no upfront plan → unknown total).
+        question_index = discovery_result.question_index or None
+        question_total = discovery_result.question_total or None
+        niche = discovery_result.niche or None
     else:
         ask_choices = []
         allow_custom = True
         multi_select = False
+        question_index = None
+        question_total = None
+        niche = None
     return PromptResponse(
         message_id=assistant_msg.id,
         snapshot_id=None,
@@ -770,6 +792,9 @@ async def post_prompt(
         choices=ask_choices,
         allow_custom=allow_custom,
         multi_select=multi_select,
+        question_index=question_index,
+        question_total=question_total,
+        niche=niche,
     )
 
 
