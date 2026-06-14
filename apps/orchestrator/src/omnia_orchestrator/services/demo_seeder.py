@@ -737,6 +737,27 @@ _FUTURE_DATE_TOKENS = (
     "прибыт", "поступл", "брон", "сеанс", "меропр", "событ", "концерт",
     "предстоящ", "заплан", "акци", "промо", "действ",
 )
+# A *negative*-polarity boolean — archived / hidden / blocked / out-of-stock /
+# negated-positive ("неактивен", "недоступен"). Most rows should NOT carry it, so
+# it skews FALSE-heavy. Checked BEFORE the positive group so a negated word
+# ("недоступ" contains "доступ") classifies by its real meaning, not its stem.
+_BOOL_NEGATIVE_TOKENS = (
+    "снят", "архив", "заблок", "удал", "скрыт", "забан", "неактив", "недоступ",
+    "выключ", "запрещ", "archived", "disabled", "hidden", "deleted", "banned",
+    "blocked", "inactive", "unavailable", "out_of_stock", "outofstock",
+)
+# A *positive*-polarity boolean — in-stock / active / published / featured /
+# verified. On a fresh catalog most rows should read available, so a neutral
+# ⅓-true mix puts a "Нет в наличии" / "Снят с продажи" flag on ⅔ of cards — a
+# dead-store look on the first screen (pillar 1, mirrors the rating skew). These
+# skew TRUE-heavy. High-precision-or-nothing: an unrecognised boolean keeps the
+# neutral mix → byte-identical, 0 regression.
+_BOOL_POSITIVE_TOKENS = (
+    "налич", "доступ", "актив", "опубликов", "включ", "хит",
+    "новинк", "рекоменд", "верифиц", "подтвержд", "available", "in_stock",
+    "instock", "active", "published", "enabled", "featured", "visible",
+    "verified",
+)
 # String-field token groups that outrank the niche-noun branch in `_demo_string`.
 # A label field only becomes a product noun when none of these match first — the
 # same precedence is reused to find the row's primary label field for category
@@ -985,8 +1006,19 @@ def _field_value(
         return fshape.options[index % len(fshape.options)]
 
     if fshape.type == "boolean":
-        # ~⅓ true, deterministic — a mix reads more real than all-false.
-        return _hash_int(seed, entity, fname, index) % 3 == 0
+        # A neutral flag reads more real as a ~⅓-true mix. But a *polar* flag must
+        # look believable on a fresh catalog: an in-stock/active flag false on ⅔
+        # of cards reads as a dead store, an archived/hidden flag true on ⅓ reads
+        # as a junk catalog (pillar 1, mirrors the rating skew). Skew positive
+        # flags true-heavy, negative flags false-heavy; an unrecognised boolean
+        # keeps the neutral mix → byte-identical. Negative is checked first so a
+        # negated positive ("недоступен" ⊃ "доступ") is classified by its meaning.
+        h = _hash_int(seed, entity, fname, index)
+        if _has_token(key, _BOOL_NEGATIVE_TOKENS):
+            return h % 4 == 0  # ~¼ true: most rows are NOT archived/blocked
+        if _has_token(key, _BOOL_POSITIVE_TOKENS):
+            return h % 4 != 0  # ~¾ true: most rows are available/active
+        return h % 3 == 0
 
     if fshape.type == "date":
         return _demo_date(seed, entity, fname, index)

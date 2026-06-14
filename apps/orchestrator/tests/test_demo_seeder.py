@@ -248,6 +248,54 @@ def test_boolean_field_is_bool_and_mixed() -> None:
     assert vals == {True, False}  # a healthy mix, not all one value
 
 
+def test_positive_boolean_flag_skews_true() -> None:
+    # A positive flag (in-stock / active / published) false on ⅔ of a fresh
+    # catalog reads as a dead store — pillar 1. These must skew true-heavy while
+    # still mixing (a real catalog has a few sold-out / draft rows too).
+    for fname in ("в_наличии", "available", "active", "опубликован", "хит",
+                  "is_featured", "in_stock"):
+        spread = [r[fname] for s in range(40)
+                  for r in ds.generate_rows(
+                      "Product",
+                      _fields(**{fname: {"type": "boolean", "required": True}}),
+                      count=12, seed=f"s{s}")]
+        assert all(isinstance(v, bool) for v in spread), fname
+        assert spread.count(True) > spread.count(False) * 2, (fname, _ratio(spread))
+        assert False in spread, fname  # still a believable mix, not all-true
+
+
+def test_negative_boolean_flag_skews_false() -> None:
+    # The inverse: an archived / hidden / blocked / sold-out flag true on a third
+    # of a fresh catalog reads as a junk store. These must skew false-heavy.
+    for fname in ("archived", "is_hidden", "заблокирован", "снят_с_продажи",
+                  "out_of_stock", "неактивен", "недоступен"):
+        spread = [r[fname] for s in range(40)
+                  for r in ds.generate_rows(
+                      "Product",
+                      _fields(**{fname: {"type": "boolean", "required": True}}),
+                      count=12, seed=f"s{s}")]
+        assert all(isinstance(v, bool) for v in spread), fname
+        assert spread.count(False) > spread.count(True) * 2, (fname, _ratio(spread))
+        assert True in spread, fname  # still a believable mix, not all-false
+
+
+def test_neutral_boolean_flag_unchanged() -> None:
+    # An unrecognised boolean keeps the byte-identical neutral ~⅓-true mix, so
+    # the polarity skew never silently regresses an ordinary flag.
+    for fname in ("done", "is_paid", "agreed"):
+        f = _fields(**{fname: {"type": "boolean", "required": True}})
+        rows = ds.generate_rows("Task", f, count=24, seed="s")
+        expected = [
+            ds._hash_int("s", "Task", fname, i) % 3 == 0 for i in range(len(rows))
+        ]
+        assert [r[fname] for r in rows] == expected, fname
+
+
+def _ratio(spread: list[bool]) -> str:
+    t = spread.count(True)
+    return f"{t}/{len(spread)} true"
+
+
 # ── references ───────────────────────────────────────────────────────────────
 
 
