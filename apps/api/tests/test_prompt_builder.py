@@ -77,6 +77,16 @@ def test_entity_prompt_excludes_landing_section_kit() -> None:
     assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" not in ep
 
 
+def test_entity_prompt_teaches_grouped_nav_and_brand_glyph() -> None:
+    # The AppShell sidebar gained a workspace glyph + grouped nav (`section`);
+    # the generator must instruct apps to use them, else every generated app
+    # keeps a flat, brand-mark-less sidebar — the "looks like a template" tell.
+    ep = build_system_prompt("nextjs_entities")
+    assert "ГРУППЫ НАВИГАЦИИ" in ep
+    assert "section:" in ep  # the grouped NAV example carries the field
+    assert "workspace-глиф" in ep  # brand-glyph guidance present
+
+
 def test_fullstack_prompt_excludes_static_kit() -> None:
     fs = build_system_prompt("fullstack")
     assert "assets/omnia-kit.css" not in fs

@@ -1355,13 +1355,16 @@ _ENTITIES_UI = """\
   "use client";
   import { useRouter } from "next/navigation";
   import { useEffect, useState } from "react";
-  import { LayoutDashboard, Users, Briefcase } from "lucide-react";
+  import { LayoutDashboard, Users, Briefcase, Settings } from "lucide-react";
   import { AppShell } from "@/components/omnia";
   import { auth, type Me } from "@/lib/sdk";
+  // 5+ пунктов → группируй по `section` (заголовок-секция). Соседние пункты с
+  // одним section встают под одной тихой подписью — паттерн Linear/Vanta/Stripe.
   const NAV = [
-    { label: "Дашборд", href: "/dashboard", icon: <LayoutDashboard /> },
-    { label: "Клиенты", href: "/dashboard/clients", icon: <Users /> },
-    { label: "Сделки",  href: "/dashboard/deals",  icon: <Briefcase /> },
+    { label: "Дашборд", href: "/dashboard", icon: <LayoutDashboard />, section: "Обзор" },
+    { label: "Клиенты", href: "/dashboard/clients", icon: <Users />, section: "Работа" },
+    { label: "Сделки",  href: "/dashboard/deals",  icon: <Briefcase />, section: "Работа" },
+    { label: "Настройки", href: "/dashboard/settings", icon: <Settings />, section: "Аккаунт" },
   ];
   export default function AppLayout({ children }: { children: React.ReactNode }) {
     const router = useRouter();
@@ -1375,6 +1378,15 @@ _ENTITIES_UI = """\
     );
   }
   </file>
+  ▸ САЙДБАР-БРЕНД — `brand="MyCRM"` (строка) сам получает workspace-глиф: инициалы
+    в плитке бренд-цвета слева от названия (паттерн Linear/Notion/Vanta). Ничего
+    рисовать не надо. Свой логотип — `brandMark={<Logo />}` (или эмодзи); кастомный
+    node-бренд рисуется как есть. НЕ верстай плитку логотипа руками.
+  ▸ ГРУППЫ НАВИГАЦИИ — при 5+ пунктах ОБЯЗАТЕЛЬНО разбей nav на 2–3 секции через
+    `section` (как в NAV выше): «Обзор» / «Работа»/«Каталог»/«Продажи» / «Аккаунт».
+    Плоский список из 6+ пунктов читается как шаблон; секции = enterprise-вид.
+    Соседние пункты с одинаковым `section` группируются автоматически — порядок
+    сохраняется, подпись-секция рисуется китом. 3–4 пункта — секции необязательны.
   Страницы кабинета — в той же группе под dashboard, наследуют шелл:
   src/app/(app)/dashboard/page.tsx (дашборд), src/app/(app)/dashboard/clients/page.tsx,
   src/app/(app)/dashboard/deals/page.tsx …
