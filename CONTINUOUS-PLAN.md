@@ -770,6 +770,29 @@
 
 ## 7. ЛОГ ИТЕРАЦИЙ
 
+## 2026-06-15 00:4x–01:2x MSK — ★BIG-WIN: #2 v2.23 HOT-FORK RECAP — тёплый ремикс-воркспейс с design-DNA картой (`08b4b27`, WOW 9/9 desktop+mobile)
+
+**Задача (rule 12 milestone-такт — последний ★BIG-WIN ≈2 мин назад = ON TACK; pickup-порядок v2.23: #1 archetype-heroes DONE → взял #2 hot-fork recap, пиллар 4 виральность):** грепом подтверждён диагноз плана — `perform_fork` (`routers/projects.py:204`) тащил design-DNA источника (discovery_spec + design_preset + HEAD-snapshot + viral_eligible), НО создавал **0 Message-строк** → ремиксер открывал форкнутый апп над ХОЛОДНЫМ пустым чатом с дженерик «Поговорим о вашем сайте» (`ChatPanel.tsx:150`, ветка `messages.length===0`). Ничто не говорило ЧТО он ремикснул и с чего начать. NORTH STAR пиллар 4 («коллега форкает за секунды») требует ТЁПЛОГО приземления.
+
+**Что сделано (backend-anchored слайс, детерминир./LLM-free, 0 build-cost / 0 failure-surface):**
+1. **`services/fork_recap.py` (новый, pure + unit-pinned):** `build_fork_recap(name, discovery_spec, design_preset_name)` → один `<remix>`-тег (та же конвенция, что `<file>`/`<edit>`/`<app-error>`). Именует источник, эхо-DNA (ниша из имени через `infer_niche_label` · тема · акцент-семья RU · тон RU), 3 **ниша-нативных** one-tap стартовых правки (кафе→«меню с фото блюд», школа→«расписание», фитнес→«расписание тренировок»…; `_NICHE_STARTER` карта). Акцент-своп всегда ОТЛИЧАЕТСЯ от текущего (emerald→«тёплый янтарный», иначе→«изумрудный»). DNA-фоллбэк на preset-имя/«стиль скопирован 1:1» если discovery пуст → карта НИКОГДА не голая. Использует `FidelitySpec.from_dict` (R-10 robust к malformed-строке).
+2. **`routers/projects.py` `perform_fork`:** сидит ОДНУ assistant-Message с рекапом ПЕРЕД commit (атомарно). `tokens_out=0` (НЕ NULL) → клиент не считает сид mid-stream (isStreaming-гейт `ChatPanel:88`); `tokens_in=None` → не рисует «0 tokens» футер.
+3. **`web/parse-assistant.ts`:** `<remix name=… dna=…>`-тег → `{kind:"remix", name, dna, suggestions[]}` (suggestions = строки body). `BLOCK_OPEN` regex += `remix`.
+4. **`web/RemixRecapCard.tsx` (новый) + ChatMessage/ChatPanel:** карта (GitFork-бейдж «Ремикс» + акцент-имя источника + Sparkles «Дизайн-ДНК» чипы + Wand2 «С чего начать» tappable-кнопки). Клик правки → `onSuggest` → `submit()` через обычный pipeline (тот же шов, что `onFix`). Сид-Message делает `messages.length>0` → холодный empty-state НИКОГДА не показывается.
+
+**Гейт:** web typecheck/lint/build зелено (снёс stale `.next/types` от прошлого harness-тика); api ruff чисто на моих файлах, mypy 0-new (3 projects.py-ошибки `preview_url` = baseline, сдвинуты +26 строк моей вставкой; подтверждено `git show HEAD`); pytest **5 pure recap + 54 discovery passed** (DB-backed seed-тест отложен на прод — нет локального Postgres).
+
+**Деплой (rule 17, всё-сразу):** `08b4b27` push→main; prod `git merge --ff-only` + `docker compose up -d --build api worker web gateway`; front 200 + api-health 200; deployed-binary: `build_fork_recap` ×2 в `routers/projects.py` + ×1 в `fork_recap.py`; web-бандл несёт «ремикснули» в server+client chunks `projects/[id]/page`. Templates/ не тронуты → rebuild образов не нужен.
+
+**EYES (rule 11/13 — глазами desktop+mobile):** workspace-UI verify-constraint (нет прод-логина) → отрендерил РЕАЛЬНУЮ карту через Claude_Preview статик-harness с ТОЧНЫМИ dark-theme токенами (`globals.css`: accent `#6e5be8`, panel `#0d0d12`, surface/border/fg) + РЕАЛЬНЫМ выводом `build_fork_recap` для 2 ниш (кафе/йога). **DESKTOP 400px (ширина чат-панели):** премиум-карта на тёмной панели — иерархия Ремикс-бейдж(violet)→акцент-имя→DNA-чипы→стартовые кнопки; 2 ниши ВИДИМО разные (кафе/тёмная/фиолетовый/премиум vs фитнес/светлая/изумрудный/минимализм). **MOBILE 375:** 0 h-overflow (`scrollW===clientW===375`), чипы переносятся, кнопки 2-строчные грациозно. Console 0 errors. **WOW 9/9.**
+- **BACKEND E2E ЖИВЬЁМ НА ПРОДЕ (закрыл отложенный DB-тест):** register→create blank «Кафе Юла»→`POST /fork`→`GET /messages` = ровно **1 assistant `<remix name="Кафе Юла" dna="кафе / ресторан">`** с ниша-нативными правками, источник = **0 сообщений** (нетронут), `forked_from` lineage цел. Blank-форк (без discovery) → DNA graceful-degraded на одну нишу = фоллбэк-путь работает.
+
+**Resource-guard:** 0 dev-контейнеров создано (blank-форк = static); прод dev-контейнеры (legomagazin=клиент, mbou-sosh-15=owner-демо) нетронуты, RAM avail 8.2ГБ. Локальный harness снесён, launch.json восстановлен в owner-baseline, Claude_Preview остановлен.
+
+**Throwaway на проде (owner может удалить):** source `375e7caa` + fork `2a4b6eb6` под `cq-recap-*@example.com` (static blank, без контейнеров — RAM не жрут).
+
+**Следующее:** §5★ v2.23 #3 (LIVE DESIGN-PREVIEW в онбординге — FidelitySpec→живой swatch/mini-hero на каждый тап чипа). Опц. follow-on: provyazat' fork recap на entity-iframe brief-narration replay (пиллар 3 — дизайн «рождается» при открытии форка).
+
 ## 2026-06-15 00:2x–01:0x MSK — ★BIG-WIN: #1 v2.23 ARCHETYPE-AWARE HERO VARIANTS — `hero-editorial` + `hero-cinematic` (`5498e59`, WOW 9/9/9/8.5 desktop+mobile)
 
 **Задача (rule 12 milestone-такт + §0 rule 10–13 — ВИДИМОЕ дизайн-качество, V1 высший пиллар):** последний ★BIG-WIN был ≈1 мин назад (онбординг `0f0cefd`) → ON TACK, без дедлайн-давления. Взял §5★ v2.23 pickup #1 = ARCHETYPE-AWARE HERO VARIANTS. Код-факт грепом: freeform `_LANDING_SECTION_KIT` нёс ТОЛЬКО 2 browser-mockup героя (`hero-centered`/`hero-split`), а AD-`_STYLE_KIT` классифицирует нишу в 10 визуальных пресетов — ни один не маппился на hero-вариант → каждая ниша (студия, люкс, фитнес, SaaS) приземлялась на ОДИН и тот же первый экран = «один темплейт» на самой шарабельной поверхности.
