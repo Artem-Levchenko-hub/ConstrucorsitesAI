@@ -38,6 +38,7 @@ from omnia_api.services import (
     perf_a11y_gate,
     reference_corpus,
     taste_gate,
+    viral_registry,
     wow_dom_gate,
 )
 from omnia_api.services.chip_pixel_gate import FidelitySpec
@@ -61,6 +62,7 @@ COMPOSITION_WIDTH = TASTE_WIDTH
 # Gate identifiers, in the order they appear in the verdict table.
 DEFECT_REGISTRY = "defect-registry"
 COMPOSE = "compose"
+VIRAL = "viral"
 WOW_DOM = "wow-dom"
 PERF_A11Y = "perf-a11y"
 CHIP_PIXEL = "chip-pixel"
@@ -227,6 +229,23 @@ def _from_compose(rep: compose_gate.ComposeReport) -> GateVerdict:
     )
 
 
+def _from_viral(rep: viral_registry.ViralReport) -> GateVerdict:
+    """Adapt the viral registry (V4.6) — a pure context-scan, like the compose floor.
+
+    It never abstains: an episode with nothing to judge is INERT and reports
+    ``passed=True`` (nothing to judge ≠ a flaky render with no evidence). It folds
+    ``first_paint_gate`` internally over the served-surface observation (R-04).
+    """
+    return GateVerdict(
+        gate=VIRAL,
+        passed=rep.passed,
+        abstained=False,  # pure context-scan — its evidence is always present
+        classes=rep.classes,
+        summary=rep.summary(),
+        subscore=rep.subscore(),
+    )
+
+
 def _from_rendered(gate: str, rep: Any) -> GateVerdict:
     """Adapt a rendered gate's report (wow/perf/chip — same shape) to a verdict.
 
@@ -304,6 +323,8 @@ async def run(
     composition: bool = False,
     fidelity: bool = False,
     reference: bool = False,
+    viral: bool = False,
+    viral_context: viral_registry.ViralContext | None = None,
 ) -> GauntletVerdict:
     """Fan the selected landed gates over ``files`` and/or a live ``url``.
 
@@ -318,6 +339,15 @@ async def run(
       type size / no section rhythm / no hero) before any paid render or the
       advisory vision pass. It is INERT on a set with no standalone HTML page
       (entity stacks), so it never false-positives the live hot path.
+
+    * ``viral=True`` adds the V4.6 viral defect-registry — also a pure
+      context-scan (no render). It scores the ``viral_context`` (one share→fork
+      episode) against the viral invariants — link-served-before-done, dead remix
+      CTA, leaked-tenant fork, dropped seed param — and folds ``first_paint_gate``
+      over the served-surface observation (R-04). It is INERT on a ``None`` /
+      empty context, so it never false-fails; a fork is not a generation, so it is
+      independent of ``files`` and exercised by the synthetic viral-loop (V4.7) /
+      the paid-run manifest, not the per-gen ship path.
 
     Two independent dials pick WHICH rendered legs run (V1.6 14/5 decouple):
 
@@ -367,6 +397,15 @@ async def run(
         # judged by the rendered legs), so wiring it is safe on every path.
         if compose:
             gates.append(_from_compose(compose_gate.scan(files)))
+
+    # V4.6 — the money-free viral defect-registry. Like the compose floor it is a
+    # pure CONTEXT-scan (no render): it scores one share→fork episode (the
+    # ``viral_context``) against the falsifiable viral invariants and folds
+    # first_paint_gate over the served-surface observation (R-04). It is INERT (a
+    # passing no-op) on an empty/None context, so wiring it is safe on every path;
+    # it is independent of ``files`` (a share/fork episode is not a generation).
+    if viral:
+        gates.append(_from_viral(viral_registry.scan(viral_context)))
 
     legs: set[str] = set(RENDERED_GATES) if include_rendered else set()
     if composition:
@@ -443,6 +482,7 @@ __all__ = [
     "REFERENCE_LEGS",
     "RENDERED_GATES",
     "TOUCH_LEGS",
+    "VIRAL",
     "GateVerdict",
     "GauntletVerdict",
     "run",
