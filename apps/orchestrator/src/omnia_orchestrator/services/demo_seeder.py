@@ -226,6 +226,104 @@ _DOMAIN_NOUNS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Each catalog noun's category, used to keep a row's `category` enum coherent with
+# its title (a "Витамин C" row must not land in "Косметика"). The value is a
+# representative category word; it's matched against the entity's *own* enum
+# options by substring/stem (`_match_category_option`), so it need not equal them
+# exactly — and when no option matches, the seeder falls back to the index-cycle
+# (high-precision-or-nothing). Every noun in `_DOMAIN_NOUNS` MUST appear here
+# (asserted in tests) so a newly added noun can't silently decorrelate.
+_DOMAIN_NOUN_CATEGORY: dict[str, dict[str, str]] = {
+    "pharmacy": {
+        "Витамин D3 2000 МЕ": "Витамины", "Омега-3 1000 мг": "БАДы",
+        "Магний B6": "Витамины", "Цинк пиколинат": "БАДы",
+        "Морской коллаген": "БАДы", "Пробиотик комплекс": "БАДы",
+        "Мелатонин 3 мг": "БАДы", "Гиалуроновая кислота": "БАДы",
+        "Витамин C 900 мг": "Витамины", "Железо хелат": "БАДы",
+        "Куркумин экстракт": "БАДы", "Коэнзим Q10": "БАДы",
+        "Крем увлажняющий SPF30": "Косметика", "Маска тканевая": "Косметика",
+    },
+    "clinic": {
+        "Консультация терапевта": "Консультации", "УЗИ брюшной полости": "Диагностика",
+        "Общий анализ крови": "Анализы", "Приём стоматолога": "Стоматология",
+        "Вакцинация": "Процедуры", "ЭКГ с расшифровкой": "Диагностика",
+        "Лечебный массаж": "Процедуры", "Физиотерапия": "Процедуры",
+        "Приём кардиолога": "Консультации", "МРТ позвоночника": "Диагностика",
+        "Осмотр офтальмолога": "Консультации",
+        "Профессиональная чистка зубов": "Стоматология",
+    },
+    "beauty": {
+        "Женская стрижка": "Волосы", "Окрашивание в один тон": "Волосы",
+        "Маникюр с покрытием": "Ногти", "Педикюр аппаратный": "Ногти",
+        "Укладка": "Волосы", "Ламинирование ресниц": "Брови и ресницы",
+        "Коррекция бровей": "Брови и ресницы", "Спа-уход для лица": "Лицо",
+        "Массаж лица": "Лицо", "Депиляция воском": "Тело",
+        "Дневной макияж": "Макияж", "Мужская барбер-стрижка": "Волосы",
+    },
+    "fitness": {
+        "Персональная тренировка": "Тренировки", "Групповое занятие": "Групповые",
+        "Йога для начинающих": "Йога", "Пилатес": "Групповые", "Сайкл": "Групповые",
+        "Кроссфит": "Тренировки", "Бокс": "Единоборства", "Стретчинг": "Групповые",
+        "Абонемент на месяц": "Абонементы", "Функциональный тренинг": "Тренировки",
+        "Плавание": "Бассейн", "TRX": "Тренировки",
+    },
+    "auto": {
+        "Замена масла и фильтров": "Техобслуживание", "Шиномонтаж": "Шины",
+        "Диагностика двигателя": "Диагностика", "Развал-схождение": "Шины",
+        "Замена тормозных колодок": "Техобслуживание", "Полировка кузова": "Кузов",
+        "Химчистка салона": "Мойка", "Замена ремня ГРМ": "Техобслуживание",
+        "Заправка кондиционера": "Техобслуживание",
+        "Компьютерная диагностика": "Диагностика",
+        "Замена аккумулятора": "Техобслуживание", "Антикоррозийная обработка": "Кузов",
+    },
+    "cafe": {
+        "Капучино": "Кофе", "Латте": "Кофе", "Раф ванильный": "Кофе",
+        "Эспрессо": "Кофе", "Флэт уайт": "Кофе", "Чизкейк Нью-Йорк": "Десерты",
+        "Тирамису": "Десерты", "Круассан с миндалём": "Выпечка",
+        "Сэндвич клаб": "Еда", "Поке-боул": "Еда",
+        "Смузи манго-маракуйя": "Напитки", "Матча латте": "Напитки",
+    },
+    "restaurant": {
+        "Ролл «Филадельфия»": "Роллы", "Ролл «Калифорния»": "Роллы",
+        "Унаги маки": "Роллы", "Темпура ролл": "Роллы", "Сяке нигири": "Суши",
+        "Том ям с креветками": "Супы", "Удон с курицей": "Горячее",
+        "Гёдза": "Горячее", "Спайси лосось": "Роллы", "Чука салат": "Салаты",
+        "Мисо суп": "Супы", "Сет «Токио»": "Сеты",
+    },
+    "furniture": {
+        "Угловой диван «Осло»": "Диваны", "Кресло «Лофт»": "Кресла",
+        "Шкаф-купе": "Шкафы", "Кровать двуспальная": "Кровати",
+        "Комод на 4 ящика": "Хранение", "Обеденный стол": "Столы",
+        "Стеллаж открытый": "Хранение", "Тумба под ТВ": "Хранение",
+        "Пуф мягкий": "Кресла", "Кухонный гарнитур": "Кухни",
+        "Полка навесная": "Хранение", "Зеркало напольное": "Декор",
+    },
+    "travel": {
+        "Тур в Турцию, всё включено": "Туры", "Тур в ОАЭ": "Туры",
+        "Обзорная экскурсия": "Экскурсии", "Авиабилеты туда-обратно": "Билеты",
+        "Отель 5★ на берегу": "Отели", "Морской круиз": "Круизы",
+        "Тур в Грузию": "Туры", "Сафари-тур": "Туры", "Горнолыжный тур": "Туры",
+        "Виза под ключ": "Услуги", "Индивидуальный трансфер": "Услуги",
+        "Страховка путешественника": "Услуги",
+    },
+    "education": {
+        "Курс «Python с нуля»": "Программирование", "Разговорный английский": "Языки",
+        "Подготовка к ЕГЭ": "Школьникам", "Математика для школьников": "Школьникам",
+        "Курс рисования": "Творчество", "Робототехника": "Программирование",
+        "Шахматы для детей": "Детям", "Основы дизайна": "Творчество",
+        "Уроки вокала": "Творчество", "Программирование для детей": "Программирование",
+        "Скорочтение": "Детям", "Занятия с логопедом": "Детям",
+    },
+    "realestate": {
+        "1-комн. квартира": "Квартиры", "2-комн. квартира": "Квартиры",
+        "Студия": "Студии", "Таунхаус": "Дома", "Загородный дом": "Дома",
+        "Апартаменты": "Апартаменты", "Коммерческое помещение": "Коммерческая",
+        "Земельный участок": "Участки", "Пентхаус": "Апартаменты",
+        "3-комн. квартира": "Квартиры", "Машино-место": "Коммерческая",
+        "Офис в центре": "Коммерческая",
+    },
+}
+
 # Per-domain catalog-price band as (low, high, step) in whole roubles. A generic
 # money formula (990 … 199 990) is absurd per-niche — a vitamin at 197 010 ₽, a
 # coffee at 150 000 ₽. When the domain is known, an item's *price* is drawn from
@@ -343,6 +441,22 @@ _LABEL_FIELD_TOKENS = (
     "продукт", "product", "услуга", "service", "блюдо", "позиция", "model",
     "модель",
 )
+# A catalog *category/type* enum field — its value should match the row's title
+# noun (see `_DOMAIN_NOUN_CATEGORY`). Deliberately excludes status/state vocabulary
+# so a status enum keeps the plain index spread. Correlation only fires when an
+# option actually matches, so a broad token like "тип" is safe (no match → cycle).
+_CATEGORY_FIELD_TOKENS = (
+    "categ", "категор", "group", "группа", "раздел", "рубрик", "rubric",
+    "вид", "kind", "section", "тип", "type",
+)
+# String-field token groups that outrank the niche-noun branch in `_demo_string`.
+# A label field only becomes a product noun when none of these match first — the
+# same precedence is reused to find the row's primary label field for category
+# correlation, so the two paths can never disagree about which field is the title.
+_PRE_LABEL_TOKEN_GROUPS = (
+    _IMAGE_TOKENS, _CODE_TOKENS, _EMAIL_TOKENS, _PHONE_TOKENS, _CITY_TOKENS,
+    _ADDRESS_TOKENS, _URL_TOKENS, _COMPANY_TOKENS, _STATUS_TOKENS, _PERSON_TOKENS,
+)
 
 
 @dataclass(frozen=True)
@@ -439,12 +553,20 @@ def generate_rows(
     """
     refs = references or {}
     domain = _detect_domain(entity, fields, niche)
+    # The field whose title noun a `category` enum should agree with (only when a
+    # niche is known — otherwise there's no noun to correlate against).
+    label_field = _primary_label_field(entity, fields) if domain else None
     rows: list[dict[str, Any]] = []
     for i in range(max(0, count)):
+        row_category: str | None = None
+        if domain is not None and label_field is not None:
+            noun = _niche_noun(domain, seed, entity, label_field, i)
+            row_category = _DOMAIN_NOUN_CATEGORY.get(domain, {}).get(noun)
         row: dict[str, Any] = {}
         for fname, fshape in fields.items():
             value = _field_value(
-                entity, fname, fshape, seed=seed, index=i, refs=refs, domain=domain
+                entity, fname, fshape, seed=seed, index=i, refs=refs,
+                domain=domain, row_category=row_category,
             )
             if value is None and not fshape.required:
                 # Skip optional nulls (e.g. a reference with no pool) — leaving
@@ -472,6 +594,55 @@ def _detect_domain(
     return None
 
 
+def _takes_niche_noun(entity: str, key: str) -> bool:
+    """Whether a string field named `key` resolves to a niche catalog noun in
+    `_demo_string` — true only when it's a label field that no higher-precedence
+    group (image/code/email/…/person) claims first. Lowercased `key` expected."""
+    if any(_has_token(key, group) for group in _PRE_LABEL_TOKEN_GROUPS):
+        return False
+    if _is_person_entity(entity, key):
+        return False
+    return _has_token(key, _LABEL_FIELD_TOKENS)
+
+
+def _primary_label_field(
+    entity: str, fields: Mapping[str, FieldShape]
+) -> str | None:
+    """The first string field that carries the entity's catalog title — the one
+    whose niche noun a `category` enum should agree with. None when no field
+    qualifies (e.g. a person entity, or no title-like field)."""
+    for fname, fshape in fields.items():
+        if fshape.type == "string" and _takes_niche_noun(entity, fname.lower()):
+            return fname
+    return None
+
+
+def _niche_noun(
+    domain: str, seed: str, entity: str, fname: str, index: int
+) -> str:
+    """The catalog noun for one row: spread by index off a seed-varied start so a
+    page of rows is distinct. Single source for both the title value and the
+    category it correlates with."""
+    pool = _DOMAIN_NOUNS[domain]
+    start = _hash_int(seed, entity, fname) % len(pool)
+    return pool[(start + index) % len(pool)]
+
+
+def _match_category_option(options: Sequence[str], category: str) -> str | None:
+    """The enum option that best names `category`, or None if none does. Matches
+    case-insensitively by containment (either way) or a shared 5-char stem (so
+    "Десерты" ≈ "Десерт"), keeping correlation high-precision — an unrelated set
+    of options yields None and the caller keeps the plain index spread."""
+    c = category.lower()
+    for opt in options:
+        o = opt.lower()
+        if c in o or o in c:
+            return opt
+        if len(c) >= 5 and len(o) >= 5 and c[:5] == o[:5]:
+            return opt
+    return None
+
+
 # ── value derivation ─────────────────────────────────────────────────────────
 
 
@@ -484,6 +655,7 @@ def _field_value(
     index: int,
     refs: Mapping[str, Sequence[str]],
     domain: str | None = None,
+    row_category: str | None = None,
 ) -> Any:
     key = fname.lower()
 
@@ -496,7 +668,13 @@ def _field_value(
     if fshape.type == "enum":
         if not fshape.options:
             return None
-        # Cycle by index so a catalog spreads across every option deterministically.
+        # A category/type enum agrees with the row's title noun when an option
+        # matches it — so a "Витамин C" row reads "Витамины", not "Косметика".
+        if row_category and _has_token(key, _CATEGORY_FIELD_TOKENS):
+            match = _match_category_option(fshape.options, row_category)
+            if match is not None:
+                return match
+        # Otherwise cycle by index so a catalog spreads across every option.
         return fshape.options[index % len(fshape.options)]
 
     if fshape.type == "boolean":
@@ -551,11 +729,8 @@ def _demo_string(
     if _has_token(key, _PERSON_TOKENS) or _is_person_entity(entity, key):
         return _pick(_PERSON_NAMES, seed, entity, fname, index)
     # The entity's primary label in a recognised niche → a real catalog product.
-    # Spread by index (so a page of rows is distinct) off a seed-varied start.
-    if domain is not None and _has_token(key, _LABEL_FIELD_TOKENS):
-        pool = _DOMAIN_NOUNS[domain]
-        start = _hash_int(seed, entity, fname) % len(pool)
-        return pool[(start + index) % len(pool)]
+    if domain is not None and _takes_niche_noun(entity, key):
+        return _niche_noun(domain, seed, entity, fname, index)
     # A "thing" label: <Entity-label> «Adjective» — always on-topic, clearly demo.
     return f"{_pick(_LABELS, seed, entity, fname, index)} {index + 1}"
 

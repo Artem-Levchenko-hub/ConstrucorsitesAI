@@ -550,3 +550,155 @@ def test_image_tiles_vary_across_a_page() -> None:
     f = _fields(image={"type": "string", "required": True})
     rows = ds.generate_rows("Product", f, count=8, seed="s")
     assert len({r["image"] for r in rows}) > 1
+
+
+# ── title ↔ category coherence (a niche catalog's category must match the item) ─
+
+
+def test_every_domain_noun_has_a_category() -> None:
+    """Sync guard: every catalog noun maps to a category, so a freshly added noun
+    can never silently fall through to a decorrelated category."""
+    assert set(ds._DOMAIN_NOUN_CATEGORY) == set(ds._DOMAIN_NOUNS)
+    for domain, nouns in ds._DOMAIN_NOUNS.items():
+        mapping = ds._DOMAIN_NOUN_CATEGORY[domain]
+        for noun in nouns:
+            assert noun in mapping, (domain, noun)
+            assert mapping[noun], (domain, noun)  # non-empty
+
+
+def test_pharmacy_category_correlates_with_title() -> None:
+    """A vitamin must never land in the cosmetics category, and a cream must never
+    land in the vitamins category — the single most obviously-wrong catalog defect."""
+    raw = {
+        "name": "Product",
+        "access": "public",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "category": {
+                "type": "enum",
+                "options": ["Витамины", "БАДы", "Косметика"],
+                "required": True,
+            },
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(shape.name, shape.fields, count=12, seed="s")
+    saw_vitamin = saw_cosmetic = False
+    for r in rows:
+        title, cat = r["title"], r["category"]
+        assert cat in ("Витамины", "БАДы", "Косметика")
+        if title.startswith("Витамин"):
+            assert cat == "Витамины", (title, cat)
+            saw_vitamin = True
+        if "Крем" in title or "Маска" in title:
+            assert cat == "Косметика", (title, cat)
+            saw_cosmetic = True
+    assert saw_vitamin and saw_cosmetic  # the page actually exercised both
+
+
+def test_cafe_coffee_drinks_land_in_coffee_category() -> None:
+    raw = {
+        "name": "Position",
+        "access": "public",
+        "fields": {
+            "name": {"type": "string", "required": True},
+            "категория": {
+                "type": "enum",
+                "options": ["Кофе", "Десерты", "Выпечка", "Напитки"],
+                "required": True,
+            },
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(shape.name, shape.fields, count=12, seed="c", niche="kofeinia")
+    coffee = {"Капучино", "Латте", "Раф ванильный", "Эспрессо", "Флэт уайт"}
+    for r in rows:
+        if r["name"] in coffee:
+            assert r["категория"] == "Кофе", (r["name"], r["категория"])
+
+
+def test_furniture_sofa_lands_in_sofa_category() -> None:
+    raw = {
+        "name": "Product",
+        "access": "public",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "тип": {
+                "type": "enum",
+                "options": ["Диваны", "Шкафы", "Столы", "Хранение"],
+            },
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(shape.name, shape.fields, count=12, seed="f", niche="mebel-shourum")
+    for r in rows:
+        if r["title"].startswith("Угловой диван"):
+            assert r["тип"] == "Диваны", (r["title"], r["тип"])
+
+
+def test_category_falls_back_to_index_cycle_when_no_option_matches() -> None:
+    """Enum options that match no noun-category keep the deterministic index spread
+    (zero regression for catalogs whose categories aren't product-type buckets)."""
+    raw = {
+        "name": "Product",
+        "access": "public",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "category": {
+                "type": "enum",
+                "options": ["Новинки", "Хиты продаж", "Распродажа"],
+                "required": True,
+            },
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(shape.name, shape.fields, count=6, seed="s")  # pharmacy via title? no
+    opts = ["Новинки", "Хиты продаж", "Распродажа"]
+    # title here has no niche vocab/slug → no domain → pure index cycle preserved
+    assert [r["category"] for r in rows] == [opts[i % 3] for i in range(6)]
+
+
+def test_status_enum_is_not_correlated_even_in_a_niche() -> None:
+    """Only category-like fields correlate; a status/state enum keeps the index
+    spread even when its option words happen to look like categories."""
+    raw = {
+        "name": "Product",
+        "access": "public",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "category": {  # gives the niche signal (pharmacy)
+                "type": "enum",
+                "options": ["Витамины", "БАДы", "Косметика"],
+            },
+            "статус": {
+                "type": "enum",
+                "options": ["В наличии", "Под заказ"],
+            },
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(shape.name, shape.fields, count=6, seed="s")
+    opts = ["В наличии", "Под заказ"]
+    assert [r["статус"] for r in rows] == [opts[i % 2] for i in range(6)]
+
+
+def test_category_correlation_is_deterministic() -> None:
+    raw = {
+        "name": "Product",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "category": {"type": "enum", "options": ["Витамины", "БАДы", "Косметика"]},
+        },
+    }
+    shape = ds.parse_entity(raw)
+    a = ds.generate_rows(shape.name, shape.fields, count=10, seed="p1")
+    b = ds.generate_rows(shape.name, shape.fields, count=10, seed="p1")
+    assert a == b
+
+
+def test_match_category_option_handles_stem_and_substring() -> None:
+    m = ds._match_category_option
+    assert m(("Витамины", "БАДы"), "Витамины") == "Витамины"
+    assert m(("Десерты и выпечка", "Кофе"), "Десерты") == "Десерты и выпечка"  # substring
+    assert m(("Десерт", "Кофе"), "Десерты") == "Десерт"  # stem (5-char prefix)
+    assert m(("Хиты", "Новинки"), "Витамины") is None  # no match → fall back
