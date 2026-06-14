@@ -65,6 +65,20 @@ _PERSON_NAMES: tuple[str, ...] = (
     "Николай Степанов",
 )
 
+# Email local-parts (see `_demo_email`). A person entity's email reads as a
+# personal mailbox (a translit of the `_PERSON_NAMES` first names); any other
+# entity gets a business mailbox. Both are pure-ASCII so they're valid local
+# parts on the slug-derived domain. The two pools are kept disjoint (asserted in
+# tests) so the entity-kind branch is observable.
+_EMAIL_HANDLES_PERSON: tuple[str, ...] = (
+    "anna", "dmitriy", "elena", "sergey", "mariya", "aleksey",
+    "olga", "ivan", "natalya", "andrey", "ekaterina", "pavel",
+    "yuliya", "mihail", "tatyana", "nikolay",
+)
+_EMAIL_HANDLES_BIZ: tuple[str, ...] = (
+    "info", "zakaz", "sales", "office", "hello", "shop", "client", "support",
+)
+
 _COMPANIES: tuple[str, ...] = (
     "ООО «Вектор»",
     "Группа «Альфа»",
@@ -824,6 +838,10 @@ def generate_rows(
     """
     refs = references or {}
     domain = _detect_domain(entity, fields, niche)
+    # The app's own brand domain for email fields (`anna@salon-krasoty.ru`),
+    # derived from the slug. None for a niche-less / non-ASCII-slug call → email
+    # keeps its byte-identical legacy form (0 regression).
+    email_domain = _email_domain(niche)
     # The field whose title noun a `category` enum should agree with (only when a
     # niche is known — otherwise there's no noun to correlate against).
     label_field = _primary_label_field(entity, fields) if domain else None
@@ -840,7 +858,7 @@ def generate_rows(
             value = _field_value(
                 entity, fname, fshape, seed=seed, index=i, refs=refs,
                 domain=domain, row_category=row_category,
-                row_description=row_description,
+                row_description=row_description, email_domain=email_domain,
             )
             if value is None and not fshape.required:
                 # Skip optional nulls (e.g. a reference with no pool) — leaving
@@ -940,6 +958,7 @@ def _field_value(
     domain: str | None = None,
     row_category: str | None = None,
     row_description: str | None = None,
+    email_domain: str | None = None,
 ) -> Any:
     key = fname.lower()
 
@@ -985,11 +1004,17 @@ def _field_value(
         return _pick(_SENTENCES, seed, entity, fname, index)
 
     # string (and any unknown type, coerced to string upstream)
-    return _demo_string(entity, key, seed, fname, index, domain)
+    return _demo_string(entity, key, seed, fname, index, domain, email_domain)
 
 
 def _demo_string(
-    entity: str, key: str, seed: str, fname: str, index: int, domain: str | None = None
+    entity: str,
+    key: str,
+    seed: str,
+    fname: str,
+    index: int,
+    domain: str | None = None,
+    email_domain: str | None = None,
 ) -> str:
     if _has_token(key, _IMAGE_TOKENS):
         # A real, always-rendering tile — not a placeholder word the browser would
@@ -1000,8 +1025,7 @@ def _demo_string(
         prefix = "ART" if _has_token(key, ("артикул", "vendor")) else "SKU"
         return f"{prefix}-{_hash_int(seed, entity, fname, index, 'c') % 9000 + 1000}"
     if _has_token(key, _EMAIL_TOKENS):
-        first = _hash_int(seed, entity, fname, index, "u")
-        return f"user{first % 9000 + 1000}@example.ru"
+        return _demo_email(entity, seed, fname, index, email_domain)
     if _has_token(key, _PHONE_TOKENS):
         n = _hash_int(seed, entity, fname, index, "p")
         return f"+7 (9{n % 100:02d}) {n // 100 % 1000:03d}-{n % 100:02d}-{n // 7 % 100:02d}"
@@ -1024,6 +1048,21 @@ def _demo_string(
         return _niche_noun(domain, seed, entity, fname, index)
     # A "thing" label: <Entity-label> «Adjective» — always on-topic, clearly demo.
     return f"{_pick(_LABELS, seed, entity, fname, index)} {index + 1}"
+
+
+def _demo_email(
+    entity: str, seed: str, fname: str, index: int, email_domain: str | None
+) -> str:
+    """A believable demo email. A `user1234@example.ru` placeholder is the most
+    obviously fake value left on a contact card; when the app's slug gives a
+    brand domain we use it (`anna@salon-krasoty.ru`), with a name-like handle for
+    person entities and a business mailbox otherwise. No brand domain (niche-less
+    or non-ASCII slug) → the byte-identical legacy form, so nothing regresses."""
+    if email_domain is None:
+        first = _hash_int(seed, entity, fname, index, "u")
+        return f"user{first % 9000 + 1000}@example.ru"
+    pool = _EMAIL_HANDLES_PERSON if _entity_is_person(entity) else _EMAIL_HANDLES_BIZ
+    return f"{_pick(pool, seed, entity, fname, index)}@{email_domain}"
 
 
 def _demo_image(
@@ -1109,6 +1148,34 @@ def _pick(pool: Sequence[str], *parts: object) -> str:
 
 def _has_token(key: str, tokens: tuple[str, ...]) -> bool:
     return any(t in key for t in tokens)
+
+
+def _entity_is_person(entity: str) -> bool:
+    """Whether the entity itself models a person (Client, Doctor, Employee …) —
+    used to pick a personal vs. business email mailbox."""
+    e = entity.lower()
+    return any(h in e for h in _PERSON_ENTITY_HINT)
+
+
+def _email_domain(niche: str | None) -> str | None:
+    """The app's brand email domain (`salon-krasoty.ru`) from its slug, or None
+    when no usable ASCII brand is present (Cyrillic-only hint, empty, or absent)
+    — the caller then keeps the legacy `example.ru` form. Collapses repeated
+    hyphens and caps the label at 24 chars on a hyphen boundary so the domain
+    stays readable."""
+    if not niche:
+        return None
+    slug = _slugish(niche)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    slug = slug.strip("-")
+    # `_slugish` returns "item" for an all-non-ASCII string — treat that (and any
+    # too-short / letter-less result) as "no brand" and fall back.
+    if slug == "item" or len(slug) < 3 or not any(c.isalpha() for c in slug):
+        return None
+    if len(slug) > 24:
+        slug = slug[:24].rsplit("-", 1)[0] or slug[:24]
+    return f"{slug}.ru"
 
 
 def _is_person_entity(entity: str, key: str) -> bool:

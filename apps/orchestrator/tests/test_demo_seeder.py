@@ -917,3 +917,74 @@ def test_category_synonyms_are_well_formed() -> None:
             assert words, (domain, primary)  # no empty tuples — drop the key instead
             for w in words:
                 assert len(w) >= 5, (domain, primary, w)
+
+
+# ── niche-aware email (RULE-10 #8) ───────────────────────────────────────────
+# A throwaway `user1234@example.ru` is the most obviously fake value left on a
+# catalog/contact card. When the app's own slug is known the email's domain is
+# the brand (`anna@salon-krasoty.ru`); person entities get a name-like handle,
+# others a business mailbox. No ASCII slug → byte-identical legacy fallback.
+
+
+def test_email_uses_slug_domain_for_known_niche() -> None:
+    f = _fields(email={"type": "string", "required": True})
+    rows = ds.generate_rows(
+        "Doctor", f, count=8, seed="s", niche="salon-krasoty-moskva"
+    )
+    assert all(r["email"].endswith("@salon-krasoty-moskva.ru") for r in rows)
+    assert all("example.ru" not in r["email"] for r in rows)  # no fake domain
+
+
+def test_email_person_entity_has_name_like_handle() -> None:
+    f = _fields(email={"type": "string", "required": True})
+    rows = ds.generate_rows("Doctor", f, count=10, seed="s", niche="klinika-zdorovya")
+    locals_ = [r["email"].split("@")[0] for r in rows]
+    assert all(loc in ds._EMAIL_HANDLES_PERSON for loc in locals_)
+
+
+def test_email_business_entity_has_mailbox_handle() -> None:
+    f = _fields(email={"type": "string", "required": True})
+    rows = ds.generate_rows("Product", f, count=10, seed="s", niche="apteka-online")
+    locals_ = [r["email"].split("@")[0] for r in rows]
+    assert all(loc in ds._EMAIL_HANDLES_BIZ for loc in locals_)
+
+
+def test_email_falls_back_to_legacy_when_no_slug() -> None:
+    f = _fields(email={"type": "string", "required": True})
+    rows = ds.generate_rows("Client", f, count=6, seed="s")  # niche=None
+    assert all(re.fullmatch(r"user\d{4}@example\.ru", r["email"]) for r in rows)
+
+
+def test_email_falls_back_when_slug_has_no_ascii_brand() -> None:
+    f = _fields(email={"type": "string", "required": True})
+    rows = ds.generate_rows("Client", f, count=6, seed="s", niche="недвижимость")
+    assert all(r["email"].endswith("@example.ru") for r in rows)
+
+
+def test_email_is_valid_shape_and_deterministic() -> None:
+    f = _fields(email={"type": "string", "required": True})
+    a = ds.generate_rows("Doctor", f, count=8, seed="p1", niche="cafe-aroma")
+    b = ds.generate_rows("Doctor", f, count=8, seed="p1", niche="cafe-aroma")
+    assert a == b
+    for r in a:
+        assert re.fullmatch(r"[a-z0-9.-]+@[a-z0-9.-]+\.ru", r["email"]), r["email"]
+
+
+def test_email_domain_caps_overlong_slug() -> None:
+    f = _fields(email={"type": "string", "required": True})
+    rows = ds.generate_rows(
+        "Client", f, count=4, seed="s",
+        niche="ochen-dlinnyy-slug-internet-magazina-tovarov-dlya-doma",
+    )
+    dom = rows[0]["email"].split("@")[1]
+    assert dom.endswith(".ru")
+    assert len(dom) <= 27  # 24-char slug cap + ".ru"
+    assert "--" not in dom
+
+
+def test_email_handle_pools_are_disjoint_and_ascii() -> None:
+    """Person and business handles never overlap (so the entity-kind test is
+    meaningful) and are pure lowercase ASCII (valid local-parts)."""
+    assert not (set(ds._EMAIL_HANDLES_PERSON) & set(ds._EMAIL_HANDLES_BIZ))
+    for h in (*ds._EMAIL_HANDLES_PERSON, *ds._EMAIL_HANDLES_BIZ):
+        assert h == h.lower() and h.isascii() and h.isalnum()
