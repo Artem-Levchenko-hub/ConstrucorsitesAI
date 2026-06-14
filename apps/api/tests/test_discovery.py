@@ -17,12 +17,17 @@ import pytest
 
 from omnia_api.services import discovery
 from omnia_api.services.discovery import (
+    _PLAN_MAX_QUESTIONS,
     ASK,
     BUILD,
     MAX_DISCOVERY_QUESTIONS,
+    PlannedQuestion,
     _infer_stack_from_text,
+    plan_discovery_questions,
     run_discovery,
+    serve_planned_question,
     wants_build_now,
+    zero_question_build,
 )
 
 # ─── Gateway stub ────────────────────────────────────────────────────────
@@ -595,3 +600,191 @@ async def test_forced_build_pure_landing_stays_static(
     )
     assert result.action == BUILD
     assert result.stack == "static"
+
+
+# ─── Batch discovery plan (owner rule 13 #1 — NORTH STAR pillar 2) ───────────
+
+
+def _plan_envelope(questions: list[dict[str, Any]]) -> str:
+    """Wrap a list of question dicts in the model's `{"questions":[…]}` reply."""
+    return json.dumps({"questions": questions})
+
+
+async def test_plan_returns_tailored_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One upfront pass yields the WHOLE set of product-tailored questions, each
+    cleaned (chips kept, multi-select honoured)."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            _plan_envelope(
+                [
+                    {
+                        "message": "Какие ступени обучения в школе?",
+                        "choices": ["Начальная", "Средняя", "Старшая"],
+                        "multiSelect": True,
+                    },
+                    {
+                        "message": "Какой тон сайта ближе?",
+                        "choices": ["Строгий", "Дружелюбный"],
+                        "multiSelect": False,
+                    },
+                ]
+            )
+        ),
+    )
+    plan = await plan_discovery_questions("сайт школы МБОУ СОШ 15")
+    assert [q.message for q in plan] == [
+        "Какие ступени обучения в школе?",
+        "Какой тон сайта ближе?",
+    ]
+    assert plan[0].choices == ("Начальная", "Средняя", "Старшая")
+    assert plan[0].multi_select is True  # model flag honoured
+    assert plan[1].multi_select is False
+    assert all(q.allow_custom for q in plan)  # «Другое» never trapped
+
+
+async def test_plan_infers_multi_select_when_model_omits_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A "какие разделы" question gets multi-select even if the model forgot the
+    flag — the same deterministic floor as the per-question path."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            _plan_envelope(
+                [{"message": "Какие разделы нужны на сайте?", "choices": ["Новости"]}]
+            )
+        ),
+    )
+    plan = await plan_discovery_questions("сайт школы")
+    assert plan[0].multi_select is True
+
+
+async def test_plan_question_without_chips_gets_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A question the model returned without choices still lands with chips — the
+    discovery card is never bare text (V2.1)."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            _plan_envelope([{"message": "Расскажите про проект?", "choices": []}])
+        ),
+    )
+    plan = await plan_discovery_questions("стартап")
+    assert plan[0].choices  # non-empty floor
+
+
+async def test_plan_caps_at_max_questions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model that floods 8 questions is capped — onboarding is not an
+    inquisition."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            _plan_envelope(
+                [{"message": f"Вопрос {i}?", "choices": ["Да", "Нет"]} for i in range(8)]
+            )
+        ),
+    )
+    plan = await plan_discovery_questions("любая идея")
+    assert len(plan) == _PLAN_MAX_QUESTIONS
+
+
+async def test_plan_falls_back_to_meaningful_batch_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A gateway failure degrades to a MEANINGFUL batch (general→detail), not a
+    single generic question (owner rule 13 #1 fail-soft)."""
+    _install(monkeypatch, exc=RuntimeError("gateway down"))
+    plan = await plan_discovery_questions("сайт школы")
+    assert len(plan) >= 3  # a real batch, not one lone question
+    assert all(q.message for q in plan)
+    assert all(q.choices for q in plan)  # each carries chips
+    # general→detail: the questions are distinct, not one repeated.
+    assert len({q.message for q in plan}) == len(plan)
+
+
+async def test_plan_falls_back_on_unparseable_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch, resp=_gateway_returning("не json вообще"))
+    plan = await plan_discovery_questions("идея")
+    assert len(plan) >= 3
+
+
+async def test_plan_falls_back_on_wrong_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid JSON object without a `questions` list degrades to the batch."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(json.dumps({"foo": "bar"})),
+    )
+    plan = await plan_discovery_questions("идея")
+    assert len(plan) >= 3
+
+
+# ─── serve_planned_question (pure, no gateway) ───────────────────────────────
+
+
+def _sample_plan() -> list[dict[str, Any]]:
+    return [
+        PlannedQuestion(
+            message="Что за продукт?", choices=("A", "B"), multi_select=False
+        ).to_dict(),
+        PlannedQuestion(
+            message="Какие разделы нужны?", choices=("Новости", "Контакты")
+        ).to_dict(),
+    ]
+
+
+def test_serve_advances_through_plan_without_gateway() -> None:
+    """Each turn serves the next pre-computed question — no gateway call needed."""
+    plan = _sample_plan()
+    first = serve_planned_question(plan, 0)
+    second = serve_planned_question(plan, 1)
+    assert first is not None and first.action == ASK
+    assert first.message == "Что за продукт?"
+    assert first.choices == ("A", "B")
+    assert second is not None and second.message == "Какие разделы нужны?"
+    assert first.message != second.message  # advances
+
+
+def test_serve_returns_none_when_plan_exhausted() -> None:
+    """Past the last question → None, so the caller builds from the answers."""
+    plan = _sample_plan()
+    assert serve_planned_question(plan, 2) is None
+    assert serve_planned_question(plan, 99) is None
+
+
+def test_serve_reapplies_multi_select_floor() -> None:
+    """A persisted "разделы" question is served multi-select even if it was
+    stored before the inference rule existed."""
+    plan = [{"message": "Какие разделы нужны?", "choices": ["Новости"]}]
+    served = serve_planned_question(plan, 0)
+    assert served is not None and served.multi_select is True
+
+
+def test_serve_handles_malformed_plan() -> None:
+    """Junk in the plan slot degrades to None rather than raising (R-10)."""
+    assert serve_planned_question(None, 0) is None
+    assert serve_planned_question("not a list", 0) is None
+    assert serve_planned_question([{"no_message": True}], 0) is None
+
+
+# ─── zero_question_build (shared floor) ──────────────────────────────────────
+
+
+def test_zero_question_build_skips_popup_for_rich_prompt() -> None:
+    """A prompt that pins ≥2 design axes builds immediately (shared with the batch
+    path, so the popup never appears in either)."""
+    result = zero_question_build(
+        [], "тёмный минималистичный лендинг с каталогом и отзывами на фиолетовом"
+    )
+    assert result is not None and result.action == BUILD
+    assert "каталог" in result.brief
+
+
+def test_zero_question_build_returns_none_for_thin_prompt() -> None:
+    """A thin prompt needs a question — the floor must not over-trigger."""
+    assert zero_question_build([], "сделай сайт") is None

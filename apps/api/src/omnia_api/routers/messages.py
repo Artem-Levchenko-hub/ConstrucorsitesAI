@@ -62,8 +62,11 @@ from omnia_api.services.discovery import (
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
+    plan_discovery_questions,
     run_discovery,
+    serve_planned_question,
     wants_build_now,
+    zero_question_build,
 )
 from omnia_api.services.file_extractor import (
     UnsafePathError,
@@ -410,6 +413,49 @@ def _compose_build_prompt(result: DiscoveryResult) -> str:
     return brief
 
 
+async def _batch_discovery_turn(
+    project: Project,
+    history: list[dict[str, str]],
+    prompt: str,
+    *,
+    asked_count: int,
+    force_build: bool,
+) -> DiscoveryResult:
+    """Batch discovery (owner rule 13 #1 — NORTH STAR pillar 2).
+
+    On the FIRST turn we plan the WHOLE set of product-tailored questions in ONE
+    upfront gateway pass (unless the prompt is rich enough to skip the popup
+    entirely) and stash it on ``project.discovery_plan`` (committed with the
+    message rows by the caller). Every turn then SERVES the next pre-computed
+    question with NO further gateway call — zero wait between steps. Once the plan
+    is exhausted (all questions answered) — or the user forces it — we build,
+    reusing ``run_discovery``'s battle-tested brief/stack compilation.
+
+    Never raises (R-10): ``plan_discovery_questions`` degrades to a deterministic
+    batch, and the exhausted/forced path delegates to the fail-soft builder.
+    """
+    if force_build:
+        return await run_discovery(
+            history, prompt, asked_count=asked_count, force_build=True
+        )
+    # Plan once, on the first turn, when nothing is stashed yet. A first prompt
+    # that already pins the design wins the zero-question shortcut and never gets
+    # a plan (the popup never appears).
+    if asked_count == 0 and not project.discovery_plan:
+        zero = zero_question_build(history, prompt)
+        if zero is not None:
+            return zero
+        questions = await plan_discovery_questions(prompt)
+        project.discovery_plan = [q.to_dict() for q in questions]
+    ask = serve_planned_question(project.discovery_plan or [], asked_count)
+    if ask is not None:
+        return ask
+    # Plan exhausted — every question answered → build from the full Q&A.
+    return await run_discovery(
+        history, prompt, asked_count=asked_count, force_build=True
+    )
+
+
 async def _ensure_owner(session: SessionDep, project_id: UUID, user_id: UUID) -> Project:
     project = await session.get(Project, project_id)
     if project is None or project.owner_id != user_id:
@@ -564,12 +610,24 @@ async def post_prompt(
             {"role": m.role, "content": m.content} for m in _rows if m.content
         ]
         _asked = sum(1 for m in _rows if m.role == "assistant")
-        discovery_result = await run_discovery(
-            _history,
-            payload.prompt,
-            asked_count=_asked,
-            force_build=wants_build_now(payload.prompt),
-        )
+        if settings.use_batch_discovery:
+            # Plan all 3–4 product-tailored questions in ONE upfront pass, then
+            # serve them with zero per-question wait (owner rule 13 #1). The plan
+            # is stashed on ``project`` and persisted by the commit below.
+            discovery_result = await _batch_discovery_turn(
+                project,
+                _history,
+                payload.prompt,
+                asked_count=_asked,
+                force_build=wants_build_now(payload.prompt),
+            )
+        else:
+            discovery_result = await run_discovery(
+                _history,
+                payload.prompt,
+                asked_count=_asked,
+                force_build=wants_build_now(payload.prompt),
+            )
         if discovery_result.action == DISCOVERY_BUILD:
             # Build now — the compiled brief (with the recommended stack folded in)
             # becomes the generator's prompt; the raw idea stays as the user turn.

@@ -272,6 +272,15 @@ class Settings(BaseSettings):
     # bypassed. Kill switch for instant rollback to the batch clarify (R-10):
     # USE_PROGRESSIVE_DISCOVERY=false.
     use_progressive_discovery: bool = Field(default=True)
+    # Batch discovery (2026-06-14, owner rule 13 #1 — NORTH STAR pillar 2). Within
+    # progressive discovery, plan the WHOLE set of 3–4 product-tailored questions
+    # in ONE upfront gateway pass (right after the first prompt), persist them on
+    # `Project.discovery_plan`, then serve one per turn with NO further gateway
+    # call — instant between steps, no per-question minute-long wait, and every
+    # question is about the user's actual product (not a generic "тип сайта"
+    # timeout fallback). Kill switch (R-10): USE_BATCH_DISCOVERY=false reverts to
+    # the per-question conversational discovery.
+    use_batch_discovery: bool = Field(default=True)
     # Auto stack-routing (2026-06-09, owner P1 — last mile of zero-friction).
     # When progressive discovery decides to BUILD and recommends a container
     # stack (fullstack / nextjs_entities) for a still-static project, the server
