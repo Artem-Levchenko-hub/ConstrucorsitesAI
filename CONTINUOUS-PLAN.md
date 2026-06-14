@@ -613,6 +613,20 @@
 
 ## 7. ЛОГ ИТЕРАЦИЙ
 
+## 2026-06-14 11:25–11:5x MSK — RULE-10 #11: BELIEVABLE POLAR BOOLEAN FLAGS В DEMO-SEEDER — конец «Нет в наличии» на ⅔ каталога [x] (generator-quality §0.10; prod-deployed + LIVE-verified на задеплоенном бинарнике, money-free/0 LLM)
+
+**Выбор:** stop-gate OK (now 11:25 < HARD-STOP 2026-06-17 10:17). Lock ACQUIRED (cross-machine VPS mkdir-mutex). Нет IN-FLIGHT. По §0.10 (OWNER-приоритет, перебивает money-free-курс: ПОДНИМАЙ реальное качество генерации, НЕ строй новые ворота) продолжил RULE-10 demo-seeder волну — следующий видимый realism-дефект.
+
+**Дефект (pillar 1, симметричен RULE-10 #9 «believable rating»):** `_field_value` boolean-ветка отдавала нейтральный ~⅓-true микс ВСЕМ булевым полям. Но *полярный* каталожный флаг ломает первый экран: in-stock/active/published-флаг = false на ⅔ карточек → «мёртвый магазин»; archived/hidden/blocked-флаг = true на ⅓ → «мусорный каталог». `data_gate.py` мерит только `MIN_ROWS≥6` → класс негейчен.
+
+**Фикс (money-free, 1 файл рантайма + тесты):** два token-набора в `demo_seeder.py` — `_BOOL_POSITIVE_TOKENS` (налич/доступ/актив/опубликов/включ/хит/новинк/рекоменд/верифиц/подтвержд + available/in_stock/published/featured/visible/verified…) → skew TRUE-heavy (`h%4!=0` ≈¾); `_BOOL_NEGATIVE_TOKENS` (снят/архив/заблок/удал/скрыт/забан/неактив/недоступ/выключ/запрещ + archived/disabled/hidden/deleted/banned/blocked/inactive/unavailable/out_of_stock) → skew FALSE-heavy (`h%4==0` ≈¼). Negative проверяется ПЕРВЫМ → негированный позитив («недоступен» ⊃ «доступ») классифицируется по смыслу, не по стему. Нераспознанный boolean → байт-идентичный нейтральный микс (`h%3==0`) → 0 регрессии.
+
+**TDD/ратчет:** 3 high-level регресс-теста в `test_demo_seeder.py` (positive-skew >2× / negative-skew >2× / neutral-unchanged byte-identical) пиннят класс — рецидив на новой нише невозможен. Существующий `test_boolean_field_is_bool_and_mixed` (`done`, нейтральное) остаётся зелёным.
+
+**Гейт:** ruff ✓, mypy чисто на demo_seeder.py (2 mypy-ошибки — `postgres_admin.py`/`runtime.py`, НЕ тронуты мной, подтверждён байт-идентичный diff vs origin/main = pre-existing); `test_demo_seeder` 94/94 зелёные; полная orchestrator-сюита 227 passed, 3 failed = pre-existing env (`/opt/omnia-runtime` отсутствует на Mac — provisioner-тесты, не связаны).
+
+**Доставка:** commit `b567d89` → push origin main ✓ → прод `cd /opt/omnia && git fetch + merge --ff-only` (грязное дерево, НЕ rebase) → `sudo systemctl restart omnia-orchestrator` → active. **LIVE-verify на задеплоенном бинарнике** (`/opt/omnia/apps/orchestrator/.venv/bin/python`, 40 seeds×12): `в_наличии`=75% true, `снят_с_продажи`=22% true, `is_paid`=33% (нейтральное, не тронуто) — ровно как спроектировано. Health: orchestrator `/health` 200, front `https://constructor.lead-generator.ru` 200, web-container 200. Browser-E2E full-app N/A (детерминир. seeder-изменение, доказано на deployed-binary = установленный money-free RULE-10 паттерн #9/#10; свежий апп = платный LLM-gen, не оправдан для proven-детерминированного твика). Lock released.
+
 ## 2026-06-14 11:16–11:4x MSK — V1.17 СЛАЙС 3 [x→ostatok]: HIGH-LEVEL CATALOG-REALISM РЕГРЕСС в orchestrator — RULE-10 волна стала ратчетом У ИСТОЧНИКА сидера (push-only, money-free/0 LLM/browser-free)
 
 **Выбор.** Stop-gate 11:16 < HARD-STOP 2026-06-17 10:17 → работаю. Lock ACQUIRED (cross-machine mkdir-mutex lh-server, RUN MacBook-Air-Roman). Sync ff-only (HEAD ef14825). V1.17 IN-FLIGHT ([~], пикап v2.16 #1): CORE-гейт `c5bd544` + фолд в accept_gauntlet `1703d3e` шипнуты; взял первый из «ОСТАТОК»: high-level `test_demo_seeder` регресс.
