@@ -2808,6 +2808,23 @@ async def _process_prompt(
             except Exception as _strip_exc:
                 print(f"[PP] strip_unresolved skipped: {_strip_exc!r}", flush=True)
 
+        # ── Entity theme-token guard — deterministic, BEFORE the audit ────────
+        # Cheap writer models leak raw neutral utilities (text-gray-800,
+        # bg-gray-100, bg-white) instead of theme tokens, so the app freezes grey
+        # and ignores the art-director's --primary/--foreground. Rewrite them to
+        # tokens here (the .tsx analogue of palette_guard) so the shipped app
+        # actually re-themes and the audit's hardcoded-colour class clears.
+        # Semantic status colours (green/yellow/red) are left untouched.
+        if files and not surgical and project_template in ("nextjs_entities", "fullstack"):
+            try:
+                from omnia_api.services.entity_theme import tokenize_neutrals
+
+                files, _tok_n = tokenize_neutrals(files)
+                if _tok_n:
+                    print(f"[PP] entity_theme tokenized={_tok_n} neutral utils", flush=True)
+            except Exception as _tok_exc:
+                print(f"[PP] entity_theme skipped: {_tok_exc!r}", flush=True)
+
         # ── Structure audit (entity/app builds) — non-blocking smoke detector ─
         # Entity/fullstack apps skip the acceptance gate (container-backed), so we
         # at least LOG drift from the app-UI doctrine (hardcoded colours, fixed-px
