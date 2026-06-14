@@ -264,7 +264,9 @@ async def hot_reload(
     # Seed PUBLIC entity catalogs with demo rows so the first browse screen
     # isn't an empty-state (NORTH STAR pillars 1 & 4). Idempotent (only fills
     # empty catalogs) and fail-soft (never raises) — see demo_seed_writer.
-    seeded = await demo_seed_writer.seed_demo_data(payload.project_id, payload.files)
+    seeded = await demo_seed_writer.seed_demo_data(
+        payload.project_id, payload.files, niche=slug
+    )
 
     # If the AI touched the DB schema or migrations, push it to Postgres now.
     schema_touched = any(

@@ -43,11 +43,12 @@ _SEEDABLE_ACCESS = frozenset({"public"})
 
 
 def _build_batches(
-    project_id: UUID, files: Mapping[str, str]
+    project_id: UUID, files: Mapping[str, str], niche: str | None = None
 ) -> dict[str, list[dict[str, Any]]]:
     """Parse the entity schemas in `files` and generate demo rows for each
     PUBLIC entity. The project id is the deterministic seed, so the same app
-    yields byte-identical demo data on every run and machine."""
+    yields byte-identical demo data on every run and machine. `niche` (the app
+    slug) lets the seeder pick niche-realistic catalog titles."""
     seed = str(project_id)
     batches: dict[str, list[dict[str, Any]]] = {}
     for path, content in files.items():
@@ -64,7 +65,7 @@ def _build_batches(
             continue
         count = demo_seeder.row_count(shape.name, seed)
         rows = demo_seeder.generate_rows(
-            shape.name, shape.fields, count=count, seed=seed
+            shape.name, shape.fields, count=count, seed=seed, niche=niche
         )
         if rows:
             batches[shape.name] = rows
@@ -72,16 +73,19 @@ def _build_batches(
 
 
 async def seed_demo_data(
-    project_id: UUID, files: Mapping[str, str]
+    project_id: UUID, files: Mapping[str, str], niche: str | None = None
 ) -> dict[str, int]:
     """Fill empty PUBLIC catalogs of a freshly hot-reloaded app with demo rows.
+
+    `niche` is the app slug — a free-text hint that makes catalog titles
+    niche-realistic (a pharmacy lists real products, not "Максимум 1").
 
     Returns ``{entity: inserted_count}`` (empty if nothing was seeded). Never
     raises — failures are logged and swallowed so seeding can't break the
     hot-reload that delivers the user's app.
     """
     try:
-        batches = _build_batches(project_id, files)
+        batches = _build_batches(project_id, files, niche)
         if not batches:
             return {}
         inserted = await postgres_admin.seed_public_records(project_id, batches)

@@ -294,3 +294,121 @@ def test_phone_format_shape() -> None:
     rows = ds.generate_rows("Client", f, count=6, seed="s")
     pat = re.compile(r"^\+7 \(9\d\d\) \d\d\d-\d\d-\d\d$")
     assert all(pat.match(r["phone"]) for r in rows)
+
+
+# ── niche-aware realism (catalog titles, descriptions, SKU codes) ─────────────
+
+
+def test_pharmacy_catalog_titles_are_real_products_not_placeholders() -> None:
+    """A pharmacy Product catalog must read like real products, not "Максимум 1".
+
+    The niche is inferred from the entity's own enum vocabulary (Препараты /
+    Витамины / …) — no LLM, no slug needed. Titles come from the pharmacy pool;
+    none of the generic placeholder labels (`Максимум 5`) survive.
+    """
+    raw = {
+        "name": "Product",
+        "access": "public",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "category": {
+                "type": "enum",
+                "options": ["Препараты", "Витамины", "Косметика"],
+                "required": True,
+            },
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(shape.name, shape.fields, count=8, seed="s")
+    assert all(r["title"] in ds._DOMAIN_NOUNS["pharmacy"] for r in rows)
+    # none is the bare placeholder form "<Label> <n>" (e.g. "Максимум 5")
+    assert all(not re.fullmatch(r"\S+ \d+", r["title"]) for r in rows)
+
+
+def test_niche_from_slug_drives_titles_when_fields_are_generic() -> None:
+    """When the entity fields carry no niche vocabulary, the slug still does."""
+    f = _fields(title={"type": "string", "required": True})
+    rows = ds.generate_rows(
+        "Item", f, count=8, seed="s", niche="sait-avtoservis-v-moskve"
+    )
+    assert all(r["title"] in ds._DOMAIN_NOUNS["auto"] for r in rows)
+
+
+def test_unknown_niche_falls_back_to_safe_demo_label() -> None:
+    """No detected domain → keep the existing clearly-demo label (no regression,
+    never a confidently-wrong noun)."""
+    f = _fields(title={"type": "string", "required": True})
+    rows = ds.generate_rows("Widget", f, count=6, seed="s", niche="zzz-unknownixx")
+    # falls back to "<Label> <n>" form — a label from the generic pool + index
+    assert all(r["title"].split()[-1].isdigit() for r in rows)
+
+
+def test_catalog_titles_are_distinct_across_a_page() -> None:
+    f = _fields(title={"type": "string", "required": True})
+    rows = ds.generate_rows("Dish", f, count=8, seed="s", niche="sushi-restoran")
+    titles = [r["title"] for r in rows]
+    # a curated catalog should not repeat the same product 8 times
+    assert len(set(titles)) >= 6
+
+
+def test_description_field_is_a_catalog_blurb_not_a_crm_task() -> None:
+    """A `description` field reads as catalog copy; the CRM-task sentences belong
+    only to operational note fields."""
+    f = _fields(description={"type": "text", "required": True})
+    rows = ds.generate_rows("Product", f, count=8, seed="s")
+    assert all(r["description"] in ds._DESCRIPTIONS for r in rows)
+    assert all(r["description"] not in ds._SENTENCES for r in rows)
+
+
+def test_notes_field_still_uses_operational_sentences() -> None:
+    """Routing must not touch operational note fields (no regression)."""
+    f = _fields(notes={"type": "text", "required": True})
+    rows = ds.generate_rows("Task", f, count=8, seed="s")
+    assert all(r["notes"] in ds._SENTENCES for r in rows)
+
+
+def test_sku_field_is_a_code_not_a_label() -> None:
+    f = _fields(sku={"type": "string", "required": True})
+    rows = ds.generate_rows("Product", f, count=8, seed="s")
+    pat = re.compile(r"^[A-Z]{2,4}-\d{3,5}$")
+    assert all(pat.match(r["sku"]) for r in rows), [r["sku"] for r in rows]
+
+
+def test_niche_titles_are_deterministic() -> None:
+    f = _fields(title={"type": "string", "required": True})
+    a = ds.generate_rows("Item", f, count=8, seed="p1", niche="kofeinia")
+    b = ds.generate_rows("Item", f, count=8, seed="p1", niche="kofeinia")
+    assert a == b
+
+
+def test_pharmacy_not_misdetected_as_beauty_by_cosmetics_enum() -> None:
+    """`Косметика` is a pharmacy category AND a beauty word — pharmacy wins, so an
+    apteka catalog never shows manicures."""
+    raw = {
+        "name": "Product",
+        "access": "public",
+        "fields": {
+            "title": {"type": "string", "required": True},
+            "category": {
+                "type": "enum",
+                "options": ["Препараты", "Витамины", "Косметика", "Органика"],
+            },
+        },
+    }
+    shape = ds.parse_entity(raw)
+    rows = ds.generate_rows(shape.name, shape.fields, count=6, seed="s")
+    assert all(r["title"] in ds._DOMAIN_NOUNS["pharmacy"] for r in rows)
+    assert all(r["title"] not in ds._DOMAIN_NOUNS["beauty"] for r in rows)
+
+
+def test_non_label_string_field_keeps_label_form_not_a_product_noun() -> None:
+    """Domain nouns only fill the item's *title/name*; an unrelated string field
+    in a niche app must not become a product noun."""
+    f = _fields(
+        title={"type": "string", "required": True},
+        color={"type": "string", "required": True},
+    )
+    rows = ds.generate_rows("Item", f, count=6, seed="s", niche="apteka")
+    # title is a real product, color stays a neutral demo label
+    assert all(r["title"] in ds._DOMAIN_NOUNS["pharmacy"] for r in rows)
+    assert all(r["color"] not in ds._DOMAIN_NOUNS["pharmacy"] for r in rows)
