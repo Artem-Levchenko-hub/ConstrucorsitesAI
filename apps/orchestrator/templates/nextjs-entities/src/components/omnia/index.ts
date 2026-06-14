@@ -13,6 +13,7 @@ export {
   type PlanInfo,
 } from "./app-shell";
 export { PageHeader, type PageHeaderProps } from "./page-header";
+export { AuthShell, AuthProof, type AuthShellProps } from "./auth-shell";
 export {
   DashboardHero,
   type DashboardHeroProps,

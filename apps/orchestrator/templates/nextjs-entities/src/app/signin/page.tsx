@@ -12,6 +12,7 @@ import { signIn, auth } from "@/lib/auth";
 import { APP_HOME } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AuthShell } from "@/components/omnia";
 
 export const metadata = { title: "Вход" };
 
@@ -47,50 +48,49 @@ export default async function SignInPage({
   }
 
   return (
-    <main className="grid min-h-screen place-items-center bg-muted/30 px-4 py-12">
-      <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-8 shadow-sm">
-        <header className="mb-6 space-y-1 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">Вход</h1>
-          <p className="text-sm text-muted-foreground">
-            Нет аккаунта?{" "}
-            <Link href="/signup" className="font-medium text-primary hover:underline">
-              Зарегистрироваться
-            </Link>
-          </p>
-        </header>
+    <AuthShell
+      mode="signin"
+      title="Вход"
+      subtitle={
+        <>
+          Нет аккаунта?{" "}
+          <Link href="/signup" className="font-medium text-primary hover:underline">
+            Зарегистрироваться
+          </Link>
+        </>
+      }
+    >
+      {sp.error && (
+        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          Неверный email или пароль.
+        </div>
+      )}
 
-        {sp.error && (
-          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            Неверный email или пароль.
-          </div>
-        )}
-
-        <form action={action} className="space-y-4">
-          <input type="hidden" name="next" value={sp.next ?? APP_HOME} />
-          <div className="space-y-2">
-            <label htmlFor="email" className="text-sm font-medium">
-              Email
-            </label>
-            <Input id="email" name="email" type="email" required autoComplete="email" />
-          </div>
-          <div className="space-y-2">
-            <label htmlFor="password" className="text-sm font-medium">
-              Пароль
-            </label>
-            <Input
-              id="password"
-              name="password"
-              type="password"
-              required
-              minLength={8}
-              autoComplete="current-password"
-            />
-          </div>
-          <Button type="submit" size="lg" className="w-full">
-            Войти
-          </Button>
-        </form>
-      </div>
-    </main>
+      <form action={action} className="space-y-4">
+        <input type="hidden" name="next" value={sp.next ?? APP_HOME} />
+        <div className="space-y-2">
+          <label htmlFor="email" className="text-sm font-medium">
+            Email
+          </label>
+          <Input id="email" name="email" type="email" required autoComplete="email" />
+        </div>
+        <div className="space-y-2">
+          <label htmlFor="password" className="text-sm font-medium">
+            Пароль
+          </label>
+          <Input
+            id="password"
+            name="password"
+            type="password"
+            required
+            minLength={8}
+            autoComplete="current-password"
+          />
+        </div>
+        <Button type="submit" size="lg" className="w-full">
+          Войти
+        </Button>
+      </form>
+    </AuthShell>
   );
 }
