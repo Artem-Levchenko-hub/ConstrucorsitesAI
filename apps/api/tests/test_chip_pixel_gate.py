@@ -13,8 +13,10 @@ from omnia_api.services.chip_pixel_gate import (
     SECTION_ANCHOR,
     TONE_MARKER,
     FidelitySpec,
+    compile_build_spec,
     evaluate_fidelity,
     family_of_hue,
+    spec_confidence,
     spec_from_discovery,
 )
 
@@ -299,6 +301,53 @@ def test_spec_from_discovery_ignores_assistant_turns():
     ]
     # "да" carries no assertable axis → None (assistant suggestion ignored).
     assert spec_from_discovery(history) is None
+
+
+# ─── compile_build_spec + spec_confidence (V2.12 zero-question compiler) ─────
+
+
+def test_compile_build_spec_rich_prompt_pins_every_axis():
+    # The zero-question case: one rich prompt carries the whole brief — theme,
+    # accent, two sections, tone — extracted with no chips and no LLM.
+    spec = compile_build_spec(
+        "тёмный минималистичный лендинг с каталогом и отзывами на фиолетовом"
+    )
+    assert spec.dark_mode is True
+    assert spec.primary_family == "violet"
+    assert "catalog" in spec.sections
+    assert "testimonials" in spec.sections
+    assert spec.tone == "minimal"
+    assert spec_confidence(spec) == 4
+
+
+def test_compile_build_spec_plan_example_extracts_tone():
+    # The plan's canonical example: tone is the pinned axis ("минимал" wins over
+    # "строг" by alias order). One axis → below the zero-question floor, so this
+    # prompt still earns an onboarding question (compiler works, skip stays shy).
+    spec = compile_build_spec("строгий минималистичный лендинг финтех-стартапа")
+    assert spec.tone == "minimal"
+    assert spec_confidence(spec) == 1
+
+
+def test_compile_build_spec_vague_prompt_is_empty():
+    # Adversarial: an unsteerable prompt reifies to an empty spec (confidence 0) —
+    # the signal that the intent is NOT clear enough to skip onboarding.
+    spec = compile_build_spec("сделай сайт")
+    assert spec.is_empty
+    assert spec_confidence(spec) == 0
+
+
+def test_compile_build_spec_blank_prompt_is_empty():
+    assert compile_build_spec("").is_empty
+    assert spec_confidence(compile_build_spec("   ")) == 0
+
+
+def test_spec_confidence_counts_sections_once():
+    # Three sections are one "we learned the structure" signal, not three points,
+    # so a multi-section prompt can't outweigh a palette+theme+tone one.
+    three = compile_build_spec("сайт с каталогом, отзывами и контактами")
+    assert len(three.sections) == 3
+    assert spec_confidence(three) == 1
 
 
 def test_to_dict_round_trips_via_constructor():

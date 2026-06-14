@@ -375,6 +375,86 @@ async def test_build_with_unparseable_reply_still_builds_from_history(
     assert "барбершоп" in result.brief
 
 
+# ─── Zero-question intent compile (V2.12) ────────────────────────────────────
+
+
+async def test_zero_question_rich_first_prompt_builds_without_asking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """North Star pillar 2: a first prompt that already pins ≥2 design axes builds
+    immediately — the popup never appears. The gateway is stubbed to ASK, so a
+    BUILD result proves we short-circuited BEFORE the round-trip (deterministic,
+    LLM-free)."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps({"action": "ask", "message": "не должно дойти сюда"})
+        ),
+    )
+    result = await run_discovery(
+        [],
+        "тёмный минималистичный лендинг с каталогом и отзывами на фиолетовом",
+        asked_count=0,
+    )
+    assert result.action == BUILD
+    assert result.brief  # compiled from the raw prompt, carries it forward
+    assert "каталог" in result.brief
+
+
+async def test_zero_question_vague_first_prompt_still_asks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adversarial symmetry: an unsteerable prompt stays in the interview — the
+    compiler must not over-trigger and skip a genuinely needed question."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps({"action": "ask", "message": "Что за сайт?"})
+        ),
+    )
+    result = await run_discovery([], "сделай сайт", asked_count=0)
+    assert result.action == ASK
+    assert result.message == "Что за сайт?"
+
+
+async def test_zero_question_only_fires_on_first_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rich prompt mid-interview (asked_count>0) does NOT skip — the user is
+    already in a conversation, the model owns the ask/build call there."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps({"action": "ask", "message": "уточняющий вопрос"})
+        ),
+    )
+    result = await run_discovery(
+        [{"role": "user", "content": "идея"}, {"role": "assistant", "content": "?"}],
+        "тёмный минималистичный лендинг с каталогом и отзывами на фиолетовом",
+        asked_count=1,
+    )
+    assert result.action == ASK
+
+
+async def test_zero_question_routes_backend_intent_to_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The deterministic skip re-derives the stack from intent like the forced
+    path does — a rich prompt that also needs accounts/data lands on a container
+    stack, not a dead static landing."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(json.dumps({"action": "ask", "message": "x"})),
+    )
+    result = await run_discovery(
+        [],
+        "тёмный минималистичный магазин с каталогом товаров, корзиной и отзывами",
+        asked_count=0,
+    )
+    assert result.action == BUILD
+    assert result.stack == "nextjs_entities"
+
+
 # ─── Stack safety-net (P0★ — owner directive 2026-06-10) ─────────────────────
 
 

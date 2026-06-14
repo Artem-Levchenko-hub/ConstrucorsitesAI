@@ -23,11 +23,20 @@ from dataclasses import dataclass
 import httpx
 
 from omnia_api.core.config import get_settings, model_for_role
+from omnia_api.services.chip_pixel_gate import compile_build_spec, spec_confidence
 
 log = logging.getLogger(__name__)
 
 ASK = "ask"
 BUILD = "build"
+
+# Zero-question floor (V2.12 / North Star pillar 2 — "the best onboarding is its
+# absence when intent is clear"). When the user's VERY FIRST prompt already pins
+# at least this many concrete design axes (theme / accent / sections / tone), the
+# intent is unambiguous enough to build immediately — no popup, no gateway call.
+# A conservative ≥2: a thin one-axis hint ("на тёмном фоне") still earns one
+# question, only a genuinely steered prompt skips the interview.
+_ZERO_QUESTION_MIN_AXES = 2
 
 # Stacks the discovery may recommend. ``static`` builds immediately with no
 # container; the container stacks (``fullstack`` / ``nextjs_entities`` / ``spa``)
@@ -312,6 +321,34 @@ async def run_discovery(
     """
     capped = asked_count >= MAX_DISCOVERY_QUESTIONS
     must_build = force_build or capped
+
+    # Zero-question intent compile (V2.12). On the FIRST turn, if the raw prompt
+    # already pins ≥ ``_ZERO_QUESTION_MIN_AXES`` design axes, build straight away —
+    # the popup never appears and we skip the gateway round-trip entirely. The
+    # compiled spec is re-derived and persisted downstream (``spec_from_discovery``
+    # in messages.py) so it also steers the writer (generator-quality, not a gate).
+    # Gated to ``asked_count == 0`` so it never cuts an interview already in flight,
+    # and to non-forced/non-capped so the explicit/forced paths keep their own
+    # brief-compilation. Deterministic and LLM-free.
+    if not must_build and asked_count == 0:
+        spec = compile_build_spec(latest_prompt or "")
+        if spec_confidence(spec) >= _ZERO_QUESTION_MIN_AXES:
+            brief = _fallback_brief(history, latest_prompt)
+            intent_text = "\n".join(
+                [*(m.get("content") or "" for m in history), latest_prompt or ""]
+            )
+            stack = _infer_stack_from_text(intent_text) or _DEFAULT_STACK
+            log.info(
+                "discovery: zero-question build (%d intent axes pinned, stack=%s)",
+                spec_confidence(spec),
+                stack,
+            )
+            return DiscoveryResult(
+                action=BUILD,
+                message="Понял задумку — собираю первый вариант. Это займёт минуту.",
+                brief=brief,
+                stack=stack,
+            )
 
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions"
