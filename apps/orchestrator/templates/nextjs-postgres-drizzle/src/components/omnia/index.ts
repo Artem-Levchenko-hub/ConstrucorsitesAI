@@ -7,12 +7,17 @@
  * query with Drizzle, pass rows/values down as props.
  *
  *   import { AppShell, PageHeader, StatCard, DataTable, EmptyState } from "@/components/omnia";
+ *   import { StorefrontHero, StorefrontSection, FeatureCard } from "@/components/omnia";
  *   import { Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
  */
 export { AppShell } from "./app-shell";
 export type { AppShellProps, AppShellUser, NavItem } from "./app-shell";
 export { DashboardHero } from "./dashboard-hero";
 export type { DashboardHeroProps, HeroStat } from "./dashboard-hero";
+export { StorefrontHero } from "./storefront-hero";
+export type { StorefrontHeroProps, StorefrontCta, StorefrontStat } from "./storefront-hero";
+export { StorefrontSection, FeatureCard } from "./storefront-section";
+export type { StorefrontSectionProps, FeatureCardProps } from "./storefront-section";
 export { PageHeader } from "./page-header";
 export type { PageHeaderProps } from "./page-header";
 export { StatCard } from "./stat-card";
