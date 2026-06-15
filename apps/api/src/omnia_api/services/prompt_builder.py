@@ -1137,7 +1137,15 @@ _ENTITIES_STACK = """\
 • ГОТОВЫЙ КИТ кабинета — src/components/omnia/*: AppShell (каркас с навигацией +
   sign-out), CrudResource (полный CRUD-экран сущности из коробки: таблица+форма),
   DataTable, PageHeader, StatCard, EntityForm. Кабинет собирай из них. Лендинг —
-  из src/components/ui/* (Button, Card, Badge…) + Tailwind-токенов.
+  из src/components/ui/* + Tailwind-токенов.
+• ⛔ ДОСТУПНЫЕ `src/components/ui/*` — РОВНО ЭТИ, импортируй ТОЛЬКО из этого списка:
+  avatar, badge, button, card, checkbox, dialog, dropdown-menu, input, label, select,
+  separator, sheet, skeleton, sonner, table, tabs, textarea, tooltip. ДРУГИХ НЕТ В ШАБЛОНЕ.
+  НЕ импортируй radio-group / switch / accordion / slider / popover / form / progress /
+  alert / toast / calendar / command и т.п. — их НЕТ, импорт `@/components/ui/<x>` которого
+  нет в списке = ОШИБКА СБОРКИ (Module not found → белый экран на ВЕСЬ апп). Замены:
+  выбор-один-из → `Select` или группа `<Button>`; тумблер → `Checkbox`; аккордеон →
+  `Card` + локальный `useState`.
 
 ДАННЫЕ — сущности, а не код. Каждый бизнес-объект = один файл entities/<Имя>.json.
 Движок мгновенно делает из него полный CRUD REST API + валидацию + владение —

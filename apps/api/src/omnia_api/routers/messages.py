@@ -2945,6 +2945,27 @@ async def _process_prompt(
             except Exception as _tok_exc:
                 print(f"[PP] entity_theme skipped: {_tok_exc!r}", flush=True)
 
+        # ── Missing-component shim guard — deterministic, BEFORE commit ────────
+        # Writer models import standard shadcn components the template doesn't
+        # ship (radio-group, switch, …) → Next.js "Module not found" → the WHOLE
+        # app renders a build-error page (owner hit this). Inject a dependency-
+        # free self-contained shim for any imported-but-missing @/components/ui/*
+        # so the app always builds.
+        if files and not surgical and project_template in ("nextjs_entities", "fullstack"):
+            try:
+                from omnia_api.services.ui_shims import ensure_ui_shims
+
+                files, _shim_added, _shim_missing = ensure_ui_shims(files)
+                if _shim_added:
+                    print(f"[PP] ui_shims injected={_shim_added}", flush=True)
+                if _shim_missing:
+                    print(
+                        f"[PP] ui_shims MISSING no-shim (build may fail)={_shim_missing}",
+                        flush=True,
+                    )
+            except Exception as _shim_exc:
+                print(f"[PP] ui_shims skipped: {_shim_exc!r}", flush=True)
+
         # ── Branded share-card (P2, pillar 4) — deterministic, BEFORE commit ──
         # The entity template's <head> is a static «Omnia project», so every
         # shared /p/<slug> link unfurls brand-less. Derive a {title, tagline,
