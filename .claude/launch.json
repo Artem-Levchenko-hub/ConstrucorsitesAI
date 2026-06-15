@@ -66,6 +66,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "apps/orchestrator/templates/nextjs-entities", "run", "dev", "--", "--port", "3010"],
       "port": 3010
+    },
+    {
+      "name": "auth-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4607", "--directory", "/tmp/omnia-auth-harness"],
+      "port": 4607
     }
   ]
 }

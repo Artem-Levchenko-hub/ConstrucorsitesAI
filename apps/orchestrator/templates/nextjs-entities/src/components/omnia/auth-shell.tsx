@@ -46,6 +46,38 @@ const PROOF: ProofPoint[] = [
   { icon: <Sparkles />, text: "Работает на телефоне, планшете и компьютере" },
 ];
 
+/** Pick a legible foreground (near-white or near-black) for text/icons sitting
+ *  on top of `hex`, via WCAG relative luminance — so the brand accent can drive
+ *  the form's primary button without ever producing unreadable button text. */
+function readableOn(hex: string): string {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return "#ffffff";
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return L > 0.45 ? "#0b0b0c" : "#ffffff";
+}
+
+/** The auth route is a *sibling* of the root layout — the brand `<style>` the
+ *  art-director writes lives inside the app layout (`SYSTEM_PROMPT.md`: "override
+ *  CSS-var values in one <style> in your layout"), which never wraps signin /
+ *  signup. Left alone, the form half (primary button, links, input focus ring)
+ *  would render in the template's default graphite while only the showcase panel
+ *  wore the brand. We close that by deriving the same tokens from `share.accent`
+ *  and pinning them on the auth root, so the WHOLE screen is on-brand — no
+ *  dependency on where (or whether) the generated app themed its own layout. */
+function brandTokens(accent: string): React.CSSProperties {
+  return {
+    "--primary": accent,
+    "--primary-foreground": readableOn(accent),
+    "--ring": accent,
+  } as React.CSSProperties;
+}
+
 /** A deep, brand-tinted gradient for the showcase panel. `accent` is a hex from
  *  the project's share payload; we ride it from a light top to a near-black
  *  bottom so light/dark accents both stay legible under white text. */
@@ -141,7 +173,10 @@ function MobileBrand({ accent }: { accent: string }) {
 export function AuthShell({ mode, title, subtitle, children }: AuthShellProps) {
   const accent = share.accent || "#6366f1";
   return (
-    <main className="grid min-h-screen lg:grid-cols-[1.05fr_1fr] xl:grid-cols-[1.1fr_1fr]">
+    <main
+      className="grid min-h-screen lg:grid-cols-[1.05fr_1fr] xl:grid-cols-[1.1fr_1fr]"
+      style={brandTokens(accent)}
+    >
       <Showcase mode={mode} accent={accent} />
 
       <div className="flex items-center justify-center bg-background px-6 py-12 sm:px-10">
