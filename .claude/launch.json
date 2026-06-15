@@ -2,6 +2,18 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "lego-preview",
+      "runtimeExecutable": "ssh",
+      "runtimeArgs": ["-N", "-L", "8770:127.0.0.1:3206", "lh-server"],
+      "port": 8770
+    },
+    {
+      "name": "kofeinia-preview",
+      "runtimeExecutable": "ssh",
+      "runtimeArgs": ["-N", "-L", "8771:127.0.0.1:3208", "lh-server"],
+      "port": 8771
+    },
+    {
       "name": "drizzle-auth",
       "runtimeExecutable": "ssh",
       "runtimeArgs": ["-N", "-L", "8757:127.0.0.1:39301", "lh-server"],

@@ -256,8 +256,8 @@ export function BoardView({
   return (
     <div className={cn("space-y-4", className)} data-omnia-board="" data-omnia-rows={rawCount}>
       {searchable ? (
-        <div className="flex justify-end">
-          <div className="relative sm:w-64">
+        <div className="flex">
+          <div className="relative w-full sm:w-72">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
@@ -297,7 +297,7 @@ export function BoardView({
               }
               onDrop={canMove ? () => void drop(col.value) : undefined}
               className={cn(
-                "flex w-72 shrink-0 flex-col rounded-2xl border bg-muted/30 [scroll-snap-align:start]",
+                "flex min-h-[60vh] w-72 shrink-0 flex-col rounded-2xl border bg-muted/30 [scroll-snap-align:start]",
                 isOver ? "border-primary/50 bg-primary/5 ring-2 ring-primary/30" : "border-border/60",
               )}
             >
