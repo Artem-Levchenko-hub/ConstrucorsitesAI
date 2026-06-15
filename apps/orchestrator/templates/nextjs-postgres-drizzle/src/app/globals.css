@@ -1,20 +1,189 @@
 @import "tailwindcss";
 
-/* ── Omnia animation utilities (CSS-only, reduced-motion safe) ───────────────
- * Lightweight parity with the static generator's kit. Entrance animations are
- * self-resolving (animation-fill-mode: both) so they never leave content stuck
- * hidden, even without JS. For scroll-triggered reveal, add a tiny "use client"
- * IntersectionObserver that toggles `.is-visible` (see SYSTEM_PROMPT.md). */
+/* Dark mode is class-based: add `.dark` on <html> (or any wrapper) to flip the
+ * token set. A no-flash script in layout.tsx sets it from localStorage ??
+ * prefers-color-scheme before paint; the cabinet topbar carries a toggle. */
+@custom-variant dark (&:is(.dark *));
+
+/* ── Design tokens (theme-adaptive neutral base) ──────────────────────────────
+ * The whole cabinet kit (src/components/omnia/*) is driven by these CSS
+ * variables, so flipping `.dark` re-themes every surface for free — a light
+ * niche (bakery, clinic, school) gets a clean light cabinet, a luxe / fintech
+ * niche the near-black one, instead of every app being locked dark (the old
+ * dark-ONLY kit rendered white-on-white the moment a light theme was wanted).
+ * The project ACCENT still rides the separate `--brand` / `--brand-fg` pair that
+ * `brandTokens()` pins per build from `share.accent` — neutrals adapt to the
+ * theme, the brand colour stays the project's. Light is the default (enterprise
+ * apps read cleaner light). Mirrors the nextjs-entities kit token contract so
+ * the two templates converge on one design language. */
+:root {
+  --radius: 0.65rem;
+
+  --background: oklch(0.99 0 0);
+  --foreground: oklch(0.18 0.004 285.8);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.004 285.8);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.004 285.8);
+
+  --primary: oklch(0.21 0.006 285.9);
+  --primary-foreground: oklch(0.985 0 0);
+
+  --secondary: oklch(0.967 0.001 286.4);
+  --secondary-foreground: oklch(0.21 0.006 285.9);
+  --muted: oklch(0.967 0.001 286.4);
+  --muted-foreground: oklch(0.552 0.016 285.9);
+  --accent: oklch(0.967 0.001 286.4);
+  --accent-foreground: oklch(0.21 0.006 285.9);
+
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.62 0.17 152);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.75 0.16 78);
+  --warning-foreground: oklch(0.21 0.006 285.9);
+
+  --border: oklch(0.92 0.004 286.3);
+  --input: oklch(0.92 0.004 286.3);
+  --ring: oklch(0.62 0.13 264);
+  --field: oklch(0.968 0.0015 286.4);
+
+  /* App-shell sidebar surface — its own tokens so the chrome reads distinct from
+     the page background (a hallmark of real app shells: Linear, Notion). */
+  --sidebar: oklch(0.985 0.001 286.4);
+  --sidebar-foreground: oklch(0.32 0.004 285.8);
+  --sidebar-primary: oklch(0.21 0.006 285.9);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.96 0.002 286.4);
+  --sidebar-accent-foreground: oklch(0.21 0.006 285.9);
+  --sidebar-border: oklch(0.92 0.004 286.3);
+  --sidebar-ring: oklch(0.62 0.13 264);
+}
+
+/* ── Dark token set — the near-black premium cabinet. SPECIFICITY IS LOAD-BEARING
+ * (mirrors the entities kit): an art-director may re-map a few LIGHT values in a
+ * `:root { … }` <style>, so neutrals live on `:root.dark` (0,2,0) to win over
+ * that `:root` (0,1,0). The bare `.dark` arm keeps a wrapper-level `.dark`
+ * (e.g. the public landing forces itself dark) working too. */
+:root.dark,
+.dark {
+  --background: oklch(0.16 0.004 285.8);
+  --foreground: oklch(0.985 0 0);
+
+  --card: oklch(0.21 0.006 285.9);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.21 0.006 285.9);
+  --popover-foreground: oklch(0.985 0 0);
+
+  --secondary: oklch(0.274 0.006 286.0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.0);
+  --muted-foreground: oklch(0.705 0.015 286.1);
+  --accent: oklch(0.274 0.006 286.0);
+  --accent-foreground: oklch(0.985 0 0);
+
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.7 0.16 152);
+  --success-foreground: oklch(0.16 0.004 285.8);
+  --warning: oklch(0.8 0.16 78);
+  --warning-foreground: oklch(0.16 0.004 285.8);
+
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --field: oklch(0.255 0.006 286.0);
+
+  --sidebar: oklch(0.21 0.006 285.9);
+  --sidebar-foreground: oklch(0.92 0.004 286.3);
+  --sidebar-primary: oklch(0.985 0 0);
+  --sidebar-primary-foreground: oklch(0.21 0.006 285.9);
+  --sidebar-accent: oklch(0.274 0.006 286.0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.62 0.13 264);
+}
+
+/* ── Map tokens → Tailwind v4 utilities ───────────────────────────────────────
+ * Makes `bg-background`, `text-muted-foreground`, `border-border`, `bg-card`,
+ * `bg-sidebar-accent`, `text-success`, `rounded-2xl`, … resolve to the variables
+ * above. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-field: var(--field);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 6px);
+  --radius-3xl: calc(var(--radius) + 14px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklch, var(--ring) 50%, transparent);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    /* Faint brand-tinted top glow so the canvas is never dead-flat. */
+    background-image: radial-gradient(110% 55% at 50% -12%, color-mix(in oklch, var(--brand, #6366f1) 6%, transparent), transparent 55%);
+    background-attachment: fixed;
+  }
+  table,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  h1,
+  h2 {
+    overflow-wrap: break-word;
+    hyphens: auto;
+  }
+}
+
+/* ── Omnia animation utilities (CSS-only, reduced-motion safe) ────────────────
+ * Entrance animations self-resolve (animation-fill-mode: both) so they never
+ * leave content stuck hidden, even without JS. Per-app MOTION-DNA: the entrance
+ * family obeys `--omnia-ease` / `--omnia-dur`, pinned per build by brandTokens()
+ * from `share.motion` (calm / snappy / precise). Unset → the defaults below =
+ * the original feel, so a build that omits them is byte-for-byte unchanged.
+ * Mirrors the entities kit so both templates animate identically. */
 @media (prefers-reduced-motion: no-preference) {
   @keyframes omnia-fade-up { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: none } }
   @keyframes omnia-fade-in { from { opacity: 0 } to { opacity: 1 } }
   @keyframes omnia-scale-in { from { opacity: 0; transform: scale(.96) } to { opacity: 1; transform: none } }
-  /* Per-app MOTION-DNA: the entrance family obeys `--omnia-ease` / `--omnia-dur`,
-     pinned per build by brandTokens() from `share.motion` (calm / snappy / precise),
-     just like `--brand` rides `share.accent`. Unset → the defaults below = the
-     original feel, so a build that omits them is byte-for-byte unchanged. One tempo
-     drives every surface's birth, so a luxe gallery and a kids' shop come alive
-     apart. Mirrors the entities kit (art_director_writer МОТИОН-ТЕМП). */
   .fade-up { animation: omnia-fade-up var(--omnia-dur, .6s) var(--omnia-ease, ease-out) both; }
   .fade-in { animation: omnia-fade-in var(--omnia-dur, .6s) var(--omnia-ease, ease-out) both; }
   .scale-in { animation: omnia-scale-in var(--omnia-dur, .5s) var(--omnia-ease, ease-out) both; }
@@ -24,11 +193,7 @@
   .fade-up.delay-4 { animation-delay: .48s; }
   .fade-up.delay-5 { animation-delay: .60s; }
   /* Staggered entrance — direct children rise in sequence on mount (KPI rows,
-     feature grids, lists). Add `stagger` to the wrapping grid/flex instead of
-     hand-delaying each card, so a row of any length cascades in. Obeys the same
-     per-app MOTION-DNA (`--omnia-ease` / `--omnia-dur`) as the entrance family,
-     reduced-motion safe. Mirrors the entities kit so the flagship default and the
-     entity templates animate identically. */
+     feature grids, lists). Add `stagger` to the wrapping grid/flex. */
   .stagger > * { animation: omnia-fade-up var(--omnia-dur, .5s) var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)) both; }
   .stagger > *:nth-child(2) { animation-delay: .05s; }
   .stagger > *:nth-child(3) { animation-delay: .10s; }
@@ -43,61 +208,60 @@
 }
 
 /* ── Premium elevation — soft, layered shadows = the "floating panel" depth of
- * Linear / Stripe / Vercel dashboards. `.elev-1` is the resting card; `.elev-2`
- * is raised / hover. Tuned for the dark-by-default drizzle canvas (black-based,
- * so they read on near-black instead of washing out like a slate shadow would).
- * One source for every panel's depth so `.hover-lift` and `.card-soft` ride the
- * same token. Mirrors the entities kit. */
+ * Linear / Stripe / Vercel dashboards. Theme-aware: a tinted slate shadow reads
+ * on the light canvas, a black-based one on the near-black dark canvas (a slate
+ * shadow would wash out there). `.elev-1` is the resting card; `.elev-2` raised
+ * / hover. Mirrors the entities kit. */
 :root {
+  --elevation-1: 0 1px 2px -1px oklch(0.21 0.01 285 / 0.07), 0 4px 12px -4px oklch(0.21 0.01 285 / 0.08);
+  --elevation-2: 0 2px 6px -2px oklch(0.21 0.01 285 / 0.10), 0 14px 36px -10px oklch(0.21 0.01 285 / 0.14);
+}
+:root.dark,
+.dark {
   --elevation-1: 0 1px 2px -1px oklch(0 0 0 / 0.5), 0 4px 12px -4px oklch(0 0 0 / 0.4);
   --elevation-2: 0 2px 6px -2px oklch(0 0 0 / 0.6), 0 14px 36px -10px oklch(0 0 0 / 0.55);
 }
 .elev-1 { box-shadow: var(--elevation-1); }
 .elev-2 { box-shadow: var(--elevation-2); }
 
-/* ── Cabinet work-canvas glow — a faint, fixed brand-tinted aurora behind the
- * whole signed-in shell so the near-black `bg-zinc-950` work surface isn't
- * dead-flat (the public landing already carries its own ambient glow; this gives
- * the cabinet the same depth). Tone-on-tone over the dark canvas at low alpha,
- * so text keeps full contrast (content sits above). Painted on the AppShell root
- * (the opaque zinc-950 there would otherwise hide a body-level glow). One kit
- * primitive → every generated cabinet inherits the ambient depth for free. */
-.omnia-app-canvas {
-  background-image: radial-gradient(120% 62% at 50% -12%, color-mix(in oklab, var(--brand, #6366f1) 10%, transparent), transparent 60%);
-  background-attachment: fixed;
-}
-
 .hover-lift { transition: transform .2s ease, box-shadow .2s ease; }
 @media (hover: hover) {
   .hover-lift:hover { transform: translateY(-4px); box-shadow: var(--elevation-2); }
 }
 .card-soft { border-radius: 1rem; box-shadow: var(--elevation-1); }
-.gradient-text { background-image: linear-gradient(90deg, var(--g1, #6366f1), var(--g2, #8b5cf6)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.glass { background: rgba(255, 255, 255, .72); backdrop-filter: blur(12px) saturate(140%); -webkit-backdrop-filter: blur(12px) saturate(140%); border: 1px solid rgba(255, 255, 255, .25); }
+
+/* ── Cabinet work-canvas glow — a faint, fixed brand-tinted aurora behind the
+ * whole signed-in shell so the work surface isn't dead-flat. Tone-on-tone at low
+ * alpha (reads in light AND dark over the page background), so text keeps full
+ * contrast. One kit primitive → every generated cabinet inherits ambient depth
+ * for free. */
+.omnia-app-canvas {
+  background-image: radial-gradient(120% 62% at 50% -12%, color-mix(in oklab, var(--brand, #6366f1) 9%, transparent), transparent 60%);
+  background-attachment: fixed;
+}
 
 /* ── Signature hero art-layer — the brand-tinted "surface zero" that lifts the
  * cabinet's FIRST screen from a flat panel to Linear / Stripe-grade depth
- * (pillar 1). A tone-on-tone aurora mesh painted in the project accent (the
- * `--brand` token, pinned from `share.accent`) BEHIND content at low alpha, so
- * text keeps full contrast. The drizzle cabinet is dark-by-default
- * (`bg-zinc-950`), so one calm opacity reads on the near-black canvas; masked
- * toward the bottom so a stats strip stays clean, and reduced-motion safe — a
- * slow 22s drift only when motion is welcome. Baked into <DashboardHero>: the
- * default cabinet (and anything the writer builds on it) inherits the signature
- * moment for free, never hand-rolling effects. Mirrors the entities kit so both
- * templates wear the same brand-aurora identity. */
+ * (pillar 1). A tone-on-tone aurora mesh painted in the project accent
+ * (`--brand`) BEHIND content at low alpha, so text keeps full contrast. Reads in
+ * light AND dark (a touch stronger on the dark canvas), masked toward the bottom
+ * so a stats strip stays clean, reduced-motion safe. Baked into <DashboardHero>:
+ * the default cabinet (and anything the writer builds on it) inherits the
+ * signature moment for free. */
 .omnia-hero-art {
   position: absolute;
   inset: 0;
   pointer-events: none;
   background-image:
-    radial-gradient(58% 120% at 10% -12%, color-mix(in oklab, var(--brand, #6366f1) 48%, transparent), transparent 60%),
-    radial-gradient(52% 116% at 96% -4%, color-mix(in oklab, var(--brand, #6366f1) 34%, transparent), transparent 56%),
-    radial-gradient(42% 96% at 72% 118%, color-mix(in oklab, var(--brand, #6366f1) 22%, transparent), transparent 62%);
-  opacity: 0.85;
+    radial-gradient(58% 120% at 10% -12%, color-mix(in oklab, var(--brand, #6366f1) 30%, transparent), transparent 60%),
+    radial-gradient(52% 116% at 96% -4%, color-mix(in oklab, var(--brand, #6366f1) 20%, transparent), transparent 56%),
+    radial-gradient(42% 96% at 72% 118%, color-mix(in oklab, var(--brand, #6366f1) 14%, transparent), transparent 62%);
+  opacity: 0.55;
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 100%);
 }
+:root.dark .omnia-hero-art,
+.dark .omnia-hero-art { opacity: 0.85; }
 @media (prefers-reduced-motion: no-preference) {
   @keyframes omnia-aurora-drift {
     0%   { transform: translate3d(0, 0, 0) scale(1); }
@@ -107,20 +271,18 @@
   .omnia-hero-art { animation: omnia-aurora-drift 22s ease-in-out infinite; will-change: transform; }
 }
 
-/* ── Display type-rhythm — the agency-grade tracking ladder. Top-tier product
- * UIs (Linear, Stripe, Vercel) optically TIGHTEN big type and keep body open;
- * the kit hero carries the ladder so the writer never sets letter-spacing
- * inline. */
+/* ── Display type-rhythm — the agency-grade tracking ladder (Linear / Stripe /
+ * Vercel optically TIGHTEN big type, keep body open). The kit headers carry the
+ * ladder so the writer never sets letter-spacing inline. */
 .omnia-display { letter-spacing: -0.035em; }
 .omnia-metric { letter-spacing: -0.022em; }
 
 /* ── Data-viz draw-in — the "living dashboard" motion for the chart kit
  * (<Sparkline>/<TrendArea>/<BarMini>/<DonutStat>). On first paint the line
- * strokes itself left-to-right, the area fades up a beat behind it, bars grow
- * from their left edge, and the conic ring sweeps to its value. Pure CSS so the
- * charts stay server components; the rules live inside the no-preference block,
- * so reduced-motion users get the final, fully-drawn frame with zero animation.
- * Mirrors the entities kit so both templates animate identically. */
+ * strokes itself, the area fades up a beat behind, bars grow from their left
+ * edge, the ring sweeps to its value. Pure CSS (charts stay server components);
+ * reduced-motion users get the final, fully-drawn frame. Mirrors the entities
+ * kit. */
 @property --omnia-pct {
   syntax: "<percentage>";
   inherits: false;
@@ -130,12 +292,8 @@
   @keyframes omnia-draw { from { stroke-dashoffset: 1 } to { stroke-dashoffset: 0 } }
   @keyframes omnia-grow-x { from { transform: scaleX(0) } to { transform: scaleX(1) } }
   @keyframes omnia-sweep { from { --omnia-pct: 0% } }
-  /* Stroke that draws itself in (line / area charts). Needs pathLength="1". */
   .omnia-chart-draw { stroke-dasharray: 1; animation: omnia-draw 1.1s cubic-bezier(.16, 1, .3, 1) both; }
-  /* Area fill rises in a beat behind the stroke. */
   .omnia-chart-fill { animation: omnia-fade-in .9s ease-out .25s both; }
-  /* Horizontal bar grows out from its left edge (stagger via inline delay). */
   .omnia-chart-grow { transform-origin: left center; animation: omnia-grow-x .9s cubic-bezier(.16, 1, .3, 1) both; }
-  /* Conic ring sweeps from 0 to its value (target set inline as --omnia-pct). */
   .omnia-donut-sweep { animation: omnia-sweep 1.1s cubic-bezier(.16, 1, .3, 1) both; }
 }

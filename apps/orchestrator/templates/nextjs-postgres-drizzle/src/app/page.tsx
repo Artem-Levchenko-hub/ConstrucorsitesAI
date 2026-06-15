@@ -59,7 +59,7 @@ export default function Home() {
 
   return (
     <main
-      className="relative isolate min-h-screen overflow-hidden"
+      className="dark relative isolate min-h-screen overflow-hidden bg-zinc-950 text-zinc-100"
       style={brandTokens(accent)}
     >
       {/* Brand-tinted aurora over the near-black canvas (reduced-motion safe). */}

@@ -2,8 +2,9 @@
  * Default signed-in cabinet for a freshly provisioned fullstack project.
  *
  * Sign-in lands here (`/signin` default `next`), so it is the FIRST thing an
- * owner sees once authed — the work surface, the dark counterpart to the public
- * landing. It opens with a <DashboardHero> — the signature brand-aurora band
+ * owner sees once authed — the work surface. Theme-adaptive (light niche → light
+ * cabinet, luxe / fintech → the near-black one; follows the OS, topbar toggle
+ * overrides). It opens with a <DashboardHero> — the signature brand-aurora band
  * (the kit's "surface zero") — so the first screen reads as one design product
  * with the landing and auth chrome, not a flat heading. AI replaces / extends
  * this when the user describes what to store and show: it adds nav items, a
@@ -96,7 +97,7 @@ async function Cabinet() {
               title="Здесь появятся ваши данные"
               description="Postgres и вход уже работают. Опишите первую сущность — например «заказы с клиентом, суммой и статусом» — и AI создаст таблицу, форму и эту страницу со списком."
               action={
-                <span className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-medium text-zinc-200">
+                <span className="inline-flex items-center gap-2 rounded-xl border border-border bg-muted px-4 py-2.5 text-sm font-medium text-foreground">
                   <Sparkles className="size-4 text-[var(--brand)]" />
                   Напишите промпт слева
                 </span>

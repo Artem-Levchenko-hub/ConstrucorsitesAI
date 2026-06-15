@@ -3,26 +3,30 @@
 /**
  * `<AppShell>` — the premium signed-in cabinet frame for a fullstack project.
  *
- * Self-contained on purpose: the drizzle template ships NO shadcn token system
- * and NO `@/components/ui/*` primitives, so this shell is built from Tailwind +
- * lucide alone and wears the project's colour through `share.accent` (pinned as
- * `--brand` / `--brand-fg` by `brandTokens`) — exactly like the default landing
- * and the split-screen auth chrome it sits beside. One accent, one recipe.
+ * Self-contained on purpose: the drizzle template ships NO `@/components/ui/*`
+ * shadcn primitives, so this shell is built from Tailwind + lucide alone and
+ * wears the project's colour through `share.accent` (pinned as `--brand` /
+ * `--brand-fg` by `brandTokens`) — exactly like the default landing and the
+ * split-screen auth chrome it sits beside. One accent, one recipe.
  *
- * Dark by default to match the app `<body className="bg-zinc-950">`: a branded
- * sidebar (workspace glyph + grouped nav with an active accent bar) wraps a
- * topbar (page title + user menu) over a near-black work canvas — the Linear /
- * Notion enterprise cabinet pattern. Mobile collapses the sidebar into a
+ * Theme-adaptive: the whole shell is token-driven (`bg-background`, `bg-sidebar`,
+ * `text-foreground`, …), so a light niche (bakery, clinic, school) gets a clean
+ * light cabinet and a luxe / fintech niche the near-black one — instead of every
+ * app being locked dark. The theme follows the OS (no-flash init in layout.tsx)
+ * and the topbar carries a Sun/Moon toggle that persists the user's choice. A
+ * branded sidebar (workspace glyph + grouped nav with an active accent bar) wraps
+ * a topbar (page title + theme toggle + user menu) over the work canvas — the
+ * Linear / Notion enterprise cabinet pattern. Mobile collapses the sidebar into a
  * slide-over drawer.
  *
- * `"use client"` only for the active-route highlight (`usePathname`) and the
- * mobile drawer toggle; it takes its data via props, so a server page can fetch
- * the user with `getCurrentUser()` and hand it straight down.
+ * `"use client"` for the active-route highlight (`usePathname`), the mobile
+ * drawer toggle and the theme switch; it takes its data via props, so a server
+ * page can fetch the user with `getCurrentUser()` and hand it straight down.
  */
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, Menu, Sparkles, X } from "lucide-react";
+import { LogOut, Menu, Moon, Sparkles, Sun, X } from "lucide-react";
 
 import { brandTokens } from "@/lib/brand";
 
@@ -69,6 +73,44 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+/** Light/dark toggle — flips `<html class="dark">` and persists the choice, so
+ *  the cabinet honours both the OS default and an explicit per-user override
+ *  (the no-flash init in layout.tsx reads `localStorage.theme`). */
+function ThemeToggle() {
+  const [dark, setDark] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    setDark(document.documentElement.classList.contains("dark"));
+  }, []);
+  function toggle() {
+    const next = !document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", next);
+    try {
+      localStorage.setItem("theme", next ? "dark" : "light");
+    } catch {
+      /* private mode — the in-page toggle still works for the session */
+    }
+    setDark(next);
+  }
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={dark ? "Светлая тема" : "Тёмная тема"}
+      title={dark ? "Светлая тема" : "Тёмная тема"}
+      className="grid size-9 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground"
+    >
+      {/* Pre-hydration: render nothing decisive to avoid a mismatch flash. */}
+      {dark === null ? (
+        <Sun className="size-[1.05rem] opacity-0" />
+      ) : dark ? (
+        <Sun className="size-[1.05rem]" />
+      ) : (
+        <Moon className="size-[1.05rem]" />
+      )}
+    </button>
+  );
+}
+
 /** Renders the grouped nav list. Consecutive items with the same `section`
  *  sit under one quiet uppercase label. */
 function NavList({
@@ -90,7 +132,7 @@ function NavList({
         return (
           <React.Fragment key={item.href}>
             {showSection ? (
-              <p className="px-3 pb-1 pt-5 text-[0.65rem] font-semibold uppercase tracking-widest text-zinc-500 first:pt-1">
+              <p className="px-3 pb-1 pt-5 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground first:pt-1">
                 {item.section}
               </p>
             ) : null}
@@ -101,8 +143,8 @@ function NavList({
               className={[
                 "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition",
                 active
-                  ? "bg-white/[0.06] text-white"
-                  : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100",
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
               ].join(" ")}
             >
               <span
@@ -116,7 +158,7 @@ function NavList({
                 <span
                   className={[
                     "[&_svg]:size-[1.05rem] transition-colors",
-                    active ? "text-[var(--brand)]" : "text-zinc-500 group-hover:text-zinc-300",
+                    active ? "text-[var(--brand)]" : "text-muted-foreground group-hover:text-foreground",
                   ].join(" ")}
                 >
                   {item.icon}
@@ -148,10 +190,10 @@ function SidebarInner({
     <div className="flex h-full flex-col">
       {/* Brand */}
       <div className="flex items-center gap-2.5 px-5 py-5">
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_oklab,var(--brand),transparent_78%)] text-[var(--brand)] ring-1 ring-inset ring-white/10">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_oklab,var(--brand),transparent_78%)] text-[var(--brand)] ring-1 ring-inset ring-border">
           <Sparkles className="size-5" />
         </span>
-        <span className="truncate text-[0.95rem] font-semibold tracking-tight text-white">
+        <span className="truncate text-[0.95rem] font-semibold tracking-tight text-foreground">
           {brand}
         </span>
       </div>
@@ -163,23 +205,23 @@ function SidebarInner({
 
       {/* User footer */}
       {user ? (
-        <div className="border-t border-white/5 p-3">
+        <div className="border-t border-sidebar-border p-3">
           <div className="flex items-center gap-3 rounded-lg px-2 py-2">
-            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[color-mix(in_oklab,var(--brand),transparent_82%)] text-xs font-semibold text-[var(--brand)] ring-1 ring-inset ring-white/10">
+            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[color-mix(in_oklab,var(--brand),transparent_82%)] text-xs font-semibold text-[var(--brand)] ring-1 ring-inset ring-border">
               {initials(user.name || user.email || "?")}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-zinc-100">
+              <p className="truncate text-sm font-medium text-foreground">
                 {user.name || user.email}
               </p>
               {user.name && user.email ? (
-                <p className="truncate text-xs text-zinc-500">{user.email}</p>
+                <p className="truncate text-xs text-muted-foreground">{user.email}</p>
               ) : null}
             </div>
             <Link
               href="/signout"
               aria-label="Выйти"
-              className="grid size-8 shrink-0 place-items-center rounded-lg text-zinc-500 transition hover:bg-white/5 hover:text-zinc-200"
+              className="grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition hover:bg-sidebar-accent hover:text-foreground"
             >
               <LogOut className="size-4" />
             </Link>
@@ -209,11 +251,11 @@ export function AppShell({
 
   return (
     <div
-      className="omnia-app-canvas min-h-screen bg-zinc-950 text-zinc-100"
+      className="omnia-app-canvas min-h-screen bg-background text-foreground"
       style={brandTokens(accent)}
     >
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-white/5 bg-zinc-900/40 backdrop-blur-sm lg:block">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-sidebar-border bg-sidebar lg:block">
         <SidebarInner brand={brand} nav={nav} user={user} pathname={pathname} />
       </aside>
 
@@ -226,12 +268,12 @@ export function AppShell({
             onClick={() => setDrawerOpen(false)}
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
           />
-          <div className="absolute inset-y-0 left-0 w-72 max-w-[82vw] border-r border-white/10 bg-zinc-900 shadow-2xl">
+          <div className="absolute inset-y-0 left-0 w-72 max-w-[82vw] border-r border-sidebar-border bg-sidebar shadow-2xl">
             <button
               type="button"
               aria-label="Закрыть меню"
               onClick={() => setDrawerOpen(false)}
-              className="absolute right-3 top-4 grid size-8 place-items-center rounded-lg text-zinc-400 transition hover:bg-white/5 hover:text-white"
+              className="absolute right-3 top-4 grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-sidebar-accent hover:text-foreground"
             >
               <X className="size-4" />
             </button>
@@ -249,23 +291,24 @@ export function AppShell({
       {/* Main column */}
       <div className="lg:pl-64">
         {/* Topbar */}
-        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-white/5 bg-zinc-950/80 px-4 backdrop-blur-md sm:px-6">
+        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md sm:px-6">
           <button
             type="button"
             aria-label="Открыть меню"
             onClick={() => setDrawerOpen(true)}
-            className="grid size-9 place-items-center rounded-lg text-zinc-400 transition hover:bg-white/5 hover:text-white lg:hidden"
+            className="grid size-9 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground lg:hidden"
           >
             <Menu className="size-5" />
           </button>
           {title ? (
-            <div className="min-w-0 truncate text-sm font-medium text-zinc-300">
+            <div className="min-w-0 truncate text-sm font-medium text-muted-foreground">
               {title}
             </div>
           ) : null}
-          {actions ? (
-            <div className="ml-auto flex items-center gap-2">{actions}</div>
-          ) : null}
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
+            {actions ? <>{actions}</> : null}
+          </div>
         </header>
 
         <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">

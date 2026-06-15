@@ -45,7 +45,7 @@ function FaqRow({
         "overflow-hidden rounded-2xl border backdrop-blur-sm transition-colors duration-200",
         open
           ? "border-[color-mix(in_oklab,var(--brand),transparent_55%)] bg-[color-mix(in_oklab,var(--brand),transparent_92%)]"
-          : "border-white/10 bg-white/[0.03] hover:border-white/20",
+          : "border-border bg-card hover:border-foreground/20",
       )}
     >
       <h3>
@@ -60,7 +60,7 @@ function FaqRow({
           <span
             className={cx(
               "text-pretty text-[15px] font-semibold tracking-tight transition-colors sm:text-base",
-              open ? "text-[var(--brand)]" : "text-white",
+              open ? "text-[var(--brand)]" : "text-foreground",
             )}
           >
             {item.question}
@@ -69,7 +69,7 @@ function FaqRow({
             aria-hidden
             className={cx(
               "size-5 shrink-0 transition-transform duration-300",
-              open ? "rotate-180 text-[var(--brand)]" : "text-zinc-400",
+              open ? "rotate-180 text-[var(--brand)]" : "text-muted-foreground",
             )}
           />
         </button>
@@ -87,7 +87,7 @@ function FaqRow({
         )}
       >
         <div className="overflow-hidden">
-          <div className="px-5 pb-5 text-pretty text-sm leading-relaxed text-zinc-400 sm:px-6 sm:text-[15px]">
+          <div className="px-5 pb-5 text-pretty text-sm leading-relaxed text-muted-foreground sm:px-6 sm:text-[15px]">
             {item.answer}
           </div>
         </div>

@@ -176,10 +176,10 @@ export function BarMini({ data, label, className }: BarMiniProps) {
       {data.map((d, i) => (
         <div key={`${d.label}-${i}`} aria-hidden="true" className="flex flex-col gap-1">
           <div className="flex items-baseline justify-between gap-2 text-xs">
-            <span className="truncate text-zinc-400">{d.label}</span>
-            <span className="shrink-0 font-medium tabular-nums text-zinc-300">{d.value}</span>
+            <span className="truncate text-muted-foreground">{d.label}</span>
+            <span className="shrink-0 font-medium tabular-nums text-foreground">{d.value}</span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-white/10">
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
             <div
               className="omnia-chart-grow h-full rounded-full"
               style={{
@@ -230,20 +230,20 @@ export function DonutStat({ value, pct, label, size = 112, className }: DonutSta
             height: size,
             "--omnia-pct": `${clamped}%`,
             background:
-              "conic-gradient(currentColor var(--omnia-pct), rgba(255,255,255,0.08) var(--omnia-pct) 100%)",
+              "conic-gradient(currentColor var(--omnia-pct), var(--muted) var(--omnia-pct) 100%)",
           } as React.CSSProperties
         }
       >
         <div
-          className="grid place-items-center rounded-full bg-zinc-900 text-center"
+          className="grid place-items-center rounded-full bg-card text-center"
           style={{ width: size * 0.72, height: size * 0.72 }}
         >
-          <span className="text-xl font-semibold tracking-tight tabular-nums text-white">
+          <span className="text-xl font-semibold tracking-tight tabular-nums text-foreground">
             {value}
           </span>
         </div>
       </div>
-      {label ? <span className="text-xs text-zinc-400">{label}</span> : null}
+      {label ? <span className="text-xs text-muted-foreground">{label}</span> : null}
     </div>
   );
 }

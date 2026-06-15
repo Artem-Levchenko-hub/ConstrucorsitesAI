@@ -15,7 +15,20 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ru">
-      <body className="bg-zinc-950 text-zinc-100 antialiased">
+      <head>
+        {/* No-flash theme init — flips <html class="dark"> from an explicit
+            localStorage choice (the cabinet topbar toggle writes it) else the
+            OS prefers-color-scheme, synchronously before first paint. The kit is
+            token-driven, so this re-themes the whole cabinet with zero flash.
+            The public landing forces its own `.dark` wrapper regardless. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('theme');var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.classList.toggle('dark',d);}catch(e){}})();",
+          }}
+        />
+      </head>
+      <body className="bg-background text-foreground antialiased">
         {children}
         {/* Omnia select-mode inspector — synced copy of apps/api static/omnia-inspector.js
             (a drift test keeps them identical). Dormant until the workspace enables it

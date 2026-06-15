@@ -50,7 +50,7 @@ export function FeatureCard({
   const body = (
     <>
       {media ? (
-        <div className="relative aspect-[16/10] w-full overflow-hidden rounded-xl border border-white/10 bg-white/5 [&_img]:size-full [&_img]:object-cover">
+        <div className="relative aspect-[16/10] w-full overflow-hidden rounded-xl border border-border bg-muted [&_img]:size-full [&_img]:object-cover">
           {typeof media === "string" ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -74,25 +74,25 @@ export function FeatureCard({
         {!media && (icon || badge) ? (
           <div className="mb-4 flex items-center justify-between gap-3">
             {icon ? (
-              <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[color-mix(in_oklab,var(--brand),transparent_82%)] text-[var(--brand)] ring-1 ring-inset ring-white/10 [&_svg]:size-5">
+              <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[color-mix(in_oklab,var(--brand),transparent_82%)] text-[var(--brand)] ring-1 ring-inset ring-border [&_svg]:size-5">
                 {icon}
               </span>
             ) : (
               <span />
             )}
             {badge ? (
-              <span className="inline-flex items-center rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-zinc-300">
+              <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
                 {badge}
               </span>
             ) : null}
           </div>
         ) : null}
 
-        <h3 className="text-base font-semibold leading-snug tracking-tight text-white">
+        <h3 className="text-base font-semibold leading-snug tracking-tight text-foreground">
           {title}
         </h3>
         {description ? (
-          <p className="mt-2 text-sm leading-relaxed text-zinc-400">{description}</p>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{description}</p>
         ) : null}
 
         {cta && !linked ? (
@@ -109,7 +109,7 @@ export function FeatureCard({
   );
 
   const shell = cx(
-    "group hover-lift flex h-full flex-col gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-6 outline-none backdrop-blur-sm transition-colors hover:border-white/20 hover:bg-white/[0.05]",
+    "group hover-lift elev-1 flex h-full flex-col gap-4 rounded-2xl border border-border bg-card p-6 outline-none transition-colors hover:border-foreground/20 hover:bg-muted",
     linked && "cursor-pointer",
     className,
   );
@@ -194,7 +194,7 @@ export function StorefrontSection({
   const hasHeader = !!(eyebrow || title || lead || actions);
 
   return (
-    <section id={id} className={cx("scroll-mt-20 border-b border-white/10", tint && "bg-white/[0.02]", className)}>
+    <section id={id} className={cx("scroll-mt-20 border-b border-border", tint && "bg-muted/40", className)}>
       <div className="mx-auto w-full max-w-6xl px-6 py-20 sm:py-24">
         {hasHeader ? (
           <div className={cx("flex flex-col", centered ? "items-center text-center" : "items-start text-left")}>
@@ -204,7 +204,7 @@ export function StorefrontSection({
             {title ? (
               <h2
                 className={cx(
-                  "omnia-display mt-3 max-w-2xl text-pretty text-3xl font-semibold leading-tight tracking-tight text-white sm:text-4xl",
+                  "omnia-display mt-3 max-w-2xl text-pretty text-3xl font-semibold leading-tight tracking-tight text-foreground sm:text-4xl",
                   centered && "mx-auto text-balance",
                 )}
               >
@@ -212,7 +212,7 @@ export function StorefrontSection({
               </h2>
             ) : null}
             {lead ? (
-              <p className={cx("mt-4 max-w-2xl text-lg leading-relaxed text-zinc-400", centered && "mx-auto")}>
+              <p className={cx("mt-4 max-w-2xl text-lg leading-relaxed text-muted-foreground", centered && "mx-auto")}>
                 {lead}
               </p>
             ) : null}

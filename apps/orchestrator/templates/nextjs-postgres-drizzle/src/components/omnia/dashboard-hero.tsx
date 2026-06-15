@@ -65,7 +65,7 @@ function TrendPill({ value, positive }: { value: React.ReactNode; positive?: boo
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-        down ? "bg-rose-500/10 text-rose-400" : "bg-emerald-500/10 text-emerald-400"
+        down ? "bg-destructive/10 text-destructive" : "bg-success/10 text-success"
       }`}
     >
       {down ? <TrendingDown className="size-3.5" /> : <TrendingUp className="size-3.5" />}
@@ -88,7 +88,7 @@ export function DashboardHero({
   const supporting = (stats ?? []).slice(0, 3);
   return (
     <section
-      className={`fade-up relative mb-8 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-sm ${
+      className={`fade-up elev-1 relative mb-8 overflow-hidden rounded-2xl border border-border bg-card ${
         className ?? ""
       }`}
     >
@@ -107,11 +107,11 @@ export function DashboardHero({
                 {eyebrow}
               </p>
             ) : null}
-            <h1 className="omnia-display text-balance text-2xl font-semibold leading-tight text-white sm:text-3xl">
+            <h1 className="omnia-display text-balance text-2xl font-semibold leading-tight text-foreground sm:text-3xl">
               {title}
             </h1>
             {description ? (
-              <p className="max-w-2xl text-pretty text-sm leading-relaxed text-zinc-400">
+              <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
                 {description}
               </p>
             ) : null}
@@ -124,10 +124,10 @@ export function DashboardHero({
         {metric ? (
           <div className="mt-6 min-w-0">
             {metricLabel ? (
-              <p className="text-sm font-medium text-zinc-400">{metricLabel}</p>
+              <p className="text-sm font-medium text-muted-foreground">{metricLabel}</p>
             ) : null}
             <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="omnia-metric text-4xl font-semibold tabular-nums text-white sm:text-5xl">
+              <span className="omnia-metric text-4xl font-semibold tabular-nums text-foreground sm:text-5xl">
                 {metric}
               </span>
               {trend ? <TrendPill {...trend} /> : null}
@@ -136,13 +136,13 @@ export function DashboardHero({
         ) : null}
 
         {supporting.length ? (
-          <div className="mt-6 flex flex-wrap gap-x-8 gap-y-3 border-t border-white/10 pt-5">
+          <div className="mt-6 flex flex-wrap gap-x-8 gap-y-3 border-t border-border pt-5">
             {supporting.map((s, i) => (
               <div key={i} className="min-w-0">
-                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   {s.label}
                 </p>
-                <p className="mt-0.5 flex items-center gap-1.5 text-lg font-semibold tracking-tight tabular-nums text-zinc-100 [&_svg]:size-4 [&_svg]:text-zinc-500">
+                <p className="mt-0.5 flex items-center gap-1.5 text-lg font-semibold tracking-tight tabular-nums text-foreground [&_svg]:size-4 [&_svg]:text-muted-foreground">
                   {s.icon}
                   {s.value}
                 </p>

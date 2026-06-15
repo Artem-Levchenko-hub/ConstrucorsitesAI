@@ -86,7 +86,7 @@ export function CtaBand({
           "relative isolate mx-auto w-full max-w-6xl overflow-hidden rounded-[2rem] px-8 py-16 sm:px-14 sm:py-20",
           brand
             ? "bg-gradient-to-br from-[var(--brand)] to-[color-mix(in_oklab,var(--brand),black_22%)] text-[var(--brand-fg)]"
-            : "border border-white/10 bg-white/[0.03] text-white backdrop-blur-sm",
+            : "border border-border bg-card text-foreground",
         )}
       >
         {/* Brand-band depth — two soft inner glows so the panel never reads flat. */}
@@ -127,7 +127,7 @@ export function CtaBand({
             <p
               className={cx(
                 "mt-5 max-w-xl text-lg leading-relaxed",
-                brand ? "opacity-90" : "text-zinc-400",
+                brand ? "opacity-90" : "text-muted-foreground",
                 centered && "mx-auto",
               )}
             >
@@ -165,7 +165,7 @@ export function CtaBand({
                     "inline-flex h-12 items-center justify-center rounded-xl px-7 text-base font-semibold transition",
                     brand
                       ? "border border-[color-mix(in_oklab,var(--brand-fg),transparent_65%)] text-[var(--brand-fg)] hover:bg-[color-mix(in_oklab,var(--brand-fg),transparent_88%)]"
-                      : "border border-white/15 bg-white/5 text-zinc-100 hover:bg-white/10",
+                      : "border border-border bg-muted text-foreground hover:bg-accent",
                   )}
                 >
                   {secondaryCta.label}
@@ -178,7 +178,7 @@ export function CtaBand({
             <p
               className={cx(
                 "mt-5 text-sm",
-                brand ? "opacity-70" : "text-zinc-400",
+                brand ? "opacity-70" : "text-muted-foreground",
               )}
             >
               {note}

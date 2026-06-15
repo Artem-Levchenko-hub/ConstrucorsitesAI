@@ -45,9 +45,9 @@ export function DataTable<T extends Record<string, unknown>>({
   caption,
 }: DataTableProps<T>) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
+    <div className="overflow-hidden rounded-2xl border border-border bg-card elev-1">
       {caption ? (
-        <div className="border-b border-white/5 px-5 py-3 text-sm text-zinc-400">
+        <div className="border-b border-border px-5 py-3 text-sm text-muted-foreground">
           {caption}
         </div>
       ) : null}
@@ -58,12 +58,12 @@ export function DataTable<T extends Record<string, unknown>>({
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="border-b border-white/8">
+              <tr className="border-b border-border">
                 {columns.map((col) => (
                   <th
                     key={col.key}
                     className={[
-                      "whitespace-nowrap px-5 py-3 text-[0.7rem] font-semibold uppercase tracking-widest text-zinc-500",
+                      "whitespace-nowrap px-5 py-3 text-[0.7rem] font-semibold uppercase tracking-widest text-muted-foreground",
                       alignClass[col.align ?? "left"],
                       col.className ?? "",
                     ].join(" ")}
@@ -77,13 +77,13 @@ export function DataTable<T extends Record<string, unknown>>({
               {rows.map((row, i) => (
                 <tr
                   key={getRowKey ? getRowKey(row, i) : i}
-                  className="border-b border-white/5 transition-colors last:border-0 hover:bg-white/[0.03]"
+                  className="border-b border-border transition-colors last:border-0 hover:bg-muted/50"
                 >
                   {columns.map((col) => (
                     <td
                       key={col.key}
                       className={[
-                        "px-5 py-3.5 text-zinc-200",
+                        "px-5 py-3.5 text-foreground",
                         alignClass[col.align ?? "left"],
                         col.className ?? "",
                       ].join(" ")}

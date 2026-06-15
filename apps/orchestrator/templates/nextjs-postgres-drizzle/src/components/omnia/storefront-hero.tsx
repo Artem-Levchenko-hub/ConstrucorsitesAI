@@ -93,7 +93,7 @@ export function StorefrontHero({
   const copy = (
     <div className={cx("flex min-w-0 flex-col", centered ? "items-center text-center" : "items-start text-left")}>
       {badge ? (
-        <span className="fade-up mb-5 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium uppercase tracking-widest text-zinc-300 backdrop-blur-sm [&_svg]:size-3.5 [&_svg]:text-[var(--brand)]">
+        <span className="fade-up mb-5 inline-flex items-center gap-1.5 rounded-full border border-border bg-muted px-3 py-1 text-xs font-medium uppercase tracking-widest text-muted-foreground [&_svg]:size-3.5 [&_svg]:text-[var(--brand)]">
           <span aria-hidden className="size-1.5 rounded-full bg-[var(--brand)] shadow-[0_0_12px_var(--brand)]" />
           {badge}
         </span>
@@ -105,14 +105,14 @@ export function StorefrontHero({
       ) : null}
       <h1
         className={cx(
-          "omnia-display fade-up delay-1 mt-3 max-w-2xl text-pretty text-4xl font-semibold leading-[1.05] tracking-tight text-white sm:text-5xl lg:text-6xl",
+          "omnia-display fade-up delay-1 mt-3 max-w-2xl text-pretty text-4xl font-semibold leading-[1.05] tracking-tight text-foreground sm:text-5xl lg:text-6xl",
           centered && "mx-auto text-balance",
         )}
       >
         {title}
       </h1>
       {subtitle ? (
-        <p className={cx("fade-up delay-2 mt-5 max-w-xl text-lg leading-relaxed text-zinc-400", centered && "mx-auto")}>
+        <p className={cx("fade-up delay-2 mt-5 max-w-xl text-lg leading-relaxed text-muted-foreground", centered && "mx-auto")}>
           {subtitle}
         </p>
       ) : null}
@@ -130,7 +130,7 @@ export function StorefrontHero({
           {secondaryCta ? (
             <a
               href={secondaryCta.href}
-              className="inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-7 text-base font-semibold text-zinc-100 backdrop-blur-sm transition hover:bg-white/10"
+              className="inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-border bg-muted px-7 text-base font-semibold text-foreground transition hover:bg-accent"
             >
               {secondaryCta.label}
             </a>
@@ -139,11 +139,11 @@ export function StorefrontHero({
       ) : null}
 
       {proof.length ? (
-        <dl className={cx("fade-up delay-3 mt-12 flex flex-wrap gap-x-10 gap-y-5 border-t border-white/10 pt-7", centered && "justify-center")}>
+        <dl className={cx("fade-up delay-3 mt-12 flex flex-wrap gap-x-10 gap-y-5 border-t border-border pt-7", centered && "justify-center")}>
           {proof.map((s, i) => (
             <div key={i} className={cx("min-w-0", centered && "text-center")}>
-              <dt className="order-2 mt-1 text-sm text-zinc-500">{s.label}</dt>
-              <dd className="omnia-metric order-1 text-3xl font-semibold tracking-tight tabular-nums text-white">
+              <dt className="order-2 mt-1 text-sm text-muted-foreground">{s.label}</dt>
+              <dd className="omnia-metric order-1 text-3xl font-semibold tracking-tight tabular-nums text-foreground">
                 {s.value}
               </dd>
             </div>
@@ -154,13 +154,13 @@ export function StorefrontHero({
   );
 
   const frame = media ? (
-    <div className="fade-up delay-2 relative aspect-[4/3] w-full overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03] shadow-2xl shadow-black/40 [&_img]:h-full [&_img]:w-full [&_img]:object-cover">
+    <div className="fade-up delay-2 elev-2 relative aspect-[4/3] w-full overflow-hidden rounded-3xl border border-border bg-card [&_img]:h-full [&_img]:w-full [&_img]:object-cover">
       {media}
     </div>
   ) : null;
 
   return (
-    <section className={cx("relative isolate overflow-hidden border-b border-white/10", className)}>
+    <section className={cx("relative isolate overflow-hidden border-b border-border", className)}>
       {/* Brand-accent aurora — same recipe as the default landing, palette-tied. */}
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
         <div className="absolute inset-0 bg-[radial-gradient(110%_80%_at_50%_-10%,color-mix(in_oklab,var(--brand),transparent_60%),transparent_60%)] opacity-70" />

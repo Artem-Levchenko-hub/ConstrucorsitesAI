@@ -23,29 +23,29 @@ export interface StatCardProps {
 export function StatCard({ label, value, icon, delta, direction = "flat", hint, chart }: StatCardProps) {
   const deltaTone =
     direction === "up"
-      ? "text-emerald-400"
+      ? "text-success"
       : direction === "down"
-        ? "text-rose-400"
-        : "text-zinc-400";
+        ? "text-destructive"
+        : "text-muted-foreground";
   return (
-    <div className="hover-lift rounded-2xl border border-white/10 bg-white/[0.03] p-5 backdrop-blur-sm transition hover:border-white/20 hover:bg-white/[0.05]">
+    <div className="hover-lift elev-1 rounded-2xl border border-border bg-card p-5 transition hover:border-foreground/20">
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-medium text-zinc-400">{label}</p>
+        <p className="text-sm font-medium text-muted-foreground">{label}</p>
         {icon ? (
-          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_oklab,var(--brand),transparent_82%)] text-[var(--brand)] ring-1 ring-inset ring-white/10 [&_svg]:size-[1.05rem]">
+          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_oklab,var(--brand),transparent_82%)] text-[var(--brand)] ring-1 ring-inset ring-border [&_svg]:size-[1.05rem]">
             {icon}
           </span>
         ) : null}
       </div>
       <div className="mt-3 flex items-baseline gap-2">
-        <span className="text-3xl font-semibold tracking-tight text-white tabular-nums">
+        <span className="text-3xl font-semibold tracking-tight text-foreground tabular-nums">
           {value}
         </span>
         {delta ? (
           <span className={`text-sm font-medium ${deltaTone}`}>{delta}</span>
         ) : null}
       </div>
-      {hint ? <p className="mt-1 text-xs text-zinc-500">{hint}</p> : null}
+      {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
       {chart ? <div className="mt-3">{chart}</div> : null}
     </div>
   );

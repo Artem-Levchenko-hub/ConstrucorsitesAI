@@ -58,7 +58,7 @@ function Stars({ rating }: { rating: number }) {
             "size-4",
             i < n
               ? "fill-[var(--brand)] text-[var(--brand)]"
-              : "fill-white/10 text-white/10",
+              : "fill-muted-foreground/25 text-muted-foreground/25",
           )}
         />
       ))}
@@ -76,7 +76,7 @@ function Avatar({ item }: { item: Testimonial }) {
         src={item.avatar}
         alt=""
         loading="lazy"
-        className="size-11 shrink-0 rounded-full border border-white/10 object-cover"
+        className="size-11 shrink-0 rounded-full border border-border object-cover"
       />
     );
   }
@@ -92,7 +92,7 @@ function Avatar({ item }: { item: Testimonial }) {
 
 function TestimonialCard({ item }: { item: Testimonial }) {
   return (
-    <figure className="hover-lift flex h-full flex-col gap-5 rounded-2xl border border-white/10 bg-white/[0.03] p-6 backdrop-blur-sm sm:p-7">
+    <figure className="hover-lift elev-1 flex h-full flex-col gap-5 rounded-2xl border border-border bg-card p-6 sm:p-7">
       <div className="flex items-center justify-between gap-3">
         <Quote
           aria-hidden
@@ -102,18 +102,18 @@ function TestimonialCard({ item }: { item: Testimonial }) {
         {typeof item.rating === "number" ? <Stars rating={item.rating} /> : null}
       </div>
 
-      <blockquote className="flex-1 text-pretty text-[15px] leading-relaxed text-zinc-100 sm:text-base">
+      <blockquote className="flex-1 text-pretty text-[15px] leading-relaxed text-foreground sm:text-base">
         {item.quote}
       </blockquote>
 
-      <figcaption className="flex items-center gap-3 border-t border-white/10 pt-5">
+      <figcaption className="flex items-center gap-3 border-t border-border pt-5">
         <Avatar item={item} />
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold tracking-tight text-white">
+          <div className="truncate text-sm font-semibold tracking-tight text-foreground">
             {item.name}
           </div>
           {item.role ? (
-            <div className="truncate text-sm text-zinc-400">{item.role}</div>
+            <div className="truncate text-sm text-muted-foreground">{item.role}</div>
           ) : null}
         </div>
       </figcaption>

@@ -45,14 +45,14 @@ function PricingTier({ plan }: { plan: PricingPlan }) {
   const card = (
     <div
       className={cx(
-        "flex h-full flex-col rounded-3xl border p-7 backdrop-blur-sm",
+        "flex h-full flex-col rounded-3xl border p-7",
         highlighted
-          ? "border-white/15 bg-white/[0.06] shadow-2xl shadow-[color-mix(in_oklab,var(--brand),transparent_75%)]"
-          : "border-white/10 bg-white/[0.03] hover-lift hover:border-white/20",
+          ? "border-border bg-card shadow-2xl shadow-[color-mix(in_oklab,var(--brand),transparent_75%)]"
+          : "border-border bg-card elev-1 hover-lift hover:border-foreground/20",
       )}
     >
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-base font-semibold tracking-tight text-white">
+        <h3 className="text-base font-semibold tracking-tight text-foreground">
           {plan.name}
         </h3>
         {highlighted ? (
@@ -63,25 +63,25 @@ function PricingTier({ plan }: { plan: PricingPlan }) {
       </div>
 
       <div className="mt-5 flex items-baseline gap-1.5">
-        <span className="omnia-display text-4xl font-semibold tracking-tight tabular-nums text-white">
+        <span className="omnia-display text-4xl font-semibold tracking-tight tabular-nums text-foreground">
           {plan.price}
         </span>
         {plan.period ? (
-          <span className="text-sm font-medium text-zinc-400">
+          <span className="text-sm font-medium text-muted-foreground">
             {plan.period}
           </span>
         ) : null}
       </div>
       {plan.description ? (
-        <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
           {plan.description}
         </p>
       ) : null}
 
       {plan.features.length ? (
-        <ul className="mt-7 flex flex-1 flex-col gap-3 border-t border-white/10 pt-7">
+        <ul className="mt-7 flex flex-1 flex-col gap-3 border-t border-border pt-7">
           {plan.features.map((feature, i) => (
-            <li key={i} className="flex items-start gap-3 text-sm text-zinc-200">
+            <li key={i} className="flex items-start gap-3 text-sm text-foreground">
               <span
                 aria-hidden
                 className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_oklab,var(--brand),transparent_80%)] text-[var(--brand)] [&_svg]:size-3.5"
@@ -103,7 +103,7 @@ function PricingTier({ plan }: { plan: PricingPlan }) {
             "mt-8 inline-flex h-12 w-full items-center justify-center rounded-xl px-7 text-base font-semibold transition hover:brightness-110",
             highlighted
               ? "bg-[var(--brand)] text-[var(--brand-fg)] shadow-lg shadow-[color-mix(in_oklab,var(--brand),transparent_70%)]"
-              : "border border-white/15 bg-white/5 text-zinc-100 hover:bg-white/10",
+              : "border border-border bg-muted text-foreground hover:bg-accent",
           )}
         >
           {plan.cta.label}
