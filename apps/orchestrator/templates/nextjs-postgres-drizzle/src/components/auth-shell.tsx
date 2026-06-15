@@ -2,6 +2,7 @@ import * as React from "react";
 import { Check, ShieldCheck, Sparkles, Zap } from "lucide-react";
 
 import { share } from "@/app/omnia-share";
+import { brandName, brandTokens, panelGradient } from "@/lib/brand";
 
 /**
  * Premium split-screen auth chrome — a branded showcase panel beside a clean
@@ -47,49 +48,6 @@ const PROOF: ProofPoint[] = [
   { icon: <ShieldCheck />, text: "Личный кабинет: ваши данные под защитой и только ваши" },
   { icon: <Sparkles />, text: "Работает на телефоне, планшете и компьютере" },
 ];
-
-/** Pick a legible foreground (near-white or near-black) for text/icons sitting
- *  on top of `hex`, via WCAG relative luminance — so the brand accent can drive
- *  the form's primary button without ever producing unreadable button text. */
-function readableOn(hex: string): string {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return "#ffffff";
-  let h = m[1];
-  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-  const r = parseInt(h.slice(0, 2), 16) / 255;
-  const g = parseInt(h.slice(2, 4), 16) / 255;
-  const b = parseInt(h.slice(4, 6), 16) / 255;
-  const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-  return L > 0.45 ? "#0b0b0c" : "#ffffff";
-}
-
-/** Pin the brand accent as local CSS vars on the auth root so the form half
- *  (focus ring + submit button) inherits it through Tailwind arbitrary values
- *  (`bg-[var(--brand)]`, `focus:ring-[var(--brand)]`). No dependency on any
- *  template-wide token system — drizzle ships none. */
-function brandTokens(accent: string): React.CSSProperties {
-  return {
-    "--brand": accent,
-    "--brand-fg": readableOn(accent),
-  } as React.CSSProperties;
-}
-
-/** A deep, brand-tinted gradient for the showcase panel. `accent` is a hex from
- *  the project's share payload; we ride it from a light top to a near-black
- *  bottom so light/dark accents both stay legible under white text. */
-function panelGradient(accent: string): string {
-  return [
-    "linear-gradient(155deg,",
-    `color-mix(in oklab, ${accent}, white 10%) 0%,`,
-    `${accent} 34%,`,
-    `color-mix(in oklab, ${accent}, #060810 86%) 100%)`,
-  ].join(" ");
-}
-
-function brandName(): string {
-  return share.title && share.title !== "Omnia project" ? share.title : "Omnia";
-}
 
 function Showcase({ mode, accent }: { mode: "signin" | "signup"; accent: string }) {
   const headline =
