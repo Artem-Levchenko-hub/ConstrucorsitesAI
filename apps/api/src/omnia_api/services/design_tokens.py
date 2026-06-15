@@ -58,6 +58,10 @@ _INDUSTRY_VIBE: tuple[tuple[str, str], ...] = (
     ("bank", "fintech-trust"),
     ("saas", "swiss-minimal"),
     ("b2b", "swiss-minimal"),
+    # Schools / e-diaries / courses read cleanest as a calm minimal app, not a
+    # dramatic editorial canvas. Without this, education-bright had no vibe route
+    # and fell through to a random (sometimes dark) palette.
+    ("education", "swiss-minimal"),
     ("dev", "linear-dark"),
     ("tech", "apple-tech"),
     ("luxury", "editorial-luxury"),

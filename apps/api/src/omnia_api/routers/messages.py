@@ -3298,6 +3298,7 @@ async def _process_prompt(
                     "07_pre_palette_guard.html", files.get("index.html", ""),
                 )
             try:
+                from omnia_api.services.app_theme import apply_app_palette
                 from omnia_api.services.design_tokens import tokens_for_project
                 from omnia_api.services.palette_guard import enforce_palette
 
@@ -3309,6 +3310,12 @@ async def _process_prompt(
                         project_id, assistant_message_id,
                         "07b_forced_palette.md", repr(_palette),
                     )
+                # Entity/.tsx apps theme via a brand :root override in
+                # (app)/layout.tsx, NOT via index.html — enforce_palette below is
+                # HTML-only and skips them. Snap the brand --primary to a colour
+                # that's actually visible on the kit's light canvas (the writer
+                # routinely emits a dark-palette near-white primary that vanishes).
+                files = apply_app_palette(files, _palette)
                 files = enforce_palette(files, _palette)
             except Exception as _pg_exc:
                 print(f"[PP] palette_guard skipped err={_pg_exc!r}", flush=True)
