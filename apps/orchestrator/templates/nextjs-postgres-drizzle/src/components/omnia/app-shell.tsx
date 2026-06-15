@@ -209,7 +209,7 @@ export function AppShell({
 
   return (
     <div
-      className="min-h-screen bg-zinc-950 text-zinc-100"
+      className="omnia-app-canvas min-h-screen bg-zinc-950 text-zinc-100"
       style={brandTokens(accent)}
     >
       {/* Desktop sidebar */}

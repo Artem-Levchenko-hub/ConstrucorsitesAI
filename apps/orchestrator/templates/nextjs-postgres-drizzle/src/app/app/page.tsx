@@ -65,8 +65,10 @@ async function Cabinet() {
         description="Стартовый кабинет готов. Опишите в чате слева, что нужно хранить и показывать — AI добавит сущности, таблицы и страницы прямо сюда, под этим же дизайном."
       />
 
-      {/* KPI row — honest fresh-project state, no fabricated numbers. */}
-      <div className="fade-up delay-1 grid gap-4 sm:grid-cols-3">
+      {/* KPI row — honest fresh-project state, no fabricated numbers. The
+          `stagger` wrapper rises each tile in sequence (the "living dashboard"
+          cascade) instead of one flat fade — obeys the per-app MOTION-DNA. */}
+      <div className="stagger grid gap-4 sm:grid-cols-3">
         <StatCard
           label="Аккаунт"
           value="1"

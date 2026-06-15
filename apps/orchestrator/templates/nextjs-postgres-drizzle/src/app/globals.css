@@ -21,16 +21,57 @@
   .fade-up.delay-1 { animation-delay: .12s; }
   .fade-up.delay-2 { animation-delay: .24s; }
   .fade-up.delay-3 { animation-delay: .36s; }
+  .fade-up.delay-4 { animation-delay: .48s; }
+  .fade-up.delay-5 { animation-delay: .60s; }
+  /* Staggered entrance — direct children rise in sequence on mount (KPI rows,
+     feature grids, lists). Add `stagger` to the wrapping grid/flex instead of
+     hand-delaying each card, so a row of any length cascades in. Obeys the same
+     per-app MOTION-DNA (`--omnia-ease` / `--omnia-dur`) as the entrance family,
+     reduced-motion safe. Mirrors the entities kit so the flagship default and the
+     entity templates animate identically. */
+  .stagger > * { animation: omnia-fade-up var(--omnia-dur, .5s) var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)) both; }
+  .stagger > *:nth-child(2) { animation-delay: .05s; }
+  .stagger > *:nth-child(3) { animation-delay: .10s; }
+  .stagger > *:nth-child(4) { animation-delay: .15s; }
+  .stagger > *:nth-child(5) { animation-delay: .20s; }
+  .stagger > *:nth-child(6) { animation-delay: .25s; }
+  .stagger > *:nth-child(7) { animation-delay: .30s; }
+  .stagger > *:nth-child(8) { animation-delay: .35s; }
   /* Opt-in scroll reveal: requires a client component to add `.is-visible`. */
   .reveal { opacity: 0; transform: translateY(24px); transition: opacity var(--omnia-dur, .6s) var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)), transform var(--omnia-dur, .6s) var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)); }
   .reveal.is-visible { opacity: 1; transform: none; }
 }
 
+/* ── Premium elevation — soft, layered shadows = the "floating panel" depth of
+ * Linear / Stripe / Vercel dashboards. `.elev-1` is the resting card; `.elev-2`
+ * is raised / hover. Tuned for the dark-by-default drizzle canvas (black-based,
+ * so they read on near-black instead of washing out like a slate shadow would).
+ * One source for every panel's depth so `.hover-lift` and `.card-soft` ride the
+ * same token. Mirrors the entities kit. */
+:root {
+  --elevation-1: 0 1px 2px -1px oklch(0 0 0 / 0.5), 0 4px 12px -4px oklch(0 0 0 / 0.4);
+  --elevation-2: 0 2px 6px -2px oklch(0 0 0 / 0.6), 0 14px 36px -10px oklch(0 0 0 / 0.55);
+}
+.elev-1 { box-shadow: var(--elevation-1); }
+.elev-2 { box-shadow: var(--elevation-2); }
+
+/* ── Cabinet work-canvas glow — a faint, fixed brand-tinted aurora behind the
+ * whole signed-in shell so the near-black `bg-zinc-950` work surface isn't
+ * dead-flat (the public landing already carries its own ambient glow; this gives
+ * the cabinet the same depth). Tone-on-tone over the dark canvas at low alpha,
+ * so text keeps full contrast (content sits above). Painted on the AppShell root
+ * (the opaque zinc-950 there would otherwise hide a body-level glow). One kit
+ * primitive → every generated cabinet inherits the ambient depth for free. */
+.omnia-app-canvas {
+  background-image: radial-gradient(120% 62% at 50% -12%, color-mix(in oklab, var(--brand, #6366f1) 10%, transparent), transparent 60%);
+  background-attachment: fixed;
+}
+
 .hover-lift { transition: transform .2s ease, box-shadow .2s ease; }
 @media (hover: hover) {
-  .hover-lift:hover { transform: translateY(-4px); box-shadow: 0 16px 40px -12px rgba(15, 23, 42, .22); }
+  .hover-lift:hover { transform: translateY(-4px); box-shadow: var(--elevation-2); }
 }
-.card-soft { border-radius: 1rem; box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 10px 30px -14px rgba(15, 23, 42, .18); }
+.card-soft { border-radius: 1rem; box-shadow: var(--elevation-1); }
 .gradient-text { background-image: linear-gradient(90deg, var(--g1, #6366f1), var(--g2, #8b5cf6)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .glass { background: rgba(255, 255, 255, .72); backdrop-filter: blur(12px) saturate(140%); -webkit-backdrop-filter: blur(12px) saturate(140%); border: 1px solid rgba(255, 255, 255, .25); }
 
