@@ -87,13 +87,13 @@ export default function Home() {
         <nav className="flex items-center gap-2">
           <a
             href="/signin"
-            className="rounded-lg px-4 py-2 text-sm font-medium text-zinc-300 transition hover:text-white"
+            className="hidden rounded-lg px-4 py-2 text-sm font-medium text-zinc-300 transition hover:text-white sm:inline-block"
           >
             Войти
           </a>
           <a
             href="/signup"
-            className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-[var(--brand-fg)] shadow-sm transition hover:brightness-110"
+            className="whitespace-nowrap rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-[var(--brand-fg)] shadow-sm transition hover:brightness-110"
           >
             Создать аккаунт
           </a>
