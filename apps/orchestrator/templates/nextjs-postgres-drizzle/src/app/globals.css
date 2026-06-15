@@ -297,3 +297,37 @@
   .omnia-chart-grow { transform-origin: left center; animation: omnia-grow-x .9s cubic-bezier(.16, 1, .3, 1) both; }
   .omnia-donut-sweep { animation: omnia-sweep 1.1s cubic-bezier(.16, 1, .3, 1) both; }
 }
+
+/* ── Loading shimmer — the brand-tinted skeleton block (<Skeleton> /
+ * <DashboardSkeleton>). Render these in a route `loading.tsx` (or any Suspense
+ * fallback) so a data region is ALIVE from first paint — a soft brand pulse with
+ * a sheen sweeping across it — instead of a blank flash or a lone spinner (the
+ * "live render" feel, before the real rows even arrive). The base is a static,
+ * theme-adaptive tint: a faint brand wash over the neutral `--muted`, so it reads
+ * on the light AND the near-black cabinet and reduced-motion users still get a
+ * calm placeholder. The moving sheen is layered on (::after) only when motion is
+ * allowed, riding the per-app tempo via `--omnia-ease`. The element's own
+ * `rounded-*` / size utilities win (this rule sets no radius), and `::after` is
+ * clipped to that radius by `overflow:hidden`. Self-contained, mirrors the
+ * entities kit's loading intent. */
+.omnia-skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: color-mix(in oklab, var(--brand, #6366f1) 9%, var(--muted));
+}
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes omnia-skeleton-sheen { 100% { transform: translateX(100%) } }
+  .omnia-skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in oklab, var(--brand, #6366f1) 24%, transparent) 50%,
+      transparent 100%
+    );
+    animation: omnia-skeleton-sheen 1.5s var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)) infinite;
+  }
+}

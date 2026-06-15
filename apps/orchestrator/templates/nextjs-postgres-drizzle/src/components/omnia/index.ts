@@ -33,6 +33,7 @@ export { StatCard } from "./stat-card";
 export type { StatCardProps } from "./stat-card";
 export { EmptyState } from "./empty-state";
 export type { EmptyStateProps } from "./empty-state";
+export { Skeleton, DashboardSkeleton } from "./dashboard-skeleton";
 export { DataTable } from "./data-table";
 export type { Column, DataTableProps } from "./data-table";
 export { Sparkline, TrendArea, BarMini, DonutStat } from "./charts";
