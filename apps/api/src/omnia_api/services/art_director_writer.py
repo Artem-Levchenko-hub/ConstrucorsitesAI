@@ -577,10 +577,15 @@ _WRITER_INSTRUCTION_TEMPLATE_APP = """\
 • globals.css — НЕ ТРОГАЙ (фиксирован: @import "tailwindcss" + @theme inline + токены,
   Tailwind v4). ⛔ Запрещены @tailwind base/components/utilities, @apply border-border,
   HSL-каналы, свой shadcn-блок из памяти — это ломает сборку (unknown utility border-border).
-  Бренд-цвет — ОДИН статический <style> в (app)/layout.tsx, переопредели значения в oklch:
-  <style>{":root{--primary:oklch(0.52 0.12 233);--primary-foreground:oklch(0.99 0 0);--ring:oklch(0.52 0.12 233)}"}</style>.
+  Бренд-токены — ОДИН статический <style> в (app)/layout.tsx, переопредели значения в oklch.
+  ⛔ ОБЯЗАТЕЛЬНО включи И `--radius` из поля РАДИУС брифа (это ФОРМА-ДНК приложения: один
+  выбор радиуса перекрашивает ВСЕ поверхности кита — кнопки, карточки, hero-панель, доску,
+  модалки — через token-ладдер globals.css; пропустишь --radius → апп получит дефолтную
+  форму, а не задуманную тобой → разные ниши выглядят одинаково). Пиши ровно так:
+  <style>{":root{--primary:oklch(0.52 0.12 233);--primary-foreground:oklch(0.99 0 0);--ring:oklch(0.52 0.12 233);--radius:0.5rem}"}</style>.
   В КОМПОНЕНТАХ — только токен-классы (bg-primary / bg-card / text-muted-foreground /
-  border-border), НИКОГДА bg-zinc-* / hex. Шрифт — дефолт кита (Manrope).
+  border-border) и token-радиусы (rounded-lg/xl/2xl — следуют --radius), НИКОГДА bg-zinc-* /
+  hex / rounded-[..px]. Шрифт — дефолт кита (Manrope).
 • Колонки / поля / лейблы / статусы / KPI — ровно из брифа, дословно. formatRub для денег,
   formatDate для дат, <Badge> для статусов.
 • Контракт «ноль тупиков»: каждый пункт нав ведёт на существующую страницу, каждая кнопка
@@ -602,7 +607,7 @@ _WRITER_INSTRUCTION_TEMPLATE_APP = """\
 2. Есть (app)/layout.tsx с <AppShell> и навигацией из брифа? Все пункты ведут на реальные страницы?
 3. У каждой сущности — страница через <CrudResource> с колонками и полями из брифа?
 4. Дашборд: <DashboardHero> (доминантная метрика, один <h1>) + ряд второстепенных <StatCard> + таблица/разбивка?
-5. globals.css НЕ тронут (ноль @tailwind/@apply/HSL)? Бренд-цвет — через <style> в (app)/layout? Публичная главная src/app/page.tsx ЗАПОЛНЕНА витриной (НЕ пустая), дашборд под (app)/dashboard (НЕ (app)/page.tsx)? В компонентах только токен-классы?
+5. globals.css НЕ тронут (ноль @tailwind/@apply/HSL)? Бренд-токены — через <style> в (app)/layout, и в нём ЕСТЬ --radius из поля РАДИУС (не только --primary)? Публичная главная src/app/page.tsx ЗАПОЛНЕНА витриной (НЕ пустая), дашборд под (app)/dashboard (НЕ (app)/page.tsx)? В компонентах только токен-классы?
 6. Адаптив (responsive-сетки, ноль фикс-ширин)? Один <h1> на экран? Формат <file ...>?
 Нашёл отклонение — исправь ДО вывода. Выводи только финальные <file>-блоки, без объяснений.
 

@@ -184,6 +184,15 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* The big surfaces (hero panels, cards, board columns, master-detail, pricing,
+     FAQ) lean on rounded-2xl/3xl. Tailwind's defaults are FIXED (1rem / 1.5rem),
+     so without these they ignore the brand `--radius` — a sharp-corporate app and
+     a soft-consumer app would share the exact same blobby corners on their most
+     prominent panels. Deriving them from `--radius` makes the per-app shape DNA
+     reach EVERY surface (one design language end to end). Offsets are tuned so the
+     default 0.65rem keeps today's 16px / 24px rendering (no regression). */
+  --radius-2xl: calc(var(--radius) + 6px);
+  --radius-3xl: calc(var(--radius) + 14px);
 
   --font-sans: var(--font-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-mono), ui-monospace, "SF Mono", monospace;
