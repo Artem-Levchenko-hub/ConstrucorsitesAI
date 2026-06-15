@@ -384,7 +384,14 @@
     if (!rm) setTimeout(birthWave, Math.max(0, total - 650));
   }
 
-  if (document.readyState === "loading")
-    document.addEventListener("DOMContentLoaded", play);
-  else play();
+  // Auto-play ONLY inside the workspace preview iframe (embedded). A standalone
+  // top-level page must NOT show the build-time "Omnia собираю дизайн" overlay —
+  // that is the owner's preview magic, not the end customer's UX.
+  var inPreview = false;
+  try { inPreview = window.self !== window.top; } catch (_) { inPreview = true; }
+  if (inPreview) {
+    if (document.readyState === "loading")
+      document.addEventListener("DOMContentLoaded", play);
+    else play();
+  }
 })();

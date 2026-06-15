@@ -414,7 +414,12 @@
   });
 
   function bootFromBaked() {
-    if (window.__omniaBrief) play(window.__omniaBrief);
+    // Auto-play ONLY inside the workspace preview iframe (embedded). A standalone
+    // visit to the SHIPPED app must NOT show the build-time "Omnia собираю дизайн"
+    // overlay — that is the owner's preview magic, not the end customer's UX.
+    var inPreview = false;
+    try { inPreview = window.self !== window.top; } catch (_) { inPreview = true; }
+    if (inPreview && window.__omniaBrief) play(window.__omniaBrief);
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bootFromBaked);
