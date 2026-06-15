@@ -46,8 +46,29 @@ def test_blank_everything_is_safe() -> None:
     assert card.accent.startswith("#") and len(card.accent) == 7
 
 
+def test_motion_dna_derived_from_niche() -> None:
+    # MOTION-half of APP-DNA (mirrors the entities --omnia-ease/--omnia-dur, but
+    # here it's DETERMINISTIC — no model). The niche character picks one of three
+    # entrance tempi; the drizzle `brandTokens` turns it into the CSS-var pair.
+    calm = build_share_card("Галерея Лофт", "сайт галереи современного искусства", "#000000")
+    assert calm.motion == "calm"  # luxe / media / content → slow, smooth entrance
+    snappy = build_share_card("Кофейня", "интернет-магазин кофе с доставкой", "#b45309")
+    assert snappy.motion == "snappy"  # shop / lifestyle / e-com → quick, springy
+    precise = build_share_card("ФинСервис", "crm для финансовой компании", "#0d9488")
+    assert precise.motion == "precise"  # fintech / b2b / saas → crisp, composed
+
+
+def test_default_motion_is_precise() -> None:
+    # An unclassifiable / blank brief lands on the professional default — the same
+    # tempo the enterprise drizzle default ships with.
+    assert build_share_card("  ", "", "not-a-color").motion == "precise"
+    assert build_share_card("X", "нечто непонятное", "#111111").motion == "precise"
+
+
 def test_inject_writes_a_valid_ts_module() -> None:
-    card = ShareCard(title='Студия «Алёна"s»', tagline="салон красоты", accent="#db2777")
+    card = ShareCard(
+        title='Студия «Алёна"s»', tagline="салон красоты", accent="#db2777", motion="snappy"
+    )
     files = inject_share_module({"src/app/page.tsx": "x"}, card)
     assert _MODULE_PATH in files
     src = files[_MODULE_PATH]
@@ -60,6 +81,7 @@ def test_inject_writes_a_valid_ts_module() -> None:
         "title": 'Студия «Алёна"s»',
         "tagline": "салон красоты",
         "accent": "#db2777",
+        "motion": "snappy",
     }
     assert "as const" in src
     # Original files are preserved.

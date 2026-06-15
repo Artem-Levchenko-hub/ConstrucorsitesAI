@@ -37,6 +37,35 @@ _UNTITLED = {"untitled", "untitled project", "новый проект", "про�
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
+#: MOTION-half of APP-DNA (mirrors the entities' brief-driven --omnia-ease /
+#: --omnia-dur, but DETERMINISTIC here — no model). One entrance tempo drives the
+#: birth of every drizzle surface, so a gallery and a kids' shop visibly "come
+#: alive" apart from one build. The drizzle `brandTokens` turns the chosen name
+#: into the CSS-var pair; an unclassifiable brief lands on the professional
+#: `precise` default the enterprise template ships with.
+_MOTION_CALM = (
+    "люкс", "премиум", "ювелир", "отел", "спа", "галере", "фото", "портфолио",
+    "медиа", "журнал", "бутик", "интерьер", "архитект", "вино", "парфюм", "часы",
+    "искусств", "дизайн-студ", "luxury", "gallery", "portfolio",
+)
+_MOTION_SNAPPY = (
+    "детск", "игрушк", "ребён", "ребен", "кафе", "кофейн", "магазин", "шоп",
+    "shop", "ecom", "e-com", "маркетплейс", "доставк", "еда", "пицц", "бургер",
+    "фитнес", "спорт", "лайфстайл", "блог", "ивент", "праздник", "цвет", "store",
+)
+
+
+def _derive_motion(prompt: str | None) -> str:
+    """Deterministically pick an entrance tempo (`calm` / `snappy` / `precise`)
+    from the brief's niche keywords. Defaults to `precise` — the crisp, composed
+    feel that fits the fintech / B2B / SaaS bulk and the template's own default."""
+    text = (prompt or "").lower()
+    if any(kw in text for kw in _MOTION_CALM):
+        return "calm"
+    if any(kw in text for kw in _MOTION_SNAPPY):
+        return "snappy"
+    return "precise"
+
 
 @dataclass(frozen=True)
 class ShareCard:
@@ -45,6 +74,8 @@ class ShareCard:
     title: str
     tagline: str
     accent: str
+    #: Entrance tempo (`calm` / `snappy` / `precise`) — APP-DNA MOTION-half.
+    motion: str = "precise"
 
 
 def _clean_accent(accent_hex: str | None) -> str:
@@ -80,6 +111,7 @@ def build_share_card(
         title=_derive_title(name, prompt),
         tagline=infer_niche_label(prompt or ""),
         accent=_clean_accent(accent_hex),
+        motion=_derive_motion(prompt),
     )
 
 

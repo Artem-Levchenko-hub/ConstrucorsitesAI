@@ -41,14 +41,31 @@ export function panelGradient(accent: string): string {
   ].join(" ");
 }
 
-/** Pin the brand accent as local CSS vars on a root element so descendants can
- *  read it through Tailwind arbitrary values (`bg-[var(--brand)]`,
- *  `focus:ring-[var(--brand)]`). No dependency on any template-wide token
- *  system — drizzle ships none. */
+/** APP-DNA motion-half: each tempo is a ready entrance curve + duration that the
+ *  kit's `.fade-up` / `.fade-in` / `.scale-in` / `.reveal` family reads through
+ *  `--omnia-ease` / `--omnia-dur` (globals.css). One tempo drives the birth of
+ *  every surface, so a luxe gallery (calm) and a kids' shop (snappy) visibly
+ *  "come alive" apart — mirrors the entities kit's brief-driven motion-DNA. */
+const MOTION_TEMPI: Record<"calm" | "snappy" | "precise", { ease: string; dur: string }> = {
+  calm: { ease: "cubic-bezier(.22,1,.36,1)", dur: ".72s" }, // luxe / media / content
+  snappy: { ease: "cubic-bezier(.34,1.56,.64,1)", dur: ".34s" }, // shop / lifestyle / e-com
+  precise: { ease: "cubic-bezier(.4,0,.2,1)", dur: ".5s" }, // fintech / B2B / SaaS
+};
+
+/** Pin the brand accent + entrance tempo as local CSS vars on a root element so
+ *  descendants can read them through Tailwind arbitrary values
+ *  (`bg-[var(--brand)]`, `focus:ring-[var(--brand)]`) and the kit's entrance
+ *  animations (`--omnia-ease` / `--omnia-dur`). No dependency on any
+ *  template-wide token system — drizzle ships none. The motion pair rides
+ *  `share.motion` (pinned per-build by services/share_meta.py) the same way the
+ *  accent rides `share.accent`. */
 export function brandTokens(accent: string): React.CSSProperties {
+  const tempo = MOTION_TEMPI[share.motion as keyof typeof MOTION_TEMPI] ?? MOTION_TEMPI.precise;
   return {
     "--brand": accent,
     "--brand-fg": readableOn(accent),
+    "--omnia-ease": tempo.ease,
+    "--omnia-dur": tempo.dur,
   } as React.CSSProperties;
 }
 
