@@ -19,6 +19,7 @@ import { PageHeader } from "./page-header";
 import { DataTable, type Column, type FilterTab } from "./data-table";
 import { GalleryGrid, type GalleryItem, type MediaCardProps } from "./gallery-grid";
 import { BoardView, type BoardCard, type BoardColumn } from "./board-view";
+import { CalendarView, type CalendarEvent } from "./calendar-view";
 import { RecordDetail } from "./record-detail";
 import { EntityForm, type FieldSpec } from "./entity-form";
 import { useEntity } from "./use-entity";
@@ -90,10 +91,16 @@ export interface CrudResourceProps {
    *  - "board"   — drag-and-drop kanban grouped by `filterField` into the
    *    `filterTabs` stages, for anything that moves through a workflow (заявки,
    *    тикеты, заказы, сделки, задачи). Dragging a card saves its new status.
+   *  - "calendar"— month-grid + agenda placed by `dateField`, for anything that
+   *    lives on a date (брони, события, встречи, смены, дедлайны). Requires
+   *    `dateField`.
    */
-  view?: "table" | "gallery" | "board";
-  /** Row→card mapping for `view="gallery"` / `view="board"`. Ignored in table view. */
+  view?: "table" | "gallery" | "board" | "calendar";
+  /** Row→card mapping for `view="gallery"` / `view="board"` / `view="calendar"`. Ignored in table view. */
   media?: MediaMap;
+  /** The row field holding the date for `view="calendar"` (ISO string, epoch
+   *  number, or Date). Without it, calendar view falls back to a table. */
+  dateField?: string;
 }
 
 /** Plain display of a raw field value in the detail card — mirrors the table's
@@ -147,6 +154,7 @@ export function CrudResource({
   createLabel = "Создать",
   view = "table",
   media,
+  dateField,
 }: CrudResourceProps) {
   const allowBulk = selectable ?? canDelete;
   // Make every column sortable by default so operators can order a managed list
@@ -288,6 +296,9 @@ export function CrudResource({
     [filterTabs],
   );
   const useBoard = view === "board" && !!filterField && boardColumns.length > 0;
+  // Calendar needs a date field to place records on; without one there is
+  // nothing to schedule, so fall back to a table.
+  const useCalendar = view === "calendar" && !!dateField;
 
   // Build the card models once per row set. Search keywords fold the searchable
   // columns' raw text so the gallery's search box matches the same fields the
@@ -345,6 +356,34 @@ export function CrudResource({
     }));
   }, [useBoard, media, data.rows, columns, filterField, rowDetail, rowActions, keywordKeys]);
 
+  // Event models for the calendar. Mirror the board's display mapping (reuse
+  // `media` when present, else first column = title, next non-date column =
+  // subtitle); the date itself comes from `dateField`.
+  const calendarEvents: CalendarEvent[] = React.useMemo(() => {
+    if (!useCalendar || !dateField) return [];
+    const subtitleCol = columns.find((c) => c.key !== dateField && c !== columns[0]);
+    return data.rows.map((row) => ({
+      id: row.id,
+      date: row[dateField] as CalendarEvent["date"],
+      title: media ? media.title(row) : columns[0] ? renderCell(columns[0], row) : row.id,
+      subtitle: media
+        ? media.subtitle?.(row)
+        : subtitleCol
+          ? renderCell(subtitleCol, row)
+          : undefined,
+      meta: media?.price?.(row),
+      badge: media?.badge?.(row),
+      onClick: rowDetail ? () => setViewing(row) : undefined,
+      actions: rowActions ? rowActions(row) : undefined,
+      keywords: keywordKeys
+        .map((k) => {
+          const v = (row as Record<string, unknown>)[k];
+          return v == null ? "" : String(v);
+        })
+        .join(" "),
+    }));
+  }, [useCalendar, dateField, media, data.rows, columns, rowDetail, rowActions, keywordKeys]);
+
   async function handleMove(id: string, toStatus: string) {
     if (!filterField) return;
     try {
@@ -366,7 +405,21 @@ export function CrudResource({
         <div className="mb-4 flex justify-end">{createButton}</div>
       ) : null}
 
-      {useBoard ? (
+      {useCalendar ? (
+        <CalendarView
+          events={calendarEvents}
+          loading={data.loading}
+          searchable={searchable}
+          emptyAction={
+            canCreate ? (
+              <Button onClick={openCreate}>
+                <Plus />
+                {createLabel}
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : useBoard ? (
         <BoardView
           columns={boardColumns}
           cards={boardCards}

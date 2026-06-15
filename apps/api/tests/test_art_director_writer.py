@@ -187,11 +187,20 @@ def test_app_art_director_prescribes_screen_archetypes() -> None:
     # command-center dashboard. All four names + the no-kanban guard must survive.
     instr = adw._ART_DIRECTOR_INSTRUCTION_APP
     assert "АРХЕТИП ГЛАВНОГО ЭКРАНА" in instr
-    for name in ("КОМАНД-ЦЕНТР", "ВИТРИНА-КАТАЛОГ", "ДОСЬЕ-ФОКУС", "ТРЕКЕР-ПОТОК"):
+    for name in (
+        "КОМАНД-ЦЕНТР",
+        "ВИТРИНА-КАТАЛОГ",
+        "ДОСЬЕ-ФОКУС",
+        "ТРЕКЕР-ПОТОК",
+        "РАСПИСАНИЕ-КАЛЕНДАРЬ",
+    ):
         assert name in instr, f"archetype {name} dropped from app art-director"
     # the main screen is no longer hard-wired to DashboardHero for every niche
     assert "по выбранному архетипу" in adw._ART_DIRECTOR_INSTRUCTION_APP.lower() or (
         "по АРХЕТИПУ" in adw._WRITER_INSTRUCTION_TEMPLATE_APP
     )
-    # kanban guard: no hand-rolled board (the kit has no Board component)
+    # the kit OWNS the kanban (board) + calendar views — the brief routes the
+    # tracker/schedule archetypes to them instead of hand-rolled grids.
     assert "канбан" in instr.lower()
+    assert 'view="board"' in instr
+    assert 'view="calendar"' in instr

@@ -719,14 +719,23 @@ def test_entities_ui_brief_selects_screen_archetype() -> None:
     from omnia_api.services.prompt_builder import _ENTITIES_UI
 
     assert "АРХЕТИП ГЛАВНОГО ЭКРАНА" in _ENTITIES_UI
-    for name in ("КОМАНД-ЦЕНТР", "ВИТРИНА-КАТАЛОГ", "ДОСЬЕ-ФОКУС", "ТРЕКЕР-ПОТОК"):
+    for name in (
+        "КОМАНД-ЦЕНТР",
+        "ВИТРИНА-КАТАЛОГ",
+        "ДОСЬЕ-ФОКУС",
+        "ТРЕКЕР-ПОТОК",
+        "РАСПИСАНИЕ-КАЛЕНДАРЬ",
+    ):
         assert name in _ENTITIES_UI, f"archetype {name} dropped from _ENTITIES_UI"
     # archetype block sits ABOVE the dashboard recipe (it reframes it)
     assert _ENTITIES_UI.index("АРХЕТИП ГЛАВНОГО ЭКРАНА") < _ENTITIES_UI.index(
         "рецепт архетипа"
     )
-    # no hand-rolled kanban (kit has no Board component)
-    assert "Канбан-доски в ките НЕТ" in _ENTITIES_UI
+    # the kit OWNS the kanban + calendar views — the brief must route to them,
+    # NOT tell the writer they're missing (stale-guidance regression guard).
+    assert "Канбан-доски в ките НЕТ" not in _ENTITIES_UI
+    assert 'view="board"' in _ENTITIES_UI
+    assert 'view="calendar"' in _ENTITIES_UI
 
 
 def test_entities_ui_public_home_uses_storefront_hero() -> None:

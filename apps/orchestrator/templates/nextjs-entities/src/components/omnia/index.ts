@@ -75,6 +75,11 @@ export {
   type BoardColumn,
   type BoardCard,
 } from "./board-view";
+export {
+  CalendarView,
+  type CalendarViewProps,
+  type CalendarEvent,
+} from "./calendar-view";
 export { CrudResource, type CrudResourceProps } from "./crud-resource";
 export {
   RecordDetail,
