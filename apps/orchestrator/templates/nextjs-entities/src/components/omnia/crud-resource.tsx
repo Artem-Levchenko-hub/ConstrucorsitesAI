@@ -367,9 +367,14 @@ export function CrudResource({
 
       {/* Create / edit */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent>
+        <DialogContent className={cn(fields.length > 3 && "sm:max-w-2xl")}>
           <DialogHeader>
             <DialogTitle>{editing ? "Редактировать" : createLabel}</DialogTitle>
+            <DialogDescription>
+              {editing
+                ? "Измените поля и сохраните изменения."
+                : "Заполните поля ниже, чтобы создать запись."}
+            </DialogDescription>
           </DialogHeader>
           <EntityForm
             key={editing?.id ?? "new"}
