@@ -109,6 +109,48 @@ def test_brief_failure_is_fail_soft() -> None:
     assert not any("error" in e for e in events)
 
 
+def test_freeform_archetype_hero_map_is_total_and_deterministic() -> None:
+    # Keystone (v2.24 #1a): every _STYLE_KIT archetype must resolve to EXACTLY
+    # ONE kit hero snippet, so the first screen differentiates by niche instead
+    # of the Writer guessing and defaulting to hero-centered.
+    from omnia_api.services import prompt_builder as pb
+
+    archetypes = (
+        "APPLE TECH",
+        "FINTECH TRUST",
+        "LINEAR DARK",
+        "EDITORIAL LUXURY",
+        "VIBRANT CONSUMER",
+        "CLINICAL TRUST",
+        "BOLD STUDIO",
+        "KINETIC TYPE",
+        "REFINED MINIMAL",
+        "NORDIC MINIMAL",
+    )
+    # all 10 presets covered, each mapping to a valid kit hero variant
+    assert set(adw._ARCHETYPE_HERO) == set(archetypes)
+    for name, hero in adw._ARCHETYPE_HERO.items():
+        assert hero in adw._HERO_VARIANTS, f"{name} → invalid hero {hero}"
+        # the archetype name is a real _STYLE_KIT preset, not a typo
+        assert name in pb._STYLE_KIT, f"{name} absent from _STYLE_KIT"
+        # the kit actually ships that hero snippet
+        assert f"▸ {hero.upper()}" in pb._LANDING_SECTION_KIT, f"kit missing {hero} snippet"
+
+
+def test_freeform_brief_carries_structural_archetype_hero_fields() -> None:
+    # The AD brief must EMIT the structural fields (not just prose), and the
+    # deterministic archetype→hero table must be rendered into the instruction
+    # with no leftover sentinel.
+    instr = adw._ART_DIRECTOR_INSTRUCTION
+    assert "АРХЕТИП:" in instr
+    assert "HERO-ВАРИАНТ:" in instr
+    assert "«ARCHETYPE_HERO_TABLE»" not in instr  # sentinel was substituted
+    for name, hero in adw._ARCHETYPE_HERO.items():
+        assert f"{name}→{hero}" in instr, f"mapping {name}→{hero} missing from brief"
+    # the first-screen instruction now defers to the fixed field, no re-guessing
+    assert "HERO-ВАРИАНТ" in instr
+
+
 def test_app_art_director_prescribes_screen_archetypes() -> None:
     # Composition lever (pickup #2): the APP art-director must classify the niche
     # into one of four screen archetypes upfront, not default every app to a
