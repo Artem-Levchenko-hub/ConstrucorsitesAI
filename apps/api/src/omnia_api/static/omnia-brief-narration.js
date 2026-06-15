@@ -184,12 +184,104 @@
     (document.head || document.documentElement).appendChild(s);
   }
 
+  // ── Birth conductor (pillar 3): the overlay hands off to the PAGE itself,
+  // which assembles section-by-section in the brand accent — the SAME born
+  // swipe the workspace plays on the live stream (#2a), now on the SHARED
+  // /p/<slug> surface so a colleague opening the link WATCHES it come alive
+  // instead of the card fading to a static page. Self-contained: a brand-accent
+  // bar wipes down each top-level section's left edge, cascaded top→bottom, and
+  // every kit .reveal is settled so nothing stays hidden after the birth. No
+  // dependency on the per-project kit.js version — works on any baked page.
+  var birthDone = false;
+
+  function birthStyle() {
+    if (document.getElementById("omnia-birth-style")) return;
+    var s = document.createElement("style");
+    s.id = "omnia-birth-style";
+    s.textContent =
+      // Left rail wipes top→bottom; a top sweep draws left→right — together a
+      // brand-accent corner bracket that frames each section as it is "born".
+      ".omnia-born-bar{position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:4px;" +
+      "pointer-events:none;z-index:6;transform-origin:top;transform:scaleY(0);opacity:0;" +
+      "background:linear-gradient(180deg,var(--obn,#818cf8) 0,var(--obn,#818cf8) 55%,transparent);" +
+      "box-shadow:0 0 22px var(--obn,#818cf8);" +
+      "animation:obnwipe 1.1s cubic-bezier(.16,1,.3,1) forwards}" +
+      ".omnia-born-bar::before{content:'';position:absolute;left:0;top:0;height:4px;" +
+      "width:min(160px,42%);border-radius:4px;transform-origin:left;transform:scaleX(0);" +
+      "background:linear-gradient(90deg,var(--obn,#818cf8),transparent);" +
+      "box-shadow:0 0 16px var(--obn,#818cf8);" +
+      "animation:obnsweep 1.1s cubic-bezier(.16,1,.3,1) forwards}" +
+      "@keyframes obnwipe{0%{transform:scaleY(0);opacity:0}14%{opacity:1}" +
+      "50%{transform:scaleY(1);opacity:1}100%{transform:scaleY(1);opacity:0}}" +
+      "@keyframes obnsweep{0%{transform:scaleX(0);opacity:0}20%{opacity:1}" +
+      "55%{transform:scaleX(1);opacity:1}100%{transform:scaleX(1);opacity:0}}" +
+      "@media (prefers-reduced-motion:reduce){.omnia-born-bar{animation:none;opacity:0}" +
+      ".omnia-born-bar::before{animation:none;opacity:0}}";
+    (document.head || document.documentElement).appendChild(s);
+  }
+
+  // Top-level structural blocks, document order, de-nested (a candidate inside
+  // an already-collected candidate is dropped) and skipping tiny/empty nodes.
+  function birthTargets() {
+    var out = [];
+    var all = [].slice.call(
+      document.querySelectorAll("section, article, header, footer")
+    );
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.offsetHeight < 48) continue;
+      var nested = false;
+      for (var j = 0; j < out.length; j++) {
+        if (out[j].contains(el)) {
+          nested = true;
+          break;
+        }
+      }
+      if (!nested) out.push(el);
+      if (out.length >= 12) break;
+    }
+    return out;
+  }
+
+  function birthWave() {
+    if (birthDone) return;
+    birthDone = true;
+    // Settle every kit reveal so the page is fully shown after the birth,
+    // independent of the kit's scroll observer (idempotent with it).
+    [].slice
+      .call(document.querySelectorAll(".reveal,.line-rise"))
+      .forEach(function (el) {
+        el.classList.add("is-visible");
+      });
+    if (reduced()) return;
+    var targets = birthTargets();
+    if (!targets.length) return;
+    birthStyle();
+    var ac = hexes(brief.palette || {}, 1)[0] || "#818cf8";
+    targets.forEach(function (el, i) {
+      setTimeout(function () {
+        if (getComputedStyle(el).position === "static") el.style.position = "relative";
+        var bar = document.createElement("div");
+        bar.className = "omnia-born-bar";
+        bar.setAttribute("aria-hidden", "true");
+        bar.style.setProperty("--obn", ac);
+        el.appendChild(bar);
+        setTimeout(function () {
+          if (bar.parentNode) bar.parentNode.removeChild(bar);
+        }, 1300);
+      }, i * 130);
+    });
+  }
+
   var timer = null;
   function remove() {
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
+    // Hand off to the page birth (guarded → fires once even if the overlay is
+    // click-skipped before the scheduled handoff).
+    birthWave();
     var el = document.getElementById(ID);
     if (!el) return;
     el.classList.add("out");
@@ -266,6 +358,10 @@
       sessionStorage.setItem(KEY, sig(brief));
     } catch (_) {}
     timer = setTimeout(remove, total);
+    // Start the section-birth cascade just before the card fades, so the page
+    // assembles in the brand accent as the overlay concludes — one continuous
+    // "AI is designing this → and here it is being built" motion.
+    if (!rm) setTimeout(birthWave, Math.max(0, total - 650));
   }
 
   if (document.readyState === "loading")

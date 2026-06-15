@@ -81,6 +81,20 @@ def test_inject_adds_payload_and_reveal_before_head_close() -> None:
     assert "<title>X</title>" in out and "hi" in out
 
 
+def test_inject_carries_birth_conductor() -> None:
+    """The baked reveal hands off to a page-birth cascade (pillar 3): the
+    overlay concludes, then the page assembles section-by-section in the brand
+    accent (the same born swipe the workspace plays on-stream). Pinned so the
+    shared /p/<slug> can't silently regress back to "fade to a static page"."""
+    out = inject_brief_narration(
+        "<head></head><body></body>", _FULL_BRIEF
+    )
+    assert "omnia-born-bar" in out  # brand-accent born swipe element
+    assert "function birthWave" in out  # the conductor is wired in
+    # Reduced-motion still settles the page (no orphaned hidden sections).
+    assert 'classList.add("is-visible")' in out
+
+
 def test_inject_is_idempotent() -> None:
     html = "<html><head></head><body></body></html>"
     once = inject_brief_narration(html, _FULL_BRIEF)
