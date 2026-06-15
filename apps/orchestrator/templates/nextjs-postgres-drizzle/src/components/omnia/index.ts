@@ -10,6 +10,8 @@
  */
 export { AppShell } from "./app-shell";
 export type { AppShellProps, AppShellUser, NavItem } from "./app-shell";
+export { DashboardHero } from "./dashboard-hero";
+export type { DashboardHeroProps, HeroStat } from "./dashboard-hero";
 export { PageHeader } from "./page-header";
 export type { PageHeaderProps } from "./page-header";
 export { StatCard } from "./stat-card";

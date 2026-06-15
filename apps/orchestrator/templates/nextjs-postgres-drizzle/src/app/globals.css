@@ -27,3 +27,42 @@
 .card-soft { border-radius: 1rem; box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 10px 30px -14px rgba(15, 23, 42, .18); }
 .gradient-text { background-image: linear-gradient(90deg, var(--g1, #6366f1), var(--g2, #8b5cf6)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .glass { background: rgba(255, 255, 255, .72); backdrop-filter: blur(12px) saturate(140%); -webkit-backdrop-filter: blur(12px) saturate(140%); border: 1px solid rgba(255, 255, 255, .25); }
+
+/* ── Signature hero art-layer — the brand-tinted "surface zero" that lifts the
+ * cabinet's FIRST screen from a flat panel to Linear / Stripe-grade depth
+ * (pillar 1). A tone-on-tone aurora mesh painted in the project accent (the
+ * `--brand` token, pinned from `share.accent`) BEHIND content at low alpha, so
+ * text keeps full contrast. The drizzle cabinet is dark-by-default
+ * (`bg-zinc-950`), so one calm opacity reads on the near-black canvas; masked
+ * toward the bottom so a stats strip stays clean, and reduced-motion safe — a
+ * slow 22s drift only when motion is welcome. Baked into <DashboardHero>: the
+ * default cabinet (and anything the writer builds on it) inherits the signature
+ * moment for free, never hand-rolling effects. Mirrors the entities kit so both
+ * templates wear the same brand-aurora identity. */
+.omnia-hero-art {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(58% 120% at 10% -12%, color-mix(in oklab, var(--brand, #6366f1) 48%, transparent), transparent 60%),
+    radial-gradient(52% 116% at 96% -4%, color-mix(in oklab, var(--brand, #6366f1) 34%, transparent), transparent 56%),
+    radial-gradient(42% 96% at 72% 118%, color-mix(in oklab, var(--brand, #6366f1) 22%, transparent), transparent 62%);
+  opacity: 0.85;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 100%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes omnia-aurora-drift {
+    0%   { transform: translate3d(0, 0, 0) scale(1); }
+    50%  { transform: translate3d(-2.5%, 1.5%, 0) scale(1.07); }
+    100% { transform: translate3d(0, 0, 0) scale(1); }
+  }
+  .omnia-hero-art { animation: omnia-aurora-drift 22s ease-in-out infinite; will-change: transform; }
+}
+
+/* ── Display type-rhythm — the agency-grade tracking ladder. Top-tier product
+ * UIs (Linear, Stripe, Vercel) optically TIGHTEN big type and keep body open;
+ * the kit hero carries the ladder so the writer never sets letter-spacing
+ * inline. */
+.omnia-display { letter-spacing: -0.035em; }
+.omnia-metric { letter-spacing: -0.022em; }

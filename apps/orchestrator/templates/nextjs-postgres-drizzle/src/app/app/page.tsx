@@ -3,8 +3,11 @@
  *
  * Sign-in lands here (`/signin` default `next`), so it is the FIRST thing an
  * owner sees once authed — the work surface, the dark counterpart to the public
- * landing. AI replaces / extends this when the user describes what to store and
- * show: it adds nav items, real Drizzle-backed StatCards, and DataTable lists
+ * landing. It opens with a <DashboardHero> — the signature brand-aurora band
+ * (the kit's "surface zero") — so the first screen reads as one design product
+ * with the landing and auth chrome, not a flat heading. AI replaces / extends
+ * this when the user describes what to store and show: it adds nav items, a
+ * focal metric on the hero, real Drizzle-backed StatCards, and DataTable lists
  * using the same `@/components/omnia` kit, so the cabinet grows premium from the
  * first prompt instead of starting as a bare shadcn page.
  *
@@ -18,9 +21,9 @@ import { Database, Home, LayoutDashboard, Layers, Rows3, Sparkles, User } from "
 import { Protected } from "@/components/Protected";
 import {
   AppShell,
+  DashboardHero,
   DataTable,
   EmptyState,
-  PageHeader,
   StatCard,
   type NavItem,
 } from "@/components/omnia";
@@ -54,13 +57,11 @@ async function Cabinet() {
       user={user ? { name: user.name, email: user.email } : null}
       title="Обзор"
     >
-      <div className="fade-up">
-        <PageHeader
-          eyebrow="Кабинет"
-          title={`Здравствуйте${user?.name ? `, ${user.name.split(" ")[0]}` : ""}`}
-          description="Стартовый кабинет готов. Опишите в чате слева, что нужно хранить и показывать — AI добавит сущности, таблицы и страницы прямо сюда, под этим же дизайном."
-        />
-      </div>
+      <DashboardHero
+        eyebrow="Кабинет"
+        title={`Здравствуйте${user?.name ? `, ${user.name.split(" ")[0]}` : ""}`}
+        description="Стартовый кабинет готов. Опишите в чате слева, что нужно хранить и показывать — AI добавит сущности, таблицы и страницы прямо сюда, под этим же дизайном."
+      />
 
       {/* KPI row — honest fresh-project state, no fabricated numbers. */}
       <div className="fade-up delay-1 grid gap-4 sm:grid-cols-3">

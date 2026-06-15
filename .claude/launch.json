@@ -50,6 +50,12 @@
       "port": 8760
     },
     {
+      "name": "drizzle-cab",
+      "runtimeExecutable": "ssh",
+      "runtimeArgs": ["-N", "-L", "8762:127.0.0.1:3011", "lh-server"],
+      "port": 8762
+    },
+    {
       "name": "web-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "apps/web", "run", "dev"],
@@ -84,6 +90,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "apps/orchestrator/templates/nextjs-entities", "run", "dev", "--", "--port", "3010"],
       "port": 3010
+    },
+    {
+      "name": "drizzle-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "apps/orchestrator/templates/nextjs-postgres-drizzle", "run", "dev", "--", "--port", "3012"],
+      "port": 3012
     },
     {
       "name": "auth-harness",
