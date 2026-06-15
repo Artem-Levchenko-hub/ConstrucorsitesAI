@@ -64,6 +64,29 @@
   --sidebar-ring: oklch(0.62 0.13 264);
 }
 
+/* ── Dark token set — OS-aware (an inline no-flash script in layout.tsx flips
+ *    `<html class="dark">` from localStorage ?? prefers-color-scheme; the
+ *    app-shell carries a toggle). The whole kit + the writer's app code is
+ *    token-driven (services/entity_theme rewrites every raw neutral → token), so
+ *    flipping these variables re-themes the ENTIRE app for free.
+ *
+ *    SPECIFICITY IS LOAD-BEARING. The art-director re-maps a few tokens per brand
+ *    in one `:root { … }` <style> in (app)/layout — and those are LIGHT values.
+ *    NEUTRALS therefore live on `:root.dark` (specificity 0,2,0) so the kit's
+ *    dark canvas WINS over that `:root` (0,1,0) override → a branded app gets a
+ *    correct dark background, not the designer's light one leaking through.
+ *    The BRAND accent (--primary / --primary-foreground / --ring) stays on the
+ *    lower-specificity `.dark` block below, so the SAME `:root` accent override
+ *    still wins in dark → a branded app keeps its accent; an un-branded app
+ *    falls back to the monochrome dark default.
+ *
+ *    The bare `.dark` in the selector list keeps the AppShell `theme="dark"`
+ *    fallback working: that prop puts `.dark` on a WRAPPER div for the pre-hydration
+ *    SSR frame (then mirrors it to <html>). On <html class="dark"> the `:root.dark`
+ *    arm matches at 0,2,0 and wins over an art-director `:root`; on the wrapper div
+ *    only the `.dark` arm matches (0,1,0) — correct where it has no competing
+ *    override on that subtree. */
+:root.dark,
 .dark {
   --background: oklch(0.16 0.004 285.8);
   --foreground: oklch(0.985 0 0);
@@ -72,9 +95,6 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.21 0.006 285.9);
   --popover-foreground: oklch(0.985 0 0);
-
-  --primary: oklch(0.92 0.004 286.3);
-  --primary-foreground: oklch(0.21 0.006 285.9);
 
   --secondary: oklch(0.274 0.006 286.0);
   --secondary-foreground: oklch(0.985 0 0);
@@ -92,7 +112,6 @@
 
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.62 0.13 264);
 
   --chart-1: oklch(0.62 0.19 260);
   --chart-2: oklch(0.7 0.13 180);
@@ -108,6 +127,15 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.62 0.13 264);
+}
+
+/* Brand accent in dark — LOW specificity on purpose (see the note above): an
+ * art-director `:root { --primary … }` override must still win here so a branded
+ * app keeps its accent in dark; an un-branded app gets this monochrome default. */
+.dark {
+  --primary: oklch(0.92 0.004 286.3);
+  --primary-foreground: oklch(0.21 0.006 285.9);
+  --ring: oklch(0.62 0.13 264);
 }
 
 /* ── Map tokens → Tailwind utilities (v4 @theme inline) ───────────────────────
@@ -222,6 +250,7 @@
   --elevation-1: 0 1px 2px -1px oklch(0.21 0.01 285 / 0.07), 0 4px 12px -4px oklch(0.21 0.01 285 / 0.08);
   --elevation-2: 0 2px 6px -2px oklch(0.21 0.01 285 / 0.10), 0 14px 36px -10px oklch(0.21 0.01 285 / 0.14);
 }
+:root.dark,
 .dark {
   --elevation-1: 0 1px 2px -1px oklch(0 0 0 / 0.5), 0 4px 12px -4px oklch(0 0 0 / 0.4);
   --elevation-2: 0 2px 6px -2px oklch(0 0 0 / 0.6), 0 14px 36px -10px oklch(0 0 0 / 0.55);

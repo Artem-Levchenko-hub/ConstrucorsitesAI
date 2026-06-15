@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, Menu, Search, Sparkles } from "lucide-react";
+import { LogOut, Menu, Moon, Search, Sparkles, Sun } from "lucide-react";
 
 import { cn, initials } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -273,6 +273,42 @@ function CommandTrigger({ onOpen }: { onOpen: () => void }) {
   );
 }
 
+/** OS-aware light/dark switch. The no-flash script in layout.tsx sets the
+ *  initial `<html class="dark">` from localStorage ?? prefers-color-scheme; this
+ *  flips and persists the user's explicit choice. Renders a stable icon until
+ *  mounted so server and client markup match (no hydration warning). */
+function ThemeToggle() {
+  const [mounted, setMounted] = React.useState(false);
+  const [dark, setDark] = React.useState(false);
+  React.useEffect(() => {
+    setMounted(true);
+    setDark(document.documentElement.classList.contains("dark"));
+  }, []);
+  const toggle = React.useCallback(() => {
+    const next = !document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", next);
+    try {
+      localStorage.setItem("theme", next ? "dark" : "light");
+    } catch {
+      /* storage blocked — the in-page toggle still works for this session */
+    }
+    setDark(next);
+  }, []);
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={toggle}
+      aria-label={dark ? "Светлая тема" : "Тёмная тема"}
+      className="size-9 text-muted-foreground"
+    >
+      {/* Until mounted, render the light-theme icon (matches SSR) to avoid a
+          hydration mismatch; swap to the real state on the client. */}
+      {mounted && dark ? <Sun className="size-[1.15rem]" /> : <Moon className="size-[1.15rem]" />}
+    </Button>
+  );
+}
+
 /** Sidebar-footer capsule advertising the current plan / trial status, with an
  *  optional usage meter and Upgrade CTA. Renders the CTA only when it has
  *  somewhere to go, so the MVP (no billing) never ships a dead button. */
@@ -454,6 +490,7 @@ export function AppShell({
           <div className="ml-auto flex items-center gap-2">
             <CommandTrigger onOpen={() => setCmdOpen(true)} />
             {actions}
+            <ThemeToggle />
             <UserMenu user={user} onSignOut={onSignOut} />
           </div>
         </header>

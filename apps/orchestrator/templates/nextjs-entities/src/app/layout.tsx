@@ -56,6 +56,17 @@ export default function RootLayout({
   return (
     <html lang="ru" suppressHydrationWarning className={`${sans.variable} ${mono.variable}`}>
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
+        {/* No-flash dark-mode init — runs synchronously before the body paints so
+            the first frame is already in the right theme (OS-aware: an explicit
+            choice in localStorage wins, else the OS prefers-color-scheme). The
+            app-shell toggle writes `theme`; the kit flips on `<html class="dark">`.
+            Wrapped in try/catch so a blocked storage never breaks the page. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('theme');var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.classList.toggle('dark',d);}catch(e){}})();",
+          }}
+        />
         {children}
         <Toaster />
         {/* Omnia select-mode inspector — synced copy of apps/api static/omnia-inspector.js
