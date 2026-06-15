@@ -45,6 +45,14 @@
   --input: oklch(0.92 0.004 286.3);
   --ring: oklch(0.62 0.13 264);
 
+  /* Form-control resting surface. Stock shadcn fields are `bg-transparent` — on a
+     white card they read as a faint outline, the tell of an un-designed app. A
+     dedicated `--field` fill (≈ muted in light, LIFTED above the card in dark)
+     makes every input/textarea/select a tangible, recessed surface that brightens
+     to `--card` on focus (Linear/Notion/Stripe form feel). Neutral on purpose so
+     it stays calm under any brand accent; the brand shows through the focus ring. */
+  --field: oklch(0.968 0.0015 286.4);
+
   /* Data-viz palette for dashboard charts. */
   --chart-1: oklch(0.62 0.19 260);
   --chart-2: oklch(0.6 0.13 180);
@@ -112,6 +120,8 @@
 
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
+  /* Lifted above the dark card (0.21) so fields read as tangible, not voids. */
+  --field: oklch(0.255 0.006 286.0);
 
   --chart-1: oklch(0.62 0.19 260);
   --chart-2: oklch(0.7 0.13 180);
@@ -165,6 +175,7 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-field: var(--field);
   --color-ring: var(--ring);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
