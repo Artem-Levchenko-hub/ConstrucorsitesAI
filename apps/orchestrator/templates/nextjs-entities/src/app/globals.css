@@ -408,3 +408,32 @@
   /* Conic ring sweeps from 0 to its value (target set inline as --omnia-pct). */
   .omnia-donut-sweep { animation: omnia-sweep 1.1s cubic-bezier(.16, 1, .3, 1) both; }
 }
+
+/* ── Live-mutation: a row's BIRTH (pillar 3 — the app reacts in real time). When
+ * the operator creates a record it shouldn't blink into the list; it should land.
+ * A freshly-created row wears `.omnia-row-born` for one beat: a brand-tinted wash
+ * settles to transparent while a brand accent bar draws down the leading edge and
+ * recedes — the "new item" flash of Linear / Notion / GitHub's :target row. The
+ * <DataTable> diffs incoming ids and tags only genuinely-new rows, so this fires
+ * on a real create, never on mount (the `.stagger` cascade owns that) or a sort.
+ * `both` holds the resting frame (transparent) so nothing flashes back. Brand hue
+ * via `--ring`, reduced-motion safe — motion-averse operators get the record
+ * instantly with no wash. One primitive other surfaces (board/gallery cards) can
+ * adopt next. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes omnia-row-born {
+    0% {
+      background-color: color-mix(in oklch, var(--ring) 24%, transparent);
+      box-shadow: inset 3px 0 0 0 var(--ring);
+    }
+    55% {
+      background-color: color-mix(in oklch, var(--ring) 13%, transparent);
+      box-shadow: inset 3px 0 0 0 var(--ring);
+    }
+    100% {
+      background-color: transparent;
+      box-shadow: inset 0 0 0 0 transparent;
+    }
+  }
+  .omnia-row-born { animation: omnia-row-born 1.5s var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)) both; }
+}

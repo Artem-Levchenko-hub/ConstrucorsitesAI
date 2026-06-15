@@ -219,6 +219,40 @@ export function DataTable<T extends { id: string }>({
   const [hidden, setHidden] = React.useState<Set<string>>(() => new Set());
   const [density, setDensity] = React.useState<"comfortable" | "compact">("comfortable");
 
+  // ── Live-mutation: flash rows that were just BORN (created) so a fresh record
+  // visibly lands instead of blinking into the list (pillar 3). We diff the
+  // incoming ids against everything seen so far; ids new *after* the first
+  // settled load get a one-shot brand highlight (`.omnia-row-born`). The first
+  // load is seeded silently — the `.stagger` mount cascade owns the entrance —
+  // so only genuine creates flash, never a sort/filter/page (those keep ids) or
+  // the very first paint. A create that re-fetches keeps this DataTable mounted,
+  // so the new id surfaces here on the next commit. Self-pruning: each born id
+  // clears after the animation so the row settles to its resting style.
+  const knownIdsRef = React.useRef<Set<string> | null>(null);
+  const [bornIds, setBornIds] = React.useState<Set<string>>(() => new Set());
+  React.useEffect(() => {
+    const ids = Array.isArray(rows) ? rows.map((r) => r.id) : [];
+    const known = knownIdsRef.current;
+    if (known === null) {
+      // Wait for the first real data, then seed silently (no birth on mount).
+      if (loading) return;
+      knownIdsRef.current = new Set(ids);
+      return;
+    }
+    const fresh = ids.filter((id) => !known.has(id));
+    ids.forEach((id) => known.add(id));
+    if (fresh.length === 0) return;
+    setBornIds((prev) => new Set([...prev, ...fresh]));
+    const timer = setTimeout(() => {
+      setBornIds((prev) => {
+        const next = new Set(prev);
+        fresh.forEach((id) => next.delete(id));
+        return next;
+      });
+    }, 1600);
+    return () => clearTimeout(timer);
+  }, [rows, loading]);
+
   const keys = searchKeys ?? columns.map((c) => c.key);
   const tabs = filterField ? filterTabs : undefined;
 
@@ -666,7 +700,10 @@ export function DataTable<T extends { id: string }>({
                   key={row.id}
                   data-state={selectable && selected.has(row.id) ? "selected" : undefined}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  className={onRowClick ? "cursor-pointer" : undefined}
+                  className={cn(
+                    onRowClick && "cursor-pointer",
+                    bornIds.has(row.id) && "omnia-row-born",
+                  )}
                 >
                   {selectable ? (
                     <TableCell className="w-0" onClick={(e) => e.stopPropagation()}>
