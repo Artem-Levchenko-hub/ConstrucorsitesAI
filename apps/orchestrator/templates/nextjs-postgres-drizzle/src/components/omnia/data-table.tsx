@@ -73,7 +73,11 @@ export function DataTable<T extends Record<string, unknown>>({
                 ))}
               </tr>
             </thead>
-            <tbody>
+            {/* `stagger` gives the cabinet table the same born-cascade as the
+             * dashboard grids — rows rise in sequence on mount, obeying the
+             * per-app `--omnia-ease`/`--omnia-dur` MOTION-DNA. Reduced-motion
+             * settles instantly. Pillar-3 hypnosis on the default list. */}
+            <tbody className="stagger">
               {rows.map((row, i) => (
                 <tr
                   key={getRowKey ? getRowKey(row, i) : i}

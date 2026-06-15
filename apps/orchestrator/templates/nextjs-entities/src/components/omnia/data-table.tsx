@@ -627,7 +627,12 @@ export function DataTable<T extends { id: string }>({
               {rowActions ? <TableHead className="w-0 text-right">Действия</TableHead> : null}
             </TableRow>
           </TableHeader>
-          <TableBody>
+          {/* `stagger` gives the most-shipped surface the same born-cascade the
+           * board/gallery views already have — rows rise in sequence on mount,
+           * obeying the per-app `--omnia-ease`/`--omnia-dur` MOTION-DNA. Plays on
+           * mount (and when a fresh page of rows keys in); reduced-motion settles
+           * instantly. Pillar-3 hypnosis on the default table view. */}
+          <TableBody className="stagger">
             {loading ? (
               Array.from({ length: effectivePageSize ?? 5 }).map((_, i) => (
                 <TableRow key={`s-${i}`}>
