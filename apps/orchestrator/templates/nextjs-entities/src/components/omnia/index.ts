@@ -69,6 +69,12 @@ export {
   type FieldKind,
   type EntityFormProps,
 } from "./entity-form";
+export {
+  BoardView,
+  type BoardViewProps,
+  type BoardColumn,
+  type BoardCard,
+} from "./board-view";
 export { CrudResource, type CrudResourceProps } from "./crud-resource";
 export {
   RecordDetail,

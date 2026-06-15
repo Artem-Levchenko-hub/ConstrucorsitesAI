@@ -99,6 +99,13 @@ template ships a component kit — **use it, don't hand-roll** chrome:
   `StatCard`, `DataTable`, `CrudResource` (full managed list+CRUD for one entity),
   `EntityForm`, `EmptyState`, `useEntity`. `@/components/ui/*` — shadcn primitives
   (button, card, input, select, dialog, sheet, table, badge, tabs, …).
+- **`CrudResource view=` picks the screen architecture** — `"table"` (default,
+  business records), `"gallery"` (image-forward card grid, needs `media`), or
+  `"board"` (drag-and-drop kanban). For an entity that moves through stages
+  (заявка/тикет/заказ/сделка/задача), set `view="board"` plus `filterField` = the
+  status field and `filterTabs` = one tab per stage (first `{label:"Все", value:null}`,
+  then each stage); the board builds its columns from those tabs and saves the new
+  status when a card is dragged. No hand-rolled kanban — the kit owns it.
 - **Multi-page app, not one screen**: wrap every page in `<AppShell>` (a route-group
   `src/app/(app)/layout.tsx` defines the nav once); a route per entity + a dashboard.
 - **`action`/`actions` props take JSX, not objects**: pass a real element, e.g.

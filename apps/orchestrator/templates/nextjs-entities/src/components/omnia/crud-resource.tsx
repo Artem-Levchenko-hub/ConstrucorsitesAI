@@ -18,6 +18,7 @@ import {
 import { PageHeader } from "./page-header";
 import { DataTable, type Column, type FilterTab } from "./data-table";
 import { GalleryGrid, type GalleryItem, type MediaCardProps } from "./gallery-grid";
+import { BoardView, type BoardCard, type BoardColumn } from "./board-view";
 import { RecordDetail } from "./record-detail";
 import { EntityForm, type FieldSpec } from "./entity-form";
 import { useEntity } from "./use-entity";
@@ -82,12 +83,16 @@ export interface CrudResourceProps {
   canDelete?: boolean;
   createLabel?: string;
   /**
-   * Render the collection as an image-forward card grid instead of a table —
-   * for visual niches a gallery sells better than rows of text (каталог,
-   * недвижимость, меню, портфолио, события). Requires `media`. Default "table".
+   * How the collection is presented:
+   *  - "table"   — sortable/filterable rows (the default, business entities).
+   *  - "gallery" — image-forward card grid for visual niches (каталог,
+   *    недвижимость, меню, портфолио, события). Requires `media`.
+   *  - "board"   — drag-and-drop kanban grouped by `filterField` into the
+   *    `filterTabs` stages, for anything that moves through a workflow (заявки,
+   *    тикеты, заказы, сделки, задачи). Dragging a card saves its new status.
    */
-  view?: "table" | "gallery";
-  /** Row→card mapping for `view="gallery"`. Ignored in table view. */
+  view?: "table" | "gallery" | "board";
+  /** Row→card mapping for `view="gallery"` / `view="board"`. Ignored in table view. */
   media?: MediaMap;
 }
 
@@ -272,6 +277,17 @@ export function CrudResource({
       : undefined;
 
   const useGallery = view === "gallery" && !!media;
+  // Board view groups by the status field the writer already declared for the
+  // quick-filter. Columns come from `filterTabs` (minus the «Все» / null entry);
+  // without a status field there is nothing to group by, so fall back to table.
+  const boardColumns: BoardColumn[] = React.useMemo(
+    () =>
+      (filterTabs ?? [])
+        .filter((t) => t.value != null)
+        .map((t) => ({ value: String(t.value), label: t.label })),
+    [filterTabs],
+  );
+  const useBoard = view === "board" && !!filterField && boardColumns.length > 0;
 
   // Build the card models once per row set. Search keywords fold the searchable
   // columns' raw text so the gallery's search box matches the same fields the
@@ -299,6 +315,49 @@ export function CrudResource({
     }));
   }, [useGallery, media, data.rows, rowDetail, rowActions, keywordKeys]);
 
+  // Card models for the board. Reuse the gallery `media` mapping when present
+  // (title/subtitle/price/meta), else derive a sensible tile from the columns —
+  // first column as title, the next non-status column as subtitle. The status
+  // itself is the column, never repeated on the card.
+  const boardCards: BoardCard[] = React.useMemo(() => {
+    if (!useBoard) return [];
+    const subtitleCol = columns.find((c) => c.key !== filterField && c !== columns[0]);
+    return data.rows.map((row) => ({
+      id: row.id,
+      status: row[filterField as string] == null ? null : String(row[filterField as string]),
+      title: media ? media.title(row) : columns[0] ? renderCell(columns[0], row) : row.id,
+      subtitle: media
+        ? media.subtitle?.(row)
+        : subtitleCol
+          ? renderCell(subtitleCol, row)
+          : undefined,
+      meta: media?.price?.(row),
+      metaRight: media?.metaRight?.(row),
+      badge: media?.badge?.(row),
+      onClick: rowDetail ? () => setViewing(row) : undefined,
+      actions: rowActions ? rowActions(row) : undefined,
+      keywords: keywordKeys
+        .map((k) => {
+          const v = (row as Record<string, unknown>)[k];
+          return v == null ? "" : String(v);
+        })
+        .join(" "),
+    }));
+  }, [useBoard, media, data.rows, columns, filterField, rowDetail, rowActions, keywordKeys]);
+
+  async function handleMove(id: string, toStatus: string) {
+    if (!filterField) return;
+    try {
+      await data.update(id, { [filterField]: toStatus });
+      const col = boardColumns.find((c) => c.value === toStatus);
+      toast.success(
+        typeof col?.label === "string" ? `Перенесено: ${col.label}` : "Статус обновлён",
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Не удалось перенести");
+    }
+  }
+
   return (
     <div>
       {title ? (
@@ -307,7 +366,23 @@ export function CrudResource({
         <div className="mb-4 flex justify-end">{createButton}</div>
       ) : null}
 
-      {useGallery ? (
+      {useBoard ? (
+        <BoardView
+          columns={boardColumns}
+          cards={boardCards}
+          loading={data.loading}
+          searchable={searchable}
+          onMove={canEdit ? handleMove : undefined}
+          emptyAction={
+            canCreate ? (
+              <Button onClick={openCreate}>
+                <Plus />
+                {createLabel}
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : useGallery ? (
         <GalleryGrid
           items={galleryItems}
           loading={data.loading}
