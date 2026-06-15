@@ -151,6 +151,36 @@ def test_freeform_brief_carries_structural_archetype_hero_fields() -> None:
     assert "HERO-ВАРИАНТ" in instr
 
 
+def test_freeform_archetype_composition_map_is_total_and_deterministic() -> None:
+    # v2.24 #1b: every _STYLE_KIT archetype must resolve to EXACTLY ONE of the
+    # four composition profiles, so the whole architecture (rhythm/grid/type-
+    # scale/container) is deterministic per niche — not decided reflexively.
+    from omnia_api.services import prompt_builder as pb
+
+    # same 10 presets the hero map covers
+    assert set(adw._ARCHETYPE_COMPOSITION) == set(adw._ARCHETYPE_HERO)
+    for name, profile in adw._ARCHETYPE_COMPOSITION.items():
+        assert profile in adw._COMPOSITION_PROFILES, f"{name} → invalid profile {profile}"
+        assert name in pb._STYLE_KIT, f"{name} absent from _STYLE_KIT"
+        # the composition-rules block actually documents that profile's tokens
+        assert profile in pb._COMPOSITION_RULES, f"rules block missing {profile}"
+    # the contrast the proof rides on: editorial niche ≠ SaaS niche by profile
+    assert adw._ARCHETYPE_COMPOSITION["BOLD STUDIO"] == "EDITORIAL"
+    assert adw._ARCHETYPE_COMPOSITION["LINEAR DARK"] == "INTERFACE"
+
+
+def test_freeform_brief_carries_structural_composition_field() -> None:
+    # The AD brief must EMIT the structural КОМПОЗИЦИЯ field and render the
+    # deterministic archetype→profile table with no leftover sentinel.
+    instr = adw._ART_DIRECTOR_INSTRUCTION
+    assert "КОМПОЗИЦИЯ:" in instr
+    assert "«ARCHETYPE_COMPOSITION_TABLE»" not in instr  # sentinel substituted
+    for name, profile in adw._ARCHETYPE_COMPOSITION.items():
+        assert f"{name}→{profile}" in instr, f"mapping {name}→{profile} missing"
+    # РИТМ no longer hands the model a free-choice spacing — it defers to the profile
+    assert "профиля КОМПОЗИЦИЯ" in instr
+
+
 def test_app_art_director_prescribes_screen_archetypes() -> None:
     # Composition lever (pickup #2): the APP art-director must classify the niche
     # into one of four screen archetypes upfront, not default every app to a

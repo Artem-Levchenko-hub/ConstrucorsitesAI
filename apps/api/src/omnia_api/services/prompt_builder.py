@@ -327,6 +327,49 @@ Peak → Fredoka · Quicksand; Helvetica Neue → Inter · Geist.
 
 Эталон — чтобы человек со вкусом сказал «сделано с душой», а не «очередной AI-лендинг»."""
 
+_COMPOSITION_RULES = """\
+КОМПОЗИЦИЯ КАК СИСТЕМА (НЕ набор блоков) — архетип стиля задаёт не только цвет и шрифт,
+но и АРХИТЕКТУРУ страницы: вертикальный ритм, плотность сетки, тип-шкалу, ширину
+контейнера и режим воздуха. ОДНА генерация = ОДНО архитектурное решение, выдержанное на
+ВСЕХ секциях. Выбрал архетип стиля → возьми его композиц-профиль ЦЕЛИКОМ и применяй ко
+всем секциям, не верстай каждую «на глаз» и не дефолти на один ритм.
+
+Профиль читается мгновенно: editorial-сайт выглядит «как книга» (воздух, разреженная
+сетка, крупный тип), SaaS — «как интерфейс» (плотнее, шире, bento). Это и есть разница
+между «шаблон Webflow / урок Фигмы» и Linear / Stripe / Framer.
+
+A. EDITORIAL (книга) — EDITORIAL LUXURY · BOLD STUDIO · KINETIC TYPE · портфолио · манифест · студия
+   РИТМ секций:  py-28 sm:py-32 md:py-36 (макс воздух)  ·  между блоками gap-12 lg:gap-16
+   СЕТКА:        grid-cols-1 sm:grid-cols-2 МАКСИМУМ (крупные ячейки, разреженно; НЕ 3-4 кол)
+   ТИП:          hero .display-fill / text-6xl md:text-8xl  ·  H2 text-4xl md:text-5xl  ·  lead text-xl
+   КОНТЕЙНЕР:    max-w-5xl (читательская колонка) … max-w-6xl
+   ВОЗДУХ:       одно заявление на экран, «фото + одна строка», без защитных описаний; whitespace = материал
+B. CINEMATIC (кино) — APPLE TECH · премиум-продукт · gadget · dark luxury
+   РИТМ секций:  py-24 sm:py-28 md:py-32 (воздух + тёмные «киносекции»)  ·  gap-10 lg:gap-14
+   СЕТКА:        grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 (продукт крупно, фичи рядами)
+   ТИП:          hero .display-hero text-6xl md:text-8xl tracking-tight  ·  H2 text-4xl md:text-5xl  ·  lead text-lg
+   КОНТЕЙНЕР:    max-w-6xl
+   ВОЗДУХ:       продукт-герой по центру, макс воздух вокруг; глубину дают .grain + тёмные секции
+C. MODULE (спокойный модуль) — REFINED MINIMAL · NORDIC MINIMAL · CLINICAL TRUST · бизнес · услуги · велнес
+   РИТМ секций:  py-20 sm:py-24 md:py-28 (спокойный, ровный)  ·  gap-8 lg:gap-12
+   СЕТКА:        grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 (чистая модульная швейцарская сетка)
+   ТИП:          hero text-5xl md:text-6xl  ·  H2 text-3xl md:text-4xl  ·  lead text-lg
+   КОНТЕЙНЕР:    max-w-6xl
+   ВОЗДУХ:       hairline-разделители (.divider-fade), мягкие/нулевые тени, тихо и уверенно
+D. INTERFACE (интерфейс) — LINEAR DARK · FINTECH TRUST · VIBRANT CONSUMER · SaaS · dev-tools · финтех · D2C
+   РИТМ секций:  py-16 sm:py-20 md:py-24 (плотнее — секций больше, темп быстрее)  ·  gap-6 lg:gap-8
+   СЕТКА:        grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 (плотные features, bento, KPI-ряды)
+   ТИП:          hero text-5xl md:text-6xl  ·  H2 text-2xl md:text-3xl  ·  lead text-base md:text-lg
+   КОНТЕЙНЕР:    max-w-7xl (широкий, интерфейсный)
+   ВОЗДУХ:       интерфейсная плотность — bento-сетка, метрики data-count-to, насыщенно, но дышит
+
+ПРАВИЛА:
+• Колонки ВСЕГДА mobile-first (grid-cols-1 sm:… lg:…), НИКОГДА голый grid-cols-3/4 (см. ЛАЙАУТ-ЖЁСТКОСТЬ).
+• Тип-шкала responsive (text-3xl sm:text-4xl md:…), НЕ голый text-8xl — на 375px он съест экран.
+• Профиль выдержан НА ВСЕЙ странице: соседние секции варьируют РАСКЛАДКУ (split / bento / full-bleed),
+  но ритм / контейнер / тип-шкала ОДНОГО профиля — единые. Разнообразие внутри ОДНОЙ архитектуры.
+• reduced-motion безопасно: композиция статична, смысл не несёт исключительно motion."""
+
 _KIT_V3_REFERENCE = """\
 KIT v3 — ДОПОЛНИТЕЛЬНЫЕ КЛАССЫ omnia-kit (обновление 2026-05). Они УЖЕ есть в
 assets/omnia-kit.{css,js} — используй активно. Без них сайт выглядит как
@@ -3266,6 +3309,7 @@ def build_system_prompt(
             *((design_anchor,) if design_anchor else ()),
             _ART_DIRECTOR,
             _TASTE_CODEX,
+            _COMPOSITION_RULES,
             _KIT_V3_REFERENCE,
             _KIT_V4_REFERENCE,
             _QUALITY_BAR,
@@ -3314,6 +3358,7 @@ def build_system_prompt(
             *((design_anchor,) if design_anchor else ()),
             _ART_DIRECTOR,
             _TASTE_CODEX,
+            _COMPOSITION_RULES,
             _KIT_V3_REFERENCE,
             _KIT_V4_REFERENCE,
             _QUALITY_BAR,
@@ -3366,6 +3411,7 @@ def build_system_prompt(
             _TASTE,
             *((_DESIGN_KIT,) if include_design_kit else ()),
             _STYLE_KIT,
+            _COMPOSITION_RULES,
             *((preset_block,) if preset_block else ()),
             _DETAILS_KIT,
             _SIGNATURE_MOVES,

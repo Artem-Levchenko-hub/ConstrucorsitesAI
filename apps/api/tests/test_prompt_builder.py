@@ -63,6 +63,36 @@ def test_static_prompt_includes_landing_section_kit() -> None:
         assert "--primary" in sp and "--card" in sp  # palette-anchor contract
 
 
+def test_static_prompt_includes_composition_rules() -> None:
+    # v2.24 #1b — kit as a SYSTEM, not a set of blocks: the archetype must drive
+    # the whole architecture (vertical rhythm, grid density, type scale, container
+    # width), not just a recoloured hero. The four composition profiles + the
+    # editorial-vs-interface contrast must be present in every landing template.
+    for tmpl in ("landing", "portfolio", "blog", "blank"):
+        sp = build_system_prompt(tmpl)
+        assert "КОМПОЗИЦИЯ КАК СИСТЕМА" in sp, tmpl
+        for profile in ("EDITORIAL", "CINEMATIC", "MODULE", "INTERFACE"):
+            assert profile in sp, f"profile {profile} missing in {tmpl}"
+        # measurable, archetype-distinct tokens — editorial breathes, SaaS is dense
+        assert "py-28 sm:py-32 md:py-36" in sp, tmpl  # EDITORIAL rhythm (max air)
+        assert "py-16 sm:py-20 md:py-24" in sp, tmpl  # INTERFACE rhythm (dense)
+        assert "max-w-7xl" in sp and "max-w-5xl" in sp, tmpl  # distinct containers
+
+
+def test_composition_rules_in_fullstack_and_spa() -> None:
+    # fullstack/spa use the same landing AD brief, which now references the
+    # «КОМПОЗИЦИЯ КАК СИСТЕМА» block — it must be in their system prompt too.
+    for tmpl in ("fullstack", "spa"):
+        assert "КОМПОЗИЦИЯ КАК СИСТЕМА" in build_system_prompt(tmpl), tmpl
+
+
+def test_composition_rules_survive_budget_trim() -> None:
+    # Composition is design-defining (like _STYLE_KIT) — cheap writers need it
+    # MORE, not less. Only _DETAILS_KIT is dropped for budget.
+    sp = build_system_prompt("landing", model_id="haiku")
+    assert "КОМПОЗИЦИЯ КАК СИСТЕМА" in sp
+
+
 def test_landing_section_kit_survives_budget_trim() -> None:
     # The section kit is THE design lever — it must reach cheap writers too
     # (deepseek/haiku). Only _DETAILS_KIT is dropped for budget; the kit stays.
