@@ -27,14 +27,14 @@ export default async function SignUpPage({
 }) {
   const sp = await searchParams;
   const session = await auth();
-  if (session?.user) redirect(sp.next ?? "/");
+  if (session?.user) redirect(sp.next ?? "/app");
 
   async function action(formData: FormData) {
     "use server";
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
     const password = String(formData.get("password") ?? "");
     const name = String(formData.get("name") ?? "").trim() || null;
-    const next = String(formData.get("next") ?? "/");
+    const next = String(formData.get("next") ?? "/app");
 
     if (!email || !password || password.length < 8) {
       redirect(`/signup?error=invalid&next=${encodeURIComponent(next)}`);
@@ -106,7 +106,7 @@ export default async function SignUpPage({
       )}
 
       <form action={action} className="space-y-4">
-        <input type="hidden" name="next" value={sp.next ?? "/"} />
+        <input type="hidden" name="next" value={sp.next ?? "/app"} />
         <AuthField label="Имя (необязательно)" name="name" type="text" autoComplete="name" />
         <AuthField
           label="Email"

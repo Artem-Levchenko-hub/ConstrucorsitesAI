@@ -21,13 +21,13 @@ export default async function SignInPage({
   const sp = await searchParams;
   // Already signed in → bounce straight through to next= or home.
   const session = await auth();
-  if (session?.user) redirect(sp.next ?? "/");
+  if (session?.user) redirect(sp.next ?? "/app");
 
   async function action(formData: FormData) {
     "use server";
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
     const password = String(formData.get("password") ?? "");
-    const next = String(formData.get("next") ?? "/");
+    const next = String(formData.get("next") ?? "/app");
     try {
       await signIn("credentials", { email, password, redirectTo: next });
     } catch (error) {
@@ -67,7 +67,7 @@ export default async function SignInPage({
       )}
 
       <form action={action} className="space-y-4">
-        <input type="hidden" name="next" value={sp.next ?? "/"} />
+        <input type="hidden" name="next" value={sp.next ?? "/app"} />
         <AuthField
           label="Email"
           name="email"
