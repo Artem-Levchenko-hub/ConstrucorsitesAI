@@ -421,4 +421,22 @@
   } else {
     bootFromBaked();
   }
+
+  // Public replay hook for the viral watermark badge ("Сделано на Omnia.AI",
+  // mounted by omnia-remix-cta.js): a share visitor clicks the badge to watch
+  // the design be born again on demand, even after the once-per-load auto-play.
+  // play() rebuilds the overlay from the baked/forwarded brief; we drop any live
+  // overlay + dismiss timer first so a mid-reveal replay starts clean.
+  window.__omniaReplayBrief = function () {
+    var b = window.__omniaBrief;
+    if (!b) return false;
+    if (dismissTimer) {
+      window.clearTimeout(dismissTimer);
+      dismissTimer = null;
+    }
+    var ex = document.getElementById(OVERLAY_ID);
+    if (ex && ex.parentNode) ex.parentNode.removeChild(ex);
+    play(b);
+    return true;
+  };
 })();

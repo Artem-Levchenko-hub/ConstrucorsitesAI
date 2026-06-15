@@ -218,6 +218,102 @@ _REMIX_CTA_TEMPLATE = (
     'console.error("[omnia-remix]",e);'
     'alert("Не удалось создать копию. Попробуйте ещё раз.");});'
     "});})();</script>"
+    # Viral seed badge (#VIRAL-WATERMARK, pillar 4). A subtle "Сделано на
+    # Omnia.AI" credit bottom-LEFT (opposite the loud remix pill). Click opens a
+    # branded popover that replays the "design being born" reveal on demand
+    # (window.__omniaReplayBrief, baked by services/brief_narration alongside the
+    # narration script) and offers a fresh "Создать свой сайт" CTA → the
+    # same-origin Omnia landing ("/" — absolute, unaffected by the page's <base
+    # href="/p/<slug>/">). Mirrors the container watermark in the template's
+    # omnia-remix-cta.js so the seed looks identical whichever surface served it.
+    '<style id="omnia-wm-style">'
+    "#omnia-wm{position:fixed;left:18px;bottom:18px;z-index:2147482999;"
+    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}"
+    "#omnia-wm-badge{display:inline-flex;align-items:center;gap:7px;cursor:pointer;"
+    "border:1px solid rgba(255,255,255,.16);background:rgba(15,16,28,.62);"
+    "-webkit-backdrop-filter:blur(10px) saturate(1.25);backdrop-filter:blur(10px) saturate(1.25);"
+    "color:rgba(255,255,255,.88);padding:7px 13px 7px 11px;border-radius:9999px;"
+    "font-size:12.5px;font-weight:600;letter-spacing:-.01em;line-height:1;"
+    "box-shadow:0 6px 22px rgba(0,0,0,.3);"
+    "transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;"
+    "animation:omnia-wm-in .6s cubic-bezier(.16,1,.3,1) both}"
+    "#omnia-wm-badge:hover{transform:translateY(-2px);border-color:rgba(192,132,252,.55);"
+    "box-shadow:0 10px 30px rgba(99,102,241,.34)}"
+    "#omnia-wm-spark{font-size:13px;line-height:1;"
+    "background:linear-gradient(90deg,#818cf8,#c084fc);-webkit-background-clip:text;"
+    "background-clip:text;color:transparent}"
+    "#omnia-wm-name{background:linear-gradient(90deg,#a5b4fc,#e9d5ff);"
+    "-webkit-background-clip:text;background-clip:text;color:transparent}"
+    "#omnia-wm-pop{position:absolute;left:0;bottom:calc(100% + 10px);width:288px;"
+    "max-width:calc(100vw - 36px);padding:18px;border-radius:18px;"
+    "border:1px solid rgba(255,255,255,.12);background:rgba(17,18,30,.92);"
+    "-webkit-backdrop-filter:blur(16px) saturate(1.3);backdrop-filter:blur(16px) saturate(1.3);"
+    "box-shadow:0 24px 64px rgba(0,0,0,.5),0 2px 10px rgba(0,0,0,.3);"
+    "color:#e9eaf3;opacity:0;transform:translateY(8px) scale(.97);transform-origin:bottom left;"
+    "pointer-events:none;transition:opacity .2s ease,transform .24s cubic-bezier(.16,1,.3,1)}"
+    "#omnia-wm-pop::before{content:'';position:absolute;inset:0;border-radius:18px;padding:1px;"
+    "background:linear-gradient(135deg,rgba(129,140,248,.5),rgba(192,132,252,.18) 55%,transparent);"
+    "-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);"
+    "-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none}"
+    "#omnia-wm.open #omnia-wm-pop{opacity:1;transform:none;pointer-events:auto}"
+    "#omnia-wm.open #omnia-wm-badge{border-color:rgba(192,132,252,.55)}"
+    "#omnia-wm-pop h4{margin:0 0 6px;font-size:14px;font-weight:700;letter-spacing:-.01em;"
+    "display:flex;align-items:center;gap:7px;color:#fff}"
+    "#omnia-wm-pop h4 b{background:linear-gradient(90deg,#a5b4fc,#e9d5ff);"
+    "-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}"
+    "#omnia-wm-pop p{margin:0 0 14px;font-size:12.5px;line-height:1.5;color:rgba(233,234,243,.72)}"
+    "#omnia-wm-replay{display:inline-flex;align-items:center;gap:7px;width:100%;"
+    "justify-content:center;cursor:pointer;border:1px solid rgba(255,255,255,.14);"
+    "background:rgba(255,255,255,.04);color:#e9eaf3;padding:9px 12px;border-radius:11px;"
+    "font-size:12.5px;font-weight:600;margin-bottom:8px;"
+    "transition:background .16s ease,border-color .16s ease}"
+    "#omnia-wm-replay:hover{background:rgba(255,255,255,.09);border-color:rgba(192,132,252,.45)}"
+    "#omnia-wm-make{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;"
+    "box-sizing:border-box;cursor:pointer;border:0;text-decoration:none;color:#fff;"
+    "padding:11px 14px;border-radius:11px;font-size:13.5px;font-weight:700;letter-spacing:-.01em;"
+    "background:linear-gradient(90deg,#818cf8,#c084fc);"
+    "box-shadow:0 8px 24px rgba(99,102,241,.4);"
+    "transition:transform .16s ease,box-shadow .16s ease}"
+    "#omnia-wm-make:hover{transform:translateY(-1px);box-shadow:0 12px 30px rgba(99,102,241,.5)}"
+    "@keyframes omnia-wm-in{from{opacity:0;transform:translateY(12px) scale(.94)}"
+    "to{opacity:1;transform:none}}"
+    "@media (max-width:479px){#omnia-wm-made{display:none}}"
+    "@media (prefers-reduced-motion:reduce){#omnia-wm-badge,#omnia-wm-pop,#omnia-wm-make{"
+    "animation:none!important;transition:none!important}#omnia-wm-badge:hover{transform:none}}"
+    "</style>"
+    '<div id="omnia-wm">'
+    '<button type="button" id="omnia-wm-badge" aria-haspopup="dialog" '
+    'aria-expanded="false" aria-label="Сделано на Omnia.AI — создать свой сайт">'
+    '<span id="omnia-wm-spark" aria-hidden="true">✦</span>'
+    '<span id="omnia-wm-made">Сделано на </span>'
+    '<span id="omnia-wm-name">Omnia.AI</span></button>'
+    '<div id="omnia-wm-pop" role="dialog" aria-label="Создано на Omnia.AI">'
+    '<h4><span aria-hidden="true">✦</span><b>Omnia.AI</b></h4>'
+    "<p>Этот сайт собран искусственным интеллектом из одного промпта — "
+    "за пару минут.</p>"
+    '<button type="button" id="omnia-wm-replay" style="display:none">'
+    '<span aria-hidden="true">▶</span>'
+    "<span>Посмотреть, как он родился</span></button>"
+    '<a id="omnia-wm-make" href="/" target="_blank" rel="noopener">'
+    "<span>Создать свой сайт</span>"
+    '<span aria-hidden="true">→</span></a>'
+    "</div></div>"
+    '<script id="omnia-wm-js">(function(){'
+    'var w=document.getElementById("omnia-wm");if(!w)return;'
+    'var b=document.getElementById("omnia-wm-badge");'
+    'var rp=document.getElementById("omnia-wm-replay");'
+    'function onDoc(e){if(!w.contains(e.target))close();}'
+    'function onKey(e){if(e.key==="Escape"||e.keyCode===27)close();}'
+    'function open(){w.classList.add("open");b.setAttribute("aria-expanded","true");'
+    'document.addEventListener("click",onDoc,true);document.addEventListener("keydown",onKey);}'
+    'function close(){w.classList.remove("open");b.setAttribute("aria-expanded","false");'
+    'document.removeEventListener("click",onDoc,true);document.removeEventListener("keydown",onKey);}'
+    'b.addEventListener("click",function(e){e.stopPropagation();'
+    'if(w.classList.contains("open"))close();else open();});'
+    'if(rp&&typeof window.__omniaReplayBrief==="function"){rp.style.display="";'
+    'rp.addEventListener("click",function(){close();'
+    'try{window.__omniaReplayBrief();}catch(_){}});}'
+    "})();</script>"
 ).encode()
 
 

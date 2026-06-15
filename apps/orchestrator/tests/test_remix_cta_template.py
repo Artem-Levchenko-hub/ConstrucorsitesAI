@@ -68,3 +68,40 @@ def test_remix_cta_wired_into_both_layouts() -> None:
         assert 'src="/omnia-remix-cta.js"' in layout, (
             f"{tpl.name}/src/app/layout.tsx must <Script src> the remix CTA."
         )
+
+
+def test_watermark_seed_contract() -> None:
+    """The viral watermark badge (#VIRAL-WATERMARK, pillar 4) rides the same
+    container surface as the remix pill — a "Сделано на Omnia.AI" credit that, on
+    click, replays the design-birth reveal and offers a "make your own" CTA. It
+    must keep the same top-level + origin gates (no broken link on dev hosts),
+    its brand copy, and its wiring to the narration replay hook."""
+    src = (_ENTITIES / _CTA_REL).read_text(encoding="utf-8")
+    # Mounted from the same module, after the pill, so one load-bearing script
+    # owns every viral corner affordance.
+    assert "function mountWatermark()" in src
+    assert "mountWatermark();" in src
+    # Visible brand seed copy + the "make your own" CTA.
+    assert "Сделано на " in src and "Omnia.AI" in src
+    assert "Создать свой сайт" in src
+    # Same gates as the pill: top-level visitor + derivable control-plane origin
+    # (the "make your own" link is the landing on that origin).
+    assert "isTopLevel()" in src
+    assert "var homeHref = origin" in src
+    # On-demand replay of the live "design being born" reveal, only when the
+    # narration module exposed its hook (graceful when absent).
+    assert "window.__omniaReplayBrief" in src
+    # Self-contained, reduced-motion-safe, no CDN.
+    assert 'wrap.id = "omnia-wm"' in src or 'id="omnia-wm"' in src
+    assert "prefers-reduced-motion:reduce" in src
+
+
+def test_narration_exposes_replay_hook() -> None:
+    """Both container narration copies expose the replay hook the watermark calls
+    (keeps the badge's "посмотреть, как он родился" button alive)."""
+    rel = "public/omnia-brief-narration.js"
+    for tpl in (_ENTITIES, _DRIZZLE):
+        src = (tpl / rel).read_text(encoding="utf-8")
+        assert "window.__omniaReplayBrief = function" in src, (
+            f"{tpl.name}/{rel} must expose window.__omniaReplayBrief."
+        )

@@ -47,3 +47,21 @@ def test_remix_cta_is_ascii_safe_bytes() -> None:
     out = _inject_remix_cta(_PAGE, _PID)
     out.decode("utf-8")  # raises if the byte template is malformed
     assert "Сделать свою версию".encode() in out
+
+
+def test_watermark_seed_rides_the_same_injection() -> None:
+    """The viral watermark badge (#VIRAL-WATERMARK, pillar 4) is injected on the
+    static share page alongside the remix pill: a "Сделано на Omnia.AI" credit
+    that replays the design-birth reveal and offers a "make your own" CTA. One
+    injection, so the same idempotency guard covers both affordances."""
+    out = _inject_remix_cta(_PAGE, _PID)
+    text = out.decode("utf-8")
+    # Visible brand seed + the "make your own" CTA to the same-origin landing.
+    assert 'id="omnia-wm"' in text
+    assert "Сделано на " in text and "Omnia.AI" in text
+    assert "Создать свой сайт" in text
+    assert 'id="omnia-wm-make" href="/"' in text  # absolute → control-plane root
+    # Wired to the narration replay hook (gracefully hidden when absent).
+    assert "window.__omniaReplayBrief" in text
+    # Inserted inside the document body, before the close tag, content preserved.
+    assert text.index('id="omnia-wm"') < text.index("</body>")

@@ -113,6 +113,26 @@
 
   var L = lines(brief);
   if (!L.length) return;
+
+  // Public replay hook for the viral watermark badge ("Сделано на Omnia.AI",
+  // injected on the static share page by routers/public.py): a visitor clicks
+  // the badge to watch the design be born again on demand. Set BEFORE the
+  // once-per-session guard so returning visitors can still replay. Drops any
+  // live overlay + timer first, then re-runs play() from the baked brief.
+  window.__omniaReplayBrief = function () {
+    try {
+      sessionStorage.removeItem(KEY);
+    } catch (_) {}
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    var ex = document.getElementById(ID);
+    if (ex && ex.parentNode) ex.parentNode.removeChild(ex);
+    play();
+    return true;
+  };
+
   try {
     if (sessionStorage.getItem(KEY) === sig(brief)) return;
   } catch (_) {}
