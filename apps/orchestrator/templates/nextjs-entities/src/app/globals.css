@@ -300,6 +300,36 @@
   .omnia-hero-art { animation: omnia-aurora-drift 22s ease-in-out infinite; will-change: transform; }
 }
 
+/* ── Secondary-screen depth — the calm sibling of `.omnia-hero-art`. The first
+ * screen (dashboard) gets the full aurora; the screens past the first click
+ * (settings / record-detail / every CRUD list) used to fall back to flat body
+ * text — "Linear on the dashboard, Base44 on the second click". `<ScreenFrame>`
+ * gives each a quiet brand plinth so the whole app stays coherent, WITHOUT the
+ * dashboard's intensity. Archetype-tuned via `data-frame` so depth is variety,
+ * not wallpaper: list = a quiet top wash; settings = no wash (the clean band +
+ * left rail carry it, calm by design); detail = a soft corner/bottom tint. */
+.omnia-screen-art {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(72% 132% at 3% -32%, color-mix(in oklch, var(--ring) 26%, transparent), transparent 62%),
+    radial-gradient(48% 124% at 99% -22%, color-mix(in oklch, var(--primary) 17%, transparent), transparent 58%);
+  opacity: 0.72;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 28%, transparent 80%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 28%, transparent 80%);
+}
+.omnia-screen-art[data-frame="settings"] { display: none; }
+.omnia-screen-art[data-frame="detail"] {
+  background-image:
+    radial-gradient(58% 132% at 94% 128%, color-mix(in oklch, var(--primary) 14%, transparent), transparent 60%),
+    radial-gradient(50% 120% at 2% -22%, color-mix(in oklch, var(--ring) 12%, transparent), transparent 60%);
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+:root.dark .omnia-screen-art,
+.dark .omnia-screen-art { opacity: 0.66; }
+
 /* ── Display type-rhythm — the agency-grade tracking ladder. Top-tier product UIs
  * (Linear, Stripe, Vercel) optically TIGHTEN big type and keep body open; the kit
  * headers carry the ladder so the writer never sets letter-spacing inline. */

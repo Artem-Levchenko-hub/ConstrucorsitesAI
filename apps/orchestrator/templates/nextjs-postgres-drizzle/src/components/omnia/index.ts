@@ -29,6 +29,8 @@ export { CtaBand } from "./cta-band";
 export type { CtaBandProps, CtaBandAction } from "./cta-band";
 export { PageHeader } from "./page-header";
 export type { PageHeaderProps } from "./page-header";
+export { ScreenFrame } from "./screen-frame";
+export type { ScreenFrameProps, ScreenFrameVariant } from "./screen-frame";
 export { StatCard } from "./stat-card";
 export type { StatCardProps } from "./stat-card";
 export { EmptyState } from "./empty-state";

@@ -13,6 +13,11 @@ export {
   type PlanInfo,
 } from "./app-shell";
 export { PageHeader, type PageHeaderProps } from "./page-header";
+export {
+  ScreenFrame,
+  type ScreenFrameProps,
+  type ScreenFrameVariant,
+} from "./screen-frame";
 export { AuthShell, AuthProof, type AuthShellProps } from "./auth-shell";
 export {
   DashboardHero,
