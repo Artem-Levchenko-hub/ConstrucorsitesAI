@@ -8,6 +8,7 @@
  *
  *   import { AppShell, PageHeader, StatCard, DataTable, EmptyState } from "@/components/omnia";
  *   import { StorefrontHero, StorefrontSection, FeatureCard } from "@/components/omnia";
+ *   import { PricingPlans, TestimonialWall, FaqAccordion, CtaBand } from "@/components/omnia";
  *   import { Sparkline, TrendArea, BarMini, DonutStat } from "@/components/omnia";
  */
 export { AppShell } from "./app-shell";
@@ -18,6 +19,14 @@ export { StorefrontHero } from "./storefront-hero";
 export type { StorefrontHeroProps, StorefrontCta, StorefrontStat } from "./storefront-hero";
 export { StorefrontSection, FeatureCard } from "./storefront-section";
 export type { StorefrontSectionProps, FeatureCardProps } from "./storefront-section";
+export { PricingPlans } from "./pricing-plans";
+export type { PricingPlansProps, PricingPlan } from "./pricing-plans";
+export { TestimonialWall } from "./testimonial-wall";
+export type { TestimonialWallProps, Testimonial } from "./testimonial-wall";
+export { FaqAccordion } from "./faq-accordion";
+export type { FaqAccordionProps, FaqItem } from "./faq-accordion";
+export { CtaBand } from "./cta-band";
+export type { CtaBandProps, CtaBandAction } from "./cta-band";
 export { PageHeader } from "./page-header";
 export type { PageHeaderProps } from "./page-header";
 export { StatCard } from "./stat-card";
