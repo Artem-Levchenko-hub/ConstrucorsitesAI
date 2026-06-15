@@ -49,6 +49,12 @@ export type Project = {
    *  lineage badge and the viral return-edge attribution. Mirrors
    *  ProjectPublic.forked_from (apps/api schemas/project.py). */
   forked_from?: Uuid | null;
+  /** V4 #3 transitive remix lineage — the *name* and *slug* of the source this
+   *  project was forked from, resolved server-side (apps/api get_project) so the
+   *  remix badge can attribute it ("ремикс <name>") and link to /p/<slug>.
+   *  null/absent for organic projects (and when the source was deleted). */
+  forked_from_name?: string | null;
+  forked_from_slug?: string | null;
 };
 
 export type Snapshot = {

@@ -25,6 +25,16 @@ export async function deleteProject(id: string): Promise<void> {
   return apiFetch<void>(`/api/projects/${id}`, { method: "DELETE" });
 }
 
+/**
+ * Fork ("ремикс") a project into a new editable copy owned by the caller — the
+ * transitive remix chain (V4 #3). Reuses the same POST /fork seam the public
+ * zero-signup CTA uses; for an authed owner the fork binds to them. Returns the
+ * new fork (its `id` is where the workspace navigates next).
+ */
+export async function forkProject(id: string): Promise<Project> {
+  return apiFetch<Project>(`/api/projects/${id}/fork`, { method: "POST" });
+}
+
 export type ProjectUpdate = {
   image_gen_enabled?: boolean;
 };

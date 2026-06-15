@@ -28,16 +28,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-/** Канонический публичный URL проекта — тот же, что использует превью. */
-function buildPublicUrl(slug: string): string {
-  const apiOrigin =
-    process.env.NEXT_PUBLIC_API_URL ??
-    (typeof window !== "undefined" ? window.location.origin : "");
-  return apiOrigin
-    ? `${apiOrigin.replace(/\/$/, "")}/p/${slug}`
-    : `https://${slug}.omnia.ai`;
-}
+import { buildPublicUrl } from "@/lib/public-url";
 
 export function PublishButton({ projectSlug }: { projectSlug: string }) {
   const [open, setOpen] = useState(false);

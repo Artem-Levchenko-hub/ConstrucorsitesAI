@@ -365,6 +365,15 @@ async def get_project(
     if project.current_snapshot_id:
         snap = await session.get(Snapshot, project.current_snapshot_id)
         project.preview_url = preview_public_url(snap.preview_key) if snap else None
+    # Transitive remix lineage (V4 #3): resolve the source's name + slug so the
+    # workspace remix badge can attribute it ("ремикс <name>") and link to
+    # /p/<slug>. A deleted source leaves both None → the badge degrades to a
+    # link-less attribution instead of a broken link.
+    if project.forked_from:
+        source = await session.get(Project, project.forked_from)
+        if source is not None:
+            project.forked_from_name = source.name
+            project.forked_from_slug = source.slug
     return project
 
 

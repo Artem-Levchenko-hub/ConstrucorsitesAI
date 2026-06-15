@@ -98,6 +98,13 @@ class ProjectPublic(BaseModel):
     # None for organically created projects. Lets the client show provenance and
     # a "back to original" / attribution edge (the viral return-loop, V4.2b).
     forked_from: UUID | None = None
+    # Resolved at read time (get_project) from `forked_from` so the workspace can
+    # show WHICH project this is a remix of and link to it — the transitive remix
+    # lineage (V4 #3). Not mapped columns: the projects router sets them on the
+    # ORM instance, same as `preview_url`. Stay None for organic projects (and
+    # when the source has been deleted).
+    forked_from_name: str | None = None
+    forked_from_slug: str | None = None
     current_snapshot_id: UUID | None
     # Thumbnail of the current snapshot (its rendered preview PNG), or None until
     # the first preview render lands. Not a mapped column — the projects router
