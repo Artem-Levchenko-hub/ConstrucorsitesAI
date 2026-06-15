@@ -243,6 +243,47 @@
   .hover-lift:hover { transform: translateY(-3px); box-shadow: var(--elevation-2); }
 }
 
+/* ── Premium loading shimmer — the brand-tinted sheen that sweeps across every
+ * skeleton while data loads (pillar 3: the screen is ALIVE from the first paint,
+ * not a dead grey pulse). Replaces the flat opacity-pulse with a diagonal light
+ * sweep — the loading signal every top-tier SaaS uses (LinkedIn / Linear /
+ * Stripe / Vercel). It's one primitive: the base <Skeleton> wears `.omnia-skeleton`,
+ * so the dashboard silhouette, data-table rows, gallery tiles and auth frame all
+ * inherit the same living sweep for free. Token-aware (the sheen reads in light
+ * AND dark), brand-aware (the base picks up the app's `--ring` hue so the
+ * skeleton is faintly on-brand, not neutral grey) and reduced-motion safe (the
+ * sweep simply doesn't run — a calm static tile remains). */
+:root {
+  --omnia-skeleton-base: color-mix(in oklch, var(--accent) 86%, var(--ring) 14%);
+  --omnia-skeleton-sheen: oklch(1 0 0 / 0.62);
+}
+:root.dark,
+.dark {
+  --omnia-skeleton-base: color-mix(in oklch, var(--accent) 78%, var(--ring) 22%);
+  --omnia-skeleton-sheen: oklch(1 0 0 / 0.07);
+}
+.omnia-skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--omnia-skeleton-base);
+}
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes omnia-shimmer { to { transform: translateX(100%); } }
+  .omnia-skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--omnia-skeleton-sheen) 50%,
+      transparent 100%
+    );
+    animation: omnia-shimmer 1.6s cubic-bezier(.4, 0, .2, 1) infinite;
+  }
+}
+
 /* ── Premium elevation + canvas (awwwards-grade depth for app surfaces) ────────
  * Soft, layered shadows = the "floating panel" look of Linear / Stripe / Vercel
  * dashboards. `.elev-1` is the resting card; `.elev-2` is raised / hover. */

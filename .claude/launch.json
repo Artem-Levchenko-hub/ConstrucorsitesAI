@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "drizzle-auth",
+      "runtimeExecutable": "ssh",
+      "runtimeArgs": ["-N", "-L", "8757:127.0.0.1:39301", "lh-server"],
+      "port": 8757
+    },
+    {
       "name": "loft-preview",
       "runtimeExecutable": "ssh",
       "runtimeArgs": ["-N", "-L", "8746:127.0.0.1:3278", "lh-server"],
@@ -72,6 +78,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "4607", "--directory", "/tmp/omnia-auth-harness"],
       "port": 4607
+    },
+    {
+      "name": "skel-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4609", "--directory", "/tmp/omnia-skel-eyes"],
+      "port": 4609
     }
   ]
 }
