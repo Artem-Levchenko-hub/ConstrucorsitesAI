@@ -212,19 +212,95 @@
       "#" + OVERLAY_ID + " .omnia-bn-sw{animation:none;opacity:1;transform:none}" +
       "#" + OVERLAY_ID + " .omnia-bn-sw::after{animation:none;opacity:0}" +
       "#" + OVERLAY_ID + " .omnia-bn-line{animation:none;opacity:1;transform:none}" +
-      "#" + OVERLAY_ID + " .omnia-bn-line::after{animation:none;transform:scaleX(1)}}";
+      "#" + OVERLAY_ID + " .omnia-bn-line::after{animation:none;transform:scaleX(1)}}" +
+      // Born-cascade (pillar 3): as the overlay lifts, the real app's top-level
+      // bands rise + sharpen into existence one after another — the reveal hands
+      // off to a LIVING app instead of a hard cut. `both` fill-mode holds each
+      // band hidden through its stagger delay, then settles it visible; no JS is
+      // needed after the class lands, so the app can never get stuck invisible.
+      ".omnia-born{animation:omnia-born-rise .62s cubic-bezier(.16,1,.3,1) var(--omnia-born-d,0ms) both}" +
+      "@keyframes omnia-born-rise{0%{opacity:0;transform:translateY(18px) scale(.985);filter:blur(7px)}" +
+      "55%{filter:blur(0)}100%{opacity:1;transform:none;filter:blur(0)}}" +
+      "@media (prefers-reduced-motion:reduce){.omnia-born{animation:none}}";
     (document.head || document.documentElement).appendChild(style);
   }
 
   var dismissTimer = null;
 
-  function remove() {
+  // The structural bands we let "rise into existence" — works for both surfaces
+  // the script ships on: entity dashboards (app-shell → header / sidebar / the
+  // main region's content rows) and the public «/» landing (section bands). We
+  // pick a generous candidate set, drop the narration overlay, keep only the
+  // OUTERMOST band per subtree (so a parent and its child never both animate),
+  // order them top-to-bottom, and cap the count so the cadence stays tight.
+  function collectBornTargets() {
+    var overlay = document.getElementById(OVERLAY_ID);
+    var seen = [];
+    function add(nodes) {
+      for (var i = 0; i < nodes.length; i++) {
+        if (seen.indexOf(nodes[i]) === -1) seen.push(nodes[i]);
+      }
+    }
+    add(
+      document.querySelectorAll(
+        "header,aside,nav[class],[class*='sidebar'],[class*='Sidebar']"
+      )
+    );
+    var main = document.querySelector("main");
+    if (main) {
+      add(main.children); // the content bands beneath the app chrome
+    } else {
+      var root = document.getElementById("__next") || document.body;
+      add(root.querySelectorAll("section,[class*='hero'],[class*='Hero']"));
+      if (!seen.length && root) add(root.children); // last resort: top bands
+    }
+    var out = seen.filter(function (el) {
+      if (!el || el.nodeType !== 1) return false;
+      if (overlay && (el === overlay || overlay.contains(el) || el.contains(overlay)))
+        return false;
+      for (var j = 0; j < seen.length; j++) {
+        if (seen[j] !== el && seen[j].contains(el)) return false; // not outermost
+      }
+      return true;
+    });
+    out.sort(function (a, b) {
+      var p = a.compareDocumentPosition(b);
+      if (p & 4 /* FOLLOWING */) return -1;
+      if (p & 2 /* PRECEDING */) return 1;
+      return 0;
+    });
+    return out.slice(0, 12);
+  }
+
+  // Hand the reveal off to the live app: stagger a brief rise-and-sharpen across
+  // its top-level bands. Run-once (window.__omniaBorn), reduced-motion-safe (the
+  // CSS force-settles, and we skip entirely), fail-soft (no targets → the app
+  // just appears). Never touches the overlay itself.
+  function startBornCascade() {
+    if (window.__omniaBorn) return;
+    window.__omniaBorn = true;
+    if (reducedMotion() || !document.body) return;
+    var targets = collectBornTargets();
+    var BASE = 30;
+    var STEP = 64;
+    for (var i = 0; i < targets.length; i++) {
+      try {
+        targets[i].style.setProperty("--omnia-born-d", BASE + i * STEP + "ms");
+        targets[i].classList.add("omnia-born");
+      } catch (_) {}
+    }
+  }
+
+  function remove(born) {
     if (dismissTimer) {
       window.clearTimeout(dismissTimer);
       dismissTimer = null;
     }
     var el = document.getElementById(OVERLAY_ID);
     if (!el) return;
+    // As the overlay dissolves, the app underneath is born — a smooth handoff,
+    // not a hard cut. Only on a genuine dismiss (auto/skip), not a brief restart.
+    if (born) startBornCascade();
     el.classList.add("omnia-bn-out");
     window.setTimeout(function () {
       if (el && el.parentNode) el.parentNode.removeChild(el);
@@ -258,8 +334,10 @@
     overlay.setAttribute("role", "status");
     overlay.setAttribute("aria-live", "polite");
     overlay.style.setProperty("--omnia-bn-accent", accent);
-    // Click anywhere to skip the reveal.
-    overlay.addEventListener("click", remove);
+    // Click anywhere to skip the reveal (still births the app underneath).
+    overlay.addEventListener("click", function () {
+      remove(true);
+    });
 
     // Living brand-tinted aura behind the card — the "alive, being-born" depth.
     var aura = document.createElement("div");
@@ -319,7 +397,9 @@
     void overlay.offsetWidth;
     overlay.classList.add("omnia-bn-in");
 
-    dismissTimer = window.setTimeout(remove, total);
+    dismissTimer = window.setTimeout(function () {
+      remove(true);
+    }, total);
   }
 
   // Workspace forwards the brief into the live container over postMessage; a

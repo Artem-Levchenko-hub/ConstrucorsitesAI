@@ -54,6 +54,14 @@ def test_brief_narration_contract() -> None:
     assert 'OVERLAY_ID = "omnia-brief-narration"' in src
     assert "prefers-reduced-motion:reduce" in src
     assert "data-omnia-sig" in src
+    # 5) Born-cascade (pillar 3): when the overlay lifts, the real app underneath
+    #    is BORN — its top-level bands rise/sharpen in a staggered cadence so the
+    #    reveal hands off to the live app instead of a hard cut. Run-once,
+    #    reduced-motion-safe, fail-soft (no targets → app just appears).
+    assert "startBornCascade" in src
+    assert "omnia-born-rise" in src  # the staggered entrance keyframe exists
+    assert "window.__omniaBorn" in src  # idempotent: births once per surface
+    assert "--omnia-born-d" in src  # per-band stagger delay drives the cadence
     # No CDN: the script makes no network calls at all.
     for cdn in ("cdnjs", "unpkg", "jsdelivr", "googleapis"):
         assert cdn not in src
