@@ -30,8 +30,35 @@ export const BOOTSTRAP_HTML = `<!doctype html>
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-  [data-omnia-new] {
+  /* Generic birth fade for NON-kit content (raw HTML без .reveal). Kit sections
+     (.reveal/.line-rise) are born via the kit's own is-visible transition driven
+     below, so they're excluded here to avoid a double animation. */
+  [data-omnia-new]:not(.reveal):not(.line-rise) {
     animation: omnia-in 250ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  /* Brand-accent birth signature: a vertical accent bar wipes down the left edge
+     of each freshly-born top-level section, then fades — so the page visibly is
+     born section-by-section IN THE BRAND ACCENT (pillar 3 «магия live-рендера»).
+     Uses the streamed :root --accent/--primary (kit CSS provides fallbacks);
+     reduced-motion drops it entirely (no position change, no bar). */
+  @media (prefers-reduced-motion: no-preference) {
+    [data-omnia-born] { position: relative; }
+    [data-omnia-born]::after {
+      content: "";
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: var(--accent, var(--primary, #6366f1));
+      transform-origin: top;
+      pointer-events: none;
+      z-index: 50;
+      animation: omnia-born-bar 1000ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes omnia-born-bar {
+      0%   { opacity: 0; transform: scaleY(0); }
+      30%  { opacity: 1; transform: scaleY(1); }
+      100% { opacity: 0; transform: scaleY(1); }
+    }
   }
   html, body { background: #ffffff; color: #0a0a0a; margin: 0; }
   .omnia-shimmer {
@@ -141,6 +168,59 @@ export const BOOTSTRAP_HTML = `<!doctype html>
 (function () {
   var cssEl = document.getElementById('omnia-css');
   var placeholderRemoved = false;
+  // Live section-birth (V3 #2a): the kit ships a .reveal/.is-visible transition
+  // (gated on html.omnia-anim) that normally fires on scroll of the FINISHED
+  // page. During the stream we drive it ourselves — each section reveals with
+  // the EXACT kit cadence (+ its data-reveal-delay stagger) AS it streams in, so
+  // what you watch being born is pixel-identical to the committed /p/<slug>.
+  // omniaAnimOn flips html.omnia-anim once (activates the hidden start-state);
+  // bornSet tracks nodes already revealed (WeakSet → survives morphdom in-place
+  // patches, which otherwise strip the is-visible class to match streamed HTML).
+  var omniaAnimOn = false;
+  var bornSet = (typeof WeakSet === 'function') ? new WeakSet() : null;
+  var rafFn = window.requestAnimationFrame
+    ? window.requestAnimationFrame.bind(window)
+    : function (cb) { return setTimeout(cb, 16); };
+
+  function revealSections() {
+    var htmlEl = document.documentElement;
+    var nodes = [].slice.call(document.querySelectorAll('.reveal, .line-rise'));
+    var fresh = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var seen = bornSet ? bornSet.has(el) : el.__omniaBorn === true;
+      if (seen) {
+        // Already born — re-assert is-visible every render: morphdom strips it
+        // when it patches the section against the (class-less) streamed node.
+        el.classList.add('is-visible');
+      } else {
+        el.classList.remove('is-visible');
+        fresh.push(el);
+      }
+    }
+    // Turn on the kit hidden start-state only AFTER already-born nodes were
+    // re-marked visible above → flipping omnia-anim never retroactively hides a
+    // section that's already on screen.
+    if (!omniaAnimOn) { htmlEl.classList.add('omnia-anim'); omniaAnimOn = true; }
+    if (!fresh.length) return;
+    // Brand-accent birth sweep only on freshly-born TOP-LEVEL sections.
+    for (var t = 0; t < fresh.length; t++) {
+      if (fresh[t].parentNode === document.body) {
+        fresh[t].setAttribute('data-omnia-born', '');
+      }
+    }
+    // Reveal on the next frame so the hidden start-state paints first and the
+    // transition actually plays (rather than snapping straight to visible).
+    rafFn(function () {
+      rafFn(function () {
+        for (var j = 0; j < fresh.length; j++) {
+          var node = fresh[j];
+          if (bornSet) bornSet.add(node); else node.__omniaBorn = true;
+          node.classList.add('is-visible');
+        }
+      });
+    });
+  }
   // idx -> resolved url. Survives morphdom patches: the streamed content keeps
   // the src-less data-omnia-gen placeholders, so we re-apply after each render.
   window.__omniaImages = window.__omniaImages || {};
@@ -230,6 +310,12 @@ export const BOOTSTRAP_HTML = `<!doctype html>
     // src-less placeholder for not-yet-preserved nodes).
     reapplyImages();
 
+    // Drive the kit reveal cascade for freshly-streamed sections (V3 #2a). Runs
+    // after morphdom so new nodes exist; re-asserts is-visible on already-born
+    // nodes that morphdom just patched. The kit's own IntersectionObserver never
+    // runs here (kit JS isn't loaded), so this is the sole reveal driver.
+    revealSections();
+
     // Анимация триггерится самим css-keyframe-ом на data-omnia-new;
     // через 400ms (250ms анимация + запас) снимаем атрибут, чтобы при
     // следующем patch старые элементы не считались «новыми».
@@ -298,11 +384,15 @@ export const BOOTSTRAP_HTML = `<!doctype html>
  * the committed `/p/<slug>` page uses (cards, gradients, .display-fill, etc.)
  * instead of unstyled kit classes that "snap" correct only after generation.
  *
- * CSS only — NOT the kit JS: its animations split/replace DOM nodes, which
- * would fight morphdom's live patching during the stream. `.reveal` stays
- * visible (its hidden start-state is gated on a class only the kit JS adds),
- * so loading the CSS never hides streaming content. Empty `apiOrigin` → no
- * link (graceful: falls back to the plain bootstrap).
+ * CSS only — NOT the kit JS: its animations split/replace DOM nodes and its
+ * IntersectionObserver assumes a finished, scrollable page, both of which would
+ * fight morphdom's live patching during the stream. The reveal cascade is driven
+ * instead by the bootstrap itself (revealSections): it flips `html.omnia-anim`
+ * to arm the kit's `.reveal` hidden start-state, then adds `.is-visible`
+ * per-section as it streams in — the same transition the committed /p/<slug>
+ * plays on scroll. Empty `apiOrigin` → no link (graceful: falls back to the
+ * plain bootstrap; without the kit CSS the start-state never hides, so content
+ * still shows).
  */
 export function buildBootstrap(apiOrigin: string): string {
   if (!apiOrigin) return BOOTSTRAP_HTML;

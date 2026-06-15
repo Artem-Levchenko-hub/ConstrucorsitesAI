@@ -20,6 +20,18 @@
       "port": 8753
     },
     {
+      "name": "ss-preview",
+      "runtimeExecutable": "ssh",
+      "runtimeArgs": ["-N", "-L", "8755:127.0.0.1:39911", "lh-server"],
+      "port": 8755
+    },
+    {
+      "name": "papi-tunnel",
+      "runtimeExecutable": "ssh",
+      "runtimeArgs": ["-N", "-L", "8760:127.0.0.1:8200", "lh-server"],
+      "port": 8760
+    },
+    {
       "name": "web-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "apps/web", "run", "dev"],
@@ -30,6 +42,30 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "4599", "--directory", "/tmp/omnia-bn-harness"],
       "port": 4599
+    },
+    {
+      "name": "hero-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4601", "--directory", "/tmp/omnia-hero-harness"],
+      "port": 4601
+    },
+    {
+      "name": "comp-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4603", "--directory", "/tmp/omnia-comp-eyes"],
+      "port": 4603
+    },
+    {
+      "name": "birth-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4605", "--directory", "/tmp/omnia-birth-eyes"],
+      "port": 4605
+    },
+    {
+      "name": "kit-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "apps/orchestrator/templates/nextjs-entities", "run", "dev", "--", "--port", "3010"],
+      "port": 3010
     }
   ]
 }
