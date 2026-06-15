@@ -4,116 +4,238 @@
     {
       "name": "lego-preview",
       "runtimeExecutable": "ssh",
-      "runtimeArgs": ["-N", "-L", "8770:127.0.0.1:3206", "lh-server"],
+      "runtimeArgs": [
+        "-N",
+        "-L",
+        "8770:127.0.0.1:3206",
+        "lh-server"
+      ],
       "port": 8770
     },
     {
       "name": "kofeinia-preview",
       "runtimeExecutable": "ssh",
-      "runtimeArgs": ["-N", "-L", "8771:127.0.0.1:3208", "lh-server"],
+      "runtimeArgs": [
+        "-N",
+        "-L",
+        "8771:127.0.0.1:3208",
+        "lh-server"
+      ],
       "port": 8771
     },
     {
       "name": "drizzle-auth",
       "runtimeExecutable": "ssh",
-      "runtimeArgs": ["-N", "-L", "8757:127.0.0.1:39301", "lh-server"],
+      "runtimeArgs": [
+        "-N",
+        "-L",
+        "8757:127.0.0.1:39301",
+        "lh-server"
+      ],
       "port": 8757
     },
     {
       "name": "loft-preview",
       "runtimeExecutable": "ssh",
-      "runtimeArgs": ["-N", "-L", "8746:127.0.0.1:3278", "lh-server"],
+      "runtimeArgs": [
+        "-N",
+        "-L",
+        "8746:127.0.0.1:3278",
+        "lh-server"
+      ],
       "port": 8746
     },
     {
       "name": "sfh-preview",
       "runtimeExecutable": "ssh",
-      "runtimeArgs": ["-N", "-L", "8748:127.0.0.1:39111", "lh-server"],
+      "runtimeArgs": [
+        "-N",
+        "-L",
+        "8748:127.0.0.1:39111",
+        "lh-server"
+      ],
       "port": 8748
     },
     {
       "name": "authcheck-preview",
       "runtimeExecutable": "ssh",
-      "runtimeArgs": ["-N", "-L", "8753:127.0.0.1:3399", "lh-server"],
+      "runtimeArgs": [
+        "-N",
+        "-L",
+        "8753:127.0.0.1:3399",
+        "lh-server"
+      ],
       "port": 8753
     },
     {
       "name": "ss-preview",
       "runtimeExecutable": "ssh",
-      "runtimeArgs": ["-N", "-L", "8755:127.0.0.1:39911", "lh-server"],
+      "runtimeArgs": [
+        "-N",
+        "-L",
+        "8755:127.0.0.1:39911",
+        "lh-server"
+      ],
       "port": 8755
     },
     {
       "name": "papi-tunnel",
       "runtimeExecutable": "ssh",
-      "runtimeArgs": ["-N", "-L", "8760:127.0.0.1:8200", "lh-server"],
+      "runtimeArgs": [
+        "-N",
+        "-L",
+        "8760:127.0.0.1:8200",
+        "lh-server"
+      ],
       "port": 8760
     },
     {
       "name": "drizzle-cab",
       "runtimeExecutable": "ssh",
-      "runtimeArgs": ["-N", "-L", "8762:127.0.0.1:3011", "lh-server"],
+      "runtimeArgs": [
+        "-N",
+        "-L",
+        "8762:127.0.0.1:3011",
+        "lh-server"
+      ],
       "port": 8762
     },
     {
       "name": "web-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "apps/web", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "apps/web",
+        "run",
+        "dev"
+      ],
       "port": 3000
     },
     {
       "name": "drizzle-kit-preview",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "apps/orchestrator/templates/nextjs-postgres-drizzle", "run", "dev", "--", "--port", "3012"],
+      "runtimeArgs": [
+        "--prefix",
+        "apps/orchestrator/templates/nextjs-postgres-drizzle",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "3012"
+      ],
       "port": 3012
     },
     {
       "name": "bn-harness",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4599", "--directory", "/tmp/omnia-bn-harness"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4599",
+        "--directory",
+        "/tmp/omnia-bn-harness"
+      ],
       "port": 4599
     },
     {
       "name": "hero-harness",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4601", "--directory", "/tmp/omnia-hero-harness"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4601",
+        "--directory",
+        "/tmp/omnia-hero-harness"
+      ],
       "port": 4601
     },
     {
       "name": "comp-harness",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4603", "--directory", "/tmp/omnia-comp-eyes"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4603",
+        "--directory",
+        "/tmp/omnia-comp-eyes"
+      ],
       "port": 4603
     },
     {
       "name": "birth-harness",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4605", "--directory", "/tmp/omnia-birth-eyes"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4605",
+        "--directory",
+        "/tmp/omnia-birth-eyes"
+      ],
       "port": 4605
     },
     {
       "name": "kit-preview",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "apps/orchestrator/templates/nextjs-entities", "run", "dev", "--", "--port", "3010"],
+      "runtimeArgs": [
+        "--prefix",
+        "apps/orchestrator/templates/nextjs-entities",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "3010"
+      ],
       "port": 3010
     },
     {
       "name": "drizzle-preview",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "apps/orchestrator/templates/nextjs-postgres-drizzle", "run", "dev", "--", "--port", "3012"],
+      "runtimeArgs": [
+        "--prefix",
+        "apps/orchestrator/templates/nextjs-postgres-drizzle",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "3012"
+      ],
       "port": 3012
     },
     {
       "name": "auth-harness",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4607", "--directory", "/tmp/omnia-auth-harness"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4607",
+        "--directory",
+        "/tmp/omnia-auth-harness"
+      ],
       "port": 4607
     },
     {
       "name": "skel-harness",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4609", "--directory", "/tmp/omnia-skel-eyes"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4609",
+        "--directory",
+        "/tmp/omnia-skel-eyes"
+      ],
       "port": 4609
+    },
+    {
+      "name": "motion-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4611",
+        "--directory",
+        "/tmp/omnia-motion-eyes"
+      ],
+      "port": 4611
     }
   ]
 }

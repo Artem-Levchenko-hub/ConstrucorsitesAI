@@ -245,16 +245,21 @@
   @keyframes omnia-fade-up { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: none } }
   @keyframes omnia-fade-in { from { opacity: 0 } to { opacity: 1 } }
   @keyframes omnia-scale-in { from { opacity: 0; transform: scale(.96) } to { opacity: 1; transform: none } }
-  .fade-up { animation: omnia-fade-up .6s ease-out both; }
-  .fade-in { animation: omnia-fade-in .6s ease-out both; }
-  .scale-in { animation: omnia-scale-in .5s ease-out both; }
+  /* Per-app MOTION-DNA: the entrance family obeys `--omnia-ease` / `--omnia-dur`,
+     pinned per build in (app)/layout's <style> from the brief's МОТИОН-ТЕМП (like
+     `--radius` does for shape). Unset → the defaults below = the original feel, so
+     a build that omits them is unchanged. One tempo (calm / snappy / precise) drives
+     every surface's birth, so a fintech and a kids' shop visibly "come alive" apart. */
+  .fade-up { animation: omnia-fade-up var(--omnia-dur, .6s) var(--omnia-ease, ease-out) both; }
+  .fade-in { animation: omnia-fade-in var(--omnia-dur, .6s) var(--omnia-ease, ease-out) both; }
+  .scale-in { animation: omnia-scale-in var(--omnia-dur, .5s) var(--omnia-ease, ease-out) both; }
   .fade-up.delay-1 { animation-delay: .06s; }
   .fade-up.delay-2 { animation-delay: .12s; }
   .fade-up.delay-3 { animation-delay: .18s; }
   .fade-up.delay-4 { animation-delay: .24s; }
   .fade-up.delay-5 { animation-delay: .30s; }
   /* Opt-in scroll reveal: requires a client component to add `.is-visible`. */
-  .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s cubic-bezier(.16, 1, .3, 1), transform .6s cubic-bezier(.16, 1, .3, 1); }
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity var(--omnia-dur, .6s) var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)), transform var(--omnia-dur, .6s) var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)); }
   .reveal.is-visible { opacity: 1; transform: none; }
 }
 
@@ -368,7 +373,7 @@
 /* Staggered entrance — children rise in sequence on mount (KPI rows, grids,
  * lists). Add `stagger` to the wrapping grid/flex. Reduced-motion safe. */
 @media (prefers-reduced-motion: no-preference) {
-  .stagger > * { animation: omnia-fade-up .5s cubic-bezier(.16, 1, .3, 1) both; }
+  .stagger > * { animation: omnia-fade-up var(--omnia-dur, .5s) var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)) both; }
   .stagger > *:nth-child(2) { animation-delay: .05s; }
   .stagger > *:nth-child(3) { animation-delay: .10s; }
   .stagger > *:nth-child(4) { animation-delay: .15s; }
