@@ -20,6 +20,7 @@ import { DataTable, type Column, type FilterTab } from "./data-table";
 import { GalleryGrid, type GalleryItem, type MediaCardProps } from "./gallery-grid";
 import { BoardView, type BoardCard, type BoardColumn } from "./board-view";
 import { CalendarView, type CalendarEvent } from "./calendar-view";
+import { MasterDetailView, type SplitItem } from "./master-detail-view";
 import { RecordDetail } from "./record-detail";
 import { EntityForm, type FieldSpec } from "./entity-form";
 import { useEntity } from "./use-entity";
@@ -94,9 +95,12 @@ export interface CrudResourceProps {
    *  - "calendar"— month-grid + agenda placed by `dateField`, for anything that
    *    lives on a date (брони, события, встречи, смены, дедлайны). Requires
    *    `dateField`.
+   *  - "split"   — master-detail (inbox) layout: a compact list rail + the
+   *    selected record's full detail in a reading pane, for read-heavy "one rich
+   *    record at a time" entities (досье, профили, дела, обращения, документы).
    */
-  view?: "table" | "gallery" | "board" | "calendar";
-  /** Row→card mapping for `view="gallery"` / `view="board"` / `view="calendar"`. Ignored in table view. */
+  view?: "table" | "gallery" | "board" | "calendar" | "split";
+  /** Row→card mapping for `view="gallery"` / `view="board"` / `view="calendar"` / `view="split"`. Ignored in table view. */
   media?: MediaMap;
   /** The row field holding the date for `view="calendar"` (ISO string, epoch
    *  number, or Date). Without it, calendar view falls back to a table. */
@@ -299,6 +303,30 @@ export function CrudResource({
   // Calendar needs a date field to place records on; without one there is
   // nothing to schedule, so fall back to a table.
   const useCalendar = view === "calendar" && !!dateField;
+  // Split (master-detail) needs nothing extra — it reuses the columns/media
+  // mapping for the rail and the same RecordDetail node for the reading pane.
+  const useSplit = view === "split";
+
+  // The reading-pane body for one record — the SAME rich <RecordDetail> the
+  // row-detail dialog shows, so the split view and the modal stay in lockstep.
+  const detailFor = React.useCallback(
+    (row: Row) => (
+      <RecordDetail
+        title={media ? media.title(row) : columns[0] ? renderCell(columns[0], row) : (title ?? "Запись")}
+        eyebrow={media?.subtitle?.(row)}
+        image={media?.image?.(row)}
+        badge={media?.badge?.(row)}
+        price={media?.price?.(row)}
+        metaRight={media?.metaRight?.(row)}
+        aspect={media?.aspect}
+        fields={columns.slice(1).map((col) => ({
+          label: col.header,
+          value: renderCell(col, row),
+        }))}
+      />
+    ),
+    [media, columns, title],
+  );
 
   // Build the card models once per row set. Search keywords fold the searchable
   // columns' raw text so the gallery's search box matches the same fields the
@@ -384,6 +412,56 @@ export function CrudResource({
     }));
   }, [useCalendar, dateField, media, data.rows, columns, rowDetail, rowActions, keywordKeys]);
 
+  // Rail + reading-pane models for the split (master-detail) view. The rail row
+  // mirrors the board/calendar tile mapping (title/subtitle/meta from media or
+  // the columns); the pane reuses `detailFor` and carries its own edit/delete.
+  const splitItems: SplitItem[] = React.useMemo(() => {
+    if (!useSplit) return [];
+    const subtitleCol = columns.find((c) => c !== columns[0]);
+    return data.rows.map((row) => ({
+      id: row.id,
+      title: media ? media.title(row) : columns[0] ? renderCell(columns[0], row) : row.id,
+      subtitle: media
+        ? media.subtitle?.(row)
+        : subtitleCol
+          ? renderCell(subtitleCol, row)
+          : undefined,
+      meta: media?.price?.(row),
+      metaRight: media?.metaRight?.(row),
+      badge: media?.badge?.(row),
+      image: media?.image?.(row),
+      detail: detailFor(row),
+      actions:
+        canEdit || canDelete ? (
+          <>
+            {canEdit ? (
+              <Button variant="outline" size="sm" onClick={() => openEdit(row)}>
+                <Pencil className="size-4" />
+                Изменить
+              </Button>
+            ) : null}
+            {canDelete ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setDeleting(row)}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="size-4" />
+                Удалить
+              </Button>
+            ) : null}
+          </>
+        ) : undefined,
+      keywords: keywordKeys
+        .map((k) => {
+          const v = (row as Record<string, unknown>)[k];
+          return v == null ? "" : String(v);
+        })
+        .join(" "),
+    }));
+  }, [useSplit, media, data.rows, columns, detailFor, canEdit, canDelete, keywordKeys]);
+
   async function handleMove(id: string, toStatus: string) {
     if (!filterField) return;
     try {
@@ -405,7 +483,22 @@ export function CrudResource({
         <div className="mb-4 flex justify-end">{createButton}</div>
       ) : null}
 
-      {useCalendar ? (
+      {useSplit ? (
+        <MasterDetailView
+          items={splitItems}
+          loading={data.loading}
+          searchable={searchable}
+          railLabel={title ?? entity}
+          emptyAction={
+            canCreate ? (
+              <Button onClick={openCreate}>
+                <Plus />
+                {createLabel}
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : useCalendar ? (
         <CalendarView
           events={calendarEvents}
           loading={data.loading}
@@ -526,27 +619,7 @@ export function CrudResource({
             {/* Required for a11y; the visible heading lives in <RecordDetail>. */}
             <DialogTitle>{title ? `${title}: запись` : "Запись"}</DialogTitle>
           </DialogHeader>
-          {viewing ? (
-            <RecordDetail
-              title={
-                media
-                  ? media.title(viewing)
-                  : columns[0]
-                    ? renderCell(columns[0], viewing)
-                    : (title ?? "Запись")
-              }
-              eyebrow={media?.subtitle?.(viewing)}
-              image={media?.image?.(viewing)}
-              badge={media?.badge?.(viewing)}
-              price={media?.price?.(viewing)}
-              metaRight={media?.metaRight?.(viewing)}
-              aspect={media?.aspect}
-              fields={columns.slice(1).map((col) => ({
-                label: col.header,
-                value: renderCell(col, viewing),
-              }))}
-            />
-          ) : null}
+          {viewing ? detailFor(viewing) : null}
           {canEdit || canDelete ? (
             <DialogFooter>
               {canEdit ? (

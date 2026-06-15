@@ -199,8 +199,10 @@ def test_app_art_director_prescribes_screen_archetypes() -> None:
     assert "по выбранному архетипу" in adw._ART_DIRECTOR_INSTRUCTION_APP.lower() or (
         "по АРХЕТИПУ" in adw._WRITER_INSTRUCTION_TEMPLATE_APP
     )
-    # the kit OWNS the kanban (board) + calendar views — the brief routes the
-    # tracker/schedule archetypes to them instead of hand-rolled grids.
+    # the kit OWNS the kanban (board) + calendar + master-detail (split) views —
+    # the brief routes the tracker/schedule/dossier archetypes to them instead of
+    # hand-rolled grids or columns.
     assert "канбан" in instr.lower()
     assert 'view="board"' in instr
     assert 'view="calendar"' in instr
+    assert 'view="split"' in instr

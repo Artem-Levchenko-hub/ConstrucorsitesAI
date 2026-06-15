@@ -80,6 +80,11 @@ export {
   type CalendarViewProps,
   type CalendarEvent,
 } from "./calendar-view";
+export {
+  MasterDetailView,
+  type MasterDetailViewProps,
+  type SplitItem,
+} from "./master-detail-view";
 export { CrudResource, type CrudResourceProps } from "./crud-resource";
 export {
   RecordDetail,

@@ -731,11 +731,13 @@ def test_entities_ui_brief_selects_screen_archetype() -> None:
     assert _ENTITIES_UI.index("АРХЕТИП ГЛАВНОГО ЭКРАНА") < _ENTITIES_UI.index(
         "рецепт архетипа"
     )
-    # the kit OWNS the kanban + calendar views — the brief must route to them,
-    # NOT tell the writer they're missing (stale-guidance regression guard).
+    # the kit OWNS the kanban + calendar + master-detail (split) views — the brief
+    # must route to them, NOT tell the writer they're missing (stale-guidance guard).
     assert "Канбан-доски в ките НЕТ" not in _ENTITIES_UI
     assert 'view="board"' in _ENTITIES_UI
     assert 'view="calendar"' in _ENTITIES_UI
+    assert 'view="split"' in _ENTITIES_UI
+    assert "MasterDetailView" in _ENTITIES_UI
 
 
 def test_entities_ui_public_home_uses_storefront_hero() -> None:
