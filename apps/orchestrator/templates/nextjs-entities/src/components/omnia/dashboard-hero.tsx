@@ -93,20 +93,19 @@ export function DashboardHero({
         className,
       )}
     >
-      {/* Single accent: a soft primary glow for depth — restraint, not chrome. */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -right-20 -top-28 size-72 rounded-full bg-primary/10 blur-3xl"
-      />
-      <div className="relative p-6 sm:p-8">
+      {/* Signature surface: a brand-tinted aurora mesh for real depth — the kit's
+          "surface zero" (tone-on-tone, contrast-safe), not a flat single glow. */}
+      <div aria-hidden className="omnia-hero-art" />
+      <div className="stagger relative p-6 sm:p-8">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
             {eyebrow ? (
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                <span aria-hidden className="size-1.5 rounded-full bg-primary" />
                 {eyebrow}
               </p>
             ) : null}
-            <h1 className="text-2xl font-semibold leading-tight tracking-tight text-balance sm:text-3xl">
+            <h1 className="omnia-display text-2xl font-semibold leading-tight text-balance sm:text-3xl">
               {title}
             </h1>
             {description ? (
@@ -123,7 +122,7 @@ export function DashboardHero({
           <div className="min-w-0">
             <p className="text-sm font-medium text-muted-foreground">{metricLabel}</p>
             <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="text-4xl font-semibold tracking-tight tabular-nums text-foreground sm:text-5xl">
+              <span className="omnia-metric text-4xl font-semibold tabular-nums text-foreground sm:text-5xl">
                 {metric}
               </span>
               {trend ? <TrendPill {...trend} /> : null}

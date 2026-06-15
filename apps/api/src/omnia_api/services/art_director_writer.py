@@ -412,8 +412,10 @@ _WRITER_INSTRUCTION_TEMPLATE = """\
 # Entity/app builds are functional product screens (dashboard / CRM / SaaS), not
 # landings. The art-director designs an APPLICATION (information architecture +
 # theme tokens), and the writer assembles it from the shadcn-based app kit
-# (AppShell / CrudResource / StatCard / DataTable) — NOT hero sections, scroll
-# attractions, omnia-shader or fx-beams.
+# (AppShell / CrudResource / StatCard / DataTable). No landing-style ad heroes —
+# but the kit hero/header blocks (DashboardHero / PageHeader) bake in a tone-on-tone
+# brand art-layer + a display tracking ladder, so app screens still open with a
+# Linear/Stripe-grade signature surface, not a flat panel.
 _APP_TEMPLATES = {"nextjs_entities"}
 
 _ART_DIRECTOR_INSTRUCTION_APP = """\
@@ -426,9 +428,13 @@ StatCard / EntityForm). Планка — enterprise: Linear, Notion, Stripe Dash
 
 Думай как продуктовый дизайнер: кто пользователь и его задачи → какие СУЩНОСТИ
 (данные) → какие ЭКРАНЫ (навигация) → что на каждом экране. НИКАКИХ
-рекламных hero-секций лендинга / скролл-аттракционов / omnia-shader / fx-beams —
-это приложение, а не реклама. (Обзорная hero-зона дашборда с ОДНОЙ доминантной
-метрикой — это другое, она нужна; см. § ЭКРАНЫ → ДАШБОРД.)
+рекламных hero-секций лендинга / скролл-аттракционов / самописных фоновых эффектов —
+это приложение, а не реклама. НО первый экран ОБЯЗАН нести сигнатурный визуальный
+момент уровня Linear/Stripe, а не плоскую панель: кит-блоки <DashboardHero> и
+<PageHeader> УЖЕ несут вшитый тон-в-тон бренд-арт-слой (мягкая аврора-сетка в hue
+бренда за контентом, контраст текста полный) + дисплейный тип-ритм + аккуратный вход —
+тебе НЕ нужно описывать эффекты, кит делает их сам. Твоя задача — выбрать ПРАВИЛЬНЫЙ
+архетип главного экрана (ниже), и его доминанта + арт-слой кита дадут «сигнатуру».
 
 Формат — СТРОГО так, плотно, без воды, без markdown-ограждений вокруг ответа:
 
@@ -534,6 +540,9 @@ Task.dealId→Deal). Два разных продукта = две разные 
 — Пустые/загрузочные состояния у каждого списка (кит даёт). Ноль «ваш текст»/lorem —
   реальные русские лейблы, статусы, правдоподобные имена/суммы.
 — Иконки lucide, НЕ эмодзи. Один <h1> на экран (через <PageHeader title>).
+— ТИП-РИТМ — НЕ ставь letter-spacing/tracking-* inline на заголовки: кит-заголовки
+  (<DashboardHero>/<PageHeader>) уже несут агентский tracking-ладдер (плотный верх,
+  открытый низ). Заголовок экрана — через кит, не Tailwind-дефолт.
 
 Пиши плотно: каждая строка — принятое решение с конкретикой.
 

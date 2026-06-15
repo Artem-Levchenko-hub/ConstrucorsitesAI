@@ -23,17 +23,18 @@ export function PageHeader({ eyebrow, title, description, actions, className }: 
   return (
     <div
       className={cn(
-        "mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between",
+        "fade-up mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between",
         className,
       )}
     >
       <div className="space-y-1">
         {eyebrow ? (
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <span aria-hidden className="size-1.5 rounded-full bg-primary" />
             {eyebrow}
           </p>
         ) : null}
-        <h1 className="text-2xl font-semibold leading-tight tracking-tight text-balance sm:text-3xl">
+        <h1 className="omnia-display text-2xl font-semibold leading-tight text-balance sm:text-3xl">
           {title}
         </h1>
         {description ? (
