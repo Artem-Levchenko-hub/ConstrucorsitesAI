@@ -16,9 +16,11 @@ export interface StatCardProps {
   direction?: "up" | "down" | "flat";
   /** Small caption under the value, e.g. «за 30 дней». */
   hint?: React.ReactNode;
+  /** Optional inline chart under the value, e.g. `<Sparkline data={…} />`. */
+  chart?: React.ReactNode;
 }
 
-export function StatCard({ label, value, icon, delta, direction = "flat", hint }: StatCardProps) {
+export function StatCard({ label, value, icon, delta, direction = "flat", hint, chart }: StatCardProps) {
   const deltaTone =
     direction === "up"
       ? "text-emerald-400"
@@ -44,6 +46,7 @@ export function StatCard({ label, value, icon, delta, direction = "flat", hint }
         ) : null}
       </div>
       {hint ? <p className="mt-1 text-xs text-zinc-500">{hint}</p> : null}
+      {chart ? <div className="mt-3">{chart}</div> : null}
     </div>
   );
 }

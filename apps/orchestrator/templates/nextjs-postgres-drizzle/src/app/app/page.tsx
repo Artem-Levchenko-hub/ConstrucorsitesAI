@@ -7,9 +7,11 @@
  * (the kit's "surface zero") — so the first screen reads as one design product
  * with the landing and auth chrome, not a flat heading. AI replaces / extends
  * this when the user describes what to store and show: it adds nav items, a
- * focal metric on the hero, real Drizzle-backed StatCards, and DataTable lists
- * using the same `@/components/omnia` kit, so the cabinet grows premium from the
- * first prompt instead of starting as a bare shadcn page.
+ * focal metric on the hero, real Drizzle-backed StatCards (with inline
+ * <Sparkline> trends), <TrendArea>/<DonutStat>/<BarMini> charts for the metrics
+ * region, and DataTable lists — all from the same `@/components/omnia` kit, so
+ * the cabinet grows premium from the first prompt instead of starting as a bare
+ * shadcn page.
  *
  * Honest zero-state on purpose: a fresh project has no entities yet, so the
  * dashboard shows the real account plus an explicit "your data will appear
