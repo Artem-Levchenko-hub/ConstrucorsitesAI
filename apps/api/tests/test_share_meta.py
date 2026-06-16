@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from omnia_api.services.share_meta import (
     ShareCard,
     build_share_card,
@@ -19,6 +21,45 @@ from omnia_api.services.share_meta import (
 )
 
 _MODULE_PATH = "src/app/omnia-share.ts"
+
+# ── BS-29 acceptance-lock — brand-desync (dogfood run #26) ───────────────────
+# Live-confirmed (dogfood-crm-avrora-6450ab): the art-director brief declared
+# `БРЕНД-НАЗВАНИЕ: "Aura CRM"`, the writer printed «AURA» across the public
+# landing — but the share card (which drives the auth-shell wordmark, the <title>
+# and the OG unfurl) derived from the raw project name «dogfood CRM Аврора». A
+# visitor sees «AURA» on the marketing page, then «dogfood CRM Аврора» the instant
+# they hit /signin (and the landing tab title already disagrees with its hero).
+_DESYNC_NAME = "dogfood CRM Аврора"
+_BRIEF_BRAND = "Aura CRM"
+_DESYNC_PROMPT = "CRM для салона красоты: вход, клиенты, записи, мастера, дашборд"
+
+
+def test_share_card_ignores_brief_brand_today() -> None:
+    # EVIDENCE (green): the share-card title is the raw project name, NOT the
+    # brand the writer put on the landing from the brief → the desync, locked.
+    card = build_share_card(
+        name=_DESYNC_NAME, prompt=_DESYNC_PROMPT, accent_hex="#111111"
+    )
+    assert card.title == _DESYNC_NAME
+    assert card.title != _BRIEF_BRAND
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason="BS-29 / P-BRAND: when the brief names a brand, the share card "
+    "(wordmark + <title> + OG) should adopt it so the authed shell matches "
+    "the public landing. XPASS when the fix lands.",
+)
+def test_brief_brand_should_win_when_present() -> None:
+    # DESIRED behaviour: a brand-aware share card prefers the art-director brief's
+    # БРЕНД-НАЗВАНИЕ over the back-office project name, so every surface agrees.
+    card = build_share_card(
+        name=_DESYNC_NAME,
+        prompt=_DESYNC_PROMPT,
+        accent_hex="#111111",
+        brand=_BRIEF_BRAND,  # kwarg does not exist yet → xfail (TypeError)
+    )
+    assert card.title == _BRIEF_BRAND
 
 
 def test_real_name_becomes_the_title() -> None:
