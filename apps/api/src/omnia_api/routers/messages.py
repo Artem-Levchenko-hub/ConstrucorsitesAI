@@ -63,6 +63,7 @@ from omnia_api.services.discovery import (
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
+    _infer_stack_from_text,
     confident_enough_to_build,
     cumulative_idea,
     gather_answers,
@@ -706,6 +707,39 @@ async def post_prompt(
     discovery_ask = (
         discovery_result is not None and discovery_result.action != DISCOVERY_BUILD
     )
+
+    # First-build stack escalation when the interview was skipped.
+    # `switch_to_stack` only ever runs inside the discovery BUILD branch above,
+    # but the discovery interview is bypassed entirely on the quiz / "just
+    # generate" path (`skip_clarify=True`) and on a select-mode first build. On
+    # those paths an unmistakable app request ("CRM, вход, личный кабинет, база
+    # записей") would still build as freeform static with dead login buttons —
+    # the exact blind spot behind «полноценное приложение с 1 генерации». So
+    # when discovery did NOT run, reuse discovery's own deterministic safety-net
+    # (`_infer_stack_from_text`) to escalate static→container on the FIRST build.
+    # Strictly first-build only: a fresh starter has no user content or rollback
+    # history, so re-scaffolding is non-destructive (unlike a follow-up — see
+    # PROPOSAL P-H1). Fail-soft (R-10): a hiccup falls back to a static build.
+    if (
+        is_first_build
+        and discovery_result is None
+        and not discovery_ask
+        and not do_clarify
+        and not selected_dump
+        and settings.use_auto_stack_routing
+    ):
+        _inferred_stack = _infer_stack_from_text(payload.prompt)
+        if _inferred_stack:
+            try:
+                await stack_routing.switch_to_stack(
+                    session, project, _inferred_stack
+                )
+            except Exception as _sr_exc:
+                await session.rollback()
+                logging.getLogger(__name__).warning(
+                    "first-build stack_routing switch failed (static fallback): %r",
+                    _sr_exc,
+                )
 
     intent = decide_intent(
         effective_prompt,

@@ -17,6 +17,7 @@ import pytest
 
 from omnia_api.services import orchestrator_client, stack_routing
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.discovery import _infer_stack_from_text
 
 # ─── discovery_stack_to_template ─────────────────────────────────────────
 
@@ -166,3 +167,42 @@ async def test_provision_failsoft(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(orchestrator_client, "provision", _boom)
     assert await stack_routing.ensure_provisioned(uuid4(), "slug", "fullstack") is False
+
+
+# ── BLIND SPOT BS-3 (dogfood-eval run #2, 2026-06-16) ────────────────────────
+# When the discovery interview is skipped (quiz / "just generate" path sends
+# skip_clarify=True, or a select-mode first build), `switch_to_stack` was never
+# reached — it only ran inside the discovery BUILD branch. So an unmistakable
+# first-build app request ("CRM, вход, личный кабинет, база записей") built as
+# freeform STATIC with dead login buttons, violating «полноценное приложение с
+# 1 генерации». The fix (routers/messages.py) reuses discovery's own
+# deterministic safety-net `_infer_stack_from_text` on the FIRST build when
+# discovery didn't run, escalating static→container. These specs lock the
+# contract that fix depends on: app-intent first prompts must infer a container
+# stack, and genuine marketing landings must stay static (no false escalation).
+_FIRSTBUILD_APP_PROMPTS = [
+    # the exact scenario-1 prompt the dogfood run used
+    "CRM для записи клиентов: вход в систему, список клиентов, добавление "
+    "нового клиента, заметки по каждому клиенту",
+    "сделай настоящее приложение с авторизацией и личным кабинетом",
+    "хочу чтобы пользователи могли регистрироваться и сохранять свои записи",
+    "интернет-магазин с корзиной и оформлением заказа",
+]
+
+_FIRSTBUILD_LANDING_PROMPTS = [
+    "лендинг для кофейни с меню и фотографиями",
+    "портфолио фотографа",
+    "одностраничный сайт для барбершопа без регистрации",  # negated → no backend
+]
+
+
+@pytest.mark.parametrize("prompt", _FIRSTBUILD_APP_PROMPTS)
+def test_firstbuild_app_prompt_infers_container_stack(prompt: str) -> None:
+    # Skipped-interview first build must still escalate to a real app stack.
+    assert _infer_stack_from_text(prompt) == "nextjs_entities"
+
+
+@pytest.mark.parametrize("prompt", _FIRSTBUILD_LANDING_PROMPTS)
+def test_firstbuild_landing_prompt_stays_static(prompt: str) -> None:
+    # A genuine marketing landing must NOT be escalated (no false positives).
+    assert _infer_stack_from_text(prompt) is None
