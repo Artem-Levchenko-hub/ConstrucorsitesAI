@@ -256,3 +256,57 @@ def test_firstbuild_app_prompt_infers_container_stack(prompt: str) -> None:
 def test_firstbuild_landing_prompt_stays_static(prompt: str) -> None:
     # A genuine marketing landing must NOT be escalated (no false positives).
     assert _infer_stack_from_text(prompt) is None
+
+
+# ── BLIND SPOT BS-7 (dogfood-eval run #5, 2026-06-16) ────────────────────────
+# Live prod repro: a user asked for a лендинг автосервиса with "запись на ремонт
+# онлайн" and explicitly picked "Лендинг" in the discovery quiz. They still got a
+# `nextjs_entities` container app whose EVERY conversion CTA ("Записаться онлайн",
+# "Записаться") points to /signin — i.e. a customer must REGISTER AN ACCOUNT to
+# book an oil change. Rendered evidence: dogfood-autoservice-turbofix-342143
+# /app/src/app/page.tsx → 5× href="/signin"; screenshot in _routine/runs/.
+#
+# Root cause: `_BACKEND_SIGNALS` treats consumer lead-capture booking words
+# ("запись на", "бронирован") as proof the product needs accounts/CRUD
+# (discovery.py:90). `_infer_stack_from_text` therefore escalates ANY booking
+# landing → nextjs_entities (auth-gated), and the negative safety-net
+# `_explicit_no_backend` only rescues prompts that literally say "без
+# регистрации" — a plain "запись на X" carries no such phrase, so nothing vetoes
+# it. The explicit "Лендинг" quiz pick has zero weight in the stack decision.
+#
+# This is a NEW trigger for the BS-3 class (over-escalation → /signin wall) that
+# BS-3's downgrade cannot catch. NOT shipped blind: the fix is a bidirectional-
+# risk routing/UX policy change (removing/narrowing "запись на"/"бронирован"
+# would under-escalate genuine booking *apps*) AND it exposes an architectural
+# gap — Omnia has no "static landing + lead-capture form, no customer auth" path
+# between static and a full entity-app. See PROPOSAL P-BS7 in
+# docs/plans/2026-06-16-dogfood-eval-routine.md.
+_CONSUMER_BOOKING_LANDINGS = [
+    "сделай сайт для автосервиса: услуги, запись на ремонт онлайн, цены, контакты",
+    "лендинг барбершопа: запись на стрижку, услуги, цены",
+    "сайт ресторана с бронированием столика и меню",
+]
+
+
+@pytest.mark.xfail(
+    reason="BS-7 blind spot: a consumer lead-capture booking landing (no account "
+    "ask) is force-escalated to a customer-auth entity-app, gating booking behind "
+    "/signin. Remove this marker when the fix lands.",
+    strict=False,
+)
+@pytest.mark.parametrize("prompt", _CONSUMER_BOOKING_LANDINGS)
+def test_consumer_booking_landing_should_not_force_customer_auth(prompt: str) -> None:
+    # Desired: a "запись/бронирование" landing where the user never asked for
+    # accounts must NOT be escalated to an auth-gated stack — the booking is a
+    # lead-capture form, not user registration.
+    assert _infer_stack_from_text(prompt) != "nextjs_entities"
+
+
+@pytest.mark.parametrize("prompt", _CONSUMER_BOOKING_LANDINGS)
+def test_consumer_booking_landing_is_currently_force_escalated_evidence(
+    prompt: str,
+) -> None:
+    """Evidence lock (not desired behavior): documents that, TODAY, every consumer
+    booking landing is force-escalated to nextjs_entities. If this changes, the
+    xfail above starts XPASSing and both markers should be revisited together."""
+    assert _infer_stack_from_text(prompt) == "nextjs_entities"
