@@ -433,6 +433,41 @@ def test_response_block_present_in_every_template() -> None:
         assert "ФОРМАТ ОТВЕТА" in sp, f"{template} missing _RESPONSE"
 
 
+def test_brief_only_drops_code_blocks_keeps_design() -> None:
+    """The Art-Director (pass 1) writes a PROSE brief — `brief_only=True` strips
+    the code-implementation contracts (the <file> response format, stacks, the
+    self-check) while KEEPING the design-thinking blocks. Pass 2 (the writer)
+    uses the full prompt, so final code quality is unaffected."""
+    for tmpl in ("landing", "nextjs_entities", "fullstack", "spa"):
+        full = build_system_prompt(tmpl)
+        brief = build_system_prompt(tmpl, brief_only=True)
+        # Code-only response format dropped...
+        assert "ФОРМАТ ОТВЕТА" in full, tmpl
+        assert "ФОРМАТ ОТВЕТА" not in brief, tmpl
+        # ...design-thinking kept...
+        assert "АРТ-ДИРЕКЦИЯ" in brief, tmpl
+        # ...and the brief is strictly leaner.
+        assert len(brief) < len(full), tmpl
+
+    # The shadcn app kit (_ENTITIES_UI) + stack are the heaviest blocks; the
+    # brief drops them, so the saving on entity apps is substantial.
+    full_e = build_system_prompt("nextjs_entities")
+    brief_e = build_system_prompt("nextjs_entities", brief_only=True)
+    assert len(full_e) - len(brief_e) > 2000
+
+
+def test_build_art_director_system_is_lean() -> None:
+    """`build_art_director_system` is the brief-lean system used for pass 1 —
+    no project_id / empty prompt reduces it to build_system_prompt(brief_only)."""
+    from omnia_api.services.prompt_builder import build_art_director_system
+
+    got = build_art_director_system("landing")
+    assert got
+    assert "ФОРМАТ ОТВЕТА" not in got
+    assert "АРТ-ДИРЕКЦИЯ" in got
+    assert len(got) < len(build_system_prompt("landing"))
+
+
 def test_backend_templates_omit_skill_brief() -> None:
     """skill_brief is design-tooling — pointless for tgbot/api. Even when
     a brief is passed (caller doesn't know), backend prompts must not

@@ -641,11 +641,18 @@ def _build_art_director_messages(
     user_prompt: str,
     model_id: str | None,
     template: str | None = None,
+    system_override: str | None = None,
 ) -> list[dict[str, str]]:
     """Art-Director pass: shared system prompt, last user turn appends the
     brief directive. ``json_strict=False`` — the brief is prose, not JSON.
     Entity/app templates get the APPLICATION brief (IA + theme), not the
-    landing brief (hero + sections)."""
+    landing brief (hero + sections).
+
+    ``system_override`` (when given) replaces the system message with a
+    brief-lean variant that drops the code-implementation blocks the prose
+    brief never uses — the WRITER pass still gets the full ``base_messages``
+    system, so final code quality is unchanged. Swaps only when the first
+    message really is the system role (fail-soft)."""
     instruction = (
         _ART_DIRECTOR_INSTRUCTION_APP
         if template in _APP_TEMPLATES
@@ -654,6 +661,8 @@ def _build_art_director_messages(
     directive = vendor_directive(model_id, json_strict=False)
     suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
+    if system_override and msgs and msgs[0].get("role") == "system":
+        msgs[0] = {"role": "system", "content": system_override}
     msgs.append({
         "role": "user",
         "content": f"{user_prompt}\n\n{instruction}{suffix}",
@@ -714,6 +723,7 @@ async def art_director_writer_generate(
     project_id: UUID,
     message_id: UUID,
     template: str | None = None,
+    art_director_system: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run Art-Director (Opus, brief) → Writer (DeepSeek, HTML).
 
@@ -722,13 +732,21 @@ async def art_director_writer_generate(
     default from ``model_for_role`` but can be forced (admin override). The
     yielded events match ``stream_chat_completion`` so the caller is agnostic to
     the 2-pass split.
+
+    ``art_director_system`` (when given) is a brief-lean system prompt used ONLY
+    for pass 1 — it drops the code-implementation blocks the prose brief never
+    uses, cutting pass-1 input. Pass 2 (the writer) always uses the full
+    ``base_messages`` system, so the final HTML is unaffected. None → both passes
+    share the full system (original behaviour).
     """
     art_director_model = art_director_model or model_for_role("art_director")
     writer_model = writer_model or model_for_role("freeform_writer")
 
     # ─── Pass 1: Art-Director (silent — accumulate the brief) ────────────
     yield {"pass": "art_director", "stage": "start", "model": art_director_model}
-    ad_msgs = _build_art_director_messages(base_messages, user_prompt, art_director_model, template)
+    ad_msgs = _build_art_director_messages(
+        base_messages, user_prompt, art_director_model, template, art_director_system
+    )
     if pipeline_debug.enabled():
         _sys = next((m["content"] for m in base_messages if m.get("role") == "system"), "")
         pipeline_debug.dump(project_id, message_id, "00_system_prompt.md", _sys)

@@ -207,6 +207,13 @@ async def astream(
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True,
+        # Ask the upstream to emit a final usage chunk (OpenAI-compatible). For
+        # DeepSeek/Gemini this carries `prompt_cache_hit_tokens` — the proof that
+        # the big stable system prefix is being served from the provider context
+        # cache (the whole point of keeping the prefix first + byte-stable). We
+        # only LOG it here (the stream's billing stays token-counted in the
+        # gateway); ignored by aggregators that don't support it.
+        "stream_options": {"include_usage": True},
     }
     headers = {
         "Authorization": f"Bearer {settings.vsegpt_api_key.get_secret_value()}",
@@ -243,13 +250,30 @@ async def astream(
                                 loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                                 return
                             try:
-                                delta = (
-                                    json.loads(data)["choices"][0]
-                                    .get("delta", {})
-                                    .get("content", "")
-                                )
-                            except (KeyError, IndexError, ValueError, TypeError):
+                                obj = json.loads(data)
+                            except ValueError:
                                 continue
+                            # Final usage chunk (stream_options.include_usage): its
+                            # `choices` is usually empty and it carries upstream
+                            # token counts incl. the cache-hit proof. Log it so the
+                            # owner can SEE whether the stable system prefix is
+                            # being served from the DeepSeek/Gemini context cache.
+                            usage = obj.get("usage")
+                            if usage:
+                                print(
+                                    f"[VSEGPT] stream usage model={model} "
+                                    f"prompt={usage.get('prompt_tokens')} "
+                                    f"completion={usage.get('completion_tokens')} "
+                                    f"cache_hit={usage.get('prompt_cache_hit_tokens')} "
+                                    f"cache_miss={usage.get('prompt_cache_miss_tokens')}",
+                                    flush=True,
+                                )
+                            try:
+                                delta = (
+                                    obj["choices"][0].get("delta", {}).get("content", "")
+                                )
+                            except (KeyError, IndexError, TypeError):
+                                delta = ""
                             if delta:
                                 emitted = True
                                 loop.call_soon_threadsafe(queue.put_nowait, ("delta", delta))
@@ -392,6 +416,17 @@ async def acompletion(
         or _approx_tokens("".join(_flatten_content(m.get("content", "")) for m in messages))
     )
     tokens_out = int(usage.get("completion_tokens") or _approx_tokens(content))
+    # Cache-hit prompt tokens (DeepSeek automatic context caching / OpenAI-compat).
+    # Surfaced so a caller can bill them at the cheaper cache-read rate
+    # (pricing.calculate_cost_rub(cached_tokens=...)) and so the cache win on the
+    # big stable system prefix is visible in logs.
+    cache_hit_tokens = int(usage.get("prompt_cache_hit_tokens") or 0)
+    if cache_hit_tokens:
+        print(
+            f"[VSEGPT] usage model={model} prompt={tokens_in} "
+            f"cache_hit={cache_hit_tokens}",
+            flush=True,
+        )
 
     # Normalize to OpenAI shape with `model` = the Omnia id (not the vsegpt slug)
     # so chat.py bills against PRICE_TABLE. slug_to_omnia returns None for this
@@ -412,5 +447,6 @@ async def acompletion(
             "prompt_tokens": tokens_in,
             "completion_tokens": tokens_out,
             "total_tokens": tokens_in + tokens_out,
+            "prompt_cache_hit_tokens": cache_hit_tokens,
         },
     }

@@ -461,6 +461,17 @@ class Settings(BaseSettings):
     # already get. Kill switch for instant rollback to the single-shot path.
     use_art_director_entities: bool = Field(default=True)
 
+    # Brief-lean Art-Director prompt (infra cost — 2026-06-16). The 2-pass build
+    # sends the SAME ~14K-token system prompt to BOTH passes, but pass 1 (the
+    # Art-Director) only writes a PROSE brief — it never emits code, so the
+    # heaviest blocks (the shadcn app kit _ENTITIES_UI ~650 lines, the landing
+    # section kit ~340, stack contracts, the <file> response format, the
+    # self-check) are dead weight on its input. On = pass 1 gets a trimmed system
+    # (design-thinking blocks only); pass 2 (the writer) keeps the FULL prompt, so
+    # final code quality is unchanged. Kill switch for instant rollback to the
+    # shared-full-prompt behaviour.
+    use_lean_art_director_prompt: bool = Field(default=True)
+
     # ── Surgical edit mode (owner directive 2026-06-06) ───────────────────
     # After the first build, a follow-up that changes ONE thing (a selected
     # element, a recolour, a text swap, "add an intro section") is routed by the

@@ -3130,6 +3130,29 @@ def _drop_blocks_for_tier(sections: tuple[str, ...], tier: str) -> tuple[str, ..
     return tuple(s for s in sections if s not in drop)
 
 
+# Blocks dropped for the Art-Director (pass 1) "brief-only" prompt. The art
+# director writes a PROSE design brief, NOT code, so the code-implementation
+# contracts below are dead weight for it (and the heaviest blocks in the prompt
+# — _ENTITIES_UI ~650 lines, _LANDING_SECTION_KIT ~340). Dropping them shrinks
+# the brief pass's input with zero effect on the WRITER pass (pass 2), which
+# keeps the full prompt and is what actually emits the files. Design-thinking
+# blocks (taste, composition, palette anchor, kit-reference moves, quality bar)
+# are intentionally NOT here — the brief needs them.
+_BRIEF_ONLY_DROP: frozenset[str] = frozenset({
+    _FUNCTIONAL_CONTRACT,
+    _SELF_CHECK,
+    _RESPONSE,
+    _LANDING_SECTION_KIT,
+    _STATIC_STACK,
+    _FULLSTACK_STACK,
+    _ENTITIES_STACK,
+    _ENTITIES_UI,
+    _SPA_STACK,
+    _TGBOT_STACK,
+    _API_STACK,
+})
+
+
 _ART_DIRECTOR = """\
 АРТ-ДИРЕКЦИЯ — СНАЧАЛА ДУМАЙ КАК ДИЗАЙНЕР, ПОТОМ ВЕРСТАЙ. Не собирай блоки из меню —
 РАССУЖДАЙ от чувства к системе. Первой строкой ВНУТРИ <body> запиши краткий разбор
@@ -3337,6 +3360,7 @@ def build_system_prompt(
     model_id: str | None = None,
     design_tokens_block: str | None = None,
     discovery_spec: dict[str, Any] | None = None,
+    brief_only: bool = False,
 ) -> str:
     """Собрать system prompt под тип проекта.
 
@@ -3532,6 +3556,13 @@ def build_system_prompt(
             _RESPONSE,
         )
 
+    # Art-Director (pass 1) writes a PROSE brief, never code — strip the
+    # code-implementation contracts it never uses so its input cost drops. The
+    # writer pass (pass 2) keeps the full prompt, so final code quality is
+    # untouched. See `_BRIEF_ONLY_DROP`.
+    if brief_only:
+        sections = tuple(s for s in sections if s not in _BRIEF_ONLY_DROP)
+
     # Phase F.2 — apply per-tier trim. Budget/balanced models drop the
     # detail-polish layers so the head→tail span fits their attention
     # budget. Premium-tier and missing-model_id calls keep the full
@@ -3540,6 +3571,52 @@ def build_system_prompt(
     if model_id is not None:
         sections = _drop_blocks_for_tier(sections, tier_for_model(model_id))
     return "\n\n".join(sections)
+
+
+def build_art_director_system(
+    template: str,
+    preset_id: str | None = None,
+    image_gen_enabled: bool = True,
+    *,
+    model_id: str | None = None,
+    project_id: str | None = None,
+    user_prompt: str = "",
+    discovery_spec: dict[str, Any] | None = None,
+) -> str:
+    """Brief-lean system prompt for the Art-Director (2-pass freeform, pass 1).
+
+    Same design-thinking blocks as :func:`build_system_prompt` but WITHOUT the
+    code-implementation contracts the prose brief never uses (`_BRIEF_ONLY_DROP`).
+    Mirrors the freeform design-input resolution of :func:`build_messages` (seeded
+    design tokens win, else a matched skill brief) so the brief author sees the
+    SAME palette/font guidance the writer will. Fail-soft: any token-resolution
+    error degrades to no tokens, never blocks the build.
+
+    The WRITER pass (pass 2) keeps the full prompt via the normal `base_messages`,
+    so this only trims pass-1 input — final code quality is unaffected.
+    """
+    design_tokens_block: str | None = None
+    if project_id:
+        try:
+            from omnia_api.services.design_tokens import tokens_for_project
+            design_tokens_block = tokens_for_project(
+                project_id, industry_hint=preset_id
+            ).prompt_block()
+        except Exception:
+            design_tokens_block = None
+    skill_brief = (
+        None if design_tokens_block else _compute_skill_brief(user_prompt, project_id)
+    )
+    return build_system_prompt(
+        template,
+        preset_id,
+        image_gen_enabled,
+        skill_brief=skill_brief,
+        model_id=model_id,
+        design_tokens_block=design_tokens_block,
+        discovery_spec=discovery_spec,
+        brief_only=True,
+    )
 
 
 def _format_selection_block(selected_elements: Sequence[dict[str, Any]]) -> str:

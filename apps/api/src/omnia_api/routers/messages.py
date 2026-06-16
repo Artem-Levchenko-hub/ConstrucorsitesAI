@@ -86,7 +86,11 @@ from omnia_api.services.link_validator import find_dead_links, repair_dead_links
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
-from omnia_api.services.prompt_builder import KIT_FILES, build_messages
+from omnia_api.services.prompt_builder import (
+    KIT_FILES,
+    build_art_director_system,
+    build_messages,
+)
 from omnia_api.services.queue import enqueue_entity_gate, enqueue_preview
 from omnia_api.services.ui_audit import audit as ui_audit
 from omnia_api.services.ui_audit import format_failures_for_retry
@@ -1731,6 +1735,28 @@ async def _process_prompt(
                 # Mark the freeform path so the post-writer image-resolve and
                 # design-judge stages emit their llm.pass progress (4-segment bar).
                 state["freeform"] = True
+                # Infra cost (2026-06-16): pass 1 (Art-Director, prose brief) gets
+                # a brief-lean system that drops the code-implementation blocks it
+                # never uses; pass 2 (the writer) keeps the FULL `messages` system,
+                # so the final HTML is unchanged. Fail-soft → full prompt on any
+                # error or when the flag is off.
+                _ad_system: str | None = None
+                if _settings.use_lean_art_director_prompt:
+                    try:
+                        _ad_system = build_art_director_system(
+                            project_template,
+                            project_design_preset_id,
+                            project_image_gen_enabled,
+                            model_id=model_id,
+                            project_id=str(project_id),
+                            user_prompt=prompt_text,
+                            discovery_spec=project_discovery_spec,
+                        )
+                    except Exception as _ad_exc:
+                        _log.warning(
+                            "lean art-director prompt failed, using full: %r", _ad_exc
+                        )
+                        _ad_system = None
                 source = art_director_writer_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
@@ -1740,6 +1766,7 @@ async def _process_prompt(
                     project_id=project_id,
                     message_id=assistant_message_id,
                     template=project_template,
+                    art_director_system=_ad_system,
                 )
             elif _dp_active:
                 source = director_polish_generate(
