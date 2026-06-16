@@ -1240,6 +1240,41 @@ def _normalize_entity_filenames(files: dict[str, str]) -> dict[str, str]:
     return out
 
 
+def _warn_unparseable_entity_json(files: dict[str, str]) -> list[str]:
+    """Observability for BS-31: the writer sometimes emits INVALID JSON for an
+    entity file (an unterminated string, a dropped key name, …). Today such a
+    file passes every guard untouched — `_normalize_entity_filenames` skips
+    unparseable files (it cannot read their ``name``) and the runtime
+    ``loadEntity`` then silently returns ``null`` (registry.ts:87-89), so
+    ``GET /api/entities/<X>`` answers 404 ``unknown entity`` and a declared
+    entity is DOA with ZERO signal anywhere. On real CRM builds this hit the
+    CENTRAL entity (``Client``) on 2/2 consecutive live gens.
+
+    This does NOT repair, regenerate, or drop the file — that action is
+    policy-adjacent and cross-surface (see PROPOSAL P-ENTITYJSON / rule 15). It
+    only makes the corruption loud in the build log, at the moment it is
+    introduced, so the dominant failure mode is diagnosable instead of silent.
+    Returns the list of entity names whose JSON does not parse.
+    """
+    import json as _json
+
+    bad: list[str] = []
+    for path, content in files.items():
+        if not (path.startswith("entities/") and path.endswith(".json")):
+            continue
+        try:
+            _json.loads(content)
+        except Exception as exc:
+            name = path[len("entities/") : -len(".json")]
+            bad.append(name)
+            print(
+                f"[PP] entity_json_INVALID: {name}.json does not parse ({exc}); "
+                f"entity will resolve as 404 'unknown entity' at runtime — DOA",
+                flush=True,
+            )
+    return bad
+
+
 def _extract_files_and_edits(
     accumulated: str, base_files: dict[str, str]
 ) -> tuple[dict[str, str], list[str]]:
@@ -3535,6 +3570,11 @@ async def _process_prompt(
                 # writer copied from the brief (clients.json for name "Client")
                 # would 404 every read/write and DOA the app. Realign here.
                 files = _normalize_entity_filenames(files)
+                # Detection half of PROPOSAL P-ENTITYJSON (BS-31): make a
+                # writer-fumbled, unparseable entities/*.json loud in the build
+                # log instead of shipping it silently DOA. Does not mutate
+                # `files` — the repair/regen/fail action stays deferred.
+                _warn_unparseable_entity_json(files)
             # Carry the user's direct style edits (omnia-overrides block + font
             # links) across this regeneration so manual color/font tweaks aren't
             # lost when the model rewrites index.html. Fail-soft, like the guards.

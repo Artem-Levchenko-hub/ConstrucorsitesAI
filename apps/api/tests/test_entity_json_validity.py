@@ -72,6 +72,26 @@ def test_current_guard_chain_ships_malformed_entity_json_verbatim() -> None:
         json.loads(out["entities/Client.json"])
 
 
+def test_invalid_entity_json_is_flagged_in_build_log(capsys: pytest.CaptureFixture[str]) -> None:
+    """BS-31 safe sub-fix (detection half of P-ENTITYJSON, dogfood run #31):
+    an unparseable `entities/*.json` is now LOGGED loudly at build time instead
+    of shipping with zero signal. The file is still emitted verbatim — repair /
+    regen / build-fail is the policy-adjacent action that stays deferred — so
+    this only removes the silence, it does not change what ships."""
+    from omnia_api.routers.messages import _warn_unparseable_entity_json
+
+    files = {
+        "entities/Client.json": _BROKEN_CLIENT,
+        "entities/Deal.json": _VALID_DEAL,
+    }
+    bad = _warn_unparseable_entity_json(files)
+    # Only the genuinely-corrupt entity is flagged; the valid sibling is not.
+    assert bad == ["Client"]
+    out = capsys.readouterr().out
+    assert "entity_json_INVALID: Client.json" in out
+    assert "Deal" not in out
+
+
 @pytest.mark.xfail(
     reason="BS-31 / PROPOSAL P-ENTITYJSON: no guard validates writer-emitted "
     "entity JSON; a malformed entities/*.json ships and the entity is silently "
