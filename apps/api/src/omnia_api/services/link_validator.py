@@ -115,3 +115,46 @@ def repair_dead_links_inline(files: dict[str, str]) -> dict[str, str]:
 
         out[path] = _DEAD_HREF_REGEX.sub(_replace, content)
     return out
+
+
+def repair_orphaned_anchors_inline(
+    old_files: dict[str, str], new_files: dict[str, str]
+) -> dict[str, str]:
+    """Repair in-page anchors that an EDIT orphaned, deterministically (no LLM).
+
+    A surgical edit like «убери секцию отзывов» deletes a section's ``id`` but
+    leaves nav links ``href="#reviews"`` pointing at it — a dead anchor the
+    normal dead-link pass never sees (it's skipped on surgical edits to avoid
+    touching links the user didn't mention). We repair ONLY anchors that were
+    VALID before this edit (the id existed in ``old``) and became dangling after
+    (the id is gone in ``new``) — strictly the side-effect of the requested
+    change, never a pre-existing dead link. Each such ``<a href="#X">`` is
+    redirected to the best surviving CTA-class section (same fallback policy as
+    ``repair_dead_links_inline``); if none exists the link is left untouched.
+    Returns a NEW dict — inputs are not mutated.
+    """
+    out: dict[str, str] = {}
+    for path, content in new_files.items():
+        if not path.lower().endswith(_HTML_SUFFIXES):
+            out[path] = content
+            continue
+        old_ids = set(_ID.findall(old_files.get(path, "")))
+        new_ids = set(_ID.findall(content))
+        # ids the edit removed — anchors pointing here were valid before, dead now.
+        orphaned = old_ids - new_ids
+        if not orphaned:
+            out[path] = content
+            continue
+        target = _pick_repair_target(new_ids)
+        if target is None or target in orphaned:
+            out[path] = content
+            continue
+
+        def _replace(m: re.Match[str]) -> str:
+            href = m.group(2).strip()
+            if href.startswith("#") and href[1:] in orphaned:
+                return f"{m.group(1)}#{target}{m.group(3)}"
+            return m.group(0)
+
+        out[path] = _DEAD_HREF_REGEX.sub(_replace, content)
+    return out

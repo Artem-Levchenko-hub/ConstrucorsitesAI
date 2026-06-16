@@ -83,7 +83,11 @@ from omnia_api.services.file_extractor import (
 )
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.intent_triage import ORCHESTRATE, decide_intent
-from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
+from omnia_api.services.link_validator import (
+    find_dead_links,
+    repair_dead_links_inline,
+    repair_orphaned_anchors_inline,
+)
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
@@ -2453,6 +2457,20 @@ async def _process_prompt(
                     f"new_len={len(_new_index)}",
                     flush=True,
                 )
+
+        # --- Orphaned-anchor repair on surgical edits ---------------------
+        # The dead-link pass below is skipped on surgical edits (it must not
+        # touch PRE-EXISTING dead links the user didn't mention). But a removal
+        # edit ("убери секцию отзывов") orphans nav links — `href="#reviews"`
+        # now points at a section this very edit deleted. That dangling anchor
+        # IS part of "what was asked", so repair it: delta-scoped (only ids the
+        # edit removed), deterministic, no LLM, no regeneration — squarely the
+        # kept inline-href-fixer policy.
+        if surgical and files and project_template not in CONTAINER_NEXT:
+            _before = files
+            files = repair_orphaned_anchors_inline(current_files, files)
+            if files != _before:
+                print("[PP] orphaned_anchors repaired", flush=True)
 
         # --- Pass 2..N: empty-content fallback ----------------------
         # If we got nothing usable back AND the primary model has known
