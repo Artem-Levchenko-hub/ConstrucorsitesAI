@@ -40,6 +40,56 @@ def test_stack_mapping(stack: str, expected: str | None) -> None:
     assert stack_routing.discovery_stack_to_template(stack) == expected
 
 
+# ─── BS-5 acceptance-lock: tgbot/api stacks orphaned from discovery ──────────
+#
+# Blind spot (dogfood run #4, 2026-06-16): the `telegram-bot-aiogram` and
+# `fastapi-postgres` templates are fully built & provisionable (orchestrator
+# stack_registry + prompt_builder `_TGBOT_STACK`/`_BACKEND_TEMPLATES`), but NO
+# natural-language request can ever reach them. Discovery's stack vocabulary
+# (`discovery._STACKS`) and its `_SYSTEM` menu only offer {static, fullstack,
+# nextjs_entities, spa}, and `_DISCOVERY_STACK_TO_TEMPLATE` only maps those. Live
+# prod repro: "сделай телеграм-бота для записи в барбершоп" → discovery picked
+# `nextjs_entities`; "telegram бот ... без сайта" → `fullstack`. The user asking
+# for a bot silently gets a web app.
+#
+# The two xfails below lock the structural preconditions of the fix (see PROPOSAL
+# P-BS5 in docs/plans/2026-06-16-dogfood-eval-routine.md). They XPASS once tgbot
+# is added to the discovery vocabulary AND wired into the routing map. `strict=
+# False` so CI never breaks on the current/broken state. NOT shipped blind: a real
+# fix also needs backend-only provisioning (no web preview) + a TELEGRAM_BOT_TOKEN
+# secret-collection UX, or the bot is dead-on-arrival.
+
+
+@pytest.mark.xfail(
+    reason="BS-5 blind spot: tgbot is absent from discovery._STACKS, so no NL "
+    "request can ever recommend a Telegram-bot stack. Remove when the fix lands.",
+    strict=False,
+)
+def test_tgbot_should_be_a_discovery_stack() -> None:
+    from omnia_api.services.discovery import _STACKS
+
+    assert "tgbot" in _STACKS
+
+
+@pytest.mark.xfail(
+    reason="BS-5 blind spot: the discovery→template map omits tgbot, so even a "
+    "'tgbot' recommendation would fall through to static. Remove when fix lands.",
+    strict=False,
+)
+def test_tgbot_should_route_to_template() -> None:
+    assert stack_routing.discovery_stack_to_template("tgbot") == "telegram-bot-aiogram"
+
+
+def test_tgbot_is_currently_unreachable_evidence() -> None:
+    """Evidence lock (not desired behavior): documents that, TODAY, tgbot is
+    orphaned from the NL pipeline on BOTH surfaces. If either changes, the xfails
+    above start XPASSing and all three markers should be revisited together."""
+    from omnia_api.services.discovery import _STACKS
+
+    assert "tgbot" not in _STACKS
+    assert stack_routing.discovery_stack_to_template("tgbot") is None
+
+
 # ─── fakes ───────────────────────────────────────────────────────────────
 
 
