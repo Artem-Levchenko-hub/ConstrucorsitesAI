@@ -131,6 +131,36 @@ def _infer_stack_from_text(text: str) -> str | None:
     return None
 
 
+# Explicit "no accounts / no login" phrases. Unlike _BACKEND_SIGNALS (bare stems
+# whose NEGATED mentions are filtered out), these are whole negated phrases that
+# carry a *positive* intent: the user actively refused auth + persistence. A tool
+# the user said needs NO login must never be escalated to an auth-backed stack —
+# nextjs_entities/fullstack scaffold a `(app)` route group behind /signin, which
+# gates the tool behind a login wall the user explicitly rejected (dogfood run #2:
+# «калькулятор ипотеки … без регистрации» → model picked nextjs_entities → the
+# calculator landed in (app)/dashboard behind /signin, while the page copy itself
+# promised «без регистрации»).
+_NO_BACKEND_SIGNALS: frozenset[str] = frozenset(
+    {
+        "без регистрац", "без вход", "без аккаунт", "без авториз", "без логин",
+        "не нужна регистрац", "не нужен вход", "не нужна авториз",
+        "no login", "no sign up", "no signup", "no account", "no registration",
+        "without login", "without sign", "without account",
+    }
+)
+
+
+def _explicit_no_backend(text: str) -> bool:
+    """True when the user EXPLICITLY refused accounts/login (whole-phrase match).
+
+    Drives the negative stack safety-net (run_discovery BUILD path): a model that
+    over-escalates such a tool to nextjs_entities/fullstack gets vetoed back to
+    ``spa`` (a no-backend interactive React tool), so the tool isn't gated behind
+    /signin against the user's stated wish."""
+    haystack = (text or "").lower()
+    return any(sig in haystack for sig in _NO_BACKEND_SIGNALS)
+
+
 @dataclass(frozen=True)
 class DiscoveryResult:
     """Outcome of one discovery turn.
@@ -831,14 +861,28 @@ async def run_discovery(
         # full gathered intent so a real app gets a container stack instead of a
         # dead static landing (owner directive 2026-06-10). Only overrides when
         # the model didn't already pick a container stack.
-        if stack not in ("fullstack", "nextjs_entities"):
-            intent_text = "\n".join(
-                [brief, *(m.get("content") or "" for m in history), latest_prompt or ""]
-            )
-            inferred = _infer_stack_from_text(intent_text)
-            if inferred:
-                log.info("discovery: stack '%s'→'%s' (backend intent signals)", stack, inferred)
-                stack = inferred
+        intent_text = "\n".join(
+            [brief, *(m.get("content") or "" for m in history), latest_prompt or ""]
+        )
+        inferred = _infer_stack_from_text(intent_text)
+        if stack not in ("fullstack", "nextjs_entities") and inferred:
+            log.info("discovery: stack '%s'→'%s' (backend intent signals)", stack, inferred)
+            stack = inferred
+        # Negative safety-net (Phase 7.x): the mirror of the upgrade above. The
+        # model OVER-escalated a tool the user explicitly said needs no accounts
+        # ("без регистрации") to an auth-backed stack — which would gate the tool
+        # behind /signin. No positive backend signal survived the negation check
+        # (``inferred is None``), so downgrade to spa: a no-backend interactive
+        # React tool. Mutually exclusive with the upgrade; only ever fires on an
+        # explicit refusal, so a genuine app ("магазин без регистрации" — commerce
+        # signals keep ``inferred`` truthy) is untouched.
+        elif (
+            stack in ("nextjs_entities", "fullstack")
+            and inferred is None
+            and _explicit_no_backend(intent_text)
+        ):
+            log.info("discovery: stack '%s'→'spa' (explicit no-account tool)", stack)
+            stack = "spa"
         return DiscoveryResult(action=BUILD, message=message, brief=brief, stack=stack)
 
     # ASK path — one more question (+ quick-reply chips, always present).

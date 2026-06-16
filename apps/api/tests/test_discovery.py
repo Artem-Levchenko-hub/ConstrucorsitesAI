@@ -22,6 +22,7 @@ from omnia_api.services.discovery import (
     BUILD,
     MAX_DISCOVERY_QUESTIONS,
     PlannedQuestion,
+    _explicit_no_backend,
     _infer_stack_from_text,
     confident_enough_to_build,
     cumulative_idea,
@@ -389,6 +390,83 @@ async def test_build_path_honours_spa_stack(
     )
     assert result.action == BUILD
     assert result.stack == "spa"
+
+
+async def test_no_account_tool_vetoes_entities_to_spa(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dogfood run #2 repro — the negative stack safety-net.
+
+    The model OVER-escalated an explicit no-account calculator to
+    ``nextjs_entities`` (which would gate the tool behind /signin via the (app)
+    route group). The user said «без регистрации / без входа / без аккаунтов» and
+    no positive backend signal survives the negation check, so the build is vetoed
+    down to ``spa`` — a no-backend interactive React tool that can't gate."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "build",
+                    "message": "Отлично, собираю…",
+                    "brief": "Ипотечный калькулятор с графиком амортизации.",
+                    "stack": "nextjs_entities",
+                }
+            )
+        ),
+    )
+    result = await run_discovery(
+        [
+            {"role": "user", "content": "калькулятор ипотеки с интерактивным графиком"},
+            {"role": "user", "content": "просто онлайн-калькулятор, без регистрации и без входа"},
+            {"role": "user", "content": "нужен только калькулятор. Без аккаунтов."},
+        ],
+        "просто сделай уже",
+        asked_count=3,
+    )
+    assert result.action == BUILD
+    assert result.stack == "spa"
+
+
+async def test_no_account_veto_spares_real_backend_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The veto must NOT downgrade a genuine app that just skips user accounts.
+
+    «магазин без регистрации» still carries commerce signals (корзина/каталог) →
+    ``_infer_stack_from_text`` stays truthy → the negative net is gated off and
+    the model's ``nextjs_entities`` pick survives."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "build",
+                    "message": "ок",
+                    "brief": "Интернет-магазин с корзиной и каталогом товаров.",
+                    "stack": "nextjs_entities",
+                }
+            )
+        ),
+    )
+    result = await run_discovery(
+        [{"role": "user", "content": "магазин с корзиной и каталогом товаров, без регистрации"}],
+        "просто сделай",
+        asked_count=2,
+    )
+    assert result.action == BUILD
+    assert result.stack == "nextjs_entities"
+
+
+def test_explicit_no_backend_predicate() -> None:
+    """Whole-phrase refusal detector — fires only on an explicit "no accounts"."""
+    assert _explicit_no_backend("просто калькулятор, без регистрации")
+    assert _explicit_no_backend("конвертер валют без аккаунтов")
+    assert _explicit_no_backend("a puzzle game, no login no accounts")
+    # A plain tool description with no refusal phrase does not fire.
+    assert not _explicit_no_backend("калькулятор ипотеки с графиком")
+    # A positive backend ask does not fire (no negation phrase).
+    assert not _explicit_no_backend("магазин с регистрацией и корзиной")
 
 
 async def test_invalid_stack_defaults_to_static(monkeypatch: pytest.MonkeyPatch) -> None:
