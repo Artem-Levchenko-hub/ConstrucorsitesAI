@@ -67,6 +67,21 @@ CREATE TABLE IF NOT EXISTS records (
 
 CREATE INDEX IF NOT EXISTS records_entity_owner_created_idx
   ON records (entity, created_by, created_at);
+
+-- Crash-proof timestamptz cast for sorting JSONB date fields. A date field's
+-- write validator only checks JS Date.parse (lenient), but sorting casts the
+-- stored text to timestamptz with Postgres' stricter parser — so one bad-but-
+-- JS-valid value ("2025", "June 2025", "2025-02-30") would throw and 500 the
+-- whole list. This returns NULL on any cast error instead of erroring, so a
+-- single malformed row can never deny the entire view (see engine.ts fieldExpr).
+CREATE OR REPLACE FUNCTION safe_to_timestamptz(t text) RETURNS timestamptz
+  LANGUAGE plpgsql STABLE AS $fn$
+  BEGIN
+    RETURN t::timestamptz;
+  EXCEPTION WHEN others THEN
+    RETURN NULL;
+  END;
+  $fn$;
 `;
 
 const url = process.env.DATABASE_URL;

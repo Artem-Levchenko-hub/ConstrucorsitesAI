@@ -87,7 +87,10 @@ def test_engine_has_typed_server_side_sort_today() -> None:
     assert 'params.get("sort")' in src
     assert 'params.get("order")' in src
     assert "(${records.data} ->> ${field})::numeric" in src
-    assert "(${records.data} ->> ${field})::timestamptz" in src
+    # date sort is timestamptz-typed (chronological); since BS-22 (run #19) it casts
+    # through the crash-proof `safe_to_timestamptz()` wrapper instead of a raw
+    # `::timestamptz` so one malformed-but-JS-valid value can't 500 the whole list.
+    assert "safe_to_timestamptz(${records.data} ->> ${field})" in src
 
 
 def test_managed_sort_is_client_side_over_loaded_rows_today() -> None:
