@@ -1163,6 +1163,68 @@ def _preserve_auth_schema(files: dict[str, str]) -> dict[str, str]:
     return {**files, path: patched}
 
 
+def _normalize_entity_filenames(files: dict[str, str]) -> dict[str, str]:
+    """Align each ``entities/<X>.json`` filename with its declared ``name``.
+
+    The entity registry resolves a definition STRICTLY by ``entities/<Name>.json``
+    (``registry.ts`` ``entityPath`` → ``${name}.json``; ``listEntities`` keys by
+    filename), and every consumer references an entity by its ``name`` — the SDK
+    (``entities.Client``), reference fields (``"entity": "Client"``), and the
+    writer's screens (``<CrudResource entity="Client">``). The contract is
+    "filename === Name" (SYSTEM_PROMPT.md, and the starter ``Task.json``).
+
+    But the art-director brief sometimes lists entity files in lowercase / plural
+    form (``clients.json``) and the writer copies that filename VERBATIM
+    (art_director_writer.py:565 «заведи каждый entities/<Имя>.json ДОСЛОВНО»). The
+    result: ``entities/clients.json`` declares ``{"name": "Client"}`` while the
+    runtime stats ``entities/Client.json`` → ENOENT → ``loadEntity`` returns null
+    → every read/write 404s («unknown entity 'Client'») → the whole app is dead
+    (empty lists everywhere, no record can be created), even though the brief,
+    the screens and the references are all internally consistent.
+
+    This guard renames such files to match their internal ``name``. Deterministic,
+    idempotent, fail-soft: only touches paths under ``entities/`` whose JSON parses
+    and carries a valid identifier ``name`` that differs from the filename stem;
+    never clobbers a file already named correctly; a no-op for already-correct
+    apps and for any stack without ``entities/*.json``.
+    """
+    import json as _json
+    import re as _re
+
+    ident = _re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+    prefix, suffix = "entities/", ".json"
+
+    def stem_of(p: str) -> str:
+        return p[len(prefix) : -len(suffix)]
+
+    # Stems already present — never overwrite a correctly-named sibling.
+    existing = {
+        stem_of(p) for p in files if p.startswith(prefix) and p.endswith(suffix)
+    }
+    out = dict(files)
+    renamed: list[str] = []
+    for path, content in list(files.items()):
+        if not (path.startswith(prefix) and path.endswith(suffix)):
+            continue
+        stem = stem_of(path)
+        try:
+            name = _json.loads(content).get("name")
+        except Exception:
+            continue  # malformed JSON — leave it for the registry/normalize() path
+        if not isinstance(name, str) or not ident.match(name) or name == stem:
+            continue
+        if name in existing:
+            continue  # a file already declares this Name — don't clobber it
+        out.pop(path, None)
+        out[f"{prefix}{name}{suffix}"] = content
+        existing.discard(stem)
+        existing.add(name)
+        renamed.append(f"{stem}->{name}")
+    if renamed:
+        print(f"[PP] entity_filename_guard: {', '.join(renamed)}", flush=True)
+    return out
+
+
 def _extract_files_and_edits(
     accumulated: str, base_files: dict[str, str]
 ) -> tuple[dict[str, str], list[str]]:
@@ -3440,6 +3502,11 @@ async def _process_prompt(
             # Runs before commit + hot_reload so git and the container agree.
             if project_template in CONTAINER_NEXT:
                 files = _preserve_auth_schema(files)
+                # Filename↔Name guard: the registry resolves entities by
+                # `entities/<Name>.json`, so a lowercase/plural filename the
+                # writer copied from the brief (clients.json for name "Client")
+                # would 404 every read/write and DOA the app. Realign here.
+                files = _normalize_entity_filenames(files)
             # Carry the user's direct style edits (omnia-overrides block + font
             # links) across this regeneration so manual color/font tweaks aren't
             # lost when the model rewrites index.html. Fail-soft, like the guards.
