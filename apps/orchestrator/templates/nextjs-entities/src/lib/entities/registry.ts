@@ -167,7 +167,13 @@ export function createSchema(def: EntityDef) {
   const shape: z.ZodRawShape = {};
   for (const [key, f] of Object.entries(def.fields)) {
     const base = zodForField(f);
-    shape[key] = f.required ? base : base.optional();
+    // A field with a `default` is always satisfiable: applyDefaults() fills it
+    // when omitted (engine.createRecord runs that AFTER this validation). If we
+    // still hard-required it here, omitting it would 400 before the default ever
+    // applied — making the default dead. So a required field counts as required
+    // in the payload only when it has NO default to fall back on.
+    const requiredInPayload = f.required && f.default === undefined;
+    shape[key] = requiredInPayload ? base : base.optional();
   }
   return z.object(shape).strip();
 }
