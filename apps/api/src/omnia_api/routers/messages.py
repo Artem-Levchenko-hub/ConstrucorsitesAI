@@ -164,6 +164,21 @@ async def _emergency_error(
         _elog.error("emergency finalize failed: %r", db_exc)
 
 
+def _failed_build_body(accumulated: str, stream_error: object) -> str:
+    """Body to persist on the assistant message when a build stream errors.
+
+    Keep any partial content the model managed to stream; otherwise write a
+    human-readable error so a user who reloaded (and lost the ephemeral
+    ``llm.error`` WS event) still sees WHY the build stopped instead of a
+    blank, forever-"streaming" chat row. Mirrors ``_emergency_error``.
+    """
+    return (
+        accumulated
+        if accumulated.strip()
+        else f"[Ошибка генерации: {str(stream_error)[:300]}]"
+    )
+
+
 async def _probe_compile_errors(
     factory: async_sessionmaker[AsyncSession],
     project_id: UUID,
@@ -1113,7 +1128,7 @@ def _inject_auth_tables(src: str) -> str:
             flush=True,
         )
         return out
-    except Exception as exc:  # noqa: BLE001 — guard must never break a build
+    except Exception as exc:
         print(f"[PP] auth_schema_guard: inject failed {exc!r}", flush=True)
         return src
 
@@ -2112,8 +2127,21 @@ async def _process_prompt(
 
         if stream_error:
             print(f"[PP] stream_error err={stream_error!r}", flush=True)
+            # The llm.error event below is delivered ONLY over the live WS
+            # stream. A user who reloaded or dropped the socket during the
+            # (multi-minute) build would otherwise be left with a chat row
+            # that is blank AND still looks "streaming" (tokens_out NULL),
+            # with no clue WHY the build stopped. Persist a human-readable
+            # error body (when the model streamed nothing) + zero tokens so
+            # the row finalises — mirroring the crash-path recovery in
+            # _emergency_error. Keep any partial content the model managed.
+            err_body = _failed_build_body(accumulated, stream_error)
             await _finalize_message(
-                factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
+                factory,
+                assistant_message_id,
+                err_body,
+                usage_data or {"tokens_in": 0, "tokens_out": 0},
+                snapshot_id=None,
             )
             await publish_event(
                 project_id,
