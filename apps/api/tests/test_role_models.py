@@ -38,7 +38,10 @@ def test_art_director_writer_split() -> None:
     # (art_director) — native multimodal + stronger taste than DeepSeek; the
     # developer (freeform_writer, writes HTML) stays deepseek-v4-pro NON-thinking.
     # Brain=Kimi, hands=DeepSeek. Both vsegpt. Swap via ROLE_MODELS.
-    assert model_for_role("art_director") == "kimi-k2.6-thinking"
+    # NON-thinking variant is the default since 2026-06-07 (the -thinking one 502s
+    # on the large brief prompt → empty brief). Prod may override to
+    # gemini-3.5-flash-high via ROLE_MODELS; both are vsegpt-served.
+    assert model_for_role("art_director") == "kimi-k2.6"
     assert model_for_role("freeform_writer") == "deepseek-v4-pro"
 
 
