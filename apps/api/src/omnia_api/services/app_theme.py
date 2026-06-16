@@ -27,6 +27,22 @@ leaving any sibling rules (``.accent-gold`` helpers, etc.) untouched. Pure,
 idempotent, fail-soft: a build with no entity layout, or a layout we cannot
 parse, is returned unchanged (R-10 — a wrong brand colour is worse than the
 template's confident near-black default).
+
+GLOBAL surface (the load-bearing fix, prod bug 2026-06-16). A ``<style>`` brand
+``:root`` only re-themes the route that renders the file it lives in. Cheap
+writers routinely scope the override to ``page.tsx`` (the public LANDING) — so
+the landing reads correctly branded while the authenticated ``(app)/*`` dashboard
+reverts to the template's near-black default (the "landing is teal, the app is
+monochrome grey" look). And the ``(app)/layout.tsx`` rewrite above can't help
+when the writer authored no block there. So we ALSO pin the brand onto a GLOBAL
+surface — a trailing ``:root { --primary … }`` appended to ``globals.css`` (the
+one file imported by the root layout, so it cascades to EVERY route). The block
+is appended last → at equal specificity it wins source-order over the template
+default ``:root`` and the ``.dark { --primary }`` fallback, while the neutral
+canvas (``:root.dark`` at 0,2,0) still wins for the dark background. We source
+the colour by HARVESTING the writer's own visible landing override (so a correct
+hand-picked brand like the user-requested teal carries through verbatim), falling
+back to the deterministic palette pick when the writer themed nothing visible.
 """
 
 from __future__ import annotations
@@ -42,11 +58,45 @@ __all__ = ["apply_app_palette", "pick_app_primary"]
 
 # The brand override lives in this file only (see globals.css contract).
 _APP_LAYOUT_SUFFIX = "(app)/layout.tsx"
+# The global cascade surface — imported by the root layout, so a trailing
+# ``:root{}`` here re-themes every route (landing + authed app).
+_GLOBALS_SUFFIX = "globals.css"
+# Marker so the appended global-brand block is idempotent across re-runs.
+_GLOBAL_BRAND_MARKER = "/* omnia:global-brand */"
 # The first ``:root{ … }`` block in the layout = the art-director's brand override.
 # No nested braces inside a token block, so ``[^}]*`` captures it exactly; we
 # replace only this substring and leave the enclosing ``<style>{"…"}</style>``
 # (and any sibling rules like ``.accent-gold``) byte-for-byte intact.
 _ROOT_BLOCK = re.compile(r":root\s*\{[^}]*\}")
+# A ``:root{}`` block that actually sets ``--primary`` (the writer's brand override
+# embedded in a landing ``<style>``), used to harvest the hand-picked brand.
+_BRAND_ROOT_RE = re.compile(r":root\s*\{([^{}]*--primary[^{}]*)\}")
+
+
+def _decl(name: str, css: str) -> str | None:
+    """Value of one ``--token`` declaration in a token block, or None."""
+    m = re.search(re.escape(name) + r"\s*:\s*([^;}]+)", css)
+    return m.group(1).strip() if m else None
+
+
+def _is_visible_fill(value: str) -> bool:
+    """True when ``value`` reads as a real fill on the LIGHT canvas (not a
+    near-white tint that vanishes). Handles the two forms writers emit: oklch
+    (gate on lightness L) and hex (gate on WCAG contrast vs white)."""
+    v = value.strip().lower()
+    m = re.match(r"oklch\(\s*([0-9.]+)", v)
+    if m:
+        try:
+            return float(m.group(1)) <= 0.82
+        except ValueError:
+            return False
+    if v.startswith("#"):
+        try:
+            return contrast_ratio(value, _CANVAS) >= _MIN_PRIMARY_VS_CANVAS
+        except Exception:
+            return False
+    # rgb()/hsl()/named — accept unless it is obviously white.
+    return v not in ("white", "#fff", "#ffffff", "rgb(255,255,255)")
 
 # Softened inks for button text — never pure #000/#fff (Albers: pure pairs
 # "vibrate"; see palettes.py). Whichever reads better on the chosen primary wins.
@@ -104,41 +154,115 @@ def _preserved_decls(root_css: str) -> str:
     return (";" + ";".join(parts)) if parts else ""
 
 
-def _root_block(palette: CuratedPalette, preserved: str) -> str:
+def _harvest_writer_brand(files: dict[str, str]) -> dict[str, str] | None:
+    """The writer's own VISIBLE ``--primary`` (+ foreground/ring) from a landing
+    ``<style>`` ``:root``, if it hand-picked a real brand. None otherwise.
+
+    Scans only the writer's ``.tsx`` (never ``globals.css`` — that's the template
+    default — nor ``(app)/layout.tsx``, which is the deterministic guard's own
+    target). The first visible ``--primary`` wins. Used so a correct hand-picked
+    brand (e.g. the user-requested teal the writer scoped to ``page.tsx``) carries
+    through verbatim instead of being replaced by a generic palette pick."""
+    for path, code in files.items():
+        if not (isinstance(code, str) and path.endswith(".tsx")):
+            continue
+        if path.endswith(_APP_LAYOUT_SUFFIX):
+            continue
+        for m in _BRAND_ROOT_RE.finditer(code):
+            body = m.group(1)
+            primary = _decl("--primary", body)
+            if not primary or not _is_visible_fill(primary):
+                continue
+            return {
+                "primary": primary,
+                "fg": _decl("--primary-foreground", body) or "oklch(0.985 0 0)",
+                "ring": _decl("--ring", body) or primary,
+            }
+    return None
+
+
+def _resolve_brand(files: dict[str, str], palette: CuratedPalette) -> dict[str, str]:
+    """The single brand triple to pin app-wide: the writer's visible override if
+    present, else the deterministic palette pick (always present, fail-soft)."""
+    harvested = _harvest_writer_brand(files)
+    if harvested:
+        return harvested
     primary, fg = pick_app_primary(palette)
-    return (
-        f":root{{--primary:{primary};--primary-foreground:{fg};"
-        f"--ring:{primary}{preserved}}}"
+    return {"primary": primary, "fg": fg, "ring": primary}
+
+
+def _ensure_global_brand(
+    files: dict[str, str], brand: dict[str, str]
+) -> dict[str, str]:
+    """Pin the brand on a GLOBAL surface so EVERY route is themed, not just the
+    one file the writer happened to style. Appends (or refreshes) a trailing
+    ``:root{}`` brand block in ``globals.css``. Plain text → cannot break a build;
+    idempotent via the marker. No-op when there is no ``globals.css`` (freeform)."""
+    block = (
+        f"\n{_GLOBAL_BRAND_MARKER}\n"
+        f":root{{--primary:{brand['primary']};"
+        f"--primary-foreground:{brand['fg']};--ring:{brand['ring']}}}\n"
     )
+    out = dict(files)
+    for path, code in files.items():
+        if not (isinstance(code, str) and path.endswith(_GLOBALS_SUFFIX)):
+            continue
+        if _GLOBAL_BRAND_MARKER in code:
+            out[path] = re.sub(
+                re.escape(_GLOBAL_BRAND_MARKER) + r"\s*\n:root\s*\{[^}]*\}\n?",
+                block.lstrip("\n"),
+                code,
+            )
+        else:
+            out[path] = code.rstrip() + "\n" + block
+        log.info("app_theme: pinned global brand --primary:%s", brand["primary"])
+    return out
 
 
 def apply_app_palette(
     files: dict[str, str], palette: CuratedPalette
 ) -> dict[str, str]:
-    """Rewrite the brand ``:root`` override in ``(app)/layout.tsx`` from ``palette``.
+    """Pin the entity app's brand ``--primary`` (+ foreground/ring) app-wide.
 
-    Returns a new dict. No-op for non-entity builds (no ``(app)/layout.tsx``) and
-    when the layout carries no ``:root`` block to rewrite (fail-soft: the template
-    default theme stays). Never raises — a parse failure leaves the file as-is.
+    1. Resolve ONE brand triple — the writer's visible landing override if present
+       (so a hand-picked brand carries verbatim), else the deterministic palette
+       pick that is guaranteed visible on the light canvas.
+    2. Pin it on the GLOBAL surface (``globals.css``) so the landing AND the
+       authenticated ``(app)/*`` dashboard share it — the actual fix for the
+       "landing branded, app monochrome grey" bug.
+    3. Keep the ``(app)/layout.tsx`` ``:root`` block (when the writer authored one)
+       in sync with the same triple, preserving its brief-driven radius/motion.
+
+    Returns a new dict. No-op for non-entity builds (no ``globals.css`` /
+    ``(app)/layout.tsx``). Never raises — a parse failure leaves files as-is.
     """
     out = dict(files)
-    for path, code in files.items():
+    try:
+        brand = _resolve_brand(out, palette)
+    except Exception as exc:  # a guard must never break the build
+        log.warning("app_theme: brand resolve failed (%r) — left as-is", exc)
+        return out
+
+    out = _ensure_global_brand(out, brand)
+
+    for path, code in list(out.items()):
         if not (isinstance(code, str) and path.endswith(_APP_LAYOUT_SUFFIX)):
             continue
         m = _ROOT_BLOCK.search(code)
         if not m:
-            log.info("app_theme: no :root brand block in %r — left as-is", path)
+            log.info("app_theme: no :root brand block in %r — global brand covers it", path)
             continue
         try:
-            new_block = _root_block(palette, _preserved_decls(m.group(0)))
-        except Exception as exc:  # a guard must never break the build
+            new_block = (
+                f":root{{--primary:{brand['primary']};"
+                f"--primary-foreground:{brand['fg']};"
+                f"--ring:{brand['ring']}{_preserved_decls(m.group(0))}}}"
+            )
+        except Exception as exc:
             log.warning("app_theme: skipped %r (%r)", path, exc)
             continue
         if new_block == m.group(0):
             continue
         out[path] = code[: m.start()] + new_block + code[m.end() :]
-        log.info(
-            "app_theme: rebranded :root --primary in %r from palette %s",
-            path, palette.id,
-        )
+        log.info("app_theme: synced (app)/layout :root brand in %r", path)
     return out
