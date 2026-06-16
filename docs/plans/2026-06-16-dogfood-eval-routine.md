@@ -75,7 +75,22 @@
 
 ## BLIND-SPOTS LEDGER (накопительный — слепые зоны генератора)
 <!-- одна строка на подтверждённую слепую зону: ID | дата | описание | file:line | статус(open/fixed commit) -->
-- H1 | 2026-06-16 | follow-up «переделай в приложение» не эскалирует stack (surgical-edit правит статику, discovery/stack_routing не пере-зовутся) | messages.py triage→edit ветка | OPEN (проверить прогоном #1)
+- H1 | 2026-06-16 | follow-up «переделай в приложение» не эскалирует stack (surgical-edit правит статику, discovery/stack_routing не пере-зовутся) | messages.py:626,675 | **CONFIRMED** (run #1, code-path proof + live prod repro) → PROPOSAL ниже, фикс рискованный (деструктивный re-scaffold) → НЕ шипить вслепую
+- BS-2 | 2026-06-16 | `decide_intent` не имеет «app-ification» интента: «вход / личный кабинет / база записей» не матчат ни _REBUILD, ни _STRUCTURAL keywords → CHEAP surgical-edit (auth/login-стемы намеренно исключены, чтобы не фолс-фолсить на «кнопка входа») | intent_triage.py:62,103 | CONFIRMED (run #1) — часть H1; xfail-репро в test_intent_triage.py
+
+## PROPOSAL P-H1 — эскалация стека на follow-up (2026-06-16, run #1)
+
+**Проблема (доказана):** на follow-up `is_first_build=False` → discovery и `stack_routing.switch_to_stack` ВООБЩЕ не вызываются (gate `interview_eligible = is_first_build and …`, messages.py:626; switch только внутри first-build-ветки, messages.py:675). Параллельно `decide_intent` роутит «сделай настоящее приложение» в CHEAP (BS-2). Итог: статический проект НИКОГДА не станет контейнерным аппом, что бы юзер ни писал. Live-репро (prod-контейнер): все 4 формулировки app-ification → `CHEAP`.
+
+**Почему не фикшу вслепую:** `switch_to_stack` → `repo_svc.init_repo` создаёт СВЕЖИЙ репо с parentless-коммитом и `_upload` ПЕРЕЗАПИСЫВАЕТ MinIO-ключ репо (repo.py:79-102). На first-build это ок (пустой starter), но на follow-up это СНОСИТ существующий сайт юзера + ломает rollback в таймлайне (старые snapshot-SHA исчезают из репо). Плюс нужна consent-UX (спросить юзера перед сменой стека) — это cross-zone (apps/web).
+
+**План безопасного фикса (для отдельного прогона/согласования):**
+1. `decide_intent` (или новый `detect_appification`) — распознать «сделать настоящее приложение / вход+кабинет+БД» на static-проекте. Тайтовый набор сигналов, тест-репро против фолс-фолса (см. xfail в test_intent_triage.py).
+2. На таком follow-up + `project.template == 'static'` — НЕ surgical-edit, а **non-destructive** эскалация: `switch_to_stack`-вариант, который НЕ сносит историю (новый снапшот как child текущего; старый static остаётся rollback-абельным), ИЛИ consent-turn («это статика; пересоздать как приложение? старую версию сохраню в таймлайне») через существующий `_spawn_text_turn`.
+3. Health-check на песочнице `dogfood-*`: static → app, кнопки живые, rollback к старому static работает.
+
+**Acceptance-lock (уже в репо):** `apps/api/tests/test_intent_triage.py::test_appification_followup_should_escalate_not_surgical_edit` (xfail strict=False — XPASS, когда фикс приземлится).
 
 ## RUNS LOG (append-only — одна строка на прогон)
 <!-- время MSK | сценарий | stack/gen_mode/модель | design-балл | тупняк | действие | PASS/FAIL -->
+- 2026-06-16 13:02 MSK | #0 H1-репро | n/a (анализ кода + live decide_intent в prod-контейнере, генерация не запускалась) | n/a | H1 CONFIRMED: follow-up app-ification → CHEAP surgical-edit статики, stack-эскалация структурно недостижима (messages.py:626,675); 4/4 формулировки → CHEAP в prod | repro-тест (xfail) + PROPOSAL P-H1 (фикс деструктивный → не шипить вслепую) | PASS (тупняк локализован, доказан)
