@@ -86,9 +86,12 @@ def test_create_record_applies_defaults_after_validation() -> None:
 
 
 def test_apply_defaults_only_fills_omitted_fields() -> None:
-    """applyDefaults fills a default ONLY when the value is undefined (omitted)."""
+    """applyDefaults fills a default ONLY when the value is undefined (omitted).
+    BS-36 split the original one-liner into a skip-guard + a validated inject, but
+    the invariant is unchanged: a present value or a missing default is skipped."""
     src = _registry()
-    assert "if (out[key] === undefined && f.default !== undefined) out[key] = f.default;" in src
+    assert "if (out[key] !== undefined || f.default === undefined) continue;" in src
+    assert "out[key] = f.default;" in src
 
 
 def test_required_with_default_is_optional_in_create_payload() -> None:
