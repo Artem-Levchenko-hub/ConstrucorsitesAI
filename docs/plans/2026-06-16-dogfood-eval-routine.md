@@ -94,3 +94,4 @@
 ## RUNS LOG (append-only — одна строка на прогон)
 <!-- время MSK | сценарий | stack/gen_mode/модель | design-балл | тупняк | действие | PASS/FAIL -->
 - 2026-06-16 13:02 MSK | #0 H1-репро | n/a (анализ кода + live decide_intent в prod-контейнере, генерация не запускалась) | n/a | H1 CONFIRMED: follow-up app-ification → CHEAP surgical-edit статики, stack-эскалация структурно недостижима (messages.py:626,675); 4/4 формулировки → CHEAP в prod | repro-тест (xfail) + PROPOSAL P-H1 (фикс деструктивный → не шипить вслепую) | PASS (тупняк локализован, доказан)
+- 2026-06-16 13:24 MSK | skipped: guard-3 sequential-lock fresh (_routine/dogfood.lock = 10:20:08Z, age 4 мин < 15) — параллельный прогон #1 в полёте, lock не снимал | n/a | n/a | yielded | SKIP
