@@ -59,8 +59,13 @@ function dayKey(d: Date): string {
 /** Parse the raw field value into a LOCAL Date. A bare "YYYY-MM-DD" is read as
  *  local midnight (split, not `new Date(str)` which would treat it as UTC and
  *  shift the day back in negative-offset zones). Anything unparseable → null,
- *  so a stray value drops out instead of crashing the grid. */
-function parseLocalDate(v: CalendarEvent["date"]): Date | null {
+ *  so a stray value drops out instead of crashing the grid.
+ *
+ *  Exported so a parent (CrudResource) can ask "will the calendar be able to
+ *  place ANY of these rows?" before committing to the calendar view — a
+ *  recurring schedule keyed on a weekday ENUM ("monday") parses to null for
+ *  every row, which would otherwise render a silently blank month grid. */
+export function parseLocalDate(v: CalendarEvent["date"]): Date | null {
   if (v == null) return null;
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;
   if (typeof v === "number") {

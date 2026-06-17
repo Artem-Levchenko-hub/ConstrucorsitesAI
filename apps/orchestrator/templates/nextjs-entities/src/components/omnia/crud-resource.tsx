@@ -19,7 +19,7 @@ import { PageHeader } from "./page-header";
 import { DataTable, type Column, type FilterTab } from "./data-table";
 import { GalleryGrid, type GalleryItem, type MediaCardProps } from "./gallery-grid";
 import { BoardView, type BoardCard, type BoardColumn } from "./board-view";
-import { CalendarView, type CalendarEvent } from "./calendar-view";
+import { CalendarView, parseLocalDate, type CalendarEvent } from "./calendar-view";
 import { MasterDetailView, type SplitItem } from "./master-detail-view";
 import { RecordDetail } from "./record-detail";
 import { EntityForm, type FieldSpec } from "./entity-form";
@@ -301,8 +301,22 @@ export function CrudResource({
   );
   const useBoard = view === "board" && !!filterField && boardColumns.length > 0;
   // Calendar needs a date field to place records on; without one there is
-  // nothing to schedule, so fall back to a table.
-  const useCalendar = view === "calendar" && !!dateField;
+  // nothing to schedule, so fall back to a table. The dateField can ALSO be
+  // present but unplaceable: a recurring schedule keyed on a weekday ENUM
+  // ("monday") — common when the writer prescribes view="calendar" for a
+  // school timetable / opening hours — parses to null for every row, which
+  // drops every event and renders a silently blank month grid (no EmptyState,
+  // since rawCount>0). When NO loaded row carries a parseable date, degrade to
+  // the table the writer already configured (columns are always present) so the
+  // data is at least readable. Empty/loading rows keep the calendar (nothing to
+  // judge yet → no flicker before the first fetch lands).
+  const calendarPlaceable = React.useMemo(() => {
+    if (!dateField || data.rows.length === 0) return true;
+    return data.rows.some(
+      (row) => parseLocalDate(row[dateField] as CalendarEvent["date"]) !== null,
+    );
+  }, [dateField, data.rows]);
+  const useCalendar = view === "calendar" && !!dateField && calendarPlaceable;
   // Split (master-detail) needs nothing extra — it reuses the columns/media
   // mapping for the rail and the same RecordDetail node for the reading pane.
   const useSplit = view === "split";
