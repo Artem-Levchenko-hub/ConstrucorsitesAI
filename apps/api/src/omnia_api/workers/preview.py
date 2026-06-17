@@ -97,6 +97,35 @@ async def _await_paint(page) -> None:
     await page.wait_for_timeout(_RENDER_SETTLE_MS)
 
 
+def _rewrite_minio_to_internal(content: str) -> str:
+    """Repoint resolved ``<img src>`` from the PUBLIC MinIO URL to the INTERNAL
+    endpoint for the duration of a render.
+
+    The image-resolver bakes ``data-omnia-gen`` photos as absolute public URLs
+    (``{minio_public_url}/<bucket>/<key>``) so real browsers load them. But the
+    preview worker renders the page from inside its container, where the public
+    host (``constructor.lead-generator.ru`` → the host's own public IP) is
+    **unreachable** — the container can't hairpin-NAT back to the host, so every
+    such ``<img>`` hangs (``net::ERR`` / connect timeout) and the screenshot
+    lands on an empty hero. ``_await_paint``'s 3s budget can't fix an
+    unreachable URL — it just bounds the inevitable failure, so the timeline
+    thumbnail and the design-judge both saw an image-less (``выглядит пусто``)
+    page even though the deployed site is fine.
+
+    Internal ``http://minio:9000/<bucket>/<key>`` answers in <10ms from the
+    worker, so we swap the base **only in the in-memory copy fed to chromium**.
+    The committed/served files are untouched — public URLs still ship to users.
+    Idempotent and a no-op for pages with no MinIO images (plain str.replace).
+    """
+    settings = get_settings()
+    public = settings.minio_public_url.rstrip("/") + "/"
+    scheme = "https" if settings.minio_secure else "http"
+    internal = f"{scheme}://{settings.minio_endpoint}/"
+    if public == internal:  # already internal (e.g. local dev) — nothing to do
+        return content
+    return content.replace(public, internal)
+
+
 # Bounded best-effort wait for a CONTAINER app's client-side data fetches to
 # settle before the shot. A generated dashboard renders its shell on first paint
 # but loads its lists / StatCards via a client fetch right after hydration — so
@@ -148,7 +177,7 @@ async def capture(
         for path, content in files.items():
             full = workdir / path
             full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(content, encoding="utf-8")
+            full.write_text(_rewrite_minio_to_internal(content), encoding="utf-8")
         index_uri = (workdir / "index.html").as_uri()
 
         async with async_playwright() as p:
@@ -236,7 +265,9 @@ async def _render_async(snapshot_id: str) -> None:
                 for path, content in files.items():
                     full = workdir / path
                     full.parent.mkdir(parents=True, exist_ok=True)
-                    full.write_text(content, encoding="utf-8")
+                    full.write_text(
+                        _rewrite_minio_to_internal(content), encoding="utf-8"
+                    )
                 target_url = (workdir / "index.html").as_uri()
 
             async with async_playwright() as p:

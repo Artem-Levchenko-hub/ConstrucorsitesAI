@@ -111,3 +111,45 @@ async def test_await_container_ready_swallows_timeout() -> None:
     # Must not raise — falls through to the screenshot.
     await preview._await_container_ready(page)
     assert page.calls == [("networkidle", preview._CONTAINER_NETWORKIDLE_MS)]
+
+
+# ── MinIO public→internal rewrite for the preview render (dogfood run #40) ──
+# Repro: the preview worker can't hairpin-NAT to the host's public IP, so the
+# resolved <img src="{public_minio}/..."> photos never paint inside chromium →
+# image-less thumbnail / design-judge view even when the deployed page is fine.
+# Fix repoints the in-memory render copy to the internal MinIO endpoint.
+
+def test_rewrite_minio_public_to_internal(monkeypatch) -> None:
+    """A resolved public MinIO <img src> is repointed to internal minio:9000."""
+    settings = preview.get_settings()
+    monkeypatch.setattr(settings, "minio_public_url", "https://constructor.lead-generator.ru/minio")
+    monkeypatch.setattr(settings, "minio_endpoint", "minio:9000")
+    monkeypatch.setattr(settings, "minio_secure", False)
+    html = (
+        '<img src="https://constructor.lead-generator.ru/minio/omnia-images/'
+        'proj/abc.png" class="absolute inset-0">'
+    )
+    out = preview._rewrite_minio_to_internal(html)
+    assert "http://minio:9000/omnia-images/proj/abc.png" in out
+    # The public host must not survive in the render copy (it's unreachable here).
+    assert "constructor.lead-generator.ru" not in out
+
+
+def test_rewrite_minio_noop_without_images(monkeypatch) -> None:
+    """A page with no MinIO images is returned untouched (pure str.replace)."""
+    settings = preview.get_settings()
+    monkeypatch.setattr(settings, "minio_public_url", "https://constructor.lead-generator.ru/minio")
+    monkeypatch.setattr(settings, "minio_endpoint", "minio:9000")
+    monkeypatch.setattr(settings, "minio_secure", False)
+    html = '<section class="omnia-shader"><h1>Привет</h1></section>'
+    assert preview._rewrite_minio_to_internal(html) == html
+
+
+def test_rewrite_minio_noop_when_already_internal(monkeypatch) -> None:
+    """Local dev (public URL == internal) must not rewrite onto itself."""
+    settings = preview.get_settings()
+    monkeypatch.setattr(settings, "minio_public_url", "http://minio:9000")
+    monkeypatch.setattr(settings, "minio_endpoint", "minio:9000")
+    monkeypatch.setattr(settings, "minio_secure", False)
+    html = '<img src="http://minio:9000/omnia-images/p/x.png">'
+    assert preview._rewrite_minio_to_internal(html) == html
