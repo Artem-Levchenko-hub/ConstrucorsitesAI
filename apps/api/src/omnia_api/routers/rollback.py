@@ -12,10 +12,21 @@ from omnia_api.core.redis import publish_event
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.snapshot import RollbackRequest, SnapshotPublic
+from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.queue import enqueue_preview
 
 router = APIRouter(prefix="/api/projects", tags=["rollback"])
+
+# Container-backed Next.js/Vite templates serve the live preview from a running
+# dev container (`omnia-dev-<slug>`), NOT from a re-rendered static file. A git
+# checkout alone reverts the repo but leaves the container serving the *old* code
+# (the build / edit / style-patch paths all push files into the container via
+# `hot_reload`; rollback must do the same or "вернуться назад" is a visible no-op
+# on the live preview). Static templates (blank/landing/portfolio/blog) have no
+# persistent container — their preview re-renders from repo files, so they roll
+# back correctly without this. Kept in sync with messages.py `CONTAINER_NEXT`.
+_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa")
 
 
 def _snapshot_dict(s: Snapshot) -> dict[str, object]:
@@ -48,6 +59,26 @@ async def post_rollback(
         raise ApiError("not_found", "snapshot not found", status.HTTP_404_NOT_FOUND)
 
     new_sha = await asyncio.to_thread(repo_svc.checkout, project_id, target.commit_sha)
+
+    # Container apps: push the rolled-back tree into the live dev container so the
+    # preview actually reverts (parity with build / edit / style-patch). Without
+    # this the git repo reverts but `omnia-dev-<slug>` keeps serving the post-edit
+    # code → the flagship "вернуться назад" is a no-op on the live preview.
+    # Best-effort (R-10): git + snapshot are already the canonical state, so a
+    # momentarily-down orchestrator only delays the live revert, never loses it.
+    if project.template in _CONTAINER_NEXT:
+        try:
+            reverted_files = await asyncio.to_thread(
+                repo_svc.read_files, project_id, new_sha
+            )
+            await orchestrator_client.hot_reload(
+                project_id=project_id,
+                slug=project.slug,
+                files=reverted_files,
+            )
+        except Exception:
+            # Preview refresh must never block the rollback; it's already committed.
+            pass
 
     new_snapshot = Snapshot(
         project_id=project_id,
