@@ -50,7 +50,7 @@ _ZERO_QUESTION_MIN_AXES = 2
 # INTERACTIVE tool/app that needs real build tooling but no accounts/DB — see the
 # stack-choice rules in ``_SYSTEM`` (Phase 7.2 multi-stack).
 _STACKS: frozenset[str] = frozenset(
-    {"static", "fullstack", "nextjs_entities", "spa"}
+    {"static", "fullstack", "nextjs_entities", "spa", "code"}
 )
 _DEFAULT_STACK = "static"
 
@@ -128,6 +128,59 @@ def _infer_stack_from_text(text: str) -> str | None:
     haystack = (text or "").lower()
     if any(_signal_fires(haystack, sig) for sig in _BACKEND_SIGNALS):
         return "nextjs_entities"
+    return None
+
+
+# Owner directive 2026-06-18: don't lock the builder to web output. When the user
+# clearly asks for a standalone PROGRAM/SCRIPT (any language) — not a site — route
+# to the `code` template (file-only, no container; the writer emits arbitrary
+# source via the <file> contract). High precision so a normal site request never
+# trips it: STRONG artifact words win outright; a bare "… на <язык>" only counts
+# as code when no website word is present (so "сайт на Python" stays a web build).
+_CODE_STRONG_SIGNALS: frozenset[str] = frozenset(
+    {
+        "скрипт", "script",
+        "парсер", "парсинг", "scraper", "скрейпер", "распарс",
+        "утилит", "консольн", "командной строк", "command line", "cli ",
+        "напиши код", "написать код", "напиши программу", "код на ",
+        "программу на", "программа на",
+        "алгоритм", "automation script", "автоматизирующий скрипт",
+    }
+)
+# Ambiguous "<вещь> на <язык>" — code only when the prompt isn't about a website.
+_CODE_LANG_HINTS: frozenset[str] = frozenset(
+    {
+        " на python", " на питон", " на golang", " на go ", " на rust",
+        " на расте", " на c++", " на си++", " на java", " на джава",
+        " на kotlin", " на котлин", " на php", " на ruby", " на bash",
+        " на c#", " на c шарп",
+    }
+)
+# Website words that veto the WEAK language hint (a Django/SSR site mentions a
+# language but still wants a web product, not a bare script).
+_WEBSITE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "сайт", "лендинг", "лендос", "landing", "магазин", "портфолио",
+        "веб-страниц", "веб страниц", "website", "webpage", "дашборд",
+        "интернет-магазин",
+    }
+)
+
+
+def _infer_code_from_text(text: str) -> str | None:
+    """Deterministic safety-net: pick the ``code`` stack for a program/script ask.
+
+    Returns ``"code"`` when the text clearly asks for a standalone program in any
+    language, else ``None`` (leave the model's / backend net's choice alone). Runs
+    BEFORE the backend escalation so "напиши парсер на python" → code, not an
+    auth-backed web app."""
+    low = (text or "").lower()
+    if any(sig in low for sig in _CODE_STRONG_SIGNALS):
+        return "code"
+    if any(sig in low for sig in _CODE_LANG_HINTS) and not any(
+        w in low for w in _WEBSITE_SIGNALS
+    ):
+        return "code"
     return None
 
 
@@ -427,7 +480,13 @@ _SYSTEM = (
     "конфигуратор, интерактивный дашборд на демо-данных. Богатая клиентская "
     "логика, но НЕ нужны аккаунты или сохранение в БД между пользователями.\n"
     "- \"fullstack\" — интерактивное веб-приложение с лёгким собственным "
-    "бэкендом, не подходящее под entities.\n\n"
+    "бэкендом, не подходящее под entities.\n"
+    "- \"code\" — НЕ сайт, а отдельная ПРОГРАММА/СКРИПТ на любом языке "
+    "(Python, Go, Rust, JS, Bash, …): скрипт, парсер, утилита, CLI, бот для "
+    "обработки данных, алгоритм. Мы храним код как файлы (как репозиторий), "
+    "пользователь скачивает/пушит в GitHub. Если просят «скрипт/программу на "
+    "<язык>» — это \"code\", НЕ static. (Сайт на Python/Django — это всё равно "
+    "веб-стек, а не code.)\n\n"
     "ФОРМАТ ОТВЕТА — СТРОГО один JSON-объект на одной строке, без пояснений и кода.\n"
     "Если спрашиваешь:\n"
     '{"action":"ask","message":"<один короткий вопрос на русском>",'
@@ -447,7 +506,7 @@ _SYSTEM = (
     '{"action":"build","message":"<короткая фраза: «Отлично, собираю…»>",'
     '"brief":"<сжатый бриф для генератора на русском: тип продукта, цель, '
     'аудитория, обязательные разделы/возможности, тон, цвета/референс, важные '
-    'детали>","stack":"static|spa|nextjs_entities|fullstack"}'
+    'детали>","stack":"static|spa|nextjs_entities|fullstack|code"}'
 )
 
 
@@ -864,8 +923,18 @@ async def run_discovery(
         intent_text = "\n".join(
             [brief, *(m.get("content") or "" for m in history), latest_prompt or ""]
         )
+        # Code net (owner 2026-06-18) — a standalone program/script ask routes to
+        # the `code` template. Runs BEFORE the backend escalation so "напиши парсер
+        # на python" lands as code, not an auth-backed web app. Only overrides a
+        # non-backend pick (static/spa); a confident entities/fullstack choice
+        # carries explicit data/account intent, so it's left alone.
+        code_inferred = _infer_code_from_text(intent_text)
+        if code_inferred and stack in ("static", "spa", "code"):
+            if stack != "code":
+                log.info("discovery: stack '%s'→'code' (program/script intent)", stack)
+            stack = "code"
         inferred = _infer_stack_from_text(intent_text)
-        if stack not in ("fullstack", "nextjs_entities") and inferred:
+        if stack not in ("fullstack", "nextjs_entities", "code") and inferred:
             log.info("discovery: stack '%s'→'%s' (backend intent signals)", stack, inferred)
             stack = inferred
         # Negative safety-net (Phase 7.x): the mirror of the upgrade above. The

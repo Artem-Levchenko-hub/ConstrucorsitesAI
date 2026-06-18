@@ -29,6 +29,8 @@ from omnia_api.services.discovery import _infer_stack_from_text
         ("fullstack", "fullstack"),
         ("nextjs_entities", "nextjs_entities"),
         ("spa", "spa"),  # Phase 7.2 — no-backend Vite stack
+        ("code", "code"),  # owner 2026-06-18 — language-agnostic source
+        ("CODE", "code"),  # case-insensitive
         ("SPA", "spa"),  # case-insensitive
         ("NEXTJS_ENTITIES", "nextjs_entities"),  # case-insensitive
         ("  fullstack  ", "fullstack"),  # trimmed

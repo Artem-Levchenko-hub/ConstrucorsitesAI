@@ -48,6 +48,12 @@ _DISCOVERY_STACK_TO_TEMPLATE: dict[str, str] = {
     "fullstack": "fullstack",
     "nextjs_entities": "nextjs_entities",
     "spa": "spa",
+    # `code` (owner 2026-06-18) — language-agnostic source. NOT container-backed
+    # (``is_fullstack``/``orchestrator_template`` omit it) and it has NO scaffold
+    # dir under ``templates/`` — the writer creates every file into the project's
+    # existing (blank) git. ``switch_to_stack`` flips the template without a
+    # re-scaffold for it; ``ensure_provisioned`` no-ops (no container).
+    "code": "code",
 }
 
 
@@ -81,8 +87,25 @@ async def switch_to_stack(
         return None  # static — nothing to switch
     if is_fullstack(project.template):
         return None  # already a container stack — leave it be (idempotent)
+    if project.template == target:
+        return None  # already on this stack — nothing to switch (idempotent)
 
     template_dir = TEMPLATES_DIR / target
+    # No-scaffold stacks (e.g. `code`) have no `templates/<target>` source dir —
+    # the writer authors every file into the project's existing (blank) git. Just
+    # flip the template; keep the current starter snapshot. No container, so
+    # `ensure_provisioned` will no-op later. Owner 2026-06-18.
+    if not template_dir.exists():
+        _old = project.template
+        project.template = target
+        await session.commit()  # type: ignore[attr-defined]
+        log.info(
+            "stack_routing: project %s switched %s→%s (no-scaffold)",
+            project.id,
+            _old,
+            target,
+        )
+        return None
     # pygit2 + MinIO upload are blocking — keep them off the event loop.
     commit_sha = await asyncio.to_thread(
         repo_svc.init_repo, project.id, template_dir, target

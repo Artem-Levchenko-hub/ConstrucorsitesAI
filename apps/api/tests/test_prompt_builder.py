@@ -7,6 +7,7 @@ from omnia_api.routers.messages import (
 )
 from omnia_api.services import skill_library
 from omnia_api.services.prompt_builder import (
+    HISTORY_LIMIT,
     KIT_FILES,
     _compute_skill_brief,
     _expand_ru_to_en,
@@ -222,6 +223,57 @@ def test_build_messages_threads_skill_brief_for_industry_prompt() -> None:
     )
     system = msgs[0]["content"]
     assert "ДИЗАЙН-БРИФ" in system
+
+
+# ---------------------------------------------------------------------------
+# `code` template — language-agnostic source (owner 2026-06-18)
+# ---------------------------------------------------------------------------
+
+
+def test_code_prompt_is_language_agnostic_not_website() -> None:
+    """The `code` branch must frame the task as writing a program/script in any
+    language and must NOT carry the website identity or the visual/section kits —
+    otherwise the model builds a page instead of the requested script."""
+    sp = build_system_prompt("code")
+    # Code framing present.
+    assert "режиме КОДА" in sp or "ПРОГРАММА" in sp or "любом языке" in sp
+    # No web identity / no website quality bar / no visual kit.
+    assert "AI-конструктор сайтов" not in sp
+    assert "assets/omnia-kit.css" not in sp
+    assert "ВИЗУАЛЬНЫЙ СТИЛЬ" not in sp
+
+
+def test_history_limit_is_twelve() -> None:
+    """Owner 2026-06-18 «реально понимай чат»: the writer must see a longer
+    thread than the old 6-turn window. Lock the bumped value so a future trim
+    is a deliberate, reviewed change."""
+    assert HISTORY_LIMIT == 12
+
+
+def test_build_messages_strips_stale_build_html_from_assistant_history() -> None:
+    """A prior build turn is 30–60 KB of <file> HTML; verbatim it buries the
+    user's real words across the 12-turn window. It must be replaced with a short
+    marker, while USER turns stay verbatim (they carry intent)."""
+    history = [
+        {"role": "user", "content": "сделай лендинг кофейни"},
+        {
+            "role": "assistant",
+            "content": 'готово <file path="index.html">' + ("X" * 5000) + "</file>",
+        },
+    ]
+    msgs = build_messages(
+        current_files={},
+        history=history,
+        user_prompt="поменяй цвет кнопки",
+        template="blank",
+        model_id="claude-haiku-4-5",
+    )
+    assistant_turns = [m["content"] for m in msgs if m["role"] == "assistant"]
+    assert assistant_turns, "history assistant turn should be threaded"
+    assert "XXXX" not in assistant_turns[0]  # the 5 KB HTML body is gone
+    assert "[предыдущая сборка]" in assistant_turns[0]
+    # The user's real words survive verbatim.
+    assert any("сделай лендинг кофейни" in m["content"] for m in msgs if m["role"] == "user")
 
 
 # ---------------------------------------------------------------------------

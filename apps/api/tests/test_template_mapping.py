@@ -92,3 +92,14 @@ def test_template_literal_includes_new_values() -> None:
     values = set(get_args(Template))
     assert {"fullstack", "spa", "tgbot", "api"} <= values
     assert {"blank", "landing", "portfolio", "blog"} <= values
+    assert "code" in values  # owner 2026-06-18: language-agnostic source
+
+
+def test_code_template_is_not_container_backed() -> None:
+    """`code` (any-language source) is file-only, like the static class — it has
+    NO orchestrator image, so it must NOT be in the orchestrator map. If it ever
+    starts mapping to a directory, runtime.py would try to provision a container
+    for plain source files (owner 2026-06-18)."""
+    assert orchestrator_template("code") is None
+    assert is_fullstack("code") is False
+    assert "code" in set(__import__("typing").get_args(Template))

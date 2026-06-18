@@ -63,6 +63,7 @@ from omnia_api.services.discovery import (
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
+    _infer_code_from_text,
     _infer_stack_from_text,
     confident_enough_to_build,
     cumulative_idea,
@@ -435,7 +436,13 @@ def _compose_build_prompt(result: DiscoveryResult) -> str:
     prompt. Stack provisioning is wired separately (P1 subtask 5); until then the
     recommendation rides in the brief so the build is aware of the intended shape."""
     brief = result.brief.strip()
-    if result.stack and result.stack != "static":
+    if result.stack == "code":
+        brief = (
+            f"{brief}\n\n[Это запрос на код/программу, НЕ сайт. Выдай рабочую "
+            "программу/скрипт на запрошенном языке (файлы + README), без HTML/"
+            "вёрстки.]"
+        )
+    elif result.stack and result.stack != "static":
         brief = (
             f"{brief}\n\n[Рекомендованный стек: {result.stack} — полноценное "
             "приложение с данными.]"
@@ -655,7 +662,9 @@ async def post_prompt(
                     select(Message)
                     .where(Message.project_id == project_id)
                     .order_by(Message.created_at.asc())
-                    .limit(20)
+                    # 40 so discovery sees the whole interview thread, not just the
+                    # last ~20 rows, before it classifies/builds (owner 2026-06-18).
+                    .limit(40)
                 )
             ).scalars().all()
         )
@@ -747,7 +756,12 @@ async def post_prompt(
         and not selected_dump
         and settings.use_auto_stack_routing
     ):
-        _inferred_stack = _infer_stack_from_text(payload.prompt)
+        # Code intent (program/script, any language) takes priority over the
+        # backend net — "напиши скрипт на python" must not be pulled into an
+        # auth-backed web app (owner 2026-06-18).
+        _inferred_stack = _infer_code_from_text(payload.prompt) or _infer_stack_from_text(
+            payload.prompt
+        )
         if _inferred_stack:
             try:
                 await stack_routing.switch_to_stack(
@@ -1617,7 +1631,10 @@ async def _process_prompt(
                 .where(Message.project_id == project_id)
                 .where(Message.id != assistant_message_id)
                 .order_by(Message.created_at.desc())
-                .limit(20)
+                # Load 40 so the writer's HISTORY_LIMIT (12 turns) is the real
+                # control — long threads (discovery Q&A + follow-up tweaks) aren't
+                # pre-truncated here (owner 2026-06-18: «реально понимай чат»).
+                .limit(40)
             )
             rows = list(reversed(list(res.scalars().all())))
             history_serialized = [
@@ -1707,6 +1724,13 @@ async def _process_prompt(
         # the model later, but the mode is fixed by the first pass's prompt.
         from omnia_api.core.config import generation_mode as _generation_mode
         _gen_mode = _generation_mode(model_id, str(project_id))
+        # Non-web templates never emit a web PageIR. `code` (any-language source)
+        # and the Python backends (`tgbot`/`api`) write source via <file> blocks,
+        # so force them off catalog mode — must match build_messages' own guard so
+        # the prompt we built and the way we parse below agree (owner 2026-06-18).
+        _is_code = project_template == "code"
+        if _gen_mode == "catalog" and project_template in ("code", "tgbot", "api"):
+            _gen_mode = "freeform"
         print(f"[PP] gen_mode={_gen_mode}", flush=True)
         if pipeline_debug.enabled():
             try:
@@ -2591,7 +2615,7 @@ async def _process_prompt(
         # IS part of "what was asked", so repair it: delta-scoped (only ids the
         # edit removed), deterministic, no LLM, no regeneration — squarely the
         # kept inline-href-fixer policy.
-        if surgical and files and project_template not in CONTAINER_NEXT:
+        if surgical and files and project_template not in CONTAINER_NEXT and not _is_code:
             _before = files
             files = repair_orphaned_anchors_inline(current_files, files)
             if files != _before:
@@ -2721,7 +2745,7 @@ async def _process_prompt(
         # Skip on surgical edits: rewriting a PRE-EXISTING dead link the user
         # didn't mention violates "change only what was asked". The edit prompt
         # already forbids dead links in any element the edit adds.
-        if files and not surgical and project_template not in CONTAINER_NEXT:
+        if files and not surgical and project_template not in CONTAINER_NEXT and not _is_code:
             initial_dead = find_dead_links(files)
             if initial_dead:
                 files = repair_dead_links_inline(files)
@@ -2789,7 +2813,7 @@ async def _process_prompt(
         # Kit files are Omnia-managed: drop any model attempt to write/delete them,
         # and re-inject the kit <link>/<script> into returned HTML if the model
         # dropped them (so animations/interactivity never silently break).
-        if files and project_template not in CONTAINER_NEXT:
+        if files and project_template not in CONTAINER_NEXT and not _is_code:
             files = {p: c for p, c in files.items() if p not in KIT_FILES}
             files = _ensure_kit_linked(files)
 
@@ -3259,7 +3283,7 @@ async def _process_prompt(
             files
             and not surgical
             and project_template
-            not in ("fullstack", "nextjs_entities", "spa", "tgbot", "api")
+            not in ("fullstack", "nextjs_entities", "spa", "tgbot", "api", "code")
             and _acc_settings.use_acceptance_gate
             and _gen_mode in ("freeform", "catalog")
         ):

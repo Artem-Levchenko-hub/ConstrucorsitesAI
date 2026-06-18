@@ -23,6 +23,7 @@ from omnia_api.services.discovery import (
     MAX_DISCOVERY_QUESTIONS,
     PlannedQuestion,
     _explicit_no_backend,
+    _infer_code_from_text,
     _infer_stack_from_text,
     confident_enough_to_build,
     cumulative_idea,
@@ -467,6 +468,50 @@ def test_explicit_no_backend_predicate() -> None:
     assert not _explicit_no_backend("калькулятор ипотеки с графиком")
     # A positive backend ask does not fire (no negation phrase).
     assert not _explicit_no_backend("магазин с регистрацией и корзиной")
+
+
+def test_infer_code_detects_program_requests() -> None:
+    """Standalone program/script asks → the ``code`` stack (any language)."""
+    assert _infer_code_from_text("напиши скрипт на python для парсинга цен") == "code"
+    assert _infer_code_from_text("сделай парсер сайта объявлений") == "code"
+    assert _infer_code_from_text("утилита cli на go для бэкапов") == "code"
+    assert _infer_code_from_text("напиши программу на rust, считающую хэши") == "code"
+
+
+def test_infer_code_spares_websites() -> None:
+    """High precision: a site request must never be pulled into ``code`` — even
+    when it names a language ("сайт на python/Django" is still a web product)."""
+    assert _infer_code_from_text("лендинг для кофейни с меню") is None
+    assert _infer_code_from_text("crm для записи клиентов с входом") is None
+    assert _infer_code_from_text("сайт на python django для школы") is None
+    assert _infer_code_from_text("интернет-магазин косметики") is None
+
+
+async def test_build_path_routes_program_to_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deterministic code net: even if the model defaults the stack to static, a
+    clear program/script ask escalates to ``code`` in the BUILD result."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "build",
+                    "message": "ок",
+                    "brief": "CLI-парсер цен на Python с выводом в CSV.",
+                    "stack": "static",
+                }
+            )
+        ),
+    )
+    result = await run_discovery(
+        [{"role": "user", "content": "напиши скрипт-парсер цен на python"}],
+        "просто сделай",
+        asked_count=2,
+    )
+    assert result.action == BUILD
+    assert result.stack == "code"
 
 
 async def test_invalid_stack_defaults_to_static(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -23,6 +23,13 @@ from omnia_api.services.design_presets import PRESETS
 # All container-backed templates share the `<file path="...">` AI contract
 # and the same per-project Postgres schema (provisioned by
 # `orchestrator.postgres_admin`).
+# `code` (added 2026-06-18) — language-agnostic source (Python script, Go CLI,
+# a parser, anything). Like the static class it has NO orchestrator container
+# (intentionally omitted from `_ORCHESTRATOR_TEMPLATE_BY_API` below, so
+# `is_fullstack`/`orchestrator_template` treat it as non-container). The model
+# writes arbitrary files via the same `<file path="...">` contract; we store,
+# version and let the user download / GitHub-push them — we never force a website
+# or "preview" them as one (owner directive: don't lock the builder to a language).
 Template = Literal[
     "blank",
     "landing",
@@ -33,6 +40,7 @@ Template = Literal[
     "spa",
     "tgbot",
     "api",
+    "code",
 ]
 
 # Map from API-side `template` value → orchestrator's template directory

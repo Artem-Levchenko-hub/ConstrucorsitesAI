@@ -1996,6 +1996,39 @@ api/routers/auth.py — НЕ переизобретай.
 • Фронтенд к этому API — ОТДЕЛЬНЫЙ проект (`vite-react-spa` если SPA или
   `nextjs-postgres-drizzle` если SSR). Предложи юзеру создать его."""
 
+_CODE_STACK = """\
+Ты — Omnia.AI в режиме КОДА. Пользователь попросил не сайт, а программу/скрипт.
+Твоя задача — выдать НАСТОЯЩИЙ, рабочий код на ТОМ языке, который попросил
+пользователь (Python, JavaScript/Node, Go, Rust, C, C++, Java, Kotlin, C#,
+PHP, Ruby, Bash, SQL — любой). Это как репозиторий на GitHub: мы храним и
+версионируем твой код как файлы, пользователь их скачивает или пушит в GitHub.
+Никакого веб-сайта, HTML или дизайна — если только сам пользователь явно не
+попросил их частью программы.
+
+ПРАВИЛА:
+• ЯЗЫК — РОВНО тот, что назвал пользователь. Просит «скрипт на Python» — пишешь
+  Python, не Node и не псевдокод. Язык не назван — выбери самый уместный для
+  задачи и НАПИШИ в README, какой и почему.
+• Код ЗАКОНЧЕННЫЙ и ЗАПУСКАЕМЫЙ: реальная логика, обработка ошибок и краевых
+  случаев, осмысленные имена. НИКАКИХ `TODO`, `pass`, «...», заглушек, обрезанных
+  функций или «допишите сами». Если задача большая — разбей на несколько файлов
+  с понятной структурой.
+• ЗАВИСИМОСТИ — приложи манифест под язык, если он нужен: `requirements.txt`
+  (Python), `package.json` (Node), `go.mod` (Go), `Cargo.toml` (Rust),
+  `pom.xml`/`build.gradle` (Java/Kotlin). Используй стандартную библиотеку, где
+  можно; не тащи тяжёлые зависимости без нужды.
+• README.md ОБЯЗАТЕЛЕН (на русском): что делает программа, как установить
+  зависимости и как запустить (точные команды), пример ввода/вывода. Коротко и
+  по делу.
+• Комментарии и docstring — по-русски, только там где они правда помогают понять
+  неочевидное. Не комментируй очевидное.
+• Секреты/ключи — НЕ хардкодь. Читай из переменных окружения или аргументов и
+  напиши об этом в README.
+• Безопасность — без `eval` произвольного ввода, без shell-инъекций, без хранения
+  паролей в открытом виде. Валидируй вход.
+• НЕ выдумывай, что код «запустился» или «протестирован» — ты его только пишешь.
+  Если есть смысл — приложи простые тесты (`pytest`, `go test`, и т.п.)."""
+
 _RESPONSE = """\
 ФОРМАТ ОТВЕТА:
 У тебя ДВА формата для возврата изменений. Выбор формата ОБЯЗАТЕЛЕН и определяет
@@ -2303,7 +2336,13 @@ KIT_FILES = frozenset(
     {"assets/omnia-kit.css", "assets/omnia-kit.js", "assets/anime.min.js"}
 )
 
-HISTORY_LIMIT = 6
+# How many prior chat turns the writer sees on a build. Bumped 6→12 (owner
+# 2026-06-18: «реально понимай чат») so a longer back-and-forth (discovery Q&A +
+# follow-up tweaks) isn't truncated away — the model honours what was actually
+# discussed instead of only the last turn. Assistant turns carrying a full prior
+# build get their `<file>` HTML stripped before they count (see build_messages),
+# so 12 turns of REAL intent fit without 60 KB markup dumps crowding them out.
+HISTORY_LIMIT = 12
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -3522,6 +3561,16 @@ def build_system_prompt(
             _API_STACK,
             _RESPONSE,
         )
+    elif template == "code":
+        # Language-agnostic source (any language). Skip the web identity AND the
+        # website quality-bar entirely — both are about multi-section sites and
+        # palettes, which would mislead the model into building a page. _CODE_STACK
+        # is fully self-framing (its own identity + rules); only the shared file/
+        # edit response contract is appended.
+        sections = (
+            _CODE_STACK,
+            _RESPONSE,
+        )
     else:
         # Static V1: blank / landing / portfolio / blog
         sections = (
@@ -4204,6 +4253,13 @@ def build_messages(
     #   plain    → budget/balanced freeform-HTML + multipass (unchanged)
     from omnia_api.core.config import generation_mode
     mode = generation_mode(model_id, project_id)
+    # Catalog mode emits a web PageIR JSON (section catalog → HTML). It is
+    # meaningless for the non-web templates: `code` (arbitrary-language source),
+    # `tgbot`/`api` (Python backend source). Force them onto the freeform `<file>`
+    # path so they hit the proper per-template system prompt below instead of the
+    # website section-catalog prompt. (messages.py mirrors this for the parse side.)
+    if mode == "catalog" and template in ("code", "tgbot", "api"):
+        mode = "freeform"
     if mode == "catalog":
         from omnia_api.services.lean_prompt import build_catalog_messages
         return build_catalog_messages(
@@ -4269,7 +4325,16 @@ def build_messages(
 
     for m in list(history)[-HISTORY_LIMIT:]:
         if m.get("role") in {"user", "assistant"} and m.get("content"):
-            messages.append({"role": m["role"], "content": m["content"]})
+            content = m["content"]
+            # An assistant build turn is the page's full <file>…</file> HTML
+            # (30–60 KB). Verbatim it crowds out the user's actual words across
+            # the 12-turn window and tempts a copy of stale markup. Replace those
+            # blocks with a short marker so the REAL conversation (what the user
+            # asked, turn by turn) survives — the current files are already fed
+            # separately above. User turns are kept verbatim (they carry intent).
+            if m["role"] == "assistant":
+                content = _FILE_BLOCK_RE.sub("[предыдущая сборка]", content)
+            messages.append({"role": m["role"], "content": content})
 
     final_user = user_prompt
     if selected_elements:
