@@ -184,6 +184,32 @@ def _infer_code_from_text(text: str) -> str | None:
     return None
 
 
+# Static is opt-in (owner 2026-06-18). These are the ONLY phrases that keep a
+# build on the flat-HTML `static` stack — an explicit ask for a plain static page.
+# A normal site request (лендинг/портфолио/блог/кофейня) does NOT match and is
+# routed to `spa` instead. Narrow on purpose: a false miss just means one more
+# interactive React build, which is exactly the new default we want.
+_EXPLICIT_STATIC_SIGNALS: frozenset[str] = frozenset(
+    {
+        "статичн", "статическ", "статикой", "статику", "статика",
+        "просто html", "просто статич", "обычный html", "чистый html",
+        "html-страниц", "html страниц", "голый html",
+        "без интерактив", "без js", "без скрипт",
+        "plain html", "static site", "static page", "just html", "just static",
+    }
+)
+
+
+def _explicit_static(text: str) -> bool:
+    """True when the user EXPLICITLY asked for a plain static HTML page.
+
+    The only thing that keeps a build on the `static` stack now (owner 2026-06-18:
+    «убрать статику, оставляем только если задача явно требует»). Whole-phrase
+    substrings on lowered text; a generic site/landing request never matches."""
+    low = (text or "").lower()
+    return any(sig in low for sig in _EXPLICIT_STATIC_SIGNALS)
+
+
 # Explicit "no accounts / no login" phrases. Unlike _BACKEND_SIGNALS (bare stems
 # whose NEGATED mentions are filtered out), these are whole negated phrases that
 # carry a *positive* intent: the user actively refused auth + persistence. A tool
@@ -440,7 +466,13 @@ def zero_question_build(
     intent_text = "\n".join(
         [*(m.get("content") or "" for m in history), latest_prompt or ""]
     )
-    stack = _infer_stack_from_text(intent_text) or _DEFAULT_STACK
+    # Same priority as run_discovery's BUILD net: code > backend(entities) > spa
+    # default. Static is opt-in (owner 2026-06-18) — a richly-specified first prompt
+    # is a real site/app, so it builds as `spa`, never flat static, unless the user
+    # explicitly asked for a plain HTML page.
+    stack = _infer_code_from_text(intent_text) or _infer_stack_from_text(intent_text)
+    if stack is None:
+        stack = "static" if _explicit_static(intent_text) else "spa"
     log.info(
         "discovery: zero-question build (%d intent axes pinned, stack=%s)",
         spec_confidence(spec),
@@ -469,16 +501,18 @@ _SYSTEM = (
     "продукт, ИЛИ пользователь просит начать — НЕ тяни, верни action=build.\n"
     "4. Обычно хватает 2–4 вопросов. Не превращай это в анкету.\n\n"
     "ВЫБОР СТЕКА (поле stack при build):\n"
-    "- \"static\" — пассивный сайт-контент: лендинг/портфолио/блог/визитка. "
-    "НЕТ входа, личных кабинетов, корзины, базы данных, CRUD И нет сложной "
-    "клиентской логики (только текст, картинки, ссылки, простые формы).\n"
+    "- \"spa\" — ДЕФОЛТ для сайтов и интерактивных продуктов БЕЗ бэкенда/аккаунтов: "
+    "лендинг, портфолио, блог, визитка, промо-страница, а также калькулятор, "
+    "конвертер, визуализатор, генератор, игра, конфигуратор, дашборд на демо-"
+    "данных. Интерактивное React-приложение. Если это сайт/страница и нет явной "
+    "БД/аккаунтов — это \"spa\".\n"
     "- \"nextjs_entities\" — есть пользователи, каталог/товары, корзина, запись/"
     "бронирование, CRM, личный кабинет, любые сохраняемые данные. Полноценное "
     "приложение с БД.\n"
-    "- \"spa\" — ИНТЕРАКТИВНЫЙ инструмент/приложение БЕЗ бэкенда и БЕЗ "
-    "регистрации: калькулятор, конвертер, визуализатор, генератор, игра, "
-    "конфигуратор, интерактивный дашборд на демо-данных. Богатая клиентская "
-    "логика, но НЕ нужны аккаунты или сохранение в БД между пользователями.\n"
+    "- \"static\" — ТОЛЬКО если пользователь ЯВНО просит простую СТАТИЧНУЮ "
+    "HTML-страницу («просто html», «статичная страница», «без интерактива/без js»). "
+    "Обычный лендинг/портфолио/блог сюда НЕ относится — это \"spa\". Не выбирай "
+    "static по умолчанию.\n"
     "- \"fullstack\" — интерактивное веб-приложение с лёгким собственным "
     "бэкендом, не подходящее под entities.\n"
     "- \"code\" — НЕ сайт, а отдельная ПРОГРАММА/СКРИПТ на любом языке "
@@ -951,6 +985,14 @@ async def run_discovery(
             and _explicit_no_backend(intent_text)
         ):
             log.info("discovery: stack '%s'→'spa' (explicit no-account tool)", stack)
+            stack = "spa"
+        # Static is opt-in (owner 2026-06-18: «убрать статику, оставляем только
+        # если задача явно требует»). Anything that ended up `static` but isn't an
+        # EXPLICIT request for a plain HTML page becomes `spa` (interactive React) —
+        # landings/portfolios/blogs included. Runs LAST so code/backend/no-backend
+        # picks above are untouched; only a bare static fallthrough is upgraded.
+        if stack == "static" and not _explicit_static(intent_text):
+            log.info("discovery: stack 'static'→'spa' (static is opt-in)")
             stack = "spa"
         return DiscoveryResult(action=BUILD, message=message, brief=brief, stack=stack)
 

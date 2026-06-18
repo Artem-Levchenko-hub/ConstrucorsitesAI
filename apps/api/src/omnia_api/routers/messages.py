@@ -63,6 +63,7 @@ from omnia_api.services.discovery import (
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
+    _explicit_static,
     _infer_code_from_text,
     _infer_stack_from_text,
     confident_enough_to_build,
@@ -758,9 +759,13 @@ async def post_prompt(
     ):
         # Code intent (program/script, any language) takes priority over the
         # backend net — "напиши скрипт на python" must not be pulled into an
-        # auth-backed web app (owner 2026-06-18).
-        _inferred_stack = _infer_code_from_text(payload.prompt) or _infer_stack_from_text(
-            payload.prompt
+        # auth-backed web app (owner 2026-06-18). And static is opt-in: if nothing
+        # specific fires, default to `spa` (interactive React) unless the user
+        # EXPLICITLY asked for a plain static HTML page — same policy as discovery.
+        _inferred_stack = (
+            _infer_code_from_text(payload.prompt)
+            or _infer_stack_from_text(payload.prompt)
+            or (None if _explicit_static(payload.prompt) else "spa")
         )
         if _inferred_stack:
             try:

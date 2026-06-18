@@ -514,7 +514,9 @@ async def test_build_path_routes_program_to_code(
     assert result.stack == "code"
 
 
-async def test_invalid_stack_defaults_to_static(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invalid_stack_defaults_to_spa(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Invalid model stack ("django") → coerced to static, then the opt-in rule
+    (owner 2026-06-18) upgrades a non-explicit-static build to spa."""
     _install(
         monkeypatch,
         resp=_gateway_returning(
@@ -525,7 +527,7 @@ async def test_invalid_stack_defaults_to_static(monkeypatch: pytest.MonkeyPatch)
     )
     result = await run_discovery([], "лендинг", asked_count=1)
     assert result.action == BUILD
-    assert result.stack == "static"
+    assert result.stack == "spa"
 
 
 async def test_force_build_overrides_model_ask(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -715,14 +717,30 @@ async def test_forced_build_with_backend_intent_routes_to_entities(
     assert result.stack == "nextjs_entities"
 
 
-async def test_forced_build_pure_landing_stays_static(
+async def test_forced_build_pure_landing_now_spa(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A landing with no backend intent still builds static — the net is precise."""
+    """Static is opt-in (owner 2026-06-18): a plain landing with no explicit
+    "static page" ask now builds as spa (interactive React), not flat HTML."""
     _install(monkeypatch, resp=_gateway_returning("не json"))
     result = await run_discovery(
         [{"role": "user", "content": "лендинг для кофейни"}],
         "просто красивая визитка с меню, генерируй",
+        asked_count=0,
+        force_build=True,
+    )
+    assert result.action == BUILD
+    assert result.stack == "spa"
+
+
+async def test_explicit_static_request_stays_static(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one escape hatch: an EXPLICIT plain-HTML ask keeps the static stack."""
+    _install(monkeypatch, resp=_gateway_returning("не json"))
+    result = await run_discovery(
+        [],
+        "сделай простую статичную html-страницу без интерактива, генерируй",
         asked_count=0,
         force_build=True,
     )
