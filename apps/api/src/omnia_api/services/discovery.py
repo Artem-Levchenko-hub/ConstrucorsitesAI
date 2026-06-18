@@ -175,6 +175,11 @@ def _infer_code_from_text(text: str) -> str | None:
     BEFORE the backend escalation so "напиши парсер на python" → code, not an
     auth-backed web app."""
     low = (text or "").lower()
+    # An explicit "plain static HTML page" ask is never code, even though it often
+    # says "без скриптов" (the "скрипт" substring would otherwise trip the strong
+    # signal below). Owner 2026-06-18 escape hatch takes precedence.
+    if _explicit_static(low):
+        return None
     if any(sig in low for sig in _CODE_STRONG_SIGNALS):
         return "code"
     if any(sig in low for sig in _CODE_LANG_HINTS) and not any(
@@ -957,18 +962,26 @@ async def run_discovery(
         intent_text = "\n".join(
             [brief, *(m.get("content") or "" for m in history), latest_prompt or ""]
         )
+        # Explicit "plain static HTML page" wins OUTRIGHT (owner 2026-06-18 escape
+        # hatch): force static and let NO net below upgrade it. Without this a brief
+        # that merely says "без скриптов" trips the code net ("скрипт" substring),
+        # and a model spa/other pick would override the user's explicit static ask.
+        _static_req = _explicit_static(intent_text)
+        if _static_req and stack != "static":
+            log.info("discovery: stack '%s'→'static' (explicit static page)", stack)
+            stack = "static"
         # Code net (owner 2026-06-18) — a standalone program/script ask routes to
         # the `code` template. Runs BEFORE the backend escalation so "напиши парсер
         # на python" lands as code, not an auth-backed web app. Only overrides a
         # non-backend pick (static/spa); a confident entities/fullstack choice
         # carries explicit data/account intent, so it's left alone.
         code_inferred = _infer_code_from_text(intent_text)
-        if code_inferred and stack in ("static", "spa", "code"):
+        if code_inferred and not _static_req and stack in ("static", "spa", "code"):
             if stack != "code":
                 log.info("discovery: stack '%s'→'code' (program/script intent)", stack)
             stack = "code"
         inferred = _infer_stack_from_text(intent_text)
-        if stack not in ("fullstack", "nextjs_entities", "code") and inferred:
+        if stack not in ("fullstack", "nextjs_entities", "code") and inferred and not _static_req:
             log.info("discovery: stack '%s'→'%s' (backend intent signals)", stack, inferred)
             stack = inferred
         # Negative safety-net (Phase 7.x): the mirror of the upgrade above. The
@@ -991,7 +1004,7 @@ async def run_discovery(
         # EXPLICIT request for a plain HTML page becomes `spa` (interactive React) —
         # landings/portfolios/blogs included. Runs LAST so code/backend/no-backend
         # picks above are untouched; only a bare static fallthrough is upgraded.
-        if stack == "static" and not _explicit_static(intent_text):
+        if stack == "static" and not _static_req:
             log.info("discovery: stack 'static'→'spa' (static is opt-in)")
             stack = "spa"
         return DiscoveryResult(action=BUILD, message=message, brief=brief, stack=stack)

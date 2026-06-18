@@ -748,6 +748,32 @@ async def test_explicit_static_request_stays_static(
     assert result.stack == "static"
 
 
+async def test_explicit_static_not_hijacked_by_script_word_in_brief(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (live prod 2026-06-18): the model's brief for a static page said
+    «минимум скриптов»; the "скрипт" substring tripped the code net and routed the
+    build to `code`. Explicit-static must win outright over the code net."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "build",
+                    "message": "ок",
+                    "brief": "статичная html-страница, минимум скриптов, без интерактива",
+                    "stack": "static",
+                }
+            )
+        ),
+    )
+    result = await run_discovery(
+        [], "сделай простую статичную html-страницу без интерактива", asked_count=2
+    )
+    assert result.action == BUILD
+    assert result.stack == "static"
+
+
 # ─── Batch discovery plan (owner rule 13 #1 — NORTH STAR pillar 2) ───────────
 
 
