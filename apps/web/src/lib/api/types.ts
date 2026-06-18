@@ -25,7 +25,11 @@ export type ProjectTemplate =
   | "fullstack"
   // Base44-style: fixed entity-engine backend (DB + auth + CRUD out of the box)
   // + generative React frontend. Also a container-backed Next.js app.
-  | "nextjs_entities";
+  | "nextjs_entities"
+  // Language-agnostic source (Python script, Go CLI, parser, …). NOT a website
+  // and NOT container-backed — stored as files like a GitHub repo. The workspace
+  // shows the «Код» tab + download/GitHub-push instead of a preview iframe.
+  | "code";
 
 export type Project = {
   id: Uuid;
