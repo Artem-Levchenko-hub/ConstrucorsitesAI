@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { ScreenFrame } from "./screen-frame";
 
 /* Settings / Account scaffold — the enterprise pattern every app with a user
  * profile needs (Mobbin refs: Grammarly, 7shifts, Oyster, Time2book). Three
@@ -98,16 +99,7 @@ export function SettingsShell({
   return (
     <div className={cn("space-y-6", className)}>
       {title || description ? (
-        <div className="space-y-1">
-          {title ? (
-            <h1 className="text-2xl font-semibold leading-tight tracking-tight sm:text-3xl">
-              {title}
-            </h1>
-          ) : null}
-          {description ? (
-            <p className="text-sm text-muted-foreground">{description}</p>
-          ) : null}
-        </div>
+        <ScreenFrame variant="settings" title={title ?? ""} description={description} />
       ) : null}
       <div className="flex flex-col gap-6 lg:flex-row">
         {nav && nav.length > 0 ? <SettingsNav nav={nav} pathname={pathname} /> : null}

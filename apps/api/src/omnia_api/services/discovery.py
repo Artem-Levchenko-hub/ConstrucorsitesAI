@@ -19,11 +19,16 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
 from omnia_api.core.config import get_settings, model_for_role
-from omnia_api.services.chip_pixel_gate import compile_build_spec, spec_confidence
+from omnia_api.services.chip_pixel_gate import (
+    compile_build_spec,
+    spec_confidence,
+    spec_from_discovery,
+)
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +50,7 @@ _ZERO_QUESTION_MIN_AXES = 2
 # INTERACTIVE tool/app that needs real build tooling but no accounts/DB — see the
 # stack-choice rules in ``_SYSTEM`` (Phase 7.2 multi-stack).
 _STACKS: frozenset[str] = frozenset(
-    {"static", "fullstack", "nextjs_entities", "spa"}
+    {"static", "fullstack", "nextjs_entities", "spa", "code"}
 )
 _DEFAULT_STACK = "static"
 
@@ -126,6 +131,219 @@ def _infer_stack_from_text(text: str) -> str | None:
     return None
 
 
+# Owner directive 2026-06-18: don't lock the builder to web output. When the user
+# clearly asks for a standalone PROGRAM/SCRIPT (any language) — not a site — route
+# to the `code` template (file-only, no container; the writer emits arbitrary
+# source via the <file> contract). High precision so a normal site request never
+# trips it: STRONG artifact words win outright; a bare "… на <язык>" only counts
+# as code when no website word is present (so "сайт на Python" stays a web build).
+_CODE_STRONG_SIGNALS: frozenset[str] = frozenset(
+    {
+        "скрипт", "script",
+        "парсер", "парсинг", "scraper", "скрейпер", "распарс",
+        "утилит", "консольн", "командной строк", "command line", "cli ",
+        "напиши код", "написать код", "напиши программу", "код на ",
+        "программу на", "программа на",
+        "алгоритм", "automation script", "автоматизирующий скрипт",
+    }
+)
+# Ambiguous "<вещь> на <язык>" — code only when the prompt isn't about a website.
+_CODE_LANG_HINTS: frozenset[str] = frozenset(
+    {
+        " на python", " на питон", " на golang", " на go ", " на rust",
+        " на расте", " на c++", " на си++", " на java", " на джава",
+        " на kotlin", " на котлин", " на php", " на ruby", " на bash",
+        " на c#", " на c шарп",
+    }
+)
+# Website words that veto the WEAK language hint (a Django/SSR site mentions a
+# language but still wants a web product, not a bare script).
+_WEBSITE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "сайт", "лендинг", "лендос", "landing", "магазин", "портфолио",
+        "веб-страниц", "веб страниц", "website", "webpage", "дашборд",
+        "интернет-магазин",
+    }
+)
+
+
+def _infer_code_from_text(text: str) -> str | None:
+    """Deterministic safety-net: pick the ``code`` stack for a program/script ask.
+
+    Returns ``"code"`` when the text clearly asks for a standalone program in any
+    language, else ``None`` (leave the model's / backend net's choice alone). Runs
+    BEFORE the backend escalation so "напиши парсер на python" → code, not an
+    auth-backed web app."""
+    low = (text or "").lower()
+    # An explicit "plain static HTML page" ask is never code, even though it often
+    # says "без скриптов" (the "скрипт" substring would otherwise trip the strong
+    # signal below). Owner 2026-06-18 escape hatch takes precedence.
+    if _explicit_static(low):
+        return None
+    if any(sig in low for sig in _CODE_STRONG_SIGNALS):
+        return "code"
+    if any(sig in low for sig in _CODE_LANG_HINTS) and not any(
+        w in low for w in _WEBSITE_SIGNALS
+    ):
+        return "code"
+    return None
+
+
+# Static is opt-in (owner 2026-06-18). These are the ONLY phrases that keep a
+# build on the flat-HTML `static` stack — an explicit ask for a plain static page.
+# A normal site request (лендинг/портфолио/блог/кофейня) does NOT match and is
+# routed to `spa` instead. Narrow on purpose: a false miss just means one more
+# interactive React build, which is exactly the new default we want.
+_EXPLICIT_STATIC_SIGNALS: frozenset[str] = frozenset(
+    {
+        "статичн", "статическ", "статикой", "статику", "статика",
+        "просто html", "просто статич", "обычный html", "чистый html",
+        "html-страниц", "html страниц", "голый html",
+        "без интерактив", "без js", "без скрипт",
+        "plain html", "static site", "static page", "just html", "just static",
+    }
+)
+
+
+def _explicit_static(text: str) -> bool:
+    """True when the user EXPLICITLY asked for a plain static HTML page.
+
+    The only thing that keeps a build on the `static` stack now (owner 2026-06-18:
+    «убрать статику, оставляем только если задача явно требует»). Whole-phrase
+    substrings on lowered text; a generic site/landing request never matches."""
+    low = (text or "").lower()
+    return any(sig in low for sig in _EXPLICIT_STATIC_SIGNALS)
+
+
+# Owner 2026-06-19 — a `code` project follow-up asking to RUN it as a web page
+# ("сделай веб-вид", "в браузере", "запусти здесь"). Used ONLY on a `code` project
+# to pivot it to a previewable `static` web build. PRECISE on purpose: a false
+# positive flips the project's stack, so we match clear "run as a web page here"
+# phrases, NOT bare "запусти" (which on a code project means "run the script") or
+# bare "сайт"/"html" (a scraper of a site / parser of html is still code).
+_WEB_PIVOT_SIGNALS: frozenset[str] = frozenset(
+    {
+        "веб-вид", "веб вид", "веб-верс", "веб верс", "веб-страниц", "веб страниц",
+        "в браузере", "прям здесь", "прямо здесь", "запусти здесь",
+        "запустить здесь", "открыть здесь", "поиграть здесь", "сыграть здесь",
+        "preview", "превью", "в вебе", "онлайн-вид", "сделай онлайн",
+        "playable", "run it here", "in the browser",
+    }
+)
+
+
+def _infer_web_pivot(text: str) -> bool:
+    """True when the user wants to RUN a code project as a web page (owner
+    2026-06-19). Used ONLY on a `code` project follow-up → pivot to `static`."""
+    low = (text or "").lower()
+    return any(sig in low for sig in _WEB_PIVOT_SIGNALS)
+
+
+# Owner 2026-06-19 — user wants to RUN / INSTALL the project locally on their own
+# machine ("как запустить", "хочу запустить", "установщик", "дай поиграть"). On a
+# follow-up this short-circuits to a one-click "download installer" card (the .zip
+# already ships a run.bat launcher) instead of another generation. PRECISE: clear
+# run/install phrases only — NOT bare "запусти" (= generate) or web-preview phrases
+# (those are the web-pivot above).
+_RUN_INTENT_SIGNALS: frozenset[str] = frozenset(
+    {
+        "установщик", "инсталлятор", "как установить", "установи и запусти",
+        "как запустить", "как мне запустить", "хочу запустить", "запусти локально",
+        "запустить локально", "запустить у себя", "запустить на компе",
+        "запустить на компьютере", "скачать и запустить", "скачать и поиграть",
+        "хочу поиграть", "дай поиграть", "как поиграть", "как мне поиграть",
+        "сразу запустить", "запустить у меня", "как мне это запустить",
+        "хочу установить",
+        # «в один клик» phrasings — only when paired with a run word, so a UI
+        # request like «заказ в один клик» (a build) never trips it.
+        "запустилось в один клик", "запускалось в один клик",
+        "запустить в один клик", "запуск в один клик", "в один клик запуст",
+        "запустилось одним кликом", "запустить одним кликом",
+        "одним кликом запуст", "запустить в 1 клик", "в 1 клик запуст",
+    }
+)
+
+
+def _infer_run_intent(text: str) -> bool:
+    """True when the user wants to RUN/INSTALL the project locally (owner
+    2026-06-19) → offer a one-click installer download instead of a build."""
+    low = (text or "").lower()
+    return any(sig in low for sig in _RUN_INTENT_SIGNALS)
+
+
+# WEAKER, AMBIGUOUS hints (owner 2026-06-19: «спрашивай, если сомневаешься»). These
+# might mean "run/share it locally" OR something else (generate, publish a link,
+# play in preview). Too uncertain to act on → we ASK "собрать установщик?" with
+# yes/no chips instead of guessing. Kept distinct from the STRONG set above.
+_RUN_MAYBE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "запусти", "запустить", "поиграть", "поиграем",
+        "поделиться", "поделись", "скинуть", "скинь друз", "отправить друз",
+        "отправить друг", "как использовать", "как пользоваться",
+        "хочу попробовать", "дай попробовать", "как открыть проект",
+        "можно запустить", "можно ли запустить", "это запустить",
+    }
+)
+# A "no, keep editing" reply to the installer question → don't build garbage from
+# the bare "нет"; ask what to change instead.
+_RUN_DECLINE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "доработать проект", "доработать", "не надо установщик",
+        "без установщика", "не нужен установщик", "продолжаем дорабат",
+        "продолжим дорабат", "нет, правим", "не устанавливать",
+    }
+)
+
+
+def _infer_run_intent_maybe(text: str) -> bool:
+    """True when run/install intent is PLAUSIBLE but not certain → ask first.
+    Excludes the strong case (handled directly) and an explicit decline."""
+    low = (text or "").lower()
+    if _infer_run_intent(low) or _is_run_decline(low):
+        return False
+    return any(sig in low for sig in _RUN_MAYBE_SIGNALS)
+
+
+def _is_run_decline(text: str) -> bool:
+    """True when the user declines the installer offer ("нет, доработать")."""
+    low = (text or "").lower()
+    if any(sig in low for sig in _RUN_DECLINE_SIGNALS):
+        return True
+    return low.strip().startswith("нет") and (
+        "доработ" in low or "правит" in low or "продолж" in low or "устанавлив" in low
+    )
+
+
+# Explicit "no accounts / no login" phrases. Unlike _BACKEND_SIGNALS (bare stems
+# whose NEGATED mentions are filtered out), these are whole negated phrases that
+# carry a *positive* intent: the user actively refused auth + persistence. A tool
+# the user said needs NO login must never be escalated to an auth-backed stack —
+# nextjs_entities/fullstack scaffold a `(app)` route group behind /signin, which
+# gates the tool behind a login wall the user explicitly rejected (dogfood run #2:
+# «калькулятор ипотеки … без регистрации» → model picked nextjs_entities → the
+# calculator landed in (app)/dashboard behind /signin, while the page copy itself
+# promised «без регистрации»).
+_NO_BACKEND_SIGNALS: frozenset[str] = frozenset(
+    {
+        "без регистрац", "без вход", "без аккаунт", "без авториз", "без логин",
+        "не нужна регистрац", "не нужен вход", "не нужна авториз",
+        "no login", "no sign up", "no signup", "no account", "no registration",
+        "without login", "without sign", "without account",
+    }
+)
+
+
+def _explicit_no_backend(text: str) -> bool:
+    """True when the user EXPLICITLY refused accounts/login (whole-phrase match).
+
+    Drives the negative stack safety-net (run_discovery BUILD path): a model that
+    over-escalates such a tool to nextjs_entities/fullstack gets vetoed back to
+    ``spa`` (a no-backend interactive React tool), so the tool isn't gated behind
+    /signin against the user's stated wish."""
+    haystack = (text or "").lower()
+    return any(sig in haystack for sig in _NO_BACKEND_SIGNALS)
+
+
 @dataclass(frozen=True)
 class DiscoveryResult:
     """Outcome of one discovery turn.
@@ -167,6 +385,19 @@ class DiscoveryResult:
     # образование») for the framing banner «Давайте разберёмся под вашу идею: …».
     # Empty when the idea matches no known niche (banner then shows no suffix).
     niche: str = ""
+    # Onboarding LIVE-causality (NORTH STAR pillar 2 — «вас услышали»): short
+    # labels of the answers gathered so far (chip taps / free text), newest last,
+    # so the popup can echo «✓ …» recap chips back at the user and prove the loop
+    # reacts to what they said. Empty on the first turn (nothing answered yet) and
+    # on BUILD turns.
+    recap: tuple[str, ...] = ()
+    # Onboarding LIVE design-preview (NORTH STAR pillars 2×3 — «покажи ЧТО
+    # построим»): the resolved design tokens (accent hex/family, theme, tone,
+    # sections) the gathered answers steer toward, so the popup can paint a live
+    # mini-hero that morphs on every answer instead of only echoing words. Shape
+    # is :func:`chip_pixel_gate.spec_preview`'s payload (or None when nothing
+    # design-relevant has been decided). None on the first turn and on BUILD turns.
+    design_preview: dict[str, Any] | None = None
 
 
 # Niche → short Russian banner label, matched by lowered-substring stems on the
@@ -214,6 +445,105 @@ def infer_niche_label(text: str) -> str:
     return ""
 
 
+# ── Onboarding LIVE-causality (NORTH STAR pillar 2) ──────────────────────────
+# The interview was inert: the niche badge was inferred once from the first
+# prompt, the next question never reacted to prior answers, and nothing echoed
+# back what the user said. These pure helpers make the loop visibly causal — a
+# live niche badge (re-inferred on the CUMULATIVE answers) and an answer-recap
+# strip — without any extra gateway call.
+
+_MAX_RECAP_ITEMS = 3
+_MAX_RECAP_LEN = 28
+
+
+def _user_contents(history: list[dict[str, str]] | None) -> list[str]:
+    """Every non-empty user-role turn, in order — the idea then each answer."""
+    return [
+        (m.get("content") or "").strip()
+        for m in (history or [])
+        if (m.get("role") or "") == "user" and (m.get("content") or "").strip()
+    ]
+
+
+def cumulative_idea(
+    history: list[dict[str, str]] | None, latest_prompt: str
+) -> str:
+    """All user-supplied text so far (the idea + every answer), newline-joined.
+
+    Basis for LIVE niche re-inference: :func:`infer_niche_label` is re-run on
+    THIS (not just the first prompt), so the badge sharpens as the conversation
+    reveals more — a vague «сайт для бизнеса» that later mentions «доставка еды»
+    surfaces «кафе / ресторан». Deterministic; the latest prompt rides last."""
+    parts = list(_user_contents(history))
+    latest = (latest_prompt or "").strip()
+    if latest:
+        parts.append(latest)
+    return "\n".join(parts)
+
+
+def gather_answers(
+    history: list[dict[str, str]] | None,
+    latest_prompt: str,
+    asked_count: int,
+) -> tuple[str, ...]:
+    """The user's answers to discovery questions so far (chip taps / free text),
+    newest last. The FIRST user message is the product idea, not an answer, so it
+    is excluded. On the very first turn (``asked_count == 0``) nothing has been
+    answered yet → empty. The latest prompt is the answer to the previous
+    question (not yet in ``history``), so it rides last once the interview is in
+    flight. Pure — drives the answer-recap card."""
+    answers = list(_user_contents(history)[1:])  # drop the idea
+    if asked_count >= 1:
+        latest = (latest_prompt or "").strip()
+        if latest:
+            answers.append(latest)
+    return tuple(answers)
+
+
+def recap_labels(answers: tuple[str, ...]) -> tuple[str, ...]:
+    """Compact the gathered answers into ≤3 short recap chips (newest-last), each
+    whitespace-collapsed and length-clipped, so the onboarding can echo «✓ …»
+    back at the user without flooding the narrow chat panel."""
+    out: list[str] = []
+    for a in answers[-_MAX_RECAP_ITEMS:]:
+        label = " ".join(a.split())
+        if len(label) > _MAX_RECAP_LEN:
+            label = label[: _MAX_RECAP_LEN - 1].rstrip() + "…"
+        if label:
+            out.append(label)
+    return tuple(out)
+
+
+# Confidence-skip floor (pillar 2 — «лучший онбординг — его отсутствие»). Once
+# the gathered answers have pinned a RECOGNISED niche AND ≥ this many design axes,
+# the interview knows enough — it builds instead of asking the remaining planned
+# questions. Conservative: requires real engagement (≥2 answered) so a decisive
+# user gets a shorter path while an undecided one keeps the full batch.
+_CONFIDENCE_SKIP_MIN_ANSWERS = 2
+_CONFIDENCE_SKIP_MIN_AXES = 2
+
+
+def confident_enough_to_build(
+    history: list[dict[str, str]] | None,
+    latest_prompt: str,
+    *,
+    asked_count: int,
+    niche: str,
+) -> bool:
+    """True when the gathered answers already pin a recognised niche + ≥2 design
+    axes — the confident user has steered enough, so the popup should build now
+    rather than ask the rest of the batch (NORTH STAR pillar 2 confidence-skip).
+
+    Pure + deterministic + fail-soft: reuses the same :func:`spec_from_discovery`
+    extractor the gauntlet uses (R-04 single source); an unclear interview returns
+    False and the full batch continues. Gated to ``asked_count >= 2`` so it can
+    never cut an interview the user has barely begun."""
+    if asked_count < _CONFIDENCE_SKIP_MIN_ANSWERS or not niche:
+        return False
+    spec = spec_from_discovery(history, latest_prompt)
+    return spec is not None and spec_confidence(spec) >= _CONFIDENCE_SKIP_MIN_AXES
+
+
 def wants_build_now(prompt: str) -> bool:
     """True when the user explicitly asked to skip questions and build."""
     text = (prompt or "").strip().lower()
@@ -240,7 +570,13 @@ def zero_question_build(
     intent_text = "\n".join(
         [*(m.get("content") or "" for m in history), latest_prompt or ""]
     )
-    stack = _infer_stack_from_text(intent_text) or _DEFAULT_STACK
+    # Same priority as run_discovery's BUILD net: code > backend(entities) > spa
+    # default. Static is opt-in (owner 2026-06-18) — a richly-specified first prompt
+    # is a real site/app, so it builds as `spa`, never flat static, unless the user
+    # explicitly asked for a plain HTML page.
+    stack = _infer_code_from_text(intent_text) or _infer_stack_from_text(intent_text)
+    if stack is None:
+        stack = "static" if _explicit_static(intent_text) else "spa"
     log.info(
         "discovery: zero-question build (%d intent axes pinned, stack=%s)",
         spec_confidence(spec),
@@ -269,18 +605,26 @@ _SYSTEM = (
     "продукт, ИЛИ пользователь просит начать — НЕ тяни, верни action=build.\n"
     "4. Обычно хватает 2–4 вопросов. Не превращай это в анкету.\n\n"
     "ВЫБОР СТЕКА (поле stack при build):\n"
-    "- \"static\" — пассивный сайт-контент: лендинг/портфолио/блог/визитка. "
-    "НЕТ входа, личных кабинетов, корзины, базы данных, CRUD И нет сложной "
-    "клиентской логики (только текст, картинки, ссылки, простые формы).\n"
+    "- \"spa\" — ДЕФОЛТ для сайтов и интерактивных продуктов БЕЗ бэкенда/аккаунтов: "
+    "лендинг, портфолио, блог, визитка, промо-страница, а также калькулятор, "
+    "конвертер, визуализатор, генератор, игра, конфигуратор, дашборд на демо-"
+    "данных. Интерактивное React-приложение. Если это сайт/страница и нет явной "
+    "БД/аккаунтов — это \"spa\".\n"
     "- \"nextjs_entities\" — есть пользователи, каталог/товары, корзина, запись/"
     "бронирование, CRM, личный кабинет, любые сохраняемые данные. Полноценное "
     "приложение с БД.\n"
-    "- \"spa\" — ИНТЕРАКТИВНЫЙ инструмент/приложение БЕЗ бэкенда и БЕЗ "
-    "регистрации: калькулятор, конвертер, визуализатор, генератор, игра, "
-    "конфигуратор, интерактивный дашборд на демо-данных. Богатая клиентская "
-    "логика, но НЕ нужны аккаунты или сохранение в БД между пользователями.\n"
+    "- \"static\" — ТОЛЬКО если пользователь ЯВНО просит простую СТАТИЧНУЮ "
+    "HTML-страницу («просто html», «статичная страница», «без интерактива/без js»). "
+    "Обычный лендинг/портфолио/блог сюда НЕ относится — это \"spa\". Не выбирай "
+    "static по умолчанию.\n"
     "- \"fullstack\" — интерактивное веб-приложение с лёгким собственным "
-    "бэкендом, не подходящее под entities.\n\n"
+    "бэкендом, не подходящее под entities.\n"
+    "- \"code\" — НЕ сайт, а отдельная ПРОГРАММА/СКРИПТ на любом языке "
+    "(Python, Go, Rust, JS, Bash, …): скрипт, парсер, утилита, CLI, бот для "
+    "обработки данных, алгоритм. Мы храним код как файлы (как репозиторий), "
+    "пользователь скачивает/пушит в GitHub. Если просят «скрипт/программу на "
+    "<язык>» — это \"code\", НЕ static. (Сайт на Python/Django — это всё равно "
+    "веб-стек, а не code.)\n\n"
     "ФОРМАТ ОТВЕТА — СТРОГО один JSON-объект на одной строке, без пояснений и кода.\n"
     "Если спрашиваешь:\n"
     '{"action":"ask","message":"<один короткий вопрос на русском>",'
@@ -300,7 +644,7 @@ _SYSTEM = (
     '{"action":"build","message":"<короткая фраза: «Отлично, собираю…»>",'
     '"brief":"<сжатый бриф для генератора на русском: тип продукта, цель, '
     'аудитория, обязательные разделы/возможности, тон, цвета/референс, важные '
-    'детали>","stack":"static|spa|nextjs_entities|fullstack"}'
+    'детали>","stack":"static|spa|nextjs_entities|fullstack|code"}'
 )
 
 
@@ -636,6 +980,21 @@ async def run_discovery(
     capped = asked_count >= MAX_DISCOVERY_QUESTIONS
     must_build = force_build or capped
 
+    # Code/script request → NO design interview (owner 2026-06-19: «без дизайна
+    # только скрипт» — palette/audience/sections questions are off-target for a
+    # program). On the FIRST turn build straight away with the user's prompt as the
+    # brief; the code writer prompt + the user's words are enough. Skips the gateway
+    # entirely (instant). Gated to asked_count == 0 so a code-flavoured answer mid-
+    # interview can't hijack an in-flight site build.
+    if asked_count == 0 and _infer_code_from_text(latest_prompt):
+        log.info("discovery: code/script intent — skipping interview, build now")
+        return DiscoveryResult(
+            action=BUILD,
+            message="Понял — пишу код. Это займёт минуту.",
+            brief=_fallback_brief(history, latest_prompt),
+            stack="code",
+        )
+
     # Zero-question intent compile (V2.12). On the FIRST turn, if the raw prompt
     # already pins enough design axes, build straight away — the popup never
     # appears and we skip the gateway round-trip entirely (shared floor, see
@@ -714,14 +1073,54 @@ async def run_discovery(
         # full gathered intent so a real app gets a container stack instead of a
         # dead static landing (owner directive 2026-06-10). Only overrides when
         # the model didn't already pick a container stack.
-        if stack not in ("fullstack", "nextjs_entities"):
-            intent_text = "\n".join(
-                [brief, *(m.get("content") or "" for m in history), latest_prompt or ""]
-            )
-            inferred = _infer_stack_from_text(intent_text)
-            if inferred:
-                log.info("discovery: stack '%s'→'%s' (backend intent signals)", stack, inferred)
-                stack = inferred
+        intent_text = "\n".join(
+            [brief, *(m.get("content") or "" for m in history), latest_prompt or ""]
+        )
+        # Explicit "plain static HTML page" wins OUTRIGHT (owner 2026-06-18 escape
+        # hatch): force static and let NO net below upgrade it. Without this a brief
+        # that merely says "без скриптов" trips the code net ("скрипт" substring),
+        # and a model spa/other pick would override the user's explicit static ask.
+        _static_req = _explicit_static(intent_text)
+        if _static_req and stack != "static":
+            log.info("discovery: stack '%s'→'static' (explicit static page)", stack)
+            stack = "static"
+        # Code net (owner 2026-06-18) — a standalone program/script ask routes to
+        # the `code` template. Runs BEFORE the backend escalation so "напиши парсер
+        # на python" lands as code, not an auth-backed web app. Only overrides a
+        # non-backend pick (static/spa); a confident entities/fullstack choice
+        # carries explicit data/account intent, so it's left alone.
+        code_inferred = _infer_code_from_text(intent_text)
+        if code_inferred and not _static_req and stack in ("static", "spa", "code"):
+            if stack != "code":
+                log.info("discovery: stack '%s'→'code' (program/script intent)", stack)
+            stack = "code"
+        inferred = _infer_stack_from_text(intent_text)
+        if stack not in ("fullstack", "nextjs_entities", "code") and inferred and not _static_req:
+            log.info("discovery: stack '%s'→'%s' (backend intent signals)", stack, inferred)
+            stack = inferred
+        # Negative safety-net (Phase 7.x): the mirror of the upgrade above. The
+        # model OVER-escalated a tool the user explicitly said needs no accounts
+        # ("без регистрации") to an auth-backed stack — which would gate the tool
+        # behind /signin. No positive backend signal survived the negation check
+        # (``inferred is None``), so downgrade to spa: a no-backend interactive
+        # React tool. Mutually exclusive with the upgrade; only ever fires on an
+        # explicit refusal, so a genuine app ("магазин без регистрации" — commerce
+        # signals keep ``inferred`` truthy) is untouched.
+        elif (
+            stack in ("nextjs_entities", "fullstack")
+            and inferred is None
+            and _explicit_no_backend(intent_text)
+        ):
+            log.info("discovery: stack '%s'→'spa' (explicit no-account tool)", stack)
+            stack = "spa"
+        # Static is opt-in (owner 2026-06-18: «убрать статику, оставляем только
+        # если задача явно требует»). Anything that ended up `static` but isn't an
+        # EXPLICIT request for a plain HTML page becomes `spa` (interactive React) —
+        # landings/portfolios/blogs included. Runs LAST so code/backend/no-backend
+        # picks above are untouched; only a bare static fallthrough is upgraded.
+        if stack == "static" and not _static_req:
+            log.info("discovery: stack 'static'→'spa' (static is opt-in)")
+            stack = "spa"
         return DiscoveryResult(action=BUILD, message=message, brief=brief, stack=stack)
 
     # ASK path — one more question (+ quick-reply chips, always present).
@@ -762,7 +1161,12 @@ __all__ = [
     "MAX_DISCOVERY_QUESTIONS",
     "DiscoveryResult",
     "PlannedQuestion",
+    "confident_enough_to_build",
+    "cumulative_idea",
+    "gather_answers",
+    "infer_niche_label",
     "plan_discovery_questions",
+    "recap_labels",
     "run_discovery",
     "serve_planned_question",
     "wants_build_now",

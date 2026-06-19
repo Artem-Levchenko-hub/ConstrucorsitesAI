@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, Menu, Search, Sparkles } from "lucide-react";
+import { LogOut, Menu, Moon, Search, Sparkles, Sun } from "lucide-react";
 
 import { cn, initials } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,13 @@ export interface NavItem {
   href: string;
   /** A lucide icon element, e.g. `<LayoutDashboard />`. */
   icon?: React.ReactNode;
+  /** Optional section heading this item belongs to, e.g. «Обзор», «Каталог»,
+   *  «Аккаунт». Consecutive items sharing a `section` render under one quiet
+   *  uppercase label — the enterprise grouped-nav pattern (Linear, Vanta,
+   *  Stripe). Omit it on every item and the nav stays a flat list, exactly as
+   *  before. Mixing labelled and unlabelled items is fine: an item with no
+   *  `section` simply renders ungrouped. */
+  section?: string;
 }
 
 export interface AppShellUser {
@@ -54,8 +61,14 @@ export interface PlanInfo {
 }
 
 export interface AppShellProps {
-  /** App name or a logo node, shown at the top of the sidebar. */
+  /** App name or a logo node, shown at the top of the sidebar. A plain string
+   *  gets an auto workspace glyph (its initials in a brand-accent tile, like
+   *  Linear / Notion / Vanta); pass a node for a custom logo. */
   brand: React.ReactNode;
+  /** Override the auto glyph beside the brand name — e.g. a small <Logo /> or a
+   *  single emoji. Omit it and a string `brand` derives its own initials tile;
+   *  a node `brand` renders bare. */
+  brandMark?: React.ReactNode;
   nav: NavItem[];
   user?: AppShellUser | null;
   onSignOut?: () => void;
@@ -83,6 +96,55 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+function NavLink({
+  item,
+  pathname,
+  onNavigate,
+}: {
+  item: NavItem;
+  pathname: string;
+  onNavigate?: () => void;
+}) {
+  const active = isActive(pathname, item.href);
+  return (
+    <Link
+      href={item.href}
+      onClick={onNavigate}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all [&_svg]:size-4 [&_svg]:shrink-0",
+        active
+          ? "bg-sidebar-accent font-semibold text-sidebar-accent-foreground shadow-sm [&_svg]:text-primary"
+          : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+      )}
+    >
+      {/* Flush left accent bar on the active item — the strong "you are here"
+          affordance enterprise sidebars use (Vercel, Linear). */}
+      {active ? (
+        <span
+          aria-hidden
+          className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary"
+        />
+      ) : null}
+      {item.icon}
+      <span className="truncate">{item.label}</span>
+    </Link>
+  );
+}
+
+/** Groups consecutive nav items by their `section`, preserving order. Items
+ *  without a section form their own un-labelled group, so a fully flat `nav`
+ *  (no sections anywhere) renders exactly as a plain list. */
+function groupNav(nav: NavItem[]): { section?: string; items: NavItem[] }[] {
+  const groups: { section?: string; items: NavItem[] }[] = [];
+  for (const item of nav) {
+    const last = groups[groups.length - 1];
+    if (last && last.section === item.section) last.items.push(item);
+    else groups.push({ section: item.section, items: [item] });
+  }
+  return groups;
+}
+
 function NavLinks({
   nav,
   pathname,
@@ -92,36 +154,54 @@ function NavLinks({
   pathname: string;
   onNavigate?: () => void;
 }) {
+  const groups = groupNav(nav);
+  const hasSections = groups.some((g) => g.section);
   return (
-    <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
-      {nav.map((item) => {
-        const active = isActive(pathname, item.href);
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={onNavigate}
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all [&_svg]:size-4 [&_svg]:shrink-0",
-              active
-                ? "bg-sidebar-accent font-semibold text-sidebar-accent-foreground shadow-sm [&_svg]:text-primary"
-                : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
-            )}
-          >
-            {item.icon}
-            <span className="truncate">{item.label}</span>
-          </Link>
-        );
-      })}
+    <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
+      {groups.map((group, gi) => (
+        <div key={gi} className={cn(gi > 0 && hasSections && "mt-5")}>
+          {group.section ? (
+            <p className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/45">
+              {group.section}
+            </p>
+          ) : null}
+          <div className="flex flex-col gap-1">
+            {group.items.map((item) => (
+              <NavLink
+                key={item.href}
+                item={item}
+                pathname={pathname}
+                onNavigate={onNavigate}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
     </nav>
   );
 }
 
-function Brand({ brand }: { brand: React.ReactNode }) {
+function Brand({
+  brand,
+  brandMark,
+}: {
+  brand: React.ReactNode;
+  brandMark?: React.ReactNode;
+}) {
+  const isText = typeof brand === "string" || typeof brand === "number";
+  // A string brand earns an auto workspace glyph (its initials in a brand-accent
+  // tile). A node brand renders as-is unless an explicit brandMark is given.
+  const mark = brandMark ?? (isText ? initials(String(brand)) : null);
   return (
-    <div className="flex h-16 items-center gap-2 border-b border-sidebar-border px-5 text-base font-semibold tracking-tight">
-      {brand}
+    <div className="flex h-16 items-center gap-2.5 border-b border-sidebar-border px-5">
+      {mark ? (
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-[13px] font-bold leading-none text-primary-foreground shadow-sm ring-1 ring-black/5">
+          {mark}
+        </span>
+      ) : null}
+      <span className="truncate text-base font-semibold tracking-tight">
+        {brand}
+      </span>
     </div>
   );
 }
@@ -189,6 +269,42 @@ function CommandTrigger({ onOpen }: { onOpen: () => void }) {
       <kbd className="hidden rounded border border-border bg-muted px-1.5 py-0.5 font-sans text-[10px] font-medium leading-none sm:inline">
         ⌘K
       </kbd>
+    </Button>
+  );
+}
+
+/** OS-aware light/dark switch. The no-flash script in layout.tsx sets the
+ *  initial `<html class="dark">` from localStorage ?? prefers-color-scheme; this
+ *  flips and persists the user's explicit choice. Renders a stable icon until
+ *  mounted so server and client markup match (no hydration warning). */
+function ThemeToggle() {
+  const [mounted, setMounted] = React.useState(false);
+  const [dark, setDark] = React.useState(false);
+  React.useEffect(() => {
+    setMounted(true);
+    setDark(document.documentElement.classList.contains("dark"));
+  }, []);
+  const toggle = React.useCallback(() => {
+    const next = !document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", next);
+    try {
+      localStorage.setItem("theme", next ? "dark" : "light");
+    } catch {
+      /* storage blocked — the in-page toggle still works for this session */
+    }
+    setDark(next);
+  }, []);
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={toggle}
+      aria-label={dark ? "Светлая тема" : "Тёмная тема"}
+      className="size-9 text-muted-foreground"
+    >
+      {/* Until mounted, render the light-theme icon (matches SSR) to avoid a
+          hydration mismatch; swap to the real state on the client. */}
+      {mounted && dark ? <Sun className="size-[1.15rem]" /> : <Moon className="size-[1.15rem]" />}
     </Button>
   );
 }
@@ -282,6 +398,7 @@ function PlanCapsule({
  */
 export function AppShell({
   brand,
+  brandMark,
   nav,
   user,
   onSignOut,
@@ -327,7 +444,7 @@ export function AppShell({
     <div className={cn("min-h-screen bg-background", dark && "dark")}>
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col bg-sidebar text-sidebar-foreground lg:flex">
-        <Brand brand={brand} />
+        <Brand brand={brand} brandMark={brandMark} />
         <NavLinks nav={nav} pathname={pathname} />
         {plan ? (
           <div className="border-t border-sidebar-border p-3">
@@ -356,7 +473,7 @@ export function AppShell({
               className="flex w-72 flex-col bg-sidebar p-0 text-sidebar-foreground"
             >
               <SheetTitle className="sr-only">Навигация</SheetTitle>
-              <Brand brand={brand} />
+              <Brand brand={brand} brandMark={brandMark} />
               <NavLinks nav={nav} pathname={pathname} onNavigate={() => setOpen(false)} />
               {plan ? (
                 <div className="border-t border-sidebar-border p-3">
@@ -373,6 +490,7 @@ export function AppShell({
           <div className="ml-auto flex items-center gap-2">
             <CommandTrigger onOpen={() => setCmdOpen(true)} />
             {actions}
+            <ThemeToggle />
             <UserMenu user={user} onSignOut={onSignOut} />
           </div>
         </header>

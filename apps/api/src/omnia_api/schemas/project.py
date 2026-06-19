@@ -23,6 +23,13 @@ from omnia_api.services.design_presets import PRESETS
 # All container-backed templates share the `<file path="...">` AI contract
 # and the same per-project Postgres schema (provisioned by
 # `orchestrator.postgres_admin`).
+# `code` (added 2026-06-18) — language-agnostic source (Python script, Go CLI,
+# a parser, anything). Like the static class it has NO orchestrator container
+# (intentionally omitted from `_ORCHESTRATOR_TEMPLATE_BY_API` below, so
+# `is_fullstack`/`orchestrator_template` treat it as non-container). The model
+# writes arbitrary files via the same `<file path="...">` contract; we store,
+# version and let the user download / GitHub-push them — we never force a website
+# or "preview" them as one (owner directive: don't lock the builder to a language).
 Template = Literal[
     "blank",
     "landing",
@@ -33,6 +40,7 @@ Template = Literal[
     "spa",
     "tgbot",
     "api",
+    "code",
 ]
 
 # Map from API-side `template` value → orchestrator's template directory
@@ -98,6 +106,13 @@ class ProjectPublic(BaseModel):
     # None for organically created projects. Lets the client show provenance and
     # a "back to original" / attribution edge (the viral return-loop, V4.2b).
     forked_from: UUID | None = None
+    # Resolved at read time (get_project) from `forked_from` so the workspace can
+    # show WHICH project this is a remix of and link to it — the transitive remix
+    # lineage (V4 #3). Not mapped columns: the projects router sets them on the
+    # ORM instance, same as `preview_url`. Stay None for organic projects (and
+    # when the source has been deleted).
+    forked_from_name: str | None = None
+    forked_from_slug: str | None = None
     current_snapshot_id: UUID | None
     # Thumbnail of the current snapshot (its rendered preview PNG), or None until
     # the first preview render lands. Not a mapped column — the projects router

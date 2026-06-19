@@ -27,9 +27,11 @@
 3. **Push на GitHub** — `git push origin main` (прод тянет `main`; для этого репо работаем прямо в `main`, не в фиче-ветке).
 4. **Деплой на прод** (если менялся runtime-код — `apps/api`, `apps/web`, `apps/llm-gateway`, `infra`):
    ```bash
-   ssh i48ptgvnis@170.168.72.200 'cd /opt/omnia && git pull && cd infra && docker compose up -d --build <изменённые сервисы>'
+   ssh i48ptgvnis@170.168.72.200 'cd /opt/omnia && git fetch origin && git merge --ff-only origin/main && cd apps/llm-gateway/deploy/full && docker compose up -d --build <изменённые сервисы>'
    ```
    Сервисы: `api worker` (бэкенд), `web` (фронт), `gateway` (LLM-шлюз). Затем health-check (`curl` health-эндпойнта или живой URL) — подтвердить 200.
+
+   **⚠️ Прод-compose — это проект `full` в `apps/llm-gateway/deploy/full/` (контейнеры `omnia-prod-*`), НЕ `infra/`.** `infra/docker-compose.yml` — отдельный dev-стек (имена `omnia-*` без `-prod`), и `docker compose up` в нём поднимет ВТОРОЙ постгрес/редис, столкнётся на host-портах (5432 занят) и насоздаёт висяков — НЕ деплоить через него. Так же `git pull` на проде падает (`pull.rebase=true` + грязное дерево от secondbrain-рантайма) → только `git fetch && git merge --ff-only origin/main` (мой коммит трогает лишь свои файлы, грязные secondbrain-доки не заденет).
 
 **Карвут:** чистые docs / `secondbrain` / memory-правки → только commit+push (деплоить нечего, runtime не затронут). Всё, что влияет на работающее приложение → полный цикл с деплоем.
 

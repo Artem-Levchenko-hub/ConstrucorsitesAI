@@ -8,6 +8,8 @@ addition earns the expensive BUILD orchestration. Build-noun follow-ups
 
 from __future__ import annotations
 
+import pytest
+
 from omnia_api.services.intent_triage import CHEAP, ORCHESTRATE, decide_intent
 
 
@@ -98,3 +100,52 @@ def test_structural_fullstack_addition_orchestrates() -> None:
     assert decide_intent("добавь бэкенд на FastAPI", is_first_prompt=False) == ORCHESTRATE
     assert decide_intent("сделай многостраничным", is_first_prompt=False) == ORCHESTRATE
     assert decide_intent("прикрути базу данных", is_first_prompt=False) == ORCHESTRATE
+
+
+# ── BLIND SPOT H1 (dogfood-eval run #1, 2026-06-16) ──────────────────────────
+# Owner: "написал «создай сайт» → получил статику; кинул 5 промптов «переделай в
+# полноценное веб-приложение» — генератор по сути ничего не делал".
+#
+# Root cause (confirmed by code-path proof, not a guess):
+#   1. `decide_intent` has no "app-ification" intent — "переделай это в
+#      полноценное веб-приложение: вход, личный кабинет, база записей" matches
+#      neither _REBUILD_KEYWORDS ("переделай это" ∉ set) nor _STRUCTURAL_KEYWORDS
+#      ("база записей" ≠ "база данных"; auth/login stems deliberately excluded to
+#      avoid false-firing on "кнопка входа"). → falls to CHEAP surgical edit.
+#   2. Even if it returned ORCHESTRATE, `stack_routing.switch_to_stack` is called
+#      ONLY inside the `is_first_build` branch (routers/messages.py:675), so a
+#      follow-up can NEVER escalate static→container. The static page is
+#      surgical-edited in place; the user's "make it a real app" is a no-op.
+#
+# These specs lock the acceptance criterion for the H1 fix (see the PROPOSAL in
+# docs/plans/2026-06-16-dogfood-eval-routine.md). The xfail runs green today (the
+# bug is present) and will XPASS when app-ification follow-ups are routed to a
+# (consent-gated, non-destructive) stack escalation. `strict=False` so CI never
+# breaks on the current/broken state.
+_APPIFY_FOLLOWUPS = [
+    "переделай это в полноценное веб-приложение: вход, личный кабинет, база записей",
+    "сделай настоящее приложение с авторизацией и личным кабинетом",
+    "хочу чтобы пользователи могли регистрироваться и сохранять свои записи",
+    "добавь вход и кабинет, чтобы клиенты записывались онлайн",
+]
+
+
+@pytest.mark.xfail(
+    reason="H1 blind spot: app-ification follow-ups are not detected — they fall "
+    "to CHEAP surgical edit of static HTML instead of escalating the stack. "
+    "Remove this marker when the fix lands.",
+    strict=False,
+)
+def test_appification_followup_should_escalate_not_surgical_edit() -> None:
+    # Desired: a "make-this-a-real-app" follow-up on a built (static) project must
+    # NOT be treated as a cheap surgical edit of the static page.
+    for prompt in _APPIFY_FOLLOWUPS:
+        assert decide_intent(prompt, is_first_prompt=False) == ORCHESTRATE
+
+
+def test_appification_followup_is_currently_cheap_evidence() -> None:
+    """Evidence lock (not desired behavior): documents that, TODAY, every
+    app-ification follow-up returns CHEAP. If this ever changes, the xfail above
+    starts XPASSing and both markers should be revisited together."""
+    for prompt in _APPIFY_FOLLOWUPS:
+        assert decide_intent(prompt, is_first_prompt=False) == CHEAP

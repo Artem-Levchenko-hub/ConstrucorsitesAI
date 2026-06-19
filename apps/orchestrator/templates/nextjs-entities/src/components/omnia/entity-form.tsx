@@ -5,6 +5,7 @@ import { ImagePlus, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { entities, integrations, type Row } from "@/lib/sdk";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -34,6 +35,8 @@ export interface FieldSpec {
   kind: FieldKind;
   required?: boolean;
   placeholder?: string;
+  /** Optional helper text shown under the label (e.g. format hints, context). */
+  hint?: string;
   /** For `kind: "select"`. */
   options?: { value: string; label: string }[];
   /** For `kind: "reference"` — entity to load options from. */
@@ -185,22 +188,40 @@ export function EntityForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      {fields.map((f) => {
-        const id = `field-${f.name}`;
-        const value = values[f.name];
-        const error = errors[f.name];
-        const errId = error ? `${id}-error` : undefined;
-        return (
-          <div key={f.name} className="space-y-2">
-            {f.kind !== "boolean" && (
-              <Label htmlFor={id}>
-                {f.label}
-                {f.required ? <span className="text-destructive">*</span> : null}
-              </Label>
-            )}
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
+        {fields.map((f) => {
+          const id = `field-${f.name}`;
+          const value = values[f.name];
+          const error = errors[f.name];
+          const errId = error ? `${id}-error` : undefined;
+          // Wide controls (long text, media), the lone field, and the boxed
+          // boolean toggle each claim the full row so the grid reads balanced.
+          const wide =
+            f.kind === "textarea" ||
+            f.kind === "image" ||
+            f.kind === "boolean" ||
+            fields.length === 1;
+          return (
+            <div
+              key={f.name}
+              className={cn("space-y-2", wide && "sm:col-span-2")}
+            >
+              {f.kind !== "boolean" && (
+                <div className="space-y-1">
+                  <Label htmlFor={id}>
+                    {f.label}
+                    {f.required ? (
+                      <span className="ml-0.5 text-destructive">*</span>
+                    ) : null}
+                  </Label>
+                  {f.hint ? (
+                    <p className="text-xs text-muted-foreground">{f.hint}</p>
+                  ) : null}
+                </div>
+              )}
 
-            {f.kind === "text" && (
+              {f.kind === "text" && (
               <Input
                 id={id}
                 value={String(value ?? "")}
@@ -246,13 +267,24 @@ export function EntityForm({
             )}
 
             {f.kind === "boolean" && (
-              <Label htmlFor={id} className="cursor-pointer">
+              <Label
+                htmlFor={id}
+                className="flex cursor-pointer items-start justify-between gap-4 rounded-lg border border-border bg-muted/30 p-4 transition-colors hover:bg-muted/50"
+              >
+                <span className="space-y-1">
+                  <span className="block font-medium leading-none">{f.label}</span>
+                  {f.hint ? (
+                    <span className="block text-xs font-normal text-muted-foreground">
+                      {f.hint}
+                    </span>
+                  ) : null}
+                </span>
                 <Checkbox
                   id={id}
                   checked={Boolean(value)}
                   onCheckedChange={(c) => set(f.name, c === true)}
+                  className="mt-0.5"
                 />
-                {f.label}
               </Label>
             )}
 
@@ -328,11 +360,12 @@ export function EntityForm({
                 {error}
               </p>
             ) : null}
-          </div>
-        );
-      })}
+            </div>
+          );
+        })}
+      </div>
 
-      <div className="flex justify-end gap-2 pt-2">
+      <div className="flex justify-end gap-2 border-t border-border pt-4">
         {onCancel ? (
           <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
             Отмена

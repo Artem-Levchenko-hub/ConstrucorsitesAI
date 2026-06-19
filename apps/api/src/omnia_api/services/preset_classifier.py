@@ -101,10 +101,22 @@ _INDUSTRY_FRAGMENT_TO_PRESET: dict[str, str] = {
     "glamping": "hospitality-escape",
     "санатори": "hospitality-escape",
     "курорт": "hospitality-escape",
-    # Образование / курсы → education-bright
+    # Образование / курсы / школы → education-bright. ВАЖНО: эти стемы стоят
+    # ВЫШЕ «журнал» ниже, и substring-матч берёт ПЕРВОЕ совпадение — школьный
+    # «электронный журнал» (= gradebook/успеваемость) ≠ глянцевый журнал-
+    # публикация. Без этого школьный дневник уезжал в editorial-publication →
+    # тёмная editorial-luxury палитра вместо чистой минимал-светлой (баг
+    # 2026-06-15: «Стиль — минималистичный» → бордовый luxury-burgundy).
     "репетит": "education-bright",
     "автошкол": "education-bright",
     "образован": "education-bright",
+    "электронный журнал": "education-bright",
+    "электронный дневник": "education-bright",
+    "успеваемост": "education-bright",
+    "ученик": "education-bright",
+    # 4 символа (исключение из ≥5-правила): ловит «школа/школы/школьный» во всех
+    # падежах; коллизии редки и безвредны (education-bright — чистый светлый).
+    "школ": "education-bright",
     # Локальные услуги (ремонт/клининг/мастер) → local-services
     "клининг": "local-services",
     "сантехник": "local-services",

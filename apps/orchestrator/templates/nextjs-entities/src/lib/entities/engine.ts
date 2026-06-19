@@ -72,7 +72,13 @@ function fieldExpr(def: EntityDef, field: string): SQL | null {
   const t = fieldSqlType(def, field);
   if (!t) return null;
   if (t === "number") return sql`(${records.data} ->> ${field})::numeric`;
-  if (t === "date") return sql`(${records.data} ->> ${field})::timestamptz`;
+  // A `date` field's write validator only checks JS `Date.parse` (lenient),
+  // but a raw `::timestamptz` cast uses Postgres' stricter parser — so a single
+  // JS-valid-but-PG-invalid value ("2025", "June 2025", "2025-02-30") would
+  // throw and 500 the WHOLE list the moment anyone sorts by that column. Sort
+  // through a crash-proof cast so one bad row can never deny the view; poison
+  // values become NULL (sort to the NULL end) instead of erroring.
+  if (t === "date") return sql`safe_to_timestamptz(${records.data} ->> ${field})`;
   return sql`${records.data} ->> ${field}`;
 }
 

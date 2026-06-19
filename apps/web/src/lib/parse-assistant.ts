@@ -31,12 +31,25 @@ export type AssistantPart =
       fixable: boolean;
       body: string;
       closed: boolean;
-    };
+    }
+  // Hot-fork recap (`<remix name=… dna=…>` with one starter-edit per body line).
+  // Mirrors apps/api/src/omnia_api/services/fork_recap.py — the warm seed message
+  // a remixer lands on. Rendered as a RemixRecapCard, not raw text.
+  | {
+      kind: "remix";
+      name: string;
+      dna: string;
+      suggestions: string[];
+    }
+  // One-click installer card (`<install-bundle>`). Owner 2026-06-19 — on a run/
+  // install intent the server streams this marker; the UI renders a prominent
+  // «Скачать установщик» button (downloads the project .zip, which ships run.bat).
+  | { kind: "install" };
 
-// Matches the opening tag of a file / edit / app-error block. The attribute
-// string is captured generically (group 2) and parsed per-tag below.
-// Mirrors apps/api file_extractor.py (`<file>`/`<edit>`) + app_errors.py.
-const BLOCK_OPEN = /<(file|edit|app-error)\b([^>]*)>/g;
+// Matches the opening tag of a file / edit / app-error / remix block. The
+// attribute string is captured generically (group 2) and parsed per-tag below.
+// Mirrors apps/api file_extractor.py (`<file>`/`<edit>`) + app_errors.py + fork_recap.py.
+const BLOCK_OPEN = /<(file|edit|app-error|remix|install-bundle)\b([^>]*)>/g;
 
 function getAttr(attrs: string, name: string): string | null {
   const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
@@ -44,11 +57,26 @@ function getAttr(attrs: string, name: string): string | null {
 }
 
 function makePart(
-  tag: "file" | "edit" | "app-error",
+  tag: "file" | "edit" | "app-error" | "remix" | "install-bundle",
   attrs: string,
   body: string,
   closed: boolean,
 ): AssistantPart {
+  if (tag === "install-bundle") {
+    return { kind: "install" };
+  }
+  if (tag === "remix") {
+    return {
+      kind: "remix",
+      name: getAttr(attrs, "name") ?? "проект",
+      dna: getAttr(attrs, "dna") ?? "",
+      // One starter-edit prompt per non-empty body line (see fork_recap.py).
+      suggestions: body
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    };
+  }
   if (tag === "app-error") {
     return {
       kind: "app-error",
@@ -63,11 +91,68 @@ function makePart(
   return { kind: tag, path: getAttr(attrs, "path") ?? "", body, closed };
 }
 
+// Markdown code fence (```lang\n…```). When the model ignores the <file>
+// contract and dumps a fenced code block (owner 2026-06-19: a `code` project
+// follow-up returned ```html …``` straight into the chat), we lift it OUT of the
+// prose into a collapsed code chip — same treatment as a <file> block — instead
+// of rendering a wall of raw code. Mirrors backend salvage (_salvage_html).
+const CLOSED_FENCE_RE = /```([a-zA-Z0-9_+#-]*)[ \t]*\r?\n([\s\S]*?)```/g;
+const FENCE_EXT: Record<string, string> = {
+  html: "html", python: "py", py: "py", javascript: "js", js: "js",
+  typescript: "ts", ts: "ts", tsx: "tsx", jsx: "jsx", css: "css",
+  json: "json", bash: "sh", sh: "sh", shell: "sh", go: "go", rust: "rs",
+  java: "java", kotlin: "kt", php: "php", ruby: "rb", sql: "sql", yaml: "yml",
+};
+function fenceLabel(lang: string): string {
+  if (!lang) return "код";
+  return `код · ${FENCE_EXT[lang] ?? lang}`;
+}
+
+/** Split a prose chunk into text + fenced-code parts. A ```fence``` becomes a
+ *  collapsed `file` chip (closed), an unterminated trailing fence (mid-stream)
+ *  becomes an open one. Plain prose passes through untouched. */
+function expandFences(text: string): AssistantPart[] {
+  const out: AssistantPart[] = [];
+  let cursor = 0;
+  CLOSED_FENCE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CLOSED_FENCE_RE.exec(text)) !== null) {
+    const pre = text.slice(cursor, m.index);
+    if (pre.trim()) out.push({ kind: "text", text: pre });
+    out.push({
+      kind: "file",
+      path: fenceLabel((m[1] || "").toLowerCase()),
+      body: m[2].replace(/\s+$/, ""),
+      closed: true,
+    });
+    cursor = m.index + m[0].length;
+  }
+  let tail = text.slice(cursor);
+  const openIdx = tail.indexOf("```");
+  if (openIdx !== -1) {
+    const om = tail.slice(openIdx).match(/^```([a-zA-Z0-9_+#-]*)[ \t]*\r?\n?([\s\S]*)$/);
+    if (om) {
+      const pre = tail.slice(0, openIdx);
+      if (pre.trim()) out.push({ kind: "text", text: pre });
+      out.push({
+        kind: "file",
+        path: fenceLabel((om[1] || "").toLowerCase()),
+        body: om[2],
+        closed: false,
+      });
+      tail = "";
+    }
+  }
+  if (tail.trim()) out.push({ kind: "text", text: tail });
+  return out;
+}
+
 /**
  * Делит content на части в порядке появления. `<file>` / `<edit>` / `<app-error>`
  * блоки выносятся в свои части (UI рисует их как чипы / карточки, а не сырой
  * текст). Незакрытый блок в конце (типично во время стриминга) возвращается с
- * `closed: false`.
+ * `closed: false`. Прозовые куски дополнительно прогоняются через
+ * ``expandFences`` — ```code``` фенсы тоже становятся чипами, а не стеной текста.
  */
 export function parseAssistantContent(content: string): AssistantPart[] {
   if (!content) return [];
@@ -78,14 +163,19 @@ export function parseAssistantContent(content: string): AssistantPart[] {
   BLOCK_OPEN.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = BLOCK_OPEN.exec(content)) !== null) {
-    const tag = match[1] as "file" | "edit" | "app-error";
+    const tag = match[1] as
+      | "file"
+      | "edit"
+      | "app-error"
+      | "remix"
+      | "install-bundle";
     const attrs = match[2];
     const openStart = match.index;
     const openEnd = openStart + match[0].length;
 
     if (openStart > cursor) {
       const text = content.slice(cursor, openStart);
-      if (text.trim()) parts.push({ kind: "text", text });
+      if (text.trim()) parts.push(...expandFences(text));
     }
 
     const closeTag = `</${tag}>`;
@@ -103,7 +193,7 @@ export function parseAssistantContent(content: string): AssistantPart[] {
 
   if (cursor < content.length) {
     const tail = content.slice(cursor);
-    if (tail.trim()) parts.push({ kind: "text", text: tail });
+    if (tail.trim()) parts.push(...expandFences(tail));
   }
 
   return parts;

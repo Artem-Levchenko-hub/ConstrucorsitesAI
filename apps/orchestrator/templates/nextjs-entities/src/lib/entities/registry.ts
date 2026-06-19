@@ -167,7 +167,13 @@ export function createSchema(def: EntityDef) {
   const shape: z.ZodRawShape = {};
   for (const [key, f] of Object.entries(def.fields)) {
     const base = zodForField(f);
-    shape[key] = f.required ? base : base.optional();
+    // A field with a `default` is always satisfiable: applyDefaults() fills it
+    // when omitted (engine.createRecord runs that AFTER this validation). If we
+    // still hard-required it here, omitting it would 400 before the default ever
+    // applied — making the default dead. So a required field counts as required
+    // in the payload only when it has NO default to fall back on.
+    const requiredInPayload = f.required && f.default === undefined;
+    shape[key] = requiredInPayload ? base : base.optional();
   }
   return z.object(shape).strip();
 }
@@ -188,7 +194,19 @@ export function applyDefaults(
 ): Record<string, unknown> {
   const out = { ...data };
   for (const [key, f] of Object.entries(def.fields)) {
-    if (out[key] === undefined && f.default !== undefined) out[key] = f.default;
+    if (out[key] !== undefined || f.default === undefined) continue;
+    // A `default` is part of the SCHEMA, but createSchema validates the PAYLOAD —
+    // an omitted field is never seen, so its default is injected here AFTER
+    // validation and would otherwise bypass every type/enum check. A bad default
+    // (writer typo: enum value not in `options`, a string on a `number`/`boolean`)
+    // would then be stored silently — the very value the engine 400s when it is
+    // *provided* (createSchema rejects it). Worse, a non-numeric default in a
+    // number field 500s any numeric sort (`::numeric`, no safe cast). So run the
+    // default through the field's OWN validator and inject it only if it passes;
+    // a malformed default is dropped (the field stays omitted) rather than
+    // poisoning the row. A VALID default is injected unchanged — this can only
+    // turn a silently-stored-invalid into a not-stored, never the reverse.
+    if (zodForField(f).safeParse(f.default).success) out[key] = f.default;
   }
   return out;
 }

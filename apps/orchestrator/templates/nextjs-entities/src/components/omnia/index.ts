@@ -14,6 +14,12 @@ export {
 } from "./app-shell";
 export { PageHeader, type PageHeaderProps } from "./page-header";
 export {
+  ScreenFrame,
+  type ScreenFrameProps,
+  type ScreenFrameVariant,
+} from "./screen-frame";
+export { AuthShell, AuthProof, type AuthShellProps } from "./auth-shell";
+export {
   DashboardHero,
   type DashboardHeroProps,
   type HeroStat,
@@ -24,7 +30,34 @@ export {
   type StorefrontCta,
   type StorefrontStat,
 } from "./storefront-hero";
+export {
+  StorefrontSection,
+  type StorefrontSectionProps,
+  FeatureCard,
+  type FeatureCardProps,
+} from "./storefront-section";
+export {
+  PricingPlans,
+  type PricingPlansProps,
+  type PricingPlan,
+} from "./pricing-plans";
+export {
+  TestimonialWall,
+  type TestimonialWallProps,
+  type Testimonial,
+} from "./testimonial-wall";
+export {
+  FaqAccordion,
+  type FaqAccordionProps,
+  type FaqItem,
+} from "./faq-accordion";
+export {
+  CtaBand,
+  type CtaBandProps,
+  type CtaBandAction,
+} from "./cta-band";
 export { StatCard, type StatCardProps } from "./stat-card";
+export { DashboardSkeleton } from "./dashboard-skeleton";
 export { CountUp, type CountUpProps } from "./count-up";
 export { EmptyState, type EmptyStateProps } from "./empty-state";
 export { DataTable, type Column, type DataTableProps, type FilterTab } from "./data-table";
@@ -41,6 +74,22 @@ export {
   type FieldKind,
   type EntityFormProps,
 } from "./entity-form";
+export {
+  BoardView,
+  type BoardViewProps,
+  type BoardColumn,
+  type BoardCard,
+} from "./board-view";
+export {
+  CalendarView,
+  type CalendarViewProps,
+  type CalendarEvent,
+} from "./calendar-view";
+export {
+  MasterDetailView,
+  type MasterDetailViewProps,
+  type SplitItem,
+} from "./master-detail-view";
 export { CrudResource, type CrudResourceProps } from "./crud-resource";
 export {
   RecordDetail,

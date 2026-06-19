@@ -149,8 +149,9 @@ Every page must look like a finished enterprise product, not a scaffold (same ba
 
 `globals.css` ships reduced-motion-safe utilities — use them, don't reinvent:
 
-- Entrance (self-resolving, safe without JS): `.fade-up` (+ `.delay-1/-2/-3`), `.fade-in`, `.scale-in` — for hero / above-the-fold.
-- Polish: `.hover-lift` on cards & buttons, `.card-soft` surfaces, `.gradient-text` (set `--g1/--g2`), `.glass` headers.
+- Entrance (self-resolving, safe without JS): `.fade-up` (+ `.delay-1`…`.delay-5`), `.fade-in`, `.scale-in` — for hero / above-the-fold.
+- Stagger: put `.stagger` on a grid/flex wrapper (KPI rows, feature/stat grids, lists) and its direct children rise in sequence — prefer this over hand-delaying each card, it cascades a row of any length and obeys the per-app MOTION-DNA.
+- Polish: `.hover-lift` on cards & buttons, `.elev-1`/`.elev-2` (resting / raised panel depth) or `.card-soft` surfaces, `.gradient-text` (set `--g1/--g2`), `.glass` headers.
 - Scroll reveal (opt-in): add `.reveal` to elements + a tiny client component that toggles `.is-visible`:
 
   ```tsx

@@ -320,6 +320,15 @@ class Settings(BaseSettings):
     # sharper brief, not a reflexive re-roll. Set = acceptance_min_score (7) to
     # restore the old always-repair-on-borderline behaviour.
     acceptance_repair_floor: int = Field(default=5)
+    # OWNER 2026-06-14 — AUTOMATIC FULL-PAGE REGENERATION OFF (default False).
+    # The owner saw a build auto-"перегенерирую с рабочими ссылками" mid-session
+    # and ruled: NEVER auto-regenerate the whole page — only deterministic
+    # inline/targeted edits. When False, both auto re-roll paths are suppressed:
+    # (1) the dead-link LLM re-roll (the inline href fixer still runs — that's a
+    # targeted edit, kept), and (2) the acceptance-gate repair re-roll (the gate
+    # still EVALUATES and publishes its advisory verdict, but never re-rolls —
+    # `_max_acc` is forced to 0). Flip to True only to restore auto-repair.
+    auto_regenerate_enabled: bool = Field(default=False)
     # V1.6 keystone — the acceptance gauntlet (`accept_gauntlet.run`) is the ship
     # decision: `evaluate()` blocks on its findings and the vision verdict is
     # demoted to advisory. The DETERMINISTIC defect-registry leg always blocks
@@ -451,6 +460,17 @@ class Settings(BaseSettings):
     # flagship enterprise apps get the same art-direction the freeform landings
     # already get. Kill switch for instant rollback to the single-shot path.
     use_art_director_entities: bool = Field(default=True)
+
+    # Brief-lean Art-Director prompt (infra cost — 2026-06-16). The 2-pass build
+    # sends the SAME ~14K-token system prompt to BOTH passes, but pass 1 (the
+    # Art-Director) only writes a PROSE brief — it never emits code, so the
+    # heaviest blocks (the shadcn app kit _ENTITIES_UI ~650 lines, the landing
+    # section kit ~340, stack contracts, the <file> response format, the
+    # self-check) are dead weight on its input. On = pass 1 gets a trimmed system
+    # (design-thinking blocks only); pass 2 (the writer) keeps the FULL prompt, so
+    # final code quality is unchanged. Kill switch for instant rollback to the
+    # shared-full-prompt behaviour.
+    use_lean_art_director_prompt: bool = Field(default=True)
 
     # ── Surgical edit mode (owner directive 2026-06-06) ───────────────────
     # After the first build, a follow-up that changes ONE thing (a selected
@@ -694,12 +714,15 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "freeform_writer": "deepseek-v4-pro",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
-    # (NOT generation), and it runs INSIDE the 30s POST /prompt budget, so it needs
-    # a FAST, reliable model — deepseek-chat's cold-start regularly took >22s here
-    # and timed out, which dropped onboarding to the generic hardcoded batch (the
-    # exact bug rule 13 flagged). Haiku returns the tailored batch in ~3s with
-    # strict JSON. Swap via ROLE_MODELS env (e.g. discovery_plan=gpt-5-nano).
-    "discovery_plan": "claude-haiku-4-5",
+    # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
+    # reliable model that emits strict JSON. Owner directive 2026-06-16: route via
+    # vsegpt (proxyapi.ru removed).
+    # 2026-06-19: gemini-3.5-flash-high was BROKEN here — live on prod it returned
+    # non-JSON junk / ReadTimeout'd at 22s → the planner fell to the GENERIC batch
+    # for EVERY web prompt (the «вопросы не в попад / шаблонные» the owner hit). The
+    # "-high" reasoning variant burns the token budget thinking. deepseek-chat
+    # returns a tailored, parseable batch in ~3.6s (proven). Swap via ROLE_MODELS env.
+    "discovery_plan": "deepseek-chat",
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.

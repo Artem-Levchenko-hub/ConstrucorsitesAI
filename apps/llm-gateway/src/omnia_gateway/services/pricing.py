@@ -87,18 +87,43 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
 _PER_1K = Decimal("1000")
 _QUANT = Decimal("0.0001")  # 4 decimals — matches NUMERIC(12,4) in Postgres
 
+# Cached-prefix input tokens bill at a fraction of the fresh-input rate. When a
+# provider serves a prompt prefix from its context cache (DeepSeek automatic
+# context caching, Anthropic cache_read, Gemini implicit caching), those tokens
+# cost far less upstream — DeepSeek/Anthropic charge ~10% of the normal input
+# rate for a cache hit. We mirror that so our billing reflects the real cost of
+# the big stable system prompt once it is cached. `cached_tokens` defaults to 0,
+# so every existing caller is byte-for-byte unchanged.
+_CACHE_HIT_RATE = Decimal("0.1")
 
-def calculate_cost_rub(model_id: str, tokens_in: int, tokens_out: int) -> Decimal:
-    """RUB cost for a request, quantized to 4 decimal places."""
-    if tokens_in < 0 or tokens_out < 0:
+
+def calculate_cost_rub(
+    model_id: str,
+    tokens_in: int,
+    tokens_out: int,
+    cached_tokens: int = 0,
+) -> Decimal:
+    """RUB cost for a request, quantized to 4 decimal places.
+
+    ``cached_tokens`` (≤ ``tokens_in``) are the prompt tokens the provider served
+    from its context cache; they bill at ``_CACHE_HIT_RATE`` of the input rate.
+    Default 0 → identical to the pre-cache behaviour.
+    """
+    if tokens_in < 0 or tokens_out < 0 or cached_tokens < 0:
         raise ValueError("token counts must be non-negative")
     try:
         price = PRICE_TABLE[model_id]
     except KeyError as exc:
         raise ModelNotFoundError(f"Unknown model_id: {model_id}") from exc
 
+    # A cache hit is a subset of the prompt; never let a bad upstream count make
+    # cached exceed the total in (which would underbill into negatives).
+    cached = min(cached_tokens, tokens_in)
+    fresh_in = tokens_in - cached
     cost = (
-        Decimal(tokens_in) * price.rub_per_1k_in + Decimal(tokens_out) * price.rub_per_1k_out
+        Decimal(fresh_in) * price.rub_per_1k_in
+        + Decimal(cached) * price.rub_per_1k_in * _CACHE_HIT_RATE
+        + Decimal(tokens_out) * price.rub_per_1k_out
     ) / _PER_1K
     return cost.quantize(_QUANT)
 
@@ -121,6 +146,9 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
     "deepseek-v4-pro": _ModelMeta("DeepSeek V4 Pro", "deepseek", 1_000_000, ("quality",)),
     "gemini-3-flash-vision": _ModelMeta("Gemini 3 Flash (Vision)", "google", 1_000_000, ("quality",)),
     "kimi-k2.6-thinking": _ModelMeta("Kimi K2.6 (Thinking)", "moonshot", 256_000, ("quality",)),
+    # NON-thinking art_director default (PRICE_TABLE carried it but _MODEL_META
+    # did not, so list_models() KeyError'd on the public /v1/models catalog).
+    "kimi-k2.6": _ModelMeta("Kimi K2.6", "moonshot", 256_000, ("quality",)),
     "claude-haiku-4-5": _ModelMeta("Claude Haiku 4.5", "anthropic", 200_000, ("fast", "budget")),
     "gpt-4.1": _ModelMeta("GPT-4.1", "openai", 128_000, ("quality",)),
     "gpt-5-mini": _ModelMeta("GPT-5 Mini", "openai", 128_000, ("fast", "budget")),

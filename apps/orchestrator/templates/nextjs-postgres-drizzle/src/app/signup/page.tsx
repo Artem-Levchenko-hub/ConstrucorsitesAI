@@ -16,6 +16,7 @@ import { redirect } from "next/navigation";
 import { auth, hashPassword, signIn } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
+import { AuthShell, AuthField, AuthSubmit } from "@/components/auth-shell";
 
 export const metadata = { title: "Регистрация" };
 
@@ -26,14 +27,14 @@ export default async function SignUpPage({
 }) {
   const sp = await searchParams;
   const session = await auth();
-  if (session?.user) redirect(sp.next ?? "/");
+  if (session?.user) redirect(sp.next ?? "/app");
 
   async function action(formData: FormData) {
     "use server";
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
     const password = String(formData.get("password") ?? "");
     const name = String(formData.get("name") ?? "").trim() || null;
-    const next = String(formData.get("next") ?? "/");
+    const next = String(formData.get("next") ?? "/app");
 
     if (!email || !password || password.length < 8) {
       redirect(`/signup?error=invalid&next=${encodeURIComponent(next)}`);
@@ -83,67 +84,48 @@ export default async function SignUpPage({
   };
 
   return (
-    <main className="min-h-screen flex items-center justify-center px-6 py-12">
-      <div className="w-full max-w-sm space-y-6">
-        <header className="text-center space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Регистрация</h1>
-          <p className="text-sm text-zinc-500">
-            Уже есть аккаунт?{" "}
-            <Link href="/signin" className="text-emerald-700 hover:underline">
-              Войти
-            </Link>
-          </p>
-        </header>
-
-        {sp.error && errorMessage[sp.error] && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {errorMessage[sp.error]}
-          </div>
-        )}
-
-        <form action={action} className="space-y-4">
-          <input type="hidden" name="next" value={sp.next ?? "/"} />
-          <label className="block">
-            <span className="text-sm font-medium">Имя (необязательно)</span>
-            <input
-              name="name"
-              type="text"
-              autoComplete="name"
-              className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm font-medium">Email</span>
-            <input
-              name="email"
-              type="email"
-              required
-              autoComplete="email"
-              className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm font-medium">Пароль</span>
-            <input
-              name="password"
-              type="password"
-              required
-              minLength={8}
-              autoComplete="new-password"
-              className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            />
-            <span className="mt-1 block text-xs text-zinc-500">
-              Минимум 8 символов
-            </span>
-          </label>
-          <button
-            type="submit"
-            className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+    <AuthShell
+      mode="signup"
+      title="Регистрация"
+      subtitle={
+        <>
+          Уже есть аккаунт?{" "}
+          <Link
+            href="/signin"
+            className="font-medium text-[var(--brand)] hover:underline"
           >
-            Создать аккаунт
-          </button>
-        </form>
-      </div>
-    </main>
+            Войти
+          </Link>
+        </>
+      }
+    >
+      {sp.error && errorMessage[sp.error] && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMessage[sp.error]}
+        </div>
+      )}
+
+      <form action={action} className="space-y-4">
+        <input type="hidden" name="next" value={sp.next ?? "/app"} />
+        <AuthField label="Имя (необязательно)" name="name" type="text" autoComplete="name" />
+        <AuthField
+          label="Email"
+          name="email"
+          type="email"
+          required
+          autoComplete="email"
+        />
+        <AuthField
+          label="Пароль"
+          name="password"
+          type="password"
+          required
+          minLength={8}
+          autoComplete="new-password"
+          hint="Минимум 8 символов"
+        />
+        <AuthSubmit>Создать аккаунт</AuthSubmit>
+      </form>
+    </AuthShell>
   );
 }

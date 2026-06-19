@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { REMIX_BADGE_LABEL, isRemix } from "@/lib/project-lineage";
+import {
+  REMIX_BADGE_LABEL,
+  REMIX_SOURCE_FALLBACK_NAME,
+  isRemix,
+  remixSource,
+} from "@/lib/project-lineage";
 
 /**
  * V4.2b-finish leg (B) — the workspace shows a remix lineage badge iff the
@@ -31,5 +36,34 @@ describe("isRemix", () => {
 describe("REMIX_BADGE_LABEL", () => {
   it("is the Russian remix label shown in the UI", () => {
     expect(REMIX_BADGE_LABEL).toBe("Ремикс");
+  });
+});
+
+describe("remixSource", () => {
+  it("is null for an organic project (no badge → no attribution)", () => {
+    expect(remixSource({ forked_from: null })).toBeNull();
+    expect(remixSource({})).toBeNull();
+  });
+
+  it("resolves name + slug when both are present", () => {
+    expect(
+      remixSource({
+        forked_from: UUID,
+        forked_from_name: "Кофейня на углу",
+        forked_from_slug: "kofeinya-ab12cd",
+      }),
+    ).toEqual({ name: "Кофейня на углу", slug: "kofeinya-ab12cd" });
+  });
+
+  it("falls back to a grammatical name and link-less slug when the source is gone", () => {
+    expect(
+      remixSource({ forked_from: UUID, forked_from_name: null, forked_from_slug: null }),
+    ).toEqual({ name: REMIX_SOURCE_FALLBACK_NAME, slug: null });
+  });
+
+  it("treats blank/whitespace name + slug as absent", () => {
+    expect(
+      remixSource({ forked_from: UUID, forked_from_name: "  ", forked_from_slug: "  " }),
+    ).toEqual({ name: REMIX_SOURCE_FALLBACK_NAME, slug: null });
   });
 });

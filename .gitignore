@@ -61,3 +61,8 @@ docker-compose.yml.bak.*
 # Claude Code local (machine-specific) settings
 .claude/settings.local.json
 .claude/*.lock
+
+# Dogfood-eval routine raw output (screenshots, logs, lock) — see
+# docs/plans/2026-06-16-dogfood-eval-routine.md. Distilled findings live in that
+# committed doc; raw run artifacts stay local.
+_routine/

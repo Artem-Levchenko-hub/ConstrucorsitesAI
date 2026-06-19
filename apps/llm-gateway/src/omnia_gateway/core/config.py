@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     # Verify the exact path against the proxyapi dashboard before prod billing.
     proxyapi_deepseek_base_url: str = "https://api.proxyapi.ru/deepseek/v1"
 
+    # Warmup keep-alive loop (services/warmup.py) exists ONLY to defeat
+    # proxyapi.ru's ~5-min idle cold-start (Haiku/GPT-5-nano returning near-empty
+    # on the first call after idle). proxyapi is retired — every role now routes
+    # via vsegpt, which opens a FRESH sync httpx.Client per call, so there is no
+    # warm upstream session to keep alive and the loop just pings dead routes
+    # every 4 min. Default OFF; set ENABLE_WARMUP=true only if a proxyapi-backed
+    # model is reactivated. `run_warmup_loop` also hard-skips when no proxyapi key
+    # is configured, so this flag is a belt-and-suspenders explicit control.
+    enable_warmup: bool = False
+
     # Sber GigaChat — auth key is base64(client_id:client_secret) from Sber developer cabinet.
     # Sber's API uses the Russian Trusted Root CA, which most Python builds don't trust by
     # default — set GIGACHAT_VERIFY_SSL=false locally if you don't have the cert installed.

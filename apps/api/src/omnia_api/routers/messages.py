@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 from decimal import Decimal
 from typing import Annotated, Any
@@ -54,7 +55,7 @@ from omnia_api.services.art_director_writer import (
     art_director_writer_generate,
     supports_app_brief,
 )
-from omnia_api.services.chip_pixel_gate import spec_from_discovery
+from omnia_api.services.chip_pixel_gate import spec_from_discovery, spec_preview
 from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.contrast_guard import enforce_contrast
 from omnia_api.services.director_polish import director_polish_generate
@@ -63,8 +64,19 @@ from omnia_api.services.discovery import (
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
+    _explicit_static,
+    _infer_code_from_text,
+    _infer_run_intent,
+    _infer_run_intent_maybe,
+    _infer_stack_from_text,
+    _infer_web_pivot,
+    _is_run_decline,
+    confident_enough_to_build,
+    cumulative_idea,
+    gather_answers,
     infer_niche_label,
     plan_discovery_questions,
+    recap_labels,
     run_discovery,
     serve_planned_question,
     wants_build_now,
@@ -78,11 +90,19 @@ from omnia_api.services.file_extractor import (
 )
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.intent_triage import ORCHESTRATE, decide_intent
-from omnia_api.services.link_validator import find_dead_links, repair_dead_links_inline
+from omnia_api.services.link_validator import (
+    find_dead_links,
+    repair_dead_links_inline,
+    repair_orphaned_anchors_inline,
+)
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
-from omnia_api.services.prompt_builder import KIT_FILES, build_messages
+from omnia_api.services.prompt_builder import (
+    KIT_FILES,
+    build_art_director_system,
+    build_messages,
+)
 from omnia_api.services.queue import enqueue_entity_gate, enqueue_preview
 from omnia_api.services.ui_audit import audit as ui_audit
 from omnia_api.services.ui_audit import format_failures_for_retry
@@ -149,6 +169,21 @@ async def _emergency_error(
                 await session.commit()
     except Exception as db_exc:
         _elog.error("emergency finalize failed: %r", db_exc)
+
+
+def _failed_build_body(accumulated: str, stream_error: object) -> str:
+    """Body to persist on the assistant message when a build stream errors.
+
+    Keep any partial content the model managed to stream; otherwise write a
+    human-readable error so a user who reloaded (and lost the ephemeral
+    ``llm.error`` WS event) still sees WHY the build stopped instead of a
+    blank, forever-"streaming" chat row. Mirrors ``_emergency_error``.
+    """
+    return (
+        accumulated
+        if accumulated.strip()
+        else f"[Ошибка генерации: {str(stream_error)[:300]}]"
+    )
 
 
 async def _probe_compile_errors(
@@ -357,6 +392,30 @@ async def _run_text_turn(
     )
 
 
+# Owner 2026-06-19 — the one-click installer card streamed back on a run/install
+# intent. The `<install-bundle>` marker is parsed by the web ChatMessage into a
+# prominent «Скачать установщик» button (downloads the .zip — which carries run.bat).
+_INSTALL_CARD_TEXT = (
+    "Готово — собрал установщик. Нажми кнопку ниже: скачается архив проекта. "
+    "Если это программа (Python/Node), внутри лежит **run.bat** — распакуй и сделай "
+    "двойной клик по нему (на Mac — run.command): он сам поставит зависимости и "
+    "запустит. Если это сайт — открой его кнопкой «Открыть» сверху.\n\n"
+    "<install-bundle></install-bundle>"
+)
+
+# Owner 2026-06-19 «спрашивай, если сомневаешься» — the clarify question shown when
+# run/install intent is plausible but uncertain. The «Да…» chip re-enters as strong
+# run-intent → installer card; the «Нет…» chip is caught as a decline.
+_RUN_ASK_TEXT = (
+    "Похоже, ты хочешь запустить проект у себя на компьютере. Собрать установщик "
+    "(архив с run.bat — распаковал, двойной клик, и оно само поставится и "
+    "запустится)? Или продолжим дорабатывать проект?"
+)
+_RUN_DECLINE_REPLY = (
+    "Понял, установщик не собираю. Напиши, что доработать или добавить — сделаю."
+)
+
+
 def _spawn_text_turn(
     project_id: UUID, assistant_message_id: UUID, text: str
 ) -> None:
@@ -407,12 +466,73 @@ def _compose_build_prompt(result: DiscoveryResult) -> str:
     prompt. Stack provisioning is wired separately (P1 subtask 5); until then the
     recommendation rides in the brief so the build is aware of the intended shape."""
     brief = result.brief.strip()
-    if result.stack and result.stack != "static":
+    if result.stack == "code":
+        brief = (
+            f"{brief}\n\n[Это запрос на код/программу, НЕ сайт. Выдай рабочую "
+            "программу/скрипт на запрошенном языке (файлы + README), без HTML/"
+            "вёрстки.]"
+        )
+    elif result.stack and result.stack != "static":
         brief = (
             f"{brief}\n\n[Рекомендованный стек: {result.stack} — полноценное "
             "приложение с данными.]"
         )
     return brief
+
+
+def _build_onboarding_survey(plan: object) -> list[dict[str, object]] | None:
+    """Assemble the whole onboarding popup from the planned question batch + a
+    palette question (owner 2026-06-19 — «несколько вопросов сразу + палитра»).
+
+    Returns the full survey (every planned text question, each with its chips +
+    «Другое», then a clickable preset-palette question) so the workspace renders
+    ONE form instead of a chat turn per question. None when the plan is empty."""
+    if not isinstance(plan, list) or not plan:
+        return None
+    out: list[dict[str, object]] = []
+    for q in plan:
+        if not isinstance(q, dict):
+            continue
+        msg = str(q.get("message") or "").strip()
+        if not msg:
+            continue
+        out.append(
+            {
+                "message": msg,
+                "kind": "text",
+                "choices": [c for c in (q.get("choices") or []) if isinstance(c, str)],
+                "allow_custom": bool(q.get("allow_custom", True)),
+                "multi_select": bool(q.get("multi_select", False)),
+            }
+        )
+    if not out:
+        return None
+    # Palette question — clickable preset swatches (owner: «нажать на палитру
+    # которая нравится»). Reuses the Awwwards preset catalog; the pick rides back
+    # as PromptRequest.design_preset_id. First few presets keep the popup compact.
+    from omnia_api.services.design_presets import PRESETS as _PRESETS
+
+    options = [
+        {
+            "id": pid,
+            "name": preset.name,
+            "one_liner": preset.one_liner,
+            "bg": preset.palette.get("bg", "#ffffff"),
+            "accent": preset.palette.get("accent", "#0a0a0a"),
+        }
+        for pid, preset in list(_PRESETS.items())[:6]
+    ]
+    out.append(
+        {
+            "message": "Какая палитра вам ближе? (можно пропустить — подберём сами)",
+            "kind": "palette",
+            "choices": [],
+            "allow_custom": True,
+            "multi_select": False,
+            "options": options,
+        }
+    )
+    return out
 
 
 async def _batch_discovery_turn(
@@ -444,25 +564,44 @@ async def _batch_discovery_turn(
     # that already pins the design wins the zero-question shortcut and never gets
     # a plan (the popup never appears).
     if asked_count == 0 and not project.discovery_plan:
+        # Code/script request → no design interview at all (owner 2026-06-19). Build
+        # straight away (run_discovery short-circuits code intent to a code build) —
+        # never plan palette/audience questions for a program.
+        if _infer_code_from_text(prompt):
+            return await run_discovery(
+                history, prompt, asked_count=asked_count, force_build=True
+            )
         zero = zero_question_build(history, prompt)
         if zero is not None:
             return zero
         questions = await plan_discovery_questions(prompt)
         project.discovery_plan = [q.to_dict() for q in questions]
+    # LIVE niche (pillar 2 causality): re-infer on the CUMULATIVE answers (idea +
+    # every reply), not just the first prompt, so the badge sharpens turn-by-turn
+    # as the conversation reveals more. Deterministic; unrecognised → "" (no
+    # suffix).
+    niche = infer_niche_label(cumulative_idea(history, prompt))
+    # Confidence-skip (pillar 2 — «лучший онбординг — его отсутствие»): once the
+    # gathered answers pin a recognised niche + ≥2 design axes, build now instead
+    # of asking the rest of the batch — the decisive user gets a shorter path.
+    # Fail-soft: an unclear interview keeps serving the planned questions.
+    if confident_enough_to_build(
+        history, prompt, asked_count=asked_count, niche=niche
+    ) and serve_planned_question(project.discovery_plan or [], asked_count) is not None:
+        return await run_discovery(
+            history, prompt, asked_count=asked_count, force_build=True
+        )
     ask = serve_planned_question(project.discovery_plan or [], asked_count)
     if ask is not None:
-        # Name the niche for the onboarding-frame banner from the product idea —
-        # the first user message (the idea) when we're past question 1, else this
-        # very prompt. Deterministic; an unrecognised idea yields "" (no suffix).
-        idea = next(
-            (
-                m["content"]
-                for m in history
-                if m.get("role") == "user" and m.get("content")
-            ),
-            "",
-        ) or prompt
-        return replace(ask, niche=infer_niche_label(idea))
+        # Answer-recap (pillar 2 — «вас услышали»): echo the answers gathered so
+        # far back as «✓ …» chips above the next question, so the loop visibly
+        # reacts to what the user said.
+        recap = recap_labels(gather_answers(history, prompt, asked_count))
+        # LIVE design-preview (pillars 2×3 — «покажи ЧТО построим»): resolve the
+        # cumulative answers into design tokens so the popup paints a mini-hero
+        # that morphs turn-by-turn. Same spec_from_discovery the gauntlet uses.
+        design_preview = spec_preview(spec_from_discovery(history, prompt))
+        return replace(ask, niche=niche, recap=recap, design_preview=design_preview)
     # Plan exhausted — every question answered → build from the full Q&A.
     return await run_discovery(
         history, prompt, asked_count=asked_count, force_build=True
@@ -589,6 +728,35 @@ async def post_prompt(
     )
     is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
 
+    # Run/install intent (owner 2026-06-19): on a FOLLOW-UP, "как запустить / хочу
+    # запустить / установщик / дай поиграть" → DON'T build; hand back a one-click
+    # installer-download card (the .zip already ships a run.bat launcher), so the
+    # user goes from ask → installer in one click. Gated to a project that already
+    # has something built. Consumed in the turn-routing branch below.
+    _has_built = not is_first_build and project.current_snapshot_id is not None
+    run_intent = _has_built and _infer_run_intent(payload.prompt)
+    # «Спрашивай, если сомневаешься» (owner 2026-06-19): plausible-but-uncertain run
+    # intent → ASK "собрать установщик?" with yes/no chips instead of guessing.
+    # A decline ("нет, доработать") gets a short "what to change?" reply, not a
+    # garbage build. Strong intent above always wins.
+    run_decline = _has_built and not run_intent and _is_run_decline(payload.prompt)
+    run_ask = (
+        _has_built
+        and not run_intent
+        and not run_decline
+        and _infer_run_intent_maybe(payload.prompt)
+    )
+
+    # Onboarding-survey palette pick (owner 2026-06-19): the popup submits the
+    # chosen design preset here so the build uses it directly. Validated against
+    # the known catalog (an unknown id is ignored); persisted with the project
+    # changes the handler commits below. Additive — absent on normal prompts.
+    if payload.design_preset_id:
+        from omnia_api.services.design_presets import PRESETS as _PRESETS
+
+        if payload.design_preset_id in _PRESETS:
+            project.design_preset_id = payload.design_preset_id
+
     # ── Onboarding interview routing ──────────────────────────────────────
     # On a brand-new project we don't build straight away: we first run a short
     # discovery so the first generation works from a real brief, not a one-line
@@ -599,6 +767,33 @@ async def post_prompt(
     # A select-mode pick, an explicit skip_clarify, or a non-first-build prompt all
     # bypass the interview entirely and go straight to generation.
     settings = get_settings()
+
+    # Code→web pivot (owner 2026-06-19): a `code` project has no live preview. A
+    # FOLLOW-UP asking to RUN it as a web page ("сделай веб-вид", "в браузере",
+    # "запусти здесь") flips it onto the previewable `static` web template (instant
+    # /p/<slug>, no container) so the next build is an openable page. Non-destructive
+    # (existing source stays — the build PORTS it). Gated to a real follow-up on a
+    # code project + explicit web intent → never touches first-build routing or a
+    # normal code edit. Fail-soft (R-10). `pivoted_to_web` forces the full-build
+    # path below (a fresh page is a build, not a surgical edit).
+    pivoted_to_web = False
+    if (
+        not is_first_build
+        and project.template == "code"
+        and settings.use_auto_stack_routing
+        and _infer_web_pivot(payload.prompt)
+    ):
+        try:
+            pivoted_to_web = await stack_routing.pivot_code_to_web(session, project)
+        except Exception as _pv_exc:
+            await session.rollback()
+            # A failed commit leaves `project` expired; a later attribute access
+            # would lazy-load on the poisoned session → MissingGreenlet → 500 for
+            # the WHOLE request. Re-fetch a clean, attached instance so the build
+            # proceeds normally (as the un-pivoted project).
+            project = await session.get(Project, project_id) or project
+            logging.getLogger(__name__).warning("code→web pivot failed: %r", _pv_exc)
+
     discovery_result: DiscoveryResult | None = None
     do_clarify = False
     effective_prompt = payload.prompt
@@ -615,7 +810,9 @@ async def post_prompt(
                     select(Message)
                     .where(Message.project_id == project_id)
                     .order_by(Message.created_at.asc())
-                    .limit(20)
+                    # 40 so discovery sees the whole interview thread, not just the
+                    # last ~20 rows, before it classifies/builds (owner 2026-06-18).
+                    .limit(40)
                 )
             ).scalars().all()
         )
@@ -687,9 +884,54 @@ async def post_prompt(
         discovery_result is not None and discovery_result.action != DISCOVERY_BUILD
     )
 
+    # First-build stack escalation when the interview was skipped.
+    # `switch_to_stack` only ever runs inside the discovery BUILD branch above,
+    # but the discovery interview is bypassed entirely on the quiz / "just
+    # generate" path (`skip_clarify=True`) and on a select-mode first build. On
+    # those paths an unmistakable app request ("CRM, вход, личный кабинет, база
+    # записей") would still build as freeform static with dead login buttons —
+    # the exact blind spot behind «полноценное приложение с 1 генерации». So
+    # when discovery did NOT run, reuse discovery's own deterministic safety-net
+    # (`_infer_stack_from_text`) to escalate static→container on the FIRST build.
+    # Strictly first-build only: a fresh starter has no user content or rollback
+    # history, so re-scaffolding is non-destructive (unlike a follow-up — see
+    # PROPOSAL P-H1). Fail-soft (R-10): a hiccup falls back to a static build.
+    if (
+        is_first_build
+        and discovery_result is None
+        and not discovery_ask
+        and not do_clarify
+        and not selected_dump
+        and settings.use_auto_stack_routing
+    ):
+        # Code intent (program/script, any language) takes priority over the
+        # backend net — "напиши скрипт на python" must not be pulled into an
+        # auth-backed web app (owner 2026-06-18). And static is opt-in: if nothing
+        # specific fires, default to `spa` (interactive React) unless the user
+        # EXPLICITLY asked for a plain static HTML page — same policy as discovery.
+        _inferred_stack = (
+            _infer_code_from_text(payload.prompt)
+            or _infer_stack_from_text(payload.prompt)
+            or (None if _explicit_static(payload.prompt) else "spa")
+        )
+        if _inferred_stack:
+            try:
+                await stack_routing.switch_to_stack(
+                    session, project, _inferred_stack
+                )
+            except Exception as _sr_exc:
+                await session.rollback()
+                logging.getLogger(__name__).warning(
+                    "first-build stack_routing switch failed (static fallback): %r",
+                    _sr_exc,
+                )
+
     intent = decide_intent(
         effective_prompt,
-        is_first_prompt=is_first_build,
+        # A code→web pivot just re-templated the project to `static`; the page
+        # doesn't exist yet, so it's a full BUILD, never a surgical edit — treat it
+        # like a first build for triage (owner 2026-06-19).
+        is_first_prompt=is_first_build or pivoted_to_web,
         selected_count=len(selected_dump or []),
     )
     orchestrate = intent == ORCHESTRATE
@@ -701,12 +943,19 @@ async def post_prompt(
     force_model = settings.force_model or None
     routing_model = force_model or model_for_role("director" if orchestrate else "edit")
 
+    # Explicit, DISTINCT timestamps (owner 2026-06-19 bug): both rows committed in
+    # one transaction would otherwise share `func.now()` (= transaction time) →
+    # identical created_at → the chat, ordered by created_at, can't tell which came
+    # first and renders the assistant reply ABOVE the user's prompt («промпт уехал
+    # вниз»). +1ms guarantees user-before-assistant ordering everywhere.
+    _now = datetime.now(timezone.utc)
     user_msg = Message(
         project_id=project_id,
         role="user",
         content=payload.prompt,
         model_id=None,  # user turns have no model
         selected_elements=selected_dump,
+        created_at=_now,
     )
     assistant_msg = Message(
         project_id=project_id,
@@ -714,6 +963,7 @@ async def post_prompt(
         content="",
         # Orchestrated runs carry the mix label; cheap runs log the real model.
         model_id=force_model or (ORCHESTRATION_LABEL if orchestrate else routing_model),
+        created_at=_now + timedelta(milliseconds=1),
     )
     session.add_all([user_msg, assistant_msg])
     await session.commit()
@@ -730,6 +980,19 @@ async def post_prompt(
         # Ask first — no generation this turn. The user's answers (next message)
         # flow into the real build via chat history.
         _spawn_clarify(project_id, assistant_msg.id, payload.prompt)
+    elif run_intent:
+        # Run/install intent (owner 2026-06-19): no build — stream a one-click
+        # installer-download card. The user clicks «Скачать установщик», gets the
+        # .zip (with run.bat), double-clicks → installed + running.
+        _spawn_text_turn(project_id, assistant_msg.id, _INSTALL_CARD_TEXT)
+    elif run_decline:
+        # Declined the installer offer → don't build from a bare "нет"; ask what
+        # to change so the next turn is a real edit.
+        _spawn_text_turn(project_id, assistant_msg.id, _RUN_DECLINE_REPLY)
+    elif run_ask:
+        # Uncertain run intent → ASK "собрать установщик?" (yes/no chips set on the
+        # response below); no build this turn.
+        _spawn_text_turn(project_id, assistant_msg.id, _RUN_ASK_TEXT)
     else:
         _spawn_process_prompt(
             project_id=project_id,
@@ -762,7 +1025,7 @@ async def post_prompt(
     # "точечная правка" copy; a build shows the full-generation experience.
     turn_mode = (
         "clarify"
-        if (discovery_ask or do_clarify)
+        if (discovery_ask or do_clarify or run_intent or run_ask or run_decline)
         else ("build" if orchestrate else "edit")
     )
     # Quick-reply chips ride on the ASK turn only — the workspace renders them
@@ -778,13 +1041,33 @@ async def post_prompt(
         question_index = discovery_result.question_index or None
         question_total = discovery_result.question_total or None
         niche = discovery_result.niche or None
+        recap = list(discovery_result.recap)
+        design_preview = discovery_result.design_preview
+        # Owner 2026-06-19 — on the FIRST discovery turn return the WHOLE survey
+        # (every planned question + a clickable palette question) so the workspace
+        # renders ONE popup form, not a chat turn per question. Only the first turn
+        # (index 1) with a stashed plan; follow-up turns keep the single-question
+        # fields (back-compat for a client that ignores `survey`).
+        survey = (
+            _build_onboarding_survey(project.discovery_plan)
+            if question_index == 1
+            else None
+        )
     else:
-        ask_choices = []
+        # Uncertain run-intent question (owner 2026-06-19): tappable yes/no chips.
+        # «Да…» re-enters as strong run-intent → installer card; «Нет…» is caught
+        # as a decline → "what to change?" reply.
+        ask_choices = (
+            ["Да, собрать установщик", "Нет, доработать проект"] if run_ask else []
+        )
         allow_custom = True
         multi_select = False
         question_index = None
         question_total = None
         niche = None
+        recap = []
+        design_preview = None
+        survey = None
     return PromptResponse(
         message_id=assistant_msg.id,
         snapshot_id=None,
@@ -795,6 +1078,9 @@ async def post_prompt(
         question_index=question_index,
         question_total=question_total,
         niche=niche,
+        recap=recap,
+        design_preview=design_preview,
+        survey=survey,
     )
 
 
@@ -1049,7 +1335,7 @@ def _inject_auth_tables(src: str) -> str:
             flush=True,
         )
         return out
-    except Exception as exc:  # noqa: BLE001 — guard must never break a build
+    except Exception as exc:
         print(f"[PP] auth_schema_guard: inject failed {exc!r}", flush=True)
         return src
 
@@ -1097,6 +1383,103 @@ def _preserve_auth_schema(files: dict[str, str]) -> dict[str, str]:
     patched = src[:close_brace] + _AUTH_USERS_COLUMNS + src[close_brace:]
     print("[PP] auth_schema_guard: re-injected users.passwordHash/role", flush=True)
     return {**files, path: patched}
+
+
+def _normalize_entity_filenames(files: dict[str, str]) -> dict[str, str]:
+    """Align each ``entities/<X>.json`` filename with its declared ``name``.
+
+    The entity registry resolves a definition STRICTLY by ``entities/<Name>.json``
+    (``registry.ts`` ``entityPath`` → ``${name}.json``; ``listEntities`` keys by
+    filename), and every consumer references an entity by its ``name`` — the SDK
+    (``entities.Client``), reference fields (``"entity": "Client"``), and the
+    writer's screens (``<CrudResource entity="Client">``). The contract is
+    "filename === Name" (SYSTEM_PROMPT.md, and the starter ``Task.json``).
+
+    But the art-director brief sometimes lists entity files in lowercase / plural
+    form (``clients.json``) and the writer copies that filename VERBATIM
+    (art_director_writer.py:565 «заведи каждый entities/<Имя>.json ДОСЛОВНО»). The
+    result: ``entities/clients.json`` declares ``{"name": "Client"}`` while the
+    runtime stats ``entities/Client.json`` → ENOENT → ``loadEntity`` returns null
+    → every read/write 404s («unknown entity 'Client'») → the whole app is dead
+    (empty lists everywhere, no record can be created), even though the brief,
+    the screens and the references are all internally consistent.
+
+    This guard renames such files to match their internal ``name``. Deterministic,
+    idempotent, fail-soft: only touches paths under ``entities/`` whose JSON parses
+    and carries a valid identifier ``name`` that differs from the filename stem;
+    never clobbers a file already named correctly; a no-op for already-correct
+    apps and for any stack without ``entities/*.json``.
+    """
+    import json as _json
+    import re as _re
+
+    ident = _re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+    prefix, suffix = "entities/", ".json"
+
+    def stem_of(p: str) -> str:
+        return p[len(prefix) : -len(suffix)]
+
+    # Stems already present — never overwrite a correctly-named sibling.
+    existing = {
+        stem_of(p) for p in files if p.startswith(prefix) and p.endswith(suffix)
+    }
+    out = dict(files)
+    renamed: list[str] = []
+    for path, content in list(files.items()):
+        if not (path.startswith(prefix) and path.endswith(suffix)):
+            continue
+        stem = stem_of(path)
+        try:
+            name = _json.loads(content).get("name")
+        except Exception:
+            continue  # malformed JSON — leave it for the registry/normalize() path
+        if not isinstance(name, str) or not ident.match(name) or name == stem:
+            continue
+        if name in existing:
+            continue  # a file already declares this Name — don't clobber it
+        out.pop(path, None)
+        out[f"{prefix}{name}{suffix}"] = content
+        existing.discard(stem)
+        existing.add(name)
+        renamed.append(f"{stem}->{name}")
+    if renamed:
+        print(f"[PP] entity_filename_guard: {', '.join(renamed)}", flush=True)
+    return out
+
+
+def _warn_unparseable_entity_json(files: dict[str, str]) -> list[str]:
+    """Observability for BS-31: the writer sometimes emits INVALID JSON for an
+    entity file (an unterminated string, a dropped key name, …). Today such a
+    file passes every guard untouched — `_normalize_entity_filenames` skips
+    unparseable files (it cannot read their ``name``) and the runtime
+    ``loadEntity`` then silently returns ``null`` (registry.ts:87-89), so
+    ``GET /api/entities/<X>`` answers 404 ``unknown entity`` and a declared
+    entity is DOA with ZERO signal anywhere. On real CRM builds this hit the
+    CENTRAL entity (``Client``) on 2/2 consecutive live gens.
+
+    This does NOT repair, regenerate, or drop the file — that action is
+    policy-adjacent and cross-surface (see PROPOSAL P-ENTITYJSON / rule 15). It
+    only makes the corruption loud in the build log, at the moment it is
+    introduced, so the dominant failure mode is diagnosable instead of silent.
+    Returns the list of entity names whose JSON does not parse.
+    """
+    import json as _json
+
+    bad: list[str] = []
+    for path, content in files.items():
+        if not (path.startswith("entities/") and path.endswith(".json")):
+            continue
+        try:
+            _json.loads(content)
+        except Exception as exc:
+            name = path[len("entities/") : -len(".json")]
+            bad.append(name)
+            print(
+                f"[PP] entity_json_INVALID: {name}.json does not parse ({exc}); "
+                f"entity will resolve as 404 'unknown entity' at runtime — DOA",
+                flush=True,
+            )
+    return bad
 
 
 def _extract_files_and_edits(
@@ -1441,7 +1824,10 @@ async def _process_prompt(
                 .where(Message.project_id == project_id)
                 .where(Message.id != assistant_message_id)
                 .order_by(Message.created_at.desc())
-                .limit(20)
+                # Load 40 so the writer's HISTORY_LIMIT (12 turns) is the real
+                # control — long threads (discovery Q&A + follow-up tweaks) aren't
+                # pre-truncated here (owner 2026-06-18: «реально понимай чат»).
+                .limit(40)
             )
             rows = list(reversed(list(res.scalars().all())))
             history_serialized = [
@@ -1531,6 +1917,13 @@ async def _process_prompt(
         # the model later, but the mode is fixed by the first pass's prompt.
         from omnia_api.core.config import generation_mode as _generation_mode
         _gen_mode = _generation_mode(model_id, str(project_id))
+        # Non-web templates never emit a web PageIR. `code` (any-language source)
+        # and the Python backends (`tgbot`/`api`) write source via <file> blocks,
+        # so force them off catalog mode — must match build_messages' own guard so
+        # the prompt we built and the way we parse below agree (owner 2026-06-18).
+        _is_code = project_template == "code"
+        if _gen_mode == "catalog" and project_template in ("code", "tgbot", "api"):
+            _gen_mode = "freeform"
         print(f"[PP] gen_mode={_gen_mode}", flush=True)
         if pipeline_debug.enabled():
             try:
@@ -1709,6 +2102,28 @@ async def _process_prompt(
                 # Mark the freeform path so the post-writer image-resolve and
                 # design-judge stages emit their llm.pass progress (4-segment bar).
                 state["freeform"] = True
+                # Infra cost (2026-06-16): pass 1 (Art-Director, prose brief) gets
+                # a brief-lean system that drops the code-implementation blocks it
+                # never uses; pass 2 (the writer) keeps the FULL `messages` system,
+                # so the final HTML is unchanged. Fail-soft → full prompt on any
+                # error or when the flag is off.
+                _ad_system: str | None = None
+                if _settings.use_lean_art_director_prompt:
+                    try:
+                        _ad_system = build_art_director_system(
+                            project_template,
+                            project_design_preset_id,
+                            project_image_gen_enabled,
+                            model_id=model_id,
+                            project_id=str(project_id),
+                            user_prompt=prompt_text,
+                            discovery_spec=project_discovery_spec,
+                        )
+                    except Exception as _ad_exc:
+                        _log.warning(
+                            "lean art-director prompt failed, using full: %r", _ad_exc
+                        )
+                        _ad_system = None
                 source = art_director_writer_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
@@ -1718,6 +2133,7 @@ async def _process_prompt(
                     project_id=project_id,
                     message_id=assistant_message_id,
                     template=project_template,
+                    art_director_system=_ad_system,
                 )
             elif _dp_active:
                 source = director_polish_generate(
@@ -1856,6 +2272,11 @@ async def _process_prompt(
                     # llm.chunk/llm.pass, so the live render can narrate the
                     # design reasoning as it builds (Pillar 3 → V3.10). Debug-
                     # only before; now flows as an event. Lands before llm.done.
+                    # v2.21 #1(A): also stash it so the deterministic pre-commit
+                    # step can BAKE it into the shared static page → a stranger
+                    # on /p/<slug> sees the same birth reveal (ONE BRIEF, EVERY
+                    # SURFACE). See services/brief_narration.inject_brief_narration.
+                    state["brief"] = event["brief"]
                     await publish_event(
                         project_id,
                         "omnia:brief",
@@ -1958,8 +2379,21 @@ async def _process_prompt(
 
         if stream_error:
             print(f"[PP] stream_error err={stream_error!r}", flush=True)
+            # The llm.error event below is delivered ONLY over the live WS
+            # stream. A user who reloaded or dropped the socket during the
+            # (multi-minute) build would otherwise be left with a chat row
+            # that is blank AND still looks "streaming" (tokens_out NULL),
+            # with no clue WHY the build stopped. Persist a human-readable
+            # error body (when the model streamed nothing) + zero tokens so
+            # the row finalises — mirroring the crash-path recovery in
+            # _emergency_error. Keep any partial content the model managed.
+            err_body = _failed_build_body(accumulated, stream_error)
             await _finalize_message(
-                factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
+                factory,
+                assistant_message_id,
+                err_body,
+                usage_data or {"tokens_in": 0, "tokens_out": 0},
+                snapshot_id=None,
             )
             await publish_event(
                 project_id,
@@ -2366,6 +2800,20 @@ async def _process_prompt(
                     flush=True,
                 )
 
+        # --- Orphaned-anchor repair on surgical edits ---------------------
+        # The dead-link pass below is skipped on surgical edits (it must not
+        # touch PRE-EXISTING dead links the user didn't mention). But a removal
+        # edit ("убери секцию отзывов") orphans nav links — `href="#reviews"`
+        # now points at a section this very edit deleted. That dangling anchor
+        # IS part of "what was asked", so repair it: delta-scoped (only ids the
+        # edit removed), deterministic, no LLM, no regeneration — squarely the
+        # kept inline-href-fixer policy.
+        if surgical and files and project_template not in CONTAINER_NEXT and not _is_code:
+            _before = files
+            files = repair_orphaned_anchors_inline(current_files, files)
+            if files != _before:
+                print("[PP] orphaned_anchors repaired", flush=True)
+
         # --- Pass 2..N: empty-content fallback ----------------------
         # If we got nothing usable back AND the primary model has known
         # fallbacks, transparently re-run against them. The user sees a
@@ -2490,7 +2938,7 @@ async def _process_prompt(
         # Skip on surgical edits: rewriting a PRE-EXISTING dead link the user
         # didn't mention violates "change only what was asked". The edit prompt
         # already forbids dead links in any element the edit adds.
-        if files and not surgical and project_template not in CONTAINER_NEXT:
+        if files and not surgical and project_template not in CONTAINER_NEXT and not _is_code:
             initial_dead = find_dead_links(files)
             if initial_dead:
                 files = repair_dead_links_inline(files)
@@ -2503,7 +2951,14 @@ async def _process_prompt(
                 dead = post_inline
             else:
                 dead = []
-            if len(dead) > _DEAD_LINK_LLM_THRESHOLD:
+            # OWNER 2026-06-14: auto full-page regeneration is OFF by default
+            # (auto_regenerate_enabled). The inline href fixer above already ran
+            # (a targeted edit, kept); the LLM re-roll regenerates whole files, so
+            # it only fires when auto-regen is explicitly re-enabled.
+            if (
+                get_settings().auto_regenerate_enabled
+                and len(dead) > _DEAD_LINK_LLM_THRESHOLD
+            ):
                 print(f"[PP] dead_links remain={len(dead)} -> LLM repair pass", flush=True)
                 prior_answer = accumulated
                 notice = (
@@ -2551,7 +3006,7 @@ async def _process_prompt(
         # Kit files are Omnia-managed: drop any model attempt to write/delete them,
         # and re-inject the kit <link>/<script> into returned HTML if the model
         # dropped them (so animations/interactivity never silently break).
-        if files and project_template not in CONTAINER_NEXT:
+        if files and project_template not in CONTAINER_NEXT and not _is_code:
             files = {p: c for p, c in files.items() if p not in KIT_FILES}
             files = _ensure_kit_linked(files)
 
@@ -2911,6 +3366,80 @@ async def _process_prompt(
             except Exception as _tok_exc:
                 print(f"[PP] entity_theme skipped: {_tok_exc!r}", flush=True)
 
+        # ── Missing-component shim guard — deterministic, BEFORE commit ────────
+        # Writer models import standard shadcn components the template doesn't
+        # ship (radio-group, switch, …) → Next.js "Module not found" → the WHOLE
+        # app renders a build-error page (owner hit this). Inject a dependency-
+        # free self-contained shim for any imported-but-missing @/components/ui/*
+        # so the app always builds.
+        if files and not surgical and project_template in ("nextjs_entities", "fullstack"):
+            try:
+                from omnia_api.services.ui_shims import ensure_ui_shims
+
+                files, _shim_added, _shim_missing = ensure_ui_shims(files)
+                if _shim_added:
+                    print(f"[PP] ui_shims injected={_shim_added}", flush=True)
+                if _shim_missing:
+                    print(
+                        f"[PP] ui_shims MISSING no-shim (build may fail)={_shim_missing}",
+                        flush=True,
+                    )
+            except Exception as _shim_exc:
+                print(f"[PP] ui_shims skipped: {_shim_exc!r}", flush=True)
+
+        # ── Branded share-card (P2, pillar 4) — deterministic, BEFORE commit ──
+        # The entity template's <head> is a static «Omnia project», so every
+        # shared /p/<slug> link unfurls brand-less. Derive a {title, tagline,
+        # accent} card from the project name + prompt + palette and inject it as
+        # src/app/omnia-share.ts, which the template's generateMetadata +
+        # opengraph-image route consume → a branded unfurl per niche, 0 model
+        # cost. Fail-soft: any error leaves the template's neutral default card.
+        if files and not surgical and project_template in ("nextjs_entities", "fullstack"):
+            try:
+                from omnia_api.services.design_tokens import tokens_for_project
+                from omnia_api.services.share_meta import (
+                    build_share_card,
+                    inject_share_module,
+                )
+
+                _accent = tokens_for_project(
+                    str(project_id), industry_hint=project_design_preset_id
+                ).palette.primary
+                async with factory() as _share_session:
+                    _proj = await _share_session.get(Project, project_id)
+                    _proj_name = _proj.name if _proj else None
+                _card = build_share_card(_proj_name, prompt_text, _accent)
+                files = inject_share_module(files, _card)
+                print(f"[PP] share_meta card title={_card.title!r}", flush=True)
+            except Exception as _share_exc:
+                print(f"[PP] share_meta skipped: {_share_exc!r}", flush=True)
+
+        # ── Baked brief → public surface (v2.21 #1A, pillar 3+4) — BEFORE commit ──
+        # The freeform static /p/<slug> narrates its own birth (baked into
+        # index.html further below). The ENTITY hot-path (≈80% of apps) did NOT:
+        # its /p/<slug> 302-redirects to the LIVE app on another origin, whose
+        # public/omnia-brief-narration.js only ever received the brief via the
+        # workspace iframe's postMessage — so a stranger opening the shared (or
+        # forked) app saw a finished UI, SILENT. Bake the art-director brief onto
+        # window.__omniaBrief (src/app/omnia-brief.ts → layout.tsx, the .tsx
+        # analogue of share_meta's omnia-share.ts) so the SAME reveal plays for a
+        # stranger. Fail-soft: no/empty brief leaves the template's `null` default
+        # and the reveal stays inert. Side-effect-free; idempotent on the file.
+        _bm_brief = state.get("brief")
+        if (
+            files
+            and not surgical
+            and project_template in ("nextjs_entities", "fullstack")
+            and isinstance(_bm_brief, dict)
+        ):
+            try:
+                from omnia_api.services.brief_narration import inject_brief_module
+
+                files = inject_brief_module(files, _bm_brief)
+                print("[PP] brief_module baked into omnia-brief.ts", flush=True)
+            except Exception as _bm_exc:
+                print(f"[PP] brief_module skipped err={_bm_exc!r}", flush=True)
+
         # ── Structure audit (entity/app builds) — non-blocking smoke detector ─
         # Entity/fullstack apps skip the acceptance gate (container-backed), so we
         # at least LOG drift from the app-UI doctrine (hardcoded colours, fixed-px
@@ -2947,7 +3476,7 @@ async def _process_prompt(
             files
             and not surgical
             and project_template
-            not in ("fullstack", "nextjs_entities", "spa", "tgbot", "api")
+            not in ("fullstack", "nextjs_entities", "spa", "tgbot", "api", "code")
             and _acc_settings.use_acceptance_gate
             and _gen_mode in ("freeform", "catalog")
         ):
@@ -2958,8 +3487,12 @@ async def _process_prompt(
             # the judge must NOT loop many times — 1 iteration is the whole point).
             # Otherwise keep score-only (0 repairs) / max-retries as before.
             _design_judge = _acc_settings.use_design_judge
+            # OWNER 2026-06-14: with auto_regenerate_enabled OFF the gate still
+            # EVALUATES (advisory verdict published) but never re-rolls — 0 repairs.
             _max_acc = (
-                1
+                0
+                if not _acc_settings.auto_regenerate_enabled
+                else 1
                 if _design_judge
                 else 0
                 if _acc_settings.acceptance_score_only
@@ -3186,6 +3719,7 @@ async def _process_prompt(
                     "07_pre_palette_guard.html", files.get("index.html", ""),
                 )
             try:
+                from omnia_api.services.app_theme import apply_app_palette
                 from omnia_api.services.design_tokens import tokens_for_project
                 from omnia_api.services.palette_guard import enforce_palette
 
@@ -3197,6 +3731,12 @@ async def _process_prompt(
                         project_id, assistant_message_id,
                         "07b_forced_palette.md", repr(_palette),
                     )
+                # Entity/.tsx apps theme via a brand :root override in
+                # (app)/layout.tsx, NOT via index.html — enforce_palette below is
+                # HTML-only and skips them. Snap the brand --primary to a colour
+                # that's actually visible on the kit's light canvas (the writer
+                # routinely emits a dark-palette near-white primary that vanishes).
+                files = apply_app_palette(files, _palette)
                 files = enforce_palette(files, _palette)
             except Exception as _pg_exc:
                 print(f"[PP] palette_guard skipped err={_pg_exc!r}", flush=True)
@@ -3207,6 +3747,34 @@ async def _process_prompt(
                     "08_post_palette_guard.html", files.get("index.html", ""),
                 )
 
+        # ── Brief-narration bake (v2.21 #1A, pillar 3+4) — BEFORE commit ──
+        # The most-shared public surface (freeform static /p/<slug>) was born
+        # SILENT: a colleague pasting the link saw a finished page, none of the
+        # "AI is designing this" reveal that hooks the viral loop. Bake the
+        # art-director brief + a self-contained reveal into index.html so the
+        # shared link plays the SAME birth narration for a stranger (the brief
+        # reached only the workspace/iframe before). Freeform only — container
+        # apps (nextjs_entities/fullstack) 302-redirect to a live app on another
+        # origin where the template's own omnia-brief-narration.js handles it.
+        # Fail-soft + idempotent (services/brief_narration); 0-line brief = no-op.
+        _bn_brief = state.get("brief")
+        if (
+            files
+            and not surgical
+            and _gen_mode == "freeform"
+            and isinstance(_bn_brief, dict)
+            and files.get("index.html")
+        ):
+            try:
+                from omnia_api.services.brief_narration import inject_brief_narration
+
+                files["index.html"] = inject_brief_narration(
+                    files["index.html"], _bn_brief
+                )
+                print("[PP] brief_narration baked into index.html", flush=True)
+            except Exception as _bn_exc:
+                print(f"[PP] brief_narration skipped err={_bn_exc!r}", flush=True)
+
         new_snapshot_id: UUID | None = None
         if files:
             # A6a — restore the managed auth columns if the model dropped them
@@ -3214,6 +3782,16 @@ async def _process_prompt(
             # Runs before commit + hot_reload so git and the container agree.
             if project_template in CONTAINER_NEXT:
                 files = _preserve_auth_schema(files)
+                # Filename↔Name guard: the registry resolves entities by
+                # `entities/<Name>.json`, so a lowercase/plural filename the
+                # writer copied from the brief (clients.json for name "Client")
+                # would 404 every read/write and DOA the app. Realign here.
+                files = _normalize_entity_filenames(files)
+                # Detection half of PROPOSAL P-ENTITYJSON (BS-31): make a
+                # writer-fumbled, unparseable entities/*.json loud in the build
+                # log instead of shipping it silently DOA. Does not mutate
+                # `files` — the repair/regen/fail action stays deferred.
+                _warn_unparseable_entity_json(files)
             # Carry the user's direct style edits (omnia-overrides block + font
             # links) across this regeneration so manual color/font tweaks aren't
             # lost when the model rewrites index.html. Fail-soft, like the guards.

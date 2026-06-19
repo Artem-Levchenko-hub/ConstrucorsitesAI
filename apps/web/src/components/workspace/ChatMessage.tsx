@@ -17,7 +17,10 @@ import {
   Check,
   AlertTriangle,
   Wrench,
+  Download,
 } from "lucide-react";
+import { toast } from "sonner";
+import { downloadProjectFiles } from "@/lib/api/projects";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import type { Message } from "@/lib/api/types";
 import { EASE_OUT, fadeUp } from "@/lib/motion";
@@ -30,6 +33,7 @@ import {
 } from "@/lib/parse-assistant";
 import { SelectedChips } from "./SelectedChips";
 import { PassProgressBar } from "./PassProgressBar";
+import { RemixRecapCard } from "./RemixRecapCard";
 
 // The onboarding quiz folds its answers into the user prompt after this marker
 // (see OnboardingQuiz.compile). We split on it to render the answers as chips
@@ -45,6 +49,7 @@ export function ChatMessage({
   streaming,
   projectId,
   onFix,
+  onSuggest,
 }: {
   message: Message;
   streaming?: boolean;
@@ -58,6 +63,9 @@ export function ChatMessage({
   /** Submit a follow-up "fix this error" prompt (wired from the error card's
    *  «Починить» button). Omitted in replays / screenshots → button hidden. */
   onFix?: (prompt: string) => void;
+  /** Submit a starter-edit prompt from a fork recap card's one-tap chips.
+   *  Omitted in replays / screenshots → chips render non-interactive. */
+  onSuggest?: (prompt: string) => void;
 }) {
   const isUser = message.role === "user";
   const quiz = isUser ? parseQuizBrief(message.content) : null;
@@ -109,8 +117,18 @@ export function ChatMessage({
             parts.map((p, i) =>
               p.kind === "text" ? (
                 <AssistantText key={i} text={p.text} streaming={!!streaming} />
+              ) : p.kind === "remix" ? (
+                <RemixRecapCard
+                  key={i}
+                  name={p.name}
+                  dna={p.dna}
+                  suggestions={p.suggestions}
+                  onSuggest={onSuggest}
+                />
               ) : p.kind === "app-error" ? (
                 <AppErrorCard key={i} part={p} onFix={onFix} />
+              ) : p.kind === "install" ? (
+                <InstallBundleCard key={i} projectId={projectId} />
               ) : (
                 <FileChip
                   key={i}
@@ -516,6 +534,43 @@ function AppErrorCard({
 }
 
 /* ───────────────────────────── file / edit chip ───────────────────────── */
+
+/* ───────────────────────── one-click installer card ───────────────────── */
+
+/** Prominent «Скачать установщик» card (owner 2026-06-19). The server streams an
+ *  `<install-bundle>` marker on a run/install intent; one click downloads the
+ *  project .zip (which ships run.bat) → double-click → installed + running. */
+function InstallBundleCard({ projectId }: { projectId?: string }) {
+  const [busy, setBusy] = useState(false);
+  const onClick = async () => {
+    if (!projectId || busy) return;
+    setBusy(true);
+    try {
+      await downloadProjectFiles(projectId);
+    } catch (e) {
+      toast.error("Не удалось скачать", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!projectId || busy}
+      className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent-subtle px-4 py-2.5 text-sm font-semibold text-fg-primary transition-colors hover:border-accent hover:bg-accent-subtle/80 disabled:opacity-50"
+    >
+      {busy ? (
+        <Loader2 className="h-4 w-4 animate-spin text-accent" />
+      ) : (
+        <Download className="h-4 w-4 text-accent" />
+      )}
+      Скачать установщик (.zip)
+    </button>
+  );
+}
 
 function FileChip({
   path,

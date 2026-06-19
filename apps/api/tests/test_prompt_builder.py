@@ -7,6 +7,7 @@ from omnia_api.routers.messages import (
 )
 from omnia_api.services import skill_library
 from omnia_api.services.prompt_builder import (
+    HISTORY_LIMIT,
     KIT_FILES,
     _compute_skill_brief,
     _expand_ru_to_en,
@@ -34,6 +35,87 @@ def test_static_prompt_includes_style_and_animation_kit() -> None:
     assert ".tone-warm" in sp  # image filter family
     assert ".atmosphere-noir" in sp  # body-overlay family
     assert ".grain-heavy" in sp  # film-grain family
+
+
+def test_static_prompt_includes_landing_section_kit() -> None:
+    # v2.22 #1 — THE LEVER: freeform landings now carry the premium section kit
+    # (the prod-default surface that a colleague shares), mirroring the entity
+    # kit's StorefrontSection/PricingPlans/… so a forked store + its landing
+    # look identical. The header + every kit-variant id + the palette-anchor
+    # contract must be present in the static branch.
+    for tmpl in ("landing", "portfolio", "blog", "blank"):
+        sp = build_system_prompt(tmpl)
+        assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" in sp, tmpl
+        for variant in (
+            "header-nav",  # v2.22 #3 — the page FRAME (sticky nav) is now kit, not hand-rolled
+            "hero-centered",  # v2.22 #2 — the hero (rubric crit. 5) is now kit, not hand-rolled
+            "hero-split",
+            "hero-editorial",  # v2.23 #1 — archetype hero: type-as-graphic (Bold Studio/Kinetic/portfolio)
+            "hero-cinematic",  # v2.23 #1 — archetype hero: full-bleed photo-art (Apple Tech/luxury/premium)
+            "logos-strip",  # v2.22 #3 — social-proof band, kit-sourced
+            "features-grid",
+            "pricing-plans",
+            "testimonial-wall",
+            "faq-accordion",
+            "cta-band",
+            "footer-rich",  # v2.22 #3 — the page FRAME (footer) is now kit, not hand-rolled
+        ):
+            assert variant in sp, f"{variant} missing in {tmpl}"
+        assert "--primary" in sp and "--card" in sp  # palette-anchor contract
+
+
+def test_static_prompt_includes_composition_rules() -> None:
+    # v2.24 #1b — kit as a SYSTEM, not a set of blocks: the archetype must drive
+    # the whole architecture (vertical rhythm, grid density, type scale, container
+    # width), not just a recoloured hero. The four composition profiles + the
+    # editorial-vs-interface contrast must be present in every landing template.
+    for tmpl in ("landing", "portfolio", "blog", "blank"):
+        sp = build_system_prompt(tmpl)
+        assert "КОМПОЗИЦИЯ КАК СИСТЕМА" in sp, tmpl
+        for profile in ("EDITORIAL", "CINEMATIC", "MODULE", "INTERFACE"):
+            assert profile in sp, f"profile {profile} missing in {tmpl}"
+        # measurable, archetype-distinct tokens — editorial breathes, SaaS is dense
+        assert "py-28 sm:py-32 md:py-36" in sp, tmpl  # EDITORIAL rhythm (max air)
+        assert "py-16 sm:py-20 md:py-24" in sp, tmpl  # INTERFACE rhythm (dense)
+        assert "max-w-7xl" in sp and "max-w-5xl" in sp, tmpl  # distinct containers
+
+
+def test_composition_rules_in_fullstack_and_spa() -> None:
+    # fullstack/spa use the same landing AD brief, which now references the
+    # «КОМПОЗИЦИЯ КАК СИСТЕМА» block — it must be in their system prompt too.
+    for tmpl in ("fullstack", "spa"):
+        assert "КОМПОЗИЦИЯ КАК СИСТЕМА" in build_system_prompt(tmpl), tmpl
+
+
+def test_composition_rules_survive_budget_trim() -> None:
+    # Composition is design-defining (like _STYLE_KIT) — cheap writers need it
+    # MORE, not less. Only _DETAILS_KIT is dropped for budget.
+    sp = build_system_prompt("landing", model_id="haiku")
+    assert "КОМПОЗИЦИЯ КАК СИСТЕМА" in sp
+
+
+def test_landing_section_kit_survives_budget_trim() -> None:
+    # The section kit is THE design lever — it must reach cheap writers too
+    # (deepseek/haiku). Only _DETAILS_KIT is dropped for budget; the kit stays.
+    sp = build_system_prompt("landing", model_id="haiku")
+    assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" in sp
+
+
+def test_entity_prompt_excludes_landing_section_kit() -> None:
+    # Entity apps have their OWN section kit (_ENTITIES_UI React components);
+    # the freeform HTML doubles must not leak in and confuse the .tsx writer.
+    ep = build_system_prompt("nextjs_entities")
+    assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" not in ep
+
+
+def test_entity_prompt_teaches_grouped_nav_and_brand_glyph() -> None:
+    # The AppShell sidebar gained a workspace glyph + grouped nav (`section`);
+    # the generator must instruct apps to use them, else every generated app
+    # keeps a flat, brand-mark-less sidebar — the "looks like a template" tell.
+    ep = build_system_prompt("nextjs_entities")
+    assert "ГРУППЫ НАВИГАЦИИ" in ep
+    assert "section:" in ep  # the grouped NAV example carries the field
+    assert "workspace-глиф" in ep  # brand-glyph guidance present
 
 
 def test_fullstack_prompt_excludes_static_kit() -> None:
@@ -141,6 +223,57 @@ def test_build_messages_threads_skill_brief_for_industry_prompt() -> None:
     )
     system = msgs[0]["content"]
     assert "ДИЗАЙН-БРИФ" in system
+
+
+# ---------------------------------------------------------------------------
+# `code` template — language-agnostic source (owner 2026-06-18)
+# ---------------------------------------------------------------------------
+
+
+def test_code_prompt_is_language_agnostic_not_website() -> None:
+    """The `code` branch must frame the task as writing a program/script in any
+    language and must NOT carry the website identity or the visual/section kits —
+    otherwise the model builds a page instead of the requested script."""
+    sp = build_system_prompt("code")
+    # Code framing present.
+    assert "режиме КОДА" in sp or "ПРОГРАММА" in sp or "любом языке" in sp
+    # No web identity / no website quality bar / no visual kit.
+    assert "AI-конструктор сайтов" not in sp
+    assert "assets/omnia-kit.css" not in sp
+    assert "ВИЗУАЛЬНЫЙ СТИЛЬ" not in sp
+
+
+def test_history_limit_is_twelve() -> None:
+    """Owner 2026-06-18 «реально понимай чат»: the writer must see a longer
+    thread than the old 6-turn window. Lock the bumped value so a future trim
+    is a deliberate, reviewed change."""
+    assert HISTORY_LIMIT == 12
+
+
+def test_build_messages_strips_stale_build_html_from_assistant_history() -> None:
+    """A prior build turn is 30–60 KB of <file> HTML; verbatim it buries the
+    user's real words across the 12-turn window. It must be replaced with a short
+    marker, while USER turns stay verbatim (they carry intent)."""
+    history = [
+        {"role": "user", "content": "сделай лендинг кофейни"},
+        {
+            "role": "assistant",
+            "content": 'готово <file path="index.html">' + ("X" * 5000) + "</file>",
+        },
+    ]
+    msgs = build_messages(
+        current_files={},
+        history=history,
+        user_prompt="поменяй цвет кнопки",
+        template="blank",
+        model_id="claude-haiku-4-5",
+    )
+    assistant_turns = [m["content"] for m in msgs if m["role"] == "assistant"]
+    assert assistant_turns, "history assistant turn should be threaded"
+    assert "XXXX" not in assistant_turns[0]  # the 5 KB HTML body is gone
+    assert "[предыдущая сборка]" in assistant_turns[0]
+    # The user's real words survive verbatim.
+    assert any("сделай лендинг кофейни" in m["content"] for m in msgs if m["role"] == "user")
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +483,41 @@ def test_response_block_present_in_every_template() -> None:
     for template in ("fullstack", "spa", "tgbot", "api", "landing", "blank"):
         sp = build_system_prompt(template)
         assert "ФОРМАТ ОТВЕТА" in sp, f"{template} missing _RESPONSE"
+
+
+def test_brief_only_drops_code_blocks_keeps_design() -> None:
+    """The Art-Director (pass 1) writes a PROSE brief — `brief_only=True` strips
+    the code-implementation contracts (the <file> response format, stacks, the
+    self-check) while KEEPING the design-thinking blocks. Pass 2 (the writer)
+    uses the full prompt, so final code quality is unaffected."""
+    for tmpl in ("landing", "nextjs_entities", "fullstack", "spa"):
+        full = build_system_prompt(tmpl)
+        brief = build_system_prompt(tmpl, brief_only=True)
+        # Code-only response format dropped...
+        assert "ФОРМАТ ОТВЕТА" in full, tmpl
+        assert "ФОРМАТ ОТВЕТА" not in brief, tmpl
+        # ...design-thinking kept...
+        assert "АРТ-ДИРЕКЦИЯ" in brief, tmpl
+        # ...and the brief is strictly leaner.
+        assert len(brief) < len(full), tmpl
+
+    # The shadcn app kit (_ENTITIES_UI) + stack are the heaviest blocks; the
+    # brief drops them, so the saving on entity apps is substantial.
+    full_e = build_system_prompt("nextjs_entities")
+    brief_e = build_system_prompt("nextjs_entities", brief_only=True)
+    assert len(full_e) - len(brief_e) > 2000
+
+
+def test_build_art_director_system_is_lean() -> None:
+    """`build_art_director_system` is the brief-lean system used for pass 1 —
+    no project_id / empty prompt reduces it to build_system_prompt(brief_only)."""
+    from omnia_api.services.prompt_builder import build_art_director_system
+
+    got = build_art_director_system("landing")
+    assert got
+    assert "ФОРМАТ ОТВЕТА" not in got
+    assert "АРТ-ДИРЕКЦИЯ" in got
+    assert len(got) < len(build_system_prompt("landing"))
 
 
 def test_backend_templates_omit_skill_brief() -> None:
@@ -638,14 +806,25 @@ def test_entities_ui_brief_selects_screen_archetype() -> None:
     from omnia_api.services.prompt_builder import _ENTITIES_UI
 
     assert "АРХЕТИП ГЛАВНОГО ЭКРАНА" in _ENTITIES_UI
-    for name in ("КОМАНД-ЦЕНТР", "ВИТРИНА-КАТАЛОГ", "ДОСЬЕ-ФОКУС", "ТРЕКЕР-ПОТОК"):
+    for name in (
+        "КОМАНД-ЦЕНТР",
+        "ВИТРИНА-КАТАЛОГ",
+        "ДОСЬЕ-ФОКУС",
+        "ТРЕКЕР-ПОТОК",
+        "РАСПИСАНИЕ-КАЛЕНДАРЬ",
+    ):
         assert name in _ENTITIES_UI, f"archetype {name} dropped from _ENTITIES_UI"
     # archetype block sits ABOVE the dashboard recipe (it reframes it)
     assert _ENTITIES_UI.index("АРХЕТИП ГЛАВНОГО ЭКРАНА") < _ENTITIES_UI.index(
         "рецепт архетипа"
     )
-    # no hand-rolled kanban (kit has no Board component)
-    assert "Канбан-доски в ките НЕТ" in _ENTITIES_UI
+    # the kit OWNS the kanban + calendar + master-detail (split) views — the brief
+    # must route to them, NOT tell the writer they're missing (stale-guidance guard).
+    assert "Канбан-доски в ките НЕТ" not in _ENTITIES_UI
+    assert 'view="board"' in _ENTITIES_UI
+    assert 'view="calendar"' in _ENTITIES_UI
+    assert 'view="split"' in _ENTITIES_UI
+    assert "MasterDetailView" in _ENTITIES_UI
 
 
 def test_entities_ui_public_home_uses_storefront_hero() -> None:
@@ -664,5 +843,138 @@ def test_entities_ui_public_home_uses_storefront_hero() -> None:
     )
     # it must be importable from the kit barrel (appears in the import line)
     assert _ENTITIES_UI.index("StorefrontHero") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
+def test_entities_ui_public_home_uses_storefront_section() -> None:
+    # The connective marketing tissue BELOW the hero (services / value props /
+    # features / pricing / FAQ) is the biggest hand-rolled, variable-quality
+    # region on the most shareable surface. Guidance must anchor it on the
+    # <StorefrontSection> + <FeatureCard> kit primitives (brand-palette-driven,
+    # model-independent) instead of raw Tailwind, and both must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "StorefrontSection" in _ENTITIES_UI
+    assert "FeatureCard" in _ENTITIES_UI
+    # the section rule names the below-hero region it owns
+    assert "СЕКЦИИ ПОД ГЕРОЕМ" in _ENTITIES_UI
+    # section headings must be <h2> (the single <h1> stays on the hero)
+    assert "Заголовки секций = <h2>" in _ENTITIES_UI
+    # both primitives sit in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("StorefrontSection") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # both must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("FeatureCard") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
+def test_entities_ui_public_home_uses_pricing_plans() -> None:
+    # Pricing / tariffs is the highest-conversion below-hero section and a
+    # genuinely distinct premium pattern (a recommended tier drawn out by a brand
+    # gradient border) — it must anchor on the <PricingPlans> kit primitive, not
+    # raw hand-rolled Tailwind, and the primitive must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "PricingPlans" in _ENTITIES_UI
+    # the pricing rule names the section it owns
+    assert "ЦЕНЫ / ТАРИФЫ" in _ENTITIES_UI
+    # the recommended tier is highlighted (the gradient-border draw)
+    assert "highlighted" in _ENTITIES_UI
+    # it sits in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("PricingPlans") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("PricingPlans") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
+def test_entities_ui_public_home_uses_testimonial_wall() -> None:
+    # Social proof is a genuinely distinct premium pattern (quote-forward cards
+    # with a brand quote-mark, star rating and an avatar-or-initials footer) — it
+    # must anchor on the <TestimonialWall> kit primitive instead of hand-rolled
+    # testimonial cards, and the primitive must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "TestimonialWall" in _ENTITIES_UI
+    # the testimonial rule names the section it owns
+    assert "ОТЗЫВЫ / СОЦ-ДОКАЗАТЕЛЬСТВО" in _ENTITIES_UI
+    # the old "hand-roll testimonials yourself" guidance is gone — the FAQ branch
+    # keeps the manual fallback, but testimonials now route to the kit primitive
+    assert "для отзывов используй <TestimonialWall>" in _ENTITIES_UI
+    # it sits in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("TestimonialWall") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("TestimonialWall") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
+def test_entities_ui_public_home_uses_faq_accordion() -> None:
+    # FAQ is a genuinely distinct premium pattern (an interactive brand-tinted
+    # accordion with a rotating chevron and a smoothly sliding answer) — it must
+    # anchor on the <FaqAccordion> kit primitive instead of a hand-rolled list of
+    # <details>, and the primitive must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "FaqAccordion" in _ENTITIES_UI
+    # the FAQ rule names the section it owns
+    assert "FAQ / ЧАСТЫЕ ВОПРОСЫ" in _ENTITIES_UI
+    # the old "hand-roll the FAQ content yourself" guidance is gone — FAQ now
+    # routes to the kit primitive
+    assert "сверстай содержимое сам" not in _ENTITIES_UI
+    assert "для FAQ —" in _ENTITIES_UI
+    # it sits in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("FaqAccordion") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("FaqAccordion") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
+def test_entities_ui_public_home_uses_cta_band() -> None:
+    # The closing call-to-action is a genuinely distinct premium pattern (the only
+    # full-bleed, inverted, brand-saturated band in the kit — the page's conversion
+    # climax) — it must anchor on the <CtaBand> kit primitive instead of a
+    # hand-rolled final CTA, and the primitive must be importable.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "CtaBand" in _ENTITIES_UI
+    # the CTA rule names the section it owns
+    assert "ФИНАЛЬНЫЙ ПРИЗЫВ / CTA-БЭНД" in _ENTITIES_UI
+    # it explicitly tells the model NOT to hand-roll the final CTA
+    assert "НЕ верстай финальный призыв сырьём" in _ENTITIES_UI
+    # it sits in the public-home half, ABOVE the cabinet AppShell block
+    assert _ENTITIES_UI.index("CtaBand") < _ENTITIES_UI.index(
+        "src/app/(app)/layout.tsx"
+    )
+    # must be importable from the kit barrel (appear in the import line)
+    assert _ENTITIES_UI.index("CtaBand") < _ENTITIES_UI.index(
+        '} from "@/components/omnia"'
+    )
+
+
+def test_entities_ui_dashboard_loading_never_blank() -> None:
+    # The flagship dashboard must never render a blank screen while data loads:
+    # the generated `if (loading) return null` paints nothing (and, if a fetch
+    # ever rejected, would hang there forever). Guidance must mandate a skeleton
+    # carcass and a caught Promise.all, and DashboardSkeleton must be in the
+    # kit import line so the model can reach it.
+    from omnia_api.services.prompt_builder import _ENTITIES_UI
+
+    assert "DashboardSkeleton" in _ENTITIES_UI
+    assert "НЕ `return null`" in _ENTITIES_UI
+    # the rule explicitly names the hang risk of an un-caught Promise.all
+    assert ".catch()" in _ENTITIES_UI
+    # DashboardSkeleton must be importable from the kit barrel
+    assert _ENTITIES_UI.index("DashboardSkeleton") < _ENTITIES_UI.index(
         '} from "@/components/omnia"'
     )

@@ -22,9 +22,19 @@ from omnia_api.services.discovery import (
     BUILD,
     MAX_DISCOVERY_QUESTIONS,
     PlannedQuestion,
+    _explicit_no_backend,
+    _infer_code_from_text,
+    _infer_run_intent,
+    _infer_run_intent_maybe,
     _infer_stack_from_text,
+    _infer_web_pivot,
+    _is_run_decline,
+    confident_enough_to_build,
+    cumulative_idea,
+    gather_answers,
     infer_niche_label,
     plan_discovery_questions,
+    recap_labels,
     run_discovery,
     serve_planned_question,
     wants_build_now,
@@ -387,7 +397,195 @@ async def test_build_path_honours_spa_stack(
     assert result.stack == "spa"
 
 
-async def test_invalid_stack_defaults_to_static(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_no_account_tool_vetoes_entities_to_spa(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dogfood run #2 repro — the negative stack safety-net.
+
+    The model OVER-escalated an explicit no-account calculator to
+    ``nextjs_entities`` (which would gate the tool behind /signin via the (app)
+    route group). The user said «без регистрации / без входа / без аккаунтов» and
+    no positive backend signal survives the negation check, so the build is vetoed
+    down to ``spa`` — a no-backend interactive React tool that can't gate."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "build",
+                    "message": "Отлично, собираю…",
+                    "brief": "Ипотечный калькулятор с графиком амортизации.",
+                    "stack": "nextjs_entities",
+                }
+            )
+        ),
+    )
+    result = await run_discovery(
+        [
+            {"role": "user", "content": "калькулятор ипотеки с интерактивным графиком"},
+            {"role": "user", "content": "просто онлайн-калькулятор, без регистрации и без входа"},
+            {"role": "user", "content": "нужен только калькулятор. Без аккаунтов."},
+        ],
+        "просто сделай уже",
+        asked_count=3,
+    )
+    assert result.action == BUILD
+    assert result.stack == "spa"
+
+
+async def test_no_account_veto_spares_real_backend_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The veto must NOT downgrade a genuine app that just skips user accounts.
+
+    «магазин без регистрации» still carries commerce signals (корзина/каталог) →
+    ``_infer_stack_from_text`` stays truthy → the negative net is gated off and
+    the model's ``nextjs_entities`` pick survives."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "build",
+                    "message": "ок",
+                    "brief": "Интернет-магазин с корзиной и каталогом товаров.",
+                    "stack": "nextjs_entities",
+                }
+            )
+        ),
+    )
+    result = await run_discovery(
+        [{"role": "user", "content": "магазин с корзиной и каталогом товаров, без регистрации"}],
+        "просто сделай",
+        asked_count=2,
+    )
+    assert result.action == BUILD
+    assert result.stack == "nextjs_entities"
+
+
+def test_explicit_no_backend_predicate() -> None:
+    """Whole-phrase refusal detector — fires only on an explicit "no accounts"."""
+    assert _explicit_no_backend("просто калькулятор, без регистрации")
+    assert _explicit_no_backend("конвертер валют без аккаунтов")
+    assert _explicit_no_backend("a puzzle game, no login no accounts")
+    # A plain tool description with no refusal phrase does not fire.
+    assert not _explicit_no_backend("калькулятор ипотеки с графиком")
+    # A positive backend ask does not fire (no negation phrase).
+    assert not _explicit_no_backend("магазин с регистрацией и корзиной")
+
+
+def test_infer_code_detects_program_requests() -> None:
+    """Standalone program/script asks → the ``code`` stack (any language)."""
+    assert _infer_code_from_text("напиши скрипт на python для парсинга цен") == "code"
+    assert _infer_code_from_text("сделай парсер сайта объявлений") == "code"
+    assert _infer_code_from_text("утилита cli на go для бэкапов") == "code"
+    assert _infer_code_from_text("напиши программу на rust, считающую хэши") == "code"
+
+
+def test_infer_code_spares_websites() -> None:
+    """High precision: a site request must never be pulled into ``code`` — even
+    when it names a language ("сайт на python/Django" is still a web product)."""
+    assert _infer_code_from_text("лендинг для кофейни с меню") is None
+    assert _infer_code_from_text("crm для записи клиентов с входом") is None
+    assert _infer_code_from_text("сайт на python django для школы") is None
+    assert _infer_code_from_text("интернет-магазин косметики") is None
+
+
+async def test_build_path_routes_program_to_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deterministic code net: even if the model defaults the stack to static, a
+    clear program/script ask escalates to ``code`` in the BUILD result."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "build",
+                    "message": "ок",
+                    "brief": "CLI-парсер цен на Python с выводом в CSV.",
+                    "stack": "static",
+                }
+            )
+        ),
+    )
+    result = await run_discovery(
+        [{"role": "user", "content": "напиши скрипт-парсер цен на python"}],
+        "просто сделай",
+        asked_count=2,
+    )
+    assert result.action == BUILD
+    assert result.stack == "code"
+
+
+async def test_code_request_skips_the_interview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owner 2026-06-19: a script/program first prompt must NOT get the design
+    interview (palette/audience/sections are off-target). It builds straight away
+    as `code` on the first turn — no ASK, no gateway call. The gateway is stubbed
+    to RAISE so we prove no round-trip happened (the short-circuit returns first)."""
+    def _boom(*_a, **_k):
+        raise AssertionError("gateway must not be called for a code request")
+
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", _boom)
+    result = await run_discovery(
+        [],
+        "напиши скрипт на питон который запускает microsoft edge каждые 5 минут",
+        asked_count=0,
+    )
+    assert result.action == BUILD
+    assert result.stack == "code"
+
+
+def test_infer_web_pivot_detects_run_as_web_intent() -> None:
+    """Owner 2026-06-19: a code-project follow-up asking to RUN it as a web page
+    triggers the pivot, but a normal code edit / scraper request does NOT (a false
+    positive would re-template the project)."""
+    assert _infer_web_pivot("сделай веб-вид змейки чтобы запустить здесь")
+    assert _infer_web_pivot("а ты можешь веб вид сделать чтобы прям здесь её запустить")
+    assert _infer_web_pivot("хочу поиграть здесь")
+    assert _infer_web_pivot("сделай чтобы в браузере работало")
+    # Not a pivot — still plain code work.
+    assert not _infer_web_pivot("добавь логирование в скрипт")
+    assert not _infer_web_pivot("напиши парсер сайта на python")
+    assert not _infer_web_pivot("запусти скрипт")
+
+
+def test_run_intent_three_tiers() -> None:
+    """Owner 2026-06-19 — smart run/install routing: STRONG → installer card,
+    AMBIGUOUS → ask first, DECLINE → "what to change?", else → build."""
+
+    def route(p: str) -> str:
+        if _infer_run_intent(p):
+            return "install"
+        if _is_run_decline(p):
+            return "decline"
+        if _infer_run_intent_maybe(p):
+            return "ask"
+        return "build"
+
+    # STRONG — act directly (installer card).
+    assert route("как запустить эту игру") == "install"
+    assert route("создай установщик") == "install"
+    assert route("Да, собрать установщик") == "install"
+    assert route("сделай так чтобы запустилось в один клик") == "install"
+    # AMBIGUOUS — ask "собрать установщик?" first, never guess.
+    assert route("запусти") == "ask"
+    assert route("хочу поделиться с друзьями") == "ask"
+    assert route("дай попробовать") == "ask"
+    # DECLINE — the "no" answer → ask what to change, not a garbage build.
+    assert route("Нет, доработать проект") == "decline"
+    assert route("нет, давай доработаем") == "decline"
+    # Plain build/edit — untouched.
+    assert route("поменяй цвет кнопки") == "build"
+    assert route("добавь раздел отзывов") == "build"
+    assert route("сделай веб-вид") == "build"
+
+
+async def test_invalid_stack_defaults_to_spa(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Invalid model stack ("django") → coerced to static, then the opt-in rule
+    (owner 2026-06-18) upgrades a non-explicit-static build to spa."""
     _install(
         monkeypatch,
         resp=_gateway_returning(
@@ -398,7 +596,7 @@ async def test_invalid_stack_defaults_to_static(monkeypatch: pytest.MonkeyPatch)
     )
     result = await run_discovery([], "лендинг", asked_count=1)
     assert result.action == BUILD
-    assert result.stack == "static"
+    assert result.stack == "spa"
 
 
 async def test_force_build_overrides_model_ask(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -588,16 +786,58 @@ async def test_forced_build_with_backend_intent_routes_to_entities(
     assert result.stack == "nextjs_entities"
 
 
-async def test_forced_build_pure_landing_stays_static(
+async def test_forced_build_pure_landing_now_spa(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A landing with no backend intent still builds static — the net is precise."""
+    """Static is opt-in (owner 2026-06-18): a plain landing with no explicit
+    "static page" ask now builds as spa (interactive React), not flat HTML."""
     _install(monkeypatch, resp=_gateway_returning("не json"))
     result = await run_discovery(
         [{"role": "user", "content": "лендинг для кофейни"}],
         "просто красивая визитка с меню, генерируй",
         asked_count=0,
         force_build=True,
+    )
+    assert result.action == BUILD
+    assert result.stack == "spa"
+
+
+async def test_explicit_static_request_stays_static(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one escape hatch: an EXPLICIT plain-HTML ask keeps the static stack."""
+    _install(monkeypatch, resp=_gateway_returning("не json"))
+    result = await run_discovery(
+        [],
+        "сделай простую статичную html-страницу без интерактива, генерируй",
+        asked_count=0,
+        force_build=True,
+    )
+    assert result.action == BUILD
+    assert result.stack == "static"
+
+
+async def test_explicit_static_not_hijacked_by_script_word_in_brief(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (live prod 2026-06-18): the model's brief for a static page said
+    «минимум скриптов»; the "скрипт" substring tripped the code net and routed the
+    build to `code`. Explicit-static must win outright over the code net."""
+    _install(
+        monkeypatch,
+        resp=_gateway_returning(
+            json.dumps(
+                {
+                    "action": "build",
+                    "message": "ок",
+                    "brief": "статичная html-страница, минимум скриптов, без интерактива",
+                    "stack": "static",
+                }
+            )
+        ),
+    )
+    result = await run_discovery(
+        [], "сделай простую статичную html-страницу без интерактива", asked_count=2
     )
     assert result.action == BUILD
     assert result.stack == "static"
@@ -821,3 +1061,93 @@ def test_zero_question_build_skips_popup_for_rich_prompt() -> None:
 def test_zero_question_build_returns_none_for_thin_prompt() -> None:
     """A thin prompt needs a question — the floor must not over-trigger."""
     assert zero_question_build([], "сделай сайт") is None
+
+
+# ─── Onboarding LIVE-causality (pillar 2): recap + live niche + confidence-skip ─
+
+
+def test_cumulative_idea_joins_all_user_text() -> None:
+    """The cumulative idea is the product idea PLUS every answer (+ latest), so a
+    later answer can sharpen the niche the first prompt left vague."""
+    history = [
+        {"role": "user", "content": "сайт для бизнеса"},
+        {"role": "assistant", "content": "Чем занимаетесь?"},
+        {"role": "user", "content": "доставка еды"},
+    ]
+    text = cumulative_idea(history, "ещё нужно меню")
+    assert "сайт для бизнеса" in text
+    assert "доставка еды" in text
+    assert "меню" in text
+
+
+def test_live_niche_sharpens_on_later_answer() -> None:
+    """A vague first prompt yields no niche; once «доставка еды» arrives the
+    cumulative re-inference surfaces «кафе / ресторан» — the badge shifts live."""
+    assert infer_niche_label("сайт для бизнеса") == ""
+    history = [
+        {"role": "user", "content": "сайт для бизнеса"},
+        {"role": "assistant", "content": "Чем занимаетесь?"},
+    ]
+    sharpened = infer_niche_label(cumulative_idea(history, "доставка еды"))
+    assert sharpened == "кафе / ресторан"
+
+
+def test_gather_answers_excludes_idea_and_includes_latest() -> None:
+    """Answers gathered so far = user turns after the idea, plus the latest prompt
+    (the answer to the previous question, not yet in history)."""
+    history = [
+        {"role": "user", "content": "магазин косметики"},
+        {"role": "assistant", "content": "Какой тон?"},
+        {"role": "user", "content": "Премиум"},
+        {"role": "assistant", "content": "Какие разделы?"},
+    ]
+    answers = gather_answers(history, "Каталог, Корзина", asked_count=2)
+    assert answers == ("Премиум", "Каталог, Корзина")
+
+
+def test_gather_answers_empty_on_first_turn() -> None:
+    """On the very first turn (idea only) nothing has been answered yet."""
+    assert gather_answers([], "магазин косметики", asked_count=0) == ()
+
+
+def test_recap_labels_clip_and_cap() -> None:
+    """Recap chips collapse whitespace, clip overly long answers, and keep only
+    the newest ≤3 so the narrow chat panel never floods."""
+    labels = recap_labels(("a", "b", "c", "d"))
+    assert labels == ("b", "c", "d")  # newest 3
+    long = recap_labels(("очень длинный ответ который точно не влезает в чип",))
+    assert long[0].endswith("…") and len(long[0]) <= 28
+
+
+def test_confidence_skip_fires_on_decisive_answers() -> None:
+    """≥2 answers pinning a recognised niche + ≥2 design axes → build early."""
+    history = [
+        {"role": "user", "content": "магазин косметики"},
+        {"role": "assistant", "content": "Тон?"},
+        {"role": "user", "content": "тёмный премиум"},
+        {"role": "assistant", "content": "Разделы?"},
+    ]
+    assert confident_enough_to_build(
+        history, "каталог и отзывы", asked_count=2, niche="интернет-магазин"
+    )
+
+
+def test_confidence_skip_holds_when_niche_unknown() -> None:
+    """No recognised niche → keep asking, even with pinned axes (fail-soft)."""
+    history = [
+        {"role": "user", "content": "что-то непонятное"},
+        {"role": "assistant", "content": "Тон?"},
+        {"role": "user", "content": "тёмный премиум"},
+        {"role": "assistant", "content": "Разделы?"},
+    ]
+    assert not confident_enough_to_build(
+        history, "каталог и отзывы", asked_count=2, niche=""
+    )
+
+
+def test_confidence_skip_holds_early_in_interview() -> None:
+    """Never cut an interview the user has barely begun (asked_count < 2)."""
+    history = [{"role": "user", "content": "магазин косметики"}]
+    assert not confident_enough_to_build(
+        history, "тёмный премиум каталог", asked_count=1, niche="интернет-магазин"
+    )

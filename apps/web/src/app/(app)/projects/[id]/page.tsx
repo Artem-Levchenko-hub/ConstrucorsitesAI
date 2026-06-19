@@ -4,7 +4,7 @@ import { TopBar } from "@/components/workspace/TopBar";
 import { Workspace } from "@/components/workspace/Workspace";
 import { mockApi, USE_MOCKS } from "@/lib/api/mocks";
 import { serverApiFetchResult, type ServerFetchResult } from "@/lib/api/server";
-import { isRemix } from "@/lib/project-lineage";
+import { remixSource } from "@/lib/project-lineage";
 import type { Project } from "@/lib/api/types";
 
 async function loadProject(
@@ -56,7 +56,7 @@ export default async function WorkspacePage({
         projectId={project.id}
         projectSlug={project.slug}
         imageGenEnabled={project.image_gen_enabled ?? true}
-        isRemix={isRemix(project)}
+        remixSource={remixSource(project)}
       />
       <Workspace project={project} />
     </>

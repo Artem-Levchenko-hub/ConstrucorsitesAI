@@ -99,6 +99,21 @@ template ships a component kit — **use it, don't hand-roll** chrome:
   `StatCard`, `DataTable`, `CrudResource` (full managed list+CRUD for one entity),
   `EntityForm`, `EmptyState`, `useEntity`. `@/components/ui/*` — shadcn primitives
   (button, card, input, select, dialog, sheet, table, badge, tabs, …).
+- **`CrudResource view=` picks the screen architecture** — `"table"` (default,
+  business records), `"gallery"` (image-forward card grid, needs `media`),
+  `"board"` (drag-and-drop kanban), `"calendar"` (month grid + agenda, needs
+  `dateField`), or `"split"` (master-detail / inbox layout). For an entity that
+  moves through stages (заявка/тикет/заказ/сделка/задача), set `view="board"` plus
+  `filterField` = the status field and `filterTabs` = one tab per stage (first
+  `{label:"Все", value:null}`, then each stage); the board builds its columns from
+  those tabs and saves the new status when a card is dragged. For an entity that
+  lives on a date (бронь/запись/событие/встреча/смена/дедлайн), set `view="calendar"`
+  plus `dateField` = the date field — records land on their day (month grid on
+  desktop, agenda list on mobile). For a read-heavy entity whose value is ONE rich
+  record studied at a time (досье/медкарта/профиль/дело/обращение/документ), set
+  `view="split"` — a compact list rail + the selected record's full detail in a
+  reading pane (full-screen with a back button on mobile). No hand-rolled kanban,
+  calendar grid or split-pane — the kit owns them.
 - **Multi-page app, not one screen**: wrap every page in `<AppShell>` (a route-group
   `src/app/(app)/layout.tsx` defines the nav once); a route per entity + a dashboard.
 - **`action`/`actions` props take JSX, not objects**: pass a real element, e.g.

@@ -19,6 +19,7 @@ import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AuthShell } from "@/components/omnia";
 
 export const metadata = { title: "Регистрация" };
 
@@ -87,57 +88,56 @@ export default async function SignUpPage({
   };
 
   return (
-    <main className="grid min-h-screen place-items-center bg-muted/30 px-4 py-12">
-      <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-8 shadow-sm">
-        <header className="mb-6 space-y-1 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">Регистрация</h1>
-          <p className="text-sm text-muted-foreground">
-            Уже есть аккаунт?{" "}
-            <Link href="/signin" className="font-medium text-primary hover:underline">
-              Войти
-            </Link>
-          </p>
-        </header>
+    <AuthShell
+      mode="signup"
+      title="Регистрация"
+      subtitle={
+        <>
+          Уже есть аккаунт?{" "}
+          <Link href="/signin" className="font-medium text-primary hover:underline">
+            Войти
+          </Link>
+        </>
+      }
+    >
+      {sp.error && errorMessage[sp.error] && (
+        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {errorMessage[sp.error]}
+        </div>
+      )}
 
-        {sp.error && errorMessage[sp.error] && (
-          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {errorMessage[sp.error]}
-          </div>
-        )}
-
-        <form action={action} className="space-y-4">
-          <input type="hidden" name="next" value={sp.next ?? APP_HOME} />
-          <div className="space-y-2">
-            <label htmlFor="name" className="text-sm font-medium">
-              Имя <span className="font-normal text-muted-foreground">(необязательно)</span>
-            </label>
-            <Input id="name" name="name" type="text" autoComplete="name" />
-          </div>
-          <div className="space-y-2">
-            <label htmlFor="email" className="text-sm font-medium">
-              Email
-            </label>
-            <Input id="email" name="email" type="email" required autoComplete="email" />
-          </div>
-          <div className="space-y-2">
-            <label htmlFor="password" className="text-sm font-medium">
-              Пароль
-            </label>
-            <Input
-              id="password"
-              name="password"
-              type="password"
-              required
-              minLength={8}
-              autoComplete="new-password"
-            />
-            <p className="text-xs text-muted-foreground">Минимум 8 символов</p>
-          </div>
-          <Button type="submit" size="lg" className="w-full">
-            Создать аккаунт
-          </Button>
-        </form>
-      </div>
-    </main>
+      <form action={action} className="space-y-4">
+        <input type="hidden" name="next" value={sp.next ?? APP_HOME} />
+        <div className="space-y-2">
+          <label htmlFor="name" className="text-sm font-medium">
+            Имя <span className="font-normal text-muted-foreground">(необязательно)</span>
+          </label>
+          <Input id="name" name="name" type="text" autoComplete="name" />
+        </div>
+        <div className="space-y-2">
+          <label htmlFor="email" className="text-sm font-medium">
+            Email
+          </label>
+          <Input id="email" name="email" type="email" required autoComplete="email" />
+        </div>
+        <div className="space-y-2">
+          <label htmlFor="password" className="text-sm font-medium">
+            Пароль
+          </label>
+          <Input
+            id="password"
+            name="password"
+            type="password"
+            required
+            minLength={8}
+            autoComplete="new-password"
+          />
+          <p className="text-xs text-muted-foreground">Минимум 8 символов</p>
+        </div>
+        <Button type="submit" size="lg" className="w-full">
+          Создать аккаунт
+        </Button>
+      </form>
+    </AuthShell>
   );
 }

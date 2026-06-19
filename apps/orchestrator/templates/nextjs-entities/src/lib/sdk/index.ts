@@ -80,9 +80,11 @@ async function req<T = unknown>(
 }
 
 export interface EntityClient {
-  /** List rows. `params`: sort/order/limit/page/offset. */
+  /** List rows. `params`: sort/order/limit/page/offset. Resolves to `[]` on
+   *  failure (never rejects) — see `safeCollection`. */
   list(params?: ListParams): Promise<Row[]>;
-  /** List rows matching exact field values, e.g. `{ done: false }`. */
+  /** List rows matching exact field values, e.g. `{ done: false }`. Resolves
+   *  to `[]` on failure (never rejects). */
   filter(query: Query, params?: ListParams): Promise<Row[]>;
   /** One row by id. Throws ApiError(404) if missing / not yours.
    *  `params.expand` embeds related records into row._expanded. */
@@ -95,12 +97,35 @@ export interface EntityClient {
   delete(id: string): Promise<{ id: string; deleted: true }>;
 }
 
+/**
+ * Collection reads degrade gracefully: a failed `list`/`filter` (session lost,
+ * API hiccup, network blip) resolves to `[]` instead of rejecting. This single
+ * rule is what keeps a generated dashboard or table from rendering a
+ * permanently blank screen — the common hand-rolled
+ * `Promise.all([list, list]).then(setLoading(false))` never catches, so if a
+ * read threw, `loading` would stay `true` forever and `if (loading) return
+ * null` would paint nothing. With this, the promise always settles: the page
+ * clears `loading`, paints its shell, and shows its empty states. Writes
+ * (`create`/`update`/`delete`) and `get` still throw — a caller must know when
+ * a mutation, or a specific record lookup, failed.
+ */
+async function safeCollection(p: Promise<Row[]>): Promise<Row[]> {
+  try {
+    return await p;
+  } catch (err) {
+    if (typeof console !== "undefined") {
+      console.warn("[omnia sdk] collection read failed — rendering empty:", err);
+    }
+    return [];
+  }
+}
+
 function entityClient(name: string): EntityClient {
   const base = `/api/entities/${encodeURIComponent(name)}`;
   return {
-    list: (params) => req<Row[]>("GET", base + qs(params)),
+    list: (params) => safeCollection(req<Row[]>("GET", base + qs(params))),
     filter: (query, params) =>
-      req<Row[]>("GET", base + qs({ ...query, ...params })),
+      safeCollection(req<Row[]>("GET", base + qs({ ...query, ...params }))),
     get: (id, params) =>
       req<Row>("GET", `${base}/${encodeURIComponent(id)}${qs(params)}`),
     create: (data) => req<Row>("POST", base, data),

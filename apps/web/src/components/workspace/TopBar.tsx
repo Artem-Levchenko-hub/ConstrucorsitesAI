@@ -4,13 +4,12 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ChevronDown,
-  GitFork,
   LogOut,
   Settings,
   User as UserIcon,
 } from "lucide-react";
-import { REMIX_BADGE_LABEL } from "@/lib/project-lineage";
-import { Badge } from "@/components/ui/badge";
+import type { RemixSource } from "@/lib/project-lineage";
+import { RemixSourceModal } from "./RemixSourceModal";
 import { logoutAction } from "@/app/(auth)/actions";
 import {
   Avatar,
@@ -25,6 +24,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { DownloadButton } from "./DownloadButton";
 import { GithubPushButton } from "./GithubPushButton";
 import { ImageGenToggle } from "./ImageGenToggle";
 import { LogsViewer } from "./LogsViewer";
@@ -38,7 +38,7 @@ export function TopBar({
   projectId,
   projectSlug,
   imageGenEnabled,
-  isRemix = false,
+  remixSource = null,
   showProjectControls = true,
 }: {
   user: { email: string };
@@ -47,9 +47,10 @@ export function TopBar({
   projectId?: string;
   /** Используется как default repo_name в диалоге «Залить в GitHub». */
   projectSlug?: string;
-  /** V4.2b-finish — project was forked ("Remix this") from another. Renders a
-   *  remix lineage badge next to the project name (viral provenance). */
-  isRemix?: boolean;
+  /** V4 #3 — when set, the project is a remix of `remixSource`. Renders a
+   *  clickable remix lineage badge next to the project name that opens a modal
+   *  attributing the source + re-remixing this version (viral provenance). */
+  remixSource?: RemixSource | null;
   /** Read-only: AI auto-classified design preset for this project. */
   designPresetId?: string;
   designPresetName?: string;
@@ -82,15 +83,8 @@ export function TopBar({
             </Link>
             <span className="text-fg-tertiary">/</span>
             <span className="truncate text-sm font-medium">{projectName}</span>
-            {isRemix && (
-              <Badge
-                variant="accent"
-                title="Этот проект — ремикс другого"
-                className="shrink-0 gap-1"
-              >
-                <GitFork className="h-3 w-3" />
-                {REMIX_BADGE_LABEL}
-              </Badge>
+            {remixSource && projectId && (
+              <RemixSourceModal projectId={projectId} source={remixSource} />
             )}
           </>
         )}
@@ -100,6 +94,9 @@ export function TopBar({
         {showProjectControls && (
           <>
             {projectId && <RuntimeButton projectId={projectId} />}
+            {projectId && (
+              <DownloadButton projectId={projectId} projectSlug={projectSlug} />
+            )}
             {projectId && <LogsViewer projectId={projectId} />}
             {projectSlug && <PublishButton projectSlug={projectSlug} />}
             {projectId && projectSlug && (

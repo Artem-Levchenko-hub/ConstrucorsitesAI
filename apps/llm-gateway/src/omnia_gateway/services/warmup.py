@@ -21,6 +21,7 @@ from typing import Any
 
 import structlog
 
+from omnia_gateway.core.config import get_settings
 from omnia_gateway.services import litellm_router
 
 log = structlog.get_logger(__name__)
@@ -73,7 +74,21 @@ async def run_warmup_loop() -> None:
 
     Cancellation-safe: ``asyncio.CancelledError`` exits the loop cleanly
     on shutdown without re-firing the ping.
+
+    No-op when warmup is disabled OR no proxyapi key is configured: the loop
+    exists ONLY to keep proxyapi.ru's idle session warm, and proxyapi is retired
+    (every role routes via vsegpt, which opens a fresh client per call — nothing
+    to keep warm). Without this guard it pinged dead proxyapi routes every 4 min
+    forever, burning a useless upstream call each tick.
     """
+    settings = get_settings()
+    if not settings.enable_warmup or settings.proxyapi_api_key is None:
+        log.info(
+            "warmup.skipped",
+            enable_warmup=settings.enable_warmup,
+            proxyapi_configured=settings.proxyapi_api_key is not None,
+        )
+        return
     await asyncio.gather(*(_ping(m) for m in WARMUP_MODELS), return_exceptions=True)
     log.info("warmup.initial_done", models=list(WARMUP_MODELS))
     while True:

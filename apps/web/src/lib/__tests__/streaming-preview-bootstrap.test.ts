@@ -37,6 +37,9 @@ let activeListeners: EventListener[] = [];
 
 /** Монтирует свежий bootstrap-iframe: чистый DOM + morphdom + исполненный IIFE. */
 function boot(): void {
+  // documentElement is global across tests; the reveal driver flips omnia-anim
+  // on it, so reset it for a clean per-test start (each IIFE re-arms it).
+  document.documentElement.className = "";
   document.head.innerHTML = '<style id="omnia-css"></style>';
   document.body.innerHTML = PLACEHOLDER;
   delete w.__omniaImages;
@@ -172,8 +175,18 @@ describe("streaming-preview bootstrap harness (V3.0b)", () => {
     expect(buildBootstrap("")).toBe(BOOTSTRAP_HTML);
   });
 
-  it("(c-render) keeps a streamed .reveal node present and unhidden", () => {
+  // ── Гейт (c): LIVE SECTION-BIRTH — бутстрап САМ гонит kit-reveal на стриме ──
+  // V3 #2a: секция рождается тем же .reveal/.is-visible переходом, что играет
+  // на готовой /p/<slug>, НО per-section ПО МЕРЕ стрима. Бутстрап включает
+  // html.omnia-anim (взводит скрытый старт kit-CSS) и сам метит .is-visible на
+  // следующем кадре — kit-JS (IntersectionObserver) намеренно не грузится.
+  const flushRaf = () => new Promise((r) => setTimeout(r, 60));
+
+  it("(c-render) arms html.omnia-anim and reveals a streamed .reveal section", async () => {
     boot();
+    expect(document.documentElement.classList.contains("omnia-anim")).toBe(
+      false,
+    );
     send({
       type: "omnia:render",
       bodyHtml: '<section class="reveal" id="r"><p>живой контент</p></section>',
@@ -182,12 +195,53 @@ describe("streaming-preview bootstrap harness (V3.0b)", () => {
     const r = document.getElementById("r");
     expect(r).toBeTruthy();
     expect(r!.classList.contains("reveal")).toBe(true);
-    // Бутстрап сам НЕ прячет .reveal (скрытый старт гейтится классом, который
-    // добавляет ТОЛЬКО kit-JS, а его мы намеренно не грузим).
-    const inlineStyle = r!.getAttribute("style") ?? "";
-    expect(inlineStyle).not.toMatch(
-      /opacity\s*:\s*0|display\s*:\s*none|visibility\s*:\s*hidden/,
+    // Бутстрап взвёл kit-скрытый-старт (без него .reveal-переход не сыграл бы).
+    expect(document.documentElement.classList.contains("omnia-anim")).toBe(true);
+    // Свежая секция помечена для бренд-акцентного birth-свайпа и СТАРТУЕТ
+    // скрытой (ещё без .is-visible) → переход реально проигрывается, не «снап».
+    expect(r!.hasAttribute("data-omnia-born")).toBe(true);
+    expect(r!.classList.contains("is-visible")).toBe(false);
+    // После кадра анимации секция раскрыта.
+    await flushRaf();
+    expect(r!.classList.contains("is-visible")).toBe(true);
+  });
+
+  it("(c-cascade) reveals sections as they stream and keeps born ones visible", async () => {
+    boot();
+    // Кадр 1: только герой.
+    send({
+      type: "omnia:render",
+      bodyHtml: '<section class="reveal" id="hero"><h1>Привет</h1></section>',
+      cssText: "",
+    });
+    await flushRaf();
+    const hero = document.getElementById("hero")!;
+    expect(hero.classList.contains("is-visible")).toBe(true);
+
+    // Кадр 2: герой ДОПИСАН (контент изменился → morphdom патчит узел и срезает
+    // is-visible) + добавлена новая секция features. Герой должен ОСТАТЬСЯ
+    // видимым (re-assert), features — родиться скрытой, затем раскрыться.
+    send({
+      type: "omnia:render",
+      bodyHtml:
+        '<section class="reveal" id="hero"><h1>Привет</h1><p>подзаголовок</p></section>' +
+        '<section class="reveal" id="features"><h2>Фичи</h2></section>',
+      cssText: "",
+    });
+    const features = document.getElementById("features")!;
+    // СРАЗУ после рендера: герой не мигнул (is-visible сохранён синхронно),
+    // features ещё скрыта (родится на следующем кадре).
+    expect(document.getElementById("hero")!.classList.contains("is-visible")).toBe(
+      true,
     );
-    expect(r!.hasAttribute("hidden")).toBe(false);
+    expect(features.classList.contains("is-visible")).toBe(false);
+    expect(features.hasAttribute("data-omnia-born")).toBe(true);
+
+    await flushRaf();
+    expect(features.classList.contains("is-visible")).toBe(true);
+    // Герой по-прежнему виден после рождения второй секции.
+    expect(document.getElementById("hero")!.classList.contains("is-visible")).toBe(
+      true,
+    );
   });
 });

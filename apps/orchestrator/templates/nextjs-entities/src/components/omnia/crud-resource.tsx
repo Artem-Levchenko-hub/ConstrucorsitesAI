@@ -18,6 +18,9 @@ import {
 import { PageHeader } from "./page-header";
 import { DataTable, type Column, type FilterTab } from "./data-table";
 import { GalleryGrid, type GalleryItem, type MediaCardProps } from "./gallery-grid";
+import { BoardView, type BoardCard, type BoardColumn } from "./board-view";
+import { CalendarView, parseLocalDate, type CalendarEvent } from "./calendar-view";
+import { MasterDetailView, type SplitItem } from "./master-detail-view";
 import { RecordDetail } from "./record-detail";
 import { EntityForm, type FieldSpec } from "./entity-form";
 import { useEntity } from "./use-entity";
@@ -82,13 +85,26 @@ export interface CrudResourceProps {
   canDelete?: boolean;
   createLabel?: string;
   /**
-   * Render the collection as an image-forward card grid instead of a table —
-   * for visual niches a gallery sells better than rows of text (каталог,
-   * недвижимость, меню, портфолио, события). Requires `media`. Default "table".
+   * How the collection is presented:
+   *  - "table"   — sortable/filterable rows (the default, business entities).
+   *  - "gallery" — image-forward card grid for visual niches (каталог,
+   *    недвижимость, меню, портфолио, события). Requires `media`.
+   *  - "board"   — drag-and-drop kanban grouped by `filterField` into the
+   *    `filterTabs` stages, for anything that moves through a workflow (заявки,
+   *    тикеты, заказы, сделки, задачи). Dragging a card saves its new status.
+   *  - "calendar"— month-grid + agenda placed by `dateField`, for anything that
+   *    lives on a date (брони, события, встречи, смены, дедлайны). Requires
+   *    `dateField`.
+   *  - "split"   — master-detail (inbox) layout: a compact list rail + the
+   *    selected record's full detail in a reading pane, for read-heavy "one rich
+   *    record at a time" entities (досье, профили, дела, обращения, документы).
    */
-  view?: "table" | "gallery";
-  /** Row→card mapping for `view="gallery"`. Ignored in table view. */
+  view?: "table" | "gallery" | "board" | "calendar" | "split";
+  /** Row→card mapping for `view="gallery"` / `view="board"` / `view="calendar"` / `view="split"`. Ignored in table view. */
   media?: MediaMap;
+  /** The row field holding the date for `view="calendar"` (ISO string, epoch
+   *  number, or Date). Without it, calendar view falls back to a table. */
+  dateField?: string;
 }
 
 /** Plain display of a raw field value in the detail card — mirrors the table's
@@ -142,6 +158,7 @@ export function CrudResource({
   createLabel = "Создать",
   view = "table",
   media,
+  dateField,
 }: CrudResourceProps) {
   const allowBulk = selectable ?? canDelete;
   // Make every column sortable by default so operators can order a managed list
@@ -272,6 +289,58 @@ export function CrudResource({
       : undefined;
 
   const useGallery = view === "gallery" && !!media;
+  // Board view groups by the status field the writer already declared for the
+  // quick-filter. Columns come from `filterTabs` (minus the «Все» / null entry);
+  // without a status field there is nothing to group by, so fall back to table.
+  const boardColumns: BoardColumn[] = React.useMemo(
+    () =>
+      (filterTabs ?? [])
+        .filter((t) => t.value != null)
+        .map((t) => ({ value: String(t.value), label: t.label })),
+    [filterTabs],
+  );
+  const useBoard = view === "board" && !!filterField && boardColumns.length > 0;
+  // Calendar needs a date field to place records on; without one there is
+  // nothing to schedule, so fall back to a table. The dateField can ALSO be
+  // present but unplaceable: a recurring schedule keyed on a weekday ENUM
+  // ("monday") — common when the writer prescribes view="calendar" for a
+  // school timetable / opening hours — parses to null for every row, which
+  // drops every event and renders a silently blank month grid (no EmptyState,
+  // since rawCount>0). When NO loaded row carries a parseable date, degrade to
+  // the table the writer already configured (columns are always present) so the
+  // data is at least readable. Empty/loading rows keep the calendar (nothing to
+  // judge yet → no flicker before the first fetch lands).
+  const calendarPlaceable = React.useMemo(() => {
+    if (!dateField || data.rows.length === 0) return true;
+    return data.rows.some(
+      (row) => parseLocalDate(row[dateField] as CalendarEvent["date"]) !== null,
+    );
+  }, [dateField, data.rows]);
+  const useCalendar = view === "calendar" && !!dateField && calendarPlaceable;
+  // Split (master-detail) needs nothing extra — it reuses the columns/media
+  // mapping for the rail and the same RecordDetail node for the reading pane.
+  const useSplit = view === "split";
+
+  // The reading-pane body for one record — the SAME rich <RecordDetail> the
+  // row-detail dialog shows, so the split view and the modal stay in lockstep.
+  const detailFor = React.useCallback(
+    (row: Row) => (
+      <RecordDetail
+        title={media ? media.title(row) : columns[0] ? renderCell(columns[0], row) : (title ?? "Запись")}
+        eyebrow={media?.subtitle?.(row)}
+        image={media?.image?.(row)}
+        badge={media?.badge?.(row)}
+        price={media?.price?.(row)}
+        metaRight={media?.metaRight?.(row)}
+        aspect={media?.aspect}
+        fields={columns.slice(1).map((col) => ({
+          label: col.header,
+          value: renderCell(col, row),
+        }))}
+      />
+    ),
+    [media, columns, title],
+  );
 
   // Build the card models once per row set. Search keywords fold the searchable
   // columns' raw text so the gallery's search box matches the same fields the
@@ -299,6 +368,127 @@ export function CrudResource({
     }));
   }, [useGallery, media, data.rows, rowDetail, rowActions, keywordKeys]);
 
+  // Card models for the board. Reuse the gallery `media` mapping when present
+  // (title/subtitle/price/meta), else derive a sensible tile from the columns —
+  // first column as title, the next non-status column as subtitle. The status
+  // itself is the column, never repeated on the card.
+  const boardCards: BoardCard[] = React.useMemo(() => {
+    if (!useBoard) return [];
+    const subtitleCol = columns.find((c) => c.key !== filterField && c !== columns[0]);
+    return data.rows.map((row) => ({
+      id: row.id,
+      status: row[filterField as string] == null ? null : String(row[filterField as string]),
+      title: media ? media.title(row) : columns[0] ? renderCell(columns[0], row) : row.id,
+      subtitle: media
+        ? media.subtitle?.(row)
+        : subtitleCol
+          ? renderCell(subtitleCol, row)
+          : undefined,
+      meta: media?.price?.(row),
+      metaRight: media?.metaRight?.(row),
+      badge: media?.badge?.(row),
+      onClick: rowDetail ? () => setViewing(row) : undefined,
+      actions: rowActions ? rowActions(row) : undefined,
+      keywords: keywordKeys
+        .map((k) => {
+          const v = (row as Record<string, unknown>)[k];
+          return v == null ? "" : String(v);
+        })
+        .join(" "),
+    }));
+  }, [useBoard, media, data.rows, columns, filterField, rowDetail, rowActions, keywordKeys]);
+
+  // Event models for the calendar. Mirror the board's display mapping (reuse
+  // `media` when present, else first column = title, next non-date column =
+  // subtitle); the date itself comes from `dateField`.
+  const calendarEvents: CalendarEvent[] = React.useMemo(() => {
+    if (!useCalendar || !dateField) return [];
+    const subtitleCol = columns.find((c) => c.key !== dateField && c !== columns[0]);
+    return data.rows.map((row) => ({
+      id: row.id,
+      date: row[dateField] as CalendarEvent["date"],
+      title: media ? media.title(row) : columns[0] ? renderCell(columns[0], row) : row.id,
+      subtitle: media
+        ? media.subtitle?.(row)
+        : subtitleCol
+          ? renderCell(subtitleCol, row)
+          : undefined,
+      meta: media?.price?.(row),
+      badge: media?.badge?.(row),
+      onClick: rowDetail ? () => setViewing(row) : undefined,
+      actions: rowActions ? rowActions(row) : undefined,
+      keywords: keywordKeys
+        .map((k) => {
+          const v = (row as Record<string, unknown>)[k];
+          return v == null ? "" : String(v);
+        })
+        .join(" "),
+    }));
+  }, [useCalendar, dateField, media, data.rows, columns, rowDetail, rowActions, keywordKeys]);
+
+  // Rail + reading-pane models for the split (master-detail) view. The rail row
+  // mirrors the board/calendar tile mapping (title/subtitle/meta from media or
+  // the columns); the pane reuses `detailFor` and carries its own edit/delete.
+  const splitItems: SplitItem[] = React.useMemo(() => {
+    if (!useSplit) return [];
+    const subtitleCol = columns.find((c) => c !== columns[0]);
+    return data.rows.map((row) => ({
+      id: row.id,
+      title: media ? media.title(row) : columns[0] ? renderCell(columns[0], row) : row.id,
+      subtitle: media
+        ? media.subtitle?.(row)
+        : subtitleCol
+          ? renderCell(subtitleCol, row)
+          : undefined,
+      meta: media?.price?.(row),
+      metaRight: media?.metaRight?.(row),
+      badge: media?.badge?.(row),
+      image: media?.image?.(row),
+      detail: detailFor(row),
+      actions:
+        canEdit || canDelete ? (
+          <>
+            {canEdit ? (
+              <Button variant="outline" size="sm" onClick={() => openEdit(row)}>
+                <Pencil className="size-4" />
+                Изменить
+              </Button>
+            ) : null}
+            {canDelete ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setDeleting(row)}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="size-4" />
+                Удалить
+              </Button>
+            ) : null}
+          </>
+        ) : undefined,
+      keywords: keywordKeys
+        .map((k) => {
+          const v = (row as Record<string, unknown>)[k];
+          return v == null ? "" : String(v);
+        })
+        .join(" "),
+    }));
+  }, [useSplit, media, data.rows, columns, detailFor, canEdit, canDelete, keywordKeys]);
+
+  async function handleMove(id: string, toStatus: string) {
+    if (!filterField) return;
+    try {
+      await data.update(id, { [filterField]: toStatus });
+      const col = boardColumns.find((c) => c.value === toStatus);
+      toast.success(
+        typeof col?.label === "string" ? `Перенесено: ${col.label}` : "Статус обновлён",
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Не удалось перенести");
+    }
+  }
+
   return (
     <div>
       {title ? (
@@ -307,7 +497,52 @@ export function CrudResource({
         <div className="mb-4 flex justify-end">{createButton}</div>
       ) : null}
 
-      {useGallery ? (
+      {useSplit ? (
+        <MasterDetailView
+          items={splitItems}
+          loading={data.loading}
+          searchable={searchable}
+          railLabel={title ?? entity}
+          emptyAction={
+            canCreate ? (
+              <Button onClick={openCreate}>
+                <Plus />
+                {createLabel}
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : useCalendar ? (
+        <CalendarView
+          events={calendarEvents}
+          loading={data.loading}
+          searchable={searchable}
+          emptyAction={
+            canCreate ? (
+              <Button onClick={openCreate}>
+                <Plus />
+                {createLabel}
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : useBoard ? (
+        <BoardView
+          columns={boardColumns}
+          cards={boardCards}
+          loading={data.loading}
+          searchable={searchable}
+          onMove={canEdit ? handleMove : undefined}
+          emptyAction={
+            canCreate ? (
+              <Button onClick={openCreate}>
+                <Plus />
+                {createLabel}
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : useGallery ? (
         <GalleryGrid
           items={galleryItems}
           loading={data.loading}
@@ -367,9 +602,14 @@ export function CrudResource({
 
       {/* Create / edit */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent>
+        <DialogContent className={cn(fields.length > 3 && "sm:max-w-2xl")}>
           <DialogHeader>
             <DialogTitle>{editing ? "Редактировать" : createLabel}</DialogTitle>
+            <DialogDescription>
+              {editing
+                ? "Измените поля и сохраните изменения."
+                : "Заполните поля ниже, чтобы создать запись."}
+            </DialogDescription>
           </DialogHeader>
           <EntityForm
             key={editing?.id ?? "new"}
@@ -393,27 +633,7 @@ export function CrudResource({
             {/* Required for a11y; the visible heading lives in <RecordDetail>. */}
             <DialogTitle>{title ? `${title}: запись` : "Запись"}</DialogTitle>
           </DialogHeader>
-          {viewing ? (
-            <RecordDetail
-              title={
-                media
-                  ? media.title(viewing)
-                  : columns[0]
-                    ? renderCell(columns[0], viewing)
-                    : (title ?? "Запись")
-              }
-              eyebrow={media?.subtitle?.(viewing)}
-              image={media?.image?.(viewing)}
-              badge={media?.badge?.(viewing)}
-              price={media?.price?.(viewing)}
-              metaRight={media?.metaRight?.(viewing)}
-              aspect={media?.aspect}
-              fields={columns.slice(1).map((col) => ({
-                label: col.header,
-                value: renderCell(col, viewing),
-              }))}
-            />
-          ) : null}
+          {viewing ? detailFor(viewing) : null}
           {canEdit || canDelete ? (
             <DialogFooter>
               {canEdit ? (

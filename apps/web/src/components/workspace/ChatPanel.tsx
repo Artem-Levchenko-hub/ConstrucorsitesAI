@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PanelLeftClose } from "lucide-react";
 import { listMessages } from "@/lib/api/messages";
-import type { SelectedElement } from "@/lib/api/types";
+import type {
+  DesignPreview,
+  SelectedElement,
+  SurveyQuestion,
+} from "@/lib/api/types";
 import { ChatMessage } from "./ChatMessage";
 import { PromptInput } from "./PromptInput";
 import { DiscoveryChips } from "./DiscoveryChips";
 import { DiscoveryFrame } from "./DiscoveryFrame";
+import { OnboardingSurvey } from "./OnboardingSurvey";
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
@@ -23,6 +29,10 @@ type DiscoveryChoices = {
   questionIndex?: number | null;
   questionTotal?: number | null;
   niche?: string | null;
+  // Answer-recap chips of what the user has said so far (pillar 2 — «вас услышали»).
+  recap?: string[] | null;
+  // LIVE design-preview tokens (pillars 2×3 — «покажи ЧТО построим»).
+  designPreview?: DesignPreview | null;
 };
 
 export function ChatPanel({
@@ -61,6 +71,12 @@ export function ChatPanel({
   // «Починить» on an error card → submit a follow-up fix prompt through the
   // normal pipeline (surgical edit / rebuild as the triage decides).
   const handleFix = (prompt: string) => {
+    submit(prompt, modelId, []);
+  };
+
+  // A fork recap card's one-tap starter edit → submit it as the remixer's first
+  // prompt through the normal pipeline (the warm first move, pillar 4).
+  const handleSuggest = (prompt: string) => {
     submit(prompt, modelId, []);
   };
 
@@ -106,6 +122,37 @@ export function ChatPanel({
     enabled: !!lastAssistantId,
     staleTime: Infinity,
   });
+
+  // Onboarding SURVEY (owner 2026-06-19 — «несколько вопросов сразу»): the whole
+  // planned batch arrives on the first discovery turn (usePromptStream stashes it
+  // keyed by project). Render it as ONE popup form instead of a chat turn per
+  // question. Dismissed once answered/skipped (client-only, per session).
+  const [surveyDismissed, setSurveyDismissed] = useState(false);
+  const { data: survey } = useQuery<SurveyQuestion[] | null>({
+    queryKey: ["onboarding-survey", projectId],
+    queryFn: () =>
+      qc.getQueryData<SurveyQuestion[]>(["onboarding-survey", projectId]) ?? null,
+    staleTime: Infinity,
+  });
+  const showSurvey = !!survey && survey.length > 0 && !surveyDismissed;
+
+  const clearSurvey = () => {
+    qc.setQueryData(["onboarding-survey", projectId], null);
+    setSurveyDismissed(true);
+  };
+  // «Готово» — fire ONE build prompt with the combined answers + picked preset.
+  // skip_clarify so the server builds straight away instead of re-interviewing.
+  const handleSurveyDone = (combined: string, presetId: string | null) => {
+    clearSurvey();
+    submit(combined.trim() || "Постройте сейчас", modelId, [], {
+      skipClarify: true,
+      designPresetId: presetId,
+    });
+  };
+  const handleSurveySkip = () => {
+    clearSurvey();
+    submit("Постройте сейчас", modelId, [], { skipClarify: true });
+  };
 
   // Auto-scroll on new messages / chunks.
   useEffect(() => {
@@ -165,15 +212,18 @@ export function ChatPanel({
             streaming={m.id === streamingId}
             projectId={projectId}
             onFix={handleFix}
+            onSuggest={handleSuggest}
           />
         ))}
 
-        {chips && chips.choices.length > 0 && (
+        {!showSurvey && chips && chips.choices.length > 0 && (
           <DiscoveryFrame
             key={lastAssistantId}
             niche={chips.niche ?? null}
             questionIndex={chips.questionIndex ?? null}
             questionTotal={chips.questionTotal ?? null}
+            recap={chips.recap ?? null}
+            designPreview={chips.designPreview ?? null}
             onSkip={handleSkip}
           >
             <DiscoveryChips
@@ -196,6 +246,17 @@ export function ChatPanel({
           textareaRef={inputRef}
         />
       </div>
+
+      {/* Onboarding survey popup — all planned questions at once (owner 2026-06-19). */}
+      <AnimatePresence>
+        {showSurvey && survey && (
+          <OnboardingSurvey
+            questions={survey}
+            onDone={handleSurveyDone}
+            onSkip={handleSurveySkip}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

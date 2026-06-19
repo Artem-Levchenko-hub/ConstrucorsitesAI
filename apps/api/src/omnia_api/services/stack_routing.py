@@ -48,6 +48,12 @@ _DISCOVERY_STACK_TO_TEMPLATE: dict[str, str] = {
     "fullstack": "fullstack",
     "nextjs_entities": "nextjs_entities",
     "spa": "spa",
+    # `code` (owner 2026-06-18) — language-agnostic source. NOT container-backed
+    # (``is_fullstack``/``orchestrator_template`` omit it) and it has NO scaffold
+    # dir under ``templates/`` — the writer creates every file into the project's
+    # existing (blank) git. ``switch_to_stack`` flips the template without a
+    # re-scaffold for it; ``ensure_provisioned`` no-ops (no container).
+    "code": "code",
 }
 
 
@@ -82,6 +88,11 @@ async def switch_to_stack(
     if is_fullstack(project.template):
         return None  # already a container stack — leave it be (idempotent)
 
+    # `templates/<target>` may not exist on disk for some stacks (nextjs_entities,
+    # spa, code have no api-side scaffold dir). That is fine: `repo_svc.init_repo`
+    # treats a missing dir as an EMPTY starter repo — exactly what `code` wants
+    # (blank git; the writer authors every file). So `code` flows through the same
+    # path as entities/spa: flip template, init (empty) repo, new starter snapshot.
     template_dir = TEMPLATES_DIR / target
     # pygit2 + MinIO upload are blocking — keep them off the event loop.
     commit_sha = await asyncio.to_thread(
@@ -110,6 +121,36 @@ async def switch_to_stack(
         snapshot.id,
     )
     return snapshot.id
+
+
+async def pivot_code_to_web(session: object, project: Project) -> bool:
+    """Pivot a `code` project to a runnable WEB page (owner 2026-06-19).
+
+    A `code` project (language-agnostic source) has NO live preview. When the user
+    asks on a FOLLOW-UP to run it as a web page ("сделай веб-вид", "в браузере",
+    "запусти здесь"), flip its template to `static` — a self-contained ``index.html``
+    served at ``/p/<slug>`` (instant preview, no container). Non-destructive: the
+    existing source files stay in git (so the next build can PORT the logic to the
+    page, and the old code is still in the timeline) — we only change the template.
+    The static build adds ``index.html`` on top; the workspace then renders the live
+    page instead of the "это код-проект" panel.
+
+    Returns True when it flipped, False when the project wasn't `code` (no-op).
+    Commits so the background build reads the new template.
+    """
+    if project.template != "code":
+        return False
+    # `blank` is the canonical STATIC-class template (the static web writer prompt +
+    # served at /p/<slug>). NB: there is NO `static` template value — `static` is a
+    # discovery STACK name; the template literal is blank/landing/portfolio/blog/…
+    # (writing `static` violates ck_projects_*_template_allowed → 500).
+    project.template = "blank"
+    await session.commit()  # type: ignore[attr-defined]
+    log.info(
+        "stack_routing: project %s pivoted code→blank (runnable web preview)",
+        project.id,
+    )
+    return True
 
 
 async def ensure_provisioned(project_id: UUID, slug: str, template: str) -> bool:
@@ -146,5 +187,6 @@ async def ensure_provisioned(project_id: UUID, slug: str, template: str) -> bool
 __all__ = [
     "discovery_stack_to_template",
     "ensure_provisioned",
+    "pivot_code_to_web",
     "switch_to_stack",
 ]

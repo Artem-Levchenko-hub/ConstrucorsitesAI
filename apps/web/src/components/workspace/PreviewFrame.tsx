@@ -30,7 +30,7 @@ import { useWorkspaceStore } from "@/store/workspace";
 import { useInspectorStore } from "@/store/inspector";
 import { useStyleEditStore } from "@/store/styleEdit";
 import { toast } from "sonner";
-import type { Project, Snapshot, TurnMode } from "@/lib/api/types";
+import type { Project, Snapshot, StreamBrief, TurnMode } from "@/lib/api/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shortSha, cn, formatRelativeTime } from "@/lib/utils";
 import { StreamingPreviewFrame } from "./StreamingPreviewFrame";
@@ -100,6 +100,18 @@ export function PreviewFrame({ project }: { project: Project }) {
     queryKey: ["messages", project.id],
     queryFn: () => listMessages(project.id),
   });
+  // Art-director brief for the latest message (cached by usePromptStream on the
+  // `omnia:brief` event — same client-only key the streaming freeform preview
+  // reads). We forward it into the live entity/fullstack container below so the
+  // generated app narrates its own birth (omnia-brief-narration.js); otherwise
+  // entity surfaces are born silent — the brief reaches only the workspace chat.
+  const briefMsgId = messages?.[messages.length - 1]?.id ?? "";
+  const { data: streamBrief } = useQuery<StreamBrief | null>({
+    queryKey: ["stream-brief", project.id, briefMsgId],
+    queryFn: () => null,
+    enabled: false,
+    initialData: null,
+  });
 
   // Fullstack projects (V2 Phase A) preview a live Next.js dev container,
   // not a static Playwright PNG. We hit /api/projects/:id/runtime on a short
@@ -124,6 +136,17 @@ export function PreviewFrame({ project }: { project: Project }) {
   const template = liveProject?.template ?? project.template;
   const isFullstack =
     template === "fullstack" || template === "nextjs_entities";
+  // `code` projects (owner 2026-06-18) are language-agnostic source, not a
+  // website — there's nothing to render in an iframe. Land the user on the «Код»
+  // tab and show an explainer panel in Preview mode instead of a blank /p/<slug>.
+  const isCode = template === "code";
+  const codeDefaultApplied = useRef(false);
+  useEffect(() => {
+    if (isCode && !codeDefaultApplied.current) {
+      codeDefaultApplied.current = true;
+      setViewMode("code");
+    }
+  }, [isCode, setViewMode]);
   const {
     data: runtime,
     isError: runtimeError,
@@ -447,7 +470,29 @@ export function PreviewFrame({ project }: { project: Project }) {
         150,
       );
     }
-  }, [frameKey, inspectMode, styleMode, postToPreview]);
+    // Replay the birth narration on (re)load if the brief is already here.
+    if (streamBrief) {
+      window.setTimeout(
+        () => postToPreview({ type: "omnia:brief", brief: streamBrief }),
+        150,
+      );
+    }
+  }, [frameKey, inspectMode, styleMode, streamBrief, postToPreview]);
+
+  // Forward the art-director brief into the live container so the generated app
+  // plays its "AI is designing" reveal (omnia-brief-narration.js). Cross-origin
+  // send is fine — only reads are blocked. The brief can land before OR after
+  // the iframe loads, so we post on every relevant change plus retry once for a
+  // listener that registered late (afterInteractive script on a fresh frame).
+  useEffect(() => {
+    if (!fullstackLive || !streamBrief) return;
+    postToPreview({ type: "omnia:brief", brief: streamBrief });
+    const retry = window.setTimeout(
+      () => postToPreview({ type: "omnia:brief", brief: streamBrief }),
+      900,
+    );
+    return () => window.clearTimeout(retry);
+  }, [fullstackLive, streamBrief, iframeKey, postToPreview]);
 
   // Пока ассистент стримит ответ — показываем долгоживущий streaming iframe
   // (StreamingPreviewFrame) с morphdom-патчингом. Когда llm.done приходит и
@@ -500,6 +545,7 @@ export function PreviewFrame({ project }: { project: Project }) {
   const iframeActive =
     !showStreaming &&
     !showStreamingCode &&
+    !isCode &&
     (fullstackLive || (!isFullstack && !!visible && !suppressStarter));
   const showFrameLoading =
     iframeActive && loadedFrameKey !== frameKey && !isPending;
@@ -757,7 +803,12 @@ export function PreviewFrame({ project }: { project: Project }) {
                 </AnimatePresence>
 
                 <AnimatePresence mode="wait">
-                  {showStreaming ? (
+                  {isCode ? (
+                    <CodeProjectPanel
+                      key="code-project"
+                      onOpenCode={() => setViewMode("code")}
+                    />
+                  ) : showStreaming ? (
                     <StreamingPreviewFrame
                       key="streaming"
                       content={last?.content ?? ""}
@@ -851,7 +902,7 @@ export function PreviewFrame({ project }: { project: Project }) {
                       onLoad={handleFrameLoad}
                     />
                   ) : null}
-                  {(!visible || suppressStarter) && !isPending && !isFullstack && (
+                  {(!visible || suppressStarter) && !isPending && !isFullstack && !isCode && (
                     <motion.div
                       key="empty"
                       initial={{ opacity: 0 }}
@@ -961,6 +1012,36 @@ function RuntimeStartupPanel({
           </Button>
         </>
       )}
+    </motion.div>
+  );
+}
+
+/**
+ * In-frame state for `code` projects (language-agnostic source, owner 2026-06-18).
+ * A script/program isn't a website — there's no live preview to render. Instead
+ * of a blank /p/<slug> iframe, point the user at the «Код» tab and the
+ * download / GitHub-push affordances (like browsing a repo on GitHub).
+ */
+function CodeProjectPanel({ onOpenCode }: { onOpenCode: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6"
+    >
+      <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border-subtle bg-surface-base">
+        <CodeIcon className="h-5 w-5 text-fg-tertiary" />
+      </div>
+      <div className="text-sm text-fg-secondary">Это код-проект</div>
+      <div className="max-w-xs text-xs leading-5 text-fg-tertiary">
+        Программа/скрипт, а не сайт — живого превью нет. Открой вкладку «Код»,
+        чтобы посмотреть файлы, скачать их или запушить в GitHub.
+      </div>
+      <Button size="sm" onClick={onOpenCode} className="mt-1 gap-1.5">
+        <CodeIcon className="h-3.5 w-3.5" />
+        Открыть код
+      </Button>
     </motion.div>
   );
 }
