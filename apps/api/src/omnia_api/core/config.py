@@ -714,13 +714,15 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "freeform_writer": "deepseek-v4-pro",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
-    # (NOT generation), and it runs INSIDE the 30s POST /prompt budget, so it needs
-    # a FAST, reliable model. Owner directive 2026-06-16: proxyapi.ru is FULLY
-    # removed — EVERY role must route via vsegpt. discovery_plan was the last
-    # proxyapi holdout (Haiku via proxyapi); moved to gemini-3.5-flash-high (vsegpt,
-    # 1M ctx, fast strict-JSON, good RU) which returns the tailored batch well
-    # inside the budget. Swap via ROLE_MODELS env (e.g. discovery_plan=minimax-m2.7).
-    "discovery_plan": "gemini-3.5-flash-high",
+    # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
+    # reliable model that emits strict JSON. Owner directive 2026-06-16: route via
+    # vsegpt (proxyapi.ru removed).
+    # 2026-06-19: gemini-3.5-flash-high was BROKEN here — live on prod it returned
+    # non-JSON junk / ReadTimeout'd at 22s → the planner fell to the GENERIC batch
+    # for EVERY web prompt (the «вопросы не в попад / шаблонные» the owner hit). The
+    # "-high" reasoning variant burns the token budget thinking. deepseek-chat
+    # returns a tailored, parseable batch in ~3.6s (proven). Swap via ROLE_MODELS env.
+    "discovery_plan": "deepseek-chat",
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.
