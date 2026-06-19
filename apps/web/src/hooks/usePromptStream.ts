@@ -116,7 +116,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     text: string;
     modelId: string;
     selections?: SelectedElement[];
-    opts?: { skipClarify?: boolean };
+    opts?: { skipClarify?: boolean; designPresetId?: string | null };
   } | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   // submitRef нужен, потому что fireQueued вызывается из apply (стабильный
@@ -127,7 +127,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         text: string,
         modelId: string,
         selections?: SelectedElement[],
-        opts?: { skipClarify?: boolean },
+        opts?: { skipClarify?: boolean; designPresetId?: string | null },
       ) => void)
     | null
   >(null);
@@ -525,7 +525,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       promptText: string,
       modelId: string,
       selections?: SelectedElement[],
-      opts?: { skipClarify?: boolean },
+      opts?: { skipClarify?: boolean; designPresetId?: string | null },
     ) => {
       // Стрим в процессе — кладём в очередь (один слот, новый замещает старый).
       // Выделения переносим вместе с текстом, чтобы отложенный промпт сохранил контекст.
@@ -646,6 +646,12 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             // so DiscoveryFrame can paint a mini-hero that morphs turn-by-turn.
             designPreview: resp.design_preview ?? null,
           });
+        }
+        // Onboarding survey (owner 2026-06-19): the WHOLE question batch arrives on
+        // the first discovery turn → stash it (keyed by project) so ChatPanel shows
+        // ONE popup form (all questions + palette) instead of a chat turn each.
+        if (resp.survey && resp.survey.length > 0) {
+          qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
         // sendPrompt failed BEFORE the backend even spawned _process_prompt

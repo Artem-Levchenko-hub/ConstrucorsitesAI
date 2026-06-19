@@ -240,6 +240,25 @@ export type PromptResponse = {
   // echoing words. Absent on the first question and on build/edit turns → older
   // API still type-checks. Mirrors api chip_pixel_gate.spec_preview's payload.
   design_preview?: DesignPreview | null;
+  // Upfront onboarding SURVEY (owner 2026-06-19 — «несколько вопросов сразу»): on
+  // the FIRST discovery turn of a web build the server returns the WHOLE planned
+  // batch (+ a clickable palette question) so the workspace shows ONE popup form
+  // instead of a chat turn per question. Absent on code builds, follow-up turns,
+  // and build/edit turns → older API still type-checks.
+  survey?: SurveyQuestion[] | null;
+};
+
+// One question in the upfront onboarding survey popup (owner 2026-06-19).
+// `kind: "text"` → chips + free-text «Другое» (DiscoveryChips); `kind: "palette"`
+// → clickable preset swatches carried in `options`.
+export type SurveyQuestion = {
+  message: string;
+  kind: "text" | "palette";
+  choices: string[];
+  allow_custom: boolean;
+  multi_select: boolean;
+  // For kind === "palette": selectable presets — {id, name, one_liner, bg, accent}.
+  options: { id: string; name: string; one_liner: string; bg: string; accent: string }[];
 };
 
 // Resolved design tokens for the onboarding live-preview mini-hero (pillars 2×3).

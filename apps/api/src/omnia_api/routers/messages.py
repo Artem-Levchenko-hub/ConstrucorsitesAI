@@ -451,6 +451,61 @@ def _compose_build_prompt(result: DiscoveryResult) -> str:
     return brief
 
 
+def _build_onboarding_survey(plan: object) -> list[dict[str, object]] | None:
+    """Assemble the whole onboarding popup from the planned question batch + a
+    palette question (owner 2026-06-19 — «несколько вопросов сразу + палитра»).
+
+    Returns the full survey (every planned text question, each with its chips +
+    «Другое», then a clickable preset-palette question) so the workspace renders
+    ONE form instead of a chat turn per question. None when the plan is empty."""
+    if not isinstance(plan, list) or not plan:
+        return None
+    out: list[dict[str, object]] = []
+    for q in plan:
+        if not isinstance(q, dict):
+            continue
+        msg = str(q.get("message") or "").strip()
+        if not msg:
+            continue
+        out.append(
+            {
+                "message": msg,
+                "kind": "text",
+                "choices": [c for c in (q.get("choices") or []) if isinstance(c, str)],
+                "allow_custom": bool(q.get("allow_custom", True)),
+                "multi_select": bool(q.get("multi_select", False)),
+            }
+        )
+    if not out:
+        return None
+    # Palette question — clickable preset swatches (owner: «нажать на палитру
+    # которая нравится»). Reuses the Awwwards preset catalog; the pick rides back
+    # as PromptRequest.design_preset_id. First few presets keep the popup compact.
+    from omnia_api.services.design_presets import PRESETS as _PRESETS
+
+    options = [
+        {
+            "id": pid,
+            "name": preset.name,
+            "one_liner": preset.one_liner,
+            "bg": preset.palette.get("bg", "#ffffff"),
+            "accent": preset.palette.get("accent", "#0a0a0a"),
+        }
+        for pid, preset in list(_PRESETS.items())[:6]
+    ]
+    out.append(
+        {
+            "message": "Какая палитра вам ближе? (можно пропустить — подберём сами)",
+            "kind": "palette",
+            "choices": [],
+            "allow_custom": True,
+            "multi_select": False,
+            "options": options,
+        }
+    )
+    return out
+
+
 async def _batch_discovery_turn(
     project: Project,
     history: list[dict[str, str]],
@@ -643,6 +698,16 @@ async def post_prompt(
         else None
     )
     is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
+
+    # Onboarding-survey palette pick (owner 2026-06-19): the popup submits the
+    # chosen design preset here so the build uses it directly. Validated against
+    # the known catalog (an unknown id is ignored); persisted with the project
+    # changes the handler commits below. Additive — absent on normal prompts.
+    if payload.design_preset_id:
+        from omnia_api.services.design_presets import PRESETS as _PRESETS
+
+        if payload.design_preset_id in _PRESETS:
+            project.design_preset_id = payload.design_preset_id
 
     # ── Onboarding interview routing ──────────────────────────────────────
     # On a brand-new project we don't build straight away: we first run a short
@@ -879,6 +944,16 @@ async def post_prompt(
         niche = discovery_result.niche or None
         recap = list(discovery_result.recap)
         design_preview = discovery_result.design_preview
+        # Owner 2026-06-19 — on the FIRST discovery turn return the WHOLE survey
+        # (every planned question + a clickable palette question) so the workspace
+        # renders ONE popup form, not a chat turn per question. Only the first turn
+        # (index 1) with a stashed plan; follow-up turns keep the single-question
+        # fields (back-compat for a client that ignores `survey`).
+        survey = (
+            _build_onboarding_survey(project.discovery_plan)
+            if question_index == 1
+            else None
+        )
     else:
         ask_choices = []
         allow_custom = True
@@ -888,6 +963,7 @@ async def post_prompt(
         niche = None
         recap = []
         design_preview = None
+        survey = None
     return PromptResponse(
         message_id=assistant_msg.id,
         snapshot_id=None,
@@ -900,6 +976,7 @@ async def post_prompt(
         niche=niche,
         recap=recap,
         design_preview=design_preview,
+        survey=survey,
     )
 
 

@@ -37,7 +37,7 @@ export async function sendPrompt(
   prompt: string,
   modelId: string,
   selectedElements?: SelectedElement[] | null,
-  opts?: { skipClarify?: boolean },
+  opts?: { skipClarify?: boolean; designPresetId?: string | null },
 ): Promise<PromptResponse> {
   if (USE_MOCKS) {
     const { assistantMessageId } = mockApi.beginPrompt(
@@ -69,6 +69,9 @@ export async function sendPrompt(
       // Onboarding quiz already gathered the brief → skip the server clarify
       // interview so this enriched first prompt builds immediately.
       ...(opts?.skipClarify ? { skip_clarify: true } : {}),
+      // Onboarding-survey palette pick (owner 2026-06-19) — the chosen preset
+      // rides with the combined-answers submit so the build uses it directly.
+      ...(opts?.designPresetId ? { design_preset_id: opts.designPresetId } : {}),
     },
   });
 }

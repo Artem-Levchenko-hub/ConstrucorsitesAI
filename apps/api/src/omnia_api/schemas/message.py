@@ -50,6 +50,28 @@ class PromptRequest(BaseModel):
     # quiz (and the "just generate" skip) send skip_clarify=true. Optional →
     # legacy clients keep the server clarify behaviour.
     skip_clarify: bool = Field(default=False)
+    # Onboarding-survey submit (owner 2026-06-19): when the user answers the whole
+    # popup at once, the picked design preset rides here so the build uses it
+    # directly (the palette question is a preset swatch). Optional → ignored when
+    # absent. Applied to the project before the build (additive, back-compat).
+    design_preset_id: str | None = Field(default=None, max_length=64)
+
+
+class SurveyQuestion(BaseModel):
+    """One question in the upfront onboarding SURVEY (owner 2026-06-19 — «несколько
+    вопросов сразу»). The whole planned batch is returned in one shot so the
+    workspace can render a single popup form instead of one chat turn per question.
+
+    ``kind`` is ``"text"`` (chips + free-text «Другое», like DiscoveryChips) or
+    ``"palette"`` (clickable preset swatches; ``options`` carries the presets)."""
+
+    message: str
+    kind: Literal["text", "palette"] = "text"
+    choices: list[str] = Field(default_factory=list)
+    allow_custom: bool = True
+    multi_select: bool = False
+    # For kind=="palette": the selectable presets — {id, name, one_liner, bg, accent}.
+    options: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ClientErrorReport(BaseModel):
@@ -109,3 +131,10 @@ class PromptResponse(BaseModel):
     # the words back. None on the first question, on build/edit turns, and whenever
     # no design axis has been decided yet.
     design_preview: dict[str, object] | None = None
+    # Upfront onboarding SURVEY (owner 2026-06-19 — «несколько вопросов сразу»): on
+    # the FIRST discovery turn of a web build we return the WHOLE planned batch
+    # (+ a palette question) so the workspace shows ONE popup form instead of a
+    # question per chat turn. None on code builds (no interview), on follow-up
+    # turns, and on build/edit turns. The single-question fields above stay
+    # populated for back-compat (a client that ignores `survey` still works).
+    survey: list[SurveyQuestion] | None = None
