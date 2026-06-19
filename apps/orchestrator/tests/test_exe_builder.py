@@ -1,5 +1,7 @@
 from __future__ import annotations
 import base64
+import pytest
+from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.services.exe_builder import run_exe_build
 from omnia_orchestrator.schemas.build_exe import BuildExeRequest
 
@@ -33,3 +35,12 @@ def test_run_exe_build_failure_returns_log(monkeypatch, tmp_path) -> None:
     assert res.ok is False
     assert "PYINSTALLER_FAILED" in res.log
     assert res.setup_b64 is None
+
+
+def test_run_exe_build_rejects_path_traversal(tmp_path) -> None:
+    # A files key that escapes src/ must be refused before any container runs.
+    req = BuildExeRequest(name="X", files={"../escape.py": "evil"},
+                          pyinstaller_args=["pyinstaller", "x"], installer_nsi="x")
+    with pytest.raises(OrchestratorError):
+        run_exe_build(req, work_root=tmp_path)
+    assert not (tmp_path / "escape.py").exists()    # nothing written outside src/
