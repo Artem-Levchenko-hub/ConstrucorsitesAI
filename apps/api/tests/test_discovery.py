@@ -514,6 +514,26 @@ async def test_build_path_routes_program_to_code(
     assert result.stack == "code"
 
 
+async def test_code_request_skips_the_interview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owner 2026-06-19: a script/program first prompt must NOT get the design
+    interview (palette/audience/sections are off-target). It builds straight away
+    as `code` on the first turn — no ASK, no gateway call. The gateway is stubbed
+    to RAISE so we prove no round-trip happened (the short-circuit returns first)."""
+    def _boom(*_a, **_k):
+        raise AssertionError("gateway must not be called for a code request")
+
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", _boom)
+    result = await run_discovery(
+        [],
+        "напиши скрипт на питон который запускает microsoft edge каждые 5 минут",
+        asked_count=0,
+    )
+    assert result.action == BUILD
+    assert result.stack == "code"
+
+
 async def test_invalid_stack_defaults_to_spa(monkeypatch: pytest.MonkeyPatch) -> None:
     """Invalid model stack ("django") → coerced to static, then the opt-in rule
     (owner 2026-06-18) upgrades a non-explicit-static build to spa."""

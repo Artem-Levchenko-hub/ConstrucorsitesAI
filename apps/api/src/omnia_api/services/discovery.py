@@ -881,6 +881,21 @@ async def run_discovery(
     capped = asked_count >= MAX_DISCOVERY_QUESTIONS
     must_build = force_build or capped
 
+    # Code/script request → NO design interview (owner 2026-06-19: «без дизайна
+    # только скрипт» — palette/audience/sections questions are off-target for a
+    # program). On the FIRST turn build straight away with the user's prompt as the
+    # brief; the code writer prompt + the user's words are enough. Skips the gateway
+    # entirely (instant). Gated to asked_count == 0 so a code-flavoured answer mid-
+    # interview can't hijack an in-flight site build.
+    if asked_count == 0 and _infer_code_from_text(latest_prompt):
+        log.info("discovery: code/script intent — skipping interview, build now")
+        return DiscoveryResult(
+            action=BUILD,
+            message="Понял — пишу код. Это займёт минуту.",
+            brief=_fallback_brief(history, latest_prompt),
+            stack="code",
+        )
+
     # Zero-question intent compile (V2.12). On the FIRST turn, if the raw prompt
     # already pins enough design axes, build straight away — the popup never
     # appears and we skip the gateway round-trip entirely (shared floor, see

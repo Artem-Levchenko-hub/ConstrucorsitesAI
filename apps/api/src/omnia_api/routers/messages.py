@@ -480,6 +480,13 @@ async def _batch_discovery_turn(
     # that already pins the design wins the zero-question shortcut and never gets
     # a plan (the popup never appears).
     if asked_count == 0 and not project.discovery_plan:
+        # Code/script request → no design interview at all (owner 2026-06-19). Build
+        # straight away (run_discovery short-circuits code intent to a code build) —
+        # never plan palette/audience questions for a program.
+        if _infer_code_from_text(prompt):
+            return await run_discovery(
+                history, prompt, asked_count=asked_count, force_build=True
+            )
         zero = zero_question_build(history, prompt)
         if zero is not None:
             return zero
