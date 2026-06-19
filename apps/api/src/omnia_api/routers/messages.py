@@ -67,8 +67,10 @@ from omnia_api.services.discovery import (
     _explicit_static,
     _infer_code_from_text,
     _infer_run_intent,
+    _infer_run_intent_maybe,
     _infer_stack_from_text,
     _infer_web_pivot,
+    _is_run_decline,
     confident_enough_to_build,
     cumulative_idea,
     gather_answers,
@@ -401,6 +403,18 @@ _INSTALL_CARD_TEXT = (
     "<install-bundle></install-bundle>"
 )
 
+# Owner 2026-06-19 «спрашивай, если сомневаешься» — the clarify question shown when
+# run/install intent is plausible but uncertain. The «Да…» chip re-enters as strong
+# run-intent → installer card; the «Нет…» chip is caught as a decline.
+_RUN_ASK_TEXT = (
+    "Похоже, ты хочешь запустить проект у себя на компьютере. Собрать установщик "
+    "(архив с run.bat — распаковал, двойной клик, и оно само поставится и "
+    "запустится)? Или продолжим дорабатывать проект?"
+)
+_RUN_DECLINE_REPLY = (
+    "Понял, установщик не собираю. Напиши, что доработать или добавить — сделаю."
+)
+
 
 def _spawn_text_turn(
     project_id: UUID, assistant_message_id: UUID, text: str
@@ -719,10 +733,18 @@ async def post_prompt(
     # installer-download card (the .zip already ships a run.bat launcher), so the
     # user goes from ask → installer in one click. Gated to a project that already
     # has something built. Consumed in the turn-routing branch below.
-    run_intent = (
-        not is_first_build
-        and project.current_snapshot_id is not None
-        and _infer_run_intent(payload.prompt)
+    _has_built = not is_first_build and project.current_snapshot_id is not None
+    run_intent = _has_built and _infer_run_intent(payload.prompt)
+    # «Спрашивай, если сомневаешься» (owner 2026-06-19): plausible-but-uncertain run
+    # intent → ASK "собрать установщик?" with yes/no chips instead of guessing.
+    # A decline ("нет, доработать") gets a short "what to change?" reply, not a
+    # garbage build. Strong intent above always wins.
+    run_decline = _has_built and not run_intent and _is_run_decline(payload.prompt)
+    run_ask = (
+        _has_built
+        and not run_intent
+        and not run_decline
+        and _infer_run_intent_maybe(payload.prompt)
     )
 
     # Onboarding-survey palette pick (owner 2026-06-19): the popup submits the
@@ -963,6 +985,14 @@ async def post_prompt(
         # installer-download card. The user clicks «Скачать установщик», gets the
         # .zip (with run.bat), double-clicks → installed + running.
         _spawn_text_turn(project_id, assistant_msg.id, _INSTALL_CARD_TEXT)
+    elif run_decline:
+        # Declined the installer offer → don't build from a bare "нет"; ask what
+        # to change so the next turn is a real edit.
+        _spawn_text_turn(project_id, assistant_msg.id, _RUN_DECLINE_REPLY)
+    elif run_ask:
+        # Uncertain run intent → ASK "собрать установщик?" (yes/no chips set on the
+        # response below); no build this turn.
+        _spawn_text_turn(project_id, assistant_msg.id, _RUN_ASK_TEXT)
     else:
         _spawn_process_prompt(
             project_id=project_id,
@@ -995,7 +1025,7 @@ async def post_prompt(
     # "точечная правка" copy; a build shows the full-generation experience.
     turn_mode = (
         "clarify"
-        if (discovery_ask or do_clarify or run_intent)
+        if (discovery_ask or do_clarify or run_intent or run_ask or run_decline)
         else ("build" if orchestrate else "edit")
     )
     # Quick-reply chips ride on the ASK turn only — the workspace renders them
@@ -1024,7 +1054,12 @@ async def post_prompt(
             else None
         )
     else:
-        ask_choices = []
+        # Uncertain run-intent question (owner 2026-06-19): tappable yes/no chips.
+        # «Да…» re-enters as strong run-intent → installer card; «Нет…» is caught
+        # as a decline → "what to change?" reply.
+        ask_choices = (
+            ["Да, собрать установщик", "Нет, доработать проект"] if run_ask else []
+        )
         allow_custom = True
         multi_select = False
         question_index = None

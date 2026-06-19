@@ -24,8 +24,11 @@ from omnia_api.services.discovery import (
     PlannedQuestion,
     _explicit_no_backend,
     _infer_code_from_text,
+    _infer_run_intent,
+    _infer_run_intent_maybe,
     _infer_stack_from_text,
     _infer_web_pivot,
+    _is_run_decline,
     confident_enough_to_build,
     cumulative_idea,
     gather_answers,
@@ -547,6 +550,37 @@ def test_infer_web_pivot_detects_run_as_web_intent() -> None:
     assert not _infer_web_pivot("добавь логирование в скрипт")
     assert not _infer_web_pivot("напиши парсер сайта на python")
     assert not _infer_web_pivot("запусти скрипт")
+
+
+def test_run_intent_three_tiers() -> None:
+    """Owner 2026-06-19 — smart run/install routing: STRONG → installer card,
+    AMBIGUOUS → ask first, DECLINE → "what to change?", else → build."""
+
+    def route(p: str) -> str:
+        if _infer_run_intent(p):
+            return "install"
+        if _is_run_decline(p):
+            return "decline"
+        if _infer_run_intent_maybe(p):
+            return "ask"
+        return "build"
+
+    # STRONG — act directly (installer card).
+    assert route("как запустить эту игру") == "install"
+    assert route("создай установщик") == "install"
+    assert route("Да, собрать установщик") == "install"
+    assert route("сделай так чтобы запустилось в один клик") == "install"
+    # AMBIGUOUS — ask "собрать установщик?" first, never guess.
+    assert route("запусти") == "ask"
+    assert route("хочу поделиться с друзьями") == "ask"
+    assert route("дай попробовать") == "ask"
+    # DECLINE — the "no" answer → ask what to change, not a garbage build.
+    assert route("Нет, доработать проект") == "decline"
+    assert route("нет, давай доработаем") == "decline"
+    # Plain build/edit — untouched.
+    assert route("поменяй цвет кнопки") == "build"
+    assert route("добавь раздел отзывов") == "build"
+    assert route("сделай веб-вид") == "build"
 
 
 async def test_invalid_stack_defaults_to_spa(monkeypatch: pytest.MonkeyPatch) -> None:

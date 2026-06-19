@@ -271,6 +271,49 @@ def _infer_run_intent(text: str) -> bool:
     return any(sig in low for sig in _RUN_INTENT_SIGNALS)
 
 
+# WEAKER, AMBIGUOUS hints (owner 2026-06-19: «спрашивай, если сомневаешься»). These
+# might mean "run/share it locally" OR something else (generate, publish a link,
+# play in preview). Too uncertain to act on → we ASK "собрать установщик?" with
+# yes/no chips instead of guessing. Kept distinct from the STRONG set above.
+_RUN_MAYBE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "запусти", "запустить", "поиграть", "поиграем",
+        "поделиться", "поделись", "скинуть", "скинь друз", "отправить друз",
+        "отправить друг", "как использовать", "как пользоваться",
+        "хочу попробовать", "дай попробовать", "как открыть проект",
+        "можно запустить", "можно ли запустить", "это запустить",
+    }
+)
+# A "no, keep editing" reply to the installer question → don't build garbage from
+# the bare "нет"; ask what to change instead.
+_RUN_DECLINE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "доработать проект", "доработать", "не надо установщик",
+        "без установщика", "не нужен установщик", "продолжаем дорабат",
+        "продолжим дорабат", "нет, правим", "не устанавливать",
+    }
+)
+
+
+def _infer_run_intent_maybe(text: str) -> bool:
+    """True when run/install intent is PLAUSIBLE but not certain → ask first.
+    Excludes the strong case (handled directly) and an explicit decline."""
+    low = (text or "").lower()
+    if _infer_run_intent(low) or _is_run_decline(low):
+        return False
+    return any(sig in low for sig in _RUN_MAYBE_SIGNALS)
+
+
+def _is_run_decline(text: str) -> bool:
+    """True when the user declines the installer offer ("нет, доработать")."""
+    low = (text or "").lower()
+    if any(sig in low for sig in _RUN_DECLINE_SIGNALS):
+        return True
+    return low.strip().startswith("нет") and (
+        "доработ" in low or "правит" in low or "продолж" in low or "устанавлив" in low
+    )
+
+
 # Explicit "no accounts / no login" phrases. Unlike _BACKEND_SIGNALS (bare stems
 # whose NEGATED mentions are filtered out), these are whole negated phrases that
 # carry a *positive* intent: the user actively refused auth + persistence. A tool
