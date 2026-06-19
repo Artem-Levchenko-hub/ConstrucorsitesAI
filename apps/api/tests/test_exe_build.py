@@ -39,6 +39,16 @@ def test_cli_script_stays_console_no_assets() -> None:
     assert spec.collect_all == []
 
 
+def test_from_pygame_import_also_collects() -> None:
+    # `from pygame import …` is windowed AND needs --collect-all=pygame, same as
+    # bare `import pygame` — the two must not diverge.
+    spec = build_spec(
+        {"game.py": "from pygame import sprite\nif __name__ == '__main__':\n    run()"},
+        slug="game")
+    assert spec.windowed is True
+    assert spec.collect_all == ["pygame"]
+
+
 from omnia_api.services.exe_build import render_pyinstaller_args, render_nsi, render
 
 

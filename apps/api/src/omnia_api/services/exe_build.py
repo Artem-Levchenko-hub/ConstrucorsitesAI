@@ -17,6 +17,10 @@ _GUI_IMPORTS = re.compile(
     r"(?:^|\n)\s*(?:import|from)\s+"
     r"(pygame|tkinter|PyQt5|PyQt6|PySide6|PySide2|wx|kivy|pyglet|arcade)\b"
 )
+# pygame ships data files (fonts, mixer backends) PyInstaller's static analysis misses,
+# so it needs --collect-all. Match both `import pygame[.x]` and `from pygame import …`
+# (mirrors _GUI_IMPORTS — otherwise a `from pygame import` game is windowed but uncollected).
+_PYGAME_IMPORT = re.compile(r"(?:^|\n)\s*(?:import|from)\s+pygame\b")
 _ASSET_DIRS = ("assets", "images", "img", "sounds", "audio", "data", "fonts", "music")
 
 
@@ -49,7 +53,7 @@ def build_spec(files: dict[str, str], *, slug: str = "app") -> BuildSpec:
         icon=next((p for p in files if p.lower().endswith(".ico")), None),
         datas=[f"{d};{d}" for d in _ASSET_DIRS
                if any(p == d or p.startswith(d + "/") for p in files)],
-        collect_all=["pygame"] if re.search(r"(?:^|\n)\s*import\s+pygame\b", blob) else [],
+        collect_all=["pygame"] if _PYGAME_IMPORT.search(blob) else [],
         requirements=files.get("requirements.txt"),
     )
 
