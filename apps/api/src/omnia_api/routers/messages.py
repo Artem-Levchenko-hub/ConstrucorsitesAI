@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 from decimal import Decimal
 from typing import Annotated, Any
@@ -865,12 +866,19 @@ async def post_prompt(
     force_model = settings.force_model or None
     routing_model = force_model or model_for_role("director" if orchestrate else "edit")
 
+    # Explicit, DISTINCT timestamps (owner 2026-06-19 bug): both rows committed in
+    # one transaction would otherwise share `func.now()` (= transaction time) →
+    # identical created_at → the chat, ordered by created_at, can't tell which came
+    # first and renders the assistant reply ABOVE the user's prompt («промпт уехал
+    # вниз»). +1ms guarantees user-before-assistant ordering everywhere.
+    _now = datetime.now(timezone.utc)
     user_msg = Message(
         project_id=project_id,
         role="user",
         content=payload.prompt,
         model_id=None,  # user turns have no model
         selected_elements=selected_dump,
+        created_at=_now,
     )
     assistant_msg = Message(
         project_id=project_id,
@@ -878,6 +886,7 @@ async def post_prompt(
         content="",
         # Orchestrated runs carry the mix label; cheap runs log the real model.
         model_id=force_model or (ORCHESTRATION_LABEL if orchestrate else routing_model),
+        created_at=_now + timedelta(milliseconds=1),
     )
     session.add_all([user_msg, assistant_msg])
     await session.commit()
