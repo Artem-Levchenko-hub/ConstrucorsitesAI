@@ -20,7 +20,9 @@ if spec.get("requirements"):
     (SRC / "requirements.txt").write_text(spec["requirements"], encoding="utf-8")
     if run(["wine", "python", "-m", "pip", "install", "-r", "requirements.txt"]):
         log.write("PIP_FAILED\n"); sys.exit(2)
-if run(["wine", "pyinstaller", *spec["pyinstaller_args"][1:]]):  # [0] is "pyinstaller"
+# `python -m PyInstaller` (not the `pyinstaller` shim) so it resolves regardless of
+# whether the Wine Scripts dir is on PATH. args[0] is the literal "pyinstaller" → drop it.
+if run(["wine", "python", "-m", "PyInstaller", *spec["pyinstaller_args"][1:]]):
     log.write("PYINSTALLER_FAILED\n"); sys.exit(3)
 (SRC / "installer.nsi").write_text(spec["installer_nsi"], encoding="utf-8")
 if run(["makensis", "installer.nsi"]):
