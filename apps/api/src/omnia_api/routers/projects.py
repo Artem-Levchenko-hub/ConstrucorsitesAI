@@ -36,6 +36,7 @@ from omnia_api.schemas.project import (
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.design_presets import PRESETS
+from omnia_api.services.run_bundle import build_launchers
 from omnia_api.services.fork_recap import build_fork_recap
 from omnia_api.services.preset_classifier import classify_preset_sync
 from omnia_api.services.queue import enqueue_preview
@@ -403,6 +404,13 @@ async def download_project(
     files = await asyncio.to_thread(repo_svc.read_files, project_id, snap.commit_sha)
     if not files:
         raise ApiError("not_found", "no files to download", status.HTTP_404_NOT_FOUND)
+    # One-click run bundle (owner 2026-06-19 — «скачал → уже играешь»): add a
+    # double-click launcher (run.bat/run.sh/run.command + RU instructions) that
+    # creates a venv, installs deps and runs the entry point, so a Python/Node
+    # project goes from download → running in one more click. `setdefault` so we
+    # never clobber a launcher the project already ships. No-op for plain websites.
+    for name, content in build_launchers(files).items():
+        files.setdefault(name, content)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for path, content in files.items():
