@@ -24,6 +24,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { DownloadButton } from "./DownloadButton";
 import { GithubPushButton } from "./GithubPushButton";
 import { ImageGenToggle } from "./ImageGenToggle";
 import { LogsViewer } from "./LogsViewer";
@@ -93,6 +94,9 @@ export function TopBar({
         {showProjectControls && (
           <>
             {projectId && <RuntimeButton projectId={projectId} />}
+            {projectId && (
+              <DownloadButton projectId={projectId} projectSlug={projectSlug} />
+            )}
             {projectId && <LogsViewer projectId={projectId} />}
             {projectSlug && <PublishButton projectSlug={projectSlug} />}
             {projectId && projectSlug && (

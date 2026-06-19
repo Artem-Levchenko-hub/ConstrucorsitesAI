@@ -1,9 +1,12 @@
 import asyncio
+import io
+import zipfile
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Response, status
+from fastapi.responses import StreamingResponse
 from slugify import slugify
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -375,6 +378,42 @@ async def get_project(
             project.forked_from_name = source.name
             project.forked_from_slug = source.slug
     return project
+
+
+@router.get("/{project_id}/download")
+async def download_project(
+    project_id: UUID, session: SessionDep, current_user: CurrentUserDep
+) -> StreamingResponse:
+    """Download ALL files of the project's current snapshot as a single .zip.
+
+    Owner directive 2026-06-19: one obvious button, zero thinking — the user gets a
+    real archive of their actual code/site (snake.py, requirements.txt, index.html,
+    …) straight from git, with no dependence on what the model wrote into the page.
+    Owner-scoped (404 for a foreign/unknown project); 404 when nothing's generated
+    yet. The zip is built in memory from the committed snapshot (single source of
+    truth = git), so it always matches what's live."""
+    project = await session.get(Project, project_id)
+    if project is None or project.owner_id != current_user.id:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    if project.current_snapshot_id is None:
+        raise ApiError("not_found", "nothing generated yet", status.HTTP_404_NOT_FOUND)
+    snap = await session.get(Snapshot, project.current_snapshot_id)
+    if snap is None:
+        raise ApiError("not_found", "snapshot missing", status.HTTP_404_NOT_FOUND)
+    files = await asyncio.to_thread(repo_svc.read_files, project_id, snap.commit_sha)
+    if not files:
+        raise ApiError("not_found", "no files to download", status.HTTP_404_NOT_FOUND)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path, content in files.items():
+            zf.writestr(path, content)
+    buf.seek(0)
+    fname = (project.slug or "project") + ".zip"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @router.patch("/{project_id}", response_model=ProjectPublic)
