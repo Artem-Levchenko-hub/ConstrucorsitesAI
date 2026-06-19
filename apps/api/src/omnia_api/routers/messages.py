@@ -67,6 +67,7 @@ from omnia_api.services.discovery import (
     _explicit_static,
     _infer_code_from_text,
     _infer_stack_from_text,
+    _infer_web_pivot,
     confident_enough_to_build,
     cumulative_idea,
     gather_answers,
@@ -720,6 +721,28 @@ async def post_prompt(
     # A select-mode pick, an explicit skip_clarify, or a non-first-build prompt all
     # bypass the interview entirely and go straight to generation.
     settings = get_settings()
+
+    # Code→web pivot (owner 2026-06-19): a `code` project has no live preview. A
+    # FOLLOW-UP asking to RUN it as a web page ("сделай веб-вид", "в браузере",
+    # "запусти здесь") flips it onto the previewable `static` web template (instant
+    # /p/<slug>, no container) so the next build is an openable page. Non-destructive
+    # (existing source stays — the build PORTS it). Gated to a real follow-up on a
+    # code project + explicit web intent → never touches first-build routing or a
+    # normal code edit. Fail-soft (R-10). `pivoted_to_web` forces the full-build
+    # path below (a fresh page is a build, not a surgical edit).
+    pivoted_to_web = False
+    if (
+        not is_first_build
+        and project.template == "code"
+        and settings.use_auto_stack_routing
+        and _infer_web_pivot(payload.prompt)
+    ):
+        try:
+            pivoted_to_web = await stack_routing.pivot_code_to_web(session, project)
+        except Exception as _pv_exc:
+            await session.rollback()
+            logging.getLogger(__name__).warning("code→web pivot failed: %r", _pv_exc)
+
     discovery_result: DiscoveryResult | None = None
     do_clarify = False
     effective_prompt = payload.prompt
@@ -854,7 +877,10 @@ async def post_prompt(
 
     intent = decide_intent(
         effective_prompt,
-        is_first_prompt=is_first_build,
+        # A code→web pivot just re-templated the project to `static`; the page
+        # doesn't exist yet, so it's a full BUILD, never a surgical edit — treat it
+        # like a first build for triage (owner 2026-06-19).
+        is_first_prompt=is_first_build or pivoted_to_web,
         selected_count=len(selected_dump or []),
     )
     orchestrate = intent == ORCHESTRATE

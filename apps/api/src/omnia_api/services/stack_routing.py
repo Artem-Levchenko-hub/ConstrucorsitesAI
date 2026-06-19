@@ -123,6 +123,32 @@ async def switch_to_stack(
     return snapshot.id
 
 
+async def pivot_code_to_web(session: object, project: Project) -> bool:
+    """Pivot a `code` project to a runnable WEB page (owner 2026-06-19).
+
+    A `code` project (language-agnostic source) has NO live preview. When the user
+    asks on a FOLLOW-UP to run it as a web page ("сделай веб-вид", "в браузере",
+    "запусти здесь"), flip its template to `static` — a self-contained ``index.html``
+    served at ``/p/<slug>`` (instant preview, no container). Non-destructive: the
+    existing source files stay in git (so the next build can PORT the logic to the
+    page, and the old code is still in the timeline) — we only change the template.
+    The static build adds ``index.html`` on top; the workspace then renders the live
+    page instead of the "это код-проект" panel.
+
+    Returns True when it flipped, False when the project wasn't `code` (no-op).
+    Commits so the background build reads the new template.
+    """
+    if project.template != "code":
+        return False
+    project.template = "static"
+    await session.commit()  # type: ignore[attr-defined]
+    log.info(
+        "stack_routing: project %s pivoted code→static (runnable web preview)",
+        project.id,
+    )
+    return True
+
+
 async def ensure_provisioned(project_id: UUID, slug: str, template: str) -> bool:
     """Provision the project's orchestrator dev container if the stack needs one.
 
@@ -157,5 +183,6 @@ async def ensure_provisioned(project_id: UUID, slug: str, template: str) -> bool
 __all__ = [
     "discovery_stack_to_template",
     "ensure_provisioned",
+    "pivot_code_to_web",
     "switch_to_stack",
 ]

@@ -215,6 +215,30 @@ def _explicit_static(text: str) -> bool:
     return any(sig in low for sig in _EXPLICIT_STATIC_SIGNALS)
 
 
+# Owner 2026-06-19 — a `code` project follow-up asking to RUN it as a web page
+# ("сделай веб-вид", "в браузере", "запусти здесь"). Used ONLY on a `code` project
+# to pivot it to a previewable `static` web build. PRECISE on purpose: a false
+# positive flips the project's stack, so we match clear "run as a web page here"
+# phrases, NOT bare "запусти" (which on a code project means "run the script") or
+# bare "сайт"/"html" (a scraper of a site / parser of html is still code).
+_WEB_PIVOT_SIGNALS: frozenset[str] = frozenset(
+    {
+        "веб-вид", "веб вид", "веб-верс", "веб верс", "веб-страниц", "веб страниц",
+        "в браузере", "прям здесь", "прямо здесь", "запусти здесь",
+        "запустить здесь", "открыть здесь", "поиграть здесь", "сыграть здесь",
+        "preview", "превью", "в вебе", "онлайн-вид", "сделай онлайн",
+        "playable", "run it here", "in the browser",
+    }
+)
+
+
+def _infer_web_pivot(text: str) -> bool:
+    """True when the user wants to RUN a code project as a web page (owner
+    2026-06-19). Used ONLY on a `code` project follow-up → pivot to `static`."""
+    low = (text or "").lower()
+    return any(sig in low for sig in _WEB_PIVOT_SIGNALS)
+
+
 # Explicit "no accounts / no login" phrases. Unlike _BACKEND_SIGNALS (bare stems
 # whose NEGATED mentions are filtered out), these are whole negated phrases that
 # carry a *positive* intent: the user actively refused auth + persistence. A tool

@@ -25,6 +25,7 @@ from omnia_api.services.discovery import (
     _explicit_no_backend,
     _infer_code_from_text,
     _infer_stack_from_text,
+    _infer_web_pivot,
     confident_enough_to_build,
     cumulative_idea,
     gather_answers,
@@ -532,6 +533,20 @@ async def test_code_request_skips_the_interview(
     )
     assert result.action == BUILD
     assert result.stack == "code"
+
+
+def test_infer_web_pivot_detects_run_as_web_intent() -> None:
+    """Owner 2026-06-19: a code-project follow-up asking to RUN it as a web page
+    triggers the pivot, but a normal code edit / scraper request does NOT (a false
+    positive would re-template the project)."""
+    assert _infer_web_pivot("сделай веб-вид змейки чтобы запустить здесь")
+    assert _infer_web_pivot("а ты можешь веб вид сделать чтобы прям здесь её запустить")
+    assert _infer_web_pivot("хочу поиграть здесь")
+    assert _infer_web_pivot("сделай чтобы в браузере работало")
+    # Not a pivot — still plain code work.
+    assert not _infer_web_pivot("добавь логирование в скрипт")
+    assert not _infer_web_pivot("напиши парсер сайта на python")
+    assert not _infer_web_pivot("запусти скрипт")
 
 
 async def test_invalid_stack_defaults_to_spa(monkeypatch: pytest.MonkeyPatch) -> None:

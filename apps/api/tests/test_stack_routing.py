@@ -152,6 +152,33 @@ async def test_switch_already_container_is_idempotent() -> None:
     assert not session.committed
 
 
+# ─── pivot_code_to_web (owner 2026-06-19) ────────────────────────────────
+
+
+async def test_pivot_code_to_web_flips_code_to_static() -> None:
+    """A code project pivots to `static` (runnable web page) — non-destructive
+    (no re-scaffold), just the template flip + commit."""
+    session = _FakeSession()
+    project = _FakeProject(template="code")
+    flipped = await stack_routing.pivot_code_to_web(session, project)
+    assert flipped is True
+    assert project.template == "static"
+    assert session.committed
+    # Non-destructive: no new snapshot scaffolded.
+    assert session.added == []
+
+
+async def test_pivot_code_to_web_noop_for_non_code() -> None:
+    """Only a `code` project pivots — a web/spa/static project is left alone."""
+    for tmpl in ("spa", "static", "nextjs_entities", "blank"):
+        session = _FakeSession()
+        project = _FakeProject(template=tmpl)
+        flipped = await stack_routing.pivot_code_to_web(session, project)
+        assert flipped is False
+        assert project.template == tmpl
+        assert not session.committed
+
+
 async def test_switch_static_to_entities(monkeypatch: pytest.MonkeyPatch) -> None:
     """Static → nextjs_entities flips template, re-scaffolds, returns new snap."""
     calls: dict[str, object] = {}
