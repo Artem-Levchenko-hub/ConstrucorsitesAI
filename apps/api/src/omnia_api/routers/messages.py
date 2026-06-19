@@ -741,6 +741,11 @@ async def post_prompt(
             pivoted_to_web = await stack_routing.pivot_code_to_web(session, project)
         except Exception as _pv_exc:
             await session.rollback()
+            # A failed commit leaves `project` expired; a later attribute access
+            # would lazy-load on the poisoned session → MissingGreenlet → 500 for
+            # the WHOLE request. Re-fetch a clean, attached instance so the build
+            # proceeds normally (as the un-pivoted project).
+            project = await session.get(Project, project_id) or project
             logging.getLogger(__name__).warning("code→web pivot failed: %r", _pv_exc)
 
     discovery_result: DiscoveryResult | None = None

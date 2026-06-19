@@ -140,10 +140,14 @@ async def pivot_code_to_web(session: object, project: Project) -> bool:
     """
     if project.template != "code":
         return False
-    project.template = "static"
+    # `blank` is the canonical STATIC-class template (the static web writer prompt +
+    # served at /p/<slug>). NB: there is NO `static` template value — `static` is a
+    # discovery STACK name; the template literal is blank/landing/portfolio/blog/…
+    # (writing `static` violates ck_projects_*_template_allowed → 500).
+    project.template = "blank"
     await session.commit()  # type: ignore[attr-defined]
     log.info(
-        "stack_routing: project %s pivoted code→static (runnable web preview)",
+        "stack_routing: project %s pivoted code→blank (runnable web preview)",
         project.id,
     )
     return True

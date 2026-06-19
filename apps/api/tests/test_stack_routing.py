@@ -155,14 +155,16 @@ async def test_switch_already_container_is_idempotent() -> None:
 # ─── pivot_code_to_web (owner 2026-06-19) ────────────────────────────────
 
 
-async def test_pivot_code_to_web_flips_code_to_static() -> None:
-    """A code project pivots to `static` (runnable web page) — non-destructive
-    (no re-scaffold), just the template flip + commit."""
+async def test_pivot_code_to_web_flips_code_to_blank() -> None:
+    """A code project pivots to the `blank` static-class template (runnable web
+    page at /p/<slug>) — non-destructive (no re-scaffold), just template + commit.
+    Must be a REAL template value (`blank`), never `static` (a discovery stack name
+    that violates the projects.template CHECK → prod 500)."""
     session = _FakeSession()
     project = _FakeProject(template="code")
     flipped = await stack_routing.pivot_code_to_web(session, project)
     assert flipped is True
-    assert project.template == "static"
+    assert project.template == "blank"
     assert session.committed
     # Non-destructive: no new snapshot scaffolded.
     assert session.added == []
