@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from omnia_api.core.config import get_settings
 from omnia_api.core.deps import (
     CurrentUserDep,
     OptionalUserDep,
@@ -19,7 +20,7 @@ from omnia_api.core.deps import (
     set_session_cookie,
 )
 from omnia_api.core.errors import ApiError
-from omnia_api.core.minio import preview_public_url
+from omnia_api.core.minio import get_exe_object, preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.core.security import create_access_token
 from omnia_api.models.message import Message
@@ -39,7 +40,7 @@ from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.run_bundle import build_launchers
 from omnia_api.services.fork_recap import build_fork_recap
 from omnia_api.services.preset_classifier import classify_preset_sync
-from omnia_api.services.queue import enqueue_preview
+from omnia_api.services.queue import enqueue_preview, enqueue_build_exe
 
 _UNTITLED_NAMES = frozenset({"untitled", "новый проект", "проект", "new project"})
 
@@ -484,3 +485,89 @@ async def delete_project(
 
     await session.delete(project)
     await session.commit()
+
+
+@router.post("/{project_id}/build-exe", status_code=status.HTTP_202_ACCEPTED)
+async def build_exe_endpoint(
+    project_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> dict:
+    """Enqueue a Windows .exe + NSIS installer build from the project's current snapshot.
+
+    Owner-scoped (404 for missing / foreign projects). Requires at least one ``.py``
+    file in the committed snapshot (exe build is Python-only). Returns a ``build_id``
+    that the client uses to track progress via SSE (``exe.stage`` / ``exe.ready`` /
+    ``exe.failed`` events on the project channel).
+
+    Gated by ``use_exe_build`` (default False) — returns 404 when the feature flag
+    is off so the endpoint is invisible to the public API surface until the
+    omnia-exe-builder sidecar is present on the host.
+    """
+    settings = get_settings()
+    if not settings.use_exe_build:
+        raise ApiError("not_found", "feature not enabled", status.HTTP_404_NOT_FOUND)
+
+    project = await session.get(Project, project_id)
+    if project is None or project.owner_id != current_user.id:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    if project.current_snapshot_id is None:
+        raise ApiError("not_found", "nothing generated yet", status.HTTP_404_NOT_FOUND)
+
+    snap = await session.get(Snapshot, project.current_snapshot_id)
+    if snap is None:
+        raise ApiError("not_found", "snapshot missing", status.HTTP_404_NOT_FOUND)
+
+    files: dict[str, str] = await asyncio.to_thread(
+        repo_svc.read_files, project_id, snap.commit_sha
+    )
+    if not any(p.endswith(".py") for p in files):
+        raise ApiError(
+            "bad_request",
+            "exe build is Python-only: no .py files in the current snapshot",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    build_id = str(uuid4())
+    await asyncio.to_thread(
+        enqueue_build_exe, project.id, build_id, project.slug, files
+    )
+    return {"build_id": build_id}
+
+
+@router.get("/{project_id}/exe/{build_id}/{artifact}")
+async def download_exe_artifact(
+    project_id: UUID,
+    build_id: str,
+    artifact: str,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> StreamingResponse:
+    """Stream a built exe artifact to the owner (owner-scoped download).
+
+    ``artifact`` must be ``setup`` (the NSIS installer, ``<Name>-Setup.exe``)
+    or ``exe`` (the bare portable executable, ``<Name>.exe``). Returns 404 for
+    a foreign/unknown project, an unknown artifact type, or a build_id whose
+    artifacts haven't been uploaded yet (build still running or failed).
+    """
+    project = await session.get(Project, project_id)
+    if project is None or project.owner_id != current_user.id:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+
+    if artifact not in ("setup", "exe"):
+        raise ApiError("not_found", "unknown artifact type", status.HTTP_404_NOT_FOUND)
+
+    result = await asyncio.to_thread(
+        get_exe_object, str(project_id), build_id, artifact
+    )
+    if result is None:
+        raise ApiError("not_found", "artifact not found", status.HTTP_404_NOT_FOUND)
+
+    stream, _ = result
+    filename_suffix = "-Setup.exe" if artifact == "setup" else ".exe"
+    fname = (project.slug or "app") + filename_suffix
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.microsoft.portable-executable",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
