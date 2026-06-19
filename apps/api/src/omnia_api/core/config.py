@@ -735,6 +735,7 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # "-high" reasoning variant burns the token budget thinking. deepseek-chat
     # returns a tailored, parseable batch in ~3.6s (proven). Swap via ROLE_MODELS env.
     "discovery_plan": "deepseek-chat",
+    "exe_doctor":    "deepseek-chat",  # self-heal patch for failed PyInstaller/NSIS builds
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.
