@@ -50,12 +50,17 @@ async def _request(
     *,
     json: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
+    timeout: float = 30.0,
 ) -> dict[str, Any]:
     """Internal call to orchestrator. Returns parsed JSON body or raises ApiError.
 
     Note: orchestrator routes are all under `/internal/...` and require the
     `X-Internal-Token` header. The shared secret comes from settings — same
     string sits in /opt/omnia-runtime/.env.orchestrator on prod.
+
+    `timeout` defaults to 30s for normal requests. Long-running jobs (e.g.
+    /build-exe which invokes PyInstaller + NSIS) should pass a higher value —
+    see `build_exe()` which uses 360s.
     """
     settings = get_settings()
     token = (
@@ -73,7 +78,7 @@ async def _request(
     headers = {"X-Internal-Token": token, "Content-Type": "application/json"}
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.request(method, url, json=json, params=params, headers=headers)
     except httpx.RequestError as exc:
         log.exception("orchestrator.network_error", path=path, err=str(exc))
@@ -273,4 +278,34 @@ async def hot_reload(
         "/internal/projects/hot-reload",
         json={"project_id": str(project_id), "files": files},
         params={"slug": slug},
+    )
+
+
+async def build_exe(
+    name: str,
+    files: dict[str, str],
+    pyinstaller_args: list[str],
+    installer_nsi: str,
+    requirements: str | None,
+) -> dict[str, Any]:
+    """POST /build-exe — package a Python project into a Windows .exe + NSIS
+    Setup installer.
+
+    The orchestrator side spawns an ``omnia-exe-builder`` sidecar container
+    that runs PyInstaller + NSIS and returns the artefacts as base-64 blobs.
+    A full build typically takes 60–300s, so we override the default 30s
+    socket timeout with 360s. Returns ``{"ok": bool, "log": str,
+    "setup_b64": str, "exe_b64": str | null}``.
+    """
+    return await _request(
+        "POST",
+        "/build-exe",
+        json={
+            "name": name,
+            "files": files,
+            "pyinstaller_args": pyinstaller_args,
+            "installer_nsi": installer_nsi,
+            "requirements": requirements,
+        },
+        timeout=360.0,
     )

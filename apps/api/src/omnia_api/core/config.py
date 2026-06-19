@@ -501,6 +501,18 @@ class Settings(BaseSettings):
     # generation. Flip UNLIMITED_GENERATIONS=false to restore normal billing.
     unlimited_generations: bool = Field(default=False)
 
+    # ── Exe-build (Windows installer, Task 6) ─────────────────────────────
+    # POST /api/projects/{id}/build-exe — packages a Python project into a
+    # Windows .exe + NSIS Setup installer via the orchestrator's /build-exe
+    # route. Off by default (the omnia-exe-builder image is an optional
+    # sidecar; flip on once it is present in docker-compose). Kill switch:
+    # USE_EXE_BUILD=false.
+    use_exe_build: bool = Field(default=False)
+    # Hard-limit on the Setup.exe size (MB) the worker will accept before
+    # refusing to upload. Prevents a runaway PyInstaller from exhausting
+    # MinIO quota. Env: EXE_BUILD_MAX_MB.
+    exe_build_max_mb: int = Field(default=150)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
