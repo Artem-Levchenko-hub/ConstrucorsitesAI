@@ -411,10 +411,19 @@ async def download_project(
     # never clobber a launcher the project already ships. No-op for plain websites.
     for name, content in build_launchers(files).items():
         files.setdefault(name, content)
+    # A .zip drops the Unix executable bit, so a double-clicked run.command/run.sh
+    # would open in TextEdit on macOS instead of running. Stamp the exec bit on the
+    # shell launchers via ZipInfo.external_attr (S_IFREG | mode) << 16.
+    _exec_launchers = {"run.sh", "run.command"}
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for path, content in files.items():
-            zf.writestr(path, content)
+            data = content.encode("utf-8") if isinstance(content, str) else content
+            info = zipfile.ZipInfo(path)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            mode = 0o100755 if path in _exec_launchers else 0o100644
+            info.external_attr = mode << 16
+            zf.writestr(info, data)
     buf.seek(0)
     fname = (project.slug or "project") + ".zip"
     return StreamingResponse(
