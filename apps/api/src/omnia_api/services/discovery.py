@@ -239,6 +239,32 @@ def _infer_web_pivot(text: str) -> bool:
     return any(sig in low for sig in _WEB_PIVOT_SIGNALS)
 
 
+# Owner 2026-06-19 — user wants to RUN / INSTALL the project locally on their own
+# machine ("как запустить", "хочу запустить", "установщик", "дай поиграть"). On a
+# follow-up this short-circuits to a one-click "download installer" card (the .zip
+# already ships a run.bat launcher) instead of another generation. PRECISE: clear
+# run/install phrases only — NOT bare "запусти" (= generate) or web-preview phrases
+# (those are the web-pivot above).
+_RUN_INTENT_SIGNALS: frozenset[str] = frozenset(
+    {
+        "установщик", "инсталлятор", "как установить", "установи и запусти",
+        "как запустить", "как мне запустить", "хочу запустить", "запусти локально",
+        "запустить локально", "запустить у себя", "запустить на компе",
+        "запустить на компьютере", "скачать и запустить", "скачать и поиграть",
+        "хочу поиграть", "дай поиграть", "как поиграть", "как мне поиграть",
+        "сразу запустить", "запустить у меня", "как мне это запустить",
+        "хочу установить",
+    }
+)
+
+
+def _infer_run_intent(text: str) -> bool:
+    """True when the user wants to RUN/INSTALL the project locally (owner
+    2026-06-19) → offer a one-click installer download instead of a build."""
+    low = (text or "").lower()
+    return any(sig in low for sig in _RUN_INTENT_SIGNALS)
+
+
 # Explicit "no accounts / no login" phrases. Unlike _BACKEND_SIGNALS (bare stems
 # whose NEGATED mentions are filtered out), these are whole negated phrases that
 # carry a *positive* intent: the user actively refused auth + persistence. A tool

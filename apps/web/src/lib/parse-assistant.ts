@@ -40,12 +40,16 @@ export type AssistantPart =
       name: string;
       dna: string;
       suggestions: string[];
-    };
+    }
+  // One-click installer card (`<install-bundle>`). Owner 2026-06-19 — on a run/
+  // install intent the server streams this marker; the UI renders a prominent
+  // «Скачать установщик» button (downloads the project .zip, which ships run.bat).
+  | { kind: "install" };
 
 // Matches the opening tag of a file / edit / app-error / remix block. The
 // attribute string is captured generically (group 2) and parsed per-tag below.
 // Mirrors apps/api file_extractor.py (`<file>`/`<edit>`) + app_errors.py + fork_recap.py.
-const BLOCK_OPEN = /<(file|edit|app-error|remix)\b([^>]*)>/g;
+const BLOCK_OPEN = /<(file|edit|app-error|remix|install-bundle)\b([^>]*)>/g;
 
 function getAttr(attrs: string, name: string): string | null {
   const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
@@ -53,11 +57,14 @@ function getAttr(attrs: string, name: string): string | null {
 }
 
 function makePart(
-  tag: "file" | "edit" | "app-error" | "remix",
+  tag: "file" | "edit" | "app-error" | "remix" | "install-bundle",
   attrs: string,
   body: string,
   closed: boolean,
 ): AssistantPart {
+  if (tag === "install-bundle") {
+    return { kind: "install" };
+  }
   if (tag === "remix") {
     return {
       kind: "remix",
@@ -156,7 +163,12 @@ export function parseAssistantContent(content: string): AssistantPart[] {
   BLOCK_OPEN.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = BLOCK_OPEN.exec(content)) !== null) {
-    const tag = match[1] as "file" | "edit" | "app-error" | "remix";
+    const tag = match[1] as
+      | "file"
+      | "edit"
+      | "app-error"
+      | "remix"
+      | "install-bundle";
     const attrs = match[2];
     const openStart = match.index;
     const openEnd = openStart + match[0].length;

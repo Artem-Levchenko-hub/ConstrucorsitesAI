@@ -66,6 +66,7 @@ from omnia_api.services.discovery import (
     DiscoveryResult,
     _explicit_static,
     _infer_code_from_text,
+    _infer_run_intent,
     _infer_stack_from_text,
     _infer_web_pivot,
     confident_enough_to_build,
@@ -389,6 +390,18 @@ async def _run_text_turn(
     )
 
 
+# Owner 2026-06-19 — the one-click installer card streamed back on a run/install
+# intent. The `<install-bundle>` marker is parsed by the web ChatMessage into a
+# prominent «Скачать установщик» button (downloads the .zip — which carries run.bat).
+_INSTALL_CARD_TEXT = (
+    "Готово — собрал установщик. Нажми кнопку ниже: скачается архив проекта. "
+    "Если это программа (Python/Node), внутри лежит **run.bat** — распакуй и сделай "
+    "двойной клик по нему (на Mac — run.command): он сам поставит зависимости и "
+    "запустит. Если это сайт — открой его кнопкой «Открыть» сверху.\n\n"
+    "<install-bundle></install-bundle>"
+)
+
+
 def _spawn_text_turn(
     project_id: UUID, assistant_message_id: UUID, text: str
 ) -> None:
@@ -701,6 +714,17 @@ async def post_prompt(
     )
     is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
 
+    # Run/install intent (owner 2026-06-19): on a FOLLOW-UP, "как запустить / хочу
+    # запустить / установщик / дай поиграть" → DON'T build; hand back a one-click
+    # installer-download card (the .zip already ships a run.bat launcher), so the
+    # user goes from ask → installer in one click. Gated to a project that already
+    # has something built. Consumed in the turn-routing branch below.
+    run_intent = (
+        not is_first_build
+        and project.current_snapshot_id is not None
+        and _infer_run_intent(payload.prompt)
+    )
+
     # Onboarding-survey palette pick (owner 2026-06-19): the popup submits the
     # chosen design preset here so the build uses it directly. Validated against
     # the known catalog (an unknown id is ignored); persisted with the project
@@ -934,6 +958,11 @@ async def post_prompt(
         # Ask first — no generation this turn. The user's answers (next message)
         # flow into the real build via chat history.
         _spawn_clarify(project_id, assistant_msg.id, payload.prompt)
+    elif run_intent:
+        # Run/install intent (owner 2026-06-19): no build — stream a one-click
+        # installer-download card. The user clicks «Скачать установщик», gets the
+        # .zip (with run.bat), double-clicks → installed + running.
+        _spawn_text_turn(project_id, assistant_msg.id, _INSTALL_CARD_TEXT)
     else:
         _spawn_process_prompt(
             project_id=project_id,
@@ -966,7 +995,7 @@ async def post_prompt(
     # "точечная правка" copy; a build shows the full-generation experience.
     turn_mode = (
         "clarify"
-        if (discovery_ask or do_clarify)
+        if (discovery_ask or do_clarify or run_intent)
         else ("build" if orchestrate else "edit")
     )
     # Quick-reply chips ride on the ASK turn only — the workspace renders them
