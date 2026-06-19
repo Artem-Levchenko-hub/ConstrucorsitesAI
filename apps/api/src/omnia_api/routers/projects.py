@@ -538,7 +538,7 @@ async def build_exe_endpoint(
 @router.get("/{project_id}/exe/{build_id}/{artifact}")
 async def download_exe_artifact(
     project_id: UUID,
-    build_id: str,
+    build_id: UUID,
     artifact: str,
     session: SessionDep,
     current_user: CurrentUserDep,
@@ -558,7 +558,7 @@ async def download_exe_artifact(
         raise ApiError("not_found", "unknown artifact type", status.HTTP_404_NOT_FOUND)
 
     result = await asyncio.to_thread(
-        get_exe_object, str(project_id), build_id, artifact
+        get_exe_object, str(project_id), str(build_id), artifact
     )
     if result is None:
         raise ApiError("not_found", "artifact not found", status.HTTP_404_NOT_FOUND)
