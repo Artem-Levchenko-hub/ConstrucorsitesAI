@@ -26,6 +26,12 @@ class Project(Base):
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     template: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(Text, nullable=False, server_default="ru", default="ru")
+    # Import provenance (migration 0019). "native" = created/generated inside
+    # Omnia; "imported" = seeded from an external GitHub repo via tarball clone.
+    # The is_imported property gates pipeline bypasses (B3+B4).
+    source: Mapped[str] = mapped_column(Text, nullable=False, server_default="native", default="native")
+    external_repo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_repo_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     design_preset_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Lineage for the V4.1b "Remix this" fork: the project this one was
     # deep-copied from. NULL for organically-created projects. Self-FK with
@@ -72,6 +78,11 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    @property
+    def is_imported(self) -> bool:
+        """True when this project was seeded from an external GitHub repo."""
+        return self.source == "imported"
 
     snapshots: Mapped[list["Snapshot"]] = relationship(
         back_populates="project",

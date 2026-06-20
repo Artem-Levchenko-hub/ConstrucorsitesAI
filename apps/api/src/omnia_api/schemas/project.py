@@ -1,8 +1,9 @@
+import re
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from omnia_api.services.design_presets import PRESETS
 
@@ -104,6 +105,10 @@ class ProjectPublic(BaseModel):
     language: str = "ru"
     design_preset_id: str | None = None
     image_gen_enabled: bool = True
+    # Import provenance (migration 0019). "native" for all organic projects;
+    # "imported" when seeded from an external GitHub repo.
+    source: str = "native"
+    external_repo_url: str | None = None
     # Lineage for V4.1b "Remix this": the project this one was forked from, or
     # None for organically created projects. Lets the client show provenance and
     # a "back to original" / attribution edge (the viral return-loop, V4.2b).
@@ -130,3 +135,35 @@ class ProjectPublic(BaseModel):
         if self.design_preset_id and (preset := PRESETS.get(self.design_preset_id)):
             return preset.name
         return None
+
+
+# ---------------------------------------------------------------------------
+# Import request (B2 — GitHub repo import)
+# ---------------------------------------------------------------------------
+
+_GH_SHORTHAND_RE = re.compile(
+    r"^(?:https?://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+)
+
+
+class ProjectImportRequest(BaseModel):
+    """Request body for POST /projects/import.
+
+    `repo_url` accepts either a full GitHub URL
+    (``https://github.com/owner/repo``) or the shorthand ``owner/repo`` form.
+    `ref` is an optional branch/tag/SHA; defaults to the repo's default branch.
+    `name` overrides the generated project name; defaults to the repo name.
+    """
+
+    repo_url: str
+    ref: str | None = None
+    name: str | None = None
+
+    @field_validator("repo_url")
+    @classmethod
+    def validate_repo_url(cls, v: str) -> str:
+        if not _GH_SHORTHAND_RE.match(v.strip().removesuffix(".git").rstrip("/")):
+            raise ValueError(
+                "repo_url must be a github.com URL or 'owner/repo' shorthand"
+            )
+        return v
