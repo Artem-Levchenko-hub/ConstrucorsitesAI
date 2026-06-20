@@ -22,7 +22,7 @@ import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 export async function generateMetadata() {
   const t = await getTranslations("meta");
   return {
-    title: "Omnia.AI — AI-конструктор веб-приложений на русском",
+    title: t("landingTitle"),
     description: t("description"),
   };
 }
