@@ -1,8 +1,10 @@
 FROM tobix/pywine:3.12
 # Windows-Python tooling under Wine
 RUN wine python -m pip install --no-cache-dir "pyinstaller>=6.3.0"
-# NSIS runs natively on Linux (no Wine needed to wrap the payload)
-RUN apt-get update && apt-get install -y --no-install-recommends nsis \
+# NSIS runs natively on Linux (no Wine needed to wrap the payload). python3 is the
+# native Linux interpreter that runs build.py (the tobix/pywine base ships only the
+# Windows Python under Wine — there is no native python3 on PATH without this).
+RUN apt-get update && apt-get install -y --no-install-recommends nsis python3 \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -m builder
 COPY build.py /usr/local/bin/build.py
