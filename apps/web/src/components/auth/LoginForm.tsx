@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { useTranslations } from "next-intl";
 import { loginAction } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,32 +11,33 @@ export function LoginForm({ next }: { next?: string }) {
   const [state, formAction, pending] = useActionState(loginAction, {
     error: null,
   });
+  const t = useTranslations("auth.form");
 
   return (
     <form action={formAction} className="space-y-4">
       {next && <input type="hidden" name="next" value={next} />}
 
       <div className="space-y-2">
-        <Label htmlFor="email">Email</Label>
+        <Label htmlFor="email">{t("emailLabel")}</Label>
         <Input
           id="email"
           name="email"
           type="email"
           autoComplete="email"
           required
-          placeholder="вы@почта.ru"
+          placeholder={t("emailPlaceholder")}
         />
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="password">Пароль</Label>
+        <Label htmlFor="password">{t("passwordLabel")}</Label>
         <Input
           id="password"
           name="password"
           type="password"
           autoComplete="current-password"
           required
-          placeholder="не короче 8 символов, с цифрой"
+          placeholder={t("passwordPlaceholder")}
         />
       </div>
 
@@ -48,7 +50,7 @@ export function LoginForm({ next }: { next?: string }) {
         className="w-full"
         disabled={pending}
       >
-        {pending ? "Вход…" : "Войти"}
+        {pending ? t("loginPending") : t("loginButton")}
       </Button>
     </form>
   );

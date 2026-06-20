@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { LoginForm } from "@/components/auth/LoginForm";
 
@@ -12,18 +13,20 @@ export default async function LoginPage({
     ? `/register?next=${encodeURIComponent(next)}`
     : "/register";
 
+  const t = await getTranslations("auth");
+
   return (
     <AuthCard
-      title="С возвращением"
-      subtitle="Войдите, чтобы продолжить работу с проектами."
+      title={t("login.title")}
+      subtitle={t("login.subtitle")}
       footer={
         <>
-          Нет аккаунта?{" "}
+          {t("login.noAccount")}{" "}
           <Link
             href={registerHref}
             className="text-accent hover:text-accent-hover transition"
           >
-            Зарегистрируйтесь
+            {t("login.registerLink")}
           </Link>
         </>
       }
