@@ -208,6 +208,9 @@ services:
       USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
       USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
       USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
+      # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
+      # off; the api+worker both need it so the gated endpoint + RQ job activate.
+      USE_EXE_BUILD: ${USE_EXE_BUILD:-false}
       # Image-gen kill switch — set false on prod while the gpt-image upstream is
       # dead, so builds don't stall on per-image timeouts (image_resolver strips
       # data-omnia-gen tags fast and the CSS/mesh fallback shows instead).
@@ -292,6 +295,9 @@ services:
       USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
       USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
       USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
+      # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
+      # off; the api+worker both need it so the gated endpoint + RQ job activate.
+      USE_EXE_BUILD: ${USE_EXE_BUILD:-false}
       # Image-gen kill switch — set false on prod while the gpt-image upstream is
       # dead, so builds don't stall on per-image timeouts (image_resolver strips
       # data-omnia-gen tags fast and the CSS/mesh fallback shows instead).
