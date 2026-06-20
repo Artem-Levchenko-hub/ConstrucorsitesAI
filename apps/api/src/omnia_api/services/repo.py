@@ -102,6 +102,34 @@ def init_repo(project_id: UUID, template_dir: Path, template_name: str) -> str:
         return str(commit_oid)
 
 
+def init_from_files(project_id: UUID, files: dict[str, str], message: str) -> str:
+    """Seed a fresh project repo from a files dict (used by GitHub import).
+
+    Same MinIO tarball storage + pygit2 flow as init_repo, but instead of
+    copying a template directory we write each file directly as a blob.
+    This lets the caller supply any arbitrary set of text files (e.g. from a
+    GitHub tarball) without touching the filesystem first.
+
+    Returns the hex SHA of the initial commit.
+    """
+    with tempfile.TemporaryDirectory(prefix=f"omnia-import-{project_id}-") as tmp:
+        workdir = Path(tmp) / "repo"
+        workdir.mkdir()
+        repo = pygit2.init_repository(str(workdir), bare=False)
+        sig = _signature()
+        index = repo.index
+        for rel, content in sorted(files.items()):
+            blob_oid = repo.create_blob(content.encode("utf-8"))
+            index.add(pygit2.IndexEntry(rel, blob_oid, pygit2.GIT_FILEMODE_BLOB))
+        index.write()
+        tree_oid = index.write_tree()
+        commit_oid = repo.create_commit(
+            "HEAD", sig, sig, message, tree_oid, []
+        )
+        _upload(project_id, workdir)
+        return str(commit_oid)
+
+
 def duplicate_repo(source_id: UUID, dest_id: UUID) -> None:
     """Deep-copy the source project's bare-repo tarball onto the fork's own key.
 
