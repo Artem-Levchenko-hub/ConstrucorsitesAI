@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter_Tight, JetBrains_Mono } from "next/font/google";
+import { NextIntlClientProvider } from "next-intl";
+import { getLocale, getMessages, getTranslations } from "next-intl/server";
 import "./globals.css";
 import { Providers } from "./providers";
 
@@ -21,88 +23,91 @@ const PUBLIC_ORIGIN =
   process.env.NEXT_PUBLIC_API_URL ?? "https://constructor.lead-generator.ru";
 
 const SITE_NAME = "Omnia.AI";
-const SITE_TITLE = "Omnia.AI — AI-сайт-билдер: пиши промпты, получай готовый сайт";
-const SITE_DESC =
-  "Опиши сайт словами — Omnia.AI сгенерирует страницы, бэкенд, домен и хостинг. " +
-  "С историей версий и кнопкой «откатить» на любой промпт. Оплата в рублях, без подписок.";
 
-export const metadata: Metadata = {
-  metadataBase: new URL(PUBLIC_ORIGIN),
-  title: {
-    default: SITE_TITLE,
-    template: "%s · Omnia.AI",
-  },
-  description: SITE_DESC,
-  applicationName: SITE_NAME,
-  authors: [{ name: "Omnia.AI" }],
-  generator: "Omnia.AI",
-  keywords: [
-    "AI сайт-билдер",
-    "конструктор сайтов",
-    "сайт под ключ",
-    "AI генератор сайтов",
-    "лендинг по промпту",
-    "сайт на русском",
-    "GigaChat сайт",
-    "no-code сайт",
-    "сделать сайт без программиста",
-  ],
-  alternates: {
-    canonical: "/",
-    languages: {
-      "ru-RU": "/",
-      "x-default": "/",
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("meta");
+
+  const title = t("title");
+  const description = t("description");
+
+  return {
+    metadataBase: new URL(PUBLIC_ORIGIN),
+    title: {
+      default: title,
+      template: "%s · Omnia.AI",
     },
-  },
-  openGraph: {
-    type: "website",
-    locale: "ru_RU",
-    siteName: SITE_NAME,
-    title: SITE_TITLE,
-    description: SITE_DESC,
-    url: PUBLIC_ORIGIN,
-    images: [
-      {
-        url: "/og-image.png",
-        width: 1200,
-        height: 630,
-        alt: "Omnia.AI — AI-сайт-билдер",
-      },
+    description,
+    applicationName: SITE_NAME,
+    authors: [{ name: "Omnia.AI" }],
+    generator: "Omnia.AI",
+    keywords: [
+      "AI сайт-билдер",
+      "конструктор сайтов",
+      "сайт под ключ",
+      "AI генератор сайтов",
+      "лендинг по промпту",
+      "сайт на русском",
+      "GigaChat сайт",
+      "no-code сайт",
+      "сделать сайт без программиста",
     ],
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: SITE_TITLE,
-    description: SITE_DESC,
-    images: ["/og-image.png"],
-  },
-  robots: {
-    index: true,
-    follow: true,
-    googleBot: {
+    alternates: {
+      canonical: "/",
+      languages: {
+        "ru-RU": "/",
+        "x-default": "/",
+      },
+    },
+    openGraph: {
+      type: "website",
+      locale: "ru_RU",
+      siteName: SITE_NAME,
+      title,
+      description,
+      url: PUBLIC_ORIGIN,
+      images: [
+        {
+          url: "/og-image.png",
+          width: 1200,
+          height: 630,
+          alt: "Omnia.AI — AI-сайт-билдер",
+        },
+      ],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: ["/og-image.png"],
+    },
+    robots: {
       index: true,
       follow: true,
-      "max-image-preview": "large",
-      "max-snippet": -1,
+      googleBot: {
+        index: true,
+        follow: true,
+        "max-image-preview": "large",
+        "max-snippet": -1,
+      },
     },
-  },
-  // verification stubs — fill after verifying domain in respective consoles
-  verification: {
-    google: process.env.NEXT_PUBLIC_GOOGLE_VERIFICATION,
-    yandex: process.env.NEXT_PUBLIC_YANDEX_VERIFICATION,
-    other: {
-      "yandex-verification": process.env.NEXT_PUBLIC_YANDEX_VERIFICATION ?? "",
+    // verification stubs — fill after verifying domain in respective consoles
+    verification: {
+      google: process.env.NEXT_PUBLIC_GOOGLE_VERIFICATION,
+      yandex: process.env.NEXT_PUBLIC_YANDEX_VERIFICATION,
+      other: {
+        "yandex-verification": process.env.NEXT_PUBLIC_YANDEX_VERIFICATION ?? "",
+      },
     },
-  },
-  icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon.svg", type: "image/svg+xml" },
-    ],
-    apple: "/apple-icon.png",
-  },
-  category: "technology",
-};
+    icons: {
+      icon: [
+        { url: "/favicon.ico", sizes: "any" },
+        { url: "/icon.svg", type: "image/svg+xml" },
+      ],
+      apple: "/apple-icon.png",
+    },
+    category: "technology",
+  };
+}
 
 export const viewport: Viewport = {
   themeColor: [
@@ -138,16 +143,19 @@ const APP_JSON_LD = {
     priceCurrency: "RUB",
     description: "Бесплатный старт; оплата по факту использования AI-токенов",
   },
-  description: SITE_DESC,
+  description: "AI-сайт-билдер для российского рынка",
   inLanguage: "ru-RU",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const locale = await getLocale();
+  const messages = await getMessages();
+
   return (
     <html
-      lang="ru"
+      lang={locale}
       className={`dark ${interTight.variable} ${jetbrainsMono.variable}`}
     >
       <head>
@@ -161,7 +169,9 @@ export default function RootLayout({
         />
       </head>
       <body className="text-fg-primary font-sans antialiased">
-        <Providers>{children}</Providers>
+        <NextIntlClientProvider messages={messages}>
+          <Providers>{children}</Providers>
+        </NextIntlClientProvider>
       </body>
     </html>
   );

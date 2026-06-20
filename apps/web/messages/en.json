@@ -1,0 +1,64 @@
+{
+  "meta": {
+    "title": "Omnia.AI — AI site builder: write prompts, get a ready website",
+    "description": "Describe your site in words — Omnia.AI generates pages, backend, domain and hosting. Version history with a one-click rollback on every prompt. Billed in rubles, no subscriptions.",
+    "keywords": "AI site builder, website generator, website turnkey, AI website builder, landing page from prompt, no-code site, build a site without a developer"
+  },
+  "landing": {
+    "nav": {
+      "stacks": "Stacks",
+      "workspace": "Workspace",
+      "examples": "Examples",
+      "pricing": "Pricing",
+      "faq": "FAQ",
+      "login": "Log in",
+      "createProject": "Create project"
+    },
+    "hero": {
+      "badge": "v3 · multi-stack · ru-1",
+      "line1": "Write a prompt.",
+      "line2": "Get production.",
+      "line3": "In any language.",
+      "subtitle": "Omnia builds a full-stack site, backend, database and deployment in one conversation. 9 curated stacks, ruble billing and a rollback button under every prompt.",
+      "ctaPrimary": "Create project",
+      "ctaDemo": "Watch demo"
+    }
+  },
+  "auth": {
+    "login": {
+      "title": "Welcome back",
+      "subtitle": "Sign in to continue working on your projects.",
+      "noAccount": "No account?",
+      "registerLink": "Sign up"
+    },
+    "register": {
+      "title": "Create account",
+      "subtitle": "100 ₽ credit on sign-up — no card, no subscription.",
+      "hasAccount": "Already have an account?",
+      "loginLink": "Sign in"
+    },
+    "form": {
+      "emailLabel": "Email",
+      "emailPlaceholder": "you@example.com",
+      "passwordLabel": "Password",
+      "passwordPlaceholder": "at least 8 characters with a number",
+      "confirmLabel": "Confirm password",
+      "confirmPlaceholder": "repeat password",
+      "loginButton": "Sign in",
+      "loginPending": "Signing in…",
+      "registerButton": "Create account",
+      "registerPending": "Creating account…",
+      "consent": "By signing up you agree to the terms of service."
+    }
+  },
+  "nav": {
+    "projects": "Projects",
+    "myProjects": "My projects",
+    "account": "Account",
+    "logout": "Log out",
+    "loggedInAs": "Signed in as"
+  },
+  "workspace": {
+    "remixBadge": "remix"
+  }
+}
