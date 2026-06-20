@@ -676,6 +676,8 @@ def _build_writer_messages(
     brief: str,
     model_id: str | None,
     template: str | None = None,
+    *,
+    language: str = "ru",
 ) -> list[dict[str, str]]:
     """Writer pass: shared system prompt + the brief injected into the last
     user turn. ``json_strict=False`` — freeform HTML, never a JSON nudge. An
@@ -689,6 +691,13 @@ def _build_writer_messages(
     )
     directive = vendor_directive(model_id, json_strict=False)
     suffix = f"\n\n{directive}" if directive else ""
+    # Phase A3 — for non-RU projects, prepend a compact language reminder to
+    # the writer turn so the instruction-level «русский контент / ₽» in the
+    # template doesn't override the system-level language directive. Empty for
+    # RU (default) → writer turn is byte-identical to pre-A3 behaviour.
+    from omnia_api.services.prompt_builder import _language_directive
+    _lang_note = _language_directive(language)
+    lang_prefix = f"{_lang_note}\n\n" if _lang_note else ""
     msgs = list(base_messages[:-1])
     if brief:
         # NB: plain str.replace, NOT str.format — the APP template embeds literal
@@ -696,9 +705,9 @@ def _build_writer_messages(
         # would misread as fields and crash with KeyError. Only `{brief}` is a
         # placeholder; everything else stays verbatim.
         tail = writer_tmpl.replace("{brief}", brief)
-        content = f"{user_prompt}\n\n{tail}{suffix}"
+        content = f"{lang_prefix}{user_prompt}\n\n{tail}{suffix}"
     else:
-        content = f"{user_prompt}{suffix}"
+        content = f"{lang_prefix}{user_prompt}{suffix}"
     msgs.append({"role": "user", "content": content})
     return msgs
 
@@ -724,6 +733,7 @@ async def art_director_writer_generate(
     message_id: UUID,
     template: str | None = None,
     art_director_system: str | None = None,
+    language: str = "ru",
 ) -> AsyncIterator[dict[str, Any]]:
     """Run Art-Director (Opus, brief) → Writer (DeepSeek, HTML).
 
@@ -785,7 +795,7 @@ async def art_director_writer_generate(
 
     # ─── Pass 2: Writer (streams the HTML to the caller) ─────────────────
     yield {"pass": "writer", "stage": "start", "model": writer_model}
-    writer_msgs = _build_writer_messages(base_messages, user_prompt, brief, writer_model, template)
+    writer_msgs = _build_writer_messages(base_messages, user_prompt, brief, writer_model, template, language=language)
     if pipeline_debug.enabled():
         pipeline_debug.dump(project_id, message_id, "01b_writer_input.md", writer_msgs[-1]["content"])
     writer_usage: dict[str, Any] | None = None

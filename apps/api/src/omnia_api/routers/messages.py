@@ -1827,6 +1827,7 @@ async def _process_prompt(
     project_design_preset_id: str | None = None
     project_image_gen_enabled: bool = True
     project_discovery_spec: dict[str, object] | None = None
+    project_language: str = "ru"
 
     try:
         async with factory() as session:
@@ -1842,6 +1843,7 @@ async def _process_prompt(
                 project_design_preset_id = proj.design_preset_id
                 project_image_gen_enabled = proj.image_gen_enabled
                 project_discovery_spec = proj.discovery_spec
+                project_language = getattr(proj, "language", None) or "ru"
             res = await session.execute(
                 select(Message)
                 .where(Message.project_id == project_id)
@@ -1931,6 +1933,10 @@ async def _process_prompt(
             # persisted onboarding chip choices steer the writer's palette /
             # theme / sections (the gauntlet already JUDGES against this spec).
             discovery_spec=project_discovery_spec,
+            # Phase A3 — language parameterisation.  "ru" is the default;
+            # non-RU injects a top-of-prompt OVERRIDE so all content is
+            # generated in the project language instead of Russian.
+            language=project_language,
         )
         print(f"[PP] messages_built count={len(messages)} surgical={surgical}", flush=True)
 
@@ -2157,6 +2163,7 @@ async def _process_prompt(
                     message_id=assistant_message_id,
                     template=project_template,
                     art_director_system=_ad_system,
+                    language=project_language,
                 )
             elif _dp_active:
                 source = director_polish_generate(
@@ -2167,6 +2174,7 @@ async def _process_prompt(
                     user_id=user_id,
                     project_id=project_id,
                     message_id=assistant_message_id,
+                    language=project_language,
                 )
             elif (
                 not force_single_shot

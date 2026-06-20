@@ -125,6 +125,8 @@ def _build_polish_messages(
     user_prompt: str,
     director_ir: str,
     model_id: str | None = None,
+    *,
+    language: str = "ru",
 ) -> list[dict[str, str]]:
     """Polish pass: same system + Director's IR injected into the last
     user turn + the per-vendor block for ``model_id`` (json_strict — Polish
@@ -132,11 +134,17 @@ def _build_polish_messages(
     prompt-cache hits on Anthropic for the entire system block."""
     directive = vendor_directive(model_id, json_strict=True)
     suffix = f"\n\n{directive}" if directive else ""
+    # Phase A3 — for non-RU projects, prepend a compact language reminder to
+    # the polish turn so the instruction-level «реальный русский контент / ₽»
+    # doesn't override the system-level language directive.
+    from omnia_api.services.prompt_builder import _language_directive
+    _lang_note = _language_directive(language)
+    lang_prefix = f"{_lang_note}\n\n" if _lang_note else ""
     msgs = list(base_messages[:-1])
     msgs.append({
         "role": "user",
         "content": (
-            f"{user_prompt}\n\n"
+            f"{lang_prefix}{user_prompt}\n\n"
             f"{_POLISH_INSTRUCTION_TEMPLATE.format(director_ir=director_ir)}"
             f"{suffix}"
         ),
@@ -163,6 +171,7 @@ async def director_polish_generate(
     user_id: UUID,
     project_id: UUID,
     message_id: UUID,
+    language: str = "ru",
 ) -> AsyncIterator[dict[str, Any]]:
     """Run Director → Polish with a different model per pass.
 
@@ -205,7 +214,7 @@ async def director_polish_generate(
 
     # ─── Pass 2: Polish (streams to user) ────────────────────────────
     yield {"pass": "polish", "stage": "start", "model": polish_model}
-    polish_msgs = _build_polish_messages(base_messages, user_prompt, director_acc, polish_model)
+    polish_msgs = _build_polish_messages(base_messages, user_prompt, director_acc, polish_model, language=language)
     polish_usage: dict[str, Any] | None = None
     async for event in stream_chat_completion(
         polish_msgs,
