@@ -13,22 +13,29 @@ import {
   Layers,
   Cpu,
 } from "lucide-react";
+import { getTranslations } from "next-intl/server";
 
 import { Reveal } from "@/components/marketing/Reveal";
 import { WordReveal } from "@/components/marketing/WordReveal";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 
-export const metadata = {
-  title: "Omnia.AI — AI-конструктор веб-приложений на русском",
-  description:
-    "Пиши промпт — получай продакшен. Full-stack сайты, бэкенд, домен и деплой за один разговор. 9 стеков, рубли, серверы в РФ.",
-};
+export async function generateMetadata() {
+  const t = await getTranslations("meta");
+  return {
+    title: "Omnia.AI — AI-конструктор веб-приложений на русском",
+    description: t("description"),
+  };
+}
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const tNav = await getTranslations("landing.nav");
+  const tHero = await getTranslations("landing.hero");
+
   return (
     <div className="min-h-svh bg-bg-base text-label-1 font-sans antialiased">
-      <Nav />
+      <Nav tNav={tNav} tHero={tHero} />
       <main>
-        <Hero />
+        <Hero tHero={tHero} />
         <LiveDemoStrip />
         <StackCarousel />
         <WorkspaceShowcase />
@@ -41,7 +48,18 @@ export default function LandingPage() {
   );
 }
 
-function Nav() {
+type NavTranslations = Awaited<ReturnType<typeof getTranslations<"landing.nav">>>;
+type HeroTranslations = Awaited<ReturnType<typeof getTranslations<"landing.hero">>>;
+
+function Nav({
+  tNav,
+  tHero,
+}: {
+  tNav: NavTranslations;
+  tHero: HeroTranslations;
+}) {
+  void tHero; // passed from parent, only tNav used here
+
   return (
     <header className="sticky top-0 z-50 material-thin border-b border-separator">
       <div className="max-w-7xl mx-auto px-6 lg:px-12 h-16 flex items-center justify-between">
@@ -57,34 +75,35 @@ function Nav() {
 
         <nav className="hidden md:flex items-center gap-7 text-[14px] text-label-2">
           <a href="#stacks" className="hover:text-label-1 transition-colors">
-            Стеки
+            {tNav("stacks")}
           </a>
           <a href="#workspace" className="hover:text-label-1 transition-colors">
-            Рабочее место
+            {tNav("workspace")}
           </a>
           <a href="#cases" className="hover:text-label-1 transition-colors">
-            Примеры
+            {tNav("examples")}
           </a>
           <a href="#pricing" className="hover:text-label-1 transition-colors">
-            Цены
+            {tNav("pricing")}
           </a>
           <a href="#faq" className="hover:text-label-1 transition-colors">
-            FAQ
+            {tNav("faq")}
           </a>
         </nav>
 
         <div className="flex items-center gap-3">
+          <LocaleSwitcher />
           <Link
             href="/login"
             className="text-[14px] text-label-2 hover:text-label-1 transition-colors"
           >
-            Войти
+            {tNav("login")}
           </Link>
           <Link
             href="/register"
             className="inline-flex items-center gap-1.5 px-4 h-9 rounded-full bg-accent text-accent-fg text-[14px] font-medium hover:bg-accent-hover active:scale-[0.98] transition-transform"
           >
-            Создать проект
+            {tNav("createProject")}
             <ArrowRight className="h-3.5 w-3.5" strokeWidth={2} />
           </Link>
         </div>
@@ -93,7 +112,7 @@ function Nav() {
   );
 }
 
-function Hero() {
+function Hero({ tHero }: { tHero: HeroTranslations }) {
   return (
     <section className="relative max-w-7xl mx-auto px-6 lg:px-12 pt-20 lg:pt-28 pb-20 lg:pb-24 overflow-hidden">
       <div className="hero-glow left-[-10%] top-[6%] h-[460px] w-[460px]" aria-hidden />
@@ -103,19 +122,19 @@ function Hero() {
           <Reveal>
             <div className="inline-flex items-center gap-2 px-3 h-7 rounded-full border border-separator text-[12px] font-mono text-label-2 tabular-nums">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-system-green" />
-              v3 · multi-stack · ru-1
+              {tHero("badge")}
             </div>
           </Reveal>
 
           <h1 className="text-[clamp(40px,5.8vw,76px)] leading-[0.98] tracking-[-0.035em] font-semibold text-balance">
-            <WordReveal text="Пишешь промпт." className="block" />
+            <WordReveal text={tHero("line1")} className="block" />
             <WordReveal
-              text="Получаешь продакшен."
+              text={tHero("line2")}
               className="block"
               baseDelay={0.18}
             />
             <WordReveal
-              text="На русском."
+              text={tHero("line3")}
               className="block text-accent"
               baseDelay={0.36}
             />
@@ -123,9 +142,7 @@ function Hero() {
 
           <Reveal delay={0.12}>
             <p className="text-[17px] leading-[1.55] text-label-2 max-w-xl">
-              Omnia собирает full-stack сайт, бэкенд, базу и деплой за один
-              разговор. 9 курируемых стеков, рублёвый биллинг и кнопка
-              «откатиться» под каждым промптом.
+              {tHero("subtitle")}
             </p>
           </Reveal>
 
@@ -135,7 +152,7 @@ function Hero() {
                 href="/register"
                 className="inline-flex items-center gap-2 h-12 px-6 rounded-full bg-accent text-accent-fg font-medium hover:bg-accent-hover active:scale-[0.98] transition-transform"
               >
-                Создать проект
+                {tHero("ctaPrimary")}
                 <ArrowRight className="h-4 w-4" strokeWidth={2} />
               </Link>
               <a
@@ -143,7 +160,7 @@ function Hero() {
                 className="inline-flex items-center gap-2 h-12 px-6 rounded-full border border-separator-solid text-label-1 hover:border-label-3 active:scale-[0.98] transition-transform"
               >
                 <Play className="h-4 w-4" strokeWidth={1.75} />
-                Посмотреть демо
+                {tHero("ctaDemo")}
               </a>
             </div>
           </Reveal>

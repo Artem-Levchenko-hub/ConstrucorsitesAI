@@ -9,6 +9,7 @@ import {
   Settings,
   User as UserIcon,
 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import type { RemixSource } from "@/lib/project-lineage";
 import { RemixSourceModal } from "./RemixSourceModal";
 import { logoutAction } from "@/app/(auth)/actions";
@@ -33,6 +34,7 @@ import { LogsViewer } from "./LogsViewer";
 import { PublishButton } from "./PublishButton";
 import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 
 export function TopBar({
   user,
@@ -65,6 +67,7 @@ export function TopBar({
   showProjectControls?: boolean;
 }) {
   const initial = user.email.slice(0, 1).toUpperCase();
+  const tNav = useTranslations("nav");
 
   return (
     <header className="shrink-0 h-14 flex items-center justify-between px-6 bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
@@ -85,7 +88,7 @@ export function TopBar({
               className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-sm text-fg-secondary transition-colors hover:bg-surface-overlay hover:text-fg-primary"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
-              Проекты
+              {tNav("projects")}
             </Link>
             <span className="text-fg-tertiary">/</span>
             <span className="truncate text-sm font-medium">{projectName}</span>
@@ -134,6 +137,8 @@ export function TopBar({
           </>
         )}
 
+        <LocaleSwitcher />
+
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="sm" className="gap-2 px-1.5">
@@ -146,7 +151,7 @@ export function TopBar({
 
           <DropdownMenuContent align="end">
             <DropdownMenuLabel className="font-normal">
-              <div className="text-xs text-fg-tertiary">Вошли как</div>
+              <div className="text-xs text-fg-tertiary">{tNav("loggedInAs")}</div>
               <div className="text-sm text-fg-primary truncate max-w-[200px]">
                 {user.email}
               </div>
@@ -155,13 +160,13 @@ export function TopBar({
             <DropdownMenuItem asChild>
               <Link href="/projects">
                 <UserIcon className="h-4 w-4" />
-                Мои проекты
+                {tNav("myProjects")}
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <Link href="/account">
                 <Settings className="h-4 w-4" />
-                Аккаунт
+                {tNav("account")}
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -169,7 +174,7 @@ export function TopBar({
               <form action={logoutAction} className="w-full">
                 <button type="submit" className="flex items-center gap-2 w-full">
                   <LogOut className="h-4 w-4" />
-                  Выйти
+                  {tNav("logout")}
                 </button>
               </form>
             </DropdownMenuItem>
