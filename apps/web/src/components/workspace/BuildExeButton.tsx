@@ -35,8 +35,7 @@ export function BuildExeButton({ projectId }: { projectId: string }) {
         <a
           href={ready.setup_url}
           download
-          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:opacity-90 transition-opacity"
-          style={{ backgroundColor: "var(--color-accent, #6e5be8)" }}
+          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-accent text-accent-fg shadow-sm hover:bg-accent-hover transition-colors"
         >
           Скачать установщик ({sizeMb} МБ)
         </a>
