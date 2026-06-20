@@ -1817,6 +1817,14 @@ async def _process_prompt(
     # (palette / contrast / signature-floor / acceptance / dead-link re-roll) so
     # nothing outside the requested change can drift.
     surgical = (not orchestrate) and get_settings().use_surgical_edit
+    # Imported foreign repos are NEVER regenerated from scratch — only surgically
+    # edited. Force surgical here so the entire build pipeline (palette/contrast/
+    # acceptance/vision/dead-link/kit-injection), which assumes an Omnia-authored
+    # template, is bypassed. project_is_imported is loaded from the DB below; we
+    # also apply it again after loading for defense-in-depth.
+    # NOTE: project_is_imported is initialised False above and set from the DB
+    # in the context-load block. The second enforcement below (after DB load)
+    # is the real gate. This first assignment is a no-op until we reload.
     print(f"[PP] start project={project_id} asst_msg={assistant_message_id} model={model_id} free={is_free} force={force_model} surgical={surgical}", flush=True)
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
@@ -1838,6 +1846,7 @@ async def _process_prompt(
     project_image_gen_enabled: bool = True
     project_discovery_spec: dict[str, object] | None = None
     project_language: str = "ru"
+    project_is_imported: bool = False
 
     try:
         async with factory() as session:
@@ -1854,6 +1863,7 @@ async def _process_prompt(
                 project_image_gen_enabled = proj.image_gen_enabled
                 project_discovery_spec = proj.discovery_spec
                 project_language = getattr(proj, "language", None) or "ru"
+                project_is_imported = bool(getattr(proj, "source", "native") == "imported")
             res = await session.execute(
                 select(Message)
                 .where(Message.project_id == project_id)
@@ -1870,13 +1880,24 @@ async def _process_prompt(
             ]
         print(f"[PP] ctx_loaded sha={current_sha} history={len(history_serialized)}", flush=True)
 
+        # B4 — imported repos are ALWAYS surgical-edit only.  We enforce this
+        # here (after the DB load sets project_is_imported) regardless of the
+        # triage result: the build pipeline (palette/contrast/acceptance/vision/
+        # dead-link/kit-injection) assumes an Omnia-authored template and must
+        # NEVER touch foreign source code.
+        if project_is_imported:
+            surgical = True
+        print(f"[PP] imported={project_is_imported} surgical_final={surgical}", flush=True)
+
         # Auto stack-routing, part 2: container-backed stacks need a live dev
         # container for the post-build hot_reload to land in. Provision it now —
         # at the START of the worker — so it warms up in parallel with the
         # (minutes-long) generation below. Idempotent + fail-soft: if the
         # container already exists this is a no-op; if the orchestrator hiccups
         # the build still ships the snapshot and hot_reload/«Запустить» retries.
-        if project_template in CONTAINER_NEXT and project_slug:
+        # Imported repos are never container-backed (detect_template returns
+        # "blank"/"code", neither is in CONTAINER_NEXT), but gate defensively.
+        if project_template in CONTAINER_NEXT and project_slug and not project_is_imported:
             await stack_routing.ensure_provisioned(
                 project_id, project_slug, project_template
             )
@@ -1889,7 +1910,11 @@ async def _process_prompt(
 
         # Kit files are Omnia-managed infra — keep them out of the model's context
         # (saves tokens and stops the model rewriting them from what it "saw").
-        current_files = {p: c for p, c in current_files.items() if p not in KIT_FILES}
+        # Imported projects: do NOT strip kit files from context — the imported
+        # repo has no kit, so the filter is a no-op anyway, but we skip it to
+        # avoid any accidental mutation of the foreign files dict.
+        if not project_is_imported:
+            current_files = {p: c for p, c in current_files.items() if p not in KIT_FILES}
 
         # Auto-classify design preset on first prompt if not set yet.
         # Heuristic is sync+cheap; LLM-fallback (Haiku, ~150 tokens) only fires
@@ -1947,6 +1972,9 @@ async def _process_prompt(
             # non-RU injects a top-of-prompt OVERRIDE so all content is
             # generated in the project language instead of Russian.
             language=project_language,
+            # B4 — imported repos use a stack-neutral generic edit identity
+            # instead of the Omnia static/Next.js-specific ones.
+            is_imported=project_is_imported,
         )
         print(f"[PP] messages_built count={len(messages)} surgical={surgical}", flush=True)
 
@@ -3047,7 +3075,9 @@ async def _process_prompt(
         # Kit files are Omnia-managed: drop any model attempt to write/delete them,
         # and re-inject the kit <link>/<script> into returned HTML if the model
         # dropped them (so animations/interactivity never silently break).
-        if files and project_template not in CONTAINER_NEXT and not _is_code:
+        # Imported projects: skip entirely — their HTML is foreign and must not
+        # have Omnia's kit injected (it would break the layout and leak branding).
+        if files and project_template not in CONTAINER_NEXT and not _is_code and not project_is_imported:
             files = {p: c for p, c in files.items() if p not in KIT_FILES}
             files = _ensure_kit_linked(files)
 

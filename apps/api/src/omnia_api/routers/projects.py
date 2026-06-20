@@ -28,14 +28,17 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
+from omnia_api.core.crypto import decrypt_secret
 from omnia_api.schemas.project import (
     ProjectCreate,
+    ProjectImportRequest,
     ProjectPublic,
     ProjectUpdate,
     is_fullstack,
 )
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services import repo_import
 from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.run_bundle import build_launchers
 from omnia_api.services.fork_recap import build_fork_recap
@@ -130,6 +133,132 @@ async def create_project(
     await session.refresh(project)
     await session.refresh(snapshot)
 
+    await asyncio.to_thread(enqueue_preview, snapshot.id)
+    await publish_event(
+        project.id,
+        "snapshot.created",
+        {
+            "snapshot": {
+                "id": str(snapshot.id),
+                "project_id": str(snapshot.project_id),
+                "commit_sha": snapshot.commit_sha,
+                "prompt_text": snapshot.prompt_text,
+                "model_id": snapshot.model_id,
+                "parent_id": str(snapshot.parent_id) if snapshot.parent_id else None,
+                "preview_url": preview_public_url(snapshot.preview_key),
+                "is_rollback_target": snapshot.is_rollback_target,
+                "created_at": snapshot.created_at.isoformat(),
+            }
+        },
+    )
+
+    return project
+
+
+@router.post("/import", response_model=ProjectPublic, status_code=status.HTTP_201_CREATED)
+async def import_project(
+    payload: ProjectImportRequest,
+    session: SessionDep,
+    response: Response,
+    current_user: OptionalUserDep,
+) -> Project:
+    """Seed a new project from an external GitHub repo tarball.
+
+    Public repos work anonymously; private repos require a connected GitHub
+    account (the user's stored OAuth token is used automatically).  The
+    resulting project has ``source='imported'`` which causes the build
+    pipeline to treat every subsequent prompt as a surgical edit — the
+    original repo files are never regenerated from scratch.
+    """
+    owner = current_user if current_user is not None else await _ensure_anon_user(
+        session, response
+    )
+
+    try:
+        gh_owner, gh_repo = repo_import.parse_github_url(payload.repo_url)
+    except ValueError as exc:
+        raise ApiError("import_bad_url", str(exc), status.HTTP_400_BAD_REQUEST) from exc
+
+    token: str | None = None
+    if current_user and current_user.github_token_enc:
+        token = decrypt_secret(current_user.github_token_enc)
+
+    try:
+        tar = await repo_import.fetch_repo_tarball(gh_owner, gh_repo, payload.ref, token)
+    except FileNotFoundError as exc:
+        raise ApiError(
+            "import_not_found",
+            "репозиторий не найден или приватный без подключённого GitHub",
+            status.HTTP_404_NOT_FOUND,
+        ) from exc
+    except PermissionError as exc:
+        raise ApiError(
+            "import_forbidden",
+            "нет доступа к репозиторию — подключите GitHub-аккаунт с нужными правами",
+            status.HTTP_403_FORBIDDEN,
+        ) from exc
+
+    result = repo_import.tarball_to_files(tar)
+    if not result.files:
+        raise ApiError(
+            "import_empty",
+            "нечего импортировать (только бинарники/пусто)",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    short_id = uuid4().hex[:6]
+    project_name = payload.name or gh_repo
+    base_slug = slugify(project_name)[:60] or "project"
+    slug = f"{base_slug}-{short_id}"
+
+    project = Project(
+        owner_id=owner.id,
+        name=project_name,
+        slug=slug,
+        template=result.template,
+        source="imported",
+        external_repo_url=f"https://github.com/{gh_owner}/{gh_repo}",
+        external_repo_ref=payload.ref,
+    )
+    session.add(project)
+    await session.flush()
+
+    commit_sha = await asyncio.to_thread(
+        repo_svc.init_from_files,
+        project.id,
+        result.files,
+        f"Import {gh_owner}/{gh_repo}",
+    )
+
+    # prompt_text='' (EMPTY STRING, not None): this makes is_first_build=False
+    # so the first chat prompt is treated as an EDIT, not a from-scratch rebuild
+    # that would nuke the imported repo files with an Omnia template generation.
+    snapshot = Snapshot(
+        project_id=project.id,
+        commit_sha=commit_sha,
+        prompt_text="",
+        model_id=None,
+        parent_id=None,
+    )
+    session.add(snapshot)
+    await session.flush()
+
+    project.current_snapshot_id = snapshot.id
+
+    try:
+        await session.commit()
+    except IntegrityError as e:
+        await session.rollback()
+        raise ApiError(
+            "conflict", "slug already exists", status.HTTP_409_CONFLICT
+        ) from e
+
+    await session.refresh(project)
+    await session.refresh(snapshot)
+
+    # Enqueue a preview render — static repos (blank template) will produce a
+    # thumbnail; code/arbitrary repos produce a no-op (gracefully handled by
+    # the worker's template check).
     await asyncio.to_thread(enqueue_preview, snapshot.id)
     await publish_event(
         project.id,

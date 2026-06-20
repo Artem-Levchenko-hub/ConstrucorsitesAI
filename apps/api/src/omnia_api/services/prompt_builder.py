@@ -3882,6 +3882,13 @@ _EDIT_IDENTITY = """\
   старым. НЕ выдумывай новую дизайн-систему и НЕ объявляй новые CSS-переменные.
 • Не добавляй секции/блоки/эффекты, которых не просили. Просят одно — делаешь одно."""
 
+_EDIT_IDENTITY_GENERIC = """\
+Ты редактируешь файлы существующего внешнего репозитория ПРОИЗВОЛЬНОГО стека.
+Меняй ТОЛЬКО то, что просит пользователь, byte-exact SEARCH/REPLACE.
+НЕ предполагай index.html / omnia-kit / какой-либо конкретный фреймворк.
+Не добавляй ничего лишнего, не переименовывай файлы, не изменяй структуру проекта.
+Используй пути файлов ТОЧНО как они показаны в текущем состоянии."""
+
 _EDIT_FAITHFUL = """\
 ТОЧНОСТЬ ИСПОЛНЕНИЯ (именно это чаще всего ломается — соблюдай жёстко):
 • ВЕРБАТИМ-ТЕКСТ: дал пользователь точный текст («заголовок ровно на X», «кнопка: Y»,
@@ -4084,6 +4091,7 @@ def _build_edit_messages(
     template: str = "blank",
     *,
     language: str = "ru",
+    is_imported: bool = False,
 ) -> list[dict[str, str]]:
     """Lean message list for a SURGICAL EDIT (CHEAP intent).
 
@@ -4120,8 +4128,13 @@ def _build_edit_messages(
     # DOCTYPE, omnia-kit) makes the model emit <edit path="index.html"> which can
     # never land on a .tsx project → the user sees "правка не применилась". Give
     # those stacks a React-aware identity/response instead.
-    if template in ("fullstack", "nextjs_entities"):
-        _blocks: list[str] = [_EDIT_IDENTITY_NEXT, _EDIT_FAITHFUL, _EDIT_RESPONSE_NEXT]
+    # Imported repos use a stack-neutral generic identity (no index.html/omnia-kit
+    # assumptions) — the actual files shown in context tell the model what's there.
+    if is_imported:
+        # Generic identity: arbitrary stack, byte-exact SEARCH/REPLACE only.
+        _blocks: list[str] = [_EDIT_IDENTITY_GENERIC, _EDIT_FAITHFUL, _EDIT_RESPONSE]
+    elif template in ("fullstack", "nextjs_entities"):
+        _blocks = [_EDIT_IDENTITY_NEXT, _EDIT_FAITHFUL, _EDIT_RESPONSE_NEXT]
     else:
         _blocks = [_EDIT_IDENTITY, _EDIT_FAITHFUL]
         if _wants_add:
@@ -4297,14 +4310,18 @@ def build_messages(
     edit_mode: bool = False,
     discovery_spec: dict[str, Any] | None = None,
     language: str = "ru",
+    is_imported: bool = False,
 ) -> list[dict[str, str]]:
     # Surgical EDIT mode (CHEAP intent on an existing project): a lean,
     # edit-only prompt that forbids rewriting the page or re-rolling the palette.
     # Bypasses the catalog/freeform/plain build branching entirely.
+    # is_imported forces edit_mode (set upstream in messages.py) and also
+    # flows down so _build_edit_messages can select the generic identity.
     if edit_mode:
         return _build_edit_messages(
             current_files, history, user_prompt, selected_elements, template,
             language=language,
+            is_imported=is_imported,
         )
 
     # Phase L3 — when the feature flag is on, route through the lean
