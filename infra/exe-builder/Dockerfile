@@ -6,7 +6,9 @@ RUN wine python -m pip install --no-cache-dir "pyinstaller>=6.3.0"
 # Windows Python under Wine — there is no native python3 on PATH without this).
 RUN apt-get update && apt-get install -y --no-install-recommends nsis python3 \
     && rm -rf /var/lib/apt/lists/*
-RUN useradd -m builder
+# The Wine prefix was created as root by the pip step above; Wine refuses a prefix
+# "not owned by you", so hand it (and everything pip wrote into it) to builder.
+RUN useradd -m builder && chown -R builder:builder /opt/wineprefix
 COPY build.py /usr/local/bin/build.py
 USER builder
 WORKDIR /work
