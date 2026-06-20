@@ -1,9 +1,7 @@
 import { getRequestConfig } from "next-intl/server";
 import { cookies } from "next/headers";
 
-export const LOCALES = ["ru", "en"] as const;
-export type AppLocale = (typeof LOCALES)[number];
-export const DEFAULT_LOCALE: AppLocale = "ru";
+import { LOCALES, DEFAULT_LOCALE, type AppLocale } from "@/i18n/config";
 
 export default getRequestConfig(async ({ requestLocale }) => {
   // requestLocale is the locale from the [locale] segment (undefined for cookie-based setup)
