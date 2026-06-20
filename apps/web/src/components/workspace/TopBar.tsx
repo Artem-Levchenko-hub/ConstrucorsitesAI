@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ChevronDown,
+  GitFork,
   LogOut,
   Settings,
   User as UserIcon,
@@ -40,6 +41,7 @@ export function TopBar({
   projectSlug,
   imageGenEnabled,
   remixSource = null,
+  importedRepoUrl = null,
   showProjectControls = true,
 }: {
   user: { email: string };
@@ -52,6 +54,9 @@ export function TopBar({
    *  clickable remix lineage badge next to the project name that opens a modal
    *  attributing the source + re-remixing this version (viral provenance). */
   remixSource?: RemixSource | null;
+  /** B5+B6 — when set (non-null), shows a small «Импортировано из GitHub» badge
+   *  linking to the original repository. Only passed when project.source==="imported". */
+  importedRepoUrl?: string | null;
   /** Read-only: AI auto-classified design preset for this project. */
   designPresetId?: string;
   designPresetName?: string;
@@ -86,6 +91,18 @@ export function TopBar({
             <span className="truncate text-sm font-medium">{projectName}</span>
             {remixSource && projectId && (
               <RemixSourceModal projectId={projectId} source={remixSource} />
+            )}
+            {importedRepoUrl && (
+              <a
+                href={importedRepoUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 rounded-full border border-border-subtle bg-surface-raised px-2 py-0.5 text-[11px] text-fg-tertiary hover:text-fg-secondary transition-colors shrink-0"
+                title={importedRepoUrl}
+              >
+                <GitFork className="h-3 w-3" />
+                GitHub
+              </a>
             )}
           </>
         )}

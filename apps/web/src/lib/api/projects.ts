@@ -67,6 +67,21 @@ export async function forkProject(id: string): Promise<Project> {
   return apiFetch<Project>(`/api/projects/${id}/fork`, { method: "POST" });
 }
 
+/**
+ * Import an existing GitHub repository as an Omnia project. The backend clones
+ * the repo, stores the files as a snapshot, and returns a Project with
+ * `source:"imported"` and `template:"blank"|"code"`. No container is
+ * provisioned — imported projects use the static /p/<slug> preview path
+ * (blank template) or the «Код» tab (code template).
+ */
+export async function importProject(input: {
+  repo_url: string;
+  ref?: string;
+  name?: string;
+}): Promise<Project> {
+  return apiFetch<Project>("/api/projects/import", { method: "POST", json: input });
+}
+
 export type ProjectUpdate = {
   image_gen_enabled?: boolean;
 };

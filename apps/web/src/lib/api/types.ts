@@ -42,6 +42,12 @@ export type Project = {
   updated_at: IsoDateTime;
   design_preset_id?: string;
   design_preset_name?: string;
+  /** B5+B6 — import-from-GitHub. "imported" when the project was cloned from an
+   *  external repo; absent/null for organically created projects. Mirrors
+   *  ProjectPublic.source (apps/api schemas/project.py). */
+  source?: string | null;
+  /** The GitHub URL the project was imported from, or null for organic projects. */
+  external_repo_url?: string | null;
   /** Per-project toggle: when true, AI-emitted <img data-omnia-gen> tags are
    *  resolved to real images via gpt-image-1. Default true. */
   image_gen_enabled?: boolean;
