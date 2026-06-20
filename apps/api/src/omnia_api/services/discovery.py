@@ -29,6 +29,7 @@ from omnia_api.services.chip_pixel_gate import (
     spec_confidence,
     spec_from_discovery,
 )
+from omnia_api.services.lang_detect import _reply_language_line
 
 log = logging.getLogger(__name__)
 
@@ -60,11 +61,17 @@ MAX_DISCOVERY_QUESTIONS = 5
 
 # Explicit "stop asking, build now" signals — substring match on the lowered
 # prompt (Russian stems cover падежи). When present we skip straight to BUILD.
+# EN equivalents added (A4 i18n) so English users get the same skip-to-build
+# shortcut without changing RU routing (RU input never contains these EN stems).
 _BUILD_NOW_SIGNALS: frozenset[str] = frozenset(
     {
+        # RU stems (unchanged)
         "генерир", "сгенерир", "строй", "собери", "построй", "сделай уже",
         "давай уже", "поехали", "начинай", "хватит вопрос", "просто сделай",
-        "build now", "just build", "go ahead",
+        # EN equivalents
+        "build now", "just build", "go ahead", "build it", "make it",
+        "create it", "generate it", "generate now", "just go", "go now",
+        "skip questions", "start building", "start now",
     }
 )
 
@@ -75,19 +82,31 @@ _BUILD_NOW_SIGNALS: frozenset[str] = frozenset(
 # wrong build (owner directive 2026-06-10: «полноценное приложение с 1 генерации»).
 # Kept precise so a genuine marketing landing (кофейня, портфолио) does NOT trip
 # it: these are product-intent words, not generic nav labels.
+# EN equivalents added (A4 i18n) so English prompts get the same routing; they
+# cannot fire on RU input (different alphabet / words), so RU routing is stable.
 _BACKEND_SIGNALS: frozenset[str] = frozenset(
     {
-        # auth / accounts
+        # auth / accounts — RU stems
         "регистрац", "зарегистр", "войти", "вход в", "логин", "авториз",
         "личный кабинет", "кабинет", "профиль пользоват", "аккаунт",
+        # auth / accounts — EN
         "log in", "login", "sign in", "signin", "sign up", "signup", "auth",
-        # private app surface / data ownership
-        "dashboard", "per-user", "каждый пользователь", "пользователи видят",
-        "роли пользоват", "админк", "admin panel",
-        # data / CRUD / commerce
-        "crm", "crud", "база данных", "сущност", "entities", "сохраня",
-        "корзин", "оформить заказ", "заказы", "checkout",
+        "register", "account", "user account", "user profile",
+        # private app surface / data ownership — RU
+        "каждый пользователь", "пользователи видят",
+        "роли пользоват", "админк",
+        # private app surface / data ownership — EN
+        "dashboard", "per-user", "admin panel", "admin dashboard",
+        "user roles", "role-based",
+        # data / CRUD / commerce — RU
+        "crm", "crud", "база данных", "сущност", "сохраня",
+        "корзин", "оформить заказ", "заказы",
         "бронирован", "запись на", "каталог товар", "товаров", "трекер",
+        # data / CRUD / commerce — EN
+        "entities", "database", "save data", "user data",
+        "shopping cart", "checkout", "booking", "appointments",
+        "payments", "payment", "orders", "product catalog",
+        "inventory", "tracker",
     }
 )
 
@@ -891,7 +910,9 @@ def _questions_from_parsed(parsed: dict[str, object] | None) -> list[PlannedQues
     return out
 
 
-async def plan_discovery_questions(prompt: str) -> list[PlannedQuestion]:
+async def plan_discovery_questions(
+    prompt: str, language: str = "ru"
+) -> list[PlannedQuestion]:
     """ONE upfront gateway pass → the WHOLE batch of 3–4 product-tailored
     questions. Never raises: any gateway/parse failure degrades to the
     deterministic general→detail batch (:func:`_plan_fallback`) so onboarding
@@ -899,11 +920,17 @@ async def plan_discovery_questions(prompt: str) -> list[PlannedQuestion]:
 
     The single call gets a generous budget (one pass replaces N per-question
     round-trips), but stays under the client's ``POST /prompt`` timeout so a cold
-    gateway degrades to the batch fallback within the window (R-10 fail fast)."""
+    gateway degrades to the batch fallback within the window (R-10 fail fast).
+
+    ``language`` is the project's detected language (BCP-47-ish, e.g. ``"en"``).
+    RU is the default and leaves the system prompt unchanged (zero diff from the
+    pre-i18n baseline).
+    """
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions"
+    system_content = _PLAN_SYSTEM + _reply_language_line(language)
     convo = [
-        {"role": "system", "content": _PLAN_SYSTEM},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": (prompt or "").strip()[:4000] or "(пусто)"},
     ]
     payload = {
@@ -966,6 +993,7 @@ async def run_discovery(
     *,
     asked_count: int,
     force_build: bool = False,
+    language: str = "ru",
 ) -> DiscoveryResult:
     """Decide the next discovery turn: ask one more question, or build.
 
@@ -973,6 +1001,10 @@ async def run_discovery(
     the user's newest message (not yet in ``history``). ``asked_count`` is how many
     questions the assistant has already asked (drives the hard cap). ``force_build``
     short-circuits to BUILD (explicit user request).
+
+    ``language`` is the project's detected language (BCP-47-ish, e.g. ``"en"``).
+    RU is the default and leaves the system prompt unchanged (zero diff from the
+    pre-i18n baseline).
 
     Never raises — degrades to a sensible question, or a from-history build at the
     cap / on force, so onboarding can never dead-end.
@@ -1008,7 +1040,8 @@ async def run_discovery(
 
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions"
-    convo: list[dict[str, str]] = [{"role": "system", "content": _SYSTEM}]
+    system_content = _SYSTEM + _reply_language_line(language)
+    convo: list[dict[str, str]] = [{"role": "system", "content": system_content}]
     for m in history[-12:]:
         content = (m.get("content") or "").strip()
         if not content:

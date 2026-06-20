@@ -307,12 +307,12 @@ def _spawn_process_prompt(**kwargs: object) -> None:
 
 
 async def _run_clarify(
-    project_id: UUID, assistant_message_id: UUID, prompt: str
+    project_id: UUID, assistant_message_id: UUID, prompt: str, language: str = "ru"
 ) -> None:
     """Pre-generation clarify turn: stream 3–4 questions into the assistant
     message, persist them, finalize. NO files, NO snapshot, NO generation — the
     user's answers (next message) drive the real build via history."""
-    text = await generate_clarify_questions(prompt)
+    text = await generate_clarify_questions(prompt, language=language)
     await publish_event(
         project_id,
         "llm.chunk",
@@ -334,7 +334,7 @@ async def _run_clarify(
 
 
 def _spawn_clarify(
-    project_id: UUID, assistant_message_id: UUID, prompt: str
+    project_id: UUID, assistant_message_id: UUID, prompt: str, language: str = "ru"
 ) -> None:
     """Fire-and-forget _run_clarify with a strong ref + error finalize (mirrors
     _spawn_process_prompt, so a clarify failure never hangs the UI spinner)."""
@@ -342,7 +342,7 @@ def _spawn_clarify(
 
     log = logging.getLogger(__name__)
     task = asyncio.create_task(
-        _run_clarify(project_id, assistant_message_id, prompt)
+        _run_clarify(project_id, assistant_message_id, prompt, language=language)
     )
     _BACKGROUND_TASKS.add(task)
 
@@ -542,6 +542,7 @@ async def _batch_discovery_turn(
     *,
     asked_count: int,
     force_build: bool,
+    language: str = "ru",
 ) -> DiscoveryResult:
     """Batch discovery (owner rule 13 #1 — NORTH STAR pillar 2).
 
@@ -555,10 +556,14 @@ async def _batch_discovery_turn(
 
     Never raises (R-10): ``plan_discovery_questions`` degrades to a deterministic
     batch, and the exhausted/forced path delegates to the fail-soft builder.
+
+    ``language`` is threaded into gateway calls so the model replies in the
+    project's language. RU (the default) leaves prompts unchanged.
     """
     if force_build:
         return await run_discovery(
-            history, prompt, asked_count=asked_count, force_build=True
+            history, prompt, asked_count=asked_count, force_build=True,
+            language=language,
         )
     # Plan once, on the first turn, when nothing is stashed yet. A first prompt
     # that already pins the design wins the zero-question shortcut and never gets
@@ -569,12 +574,13 @@ async def _batch_discovery_turn(
         # never plan palette/audience questions for a program.
         if _infer_code_from_text(prompt):
             return await run_discovery(
-                history, prompt, asked_count=asked_count, force_build=True
+                history, prompt, asked_count=asked_count, force_build=True,
+                language=language,
             )
         zero = zero_question_build(history, prompt)
         if zero is not None:
             return zero
-        questions = await plan_discovery_questions(prompt)
+        questions = await plan_discovery_questions(prompt, language=language)
         project.discovery_plan = [q.to_dict() for q in questions]
     # LIVE niche (pillar 2 causality): re-infer on the CUMULATIVE answers (idea +
     # every reply), not just the first prompt, so the badge sharpens turn-by-turn
@@ -589,7 +595,8 @@ async def _batch_discovery_turn(
         history, prompt, asked_count=asked_count, niche=niche
     ) and serve_planned_question(project.discovery_plan or [], asked_count) is not None:
         return await run_discovery(
-            history, prompt, asked_count=asked_count, force_build=True
+            history, prompt, asked_count=asked_count, force_build=True,
+            language=language,
         )
     ask = serve_planned_question(project.discovery_plan or [], asked_count)
     if ask is not None:
@@ -604,7 +611,8 @@ async def _batch_discovery_turn(
         return replace(ask, niche=niche, recap=recap, design_preview=design_preview)
     # Plan exhausted — every question answered → build from the full Q&A.
     return await run_discovery(
-        history, prompt, asked_count=asked_count, force_build=True
+        history, prompt, asked_count=asked_count, force_build=True,
+        language=language,
     )
 
 
@@ -830,6 +838,7 @@ async def post_prompt(
                 payload.prompt,
                 asked_count=_asked,
                 force_build=wants_build_now(payload.prompt),
+                language=project.language,
             )
         else:
             discovery_result = await run_discovery(
@@ -837,6 +846,7 @@ async def post_prompt(
                 payload.prompt,
                 asked_count=_asked,
                 force_build=wants_build_now(payload.prompt),
+                language=project.language,
             )
         if discovery_result.action == DISCOVERY_BUILD:
             # Build now — the compiled brief (with the recommended stack folded in)
@@ -1002,7 +1012,7 @@ async def post_prompt(
     elif do_clarify:
         # Ask first — no generation this turn. The user's answers (next message)
         # flow into the real build via chat history.
-        _spawn_clarify(project_id, assistant_msg.id, payload.prompt)
+        _spawn_clarify(project_id, assistant_msg.id, payload.prompt, language=project.language)
     elif run_intent:
         # Run/install intent (owner 2026-06-19): no build — stream a one-click
         # installer-download card. The user clicks «Скачать установщик», gets the

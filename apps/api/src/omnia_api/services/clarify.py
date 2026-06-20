@@ -18,6 +18,7 @@ import logging
 import httpx
 
 from omnia_api.core.config import get_settings, model_for_role
+from omnia_api.services.lang_detect import _reply_language_line
 
 log = logging.getLogger(__name__)
 
@@ -44,18 +45,24 @@ _DEFAULT = (
 )
 
 
-async def generate_clarify_questions(prompt: str) -> str:
+async def generate_clarify_questions(prompt: str, language: str = "ru") -> str:
     """Ask the gateway for 3–4 clarifying questions about ``prompt``.
+
+    ``language`` is the project's detected language (BCP-47-ish, e.g. ``"en"``).
+    RU is the default and leaves the system prompt unchanged (zero diff from the
+    pre-i18n baseline). ``_DEFAULT`` (the gateway-failure fallback) stays RU —
+    acceptable because it only fires when the gateway is unreachable.
 
     Never raises — returns ``_DEFAULT`` on any failure so the clarify turn always
     produces something usable.
     """
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions"
+    system_content = _SYSTEM + _reply_language_line(language)
     payload = {
         "model": model_for_role("edit"),
         "messages": [
-            {"role": "system", "content": _SYSTEM},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": (prompt or "").strip()[:2000]},
         ],
         "max_tokens": 420,
