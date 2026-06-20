@@ -502,3 +502,35 @@ export type WsEvent =
   | { type: "deploy.failed"; data: { error: string } };
 
 export type WsEventType = WsEvent["type"];
+
+// === Exe-build (Task 9) ===
+
+/**
+ * Lifecycle of a Windows .exe build triggered by «Собрать .exe».
+ * Matches the exe.* event types emitted by the orchestrator over the project WS.
+ */
+export type ExeBuildStage =
+  | "idle"      // not started (or reset after terminal state)
+  | "starting"  // POST sent, waiting for first exe.* event
+  | "build"     // exe.stage received — PyInstaller running
+  | "heal"      // exe.heal received — doctor patching dependencies
+  | "ready"     // exe.ready received — artefacts available for download
+  | "failed";   // exe.failed received — unrecoverable error
+
+/**
+ * Payload of the terminal `exe.ready` WS event.
+ * `setup_url` / `exe_url` are api-relative paths (e.g.
+ * `/api/projects/<id>/exe/<build_id>/setup`) — cookie-authed same-origin
+ * GETs so `<a href={…} download>` works without any fetch/blob dance.
+ */
+export interface ExeReadyData {
+  build_id: string;
+  /** Inno Setup installer — always present on success. */
+  setup_url: string;
+  /** Portable single-file .exe — may be null when the build only produced an installer. */
+  exe_url: string | null;
+  /** Human-readable artefact name (e.g. "MyApp-1.0-setup.exe"). */
+  name: string;
+  /** Installer file size in bytes (for the «N МБ» label). */
+  size: number;
+}
