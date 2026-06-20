@@ -966,6 +966,29 @@ async def post_prompt(
         created_at=_now + timedelta(milliseconds=1),
     )
     session.add_all([user_msg, assistant_msg])
+
+    # Detect & persist the project language ONCE, on the first build.  The
+    # first prompt is the strongest language signal we have.  A connected
+    # user's explicit `default_language` preference beats auto-detection.
+    # Fail-soft (R-10): any hiccup must never block the build.
+    if is_first_build and project.language == "ru":
+        try:
+            from omnia_api.services.lang_detect import detect_language
+
+            detected = (
+                current_user.default_language
+                if current_user.default_language
+                else detect_language(payload.prompt)
+            )
+            if detected and detected != project.language:
+                project.language = detected
+        except Exception as _ld_exc:
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                "language detection failed (keeping default): %r", _ld_exc
+            )
+
     await session.commit()
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
