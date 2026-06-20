@@ -31,6 +31,7 @@ dependencies = [
     "python-slugify>=8.0,<9.0",
     "jinja2>=3.1,<4.0",
     "pillow>=10,<12",
+    "langdetect>=1.0.9",
 ]
 
 [dependency-groups]

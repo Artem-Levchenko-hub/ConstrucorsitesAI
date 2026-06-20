@@ -239,6 +239,7 @@ async def perform_fork(
         name=source.name,
         slug=slug,
         template=source.template,
+        language=source.language,
         design_preset_id=source.design_preset_id,
         discovery_spec=source.discovery_spec,
         image_gen_enabled=source.image_gen_enabled,

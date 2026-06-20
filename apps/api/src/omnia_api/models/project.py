@@ -25,6 +25,7 @@ class Project(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     template: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str] = mapped_column(Text, nullable=False, server_default="ru", default="ru")
     design_preset_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Lineage for the V4.1b "Remix this" fork: the project this one was
     # deep-copied from. NULL for organically-created projects. Self-FK with

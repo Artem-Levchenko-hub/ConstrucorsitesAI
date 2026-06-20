@@ -79,6 +79,7 @@ def orchestrator_template(template: str) -> str | None:
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     template: Template = "blank"
+    language: str | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -100,6 +101,7 @@ class ProjectPublic(BaseModel):
     name: str
     slug: str
     template: Template
+    language: str = "ru"
     design_preset_id: str | None = None
     image_gen_enabled: bool = True
     # Lineage for V4.1b "Remix this": the project this one was forked from, or

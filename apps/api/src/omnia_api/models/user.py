@@ -62,6 +62,11 @@ class User(Base):
         UUID(as_uuid=True), nullable=True
     )
 
+    # Preferred language for generated content (BCP-47-ish, e.g. "ru", "en").
+    # NULL means "not set yet" — the first-build detector fills it in for new
+    # users; existing accounts get it when they next build.
+    default_language: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     wallet: Mapped["Wallet"] = relationship(
         back_populates="user",
         uselist=False,
