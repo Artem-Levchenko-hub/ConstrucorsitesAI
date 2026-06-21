@@ -27,6 +27,7 @@ import { EASE_OUT, fadeUp } from "@/lib/motion";
 import { formatRelativeTime, cn } from "@/lib/utils";
 import {
   parseAssistantContent,
+  cleanChatProse,
   formatBytes,
   type AssistantPart,
   type AppErrorCategory,
@@ -293,12 +294,17 @@ function QuizSummary({ idea, items }: { idea: string; items: QuizItem[] }) {
 /** Renders an assistant prose chunk, lifting `*Приёмка…*` / `*Свободная
  *  вёрстка…*` status lines out into a live StatusCard. */
 function AssistantText({
-  text,
+  text: rawText,
   streaming,
 }: {
   text: string;
   streaming?: boolean;
 }) {
+  // Safety net: never render leaked raw code as chat prose, even if the
+  // server-side honesty pass is off or the row predates it. Mirrors
+  // clean_chat_content on the backend.
+  const text = cleanChatProse(rawText);
+  if (!text) return null;
   if (!STATUS_RE.test(text)) {
     return (
       <div className="whitespace-pre-wrap break-words text-fg-secondary">

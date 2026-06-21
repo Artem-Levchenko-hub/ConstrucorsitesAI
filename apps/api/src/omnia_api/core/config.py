@@ -485,6 +485,26 @@ class Settings(BaseSettings):
     # guards) for instant rollback (R-10). Kill per-env: USE_SURGICAL_EDIT=false.
     use_surgical_edit: bool = Field(default=True)
 
+    # Container-app edit rewrite fallback (2026-06-21). When a surgical <edit>
+    # can't land on a React/Next container app (no index.html → the static
+    # rewrite fallbacks never fire), rewrite the TARGETED file(s) full-file via
+    # the reliable writer model, guarded by a content-preservation ratio. Fixes
+    # the owner's "сайт сломан → починить через чат не выходит, просто перестаёт
+    # что-то делать": a failed <edit> on an entity/fullstack/spa app no longer
+    # dead-ends. Kill per-env: USE_CONTAINER_EDIT_REWRITE=false.
+    use_container_edit_rewrite: bool = Field(default=True)
+
+    # Honest chat content (2026-06-21). The assistant message saved to the DB is
+    # the model's RAW output (<file>/<edit> blocks + any stray prose/code). The
+    # frontend renders anything NOT wrapped in a recognised block as raw text, so
+    # a cheap model replying conversationally (```html / bare HTML) dumps CODE
+    # into the chat ("выпуливает код, а не формирует документ"), and an <edit>
+    # that didn't actually apply still renders a "Правка" chip ("писал правка, но
+    # ничего не менялось"). When on, the saved content is rewritten to reflect
+    # what ACTUALLY happened: loose code stripped, and a chip kept ONLY for files
+    # that were really committed. Kill per-env: USE_CLEAN_CHAT_CONTENT=false.
+    use_clean_chat_content: bool = Field(default=True)
+
     # Hero background visibility (owner directive 2026-06-06) — on every fresh
     # BUILD, guarantee the main screen shows its photo/graphic background instead
     # of a flat dark wash. The writer often buries the hero's full-bleed image

@@ -1060,3 +1060,97 @@ def apply_edits(
         if applied:
             updated[path] = content
     return updated, conflicts
+
+
+# ── Honest chat content ──────────────────────────────────────────────────────
+# The assistant message saved to the DB is the model's RAW output. The web UI
+# renders anything NOT wrapped in a <file>/<edit>/<app-error> block as plain
+# text, so a cheap model that replies conversationally (a ```html fence or bare
+# HTML instead of an <edit>) dumps CODE into the chat, and an <edit> that didn't
+# actually apply still draws a "Правка" chip. `clean_chat_content` rewrites the
+# saved content to reflect what was REALLY committed.
+
+_CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_HTML_DOCISH_RE = re.compile(
+    r"<!doctype html|<html[ >]|</(?:section|div|main|header|footer|body|article|nav)>",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_code_dump(text: str) -> bool:
+    """True when a prose segment is really leaked markup, not a human sentence."""
+    t = text.strip()
+    if not t:
+        return False
+    if _HTML_DOCISH_RE.search(t):
+        return True
+    # Lots of angle-bracket tags relative to length → markup, not prose.
+    tags = t.count("<")
+    return tags >= 3 and tags * 40 >= len(t)
+
+
+def _strip_code_from_prose(text: str) -> str:
+    """Drop fenced code blocks; blank the whole segment if what remains is a raw
+    markup dump. Returns clean human prose (possibly empty)."""
+    no_fence = _CODE_FENCE_RE.sub("", text)
+    if _looks_like_code_dump(no_fence):
+        return ""
+    return no_fence.strip()
+
+
+def clean_chat_content(
+    raw: str,
+    committed_files: dict[str, str] | None,
+    *,
+    surgical: bool = False,
+    fallback: str = "",
+) -> str:
+    """Rewrite a raw assistant answer into HONEST chat content.
+
+    Keeps a ``<file>``/``<edit>`` chip ONLY for a path that was actually
+    committed (``committed_files``), strips leaked code out of the prose, and
+    synthesises a clean chip for any committed file whose original block didn't
+    survive (e.g. a salvaged rewrite that streamed bare HTML). ``fallback`` is
+    returned when nothing survives (a fully-failed edit) so the row is never
+    blank. ``surgical`` picks the synthesised chip flavour (a compact "Правка"
+    note for edits vs the full ``<file>`` body for a build).
+
+    Pure function (R-01): no I/O, mirrors the web parser in
+    apps/web/src/lib/parse-assistant.ts — update both together.
+    """
+    committed = committed_files or {}
+
+    blocks: list[tuple[int, int, str]] = []  # (start, end, path)
+    for rx in (_FILE_BLOCK, _EDIT_BLOCK):
+        for m in rx.finditer(raw):
+            blocks.append((m.start(), m.end(), m.group("path").strip()))
+    blocks.sort()
+
+    prose_segments: list[str] = []
+    chips: list[str] = []
+    kept_paths: set[str] = set()
+    cursor = 0
+    for start, end, path in blocks:
+        if start > cursor:
+            prose_segments.append(raw[cursor:start])
+        if path in committed and path not in kept_paths:
+            chips.append(raw[start:end].strip())
+            kept_paths.add(path)
+        cursor = max(cursor, end)
+    if cursor < len(raw):
+        prose_segments.append(raw[cursor:])
+
+    prose = "\n".join(
+        s for s in (_strip_code_from_prose(seg) for seg in prose_segments) if s
+    ).strip()
+
+    for path, body in committed.items():
+        if path in kept_paths:
+            continue
+        if surgical:
+            chips.append(f'<edit path="{path}">\nГотово — изменения применены.\n</edit>')
+        else:
+            chips.append(f'<file path="{path}">\n{body}\n</file>')
+
+    out = "\n\n".join(part for part in [prose, *chips] if part.strip()).strip()
+    return out or fallback.strip()

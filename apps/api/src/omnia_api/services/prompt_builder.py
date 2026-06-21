@@ -4123,17 +4123,19 @@ def _build_edit_messages(
     _wants_add = any(
         k in _p for k in ("добав", "вставь", "встав", "ещё", "еще", "новый блок", "секци")
     )
-    # Stack-aware: container stacks (Next.js/React/entities) have NO index.html —
-    # pages are src/app/**/page.tsx. The static-HTML edit prompt (index.html,
-    # DOCTYPE, omnia-kit) makes the model emit <edit path="index.html"> which can
-    # never land on a .tsx project → the user sees "правка не применилась". Give
-    # those stacks a React-aware identity/response instead.
+    # Stack-aware: container stacks (Next.js/React/entities/Vite-spa) have NO
+    # editable index.html — pages are src/app/**/page.tsx or src/App.tsx. The
+    # static-HTML edit prompt (index.html, DOCTYPE, omnia-kit) makes the model
+    # emit <edit path="index.html"> which can never land on a .tsx project → the
+    # user sees "правка не применилась". Give those stacks a React-aware
+    # identity/response instead. `spa` (Vite) belongs here too — its index.html is
+    # just the Vite shell; the real UI lives in src/*.tsx.
     # Imported repos use a stack-neutral generic identity (no index.html/omnia-kit
     # assumptions) — the actual files shown in context tell the model what's there.
     if is_imported:
         # Generic identity: arbitrary stack, byte-exact SEARCH/REPLACE only.
         _blocks: list[str] = [_EDIT_IDENTITY_GENERIC, _EDIT_FAITHFUL, _EDIT_RESPONSE]
-    elif template in ("fullstack", "nextjs_entities"):
+    elif template in ("fullstack", "nextjs_entities", "spa"):
         _blocks = [_EDIT_IDENTITY_NEXT, _EDIT_FAITHFUL, _EDIT_RESPONSE_NEXT]
     else:
         _blocks = [_EDIT_IDENTITY, _EDIT_FAITHFUL]
@@ -4230,6 +4232,61 @@ def build_edit_rewrite_messages(
         )
         messages.append(
             {"role": "user", "content": "Текущее состояние страницы:\n" + files_block}
+        )
+    messages.extend(_history_for_edit(history))
+    final_user = user_prompt
+    if selected_elements:
+        final_user = _format_selection_block(selected_elements) + "\n\n" + user_prompt
+    messages.append({"role": "user", "content": final_user})
+    return messages
+
+
+_CONTAINER_REWRITE_SYSTEM = """\
+Ты — Omnia.AI правишь/чинишь React/Next.js-приложение. Точечный патч (<edit>) не
+подошёл, поэтому верни ЦЕЛИКОМ каждый файл, который нужно изменить, применив РОВНО
+запрошенное и СОХРАНИВ всё остальное дословно.
+
+ЖЕЛЕЗНЫЕ ПРАВИЛА:
+• Меняй ТОЛЬКО то, что просят (или ровно то, что нужно, чтобы починить ошибку).
+  Остальной код файла — импорты, пропсы, разметку, тексты, цены, имена, логику —
+  оставь СЛОВО В СЛОВО как в текущем файле. НЕ передизайнивай, НЕ переписывай контент.
+• Если просьба — ПОЧИНКА ошибки сборки/рантайма: исправь ПРИЧИНУ (недостающий или
+  неверный импорт, синтаксис, опечатку в JSX, неверный путь/хук), не переписывай
+  компонент с нуля.
+• НЕ трогай файлы, которых нет ниже. НЕ подключай новые зависимости.
+• Используй уже подключённый стек проекта (Tailwind, shadcn/ui, lucide-react).
+• "use client" сохрани там, где он был; если в файл добавился обработчик/хук/состояние —
+  поставь "use client" ПЕРВОЙ строкой.
+
+ФОРМАТ: для КАЖДОГО изменённого файла верни РОВНО ОДИН блок
+<file path="точный/путь/как/в/файле.tsx">…ПОЛНОЕ новое содержимое файла…</file>
+Перед блоками — одно короткое предложение. Без markdown-ограждений вокруг <file>."""
+
+
+def build_container_rewrite_messages(
+    target_files: dict[str, str],
+    history: Sequence[dict[str, str]],
+    user_prompt: str,
+    selected_elements: Sequence[dict[str, Any]] | None,
+) -> list[dict[str, str]]:
+    """Fallback when a surgical ``<edit>`` can't land on a CONTAINER app (React /
+    Next / entities — no ``index.html``): ask for the WHOLE target file(s) back
+    with ONLY the requested change applied. Reliable (plain generation, no
+    byte-exact SEARCH to reproduce); the caller guards against a silent rewrite
+    via a content-preservation ratio before committing."""
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": _CONTAINER_REWRITE_SYSTEM}
+    ]
+    if target_files:
+        files_block = "\n\n".join(
+            f'<file path="{path}">\n{content}\n</file>'
+            for path, content in target_files.items()
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": "Файлы, которые нужно изменить:\n" + files_block,
+            }
         )
     messages.extend(_history_for_edit(history))
     final_user = user_prompt

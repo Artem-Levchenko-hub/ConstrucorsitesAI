@@ -199,6 +199,26 @@ export function parseAssistantContent(content: string): AssistantPart[] {
   return parts;
 }
 
+const FENCE_RE = /```[\s\S]*?```/g;
+const HTML_DOCISH_RE =
+  /<!doctype html|<html[ >]|<\/(?:section|div|main|header|footer|body|article|nav)>/i;
+
+/**
+ * Strip leaked code from an assistant PROSE chunk so the chat never renders raw
+ * HTML/code when a cheap model replied conversationally (```html / bare HTML)
+ * instead of with an `<edit>`/`<file>` block. Returns clean human prose, or ""
+ * when the whole chunk was a code dump. Belt-and-suspenders to the server-side
+ * `clean_chat_content` (apps/api file_extractor.py) — update both together.
+ */
+export function cleanChatProse(text: string): string {
+  const noFence = text.replace(FENCE_RE, "");
+  const tags = (noFence.match(/</g) ?? []).length;
+  if (HTML_DOCISH_RE.test(noFence) || (tags >= 3 && tags * 40 >= noFence.length)) {
+    return "";
+  }
+  return noFence.trim();
+}
+
 /** dict путь→тело по всем `<file>`-блокам (только закрытым). */
 export function collectStreamingFiles(content: string): Record<string, string> {
   const files: Record<string, string> = {};

@@ -85,6 +85,7 @@ from omnia_api.services.discovery import (
 from omnia_api.services.file_extractor import (
     UnsafePathError,
     apply_edits,
+    clean_chat_content,
     extract_edits,
     extract_files,
 )
@@ -2597,8 +2598,20 @@ async def _process_prompt(
                     "edit conflicts on first pass: %s", edit_conflicts[:5]
                 )
         except (UnsafePathError, ValueError) as e:
+            # Unparsable answer — persist an honest note, not the raw model dump
+            # (which would render as code / a lying chip in the chat on reload).
+            _final_err = (
+                clean_chat_content(
+                    accumulated,
+                    {},
+                    surgical=surgical,
+                    fallback="Не получилось разобрать ответ модели. Повтори запрос.",
+                )
+                if get_settings().use_clean_chat_content
+                else accumulated
+            )
             await _finalize_message(
-                factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
+                factory, assistant_message_id, _final_err, usage_data, snapshot_id=None
             )
             await publish_event(
                 project_id,
@@ -2882,6 +2895,139 @@ async def _process_prompt(
             files = repair_orphaned_anchors_inline(current_files, files)
             if files != _before:
                 print("[PP] orphaned_anchors repaired", flush=True)
+
+        # 3) CONTAINER-app rewrite fallback — the <edit> couldn't land on a
+        # React/Next/entities app, and the two static fallbacks above are gated
+        # on index.html (which container apps don't have), so they never fired.
+        # Without this branch a failed <edit> on an entity/fullstack/spa app
+        # dead-ends with "ничего не изменилось" — exactly the owner's "сайт
+        # сломан → починить через чат не выходит, просто перестаёт что-то
+        # делать". Rewrite ONLY the file(s) the edit targeted (full-file, via the
+        # reliable writer), guarded by a content-preservation ratio so a scoped
+        # fix is told apart from a silent redesign. Kill: USE_CONTAINER_EDIT_REWRITE.
+        if (
+            surgical
+            and not files
+            and get_settings().use_container_edit_rewrite
+            and project_template in CONTAINER_NEXT
+            and current_files
+        ):
+            from omnia_api.services.prompt_builder import (
+                build_container_rewrite_messages,
+            )
+
+            # Pick targets: the path(s) the failed <edit> named, then any path the
+            # prompt mentions ("Файл: src/…" — the «Починить» card includes it),
+            # restricted to files we actually have. Cap to a few so we never
+            # blind-rewrite the whole app.
+            _targets: dict[str, str] = {}
+            try:
+                for _p in extract_edits(accumulated):
+                    if _p in current_files:
+                        _targets[_p] = current_files[_p]
+            except (UnsafePathError, ValueError):
+                pass
+            for _m in re.finditer(
+                r"(?:Файл|file)\s*[:=]\s*([^\s,;]+)", prompt_text, re.I
+            ):
+                _cand = _m.group(1).strip().strip("`\"'.")
+                if _cand in current_files and _cand not in _targets:
+                    _targets[_cand] = current_files[_cand]
+            if not _targets:
+                for _cand in ("src/app/page.tsx", "src/App.tsx", "app/page.tsx"):
+                    if _cand in current_files:
+                        _targets[_cand] = current_files[_cand]
+                        break
+            _targets = dict(list(_targets.items())[:4])
+
+            if _targets:
+                _crc_notice = (
+                    "\n\n*Точечно не вышло — переписываю нужные файлы аккуратно, "
+                    "сохраняя остальное…*\n\n"
+                )
+                accumulated = accumulated + _crc_notice
+                await publish_event(
+                    project_id,
+                    "llm.chunk",
+                    {"message_id": str(assistant_message_id), "delta": _crc_notice},
+                )
+                print(
+                    f"[PP] container_rewrite_fallback start targets={list(_targets)}",
+                    flush=True,
+                )
+                _crc_parts: list[str] = []
+                _crc_usage: dict[str, Any] | None = None
+                try:
+                    async for _ev in stream_chat_completion(
+                        build_container_rewrite_messages(
+                            _targets,
+                            history_serialized,
+                            prompt_text,
+                            selected_elements,
+                        ),
+                        model_for_role("freeform_writer", override=force_model),
+                        str(user_id),
+                        str(project_id),
+                        str(assistant_message_id),
+                    ):
+                        if "delta" in _ev:
+                            _d = str(_ev["delta"])
+                            _crc_parts.append(_d)
+                            pub["seq"] = int(pub["seq"]) + 1
+                            pub["content"] = str(pub["content"]) + _d
+                            await publish_event(
+                                project_id,
+                                "llm.chunk",
+                                {
+                                    "message_id": str(assistant_message_id),
+                                    "delta": _d,
+                                    "seq": int(pub["seq"]),
+                                },
+                            )
+                        elif "usage" in _ev:
+                            _crc_usage = _ev["usage"]  # type: ignore[assignment]
+                except Exception as _crc_exc:
+                    print(
+                        f"[PP] container_rewrite_fallback stream_err {_crc_exc!r}",
+                        flush=True,
+                    )
+                _crc_acc = "".join(_crc_parts)
+                accumulated = accumulated + _crc_acc
+                try:
+                    _crc_files, _ = _extract_files_and_edits(_crc_acc, current_files)
+                except (UnsafePathError, ValueError):
+                    _crc_files = {}
+                # Accept only files we asked for, and only when real content
+                # survived: a scoped fix keeps the file's text; a redesign
+                # replaces it. Code-heavy files (few visible words) bypass the
+                # ratio — there the word-overlap metric is noise.
+                _accepted: dict[str, str] = {}
+                for _p, _new in _crc_files.items():
+                    if _p not in _targets:
+                        continue
+                    _old = _targets[_p]
+                    _ratio = _text_preserved_ratio(_old, _new)
+                    _few_words = len(_visible_words(_old)) < 15
+                    if (
+                        _new.strip()
+                        and len(_new) > 80
+                        and (_ratio >= 0.45 or _few_words or len(_old) < 400)
+                    ):
+                        _accepted[_p] = _new
+                        print(
+                            f"[PP] container_rewrite accept {_p} ratio={_ratio:.2f}",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"[PP] container_rewrite reject {_p} ratio={_ratio:.2f} "
+                            f"new_len={len(_new)}",
+                            flush=True,
+                        )
+                if _accepted:
+                    files = _accepted
+                    if _crc_usage:
+                        usage_data = _crc_usage  # type: ignore[assignment]
 
         # --- Pass 2..N: empty-content fallback ----------------------
         # If we got nothing usable back AND the primary model has known
@@ -3912,7 +4058,15 @@ async def _process_prompt(
 
                 msg = await session.get(Message, assistant_message_id)
                 if msg is not None:
-                    msg.content = accumulated
+                    # Honest chat content: drop leaked raw code and any chip for a
+                    # file that wasn't actually committed, so the chat reflects
+                    # what shipped (not the model's raw attempt). Kill switch
+                    # USE_CLEAN_CHAT_CONTENT falls back to the raw output.
+                    msg.content = (
+                        clean_chat_content(accumulated, files, surgical=surgical)
+                        if get_settings().use_clean_chat_content
+                        else accumulated
+                    )
                     msg.snapshot_id = snapshot.id
                     if usage_data:
                         msg.tokens_in = int(usage_data.get("tokens_in") or 0)
@@ -4038,9 +4192,6 @@ async def _process_prompt(
             # всё ок, хотя preview не обновлялся. Теперь шлём явный llm.error,
             # чтобы юзер видел, что произошло, и сообщение в чате становится
             # видимым (а не висит «пустым» из-за пустого snapshot_id).
-            await _finalize_message(
-                factory, assistant_message_id, accumulated, usage_data, snapshot_id=None
-            )
             # Surgical edit that didn't land (SEARCH didn't match) gets a friendly,
             # actionable hint — never the build-path "switch models" text (the user
             # has no model picker, and this is an edit, not a fresh build).
@@ -4055,6 +4206,21 @@ async def _process_prompt(
                     "Не получилось собрать страницу с первого раза. Попробуй "
                     "переформулировать запрос или повторить — иногда помогает."
                 )
+            # Persist the honest hint, NOT the model's raw attempt: with no files
+            # committed there's nothing to chip, and saving raw <edit>/code would
+            # render a lying "Правка" chip or dump code into the chat on reload.
+            _final_no_files = (
+                clean_chat_content(accumulated, {}, surgical=surgical, fallback=hint)
+                if get_settings().use_clean_chat_content
+                else accumulated
+            )
+            await _finalize_message(
+                factory,
+                assistant_message_id,
+                _final_no_files,
+                usage_data,
+                snapshot_id=None,
+            )
             await publish_event(
                 project_id,
                 "llm.error",

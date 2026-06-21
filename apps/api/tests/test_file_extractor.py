@@ -11,6 +11,7 @@ import pytest
 
 from omnia_api.services.file_extractor import (
     apply_edits,
+    clean_chat_content,
     extract_edits,
     extract_files,
 )
@@ -963,3 +964,71 @@ def test_dead_auth_link_scoped_to_source_files() -> None:
     body = 'doc: <a href="/">Войти</a>'
     answer = f'<file path="README.md">{body}</file>'
     assert extract_files(answer)["README.md"] == body
+
+
+# ---------------------------------------------------------------------------
+# clean_chat_content — honest chat content (2026-06-21)
+# ---------------------------------------------------------------------------
+
+
+def test_clean_keeps_chip_for_committed_edit() -> None:
+    raw = (
+        "Готово!\n"
+        '<edit path="index.html">\n'
+        "<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n"
+        "</edit>"
+    )
+    out = clean_chat_content(raw, {"index.html": "..."}, surgical=True)
+    assert '<edit path="index.html">' in out
+    assert "Готово!" in out
+
+
+def test_clean_drops_chip_for_uncommitted_edit() -> None:
+    # The model emitted an <edit> but it never applied (not in committed_files).
+    # The lying "Правка" chip must be dropped; the fallback hint shows instead.
+    raw = (
+        '<edit path="index.html">\n'
+        "<<<<<<< SEARCH\nnot-in-file\n=======\nx\n>>>>>>> REPLACE\n"
+        "</edit>"
+    )
+    out = clean_chat_content(raw, {}, surgical=True, fallback="не вышло")
+    assert "<edit" not in out
+    assert out == "не вышло"
+
+
+def test_clean_strips_bare_html_code_dump() -> None:
+    # Cheap model replied conversationally with raw markup, no <edit>/<file>.
+    raw = (
+        "Вот обновлённая секция:\n"
+        "<section class='hero'><h1>Заголовок</h1><p>Текст</p></section>"
+    )
+    out = clean_chat_content(raw, {}, surgical=True, fallback="не вышло")
+    assert "<section" not in out
+    assert out == "не вышло"
+
+
+def test_clean_strips_fenced_code_block() -> None:
+    raw = "Применил правку.\n```html\n<div>code</div>\n```"
+    out = clean_chat_content(raw, {"index.html": "x"}, surgical=True)
+    assert "```" not in out
+    assert "<div>code</div>" not in out
+    assert "Применил правку." in out
+
+
+def test_clean_synthesizes_chip_for_salvaged_commit() -> None:
+    # Rewrite salvaged bare HTML into a committed file but no <file> block
+    # survived in the raw text → synthesize a clean chip so the change is shown.
+    raw = "<!doctype html><html><body>...</body></html>"
+    out = clean_chat_content(raw, {"index.html": "<html>full</html>"}, surgical=False)
+    assert '<file path="index.html">' in out
+
+
+def test_clean_keeps_all_build_file_chips() -> None:
+    raw = (
+        '<file path="src/app/page.tsx">A</file>\n'
+        '<file path="src/lib/db/schema.ts">B</file>'
+    )
+    committed = {"src/app/page.tsx": "A", "src/lib/db/schema.ts": "B"}
+    out = clean_chat_content(raw, committed, surgical=False)
+    assert '<file path="src/app/page.tsx">' in out
+    assert '<file path="src/lib/db/schema.ts">' in out
