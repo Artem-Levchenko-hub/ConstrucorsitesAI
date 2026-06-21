@@ -153,6 +153,56 @@ async def pivot_code_to_web(session: object, project: Project) -> bool:
     return True
 
 
+async def pivot_static_to_app(
+    session: object, project: Project, stack: str
+) -> str | None:
+    """Escalate a STATIC project to a container app on a FOLLOW-UP (P-H1).
+
+    The H1 blind spot (owner: «написал "создай сайт" → статика; кинул 5 промптов
+    "переделай в полноценное приложение" — генератор ничего не делал»): a built
+    static project's app-ification follow-up was surgical-edited in place, because
+    :func:`switch_to_stack` (which re-scaffolds the git) runs ONLY on the first
+    build — re-scaffolding a BUILT project would wipe its history and break
+    rollback (see PROPOSAL P-H1).
+
+    This escalates **non-destructively**, exactly like :func:`pivot_code_to_web`:
+    flip ``project.template`` to the container stack and commit — nothing else. The
+    existing static files stay in git (the static snapshot is still in the timeline
+    and rollback-able); the orchestrated build writes the app files on top as a
+    child commit; and ``nextjs_entities`` / ``spa`` have NO api-side scaffold dir
+    (the container scaffold is laid down by the orchestrator via
+    :func:`ensure_provisioned`), so a template flip is all the git side needs — no
+    ``init_repo``, no re-scaffold.
+
+    Returns the new template name when it escalated, else ``None`` (no-op) when the
+    stack is static/unknown, the project is already a container stack, or the target
+    needs an api-side scaffold (``fullstack`` ships real template files the git repo
+    must contain — a flip-only escalation would leave it broken, so it is out of
+    scope for the non-destructive follow-up path). Commits so the background build
+    reads the new template.
+    """
+    target = discovery_stack_to_template(stack)
+    if target is None:
+        return None  # static / unknown — nothing to escalate
+    if is_fullstack(project.template):
+        return None  # already a container stack — idempotent
+    # Only the orchestrator-scaffolded container stacks are safe for a flip-only
+    # escalation: their api-side ``templates/<target>`` dir does NOT exist, so the
+    # git repo holds only user files (the static page survives; the build adds the
+    # app on top). A stack WITH an api-side scaffold dir (``fullstack``) would need
+    # a re-scaffold the flip skips → leave it for the heavier first-build path.
+    if (TEMPLATES_DIR / target).exists():
+        return None
+    project.template = target
+    await session.commit()  # type: ignore[attr-defined]
+    log.info(
+        "stack_routing: project %s escalated static→%s (follow-up, non-destructive)",
+        project.id,
+        target,
+    )
+    return target
+
+
 async def ensure_provisioned(project_id: UUID, slug: str, template: str) -> bool:
     """Provision the project's orchestrator dev container if the stack needs one.
 
@@ -188,5 +238,6 @@ __all__ = [
     "discovery_stack_to_template",
     "ensure_provisioned",
     "pivot_code_to_web",
+    "pivot_static_to_app",
     "switch_to_stack",
 ]

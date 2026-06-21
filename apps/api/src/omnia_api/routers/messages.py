@@ -4,8 +4,8 @@ import asyncio
 import logging
 import re
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
@@ -42,6 +42,7 @@ from omnia_api.schemas.message import (
     PromptRequest,
     PromptResponse,
 )
+from omnia_api.schemas.project import is_fullstack
 from omnia_api.services import (
     app_errors,
     image_edit,
@@ -73,6 +74,7 @@ from omnia_api.services.discovery import (
     _is_run_decline,
     confident_enough_to_build,
     cumulative_idea,
+    detect_appification,
     gather_answers,
     infer_niche_label,
     plan_discovery_questions,
@@ -803,6 +805,45 @@ async def post_prompt(
             project = await session.get(Project, project_id) or project
             logging.getLogger(__name__).warning("code→web pivot failed: %r", _pv_exc)
 
+    # Static→app escalation (P-H1, owner 2026-06-21): a FOLLOW-UP on a STATIC
+    # project that clearly asks to become a real app ("переделай в полноценное
+    # приложение: вход, кабинет, база записей") must escalate the stack
+    # static→container, not surgical-edit the flat page — the H1 blind spot (until
+    # now a follow-up could NEVER escalate, since `switch_to_stack` runs only inside
+    # the first-build branch). Non-destructive, like the code→web pivot above:
+    # `pivot_static_to_app` flips the template only — the static snapshot stays
+    # rollback-able, the orchestrated build writes the app on top, and the container
+    # scaffold comes from the orchestrator (nextjs_entities has no api-side scaffold
+    # dir). Gated to a real follow-up on a static-class project (not a container,
+    # not a `code` project — those have their own pivots) + a confident
+    # app-ification ask, behind the default-OFF flag. `escalated_to_app` forces the
+    # full-build path below (a freshly-templated app is a BUILD, not a surgical
+    # edit). Fail-soft (R-10): a hiccup falls back to the un-escalated project.
+    escalated_to_app = False
+    if (
+        not is_first_build
+        and not selected_dump
+        and not is_fullstack(project.template)
+        and project.template != "code"
+        and settings.use_followup_appification
+        and settings.use_auto_stack_routing
+        and detect_appification(payload.prompt)
+    ):
+        _esc_stack = _infer_stack_from_text(payload.prompt)  # → nextjs_entities
+        if _esc_stack:
+            try:
+                escalated_to_app = bool(
+                    await stack_routing.pivot_static_to_app(
+                        session, project, _esc_stack
+                    )
+                )
+            except Exception as _esc_exc:
+                await session.rollback()
+                project = await session.get(Project, project_id) or project
+                logging.getLogger(__name__).warning(
+                    "static→app escalation failed: %r", _esc_exc
+                )
+
     discovery_result: DiscoveryResult | None = None
     do_clarify = False
     effective_prompt = payload.prompt
@@ -939,11 +980,13 @@ async def post_prompt(
 
     intent = decide_intent(
         effective_prompt,
-        # A code→web pivot just re-templated the project to `static`; the page
-        # doesn't exist yet, so it's a full BUILD, never a surgical edit — treat it
-        # like a first build for triage (owner 2026-06-19).
-        is_first_prompt=is_first_build or pivoted_to_web,
+        # A code→web pivot or a static→app escalation just re-templated the project;
+        # the new page/app doesn't exist yet, so it's a full BUILD, never a surgical
+        # edit — treat it like a first build for triage (owner 2026-06-19; P-H1).
+        is_first_prompt=is_first_build or pivoted_to_web or escalated_to_app,
         selected_count=len(selected_dump or []),
+        # App-ification triage rule (P-H1), flag-gated so it's a no-op until enabled.
+        appify_enabled=settings.use_followup_appification,
     )
     orchestrate = intent == ORCHESTRATE
 
@@ -959,7 +1002,7 @@ async def post_prompt(
     # identical created_at → the chat, ordered by created_at, can't tell which came
     # first and renders the assistant reply ABOVE the user's prompt («промпт уехал
     # вниз»). +1ms guarantees user-before-assistant ordering everywhere.
-    _now = datetime.now(timezone.utc)
+    _now = datetime.now(UTC)
     user_msg = Message(
         project_id=project_id,
         role="user",

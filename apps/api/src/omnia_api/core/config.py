@@ -290,6 +290,15 @@ class Settings(BaseSettings):
     # USE_AUTO_STACK_ROUTING=false (discovery still recommends in the brief, but
     # the project stays static — old behaviour).
     use_auto_stack_routing: bool = Field(default=True)
+    # Follow-up app-ification (P-H1, 2026-06-21). A FOLLOW-UP on a STATIC project
+    # that clearly asks to become a real app ("переделай в полноценное приложение:
+    # вход, кабинет, база") escalates the stack static→container instead of
+    # surgical-editing the flat page (the H1 blind spot). Non-destructive: flips
+    # the template only (like the code→web pivot) — the static history stays
+    # rollback-able and the orchestrated build writes the app on top. Default OFF:
+    # the feature ships dark and is enabled (USE_FOLLOWUP_APPIFICATION=true) only
+    # after live verification, so prod behaviour is unchanged until then.
+    use_followup_appification: bool = Field(default=False)
     # App-error cards (2026-06-09, owner P2). After a container-app build, surface
     # build/compile/schema failures as structured cards in the chat (instead of
     # plain italic notices) and probe the dev server for a Next.js compile error

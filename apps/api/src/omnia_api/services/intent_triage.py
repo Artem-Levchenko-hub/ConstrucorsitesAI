@@ -78,6 +78,7 @@ def decide_intent(
     *,
     is_first_prompt: bool,
     selected_count: int = 0,
+    appify_enabled: bool = False,
 ) -> str:
     """Return ``ORCHESTRATE`` (BUILD) or ``CHEAP`` (surgical EDIT).
 
@@ -85,7 +86,12 @@ def decide_intent(
     1. first prompt in the project   → ORCHESTRATE (the initial build)
     2. explicit rebuild / redesign   → ORCHESTRATE (replace the whole page)
     3. structural / full-stack add   → ORCHESTRATE (changes architecture)
-    4. otherwise (existing project)  → CHEAP (the edit default — surgical patch)
+    4. app-ification follow-up*      → ORCHESTRATE (escalate static→app; P-H1)
+    5. otherwise (existing project)  → CHEAP (the edit default — surgical patch)
+
+    *Rule 4 fires only when ``appify_enabled`` is set (the caller passes
+    ``settings.use_followup_appification``); with the flag off it is skipped and an
+    app-ification follow-up stays CHEAP — today's behaviour, unchanged.
 
     ``selected_count`` wins over everything: a pointed element proves a built
     page already exists on screen, so it's always a scoped edit — never a
@@ -104,6 +110,19 @@ def decide_intent(
         return ORCHESTRATE
     if _has_any(text, _STRUCTURAL_KEYWORDS):
         return ORCHESTRATE
+
+    # App-ification follow-up (P-H1): "переделай это в полноценное приложение: вход,
+    # кабинет, база" must run the full BUILD pipeline (the matching static→container
+    # escalation is done in the prompt handler), not a surgical patch of the flat
+    # page. Gated behind the feature flag the caller threads through
+    # (settings.use_followup_appification), so it ships DARK — with the flag OFF this
+    # is a no-op and the four app-ification phrases stay CHEAP, exactly as today.
+    # Lazy import keeps triage import-cycle-free (discovery owns the signal set).
+    if appify_enabled:
+        from omnia_api.services.discovery import detect_appification
+
+        if detect_appification(text):
+            return ORCHESTRATE
 
     # Existing project, no rebuild/structural signal → it's an edit. Cheap,
     # surgical, preserves the rest. This is the key change: build-noun words

@@ -8,8 +8,7 @@ addition earns the expensive BUILD orchestration. Build-noun follow-ups
 
 from __future__ import annotations
 
-import pytest
-
+from omnia_api.services.discovery import detect_appification
 from omnia_api.services.intent_triage import CHEAP, ORCHESTRATE, decide_intent
 
 
@@ -130,22 +129,53 @@ _APPIFY_FOLLOWUPS = [
 ]
 
 
-@pytest.mark.xfail(
-    reason="H1 blind spot: app-ification follow-ups are not detected — they fall "
-    "to CHEAP surgical edit of static HTML instead of escalating the stack. "
-    "Remove this marker when the fix lands.",
-    strict=False,
-)
-def test_appification_followup_should_escalate_not_surgical_edit() -> None:
-    # Desired: a "make-this-a-real-app" follow-up on a built (static) project must
-    # NOT be treated as a cheap surgical edit of the static page.
+def test_appification_followup_escalates_when_flag_on() -> None:
+    """H1 fix (was xfail): with the feature flag on, a "make-this-a-real-app"
+    follow-up on a built static project routes to BUILD (ORCHESTRATE), not a cheap
+    surgical edit — so the handler's static→container escalation runs the full
+    pipeline instead of patching the flat page."""
     for prompt in _APPIFY_FOLLOWUPS:
-        assert decide_intent(prompt, is_first_prompt=False) == ORCHESTRATE
+        assert (
+            decide_intent(prompt, is_first_prompt=False, appify_enabled=True)
+            == ORCHESTRATE
+        ), prompt
+        # The detector itself fires on every real app-ification ask.
+        assert detect_appification(prompt) is True, prompt
 
 
-def test_appification_followup_is_currently_cheap_evidence() -> None:
-    """Evidence lock (not desired behavior): documents that, TODAY, every
-    app-ification follow-up returns CHEAP. If this ever changes, the xfail above
-    starts XPASSing and both markers should be revisited together."""
+def test_appification_followup_stays_cheap_when_flag_off() -> None:
+    """Kill switch (leak guard): with the flag OFF (the default), every
+    app-ification follow-up stays a CHEAP surgical edit — prod behaviour is
+    unchanged until the feature is explicitly enabled."""
     for prompt in _APPIFY_FOLLOWUPS:
-        assert decide_intent(prompt, is_first_prompt=False) == CHEAP
+        assert decide_intent(prompt, is_first_prompt=False) == CHEAP, prompt
+        assert (
+            decide_intent(prompt, is_first_prompt=False, appify_enabled=False) == CHEAP
+        ), prompt
+
+
+# False-positive guard (P-H1): even with the flag ON, a cosmetic edit that merely
+# MENTIONS an auth/backend noun must stay a CHEAP surgical edit — only an
+# unmistakable "make it a real app" ask escalates. An over-eager escalation would
+# nuke a static page into a login-walled container app on a styling tweak. These
+# are the exact mis-fires the detector must avoid (incl. "сделай личный кабинет на
+# тёмном фоне" — "личный кабинет" is a backend SIGNAL, never app-ification framing).
+_APPIFY_FALSE_POSITIVES = [
+    "сделай лендинг без регистрации",
+    "добавь форму входа в hero",
+    "переименуй кнопку войти",
+    "поправь текст в личном кабинете",
+    "добавь кнопку оплатить",
+    "добавь блок с FAQ",
+    "сделай кнопку войти крупнее",
+    "сделай личный кабинет на тёмном фоне",
+    "поменяй цвет кнопки регистрации",
+]
+
+
+def test_appification_false_positives_stay_cheap() -> None:
+    for prompt in _APPIFY_FALSE_POSITIVES:
+        assert detect_appification(prompt) is False, prompt
+        assert (
+            decide_intent(prompt, is_first_prompt=False, appify_enabled=True) == CHEAP
+        ), prompt

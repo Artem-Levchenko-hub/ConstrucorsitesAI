@@ -150,6 +150,48 @@ def _infer_stack_from_text(text: str) -> str | None:
     return None
 
 
+# App-ification framing (P-H1, owner 2026-06-21). On a FOLLOW-UP, an UNMISTAKABLE
+# "turn this static page into a real app" ask. We require BOTH a non-negated
+# backend signal (accounts / saved data / CRUD) AND one of these framing phrases,
+# so a bare backend-noun edit ("добавь форму входа в hero", "сделай личный кабинет
+# на тёмном фоне", "переименуй кнопку войти") stays a CHEAP surgical edit — only a
+# clear app-ification escalates the stack. NB: "личный кабинет" is deliberately NOT
+# a framing phrase (it is a plain noun that appears in cosmetic edits) — it counts
+# only as a backend SIGNAL. Framing is whole-phrase substrings on lowered text.
+_APPIFY_FRAMING: frozenset[str] = frozenset(
+    {
+        "полноценное приложение", "полноценное веб-приложение",
+        "полноценным приложением", "полноценное web-приложение",
+        "настоящее приложение", "настоящим приложением", "настоящее веб-приложение",
+        "веб-приложение", "веб приложение", "web-приложение", "web app",
+        "web application", "real app", "real application",
+        "сделай приложение", "сделать приложением", "сделай из этого приложение",
+        "преврати в приложение", "превратить в приложение", "превратить в полноценное",
+        "чтобы пользователи могли", "чтобы клиенты могли", "чтобы клиенты записыв",
+        "чтобы пользователи регистр", "чтобы пользователи могли регистр",
+        "регистрироваться и сохран", "регистрировались и сохран",
+    }
+)
+
+
+def detect_appification(text: str) -> bool:
+    """True when a FOLLOW-UP unmistakably asks to turn a static page into a real
+    (container) app (P-H1).
+
+    Requires (a) a non-negated backend signal AND (b) explicit app-ification
+    framing, and is vetoed by an explicit no-backend ask — so a cosmetic
+    auth-element edit ("добавь форму входа", "сделай кнопку войти крупнее") and an
+    explicit no-account tool ("лендинг без регистрации") never escalate. Reuses the
+    negation-aware ``_signal_fires`` so "без регистрации" does not count as a
+    signal. Deterministic, no LLM — safe on the hot path."""
+    low = (text or "").lower()
+    if _explicit_no_backend(low):
+        return False
+    if not any(_signal_fires(low, sig) for sig in _BACKEND_SIGNALS):
+        return False
+    return any(frame in low for frame in _APPIFY_FRAMING)
+
+
 # Owner directive 2026-06-18: don't lock the builder to web output. When the user
 # clearly asks for a standalone PROGRAM/SCRIPT (any language) — not a site — route
 # to the `code` template (file-only, no container; the writer emits arbitrary

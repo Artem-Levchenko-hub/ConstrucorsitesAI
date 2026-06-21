@@ -181,6 +181,71 @@ async def test_pivot_code_to_web_noop_for_non_code() -> None:
         assert not session.committed
 
 
+# ─── pivot_static_to_app (P-H1, owner 2026-06-21) ────────────────────────
+#
+# H1 blind spot: a built static project's app-ification follow-up ("переделай в
+# полноценное приложение: вход, кабинет, база") could never escalate, because
+# switch_to_stack (which re-scaffolds) runs only on the first build — re-scaffolding
+# a BUILT project would wipe history + break rollback. pivot_static_to_app escalates
+# NON-DESTRUCTIVELY, exactly like pivot_code_to_web: flip the template only. The
+# orchestrator owns the container scaffold (nextjs_entities has no api-side dir), so
+# the git side needs nothing more.
+
+
+async def test_pivot_static_to_app_escalates_static_to_entities() -> None:
+    """Static → nextjs_entities flips the template + commits ONLY — no re-scaffold,
+    no new snapshot — so the static history stays in git (rollback-able) and the
+    orchestrated build writes the app on top. Mirrors pivot_code_to_web."""
+    session = _FakeSession()
+    project = _FakeProject(template="blank")
+    old_snap = project.current_snapshot_id
+    result = await stack_routing.pivot_static_to_app(
+        session, project, "nextjs_entities"
+    )
+    assert result == "nextjs_entities"
+    assert project.template == "nextjs_entities"
+    assert session.committed
+    # Non-destructive: no re-scaffold, no new starter snapshot, history untouched.
+    assert session.added == []
+    assert project.current_snapshot_id == old_snap
+
+
+async def test_pivot_static_to_app_idempotent_for_container() -> None:
+    """A project already on a container stack is never re-escalated."""
+    for tmpl in ("nextjs_entities", "spa", "fullstack"):
+        session = _FakeSession()
+        project = _FakeProject(template=tmpl)
+        result = await stack_routing.pivot_static_to_app(
+            session, project, "nextjs_entities"
+        )
+        assert result is None
+        assert project.template == tmpl
+        assert not session.committed
+
+
+async def test_pivot_static_to_app_noop_for_static_target() -> None:
+    """A static / unknown target is a no-op — there is nothing to escalate to."""
+    for stack in ("static", "", "garbage"):
+        session = _FakeSession()
+        project = _FakeProject(template="blank")
+        result = await stack_routing.pivot_static_to_app(session, project, stack)
+        assert result is None
+        assert project.template == "blank"
+        assert not session.committed
+
+
+async def test_pivot_static_to_app_skips_scaffolded_stack() -> None:
+    """`fullstack` ships REAL api-side template files the git repo must contain, so
+    a flip-only escalation (which skips the re-scaffold) would leave it broken — it
+    is out of scope for the non-destructive follow-up path and left untouched."""
+    session = _FakeSession()
+    project = _FakeProject(template="blank")
+    result = await stack_routing.pivot_static_to_app(session, project, "fullstack")
+    assert result is None
+    assert project.template == "blank"
+    assert not session.committed
+
+
 async def test_switch_static_to_entities(monkeypatch: pytest.MonkeyPatch) -> None:
     """Static → nextjs_entities flips template, re-scaffolds, returns new snap."""
     calls: dict[str, object] = {}
