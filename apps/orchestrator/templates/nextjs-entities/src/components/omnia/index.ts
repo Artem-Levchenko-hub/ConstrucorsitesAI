@@ -60,6 +60,7 @@ export { StatCard, type StatCardProps } from "./stat-card";
 export { DashboardSkeleton } from "./dashboard-skeleton";
 export { CountUp, type CountUpProps } from "./count-up";
 export { EmptyState, type EmptyStateProps } from "./empty-state";
+export { UsersAdmin, type UsersAdminRole } from "./users-admin";
 export { DataTable, type Column, type DataTableProps, type FilterTab } from "./data-table";
 export {
   GalleryGrid,
