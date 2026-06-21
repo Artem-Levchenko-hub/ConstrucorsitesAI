@@ -186,6 +186,13 @@ services:
       JWT_COOKIE_SECURE: "true"
       LLM_GATEWAY_URL: http://gateway:8001
       MOCK_LLM: "false"
+      # Follow-up app-ification (P-H1, live-verified 2026-06-21): on a STATIC
+      # project a "make it a real app" follow-up escalates the stack
+      # static→container instead of surgical-editing the flat page. The escalation
+      # decision lives in the API handler (routers/messages.py), so the flag is
+      # needed here; the worker reads the already-flipped template. Kill switch:
+      # set to "false".
+      USE_FOLLOWUP_APPIFICATION: "true"
       CORS_ORIGINS: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       INITIAL_WALLET_BALANCE_RUB: ${INITIAL_WALLET_BALANCE_RUB:-100.0}
       ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://172.21.0.1:8003}
