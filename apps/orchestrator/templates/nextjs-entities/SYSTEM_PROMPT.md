@@ -45,7 +45,9 @@ migrations, no server code, no restart**.
 ```
 
 - `name` matches the filename. `access`: `owner` (each user sees only their own — the default and right choice for dashboards/CRM/SaaS), `public` (anyone reads, author edits — blogs, catalogs), `admin` (role admin only).
+- **Multi-role apps (teacher/student/parent, doctor/patient, manager/agent) — use named roles, don't fake it.** When different KINDS of user must see/do different things, set `"access": "public"` (shared visibility) and gate per role with `"readRoles"` / `"writeRoles"` — arrays of role names. Example: a Grade entity with `"writeRoles": ["teacher"]`, `"readRoles": ["teacher","student","parent"]` — only teachers post grades, those three roles read them, anyone else gets 403. `admin` always passes (the operator). The FIRST account that signs up is `admin`; it assigns everyone else's role. **So you MUST build an admin «Пользователи» screen** (`(app)/admin/users`, gate the page with `requireUser({ role: "admin" })`) that lists `await admin.listUsers()` and sets a role per row with `await admin.setUserRole(id, role)` — without it the other roles can never be granted and the role-gated screens stay empty (a dead end). Keep the role vocabulary small and name it in the UI.
 - Field `type`: `string` | `text` | `number` | `boolean` | `date` (day only) | `datetime` (day **+ time** — use this for appointments/visits/shifts so 10:00 ≠ 16:30) | `time` (time of day only) | `enum` (+`options`) | `reference` (a relation — `{ "type": "reference", "entity": "Project" }` stores the related row's id; filter by it, and `?expand=field` embeds the row). Optional `required`, `default`.
+  - On a `reference`, set `"onDelete"` to keep links from dangling when the target is removed: `"setNull"` (default — clears the pointer, the child survives), `"cascade"` (delete the child too, e.g. a Task when its Project goes), or `"restrict"` (block deleting a parent that still has children). Pick `restrict` for money/records you must not silently lose, `cascade` for true sub-items, else leave the safe default.
 - **Data-integrity (use them — they make the app real, not a demo):**
   - `number` takes `min` / `max` / `step`. Money/quantity fields MUST set `min: 0` (a price can't be −50 000); counts use `min: 1`, money `step: 0.01`. The form AND the server enforce it.
   - Add `"unique": true` to a natural-key field (client phone/email, SKU) so the same record can't be saved three times — the engine returns 409 on a duplicate.
@@ -75,7 +77,9 @@ export default function Expenses() {
 SDK API (any entity you defined, by name):
 `entities.X.list({sort,order,limit,page})`, `entities.X.filter({field: value})`,
 `entities.X.get(id)`, `entities.X.create(data)`, `entities.X.update(id, data)`,
-`entities.X.delete(id)`, and `auth.me()` → the current user or null.
+`entities.X.delete(id)`, and `auth.me()` → the current user or null. For a
+multi-role app: `admin.listUsers()` and `admin.setUserRole(id, role)` (admin-only)
+power the «Пользователи» role-assignment screen.
 
 ## Auth is pre-wired — DO NOT reinvent
 

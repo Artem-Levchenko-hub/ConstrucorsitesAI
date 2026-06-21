@@ -46,6 +46,13 @@ export interface FieldDef {
   options?: string[];
   /** For `type: "reference"` — the target entity name. */
   entity?: string;
+  /** For `type: "reference"` — what happens to THIS row when the row it points
+   *  at is deleted. `"setNull"` (default) clears the dangling pointer so the
+   *  child survives without a broken link; `"cascade"` deletes the child too
+   *  (a Task whose Project is gone); `"restrict"` blocks the parent delete while
+   *  any child still references it. Prevents orphaned references the moment a
+   *  parent is removed. Enforced server-side in the engine's deleteRecord. */
+  onDelete?: "setNull" | "cascade" | "restrict";
   /** For `type: "number"` — reject values below this (e.g. `0` for a price, so a
    *  −50 000 can't inflate a dashboard total). Enforced server-side AND in the form. */
   min?: number;
@@ -71,6 +78,16 @@ export interface EntityDef {
   name: string;
   access: AccessPolicy;
   fields: Record<string, FieldDef>;
+  /** Named-role gating (multi-role apps: teacher/student/parent, doctor/patient,
+   *  manager/agent). When set, only a signed-in user whose `users.role` is in the
+   *  list may READ rows — layered ON TOP of `access` (so a `public` entity with
+   *  `readRoles` stops being anonymously readable). Empty/absent = `access` alone
+   *  decides. Roles are assigned by an admin via the managed admin/users API. */
+  readRoles?: string[];
+  /** Named-role gating for WRITES (create/update/delete). When set, only a user
+   *  whose role is listed may write — e.g. only `teacher` posts Grades, students
+   *  read them. Layered on top of `access`'s own auth+ownership rules. */
+  writeRoles?: string[];
 }
 
 /** Entity names must be safe path segments — no traversal, no separators. */
@@ -143,6 +160,11 @@ function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
         type === "reference" && typeof f?.entity === "string" && NAME_RE.test(f.entity)
           ? f.entity
           : undefined,
+      onDelete:
+        type === "reference" &&
+        (f?.onDelete === "cascade" || f?.onDelete === "restrict" || f?.onDelete === "setNull")
+          ? f.onDelete
+          : undefined,
       min: type === "number" ? num(f?.min) : undefined,
       max: type === "number" ? num(f?.max) : undefined,
       step: type === "number" ? num(f?.step) : undefined,
@@ -150,7 +172,22 @@ function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
       private: Boolean(f?.private),
     };
   }
-  return { name, access, fields };
+  // Role lists: keep only safe role-name strings, drop empties → undefined so a
+  // bare `[]` never accidentally locks every reader out.
+  const roleList = (v: unknown): string[] | undefined => {
+    if (!Array.isArray(v)) return undefined;
+    const out = v
+      .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
+      .map((r) => r.trim());
+    return out.length ? out : undefined;
+  };
+  return {
+    name,
+    access,
+    fields,
+    readRoles: roleList(raw.readRoles),
+    writeRoles: roleList(raw.writeRoles),
+  };
 }
 
 function zodForField(f: FieldDef): z.ZodTypeAny {

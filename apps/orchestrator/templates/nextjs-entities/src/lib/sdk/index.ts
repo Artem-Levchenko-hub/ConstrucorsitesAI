@@ -301,4 +301,27 @@ export const integrations = {
     ),
 };
 
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  created_at?: string;
+}
+
+/**
+ * Admin-only user management — list accounts and assign roles. This is the
+ * assignment side of multi-role RBAC: the first signup is `admin` and promotes
+ * other accounts to the app's roles (teacher / manager / …). Calls 403 for a
+ * non-admin caller. Build an admin «Пользователи» screen on top of these:
+ * `admin.listUsers()` for the table, `admin.setUserRole(id, role)` on a picker.
+ */
+export const admin = {
+  /** Every account (id, email, name, role, created_at). Admin-only. */
+  listUsers: () => req<AdminUser[]>("GET", "/api/admin/users"),
+  /** Set one account's role. Admin-only; can't strip your own admin. */
+  setUserRole: (id: string, role: string) =>
+    req<AdminUser>("PATCH", `/api/admin/users/${encodeURIComponent(id)}`, { role }),
+};
+
 export { ApiError };
