@@ -15,6 +15,7 @@ onboarding never dead-ends (R-10).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -846,6 +847,15 @@ def _parse(raw: str) -> dict[str, object] | None:
 # "обычно 2–4 вопроса" steer. Stays ≤ MAX_DISCOVERY_QUESTIONS.
 _PLAN_MAX_QUESTIONS = 4
 _MAX_QUESTION_LEN = 200
+# Retry budget for the single upfront plan pass. A transient gateway blip / cold
+# start / occasional non-strict reply would otherwise persist the GENERIC fallback
+# PERMANENTLY on the project (the plan is cached on first turn and NEVER recomputed
+# — owner saw «СРМ для школы» stuck on generic «что за проект» questions, 2026-06-21).
+# The model returns a tailored batch in ~3-4s, so a couple of retries land a real
+# batch well within the request budget; only a sustained outage reaches the fallback.
+_PLAN_ATTEMPTS = 3
+_PLAN_TIMEOUT = 15.0
+_PLAN_RETRY_BACKOFF = 0.5
 
 _PLAN_SYSTEM = (
     "Ты — продуктовый дизайнер Omnia.AI. Пользователь прислал ПЕРВЫЙ запрос на "
@@ -984,22 +994,42 @@ async def plan_discovery_questions(
         "max_tokens": 900,
         "stream": False,
     }
-    parsed: dict[str, object] | None = None
-    try:
-        async with httpx.AsyncClient(timeout=22.0) as client:
-            resp = await client.post(url, json=payload)
-        if resp.status_code < 400:
-            body = resp.json()
-            content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
-            parsed = _parse(content)
-        else:
-            log.warning("discovery plan: gateway %d — using batch fallback", resp.status_code)
-    except Exception as exc:
-        log.warning("discovery plan: gateway error (batch fallback): %r", exc)
-    questions = _questions_from_parsed(parsed)
-    if not questions:
-        questions = _plan_fallback()
-    return questions
+    # Retry the pass (see _PLAN_ATTEMPTS): a single transient miss must NOT stick
+    # the project on the generic fallback forever (it is cached and never recomputed).
+    # Each attempt re-samples the model, so an occasional non-strict reply is also
+    # shaken off. Success exits immediately (normal case = one ~4s attempt).
+    for attempt in range(_PLAN_ATTEMPTS):
+        parsed: dict[str, object] | None = None
+        try:
+            async with httpx.AsyncClient(timeout=_PLAN_TIMEOUT) as client:
+                resp = await client.post(url, json=payload)
+            if resp.status_code < 400:
+                body = resp.json()
+                content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                parsed = _parse(content)
+            else:
+                log.warning(
+                    "discovery plan: gateway %d (attempt %d/%d)",
+                    resp.status_code,
+                    attempt + 1,
+                    _PLAN_ATTEMPTS,
+                )
+        except Exception as exc:
+            log.warning(
+                "discovery plan: gateway error (attempt %d/%d): %r",
+                attempt + 1,
+                _PLAN_ATTEMPTS,
+                exc,
+            )
+        questions = _questions_from_parsed(parsed)
+        if questions:
+            return questions
+        if attempt + 1 < _PLAN_ATTEMPTS:
+            await asyncio.sleep(_PLAN_RETRY_BACKOFF)
+    log.warning(
+        "discovery plan: all %d attempts failed — generic batch fallback", _PLAN_ATTEMPTS
+    )
+    return _plan_fallback()
 
 
 def serve_planned_question(
