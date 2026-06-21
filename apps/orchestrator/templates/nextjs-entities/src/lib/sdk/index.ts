@@ -324,4 +324,22 @@ export const admin = {
     req<AdminUser>("PATCH", `/api/admin/users/${encodeURIComponent(id)}`, { role }),
 };
 
+export interface DirectoryUser {
+  id: string;
+  name: string;
+  role: string;
+}
+
+/**
+ * User directory — the REAL registered people any signed-in user can pick from
+ * (message recipient, assignee, class tutor, …). Safe fields only (id, name,
+ * role; no email/phone). This is how you reference a PERSON: store the picked
+ * `id` in a `string` field and render the picker with `<UserSelect>`. NEVER make
+ * a `User` entity — people are auth accounts, and this lists them.
+ */
+export const users = {
+  /** Everyone signed in can pick from (id, name, role). Auth required. */
+  directory: () => req<DirectoryUser[]>("GET", "/api/users/directory"),
+};
+
 export { ApiError };
