@@ -5,13 +5,8 @@ import {
   Check,
   Globe,
   Database,
-  Server,
   Code2,
   Zap,
-  GitBranch,
-  FileCode,
-  Layers,
-  Cpu,
 } from "lucide-react";
 import { getTranslations } from "next-intl/server";
 
@@ -310,7 +305,7 @@ function LiveDemoStrip() {
         <div className="mt-8 flex flex-wrap justify-center gap-2 text-[12px] font-mono tabular-nums text-label-2">
           {[
             "~45 секунд до live preview",
-            "9 стеков на выбор",
+            "формат под идею",
             "1 клик до prod",
           ].map((c) => (
             <span
@@ -326,55 +321,33 @@ function LiveDemoStrip() {
   );
 }
 
+// Real formats Omnia actually ships today — AI auto-picks one per idea. Kept
+// honest (no Astro/Vue/Django/etc. that don't exist) so the landing doesn't
+// promise more than the product delivers.
 const stacks = [
   {
-    name: "Next.js + Postgres",
-    best: "SaaS, full-stack дашборды",
-    tier: "P0",
-    icon: Layers,
-  },
-  {
-    name: "Astro Content",
-    best: "блоги, контент-сайты",
-    tier: "P0",
-    icon: FileCode,
-  },
-  {
-    name: "Static HTML",
-    best: "лендинги, портфолио",
+    name: "Сайт / лендинг",
+    best: "лендинги, портфолио, промо, меню",
     tier: "P0",
     icon: Globe,
   },
   {
-    name: "SvelteKit + PocketBase",
-    best: "MVP с realtime",
-    tier: "P1",
+    name: "Веб-приложение с базой",
+    best: "CRM, кабинеты, каталоги, учёт",
+    tier: "P0",
+    icon: Database,
+  },
+  {
+    name: "Интерактив / SPA",
+    best: "калькуляторы, инструменты, дашборды",
+    tier: "P0",
     icon: Zap,
   },
-  { name: "Vue + Nuxt", best: "PWA, SPA с SSR", tier: "P1", icon: Code2 },
   {
-    name: "HTMX + Go",
-    best: "минимум JS, max скорость",
-    tier: "P1",
-    icon: Server,
-  },
-  {
-    name: "FastAPI + React",
-    best: "AI приложения, ML",
-    tier: "P2",
-    icon: Cpu,
-  },
-  {
-    name: "Express + React",
-    best: "классический Node стек",
-    tier: "P2",
-    icon: GitBranch,
-  },
-  {
-    name: "Django + HTMX",
-    best: "admin-heavy продукты",
-    tier: "P2",
-    icon: Database,
+    name: "Скрипт / программа",
+    best: "Python, Go, JS — парсер, бот, утилита",
+    tier: "P0",
+    icon: Code2,
   },
 ];
 
@@ -392,8 +365,8 @@ function StackCarousel() {
           AI сам выбирает стек под идею.
         </h2>
         <p className="text-[17px] leading-[1.55] text-label-2 max-w-xl">
-          9 курируемых шаблонов. Описываешь продукт — Omnia выбирает топ-3 с
-          обоснованием. Хочешь иначе — override одним кликом.
+          Реальные форматы под идею. Описываешь продукт — Omnia подбирает
+          подходящий с обоснованием. Хочешь иначе — override одним кликом.
         </p>
       </Reveal>
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -500,7 +473,7 @@ const cases = [
   },
   {
     title: "Crypto Edu",
-    meta: "Astro · MDX",
+    meta: "Статика · HTML",
     time: "6 часов",
     desc: "Образовательный лендинг с курсами, календарём и приёмом заявок.",
   },
@@ -575,7 +548,7 @@ const tiers = [
     price: "1 990",
     features: [
       "неограниченные проекты",
-      "все 9 стеков",
+      "все форматы",
       "свой домен",
       "оплата за токены",
       "GitHub push",
