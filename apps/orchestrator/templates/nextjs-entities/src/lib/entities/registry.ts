@@ -57,6 +57,11 @@ export interface FieldDef {
    *  field (case-insensitive for strings). Stops the "same client entered 3×"
    *  problem. Enforced server-side in the engine. */
   unique?: boolean;
+  /** Sensitive field (phone, email, address). On a `public` entity the engine
+   *  strips it from reads by anyone who is NOT the row's author/admin — so a
+   *  public directory can't leak contacts to anonymous scrapers. Ignored on
+   *  `owner`/`admin` entities (only the owner/admin reads those anyway). */
+  private?: boolean;
 }
 
 /** Who may read/write rows of this entity. */
@@ -142,6 +147,7 @@ function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
       max: type === "number" ? num(f?.max) : undefined,
       step: type === "number" ? num(f?.step) : undefined,
       unique: Boolean(f?.unique),
+      private: Boolean(f?.private),
     };
   }
   return { name, access, fields };

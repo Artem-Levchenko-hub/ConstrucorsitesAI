@@ -102,6 +102,31 @@ function shape(row: typeof records.$inferSelect): Record<string, unknown> {
   };
 }
 
+/**
+ * Strip `private`-marked fields from a shaped row for a reader who isn't allowed
+ * to see them. Only bites on `public` entities (owner/admin entities are read
+ * only by the owner/admin anyway): a public directory can declare `phone`/`email`
+ * private and the engine drops them for everyone except the row's author/admin —
+ * so anonymous reads (and scrapers) never receive the contact data.
+ */
+function maskPrivate(
+  def: EntityDef,
+  user: CurrentUser | null,
+  row: Record<string, unknown>,
+): Record<string, unknown> {
+  if (def.access !== "public") return row;
+  const priv = Object.entries(def.fields)
+    .filter(([, f]) => f.private)
+    .map(([k]) => k);
+  if (!priv.length) return row;
+  const isPrivileged =
+    !!user && (user.role === "admin" || row.created_by === user.id);
+  if (isPrivileged) return row;
+  const out = { ...row };
+  for (const k of priv) delete out[k];
+  return out;
+}
+
 /** Non-throwing access for an EXPAND fetch: skip (null) instead of erroring. */
 function scopeForExpand(
   targetDef: EntityDef,
@@ -150,7 +175,7 @@ async function expandRecords(
         ];
         if (scope.scopeOwner && user) conds.push(eq(records.createdBy, user.id));
         const rel = await db.select().from(records).where(and(...conds));
-        map = new Map(rel.map((r) => [r.id, shape(r)]));
+        map = new Map(rel.map((r) => [r.id, maskPrivate(targetDef, user, shape(r))]));
       }
     }
     for (const r of rows) {
@@ -212,7 +237,7 @@ export async function listRecords(opts: {
     .limit(limit)
     .offset(Math.max(0, offset));
 
-  const shaped = rows.map(shape);
+  const shaped = rows.map(shape).map((r) => maskPrivate(def, user, r));
   const expand = parseExpand(params.get("expand"));
   return expand.length ? await expandRecords(def, shaped, expand, user) : shaped;
 }
@@ -282,7 +307,7 @@ export async function getRecord(opts: {
 }) {
   const row = await findScoped(opts.def, opts.user, opts.id);
   if (!row) throw new EngineError(404, "not found");
-  const shaped = shape(row);
+  const shaped = maskPrivate(opts.def, opts.user, shape(row));
   const expand = parseExpand(opts.expand);
   if (!expand.length) return shaped;
   const [out] = await expandRecords(opts.def, [shaped], expand, opts.user);
