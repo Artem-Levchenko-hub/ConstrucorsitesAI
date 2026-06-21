@@ -45,8 +45,12 @@ migrations, no server code, no restart**.
 ```
 
 - `name` matches the filename. `access`: `owner` (each user sees only their own — the default and right choice for dashboards/CRM/SaaS), `public` (anyone reads, author edits — blogs, catalogs), `admin` (role admin only).
-- Field `type`: `string` | `text` | `number` | `boolean` | `date` (ISO string) | `enum` (+`options`) | `reference` (a relation — `{ "type": "reference", "entity": "Project" }` stores the related row's id; filter by it, and `?expand=field` embeds the row). Optional `required`, `default`.
-- **Never declare** `id` / `created_by` / `created_at` / `updated_at` — the engine adds and returns them on every row.
+- Field `type`: `string` | `text` | `number` | `boolean` | `date` (day only) | `datetime` (day **+ time** — use this for appointments/visits/shifts so 10:00 ≠ 16:30) | `time` (time of day only) | `enum` (+`options`) | `reference` (a relation — `{ "type": "reference", "entity": "Project" }` stores the related row's id; filter by it, and `?expand=field` embeds the row). Optional `required`, `default`.
+- **Data-integrity (use them — they make the app real, not a demo):**
+  - `number` takes `min` / `max` / `step`. Money/quantity fields MUST set `min: 0` (a price can't be −50 000); counts use `min: 1`, money `step: 0.01`. The form AND the server enforce it.
+  - Add `"unique": true` to a natural-key field (client phone/email, SKU) so the same record can't be saved three times — the engine returns 409 on a duplicate.
+  - In the page's `fields=[…]`, mirror the schema: a `datetime` entity field → `kind: "datetime"`; a `number` with `min` → pass the same `min`/`max`/`step` so the input guards it too.
+- **Never declare** `id` / `created_by` / `created_at` / `updated_at` — the engine adds and returns them on every row. (Editing through `<CrudResource>`/`<EntityForm>` also gets optimistic-locking for free — a concurrent edit is refused, not silently overwritten.)
 
 ## Build the frontend with the SDK (client components)
 

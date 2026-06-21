@@ -80,10 +80,14 @@ async function req<T = unknown>(
 }
 
 export interface EntityClient {
-  /** List rows. `params`: sort/order/limit/page/offset. Resolves to `[]` on
-   *  failure (never rejects) — see `safeCollection`. */
+  /** List EVERY matching row. With no explicit `limit`/`page`/`offset` the SDK
+   *  walks the server's pages for you, so the list/search/sort/export/count you
+   *  build over the result sees the whole table — never a silent first-50 slice.
+   *  Pass `limit`/`page`/`offset` to opt into a single bounded page instead.
+   *  Resolves to `[]` on failure (never rejects) — see `safeCollection`. */
   list(params?: ListParams): Promise<Row[]>;
-  /** List rows matching exact field values, e.g. `{ done: false }`. Resolves
+  /** List rows matching exact field values, e.g. `{ done: false }`. Returns the
+   *  COMPLETE matching set (auto-paginated) unless `params` pins a page. Resolves
    *  to `[]` on failure (never rejects). */
   filter(query: Query, params?: ListParams): Promise<Row[]>;
   /** One row by id. Throws ApiError(404) if missing / not yours.
@@ -120,12 +124,57 @@ async function safeCollection(p: Promise<Row[]>): Promise<Row[]> {
   }
 }
 
+/** Page size for auto-pagination — mirrors the engine's MAX_LIMIT so each walk
+ *  step pulls as much as the server allows. */
+const AUTO_PAGE = 500;
+/** Hard ceiling on an auto-paginated fetch: never load more than this many rows
+ *  into the browser, so a pathological table degrades to "a lot" rather than
+ *  hanging the tab. Far above any real single-tenant list. */
+const AUTO_FETCH_CAP = 10000;
+
+/** True when the caller pinned the window themselves (explicit paging). Then we
+ *  honour exactly one request; otherwise we auto-complete the result set. */
+function isPinnedPage(p?: ListParams | Query): boolean {
+  if (!p) return false;
+  const r = p as Record<string, unknown>;
+  return r.limit != null || r.page != null || r.offset != null;
+}
+
+/** Walk the server's offset pages until it returns a short page (or we hit the
+ *  safety cap), concatenating into one array. Because every page request carries
+ *  the same sort/order/filters, the concatenation stays globally ordered — so a
+ *  search/sort/export/count built over the result is correct for the WHOLE table,
+ *  not just its first page. This is the fix for the "stuck at 50 records" ceiling. */
+async function fetchAll(base: string, params?: ListParams | Query): Promise<Row[]> {
+  const out: Row[] = [];
+  for (let offset = 0; offset < AUTO_FETCH_CAP; offset += AUTO_PAGE) {
+    const page = await req<Row[]>(
+      "GET",
+      base + qs({ ...params, limit: AUTO_PAGE, offset }),
+    );
+    out.push(...page);
+    if (page.length < AUTO_PAGE) break;
+  }
+  return out;
+}
+
 function entityClient(name: string): EntityClient {
   const base = `/api/entities/${encodeURIComponent(name)}`;
   return {
-    list: (params) => safeCollection(req<Row[]>("GET", base + qs(params))),
-    filter: (query, params) =>
-      safeCollection(req<Row[]>("GET", base + qs({ ...query, ...params }))),
+    list: (params) =>
+      safeCollection(
+        isPinnedPage(params)
+          ? req<Row[]>("GET", base + qs(params))
+          : fetchAll(base, params),
+      ),
+    filter: (query, params) => {
+      const merged = { ...query, ...params };
+      return safeCollection(
+        isPinnedPage(merged)
+          ? req<Row[]>("GET", base + qs(merged))
+          : fetchAll(base, merged),
+      );
+    },
     get: (id, params) =>
       req<Row>("GET", `${base}/${encodeURIComponent(id)}${qs(params)}`),
     create: (data) => req<Row>("POST", base, data),

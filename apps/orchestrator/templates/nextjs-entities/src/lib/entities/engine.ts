@@ -35,7 +35,14 @@ export class EngineError extends Error {
 }
 
 const RESERVED = new Set(["sort", "order", "limit", "offset", "page", "expand"]);
-const MAX_LIMIT = 200;
+// Per-request hard cap. The SDK auto-paginates at this size to pull a whole
+// collection in as few round-trips as possible (see lib/sdk fetchAll), so it
+// must match the SDK's AUTO_PAGE. A bounded explicit caller still can't ask for
+// more than this in one shot.
+const MAX_LIMIT = 500;
+// Window for an explicit caller that passes no `limit`. The SDK never relies on
+// this (it sends `limit` on every auto-page request); it only bounds a hand-rolled
+// fetch that forgot to page.
 const DEFAULT_LIMIT = 50;
 
 /**
@@ -226,6 +233,27 @@ export async function createRecord(opts: {
   }
   const data = applyDefaults(def, parsed.data as Record<string, unknown>);
 
+  // Uniqueness guard: reject a create that duplicates an existing row's value on
+  // a field marked `unique` (e.g. a client's phone/email), so the same record
+  // can't be entered three times. Scoped like reads — within the owner's rows for
+  // `owner` entities, globally for `public`/`admin`. Case-insensitive for strings.
+  for (const [key, f] of Object.entries(def.fields)) {
+    if (!f.unique) continue;
+    const val = data[key];
+    if (val === undefined || val === null || val === "") continue;
+    const dupConds: SQL[] = [
+      eq(records.entity, def.name),
+      sql`lower(${records.data} ->> ${key}) = lower(${String(val)})`,
+    ];
+    if (def.access === "owner") dupConds.push(eq(records.createdBy, owner.id));
+    const [dup] = await db
+      .select({ id: records.id })
+      .from(records)
+      .where(and(...dupConds))
+      .limit(1);
+    if (dup) throw new EngineError(409, `Такое значение поля «${key}» уже есть`);
+  }
+
   const [row] = await db
     .insert(records)
     .values({ entity: def.name, data, createdBy: owner.id })
@@ -288,6 +316,24 @@ export async function updateRecord(opts: {
     .where(and(...conds))
     .limit(1);
   if (!existing[0]) throw new EngineError(404, "not found");
+
+  // Optimistic concurrency: if the caller sends the `_updatedAt` it loaded the
+  // row at, refuse the write when the row has changed since — so two people
+  // editing the same record don't silently clobber each other (last-write-wins).
+  // Opt-in: a payload without `_updatedAt` keeps the old behaviour, no regression.
+  if (opts.body && typeof opts.body === "object") {
+    const expected = (opts.body as Record<string, unknown>)._updatedAt;
+    if (expected !== undefined && expected !== null && expected !== "") {
+      const exp = new Date(String(expected)).getTime();
+      const cur = new Date(existing[0].updatedAt as unknown as string).getTime();
+      if (!Number.isNaN(exp) && !Number.isNaN(cur) && exp !== cur) {
+        throw new EngineError(
+          409,
+          "Запись изменена другим пользователем — обновите страницу и повторите",
+        );
+      }
+    }
+  }
 
   const merged = { ...(existing[0].data as Record<string, unknown>), ...parsed.data };
   const [row] = await db

@@ -25,6 +25,12 @@ export type FieldType =
   | "number"
   | "boolean"
   | "date"
+  // A calendar day + clock time (ISO 8601, e.g. 2026-06-21T14:30). Use this — not
+  // `date` — whenever the time of day matters (appointments, visits, shifts):
+  // `date` alone drops 10:00 vs 16:30, which is wrong for a barbershop/clinic.
+  | "datetime"
+  // A clock time only (HH:mm), no calendar day. For opening hours / slot times.
+  | "time"
   | "enum"
   // A relation: stores the referenced record's id (uuid). `entity` names the
   // target. Filter by it like any field; `?expand=<field>` embeds the related
@@ -40,6 +46,17 @@ export interface FieldDef {
   options?: string[];
   /** For `type: "reference"` — the target entity name. */
   entity?: string;
+  /** For `type: "number"` — reject values below this (e.g. `0` for a price, so a
+   *  −50 000 can't inflate a dashboard total). Enforced server-side AND in the form. */
+  min?: number;
+  /** For `type: "number"` — reject values above this. */
+  max?: number;
+  /** For `type: "number"` — the input step (e.g. `0.01` for money, `1` for counts). */
+  step?: number;
+  /** Reject a create whose value duplicates an existing row's value for this
+   *  field (case-insensitive for strings). Stops the "same client entered 3×"
+   *  problem. Enforced server-side in the engine. */
+  unique?: boolean;
 }
 
 /** Who may read/write rows of this entity. */
@@ -110,6 +127,8 @@ function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
   for (const [key, f] of Object.entries(raw.fields ?? {})) {
     if (!NAME_RE.test(key)) continue;
     const type = (f?.type ?? "string") as FieldType;
+    const num = (v: unknown): number | undefined =>
+      typeof v === "number" && Number.isFinite(v) ? v : undefined;
     fields[key] = {
       type,
       required: Boolean(f?.required),
@@ -119,6 +138,10 @@ function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
         type === "reference" && typeof f?.entity === "string" && NAME_RE.test(f.entity)
           ? f.entity
           : undefined,
+      min: type === "number" ? num(f?.min) : undefined,
+      max: type === "number" ? num(f?.max) : undefined,
+      step: type === "number" ? num(f?.step) : undefined,
+      unique: Boolean(f?.unique),
     };
   }
   return { name, access, fields };
@@ -126,8 +149,14 @@ function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
 
 function zodForField(f: FieldDef): z.ZodTypeAny {
   switch (f.type) {
-    case "number":
-      return z.number();
+    case "number": {
+      let n = z.number();
+      // Range guards (when declared) reject bad input server-side — a negative
+      // price or out-of-range count never reaches the store to skew a total.
+      if (f.min !== undefined) n = n.min(f.min, { message: `минимум ${f.min}` });
+      if (f.max !== undefined) n = n.max(f.max, { message: `максимум ${f.max}` });
+      return n;
+    }
     case "boolean":
       return z.boolean();
     case "enum":
@@ -135,9 +164,16 @@ function zodForField(f: FieldDef): z.ZodTypeAny {
         ? z.enum(f.options as [string, ...string[]])
         : z.string();
     case "date":
-      // Stored as an ISO string in JSONB; validate it parses.
+    case "datetime":
+      // Stored as an ISO string in JSONB; validate it parses. `datetime` keeps
+      // the time-of-day the form sends (…T14:30); `date` is just the day.
       return z.string().refine((s) => !Number.isNaN(Date.parse(s)), {
         message: "invalid date",
+      });
+    case "time":
+      // Clock time only, HH:mm (optionally :ss). Distinct 10:00 vs 16:30 values.
+      return z.string().refine((s) => /^\d{2}:\d{2}(:\d{2})?$/.test(s), {
+        message: "invalid time",
       });
     case "reference":
       // Stores the referenced record's id (uuid string).
@@ -219,6 +255,8 @@ export function fieldSqlType(
   const f = def.fields[field];
   if (!f) return null;
   if (f.type === "number") return "number";
-  if (f.type === "date") return "date";
+  // `datetime` casts to timestamptz like `date` so sort/filter order is real
+  // chronological order; `time` (HH:mm) falls through to text, which sorts right.
+  if (f.type === "date" || f.type === "datetime") return "date";
   return "text";
 }

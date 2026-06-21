@@ -25,6 +25,11 @@ export type FieldKind =
   | "number"
   | "boolean"
   | "date"
+  // Date + time of day (<input type="datetime-local">). Use for appointment /
+  // visit times so 10:00 and 16:30 are distinct, not just "the same day".
+  | "datetime"
+  // Time of day only (<input type="time">).
+  | "time"
   | "select"
   | "reference"
   | "image";
@@ -43,6 +48,11 @@ export interface FieldSpec {
   refEntity?: string;
   /** Field on the referenced row to show (defaults to name/title/label). */
   refLabel?: string;
+  /** For `kind: "number"` — min/max/step. `min: 0` blocks negative prices both
+   *  in the browser and (paired with the schema's `min`) on the server. */
+  min?: number;
+  max?: number;
+  step?: number;
   default?: unknown;
 }
 
@@ -65,6 +75,18 @@ function toDateInput(value: unknown): string {
   if (!value) return "";
   const d = new Date(value as string);
   return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+}
+
+/** Format a stored value for <input type="datetime-local"> (YYYY-MM-DDTHH:mm in
+ *  LOCAL wall-clock — the control has no timezone, so we must not use UTC here). */
+function toDateTimeInput(value: unknown): string {
+  if (!value) return "";
+  const d = new Date(value as string);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
 }
 
 /**
@@ -160,7 +182,24 @@ export function EntityForm({
         if (f.required) errs[f.name] = `Заполните поле «${f.label}»`;
         continue;
       }
-      out[f.name] = f.kind === "number" ? Number(raw) : raw;
+      if (f.kind === "number") {
+        const n = Number(raw);
+        if (Number.isNaN(n)) {
+          errs[f.name] = `«${f.label}» — введите число`;
+          continue;
+        }
+        if (f.min !== undefined && n < f.min) {
+          errs[f.name] = `«${f.label}» — не меньше ${f.min}`;
+          continue;
+        }
+        if (f.max !== undefined && n > f.max) {
+          errs[f.name] = `«${f.label}» — не больше ${f.max}`;
+          continue;
+        }
+        out[f.name] = n;
+        continue;
+      }
+      out[f.name] = raw;
     }
     if (Object.keys(errs).length) return { ok: false, errors: errs };
     return { ok: true, payload: out };
@@ -179,7 +218,14 @@ export function EntityForm({
     setErrors({});
     setSubmitting(true);
     try {
-      await onSubmit(result.payload);
+      const payload = result.payload;
+      // Carry the row's load-time `updated_at` so the engine can refuse a write
+      // that would silently clobber a concurrent edit (optimistic lock). Create
+      // has no `initial`, so nothing is sent there and behaviour is unchanged.
+      if (initial && initial.updated_at != null) {
+        payload._updatedAt = initial.updated_at;
+      }
+      await onSubmit(payload);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Не удалось сохранить");
     } finally {
@@ -247,6 +293,9 @@ export function EntityForm({
               <Input
                 id={id}
                 type="number"
+                min={f.min}
+                max={f.max}
+                step={f.step}
                 value={value === "" || value == null ? "" : String(value)}
                 placeholder={f.placeholder}
                 aria-invalid={error ? true : undefined}
@@ -260,6 +309,28 @@ export function EntityForm({
                 id={id}
                 type="date"
                 value={toDateInput(value)}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={errId}
+                onChange={(e) => set(f.name, e.target.value)}
+              />
+            )}
+
+            {f.kind === "datetime" && (
+              <Input
+                id={id}
+                type="datetime-local"
+                value={toDateTimeInput(value)}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={errId}
+                onChange={(e) => set(f.name, e.target.value)}
+              />
+            )}
+
+            {f.kind === "time" && (
+              <Input
+                id={id}
+                type="time"
+                value={String(value ?? "")}
                 aria-invalid={error ? true : undefined}
                 aria-describedby={errId}
                 onChange={(e) => set(f.name, e.target.value)}
