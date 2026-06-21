@@ -4036,6 +4036,10 @@ async def _process_prompt(
                 print(f"[PP] brief_narration skipped err={_bn_exc!r}", flush=True)
 
         new_snapshot_id: UUID | None = None
+        # Entity-schema corruption (an unparseable entities/*.json) is detected in the
+        # CONTAINER_NEXT guards below and surfaced as a «schema» card after commit, so a
+        # DOA section is loud + fixable instead of shipping silently under a «готово».
+        _bad_entities: list[str] = []
         if files:
             # A6a — restore the managed auth columns if the model dropped them
             # while rewriting the Drizzle schema, so signup/signin keep working.
@@ -4047,11 +4051,12 @@ async def _process_prompt(
                 # writer copied from the brief (clients.json for name "Client")
                 # would 404 every read/write and DOA the app. Realign here.
                 files = _normalize_entity_filenames(files)
-                # Detection half of PROPOSAL P-ENTITYJSON (BS-31): make a
-                # writer-fumbled, unparseable entities/*.json loud in the build
-                # log instead of shipping it silently DOA. Does not mutate
-                # `files` — the repair/regen/fail action stays deferred.
-                _warn_unparseable_entity_json(files)
+                # PROPOSAL P-ENTITYJSON (BS-31): a writer-fumbled, unparseable
+                # entities/*.json resolves as 404 'unknown entity' at runtime — the
+                # whole section is DOA while the build still reads as «готово». Detect
+                # it here; the action half (a fixable «schema» card) fires after commit.
+                # Does not mutate `files` — repair stays a user-driven «Починить».
+                _bad_entities = _warn_unparseable_entity_json(files)
             # Carry the user's direct style edits (omnia-overrides block + font
             # links) across this regeneration so manual color/font tweaks aren't
             # lost when the model rewrites index.html. Fail-soft, like the guards.
@@ -4144,6 +4149,27 @@ async def _process_prompt(
                 "snapshot.created",
                 {"snapshot": _snapshot_payload(snapshot)},
             )
+
+            # BS-31 action half — a declared entity whose JSON didn't parse is DOA at
+            # runtime (404 'unknown entity'), so the whole section is dead while the
+            # chat still reads as «готово». Surface each as a fixable «schema» card so
+            # the user sees the truth + «Починить» instead of a silently-broken screen.
+            # Gated on the same kill switch as the other build/runtime cards.
+            if _bad_entities and get_settings().use_error_cards:
+                for _ent in _bad_entities:
+                    await app_errors.publish(
+                        factory,
+                        project_id,
+                        assistant_message_id,
+                        category="schema",
+                        title="Ошибка в схеме данных",
+                        detail=(
+                            f"Сущность «{_ent}» не читается из-за ошибки в её "
+                            f"JSON-схеме, поэтому раздел «{_ent}» не будет работать. "
+                            f"Нажмите «Починить», чтобы я пересобрал схему."
+                        ),
+                        file=f"entities/{_ent}.json",
+                    )
 
             # Sprint 4 — fingerprint the shipped freeform page into the global
             # pool (cross-project dedup signal for next time). Fail-soft.
