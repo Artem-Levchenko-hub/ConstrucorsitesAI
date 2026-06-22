@@ -150,7 +150,11 @@ export function SetupChecklist({
   const allDone = total > 0 && done === total;
 
   return (
-    <Card className={cn("gap-0 overflow-hidden py-0", className)}>
+    <Card
+      data-omnia-checklist=""
+      data-omnia-checklist-done={allDone ? "1" : "0"}
+      className={cn("gap-0 overflow-hidden py-0", className)}
+    >
       <div className="flex items-center gap-4 border-b border-border px-5 py-4 sm:px-6">
         <ProgressRing done={done} total={total} />
         <div className="min-w-0 space-y-0.5">

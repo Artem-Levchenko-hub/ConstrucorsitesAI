@@ -30,6 +30,7 @@ from omnia_api.models.project import Project
 from omnia_api.services import (
     accept_gauntlet,
     app_errors,
+    auth_session,
     dev_container,
     entity_gate,
     orchestrator_client,
@@ -73,9 +74,35 @@ async def _gate_async(message_id: str, project_id: str, slug: str) -> None:
     # an auth-gated app). Resolve the bare URL once, probe it for the right route,
     # then gate that route. Fail-soft: probe resolves to `/` on any hiccup.
     base = await dev_container.resolve_live_url(pid)
-    route = "/" if base is None else await route_target.resolve_target_route(base)
 
-    verdict = await entity_gate.gate_live_app(pid, slug, route)
+    # Area C (DARK): log INTO the generated app with the seeded operator so the
+    # gate scores the real CABINET (/dashboard + CRUD), not the public storefront.
+    # The orchestrator exposes the seed creds over its token-guarded /status only
+    # when OMNIA_GATE_SEED=1; establish_session drives a real credentials login and
+    # returns a Playwright storage_state. Any miss → None → anonymous path (the gate
+    # is byte-identical to today when the flag/seed is off). Fail-soft (R-10).
+    storage_state = None
+    if settings.gate_authenticated_cabinet and base is not None:
+        try:
+            status = await orchestrator_client.get_status(pid)
+            seed = status.get("gate_seed") or {}
+            if seed.get("email") and seed.get("auth_secret"):
+                storage_state = await auth_session.establish_session(
+                    base, seed["email"], seed["auth_secret"]
+                )
+        except Exception as exc:
+            print(f"[quality] gate session error {slug}: {exc!r}", flush=True)
+            storage_state = None
+
+    # Authenticated → score the cabinet directly (/dashboard). Anonymous (no
+    # session / flag off) → keep the 16/5d route-probe (`/` or a PUBLIC dashboard),
+    # so the OFF path is byte-identical.
+    if storage_state is not None:
+        route = route_target.DEFAULT_CANDIDATE_ROUTE  # "/dashboard"
+    else:
+        route = "/" if base is None else await route_target.resolve_target_route(base)
+
+    verdict = await entity_gate.gate_live_app(pid, slug, route, storage_state=storage_state)
     if verdict is None:
         return
 

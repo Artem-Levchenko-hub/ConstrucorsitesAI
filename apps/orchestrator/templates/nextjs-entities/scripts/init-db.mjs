@@ -13,6 +13,7 @@
 // Auth.js and the engine expect). Both are fixed and owned by the template.
 
 import pg from "pg";
+import bcrypt from "bcryptjs"; // already a template dep (src/lib/auth.ts uses it)
 
 const { Pool } = pg;
 
@@ -103,6 +104,30 @@ const pool = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 
 try {
   await pool.query(DDL);
   console.log("[init-db] schema ready (auth tables + records)");
+  // Area C (gate-only): a deterministic, login-able OPERATOR account so the
+  // composition gate can render the authenticated cabinet. Gated on an env flag
+  // the orchestrator sets ONLY for gate-eligible provisions — a normal app never
+  // gets it. The password is derived from AUTH_SECRET (HMAC), so the gate worker
+  // can reproduce it from the same secret without any extra storage. role=admin
+  // so admin-access CRUD screens render. Idempotent: ON CONFLICT (email) updates
+  // the hash (a re-provision rotating AUTH_SECRET keeps the login working).
+  if (process.env.OMNIA_GATE_SEED === "1" && process.env.AUTH_SECRET) {
+    const email = process.env.OMNIA_GATE_SEED_EMAIL || "gate@omnia.local";
+    const crypto = await import("node:crypto");
+    const plain = crypto
+      .createHmac("sha256", process.env.AUTH_SECRET)
+      .update("omnia-gate-seed-v1")
+      .digest("base64url")
+      .slice(0, 24);
+    const hash = await bcrypt.hash(plain, 10);
+    await pool.query(
+      `INSERT INTO users (email, name, password_hash, role)
+       VALUES ($1, 'Omnia Gate', $2, 'admin')
+       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = 'admin'`,
+      [email, hash],
+    );
+    console.log("[init-db] gate seed operator ready");
+  }
   process.exit(0);
 } catch (err) {
   console.error("[init-db] failed:", err?.message ?? err);

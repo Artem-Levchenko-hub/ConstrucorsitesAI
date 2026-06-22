@@ -326,7 +326,11 @@ async def _audit_page(page: Page) -> FirstPaintReport:
 
 
 async def audit_url(
-    url: str, *, width: int = GATE_WIDTH, timeout_ms: int = 15_000
+    url: str,
+    *,
+    width: int = GATE_WIDTH,
+    timeout_ms: int = 15_000,
+    storage_state: dict | None = None,
 ) -> FirstPaintReport:
     """Audit a LIVE share link as a cold incognito stranger (0 cookies) at ``width``.
 
@@ -334,6 +338,11 @@ async def audit_url(
     honest "colleague opens the link for the first time" load. Fail-soft: any
     render/navigation error → an ABSTAIN report (``rendered=False``) rather than a
     raise (R-10).
+
+    ``storage_state`` is optional and defaults to ``None`` — the default path is the
+    unchanged 0-cookie incognito load. When a Playwright storage-state dict is passed
+    the context carries that session cookie, so the same checks run against an
+    authenticated cabinet render instead of the anonymous stranger surface.
     """
     try:
         from playwright.async_api import async_playwright
@@ -341,10 +350,13 @@ async def audit_url(
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             try:
-                # Clean context = incognito: no cookies, no stored session.
+                # storage_state=None ⇒ clean incognito context: no cookies, no
+                # stored session (the default). A passed storage_state carries the
+                # session cookie for an authenticated-cabinet render.
                 context = await browser.new_context(
                     viewport={"width": int(width), "height": GATE_HEIGHT},
                     reduced_motion="reduce",
+                    storage_state=storage_state,
                 )
                 try:
                     page = await context.new_page()

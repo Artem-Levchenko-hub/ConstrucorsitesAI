@@ -194,6 +194,16 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         **req.initial_env,
     }
 
+    # Area C (DARK): when the orchestrator runs with OMNIA_GATE_SEED=1, ask the
+    # template's init-db to seed a login-able operator account so the composition
+    # gate can render the authenticated cabinet. Off by default → normal apps get
+    # no seed account.
+    if os.getenv("OMNIA_GATE_SEED") == "1":
+        env["OMNIA_GATE_SEED"] = "1"
+        env["OMNIA_GATE_SEED_EMAIL"] = os.getenv(
+            "OMNIA_GATE_SEED_EMAIL", "gate@omnia.local"
+        )
+
     # Next.js 15 + Turbopack peaks well past 2 GB during the first compile of a
     # heavy entity/fullstack app (many routes); once warm it settles around
     # 500-800 MB. A 2 GB ceiling OOM-killed those mid-compile, so the memory

@@ -224,15 +224,19 @@ async def test_gate_async_passing_verdict_no_publish(monkeypatch) -> None:
     monkeypatch.setattr(
         quality, "get_settings",
         lambda: SimpleNamespace(
-            acceptance_entity_composition_gate=True, database_url="x"
+            acceptance_entity_composition_gate=True,
+            gate_authenticated_cabinet=False,
+            database_url="x",
         ),
     )
 
     async def _status(_pid, *, slug):
         return {"ok": True}
 
-    async def _gate(_pid, _slug, _route="/"):
-        return SimpleNamespace(hard_failed=(), failed_classes=())
+    async def _gate(_pid, _slug, _route="/", *, storage_state=None):
+        # abstained=True skips the V4.9 viral-eligibility DB write (orthogonal to
+        # this test's publish assertion; the stubbed factory has no real session).
+        return SimpleNamespace(hard_failed=(), failed_classes=(), abstained=True)
 
     _patch_route(monkeypatch)
     monkeypatch.setattr(quality.orchestrator_client, "compile_status", _status)
@@ -249,17 +253,20 @@ async def test_gate_async_hard_fail_publishes_card(monkeypatch) -> None:
     monkeypatch.setattr(
         quality, "get_settings",
         lambda: SimpleNamespace(
-            acceptance_entity_composition_gate=True, database_url="x"
+            acceptance_entity_composition_gate=True,
+            gate_authenticated_cabinet=False,
+            database_url="x",
         ),
     )
 
     async def _status(_pid, *, slug):
         return {"ok": True}
 
-    async def _gate(_pid, _slug, route="/"):
+    async def _gate(_pid, _slug, route="/", *, storage_state=None):
         captured["route"] = route
         return SimpleNamespace(
-            hard_failed=(object(),), failed_classes=("taste", "hierarchy")
+            hard_failed=(object(),), failed_classes=("taste", "hierarchy"),
+            abstained=True,
         )
 
     _patch_route(monkeypatch, route="/dashboard")
@@ -292,7 +299,7 @@ def test_worker_resolves_target_route() -> None:
     left orphaned. Without this the gate scores the bare `/` login wall."""
     src = (_SRC / "workers" / "quality.py").read_text(encoding="utf-8")
     assert "route_target.resolve_target_route" in src
-    assert "gate_live_app(pid, slug, route)" in src
+    assert "gate_live_app(pid, slug, route, storage_state=storage_state)" in src
 
 
 def test_queue_points_entity_gate_at_worker_job() -> None:
@@ -310,3 +317,163 @@ def test_messages_enqueues_entity_gate_on_entity_template() -> None:
     assert re.search(
         r'project\.template in \("nextjs_entities", "fullstack"\)', src
     )
+
+
+# ── Area C: authenticated cabinet gate (DARK) ─────────────────────────────────
+
+
+async def test_gate_live_app_authenticated_runs_cabinet_and_390(monkeypatch) -> None:
+    """With a storage_state session the gate fans cabinet + an adaptive @390
+    composition pass, merging the @390 legs in renamed (taste@390 / hierarchy@390)."""
+    from omnia_api.services.accept_gauntlet import GateVerdict, GauntletVerdict
+
+    calls: list[dict] = []
+
+    async def _resolve(_pid, route="/"):
+        return "http://omnia-dev-x:3000" + ("" if route == "/" else route)
+
+    def _verdict(gate: str) -> GauntletVerdict:
+        return GauntletVerdict(
+            (GateVerdict(gate=gate, passed=True, abstained=False, classes=(), summary="", subscore={}),),
+            render_expected=True,
+        )
+
+    async def _run(**kw):
+        calls.append(kw)
+        # desktop call has no composition_width override; @390 call sets it to 390
+        return _verdict("hierarchy") if kw.get("composition_width") == 390 else _verdict("taste")
+
+    monkeypatch.setattr(
+        entity_gate, "get_settings",
+        lambda: SimpleNamespace(acceptance_entity_composition_gate=True),
+    )
+    monkeypatch.setattr(entity_gate, "resolve_live_url", _resolve)
+    monkeypatch.setattr(entity_gate.accept_gauntlet, "run", _run)
+
+    state = {"cookies": [{"name": "authjs.session-token"}]}
+    out = await entity_gate.gate_live_app(uuid4(), "sushi", "/dashboard", storage_state=state)
+
+    assert len(calls) == 2  # desktop + @390
+    assert calls[0]["cabinet"] is True
+    assert calls[0]["storage_state"] is state
+    assert any(c.get("composition_width") == 390 for c in calls)
+    gates = {g.gate for g in out.gates}
+    assert "hierarchy@390" in gates  # @390 leg merged in renamed
+    assert "taste" in gates
+
+
+async def test_gate_async_authenticated_logs_in(monkeypatch) -> None:
+    """Flag ON + a seed exposed → establish a session, force /dashboard, pass the
+    storage_state into the gate (route_target probe is skipped)."""
+    _fast_settle(monkeypatch)
+    _patch_publish(monkeypatch)
+    captured: dict = {}
+
+    monkeypatch.setattr(
+        quality, "get_settings",
+        lambda: SimpleNamespace(
+            acceptance_entity_composition_gate=True,
+            gate_authenticated_cabinet=True,
+            database_url="x",
+        ),
+    )
+
+    async def _status(_pid, *, slug):
+        return {"ok": True}
+
+    async def _base(_pid, route="/"):
+        return "http://omnia-dev-x:3000"
+
+    async def _get_status(_pid):
+        return {"gate_seed": {"email": "gate@omnia.local", "auth_secret": "s3cret"}}
+
+    async def _establish(base, email, auth_secret, **kw):
+        captured["login"] = (base, email, auth_secret)
+        return {"cookies": [{"name": "authjs.session-token"}]}
+
+    async def _route_boom(*a, **kw):  # pragma: no cover
+        raise AssertionError("route_target must NOT run on the authenticated path")
+
+    async def _gate(_pid, _slug, route="/", *, storage_state=None):
+        captured["route"] = route
+        captured["storage_state"] = storage_state
+        return SimpleNamespace(hard_failed=(), failed_classes=(), abstained=True)
+
+    monkeypatch.setattr(quality.orchestrator_client, "compile_status", _status)
+    monkeypatch.setattr(quality.dev_container, "resolve_live_url", _base)
+    monkeypatch.setattr(quality.orchestrator_client, "get_status", _get_status)
+    monkeypatch.setattr(quality.auth_session, "establish_session", _establish)
+    monkeypatch.setattr(quality.route_target, "resolve_target_route", _route_boom)
+    monkeypatch.setattr(quality.entity_gate, "gate_live_app", _gate)
+
+    await quality._gate_async(str(uuid4()), str(uuid4()), "shop")
+    assert captured["route"] == "/dashboard"
+    assert captured["storage_state"] == {"cookies": [{"name": "authjs.session-token"}]}
+    assert captured["login"][1] == "gate@omnia.local"
+
+
+async def test_gate_async_seed_missing_falls_back_to_anonymous(monkeypatch) -> None:
+    """Flag ON but no gate_seed exposed → storage_state None → anonymous route."""
+    _fast_settle(monkeypatch)
+    _patch_publish(monkeypatch)
+    captured: dict = {}
+
+    monkeypatch.setattr(
+        quality, "get_settings",
+        lambda: SimpleNamespace(
+            acceptance_entity_composition_gate=True,
+            gate_authenticated_cabinet=True,
+            database_url="x",
+        ),
+    )
+
+    async def _status(_pid, *, slug):
+        return {"ok": True}
+
+    async def _base(_pid, route="/"):
+        return "http://omnia-dev-x:3000"
+
+    async def _get_status(_pid):
+        return {"gate_seed": None}  # OMNIA_GATE_SEED off orchestrator-side
+
+    async def _route(_base_url, *, candidate_route="/dashboard"):
+        return "/"
+
+    async def _gate(_pid, _slug, route="/", *, storage_state=None):
+        captured["route"] = route
+        captured["storage_state"] = storage_state
+        return SimpleNamespace(hard_failed=(), failed_classes=(), abstained=True)
+
+    monkeypatch.setattr(quality.orchestrator_client, "compile_status", _status)
+    monkeypatch.setattr(quality.dev_container, "resolve_live_url", _base)
+    monkeypatch.setattr(quality.orchestrator_client, "get_status", _get_status)
+    monkeypatch.setattr(quality.route_target, "resolve_target_route", _route)
+    monkeypatch.setattr(quality.entity_gate, "gate_live_app", _gate)
+
+    await quality._gate_async(str(uuid4()), str(uuid4()), "shop")
+    assert captured["storage_state"] is None
+    assert captured["route"] == "/"  # anonymous route-probe path
+
+
+# ── Area C: template markers + init-db seed survive (de-orphan source scan) ───
+
+_TEMPLATE = (
+    Path(__file__).resolve().parent.parent.parent
+    / "orchestrator" / "templates" / "nextjs-entities"
+)
+
+
+def test_cabinet_state_markers_present_in_template() -> None:
+    """The cabinet-states gate keys off stable data-omnia-* markers; a template
+    refactor that drops them would silently blind the gate."""
+    comp = _TEMPLATE / "src" / "components" / "omnia"
+    assert "data-omnia-empty" in (comp / "empty-state.tsx").read_text(encoding="utf-8")
+    assert "data-omnia-checklist" in (comp / "setup-checklist.tsx").read_text(encoding="utf-8")
+    assert "data-omnia-skeleton" in (comp / "dashboard-skeleton.tsx").read_text(encoding="utf-8")
+
+
+def test_init_db_carries_gate_seed_block() -> None:
+    """The authenticated gate needs the OMNIA_GATE_SEED operator seed in init-db."""
+    src = (_TEMPLATE / "scripts" / "init-db.mjs").read_text(encoding="utf-8")
+    assert "OMNIA_GATE_SEED" in src
+    assert "omnia-gate-seed-v1" in src  # HMAC label must match auth_session

@@ -10,7 +10,12 @@ import { Skeleton } from "@/components/ui/skeleton";
  */
 export function DashboardSkeleton() {
   return (
-    <div className="space-y-8" aria-busy="true" aria-label="Загрузка дашборда">
+    <div
+      data-omnia-skeleton=""
+      className="space-y-8"
+      aria-busy="true"
+      aria-label="Загрузка дашборда"
+    >
       {/* hero band */}
       <div className="overflow-hidden rounded-2xl border border-border/60 bg-card p-6 sm:p-8">
         <Skeleton className="h-3 w-24 rounded-full" />

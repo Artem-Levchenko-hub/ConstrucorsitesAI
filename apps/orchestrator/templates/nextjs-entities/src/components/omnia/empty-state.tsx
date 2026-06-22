@@ -144,6 +144,7 @@ export function EmptyState({
 
   return (
     <div
+      data-omnia-empty=""
       className={cn(
         "flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border px-6 py-14 text-center",
         className,

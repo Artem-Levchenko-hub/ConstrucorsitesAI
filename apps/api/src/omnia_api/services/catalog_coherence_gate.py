@@ -583,12 +583,21 @@ async def _audit_page(page: Page) -> CatalogReport:
 
 
 async def audit_url(
-    url: str, *, width: int = GATE_WIDTH, timeout_ms: int = 15_000
+    url: str,
+    *,
+    width: int = GATE_WIDTH,
+    timeout_ms: int = 15_000,
+    storage_state: dict | None = None,
 ) -> CatalogReport:
     """Audit a LIVE url (a running container app / prod ``/p/<slug>``) at ``width``.
 
     Fail-soft: any render/navigation error → an ABSTAIN report (``rendered=False``)
     rather than a raise, so a flaky container never hard-fails the gauntlet (R-10).
+
+    ``storage_state`` (optional) carries a Playwright session — cookies / local
+    storage — so the render can reach an AUTHENTICATED cabinet. ``None`` (the
+    default) builds an anonymous context byte-identical to the old ``new_page``,
+    so the public ``/p/<slug>`` path is unchanged.
     """
     try:
         from playwright.async_api import async_playwright
@@ -596,15 +605,17 @@ async def audit_url(
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             try:
-                page = await browser.new_page(
+                context = await browser.new_context(
                     viewport={"width": int(width), "height": GATE_HEIGHT},
                     reduced_motion="reduce",
+                    storage_state=storage_state,
                 )
                 try:
+                    page = await context.new_page()
                     await goto_and_settle(page, url, timeout_ms=timeout_ms)
                     return await _audit_page(page)
                 finally:
-                    await page.close()
+                    await context.close()
             finally:
                 await browser.close()
     except Exception as exc:

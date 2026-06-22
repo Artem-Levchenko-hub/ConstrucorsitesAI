@@ -12,6 +12,7 @@ contracts (request/response schemas) are stable and consumed by apps/api today.
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 from fastapi import APIRouter, Header
@@ -422,12 +423,30 @@ async def status(
         "dead": "failed",
     }
     derived_slug = name.removeprefix("omnia-dev-")
+
+    # Area C (DARK): expose the per-project AUTH_SECRET so the gate worker can
+    # re-derive the seed operator's password and drive a real login. Populated
+    # ONLY when OMNIA_GATE_SEED=1; null otherwise → contract unchanged. The
+    # secret comes from _load_or_create_auth_secret, which is idempotent and
+    # read-only once the per-project secret file exists.
+    gate_seed: dict[str, str] | None = None
+    if os.getenv("OMNIA_GATE_SEED") == "1":
+        from omnia_orchestrator.services.provisioner import (
+            _load_or_create_auth_secret,
+        )
+
+        gate_seed = {
+            "email": os.getenv("OMNIA_GATE_SEED_EMAIL", "gate@omnia.local"),
+            "auth_secret": _load_or_create_auth_secret(project_id),
+        }
+
     return StatusResponse(
         project_id=UUID(project_id),
         state=state_map.get(info["state"], "stopped"),
         container_name=name,
         port=int(info["port"]) if info["port"] else None,
         dev_url=nginx_writer.dev_url(derived_slug) if derived_slug else None,
+        gate_seed=gate_seed,
     )
 
 

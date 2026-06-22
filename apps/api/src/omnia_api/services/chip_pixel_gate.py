@@ -861,25 +861,36 @@ async def _audit_page(page: Page, spec: FidelitySpec) -> FidelityReport:
 
 
 async def audit_url(
-    url: str, spec: FidelitySpec, *, width: int = GATE_WIDTH, timeout_ms: int = 15_000
+    url: str,
+    spec: FidelitySpec,
+    *,
+    width: int = GATE_WIDTH,
+    timeout_ms: int = 15_000,
+    storage_state: dict | None = None,
 ) -> FidelityReport:
     """Audit a LIVE url against ``spec``. Fail-soft (R-10): a render/navigation
-    error → an ABSTAIN report (``rendered=False``) rather than a raise."""
+    error → an ABSTAIN report (``rendered=False``) rather than a raise.
+
+    ``storage_state`` (optional) seeds the browser context with cookies/origin
+    storage so an authenticated cabinet renders past its login wall. When
+    ``None`` the context is anonymous (byte-identical to the prior default)."""
     try:
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             try:
-                page = await browser.new_page(
+                context = await browser.new_context(
                     viewport={"width": int(width), "height": GATE_HEIGHT},
                     reduced_motion="reduce",
+                    storage_state=storage_state,
                 )
+                page = await context.new_page()
                 try:
                     await goto_and_settle(page, url, timeout_ms=timeout_ms)
                     return await _audit_page(page, spec)
                 finally:
-                    await page.close()
+                    await context.close()
             finally:
                 await browser.close()
     except Exception as exc:

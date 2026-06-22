@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from omnia_api.services import (
+    cabinet_gate,
     catalog_coherence_gate,
     chip_pixel_gate,
     compose_gate,
@@ -78,6 +79,11 @@ HIERARCHY = "hierarchy"
 DATA = "data"
 REFERENCE = "reference"
 CATALOG = "catalog"
+#: Area C — authenticated-cabinet states gate (empty-state / onboarding / stuck
+#: skeleton). ADVISORY like ``catalog``; fans ONLY behind its own ``cabinet=``
+#: dial and only renders the real cabinet when a ``storage_state`` session is
+#: threaded in (anonymous → it ABSTAINS, so it never judges the login wall).
+CABINET = "cabinet"
 
 #: The rendered gates, in run order. ``defect-registry`` is pure source-scan and
 #: runs first/always; these need a live DOM (a static file set or a URL). The
@@ -91,7 +97,7 @@ CATALOG = "catalog"
 #: is in the order tuple (so ``run()`` fans it) but is ADVISORY (a non-blocking
 #: quality-card) and runs ONLY behind its own ``catalog=`` dial, never via
 #: ``include_rendered``.
-RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA, REFERENCE, CATALOG)
+RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA, REFERENCE, CATALOG, CABINET)
 
 #: The COMPOSITION legs (V1.6 14/5). Taste + hierarchy score richness — type
 #: scale, focal dominance, layered depth, hero imagery — at DESKTOP width, where
@@ -131,13 +137,15 @@ REFERENCE_LEGS = (REFERENCE,)
 #: reusing ``taste_gate``'s JS-extract→Python-score shape (R-04). It is decoupled
 #: from ``include_rendered`` via its own ``catalog=`` dial.
 CATALOG_LEGS = (CATALOG,)
+#: Area C — the authenticated-cabinet states leg. Fans only behind ``cabinet=``.
+CABINET_LEGS = (CABINET,)
 #: ADVISORY gates surface a quality-card (a score + findings in the table / summary
 #: / subscore) but NEVER block ship — they are excluded from ``hard_failed``, the
 #: strict ``passed`` verdict, and ``failed_classes``. V1.17 folds ``catalog`` in
 #: this way: the realism ratchet teaches without false-rejecting good catalogs
 #: while the niche heuristics earn trust. For every NON-advisory gate this set is
 #: empty, so the keystone's ship semantics are byte-identical.
-ADVISORY_GATES = frozenset({CATALOG})
+ADVISORY_GATES = frozenset({CATALOG, CABINET})
 
 
 @dataclass(frozen=True)
@@ -400,33 +408,48 @@ async def _audit_one(
     composition_width: int,
     reference_enforce_score: bool = False,
     reference_tolerance: int = 0,
+    storage_state: dict | None = None,
 ) -> Any:
     """Render one rendered gate against the live target (url first, else files).
 
     Each gate's own width is honoured: the composition legs (taste/hierarchy) read
     at ``composition_width`` (desktop by default; ``390`` for the mobile dimension,
     V1.6 15/5), the correctness/touch legs at the mobile ``width`` floor.
+
+    ``storage_state`` (Area C, DARK) carries an authenticated Playwright session into
+    every URL render so the gate scores the real CABINET, not the login wall. None
+    (the default) → anonymous render, byte-identical to before. The REFERENCE leg is
+    deliberately NOT authenticated: it compares against a marketing-landing corpus,
+    a comparison that does not apply to an auth-gated cabinet (and it is never fanned
+    on the cabinet path, which uses ``composition=`` + ``cabinet=``, not
+    ``include_rendered``).
     """
     if url:
         if gate == WOW_DOM:
-            return await wow_dom_gate.audit_url(url, width=width)
+            return await wow_dom_gate.audit_url(url, width=width, storage_state=storage_state)
         if gate == PERF_A11Y:
-            return await perf_a11y_gate.audit_url(url, width=width)
+            return await perf_a11y_gate.audit_url(url, width=width, storage_state=storage_state)
         if gate == CHIP_PIXEL:
-            return await chip_pixel_gate.audit_url(url, spec, width=width)
+            return await chip_pixel_gate.audit_url(url, spec, width=width, storage_state=storage_state)
         if gate == TASTE:
-            return await taste_gate.audit_url(url, width=composition_width)
+            return await taste_gate.audit_url(url, width=composition_width, storage_state=storage_state)
         if gate == HIERARCHY:
-            return await hierarchy_gate.audit_url(url, width=composition_width)
+            return await hierarchy_gate.audit_url(url, width=composition_width, storage_state=storage_state)
         if gate == DATA:
-            return await data_gate.audit_url(url, width=width)
+            return await data_gate.audit_url(url, width=width, storage_state=storage_state)
         if gate == REFERENCE:
             return await reference_corpus.audit_url(
                 url, width=composition_width,
                 enforce_score=reference_enforce_score, tolerance=reference_tolerance,
             )
         if gate == CATALOG:
-            return await catalog_coherence_gate.audit_url(url, width=composition_width)
+            return await catalog_coherence_gate.audit_url(
+                url, width=composition_width, storage_state=storage_state
+            )
+        if gate == CABINET:
+            return await cabinet_gate.audit_url(
+                url, width=composition_width, storage_state=storage_state
+            )
     else:
         assert files is not None  # render_expected guarantees a target
         if gate == WOW_DOM:
@@ -466,6 +489,8 @@ async def run(
     reference_enforce_score: bool = False,
     reference_tolerance: int = 0,
     catalog: bool = False,
+    cabinet: bool = False,
+    storage_state: dict | None = None,
     viral: bool = False,
     viral_context: viral_registry.ViralContext | None = None,
     onboarding: bool = False,
@@ -647,6 +672,8 @@ async def run(
         legs |= set(REFERENCE_LEGS)
     if catalog:
         legs |= set(CATALOG_LEGS)
+    if cabinet:
+        legs |= set(CABINET_LEGS)
 
     has_target = bool(url or (files is not None and "index.html" in files))
     render_expected = bool(legs) and has_target
@@ -663,6 +690,7 @@ async def run(
                     composition_width=composition_width,
                     reference_enforce_score=reference_enforce_score,
                     reference_tolerance=reference_tolerance,
+                    storage_state=storage_state,
                 )
                 gates.append(_from_rendered(gate, rep))
 

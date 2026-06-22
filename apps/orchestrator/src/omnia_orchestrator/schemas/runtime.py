@@ -66,6 +66,10 @@ class StatusResponse(BaseModel):
     cpu_pct: float | None = None
     memory_mb: int | None = None
     logs_tail_url: str | None = None  # signed url for last 200 lines
+    # Area C (DARK): {email, auth_secret} for the gate's seed operator account,
+    # populated ONLY when the orchestrator runs with OMNIA_GATE_SEED=1. Null on
+    # every normal deployment, so the public contract is unchanged.
+    gate_seed: dict | None = None
 
 
 class DeployRequest(BaseModel):

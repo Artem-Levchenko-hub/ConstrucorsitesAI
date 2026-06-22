@@ -788,7 +788,9 @@ async def test_catalog_not_fanned_by_include_rendered(monkeypatch):
 def test_catalog_legs_are_catalog_only_and_advisory():
     assert accept_gauntlet.CATALOG_LEGS == (accept_gauntlet.CATALOG,)
     assert accept_gauntlet.CATALOG in accept_gauntlet.RENDERED_GATES
-    assert accept_gauntlet.ADVISORY_GATES == frozenset({accept_gauntlet.CATALOG})
+    assert accept_gauntlet.ADVISORY_GATES == frozenset(
+        {accept_gauntlet.CATALOG, accept_gauntlet.CABINET}
+    )
     assert accept_gauntlet.CATALOG not in accept_gauntlet.TOUCH_LEGS
     assert accept_gauntlet.CATALOG not in accept_gauntlet.COMPOSITION_LEGS
     assert accept_gauntlet.CATALOG not in accept_gauntlet.FIDELITY_LEGS
@@ -978,3 +980,42 @@ async def test_reference_dials_default_off_in_run(monkeypatch):
     )
     assert captured.get("enforce_score") is False
     assert captured.get("tolerance") == 0
+
+
+async def test_cabinet_leg_fans_and_is_advisory(monkeypatch):
+    """Area C: the cabinet= dial fans the cabinet-states leg, forwards storage_state,
+    and its finding is ADVISORY (never enters hard_failed / strict passed)."""
+    captured: dict[str, object] = {}
+    from omnia_api.services import cabinet_gate
+
+    async def _cab(url, *, width=cabinet_gate.GATE_WIDTH, storage_state=None, timeout_ms=15_000):
+        captured["storage_state"] = storage_state
+        # an authenticated dashboard with neither empty-state nor onboarding → FAIL class
+        return cabinet_gate.evaluate_observation(
+            {"has_empty": False, "has_checklist": False, "has_skeleton": False, "rows": 0},
+            rendered=True,
+        )
+
+    monkeypatch.setattr(accept_gauntlet.cabinet_gate, "audit_url", _cab)
+    v = await accept_gauntlet.run(
+        url="http://omnia-dev-x:3000",
+        include_rendered=False,
+        cabinet=True,
+        storage_state={"cookies": [{"name": "authjs.session-token"}]},
+    )
+    assert accept_gauntlet.CABINET in {g.gate for g in v.gates}
+    assert captured["storage_state"] == {"cookies": [{"name": "authjs.session-token"}]}
+    # advisory: a cabinet finding does NOT hard-fail or enter failed_classes
+    assert not v.hard_failed
+    assert all("no-empty-state" not in c for c in v.failed_classes)
+
+
+async def test_cabinet_leg_not_fanned_without_dial(monkeypatch):
+    """Back-compat: include_rendered alone never fans the advisory cabinet leg."""
+    async def _boom(*a, **kw):  # pragma: no cover
+        raise AssertionError("cabinet ran without its dial")
+
+    monkeypatch.setattr(accept_gauntlet.cabinet_gate, "audit_url", _boom)
+    _stub_rendered(monkeypatch, wow=_wow(), perf=_perf(), chip=_chip(checked=("palette-bg",)))
+    v = await accept_gauntlet.run(files={"index.html": _CLEAN_HTML})  # include_rendered=True
+    assert accept_gauntlet.CABINET not in {g.gate for g in v.gates}
