@@ -965,6 +965,11 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # Restores d61214b (accidentally clobbered by 2133cfd on a stale base).
     # Swap via ROLE_MODELS env (e.g. edit_escalation=claude-sonnet-4-6).
     "edit_escalation": "deepseek-v4-pro-thinking",
+    # Agentic builder loop (Phase 0). The plan→act→observe→verify loop emits a
+    # strict <omnia:action> protocol over ~14 steps and writes real code — it
+    # needs the strongest available instruction-follower/coder. claude-opus-4-8
+    # via vsegpt (sonnet is proxyapi-gated = retired). Swap via ROLE_MODELS env.
+    "agent": "claude-opus-4-8",
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
     # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
     # reliable model that emits strict JSON. Owner directive 2026-06-16: route via

@@ -2230,7 +2230,10 @@ async def _process_prompt(
             _agent_res = await agent_builder.run_agent_build(
                 system_prompt=agent_builder.SYSTEM_PROMPT,
                 user_prompt=_agent_user,
-                model=model_id,
+                # The loop needs a strong instruction-follower for the strict
+                # action protocol — route to the dedicated `agent` role
+                # (claude-opus-4-8) rather than the build-routing model.
+                model=model_for_role("agent", override=force_model),
                 execute=_agent_executor,
                 max_steps=int(get_settings().agent_builder_max_steps),
                 emit=_agent_emit,
