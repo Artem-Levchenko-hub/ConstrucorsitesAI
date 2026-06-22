@@ -3846,7 +3846,16 @@ async def _process_prompt(
                 if _acc_settings.acceptance_score_only
                 else max(0, int(_acc_settings.acceptance_max_retries))
             )
-            # Cost floor: only spend a repair re-roll on a genuinely deficient
+            # Taste barrier (область T, DARK): a generic→repair pass is decoupled
+            # from auto_regenerate_enabled (owner: never auto-regenerate the whole
+            # page) — it allows at most `acceptance_taste_repair_passes` extra
+            # re-rolls, and ONLY when `acceptance_taste_repair_on_generic` is on.
+            # Default (flag OFF / passes 0) leaves `_max_acc` untouched.
+            if _acc_settings.acceptance_taste_repair_on_generic:
+                _max_acc = max(
+                    _max_acc, int(_acc_settings.acceptance_taste_repair_passes)
+                )
+            # Repair floor: only spend a repair re-roll on a genuinely deficient
             # page (see acceptance_repair_floor docstring) — not on every
             # borderline vision score.
             _repair_floor = max(0, int(_acc_settings.acceptance_repair_floor))
@@ -3927,13 +3936,23 @@ async def _process_prompt(
                     # a hard structural/responsive defect, a "broken" vision
                     # verdict, or a vision score below the floor. A merely-not-
                     # perfect page (struct+resp OK, score in [floor, min_score))
-                    # ships as attempt-0 — this is the ~37%-of-build cost cut
-                    # (the reflexive repair fired on ~100% of builds before).
+                    # ships as attempt-0 — this is the reflexive-repair cut.
+                    # Taste barrier (область T, DARK): when
+                    # `acceptance_taste_repair_on_generic` is on, a GENERIC verdict
+                    # (not only "broken") that vision really produced is also
+                    # repair-worthy — "not ugly but generic" earns one re-roll with
+                    # the vision issues as feedback. Default OFF → unchanged.
+                    _taste_repair = (
+                        _acc_settings.acceptance_taste_repair_on_generic
+                        and _verdict.vision_ran
+                        and _verdict.verdict == "generic"
+                    )
                     _repair_worthy = (
                         not _verdict.structural_ok
                         or not _verdict.responsive_ok
                         or _verdict.verdict == "broken"
                         or (_verdict.vision_ran and int(_verdict.score) < _repair_floor)
+                        or _taste_repair
                     )
                     if (
                         _verdict.passed
