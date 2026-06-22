@@ -327,10 +327,27 @@ async def _run_app_self_repair(
     work = dict(files)
     last_status: dict[str, Any] | None = None
     last_category = ""
+    applied = 0  # number of fixes actually hot-reloaded
+
+    def _metric(outcome: str, cat: str) -> None:
+        # One grep-able efficacy line per build (mirrors the originality[shadow]
+        # metric): outcome=clean (no error) | healed (doctor fixed it green) |
+        # failed (still broken after N passes / no usable fix). Lets ops measure
+        # how often DeepSeek's container builds compile vs need / get auto-healed:
+        #   docker logs omnia-prod-worker | grep self_repair_metric
+        print(
+            f"[PP] self_repair_metric outcome={outcome} passes={applied}/{passes} "
+            f"cat={cat}",
+            flush=True,
+        )
+
     for i in range(max(0, passes)):
         status, category = await _probe_app_error(project_id, slug)
         if status is None:
-            return changed, None, ""  # green (or probe inconclusive → don't claim broken)
+            # green (or probe inconclusive → don't claim broken). On pass 0 with no
+            # fix yet that's a clean build; if we already applied a fix, it healed.
+            _metric("healed" if applied else "clean", last_category or "none")
+            return changed, None, ""
         last_status, last_category = status, category
         fix = await app_doctor.propose_fix(
             category=category,
@@ -347,6 +364,7 @@ async def _run_app_self_repair(
         except Exception as exc:
             print(f"[PP] self_repair hot_reload failed: {exc!r}", flush=True)
             break
+        applied += 1
         print(f"[PP] self_repair pass={i + 1} fixed={list(fix)} cat={category}", flush=True)
         if on_notice:
             await on_notice(
@@ -356,7 +374,9 @@ async def _run_app_self_repair(
     # Final verdict after the last fix recompiled.
     status, category = await _probe_app_error(project_id, slug)
     if status is None:
+        _metric("healed" if applied else "clean", last_category or "none")
         return changed, None, ""
+    _metric("failed", last_category or category)
     return changed, (last_status or status), (last_category or category)
 
 
