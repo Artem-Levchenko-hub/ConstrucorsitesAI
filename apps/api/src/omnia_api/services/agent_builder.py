@@ -287,6 +287,8 @@ Back-office CRM data → "admin".
 out of the box — read `src/components/omnia/crud-resource.tsx` ONCE to confirm its exact props, \
 then write ALL the pages quickly. Data SDK is `@/lib/sdk`, UI is `@/components/ui`, icons \
 `lucide-react`. Auth/login, the dashboard shell, global CSS and the kit already exist — don't recreate them.
+- ALWAYS write `src/app/(app)/dashboard/page.tsx` — the dashboard HOME (a short index with a \
+card/link to each section). Without it, `/dashboard` is a 404 right after login. This is mandatory.
 
 WORK STYLE (you have a LIMITED step budget — be decisive):
 - Explore MINIMALLY: at most read ONE existing dashboard page + ONE existing entities/*.json as \

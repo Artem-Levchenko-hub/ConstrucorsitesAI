@@ -28,7 +28,7 @@
  */
 
 import bcrypt from "bcryptjs";
-import { eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, notInArray } from "drizzle-orm";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
@@ -146,12 +146,23 @@ export async function hashPassword(plain: string): Promise<string> {
  *  If that synthetic row counted, the FIRST REAL operator would be demoted to
  *  "user" and their admin dashboard (`access:"admin"` Orders/Inquiries) would
  *  render BLANK — so we exclude password-less rows and the operator gets admin. */
+/** Synthetic accounts created by the demo seeder / acceptance gate. These have
+ *  passwords (the gate logs in as one), so without excluding them the FIRST REAL
+ *  human signup is demoted to "user" and their admin back-office (`access:"admin"`
+ *  entities) 403s / renders blank. Exclude them from the first-operator check. */
+const SEED_EMAILS = ["anon@local", "gate@omnia.local", "demo@omnia.local"];
+
 export async function roleForNewUser(): Promise<"admin" | "user"> {
   try {
     const [row] = await db
       .select({ id: users.id })
       .from(users)
-      .where(isNotNull(users.passwordHash))
+      .where(
+        and(
+          isNotNull(users.passwordHash),
+          notInArray(users.email, SEED_EMAILS),
+        ),
+      )
       .limit(1);
     return row ? "user" : "admin";
   } catch {

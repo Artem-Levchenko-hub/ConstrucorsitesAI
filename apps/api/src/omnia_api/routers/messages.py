@@ -2221,11 +2221,39 @@ async def _process_prompt(
             _agent_executor = agent_builder.make_container_executor(
                 project_id=project_id, slug=project_slug
             )
+            # Seed the agent with the project layout + the CrudResource component
+            # up-front so it does NOT burn steps re-discovering the fixed template
+            # (the #1 latency sink observed in the first live runs). Fail-soft.
+            _seed_parts: list[str] = []
+            try:
+                _ents = await orchestrator_client.agent_list_dir(
+                    project_id, project_slug, "entities")
+                _seed_parts.append(f"entities/ contains:\n{_ents}")
+                _dash = await orchestrator_client.agent_list_dir(
+                    project_id, project_slug, "src/app/(app)/dashboard")
+                _seed_parts.append(
+                    f"src/app/(app)/dashboard/ contains:\n{_dash}")
+                _crud = await orchestrator_client.agent_read_file(
+                    project_id, project_slug,
+                    "src/components/omnia/crud-resource.tsx")
+                if _crud:
+                    _seed_parts.append(
+                        "src/components/omnia/crud-resource.tsx (the entity-page "
+                        "component — render <CrudResource entity=\"Name\"/> in each "
+                        "page):\n" + _crud[:4000])
+            except Exception as _seed_exc:
+                print(f"[PP] agent seed-context skipped: {_seed_exc!r}", flush=True)
+            _seed_block = (
+                "\n\nPROJECT CONTEXT (already gathered — do NOT re-explore these):\n"
+                + "\n\n".join(_seed_parts)
+            ) if _seed_parts else ""
             _agent_user = (
                 f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
-                f"Тип проекта: {project_template}. Работай итеративно: читай "
-                f"файлы, пиши/правь, запускай build и чини КАЖДУЮ ошибку, пока "
-                f"сборка не станет чистой, затем вызови done."
+                f"Тип проекта: {project_template}.{_seed_block}\n\n"
+                f"Действуй: объяви нужные entities/<Name>.json, напиши страницы "
+                f"(включая обязательный dashboard/page.tsx индекс), затем build и "
+                f"чини ошибки до чистоты, затем done. Минимизируй разведку — "
+                f"раскладка выше уже дана."
             )
             _agent_res = await agent_builder.run_agent_build(
                 system_prompt=agent_builder.SYSTEM_PROMPT,
