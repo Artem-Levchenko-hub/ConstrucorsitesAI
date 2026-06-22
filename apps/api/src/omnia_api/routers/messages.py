@@ -2879,8 +2879,12 @@ async def _process_prompt(
             messages.append({"role": "assistant", "content": accumulated})
             messages.append({"role": "user", "content": retry_note})
             print("[PP] surgical_retry (no patch applied) -> re-ask", flush=True)
+            # Escalate the retry to a stronger reasoning model — it reproduces
+            # byte-exact SEARCH blocks far more reliably than the cheap edit model
+            # (restores d61214b, clobbered by 2133cfd on a stale base).
+            _esc_model = model_for_role("edit_escalation", override=force_model)
             await _run_stream(
-                model_id, force_single_shot=True, force_all=force_model
+                _esc_model, force_single_shot=True, force_all=_esc_model
             )
             _retry_acc = str(state["accumulated"])
             if _retry_acc.strip():
@@ -2919,8 +2923,9 @@ async def _process_prompt(
                 f"[PP] surgical_conflict_retry conflicts={len(edit_conflicts)}",
                 flush=True,
             )
+            _esc_model = model_for_role("edit_escalation", override=force_model)
             await _run_stream(
-                model_id, force_single_shot=True, force_all=force_model
+                _esc_model, force_single_shot=True, force_all=_esc_model
             )
             _cr_acc = str(state["accumulated"])
             if _cr_acc.strip():

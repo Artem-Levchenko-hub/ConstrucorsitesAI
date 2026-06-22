@@ -948,6 +948,12 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "art_director": "kimi-k2.6",
     "freeform_writer": "deepseek-v4-pro",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
+    # Edit RETRY escalation: when the cheap `edit` model's SEARCH misses, the
+    # surgical retries re-ask on this STRONGER reasoning model — it reproduces
+    # byte-exact SEARCH blocks far more reliably than the cheap edit model.
+    # Restores d61214b (accidentally clobbered by 2133cfd on a stale base).
+    # Swap via ROLE_MODELS env (e.g. edit_escalation=claude-sonnet-4-6).
+    "edit_escalation": "deepseek-v4-pro-thinking",
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
     # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
     # reliable model that emits strict JSON. Owner directive 2026-06-16: route via
