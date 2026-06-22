@@ -38,6 +38,7 @@ Phase 1 adds {"name": "bash"} on the same loop; Phase 3 adds {"name": "test"}.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -169,19 +170,32 @@ async def run_agent_build(
     stalls = 0
 
     for step in range(max_steps):
-        try:
-            reply = await complete(
-                convo,
-                model,
-                user_id=user_id,
-                project_id=project_id,
-                max_tokens=max_tokens,
-                temperature=0.0,
-            )
-        except Exception as exc:  # gateway hiccup — fail soft, report
+        # Retry the model call on transient gateway errors (ReadTimeout / 5xx /
+        # rate-limit). A single hiccup over a 30-step loop must NOT throw away all
+        # the work done so far — without this, one opus timeout aborts the build.
+        reply = None
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                reply = await complete(
+                    convo,
+                    model,
+                    user_id=user_id,
+                    project_id=project_id,
+                    max_tokens=max_tokens,
+                    temperature=0.0,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001 — fail-soft + retry
+                last_exc = exc
+                if emit:
+                    await emit("agent.retry", {"step": step, "attempt": attempt})
+                await asyncio.sleep(2.0 * (attempt + 1))
+        if reply is None:
             return AgentResult(
-                done=False, summary=f"gateway error: {exc}", files=written,
-                steps=step, transcript=convo, stop_reason="error",
+                done=False,
+                summary=f"gateway error after retries: {last_exc}",
+                files=written, steps=step, transcript=convo, stop_reason="error",
             )
 
         convo.append({"role": "assistant", "content": reply})
@@ -268,9 +282,11 @@ backend/API/db code. To add data, write `entities/<Name>.json`:
 for enum add "options":[...]; for reference add "ref":"<OtherEntity>". \
 access ∈ {owner (per-user private), public (open read), admin (back-office)}. \
 Back-office CRM data → "admin".
-- SCREENS: write pages under `src/app/(app)/dashboard/`. Data SDK is imported from `@/lib/sdk` \
-(list/create/update/remove per entity); UI from `@/components/ui`; icons from `lucide-react`. \
-Auth/login, the dashboard shell, global CSS and the kit already exist — don't recreate them.
+- SCREENS: write pages under `src/app/(app)/dashboard/`. For each entity, a page that renders \
+`<CrudResource entity="Name" />` (from `@/components/omnia`) gives a full list+create+edit screen \
+out of the box — read `src/components/omnia/crud-resource.tsx` ONCE to confirm its exact props, \
+then write ALL the pages quickly. Data SDK is `@/lib/sdk`, UI is `@/components/ui`, icons \
+`lucide-react`. Auth/login, the dashboard shell, global CSS and the kit already exist — don't recreate them.
 
 WORK STYLE (you have a LIMITED step budget — be decisive):
 - Explore MINIMALLY: at most read ONE existing dashboard page + ONE existing entities/*.json as \
