@@ -917,6 +917,14 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "art_director": "kimi-k2.6",
     "freeform_writer": "deepseek-v4-pro",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
+    # Edit ESCALATION (owner 2026-06-22 «чтобы как клауд-код точечно правил»). When
+    # the cheap `edit`/`freeform_writer` SEARCH/REPLACE didn't land (no patch, or a
+    # partial conflict), the surgical retry re-asks on THIS stronger model instead of
+    # the SAME cheap one — re-asking the cheap model with the same byte-exact demand
+    # just misses again. Reasoning DeepSeek reproduces the exact span far more
+    # reliably; same vsegpt provider (no new failure mode). Swap to a frontier model
+    # without a deploy via ROLE_MODELS env (e.g. edit_escalation=claude-sonnet-4-6).
+    "edit_escalation": "deepseek-v4-pro-thinking",
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
     # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
     # reliable model that emits strict JSON. Owner directive 2026-06-16: route via

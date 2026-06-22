@@ -2773,8 +2773,15 @@ async def _process_prompt(
             messages.append({"role": "assistant", "content": accumulated})
             messages.append({"role": "user", "content": retry_note})
             print("[PP] surgical_retry (no patch applied) -> re-ask", flush=True)
+            # Escalate the re-ask to a STRONGER model — re-asking the SAME cheap
+            # model with the same byte-exact demand just misses again. edit_escalation
+            # (reasoning DeepSeek; swap via ROLE_MODELS env) reproduces the exact span
+            # far more reliably. Fires only AFTER the cheap edit already failed →
+            # strictly better than the old same-model retry.
+            _esc_model = model_for_role("edit_escalation", override=force_model)
+            print(f"[PP] surgical_retry escalate -> {_esc_model}", flush=True)
             await _run_stream(
-                model_id, force_single_shot=True, force_all=force_model
+                _esc_model, force_single_shot=True, force_all=_esc_model
             )
             _retry_acc = str(state["accumulated"])
             if _retry_acc.strip():
@@ -2813,8 +2820,13 @@ async def _process_prompt(
                 f"[PP] surgical_conflict_retry conflicts={len(edit_conflicts)}",
                 flush=True,
             )
+            # Escalate the conflict re-ask to the stronger edit_escalation model
+            # (same rationale): the cheap model already mis-copied the anchor once;
+            # a reasoning model lands it.
+            _esc_model = model_for_role("edit_escalation", override=force_model)
+            print(f"[PP] surgical_conflict_retry escalate -> {_esc_model}", flush=True)
             await _run_stream(
-                model_id, force_single_shot=True, force_all=force_model
+                _esc_model, force_single_shot=True, force_all=_esc_model
             )
             _cr_acc = str(state["accumulated"])
             if _cr_acc.strip():

@@ -398,6 +398,23 @@ def test_extract_edits_single_block() -> None:
     assert "bg-emerald-500" in replace
 
 
+def test_extract_edits_tolerates_non_seven_equals_separator() -> None:
+    """A cheap model emits 6 or 8 ``=`` instead of 7 — the <edit> must still parse.
+
+    Regression: the old ``={7}`` exact divider made ``======`` / ``========``
+    drop the WHOLE block (``pairs`` empty → silent skip), the dominant cause of
+    «писал Правка, а ничего не поменялось».
+    """
+    for sep in ("=====", "======", "========", "=========="):
+        answer = (
+            '<edit path="index.html">\n'
+            "<<<<<<< SEARCH\nfoo()\n" + sep + "\nfoo(1)\n>>>>>>> REPLACE\n"
+            "</edit>"
+        )
+        edits = extract_edits(answer)
+        assert edits.get("index.html") == [("foo()", "foo(1)")], f"sep len={len(sep)}"
+
+
 def test_extract_edits_multiple_sr_blocks_in_one_edit() -> None:
     answer = (
         '<edit path="page.tsx">\n'
