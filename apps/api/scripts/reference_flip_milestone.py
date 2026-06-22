@@ -229,11 +229,11 @@ async def run_reference_milestone(
     regressions: dict[str, int] = {}
     adversary_row: dict[str, Any] | None = None
     if adversary_html is not None and corpus_niches:
-        adv_vec, adv_rendered = await rc.vector_of_html(adversary_html)
+        adv_vec, adv_rendered, _ = await rc.vector_of_html(adversary_html)
         if adv_rendered:
             per_niche: dict[str, int] = {}
             for niche, ref_html in corpus.items():
-                ref_vec, ref_rendered = await rc.vector_of_html(ref_html)
+                ref_vec, ref_rendered, _ = await rc.vector_of_html(ref_html)
                 if not ref_rendered:
                     continue  # render miss → coverage gap (not a pass)
                 per_niche[niche] = len(rc.adversary_regressions(adv_vec, ref_vec))

@@ -69,6 +69,12 @@ MIN_REGRESSIONS = len(RICHNESS_AXES) - MIN_AXES + 1
 #: ``failed_classes`` (becomes ``reference:reference-below``).
 BELOW_CLASS = "reference-below"
 
+#: Combined richness score = taste richness (0..len(taste_gate.CHECKS)) + hierarchy
+#: richness (0..len(hierarchy_gate.CHECKS)). The CONTINUOUS ceiling signal the
+#: boolean axes throw away: a 4/5+2/3 generation vs a 5/5+3/3 reference is BELOW the
+#: ceiling even though both clear every boolean floor (V1.13d).
+MAX_RICHNESS_SCORE = len(taste_gate.CHECKS) + len(hierarchy_gate.CHECKS)
+
 #: Corpus location — package data shipped with the api/worker image (V1.13b).
 #: It lives next to this module under ``services/reference_corpus_data`` so the
 #: prod image ships it; ``tests/`` is ``.dockerignore``d and would be empty at
@@ -93,6 +99,16 @@ def richness_vector(
     merged.update(taste_checks or {})
     merged.update(hierarchy_checks or {})
     return {axis: bool(merged.get(axis, False)) for axis in RICHNESS_AXES}
+
+
+def richness_score(taste_rep: object | None, hier_rep: object | None) -> int:
+    """Combined richness score = taste.score + hierarchy.score over the rendered
+    gates. A gate that abstained (or is None) contributes 0 — an un-rendered gate
+    must never inflate the ceiling (R-10). Reads the SAME ``.score`` the gauntlet
+    table shows (R-04, no new metric)."""
+    t = int(getattr(taste_rep, "score", 0) or 0) if getattr(taste_rep, "rendered", False) else 0
+    h = int(getattr(hier_rep, "score", 0) or 0) if getattr(hier_rep, "rendered", False) else 0
+    return t + h
 
 
 def axes_met_or_beaten(
@@ -145,11 +161,38 @@ class CorpusComparison:
     met: tuple[str, ...]
     rendered: bool
     min_axes: int = MIN_AXES
+    #: Combined taste+hierarchy richness (0..MAX_RICHNESS_SCORE). 0 when not scored
+    #: (abstain / legacy boolean-only call) — never inflates the ceiling.
+    candidate_score: int = 0
+    reference_score: int = 0
+    #: V1.13d — when True the comparison also requires the CONTINUOUS score floor
+    #: (candidate within ``tolerance`` of the reference's own richness). Default
+    #: False ⇒ pure boolean floor, byte-identical to V1.13b.
+    enforce_score: bool = False
+    tolerance: int = 0
+
+    @property
+    def score_floor_held(self) -> bool:
+        """The continuous ceiling: candidate scores within ``tolerance`` of the
+        reference's own richness. Only meaningful on a rendered pair against a
+        reference that is itself rich (callers gate this behind a credible
+        reference render — an un-rich reference is no ceiling)."""
+        return self.candidate_score >= self.reference_score - self.tolerance
 
     @property
     def passed(self) -> bool:
-        """A comparison that could not render BOTH pages abstains (not pass)."""
-        return self.rendered and len(self.met) >= self.min_axes
+        """A comparison that could not render BOTH pages abstains (not pass).
+
+        The BOOLEAN floor (>= ``min_axes`` axes held) is always required. When
+        ``enforce_score`` (V1.13d, dark), the CONTINUOUS score floor is required
+        too — that is the real CEILING ratchet."""
+        if not self.rendered:
+            return False
+        if len(self.met) < self.min_axes:
+            return False
+        if self.enforce_score and not self.score_floor_held:
+            return False
+        return True
 
     def summary(self) -> str:
         if not self.rendered:
@@ -157,47 +200,53 @@ class CorpusComparison:
         verdict = "MEETS-OR-BEATS" if self.passed else "BELOW"
         misses = [a for a in RICHNESS_AXES if a not in self.met]
         tail = "" if not misses else f" — regressions: {', '.join(misses)}"
+        score_tail = (
+            f" [richness {self.candidate_score}/{self.reference_score} ceiling]"
+            if self.enforce_score
+            else ""
+        )
         return (
             f"reference[{self.niche}]: {verdict} "
             f"({len(self.met)}/{len(RICHNESS_AXES)} axes ≥ reference, "
-            f"floor {self.min_axes}){tail}"
+            f"floor {self.min_axes}){score_tail}{tail}"
         )
 
 
 async def vector_of_files(
     files: dict[str, str], *, width: int = taste_gate.GATE_WIDTH
-) -> tuple[RichnessVector, bool]:
+) -> tuple[RichnessVector, bool, int]:
     """Render a static ``{path: html}`` set once per gate and return its
-    five-axis richness vector + whether BOTH gates actually rendered.
+    five-axis richness vector, whether BOTH gates actually rendered, and the
+    combined richness SCORE (taste+hierarchy, V1.13d).
 
-    Fail-soft: a gate that abstains contributes no passing axes (R-10).
+    Fail-soft: a gate that abstains contributes no passing axes / no score (R-10).
     """
     taste_rep = await taste_gate.audit_files(files, width=width)
     hier_rep = await hierarchy_gate.audit_files(files, width=hierarchy_gate.GATE_WIDTH)
     rendered = taste_rep.rendered and hier_rep.rendered
     taste_checks = taste_rep.subscore()["checks"] if taste_rep.rendered else {}
     hier_checks = hier_rep.subscore()["checks"] if hier_rep.rendered else {}
-    return richness_vector(taste_checks, hier_checks), rendered
+    return richness_vector(taste_checks, hier_checks), rendered, richness_score(taste_rep, hier_rep)
 
 
 async def vector_of_html(
     html: str, *, width: int = taste_gate.GATE_WIDTH
-) -> tuple[RichnessVector, bool]:
-    """Convenience: richness vector of a single HTML document."""
+) -> tuple[RichnessVector, bool, int]:
+    """Convenience: richness vector + rendered + score of a single HTML document."""
     return await vector_of_files({"index.html": html}, width=width)
 
 
 async def vector_of_url(
     url: str, *, width: int = taste_gate.GATE_WIDTH
-) -> tuple[RichnessVector, bool]:
+) -> tuple[RichnessVector, bool, int]:
     """Render a live ``url`` once per gate and return its five-axis richness
-    vector + whether BOTH gates actually rendered (fail-soft, R-10)."""
+    vector, whether BOTH gates rendered, and the combined richness score (R-10)."""
     taste_rep = await taste_gate.audit_url(url, width=width)
     hier_rep = await hierarchy_gate.audit_url(url, width=hierarchy_gate.GATE_WIDTH)
     rendered = taste_rep.rendered and hier_rep.rendered
     taste_checks = taste_rep.subscore()["checks"] if taste_rep.rendered else {}
     hier_checks = hier_rep.subscore()["checks"] if hier_rep.rendered else {}
-    return richness_vector(taste_checks, hier_checks), rendered
+    return richness_vector(taste_checks, hier_checks), rendered, richness_score(taste_rep, hier_rep)
 
 
 def load_corpus(corpus_dir: Path = CORPUS_DIR) -> dict[str, str]:
@@ -217,24 +266,48 @@ async def _compare_vector_to_corpus(
     corpus_dir: Path,
     min_axes: int,
     width: int,
+    cand_score: int = 0,
+    enforce_score: bool = False,
+    tolerance: int = 0,
 ) -> list[CorpusComparison]:
     """Compare an already-rendered candidate vector against every corpus
     reference. Shared by :func:`compare_to_corpus` (single HTML) and the gauntlet
     adapter (:func:`audit_files` / :func:`audit_url`).
+
+    When ``enforce_score`` (V1.13d), a pair is only credible — and thus only able
+    to FAIL the candidate on the score floor — if the reference itself rendered
+    AND cleared its own boolean floor. A thin/flaky reference render is NOT a bar
+    to fail a candidate against: that pair is marked not-rendered → ABSTAIN (R-10).
     """
     corpus = load_corpus(corpus_dir)
     out: list[CorpusComparison] = []
     for niche, ref_html in corpus.items():
-        ref_vec, ref_rendered = await vector_of_html(ref_html, width=width)
+        ref_vec, ref_rendered, ref_score = await vector_of_html(ref_html, width=width)
         met = axes_met_or_beaten(cand_vec, ref_vec)
+        # A reference is a credible CEILING only if it itself clears the boolean
+        # floor; an un-rich corpus render (flaky / thin) is NOT a bar to fail a
+        # candidate against — treat that pair as not-rendered → ABSTAIN (R-10).
+        # Count the axes the reference actually HOLDS (its True axes); note
+        # ``axes_met_or_beaten(ref, ref)`` would wrongly count all five since
+        # ``False >= False`` holds, so we count held axes directly (mirrors
+        # ``test_each_reference_fixture_is_genuinely_rich``).
+        ref_held = sum(1 for a in RICHNESS_AXES if ref_vec.get(a, False))
+        ref_is_credible = ref_rendered and ref_held >= min_axes
+        rendered = cand_rendered and ref_rendered and (
+            ref_is_credible if enforce_score else True
+        )
         out.append(
             CorpusComparison(
                 niche=niche,
                 candidate=cand_vec,
                 reference=ref_vec,
                 met=met,
-                rendered=cand_rendered and ref_rendered,
+                rendered=rendered,
                 min_axes=min_axes,
+                candidate_score=cand_score,
+                reference_score=ref_score,
+                enforce_score=enforce_score,
+                tolerance=tolerance,
             )
         )
     return out
@@ -246,14 +319,17 @@ async def compare_to_corpus(
     corpus_dir: Path = CORPUS_DIR,
     min_axes: int = MIN_AXES,
     width: int = taste_gate.GATE_WIDTH,
+    enforce_score: bool = False,
+    tolerance: int = 0,
 ) -> list[CorpusComparison]:
     """Render ``candidate_html`` and every corpus reference, then report a
     meet-or-beat verdict per niche. The candidate is rendered ONCE and compared
     against each reference's own vector.
     """
-    cand_vec, cand_rendered = await vector_of_html(candidate_html, width=width)
+    cand_vec, cand_rendered, cand_score = await vector_of_html(candidate_html, width=width)
     return await _compare_vector_to_corpus(
-        cand_vec, cand_rendered, corpus_dir=corpus_dir, min_axes=min_axes, width=width
+        cand_vec, cand_rendered, corpus_dir=corpus_dir, min_axes=min_axes, width=width,
+        cand_score=cand_score, enforce_score=enforce_score, tolerance=tolerance,
     )
 
 
@@ -364,11 +440,14 @@ async def audit_files(
     width: int = taste_gate.GATE_WIDTH,
     corpus_dir: Path = CORPUS_DIR,
     min_axes: int = MIN_AXES,
+    enforce_score: bool = False,
+    tolerance: int = 0,
 ) -> ReferenceReport:
     """Render a static ``{path: html}`` candidate and grade it against the corpus."""
-    cand_vec, cand_rendered = await vector_of_files(files, width=width)
+    cand_vec, cand_rendered, cand_score = await vector_of_files(files, width=width)
     comps = await _compare_vector_to_corpus(
-        cand_vec, cand_rendered, corpus_dir=corpus_dir, min_axes=min_axes, width=width
+        cand_vec, cand_rendered, corpus_dir=corpus_dir, min_axes=min_axes, width=width,
+        cand_score=cand_score, enforce_score=enforce_score, tolerance=tolerance,
     )
     return ReferenceReport(tuple(comps))
 
@@ -379,10 +458,13 @@ async def audit_url(
     width: int = taste_gate.GATE_WIDTH,
     corpus_dir: Path = CORPUS_DIR,
     min_axes: int = MIN_AXES,
+    enforce_score: bool = False,
+    tolerance: int = 0,
 ) -> ReferenceReport:
     """Render a live ``url`` candidate and grade it against the corpus."""
-    cand_vec, cand_rendered = await vector_of_url(url, width=width)
+    cand_vec, cand_rendered, cand_score = await vector_of_url(url, width=width)
     comps = await _compare_vector_to_corpus(
-        cand_vec, cand_rendered, corpus_dir=corpus_dir, min_axes=min_axes, width=width
+        cand_vec, cand_rendered, corpus_dir=corpus_dir, min_axes=min_axes, width=width,
+        cand_score=cand_score, enforce_score=enforce_score, tolerance=tolerance,
     )
     return ReferenceReport(tuple(comps))

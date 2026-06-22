@@ -48,7 +48,7 @@ async def _run(adversary_html: str) -> int:
         print(f"no reference corpus found in {rc.CORPUS_DIR}", file=sys.stderr)
         return 2
 
-    adv_vec, adv_rendered = await rc.vector_of_html(adversary_html)
+    adv_vec, adv_rendered, _ = await rc.vector_of_html(adversary_html)
     if not adv_rendered:
         print(
             "ABSTAIN: no Chromium available (adversary did not render) — run "
@@ -66,7 +66,7 @@ async def _run(adversary_html: str) -> int:
     print(f"floor: adversary must regress on >= {rc.MIN_REGRESSIONS} axes per niche\n")
 
     for niche, ref_html in sorted(corpus.items()):
-        ref_vec, ref_rendered = await rc.vector_of_html(ref_html)
+        ref_vec, ref_rendered, _ = await rc.vector_of_html(ref_html)
         if not ref_rendered:
             print(f"  {niche}: ABSTAIN (reference did not render)")
             abstained = True

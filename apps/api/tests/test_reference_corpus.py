@@ -304,7 +304,7 @@ def test_audit_files_abstains_when_corpus_empty(monkeypatch):
     # End-to-end through audit_files with a stubbed-empty corpus: the candidate
     # renders fine but there is nothing to compare against → abstain, no class.
     async def _vec(files, **kw):
-        return ({a: True for a in RICHNESS_AXES}, True)
+        return ({a: True for a in RICHNESS_AXES}, True, rc.MAX_RICHNESS_SCORE)
 
     monkeypatch.setattr(rc, "vector_of_files", _vec)
     monkeypatch.setattr(rc, "load_corpus", lambda corpus_dir=rc.CORPUS_DIR: {})
@@ -319,10 +319,10 @@ def test_audit_files_below_corpus_carries_class(monkeypatch):
     full = {a: True for a in RICHNESS_AXES}
 
     async def _cand(files, **kw):
-        return (thin, True)
+        return (thin, True, 1)
 
     async def _ref(html, **kw):
-        return (full, True)
+        return (full, True, rc.MAX_RICHNESS_SCORE)
 
     monkeypatch.setattr(rc, "vector_of_files", _cand)
     monkeypatch.setattr(rc, "vector_of_html", _ref)
@@ -339,7 +339,8 @@ def test_audit_files_below_corpus_carries_class(monkeypatch):
 
 
 def _render_vec(html: str):
-    return asyncio.run(rc.vector_of_html(html))
+    vec, rendered, _score = asyncio.run(rc.vector_of_html(html))
+    return vec, rendered
 
 
 def test_each_reference_fixture_is_genuinely_rich():
@@ -409,3 +410,110 @@ def test_bootstrap_baseline_regresses_at_least_two_axes_per_niche():
     # The render path actually exercised the proof on every rendered niche — a
     # silent all-abstain must not read as green.
     assert proven >= 1, "no reference niche rendered — proof did not run"
+
+
+# ── V1.13d ceiling ratchet (continuous score floor) ───────────────────────
+
+
+class _FakeGateRep:
+    """Stand-in for a TasteReport/HierarchyReport with the .score/.rendered the
+    ceiling reads."""
+
+    def __init__(self, score: int, rendered: bool = True) -> None:
+        self.score = score
+        self.rendered = rendered
+
+
+def test_richness_score_sums_rendered_gate_scores():
+    assert rc.richness_score(_FakeGateRep(4), _FakeGateRep(2)) == 6
+    # An abstained (not rendered) gate contributes 0 — never inflates the ceiling.
+    assert rc.richness_score(_FakeGateRep(5, rendered=False), _FakeGateRep(3)) == 3
+    assert rc.richness_score(None, None) == 0
+
+
+def test_score_floor_held_within_tolerance():
+    full = {a: True for a in RICHNESS_AXES}
+    met = axes_met_or_beaten(full, full)
+    within = CorpusComparison(
+        niche="saas", candidate=full, reference=full, met=met, rendered=True,
+        candidate_score=6, reference_score=7, enforce_score=True, tolerance=1,
+    )
+    assert within.passed is True  # 6 >= 7 - 1
+    strict = CorpusComparison(
+        niche="saas", candidate=full, reference=full, met=met, rendered=True,
+        candidate_score=6, reference_score=7, enforce_score=True, tolerance=0,
+    )
+    assert strict.passed is False  # 6 < 7
+
+
+def test_score_floor_ignored_when_enforce_off():
+    """Back-compat guard: enforce_score=False ⇒ pure boolean floor (V1.13b)."""
+    full = {a: True for a in RICHNESS_AXES}
+    met = axes_met_or_beaten(full, full)
+    comp = CorpusComparison(
+        niche="saas", candidate=full, reference=full, met=met, rendered=True,
+        candidate_score=3, reference_score=8, enforce_score=False,
+    )
+    assert comp.passed is True  # low score ignored when not enforcing
+
+
+def test_boolean_floor_still_required_under_score_enforce():
+    """A high score never bypasses the boolean axis floor."""
+    full = {a: True for a in RICHNESS_AXES}
+    thin = {a: (a == RICHNESS_AXES[0]) for a in RICHNESS_AXES}
+    met = axes_met_or_beaten(thin, full)  # only 1 axis held
+    comp = CorpusComparison(
+        niche="saas", candidate=thin, reference=full, met=met, rendered=True,
+        candidate_score=8, reference_score=8, enforce_score=True, tolerance=0,
+    )
+    assert comp.passed is False  # 1/5 axes < MIN_AXES even at a perfect score
+
+
+def test_audit_files_ceiling_blocks_low_score_candidate(monkeypatch):
+    """A boolean-passing candidate that nonetheless under-scores the reference is
+    BELOW the ceiling when enforce_score is on — and PASSES when it is off."""
+    full = {a: True for a in RICHNESS_AXES}
+
+    async def _cand(files, **kw):
+        return (full, True, 5)
+
+    async def _ref(html, **kw):
+        return (full, True, 8)
+
+    monkeypatch.setattr(rc, "vector_of_files", _cand)
+    monkeypatch.setattr(rc, "vector_of_html", _ref)
+    monkeypatch.setattr(
+        rc, "load_corpus", lambda corpus_dir=rc.CORPUS_DIR: {"saas": "<html></html>"}
+    )
+    blocked = asyncio.run(
+        rc.audit_files({"index.html": "<html></html>"}, enforce_score=True, tolerance=1)
+    )
+    assert blocked.passed is False
+    assert blocked.classes == (BELOW_CLASS,)
+    # Same candidate, ceiling OFF (default) → passes (dark default is safe).
+    passes = asyncio.run(rc.audit_files({"index.html": "<html></html>"}))
+    assert passes.passed is True
+
+
+def test_ceiling_abstains_when_reference_not_credible(monkeypatch):
+    """A thin/flaky reference render is no credible ceiling — that pair ABSTAINS
+    under enforce_score instead of failing the candidate against noise (R-10)."""
+    full = {a: True for a in RICHNESS_AXES}
+    thin_ref = {a: (a == RICHNESS_AXES[0]) for a in RICHNESS_AXES}  # only 1 axis
+
+    async def _cand(files, **kw):
+        return (full, True, 8)
+
+    async def _ref(html, **kw):
+        return (thin_ref, True, 1)
+
+    monkeypatch.setattr(rc, "vector_of_files", _cand)
+    monkeypatch.setattr(rc, "vector_of_html", _ref)
+    monkeypatch.setattr(
+        rc, "load_corpus", lambda corpus_dir=rc.CORPUS_DIR: {"saas": "<html></html>"}
+    )
+    rep = asyncio.run(
+        rc.audit_files({"index.html": "<html></html>"}, enforce_score=True, tolerance=0)
+    )
+    assert rep.rendered is False  # the only pair abstained
+    assert rep.classes == ()
