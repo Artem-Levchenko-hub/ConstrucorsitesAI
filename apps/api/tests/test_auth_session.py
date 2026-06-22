@@ -52,26 +52,32 @@ class _FakeResponse:
         return self._payload
 
 
-class _FakeRequest:
-    def __init__(self, csrf_payload: dict, *, post_raises: bool = False) -> None:
-        self._csrf_payload = csrf_payload
-        self._post_raises = post_raises
-        self.posted: dict | None = None
+class _FakePage:
+    """Stands in for a Playwright Page. The login now runs through the renderer:
+    ``page.goto`` for the CSRF token and an in-page ``page.evaluate`` fetch for the
+    credentials callback (so the b2 host-resolver rule is honoured)."""
 
-    async def get(self, url: str, *, timeout: int) -> _FakeResponse:
+    def __init__(self, csrf_payload: dict, *, evaluate_raises: bool = False) -> None:
+        self._csrf_payload = csrf_payload
+        self._evaluate_raises = evaluate_raises
+        self.evaluated_args: list | None = None
+
+    async def goto(self, url: str, *, timeout: int) -> _FakeResponse:
         return _FakeResponse(self._csrf_payload)
 
-    async def post(self, url: str, *, form: dict, timeout: int) -> _FakeResponse:
-        if self._post_raises:
+    async def evaluate(self, script: str, args: list) -> None:
+        if self._evaluate_raises:
             raise RuntimeError("callback boom")
-        self.posted = form
-        return _FakeResponse({})
+        self.evaluated_args = args
 
 
 class _FakeContext:
-    def __init__(self, request: _FakeRequest, state: dict) -> None:
-        self.request = request
+    def __init__(self, page: _FakePage, state: dict) -> None:
+        self._page = page
         self._state = state
+
+    async def new_page(self) -> _FakePage:
+        return self._page
 
     async def storage_state(self) -> dict:
         return self._state
@@ -122,17 +128,17 @@ def _install_fake_playwright(
     *,
     csrf_payload: dict,
     storage_state: dict,
-    post_raises: bool = False,
-) -> _FakeRequest:
-    request = _FakeRequest(csrf_payload, post_raises=post_raises)
-    context = _FakeContext(request, storage_state)
+    evaluate_raises: bool = False,
+) -> _FakePage:
+    page = _FakePage(csrf_payload, evaluate_raises=evaluate_raises)
+    context = _FakeContext(page, storage_state)
     cm = _FakeAsyncPlaywrightCM(_FakePlaywright(_FakeChromium(_FakeBrowser(context))))
     # establish_session imports `from playwright.async_api import async_playwright`
     # inside the function, so patch the symbol on that module.
     import playwright.async_api as pw_async
 
     monkeypatch.setattr(pw_async, "async_playwright", lambda: cm)
-    return request
+    return page
 
 
 # ── establish_session ───────────────────────────────────────────────────────
@@ -145,7 +151,7 @@ async def test_establish_session_success_returns_state(
     storage_state dict, and the credentials callback was driven with the
     derived password + the seeded email."""
     state = {"cookies": [{"name": "authjs.session-token", "value": "jwe"}]}
-    request = _install_fake_playwright(
+    page = _install_fake_playwright(
         monkeypatch, csrf_payload={"csrfToken": "tok"}, storage_state=state
     )
 
@@ -154,11 +160,13 @@ async def test_establish_session_success_returns_state(
     )
 
     assert result == state
-    assert request.posted is not None
-    assert request.posted["csrfToken"] == "tok"
-    assert request.posted["email"] == "gate@omnia.local"
-    assert request.posted["password"] == derive_seed_password("secret")
-    assert request.posted["callbackUrl"] == "http://app:3000/dashboard"
+    # the in-page credentials fetch was driven with [csrf, email, password, cb]
+    assert page.evaluated_args is not None
+    csrf, email, password, cb = page.evaluated_args
+    assert csrf == "tok"
+    assert email == "gate@omnia.local"
+    assert password == derive_seed_password("secret")
+    assert cb == "http://app:3000/dashboard"
 
 
 async def test_establish_session_secure_prefix_cookie_returns_state(
@@ -189,12 +197,12 @@ async def test_establish_session_no_csrf_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A CSRF endpoint that yields no token → None (never posts the callback)."""
-    request = _install_fake_playwright(
+    page = _install_fake_playwright(
         monkeypatch, csrf_payload={}, storage_state={"cookies": []}
     )
     result = await establish_session("http://app:3000", "gate@omnia.local", "s")
     assert result is None
-    assert request.posted is None
+    assert page.evaluated_args is None  # callback fetch never ran
 
 
 async def test_establish_session_render_error_returns_none(
@@ -205,7 +213,7 @@ async def test_establish_session_render_error_returns_none(
         monkeypatch,
         csrf_payload={"csrfToken": "tok"},
         storage_state={"cookies": []},
-        post_raises=True,
+        evaluate_raises=True,
     )
     result = await establish_session("http://app:3000", "gate@omnia.local", "s")
     assert result is None

@@ -79,24 +79,36 @@ async def establish_session(
             try:
                 context = await browser.new_context()
                 try:
+                    page = await context.new_page()
+                    # The login MUST go through the renderer's network, NOT a
+                    # Playwright APIRequestContext: ``--host-resolver-rules`` (b2,
+                    # how the worker reaches the app's canonical https preview host)
+                    # is honoured by page navigations + in-page fetch, but NOT by
+                    # context.request. So we navigate for the CSRF token and POST the
+                    # credentials callback via an in-page fetch (same-origin → carries
+                    # the csrf cookie the navigation set).
                     # 1) CSRF token (NextAuth requires it on the callback)
-                    csrf_resp = await context.request.get(
+                    csrf_resp = await page.goto(
                         f"{base}/api/auth/csrf", timeout=timeout_ms
                     )
-                    csrf = (await csrf_resp.json()).get("csrfToken")
+                    csrf = (await csrf_resp.json()).get("csrfToken") if csrf_resp else None
                     if not csrf:
                         log.warning("auth_session: no csrfToken (abstain)")
                         return None
-                    # 2) credentials callback — sets the session cookie on success
-                    await context.request.post(
-                        f"{base}/api/auth/callback/credentials",
-                        form={
-                            "csrfToken": csrf,
-                            "email": email,
-                            "password": password,
-                            "callbackUrl": f"{base}/dashboard",
-                        },
-                        timeout=timeout_ms,
+                    # 2) credentials callback (in-page fetch) — sets the session cookie
+                    await page.evaluate(
+                        """async ([csrf, email, password, cb]) => {
+                            const body = new URLSearchParams({
+                                csrfToken: csrf, email, password, callbackUrl: cb,
+                            });
+                            await fetch('/api/auth/callback/credentials', {
+                                method: 'POST',
+                                headers: {'content-type': 'application/x-www-form-urlencoded'},
+                                body: body.toString(),
+                                redirect: 'follow',
+                            });
+                        }""",
+                        [csrf, email, password, f"{base}/dashboard"],
                     )
                     state = await context.storage_state()
                     # success iff a session cookie landed
