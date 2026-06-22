@@ -132,6 +132,20 @@ def test_loop_gateway_error_is_soft():
     assert "gateway" in res.summary
 
 
+def test_window_messages_caps_payload():
+    convo = [{"role": "system", "content": "s"}, {"role": "user", "content": "task"}]
+    for i in range(20):
+        convo.append({"role": "assistant", "content": f"a{i}"})
+        convo.append({"role": "user", "content": f"o{i}"})
+    w = ab._window_messages(convo, keep_last=8)
+    assert len(w) == 10  # 2 head + 8 last
+    assert w[0]["content"] == "s" and w[1]["content"] == "task"
+    assert w[-1]["content"] == "o19"
+    # small convo passes through untouched
+    small = convo[:5]
+    assert ab._window_messages(small, keep_last=8) == small
+
+
 def test_loop_breaks_on_repeated_action():
     # Model stuck re-issuing the same grep → circuit breaker stops it.
     replies = ['<omnia:action name="grep">{"pattern":"x","path":"src"}</omnia:action>']

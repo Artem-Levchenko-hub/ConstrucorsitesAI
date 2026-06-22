@@ -127,6 +127,19 @@ def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + f"\n…[truncated {len(s) - n} chars]"
 
 
+# Keep the per-call payload bounded: always the system prompt + the first user
+# turn (task + seeded project context) + the most recent `keep_last` turns. The
+# loop still holds the full transcript for its own logic; only the MODEL CALL is
+# windowed. This is what keeps a 30-step loop at roughly one-step cost.
+def _window_messages(
+    convo: list[dict[str, Any]], keep_last: int = 8
+) -> list[dict[str, Any]]:
+    head = 2  # system + first user (orientation + seeded layout)
+    if len(convo) <= head + keep_last:
+        return convo
+    return convo[:head] + convo[-keep_last:]
+
+
 def _format_observation(action: Action, obs: dict[str, Any]) -> str:
     """Render an executor result as the next user turn the model reads."""
     ok = obs.get("ok", True)
@@ -177,10 +190,18 @@ async def run_agent_build(
         # the work done so far — without this, one opus timeout aborts the build.
         reply = None
         last_exc: Exception | None = None
-        for attempt in range(3):
+        # COST: vsegpt bills by characters, so resending the full growing
+        # transcript every step makes a long loop cost balloon. Send only a
+        # sliding window (system + the seed/task + the last N turns) → per-step
+        # payload stays ~constant regardless of step count → "same cost".
+        call_msgs = _window_messages(convo)
+        # 429-resilience: vsegpt enforces ~1 req/sec globally; under concurrent
+        # prod traffic a step can 429 for several seconds. 5 attempts w/ growing
+        # backoff (4/8/12/16/20s) ride it out instead of aborting the build.
+        for attempt in range(5):
             try:
                 reply = await complete(
-                    convo,
+                    call_msgs,
                     model,
                     user_id=user_id,
                     project_id=project_id,
@@ -192,7 +213,7 @@ async def run_agent_build(
                 last_exc = exc
                 if emit:
                     await emit("agent.retry", {"step": step, "attempt": attempt})
-                await asyncio.sleep(2.0 * (attempt + 1))
+                await asyncio.sleep(4.0 * (attempt + 1))
         if reply is None:
             return AgentResult(
                 done=False,
@@ -318,7 +339,10 @@ Back-office CRM data → "admin".
 - SCREENS: write pages under `src/app/(app)/dashboard/`. For each entity, a page that renders \
 `<CrudResource entity="Name" />` (from `@/components/omnia`) gives a full list+create+edit screen \
 out of the box — read `src/components/omnia/crud-resource.tsx` ONCE to confirm its exact props, \
-then write ALL the pages quickly. Data SDK is `@/lib/sdk`, UI is `@/components/ui`, icons \
+then write ALL the pages quickly. Pass ONLY `entity` (and an optional title) to \
+<CrudResource> — it DERIVES the table columns + create/edit form from the entity schema, so \
+values render automatically. Do NOT hand-build a table or pass custom column configs (that is \
+what makes cells show "—"). Data SDK is `@/lib/sdk`, UI is `@/components/ui`, icons \
 `lucide-react`. Auth/login, the dashboard shell, global CSS and the kit already exist — don't recreate them.
 - ALWAYS write `src/app/(app)/dashboard/page.tsx` — the dashboard HOME (a short index with a \
 card/link to each section). Without it, `/dashboard` is a 404 right after login. This is mandatory.

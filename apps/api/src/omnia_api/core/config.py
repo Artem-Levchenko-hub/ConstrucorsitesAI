@@ -970,10 +970,15 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # Swap via ROLE_MODELS env (e.g. edit_escalation=claude-sonnet-4-6).
     "edit_escalation": "deepseek-v4-pro-thinking",
     # Agentic builder loop (Phase 0). The plan→act→observe→verify loop emits a
-    # strict <omnia:action> protocol over ~14 steps and writes real code — it
-    # needs the strongest available instruction-follower/coder. claude-opus-4-8
-    # via vsegpt (sonnet is proxyapi-gated = retired). Swap via ROLE_MODELS env.
-    "agent": "claude-opus-4-8",
+    # strict <omnia:action> protocol and writes real code over many steps.
+    # Owner constraint: SAME COST. vsegpt bills by characters, so a multi-step
+    # loop on claude-opus-4-8 (expensive char-rate + the 1-req/sec 429
+    # bottleneck) blew both cost and reliability. deepseek-v4-pro is the cheap,
+    # fast workhorse coder; with the strong orientation + seed-context + circuit
+    # breaker + windowed transcript it follows the protocol reliably at a
+    # fraction of the cost (Prompt-Engineering ch.9: cheapest model that does the
+    # job). Swap to claude-opus-4-8 via ROLE_MODELS env if max-quality is needed.
+    "agent": "deepseek-v4-pro",
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
     # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
     # reliable model that emits strict JSON. Owner directive 2026-06-16: route via
