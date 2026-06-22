@@ -260,6 +260,18 @@ services:
       ACCEPTANCE_VISION_BLOCK_ENABLED: ${ACCEPTANCE_VISION_BLOCK_ENABLED:-false}
       ACCEPTANCE_TASTE_REPAIR_ON_GENERIC: ${ACCEPTANCE_TASTE_REPAIR_ON_GENERIC:-false}
       ACCEPTANCE_TASTE_REPAIR_PASSES: ${ACCEPTANCE_TASTE_REPAIR_PASSES:-0}
+      # Area D (anti-sameness) — composition-gate retune + diversity metric +
+      # softened catalog fallback. Demote the deviation-punishing checks to advisory
+      # (still surface, never block/repair) so diverse layouts stop being funnelled
+      # into one silhouette; ORIGINALITY_SHADOW logs the cross-project dHash distance
+      # without blocking; GATE_REPAIR_PASSES budgets a freeform repair-with-feedback
+      # re-roll before the catalog fallback. All default = today's hard floor.
+      GATE_HIERARCHY_ADVISORY_CHECKS: ${GATE_HIERARCHY_ADVISORY_CHECKS:-}
+      GATE_TASTE_ADVISORY_CHECKS: ${GATE_TASTE_ADVISORY_CHECKS:-}
+      GATE_TASTE_MIN_SCORE: ${GATE_TASTE_MIN_SCORE:-4}
+      GATE_HIERARCHY_MIN_SCORE: ${GATE_HIERARCHY_MIN_SCORE:-2}
+      ORIGINALITY_SHADOW: ${ORIGINALITY_SHADOW:-false}
+      ACCEPTANCE_GATE_REPAIR_PASSES: ${ACCEPTANCE_GATE_REPAIR_PASSES:-0}
       # Reference ceiling ratchet (область R) — continuous richness-score floor vs
       # the curated enterprise corpus. DARK; needs ACCEPTANCE_GAUNTLET_REFERENCE_GATE on too.
       ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
@@ -371,6 +383,15 @@ services:
       ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
       REFERENCE_CEILING_ENFORCED: ${REFERENCE_CEILING_ENFORCED:-false}
       REFERENCE_CEILING_TOLERANCE: ${REFERENCE_CEILING_TOLERANCE:-1}
+      # Area D (anti-sameness) — composition-gate retune + diversity metric +
+      # softened catalog fallback. Also read on the worker gauntlet path (entity
+      # composition legs + the diversity metric). All default = today's hard floor.
+      GATE_HIERARCHY_ADVISORY_CHECKS: ${GATE_HIERARCHY_ADVISORY_CHECKS:-}
+      GATE_TASTE_ADVISORY_CHECKS: ${GATE_TASTE_ADVISORY_CHECKS:-}
+      GATE_TASTE_MIN_SCORE: ${GATE_TASTE_MIN_SCORE:-4}
+      GATE_HIERARCHY_MIN_SCORE: ${GATE_HIERARCHY_MIN_SCORE:-2}
+      ORIGINALITY_SHADOW: ${ORIGINALITY_SHADOW:-false}
+      ACCEPTANCE_GATE_REPAIR_PASSES: ${ACCEPTANCE_GATE_REPAIR_PASSES:-0}
     restart: unless-stopped
     networks:
       - omnia-prod
