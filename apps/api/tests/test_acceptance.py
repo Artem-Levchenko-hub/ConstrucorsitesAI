@@ -257,3 +257,147 @@ async def test_evaluate_disables_fidelity_for_empty_spec(monkeypatch):
         },
     )
     assert captured["fidelity"] is False
+
+
+# ── Area R + T: reference-ceiling forwarding + vision taste barrier (DARK) ──
+
+
+def _settings_with(monkeypatch, **overrides):
+    """Real Settings with field overrides, patched onto acceptance.get_settings.
+
+    model_copy keeps every other field at its true default, so evaluate() reads a
+    complete, valid settings object and only the dials under test change."""
+    fake = acceptance.get_settings().model_copy(update=overrides)
+    monkeypatch.setattr(acceptance, "get_settings", lambda: fake)
+    return fake
+
+
+def _clean_gauntlet(monkeypatch, captured=None):
+    from omnia_api.services import accept_gauntlet
+    from omnia_api.services.accept_gauntlet import GauntletVerdict
+
+    async def _run(**kwargs):
+        if captured is not None:
+            captured.update(kwargs)
+        return GauntletVerdict((), render_expected=False)
+
+    monkeypatch.setattr(accept_gauntlet, "run", _run)
+
+
+def _stub_vision(monkeypatch, *, verdict, score, skipped=False, issues=("делай контрастнее",)):
+    vv = acceptance.vision_audit.VisionVerdict(
+        verdict=verdict, score=score, issues=issues, skipped=skipped
+    )
+
+    async def _audit(*a, **k):
+        return vv
+
+    monkeypatch.setattr(acceptance.vision_audit, "audit_screenshots", _audit)
+
+
+# --- Area R: reference ceiling dials forwarded to the gauntlet -------------
+
+
+async def test_evaluate_forwards_reference_ceiling_dials(monkeypatch):
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    _settings_with(
+        monkeypatch,
+        acceptance_gauntlet_reference_gate=True,
+        reference_ceiling_enforced=True,
+        reference_ceiling_tolerance=0,
+    )
+    captured: dict[str, object] = {}
+    _clean_gauntlet(monkeypatch, captured)
+    await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=False, run_originality=False
+    )
+    assert captured["reference"] is True
+    assert captured["reference_enforce_score"] is True
+    assert captured["reference_tolerance"] == 0
+
+
+async def test_evaluate_reference_dials_default_off(monkeypatch):
+    """Dark default: enforce_score=False is forwarded when the flag is unset."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    captured: dict[str, object] = {}
+    _clean_gauntlet(monkeypatch, captured)
+    await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=False, run_originality=False
+    )
+    assert captured["reference_enforce_score"] is False
+    assert captured["reference_tolerance"] == 1  # config default
+
+
+# --- Area T: vision taste barrier ------------------------------------------
+
+
+async def test_vision_block_off_by_default_does_not_gate(monkeypatch):
+    """Default OFF → a generic vision verdict stays ADVISORY (ships)."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    _clean_gauntlet(monkeypatch)
+    _stub_vision(monkeypatch, verdict="generic", score=5)
+    res = await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=True, run_originality=False
+    )
+    assert res.passed is True
+
+
+async def test_vision_block_on_fails_generic(monkeypatch):
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    _settings_with(monkeypatch, acceptance_vision_block_enabled=True)
+    _clean_gauntlet(monkeypatch)
+    _stub_vision(monkeypatch, verdict="generic", score=5)
+    res = await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=True, run_originality=False
+    )
+    assert res.passed is False
+    assert res.verdict == "generic"
+
+
+async def test_vision_block_on_passes_beautiful(monkeypatch):
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    _settings_with(monkeypatch, acceptance_vision_block_enabled=True)
+    _clean_gauntlet(monkeypatch)
+    _stub_vision(monkeypatch, verdict="beautiful", score=9)
+    res = await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=True, run_originality=False
+    )
+    assert res.passed is True
+
+
+async def test_vision_block_on_low_score_fails(monkeypatch):
+    """beautiful but below min_score still fails the barrier when on."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    _settings_with(monkeypatch, acceptance_vision_block_enabled=True, acceptance_min_score=7)
+    _clean_gauntlet(monkeypatch)
+    _stub_vision(monkeypatch, verdict="beautiful", score=4)
+    res = await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=True, run_originality=False
+    )
+    assert res.passed is False
+
+
+async def test_vision_block_failsoft_on_skip(monkeypatch):
+    """ABSTAIN/skip (vision_ran False) NEVER blocks, even with the barrier on."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    _settings_with(monkeypatch, acceptance_vision_block_enabled=True)
+    _clean_gauntlet(monkeypatch)
+    _stub_vision(monkeypatch, verdict="generic", score=5, skipped=True)
+    res = await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=True, run_originality=False
+    )
+    assert res.passed is True

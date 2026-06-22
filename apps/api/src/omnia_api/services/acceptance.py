@@ -155,6 +155,7 @@ async def evaluate(
         min_score = settings.acceptance_min_score
     if run_originality is None:
         run_originality = settings.use_originality
+    vision_blocks = settings.acceptance_vision_block_enabled
 
     html_pool = _html_pool(files)
     if not html_pool or "index.html" not in files:
@@ -215,9 +216,17 @@ async def evaluate(
         )
         vision_ran = not verdict.skipped
     # Vision is ADVISORY since V1.6 (the gauntlet is the ship decision): its
-    # verdict no longer gates `passed`, it only feeds feedback. `min_score` is
-    # kept on the signature for callers/back-compat.
-    _ = min_score
+    # verdict no longer gates `passed`, it only feeds feedback. The taste barrier
+    # (область T, default OFF) RE-ARMS it as a flagged gate: when
+    # `acceptance_vision_block_enabled` is on AND vision actually ran (skip/ABSTAIN
+    # scored 10 never blocks — R-10), a page that is broken/generic or scores below
+    # `min_score` fails `vision_ok`. Default OFF → `vision_ok` is always True →
+    # byte-identical to the advisory behaviour.
+    vision_ok = True
+    if vision_blocks and vision_ran:
+        vision_ok = (
+            verdict.verdict == "beautiful" and int(verdict.score) >= int(min_score)
+        )
 
     # ── 5. originality (optional, fail-soft) — Sprint 4 anti-generic ──────
     orig_fp: int | None = None
@@ -279,6 +288,12 @@ async def evaluate(
             # corpus-run); it ABSTAINS on an empty corpus / render miss, so even
             # when enabled it never sinks ship on missing evidence (R-10).
             reference=settings.acceptance_gauntlet_reference_gate,
+            # V1.13d — CEILING RATCHET strength. OFF (default) keeps the boolean
+            # axis floor; ON enforces the continuous richness-score floor (a real
+            # ceiling, not just the shared composition floor). Both fail-soft, and
+            # inert when reference= is False (the leg never runs).
+            reference_enforce_score=settings.reference_ceiling_enforced,
+            reference_tolerance=settings.reference_ceiling_tolerance,
             # V1.17 — the catalog-realism ratchet. ADVISORY (a non-blocking
             # quality-card): it surfaces a 0–5 realism score over the rendered
             # catalog DOM but never blocks ship, and ABSTAINS/WAIVES safely. OFF by
@@ -295,7 +310,10 @@ async def evaluate(
     except Exception as exc:  # defensive — gauntlet must never hard-fail the gate
         log.warning("acceptance: gauntlet failed (ignored): %r", exc)
 
-    passed = structural_ok and responsive_ok and originality_ok and gauntlet_ok
+    passed = (
+        structural_ok and responsive_ok and originality_ok and gauntlet_ok
+        and vision_ok
+    )
 
     feedback = "" if passed else _build_feedback(
         structural,

@@ -941,3 +941,40 @@ def test_subscore_is_machine_readable():
     assert sub["failed_classes"] == ["defect-registry:dead-auth-link"]
     assert sub["hard_failed"] == ["defect-registry"]
     assert "PASS" not in v.table()  # a failing run renders FAIL
+
+
+async def test_reference_ceiling_dials_forwarded_to_corpus(monkeypatch):
+    """Area R (V1.13d): run() threads reference_enforce_score/tolerance into the
+    reference_corpus leg; non-reference gates ignore them."""
+    captured: dict[str, object] = {}
+
+    async def _capture(files, **kw):
+        captured.update(kw)
+        return _ref()
+
+    monkeypatch.setattr(accept_gauntlet.reference_corpus, "audit_files", _capture)
+    await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        reference=True,
+        reference_enforce_score=True,
+        reference_tolerance=0,
+    )
+    assert captured.get("enforce_score") is True
+    assert captured.get("tolerance") == 0
+
+
+async def test_reference_dials_default_off_in_run(monkeypatch):
+    """Back-compat: a default reference run forwards enforce_score=False."""
+    captured: dict[str, object] = {}
+
+    async def _capture(files, **kw):
+        captured.update(kw)
+        return _ref()
+
+    monkeypatch.setattr(accept_gauntlet.reference_corpus, "audit_files", _capture)
+    await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML}, include_rendered=False, reference=True
+    )
+    assert captured.get("enforce_score") is False
+    assert captured.get("tolerance") == 0

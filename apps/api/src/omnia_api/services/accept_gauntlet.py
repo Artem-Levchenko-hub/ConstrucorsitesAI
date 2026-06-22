@@ -398,6 +398,8 @@ async def _audit_one(
     spec: FidelitySpec,
     width: int,
     composition_width: int,
+    reference_enforce_score: bool = False,
+    reference_tolerance: int = 0,
 ) -> Any:
     """Render one rendered gate against the live target (url first, else files).
 
@@ -419,7 +421,10 @@ async def _audit_one(
         if gate == DATA:
             return await data_gate.audit_url(url, width=width)
         if gate == REFERENCE:
-            return await reference_corpus.audit_url(url, width=composition_width)
+            return await reference_corpus.audit_url(
+                url, width=composition_width,
+                enforce_score=reference_enforce_score, tolerance=reference_tolerance,
+            )
         if gate == CATALOG:
             return await catalog_coherence_gate.audit_url(url, width=composition_width)
     else:
@@ -437,7 +442,10 @@ async def _audit_one(
         if gate == DATA:
             return await data_gate.audit_files(files, width=width)
         if gate == REFERENCE:
-            return await reference_corpus.audit_files(files, width=composition_width)
+            return await reference_corpus.audit_files(
+                files, width=composition_width,
+                enforce_score=reference_enforce_score, tolerance=reference_tolerance,
+            )
         if gate == CATALOG:
             return await catalog_coherence_gate.audit_files(files, width=composition_width)
     raise AssertionError(f"unknown rendered gate: {gate}")  # pragma: no cover
@@ -455,6 +463,8 @@ async def run(
     composition: bool = False,
     fidelity: bool = False,
     reference: bool = False,
+    reference_enforce_score: bool = False,
+    reference_tolerance: int = 0,
     catalog: bool = False,
     viral: bool = False,
     viral_context: viral_registry.ViralContext | None = None,
@@ -651,6 +661,8 @@ async def run(
                     spec=spec,
                     width=width,
                     composition_width=composition_width,
+                    reference_enforce_score=reference_enforce_score,
+                    reference_tolerance=reference_tolerance,
                 )
                 gates.append(_from_rendered(gate, rep))
 
