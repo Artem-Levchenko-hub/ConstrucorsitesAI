@@ -53,6 +53,12 @@ class AcceptanceResult:
     feedback: str = ""
     # dHash of the accepted page (Sprint 4) — caller stores it in the pool.
     fingerprint: int | None = None
+    # True iff the page failed ONLY on the vision taste-barrier (область T): every
+    # other layer passed and vision_ok flipped it. Default False (vision advisory).
+    # Lets the caller distinguish a generic-but-structurally-fine page from a real
+    # failure (e.g. don't drop a rich freeform to the uglier catalog fallback on a
+    # vision-only block unless a taste re-roll is configured).
+    vision_blocked: bool = False
 
 
 def _html_pool(files: dict[str, str]) -> dict[str, str]:
@@ -314,6 +320,13 @@ async def evaluate(
         structural_ok and responsive_ok and originality_ok and gauntlet_ok
         and vision_ok
     )
+    # Vision-only block (область T): every objective layer passed and ONLY the
+    # taste-barrier flipped the verdict. The caller uses this to avoid dropping a
+    # structurally-fine rich freeform to the catalog fallback on a vision-only fail.
+    vision_blocked = (
+        not vision_ok
+        and structural_ok and responsive_ok and originality_ok and gauntlet_ok
+    )
 
     feedback = "" if passed else _build_feedback(
         structural,
@@ -353,6 +366,7 @@ async def evaluate(
         issues=issues,
         feedback=feedback,
         fingerprint=orig_fp,
+        vision_blocked=vision_blocked,
     )
 
 

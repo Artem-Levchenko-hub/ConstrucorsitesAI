@@ -401,3 +401,33 @@ async def test_vision_block_failsoft_on_skip(monkeypatch):
         {"index.html": _GOOD}, project_id="p", run_vision=True, run_originality=False
     )
     assert res.passed is True
+
+
+async def test_vision_block_sets_vision_blocked_flag(monkeypatch):
+    """Area T review HIGH-2: a vision-only fail (struct/resp/gauntlet OK) sets
+    vision_blocked so the caller can skip the catalog fallback."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    _settings_with(monkeypatch, acceptance_vision_block_enabled=True)
+    _clean_gauntlet(monkeypatch)
+    _stub_vision(monkeypatch, verdict="generic", score=5)
+    res = await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=True, run_originality=False
+    )
+    assert res.passed is False
+    assert res.vision_blocked is True
+
+
+async def test_vision_blocked_false_by_default(monkeypatch):
+    """Default (flag off) → vision_blocked stays False even on a generic verdict."""
+    from omnia_api.workers import preview
+
+    monkeypatch.setattr(preview, "capture", _capture_stub())
+    _clean_gauntlet(monkeypatch)
+    _stub_vision(monkeypatch, verdict="generic", score=5)
+    res = await acceptance.evaluate(
+        {"index.html": _GOOD}, project_id="p", run_vision=True, run_originality=False
+    )
+    assert res.passed is True
+    assert res.vision_blocked is False

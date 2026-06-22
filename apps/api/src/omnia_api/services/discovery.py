@@ -335,6 +335,13 @@ def infer_result_type_from_text(text: str) -> str | None:
         return "web_app"
     if _has_conversion_intent(low):
         return "landing"
+    # A bare data/CRUD backend signal (трекер / orders / inventory / товаров) with no
+    # account or conversion cue still needs a real backend. Preserve the legacy
+    # escalation as a deterministic web_app FLOOR so a confident LLM cannot downgrade
+    # it to a no-backend spa (the dead-buttons regression the backend net prevents).
+    # Placed LAST so the conversion→landing (BS-7) split still wins.
+    if _infer_stack_from_text(low) == "nextjs_entities":
+        return "web_app"
     return None
 
 

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from omnia_api.routers import messages
-from omnia_api.services.discovery import ASK
+from omnia_api.services.discovery import PlannedQuestion
 
 
 def _settings(*, router: bool, clarify: bool) -> SimpleNamespace:
@@ -77,6 +77,8 @@ async def test_clarify_question_fires_on_genuine_ambiguity(
     monkeypatch.setattr(messages, "classify_result_type", _unsure)
     res = await messages._maybe_result_type_question("сделай сайт", "ru")
     assert res is not None
-    assert res.action == ASK
+    # RT-1: returns a PlannedQuestion to PREPEND as plan[0] (not a standalone ASK),
+    # so the design interview flows right after the type answer — no blind build.
+    assert isinstance(res, PlannedQuestion)
     assert "Приложение с аккаунтами" in res.choices
     assert res.allow_custom is True

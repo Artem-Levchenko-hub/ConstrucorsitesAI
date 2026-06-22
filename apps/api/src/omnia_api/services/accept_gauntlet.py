@@ -471,6 +471,11 @@ async def _audit_one(
             )
         if gate == CATALOG:
             return await catalog_coherence_gate.audit_files(files, width=composition_width)
+        if gate == CABINET:
+            # The cabinet states gate is URL-only (it needs a live authenticated
+            # /dashboard). A static files-only run has no cabinet → ABSTAIN rather
+            # than crash, in case a future caller fans cabinet= without a url.
+            return cabinet_gate.evaluate_observation({}, rendered=False)
     raise AssertionError(f"unknown rendered gate: {gate}")  # pragma: no cover
 
 

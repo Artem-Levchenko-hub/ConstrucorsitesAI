@@ -61,11 +61,11 @@ from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.contrast_guard import enforce_contrast
 from omnia_api.services.director_polish import director_polish_generate
 from omnia_api.services.discovery import (
-    ASK as DISCOVERY_ASK,
     BUILD as DISCOVERY_BUILD,
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
+    PlannedQuestion,
     _explicit_static,
     _has_account_intent,
     _has_conversion_intent,
@@ -559,10 +559,12 @@ _RESULT_TYPE_CHOICES = (
 
 async def _maybe_result_type_question(
     prompt: str, language: str
-) -> DiscoveryResult | None:
+) -> PlannedQuestion | None:
     """One clarifying question about the RESULT TYPE when genuinely ambiguous
-    (RT-1 bug 3). Returns an ASK DiscoveryResult, or None when the type is clear.
-    Gated by result_type_clarify_question; off → always None (today)."""
+    (RT-1 bug 3). Returns a PlannedQuestion to PREPEND to the design plan (so the
+    existing serve/index machinery runs the design interview right after the type
+    answer — no separate-turn off-by-one, no blind build), or None when the type
+    is clear. Gated by result_type_clarify_question; off → always None (today)."""
     s = get_settings()
     if not (s.use_result_type_router and s.result_type_clarify_question):
         return None
@@ -571,16 +573,11 @@ async def _maybe_result_type_question(
     rt, conf = await classify_result_type(prompt, language=language)
     if rt is not None and conf >= 0.6:
         return None  # classifier is sure
-    return DiscoveryResult(
-        action=DISCOVERY_ASK,
+    return PlannedQuestion(
         message=_RESULT_TYPE_QUESTION,
-        brief="",
-        stack="spa",
         choices=_RESULT_TYPE_CHOICES,
         allow_custom=True,
         multi_select=False,
-        question_index=1,
-        question_total=0,
     )
 
 
@@ -629,13 +626,14 @@ async def _batch_discovery_turn(
         zero = zero_question_build(history, prompt)
         if zero is not None:
             return zero
-        # RT-1 (bug 3): when the RESULT TYPE is genuinely ambiguous, ask ONE type
-        # question first. The design plan is built on the NEXT turn once the type is
-        # known (discovery_plan stays unset → planning re-runs). Gated/off by default.
-        _rtq = await _maybe_result_type_question(prompt, language)
-        if _rtq is not None:
-            return _rtq
         questions = await plan_discovery_questions(prompt, language=language)
+        # RT-1 (bug 3): when the RESULT TYPE is genuinely ambiguous, PREPEND a single
+        # type-clarify question as plan[0] so the existing serve/index machinery asks
+        # the type first and flows straight into the design interview (no separate
+        # turn, no off-by-one blind build). Gated/off by default → plan is unchanged.
+        _type_q = await _maybe_result_type_question(prompt, language)
+        if _type_q is not None:
+            questions = [_type_q, *questions]
         project.discovery_plan = [q.to_dict() for q in questions]
     # LIVE niche (pillar 2 causality): re-infer on the CUMULATIVE answers (idea +
     # every reply), not just the first prompt, so the badge sharpens turn-by-turn
@@ -1035,7 +1033,12 @@ async def post_prompt(
                     _rt == "web_app"
                     and not settings.result_type_firstbuild_appify
                     and not _has_account_intent(payload.prompt)
+                    and _infer_stack_from_text(payload.prompt) != "nextjs_entities"
                 ):
+                    # web_app from FRAMING alone (no real backend signal) demotes when
+                    # the appify slice is off. But a genuine data/CRUD backend prompt
+                    # (legacy net → nextjs_entities) keeps web_app regardless — never
+                    # downgrade a real backend app to a no-backend spa.
                     _rt = "landing" if _has_conversion_intent(payload.prompt) else "site"
                 # landing→entities suppression (BS-7) ships only with the lead-sink slice.
                 if (
@@ -4029,9 +4032,22 @@ async def _process_prompt(
 
                 # Freeform exhausted its retries and still fails → regenerate
                 # once via the catalog/IR path (guaranteed valid page).
+                # Taste-barrier guard (область T, review HIGH-2): a vision-ONLY
+                # block (struct/resp/gauntlet all OK, only the taste verdict flipped
+                # passed) must NOT drop the rich freeform to the uglier catalog
+                # fallback unless a taste re-roll is configured — otherwise enabling
+                # acceptance_vision_block_enabled alone would catalog-bomb a large
+                # share of structurally-fine freeform builds. With taste-repair on,
+                # the re-roll already ran (Loop A); catalog stays the last resort.
+                _vision_only_block = (
+                    _verdict is not None
+                    and getattr(_verdict, "vision_blocked", False)
+                    and not _acc_settings.acceptance_taste_repair_on_generic
+                )
                 if (
                     _verdict is not None
                     and not _verdict.passed
+                    and not _vision_only_block
                     and _gen_mode == "freeform"
                     and _acc_settings.use_section_catalog
                     and not _acc_settings.acceptance_score_only

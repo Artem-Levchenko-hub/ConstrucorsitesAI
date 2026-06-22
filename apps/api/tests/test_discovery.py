@@ -1272,3 +1272,13 @@ def test_resolve_result_type_trusts_confident_llm_on_vague() -> None:
 
 def test_resolve_result_type_none_on_low_confidence() -> None:
     assert resolve_result_type("сделай сайт", "web_app", 0.3) is None
+
+
+def test_infer_result_type_backend_noun_floors_to_web_app() -> None:
+    """RT-1 review HIGH-1: a bare data/CRUD backend noun (no account/conversion
+    cue) still resolves to web_app via the legacy-net floor, so a confident LLM
+    cannot downgrade it to a no-backend spa (dead-buttons regression)."""
+    for prompt in ("трекер задач", "tracker for habits", "inventory management"):
+        assert infer_result_type_from_text(prompt) == "web_app", prompt
+    # and the keyword floor wins even when the LLM says 'tool'
+    assert resolve_result_type("трекер задач", "tool", 0.95) == "web_app"
