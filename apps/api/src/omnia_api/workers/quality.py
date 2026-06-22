@@ -92,8 +92,12 @@ async def _gate_async(message_id: str, project_id: str, slug: str) -> None:
             seed = status.get("gate_seed") or {}
             dev_url = status.get("dev_url")
             if seed.get("email") and seed.get("auth_secret") and dev_url:
+                # Generous timeout: the first hit to /api/auth/* triggers a Next
+                # dev-server route compile (can exceed the 15s default on a freshly
+                # built app), so a cold gate run still authenticates instead of
+                # abstaining to the anonymous path.
                 storage_state = await auth_session.establish_session(
-                    dev_url, seed["email"], seed["auth_secret"]
+                    dev_url, seed["email"], seed["auth_secret"], timeout_ms=45_000
                 )
                 if storage_state is not None:
                     public_base = dev_url
