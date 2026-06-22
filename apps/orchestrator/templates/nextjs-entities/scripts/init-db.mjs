@@ -82,6 +82,14 @@ CREATE OR REPLACE FUNCTION safe_to_timestamptz(t text) RETURNS timestamptz
     RETURN NULL;
   END;
   $fn$;
+
+-- Anonymous-submission sentinel. submit-access entities (public order/booking/
+-- lead intake) attribute an anonymous create to this fixed row so records.created_by
+-- (NOT NULL) holds; it has no password so it can never sign in. Keep this id in sync
+-- with ANON_USER_ID in src/lib/entities/engine.ts.
+INSERT INTO users (id, email, name, role)
+VALUES ('00000000-0000-0000-0000-0000000000a1', 'anon@local', 'Аноним', 'user')
+ON CONFLICT (id) DO NOTHING;
 `;
 
 const url = process.env.DATABASE_URL;

@@ -71,8 +71,15 @@ export interface FieldDef {
   private?: boolean;
 }
 
-/** Who may read/write rows of this entity. */
-export type AccessPolicy = "owner" | "public" | "admin";
+/** Who may read/write rows of this entity.
+ *  - `owner`  — each user reads/writes only their own rows (default).
+ *  - `public` — anyone reads; a signed-in user writes their own.
+ *  - `admin`  — role `admin` only.
+ *  - `submit` — public intake (orders/bookings/leads): ANYONE incl. anonymous may
+ *    CREATE a row (rate-limited at the route); only `admin` may read/update/delete.
+ *    So a storefront/booking form takes submissions with NO account, and the
+ *    operator processes them in the dashboard. */
+export type AccessPolicy = "owner" | "public" | "admin" | "submit";
 
 export interface EntityDef {
   name: string;
@@ -144,7 +151,9 @@ export async function listEntities(): Promise<string[]> {
 /** Coerce a loose JSON object into a valid EntityDef (defensive defaults). */
 function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
   const access: AccessPolicy =
-    raw.access === "public" || raw.access === "admin" ? raw.access : "owner";
+    raw.access === "public" || raw.access === "admin" || raw.access === "submit"
+      ? raw.access
+      : "owner";
   const fields: Record<string, FieldDef> = {};
   for (const [key, f] of Object.entries(raw.fields ?? {})) {
     if (!NAME_RE.test(key)) continue;

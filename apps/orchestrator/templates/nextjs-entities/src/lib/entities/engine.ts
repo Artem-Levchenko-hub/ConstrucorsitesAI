@@ -60,6 +60,13 @@ const DEFAULT_LIMIT = 50;
  *             still scoped to the author (you can only edit your own rows).
  *  - admin  : role "admin" required for everything; not owner-scoped.
  */
+/** Per-app anonymous submitter. `submit`-access entities (public order/booking/
+ *  lead intake) accept anonymous creates; an anon row's createdBy is attributed to
+ *  this fixed sentinel so the NOT-NULL FK holds. Seeded in scripts/init-db.mjs; it
+ *  can never sign in (no password row). */
+const ANON_USER_ID = "00000000-0000-0000-0000-0000000000a1";
+const ANON_SENTINEL: CurrentUser = { id: ANON_USER_ID, email: "anon@local", role: "user" };
+
 function authorize(
   def: EntityDef,
   user: CurrentUser | null,
@@ -78,6 +85,14 @@ function authorize(
   }
 
   if (def.access === "admin") {
+    if (!user) throw new EngineError(401, "authentication required");
+    if (user.role !== "admin") throw new EngineError(403, "admin only");
+    return { scopeOwner: false };
+  }
+  if (def.access === "submit") {
+    // Public intake: anonymous CREATE is allowed by createRecord BEFORE it reaches
+    // authorize (a submit create never calls authorize), so reaching here means a
+    // READ / UPDATE / DELETE — admin only. Submissions are not owner-scoped.
     if (!user) throw new EngineError(401, "authentication required");
     if (user.role !== "admin") throw new EngineError(403, "admin only");
     return { scopeOwner: false };
@@ -327,9 +342,17 @@ export async function createRecord(opts: {
   body: unknown;
 }) {
   const { def, user } = opts;
-  authorize(def, user, "write");
-  // user is guaranteed non-null after a successful write authorize.
-  const owner = user as CurrentUser;
+  let owner: CurrentUser;
+  if (def.access === "submit") {
+    // Public intake (order/booking/lead): anyone, INCL. anonymous, may submit.
+    // An anon row is attributed to the sentinel so created_by (NOT NULL) holds; a
+    // signed-in submitter keeps their own id. Reads/edits stay admin-only (above).
+    owner = user ?? ANON_SENTINEL;
+  } else {
+    authorize(def, user, "write");
+    // user is guaranteed non-null after a successful write authorize.
+    owner = user as CurrentUser;
+  }
 
   const parsed = createSchema(def).safeParse(opts.body);
   if (!parsed.success) {
