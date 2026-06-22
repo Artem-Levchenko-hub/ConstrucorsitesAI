@@ -262,6 +262,7 @@ services:
       ACCEPTANCE_TASTE_REPAIR_PASSES: ${ACCEPTANCE_TASTE_REPAIR_PASSES:-0}
       # Reference ceiling ratchet (область R) — continuous richness-score floor vs
       # the curated enterprise corpus. DARK; needs ACCEPTANCE_GAUNTLET_REFERENCE_GATE on too.
+      ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
       REFERENCE_CEILING_ENFORCED: ${REFERENCE_CEILING_ENFORCED:-false}
       REFERENCE_CEILING_TOLERANCE: ${REFERENCE_CEILING_TOLERANCE:-1}
     ports:
@@ -363,6 +364,7 @@ services:
       GATE_SEED_EMAIL: ${GATE_SEED_EMAIL:-gate@omnia.local}
       GATE_CABINET_STATES_ADVISORY: ${GATE_CABINET_STATES_ADVISORY:-true}
       # Reference ceiling ratchet (R) — also read on the worker gauntlet path.
+      ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
       REFERENCE_CEILING_ENFORCED: ${REFERENCE_CEILING_ENFORCED:-false}
       REFERENCE_CEILING_TOLERANCE: ${REFERENCE_CEILING_TOLERANCE:-1}
     restart: unless-stopped
