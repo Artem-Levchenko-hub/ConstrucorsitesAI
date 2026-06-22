@@ -248,6 +248,22 @@ services:
       USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
       ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}
       FREEFORM_TRAFFIC_PCT: ${FREEFORM_TRAFFIC_PCT:-100}
+      # RT-1 result-type router (landing|web_app|tool|site|code) on the FIRST
+      # prompt — all DARK, default OFF = legacy keyword nets only. Flip the
+      # lead-sink slice FIRST (booking landings stop escalating to /signin).
+      USE_RESULT_TYPE_ROUTER: ${USE_RESULT_TYPE_ROUTER:-false}
+      RESULT_TYPE_LANDING_LEAD_SINK: ${RESULT_TYPE_LANDING_LEAD_SINK:-false}
+      RESULT_TYPE_FIRSTBUILD_APPIFY: ${RESULT_TYPE_FIRSTBUILD_APPIFY:-false}
+      RESULT_TYPE_CLARIFY_QUESTION: ${RESULT_TYPE_CLARIFY_QUESTION:-false}
+      # Taste barrier (область T) — vision verdict re-gates passed + generic→repair.
+      # DARK; flip VISION_BLOCK only together with TASTE_REPAIR_ON_GENERIC + PASSES>=1.
+      ACCEPTANCE_VISION_BLOCK_ENABLED: ${ACCEPTANCE_VISION_BLOCK_ENABLED:-false}
+      ACCEPTANCE_TASTE_REPAIR_ON_GENERIC: ${ACCEPTANCE_TASTE_REPAIR_ON_GENERIC:-false}
+      ACCEPTANCE_TASTE_REPAIR_PASSES: ${ACCEPTANCE_TASTE_REPAIR_PASSES:-0}
+      # Reference ceiling ratchet (область R) — continuous richness-score floor vs
+      # the curated enterprise corpus. DARK; needs ACCEPTANCE_GAUNTLET_REFERENCE_GATE on too.
+      REFERENCE_CEILING_ENFORCED: ${REFERENCE_CEILING_ENFORCED:-false}
+      REFERENCE_CEILING_TOLERANCE: ${REFERENCE_CEILING_TOLERANCE:-1}
     ports:
       - "${API_HOST_PORT:-8200}:8000"
     restart: unless-stopped
@@ -339,6 +355,16 @@ services:
       # container. Runs in the worker (on omnia-runtime). Default OFF until the
       # legs are calibrated for real entity apps (16/5b) — see config.py.
       ACCEPTANCE_ENTITY_COMPOSITION_GATE: ${ACCEPTANCE_ENTITY_COMPOSITION_GATE:-false}
+      # Area C — authenticated CABINET gate. When ON the worker logs into the
+      # generated app with a seeded operator and scores the real /dashboard + CRUD
+      # (full rendered set + @390) instead of the public storefront `/`. DARK;
+      # needs the orchestrator's OMNIA_GATE_SEED=1 so a login-able account exists.
+      GATE_AUTHENTICATED_CABINET: ${GATE_AUTHENTICATED_CABINET:-false}
+      GATE_SEED_EMAIL: ${GATE_SEED_EMAIL:-gate@omnia.local}
+      GATE_CABINET_STATES_ADVISORY: ${GATE_CABINET_STATES_ADVISORY:-true}
+      # Reference ceiling ratchet (R) — also read on the worker gauntlet path.
+      REFERENCE_CEILING_ENFORCED: ${REFERENCE_CEILING_ENFORCED:-false}
+      REFERENCE_CEILING_TOLERANCE: ${REFERENCE_CEILING_TOLERANCE:-1}
     restart: unless-stopped
     networks:
       - omnia-prod
