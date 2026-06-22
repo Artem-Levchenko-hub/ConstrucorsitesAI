@@ -299,6 +299,33 @@ class Settings(BaseSettings):
     # the feature ships dark and is enabled (USE_FOLLOWUP_APPIFICATION=true) only
     # after live verification, so prod behaviour is unchanged until then.
     use_followup_appification: bool = Field(default=False)
+    # ── Result-type router (RT-1, 2026-06-22) ────────────────────────────
+    # First-class `result_type` (landing/web_app/tool/site/code) decided on the
+    # FIRST prompt SEPARATELY from the stack, by a cheap LLM classifier (role
+    # `result_type`) with the existing keyword nets as a deterministic safety-net.
+    # Master switch: OFF → the first-build stack decision is byte-identical to
+    # today (only the legacy _infer_* nets run). Kill: USE_RESULT_TYPE_ROUTER=false.
+    use_result_type_router: bool = Field(default=False)
+    # Sub-slice (independently flippable): a `landing` result-type with a conversion
+    # word («запись/бронь/оформить заказ») builds as a PUBLIC lead-capture landing
+    # (spa + POST /p/<slug>/lead) instead of being force-escalated to an auth-gated
+    # nextjs_entities app behind /signin (BS-7). Requires use_result_type_router.
+    # OFF → today's escalation. Highest-value, lowest-risk slice — flip FIRST.
+    # Env: RESULT_TYPE_LANDING_LEAD_SINK=true.
+    result_type_landing_lead_sink: bool = Field(default=False)
+    # Raise app-ification framing into the FIRST build (bug 2): «сделай
+    # веб-приложение / приложение / чтобы пользователи могли …» on the first prompt,
+    # even without a precise backend noun, routes to web_app (nextjs_entities)
+    # instead of falling through to spa. Requires use_result_type_router. OFF →
+    # first build ignores framing (today). Env: RESULT_TYPE_FIRSTBUILD_APPIFY=true.
+    result_type_firstbuild_appify: bool = Field(default=False)
+    # ONE clarifying question about the RESULT TYPE when it is genuinely ambiguous
+    # (classifier unsure AND keyword net silent). Folds "type clarity" into the
+    # build-readiness gate so an ambiguous «приложение» earns one type question
+    # instead of design questions about an unknown product. Requires
+    # use_result_type_router. OFF → no extra question. Env:
+    # RESULT_TYPE_CLARIFY_QUESTION=true.
+    result_type_clarify_question: bool = Field(default=False)
     # App-error cards (2026-06-09, owner P2). After a container-app build, surface
     # build/compile/schema failures as structured cards in the chat (instead of
     # plain italic notices) and probe the dev server for a Next.js compile error
@@ -329,6 +356,31 @@ class Settings(BaseSettings):
     # sharper brief, not a reflexive re-roll. Set = acceptance_min_score (7) to
     # restore the old always-repair-on-borderline behaviour.
     acceptance_repair_floor: int = Field(default=5)
+    # ── Taste barrier (область T) — re-arm the vision verdict as a FLAGGED gate ──
+    # Since V1.6 the vision verdict (broken/generic/beautiful) is pure ADVISORY:
+    # `acceptance.evaluate` drops `min_score` (`_ = min_score`) and computes
+    # `passed` without it. The deterministic composition floor (taste/hierarchy)
+    # catches "ugly by the numbers", but a page that is "not ugly, just generic"
+    # (vision verdict=generic, score 5–6, struct+resp OK) clears everything and
+    # ships. When True, the vision verdict gates `passed` AGAIN — but only when
+    # vision REALLY ran (a skip/ABSTAIN scores 10 and never blocks, R-10): a page
+    # blocks iff `verdict in {broken, generic}` OR `score < acceptance_min_score`.
+    # Default OFF = byte-identical to today (vision stays advisory). Flip
+    # ACCEPTANCE_VISION_BLOCK_ENABLED=true to make taste a real ship barrier.
+    acceptance_vision_block_enabled: bool = Field(default=False)
+    # Promote a "generic" vision verdict (not only "broken") to REPAIR-WORTHY in
+    # the Loop A self-repair gate (messages.py): a merely-generic page earns one
+    # re-roll with the vision issues as concrete feedback, so "not ugly but
+    # generic" regenerates instead of shipping. Only fires when vision really ran.
+    # Default OFF = today's behaviour (only broken / score<repair_floor re-rolls).
+    acceptance_taste_repair_on_generic: bool = Field(default=False)
+    # Taste-specific repair budget — how many extra Loop A re-rolls the taste
+    # barrier may spend. Decoupled from the global `auto_regenerate_enabled`
+    # (owner: never auto-regenerate the whole page) so the taste path can be
+    # calibrated in isolation. ONLY raises `_max_acc` when
+    # `acceptance_taste_repair_on_generic` is also ON. Default 0 = no taste
+    # re-roll (today's behaviour); 1 = exactly one generic→repair pass.
+    acceptance_taste_repair_passes: int = Field(default=0)
     # OWNER 2026-06-14 — AUTOMATIC FULL-PAGE REGENERATION OFF (default False).
     # The owner saw a build auto-"перегенерирую с рабочими ссылками" mid-session
     # and ruled: NEVER auto-regenerate the whole page — only deterministic
@@ -399,6 +451,25 @@ class Settings(BaseSettings):
     # this flag ON without a recorded passing milestone turns the suite RED. Mirror
     # of `acceptance_gauntlet_render_gates` / 16/5e. Default OFF.
     acceptance_gauntlet_reference_gate: bool = Field(default=False)
+    # V1.13d — the CEILING RATCHET strength. The reference leg today compares only
+    # the BOOLEAN per-axis verdicts (axis passed / failed), so once a generation
+    # independently clears the taste/hierarchy floor it "meets or beats" every
+    # curated reference trivially (True >= True) — the corpus adds no teeth beyond
+    # the always-on composition floor. Flip this ON to enforce the real ceiling: a
+    # generation must score within `reference_ceiling_tolerance` points of the
+    # reference's OWN combined richness score (taste 0–5 + hierarchy 0–3), not just
+    # match its boolean axes. OFF (default) → byte-identical boolean floor (current
+    # behaviour). It is fail-soft: the score floor applies ONLY when BOTH pages
+    # rendered AND the reference itself is rich (cleared its boolean floor); any
+    # render miss or a thin reference ABSTAINS (R-10), so a flaky corpus render can
+    # never sink an otherwise-good page. Independent of the `reference_gate` dial
+    # (that decides WHETHER the leg runs; this decides HOW STRICT it is when it does).
+    reference_ceiling_enforced: bool = Field(default=False)
+    # Points a generation may fall below the reference's own richness before the
+    # ceiling ratchet fails it (only consulted when `reference_ceiling_enforced`).
+    # 0 = strict meet-or-beat; 1 (default) forgives one soft regression so a single
+    # axis dip on a genuinely strong page is not a false block.
+    reference_ceiling_tolerance: int = Field(default=1)
     # V1.17 — the catalog-realism ratchet (`CATALOG_LEGS`). The eight money-free
     # RULE-10 demo-seeder fixes (niche titles, price-bands, real images,
     # title↔category, title↔description, category synonyms, future dates, niche
@@ -430,6 +501,23 @@ class Settings(BaseSettings):
     # real entity apps (strip dev-overlay nodes + taste single-family tolerance) —
     # carried as 16/5b. CLI / niche-E2E always run the legs regardless.
     acceptance_entity_composition_gate: bool = Field(default=False)
+
+    # ── Area C (authenticated cabinet gate) — DARK, default OFF ───────────
+    # When ON the live-app gate LOGS IN to the generated app with a seeded
+    # operator account and scores the real CABINET (/dashboard + CRUD) instead
+    # of the public storefront `/`. It then fans the FULL rendered set
+    # (first_paint, perf_a11y, wow_dom, data, taste, hierarchy) at desktop AND
+    # @390, and verifies empty-state/onboarding/skeleton hygiene. OFF = current
+    # behaviour byte-identical (taste+hierarchy on `/`, no login). Requires the
+    # orchestrator's OMNIA_GATE_SEED=1 so a login-able seed account exists.
+    gate_authenticated_cabinet: bool = Field(default=False)
+    # Login email for the gate's seed operator account (matches the orchestrator
+    # seed). Fixed local address — it can never receive mail, only sign in.
+    gate_seed_email: str = Field(default="gate@omnia.local")
+    # ADVISORY at first: the cabinet empty-state/onboarding/skeleton gate
+    # surfaces a quality card but never blocks ship until calibrated (same
+    # discipline as acceptance_gauntlet_catalog_gate).
+    gate_cabinet_states_advisory: bool = Field(default=True)
 
     # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
     # Originality: fingerprint each accepted freeform page and penalise the
@@ -764,6 +852,11 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # "-high" reasoning variant burns the token budget thinking. deepseek-chat
     # returns a tailored, parseable batch in ~3.6s (proven). Swap via ROLE_MODELS env.
     "discovery_plan": "deepseek-chat",
+    # Result-type classifier (RT-1). A tiny structured meta-call (NOT generation):
+    # one prompt → {"type":"landing|web_app|tool|site|code","confidence":0..1}.
+    # Runs inside the first-turn POST /prompt budget → a FAST JSON model, same
+    # class as discovery_plan. Swap via ROLE_MODELS env.
+    "result_type":   "deepseek-chat",
     "exe_doctor":    "deepseek-chat",  # self-heal patch for failed PyInstaller/NSIS builds
 }
 
