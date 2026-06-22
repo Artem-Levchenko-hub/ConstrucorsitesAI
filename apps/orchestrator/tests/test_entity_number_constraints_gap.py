@@ -82,63 +82,84 @@ def _zod_for_field_number_arm() -> str:
     return m.group(1)
 
 
-def test_field_def_has_no_numeric_constraint_keys_today() -> None:
-    """EVIDENCE (green today): FieldDef carries type/required/default/options/
-    entity but NO min/max/integer/nonnegative — the schema cannot declare a
-    numeric bound, so the writer can't say 'price ≥ 0' even when it must."""
+def test_field_def_has_numeric_constraint_keys() -> None:
+    """FIXED (P-NUMRANGE landed): FieldDef now carries optional `min`/`max`/`step`
+    members for `type: "number"`, so the schema CAN declare a value-range bound
+    (e.g. `min: 0` for a price). The bound is opt-in per field — the model must
+    declare it — but the vocabulary to say 'price ≥ 0' now exists."""
     block = _field_def_block()
     assert "type" in block and "required" in block
-    assert "min" not in block
-    assert "max" not in block
-    assert "integer" not in block
-    assert "nonnegative" not in block
+    # The numeric-constraint vocabulary the writer now uses to bound a field.
+    assert "min?: number" in block
+    assert "max?: number" in block
+    assert "step?: number" in block
 
 
-def test_zod_number_is_unconstrained_today() -> None:
-    """EVIDENCE (green today): zodForField(number) is a bare `z.number()` — no
-    `.min(...)`, no `.int()`. This is the server-side backstop, and it accepts
-    every double, which is why a POST of quantity:-30 returns a clean 201."""
+def test_zod_number_is_constrained_when_declared() -> None:
+    """FIXED (P-NUMRANGE landed): zodForField(number) is no longer a bare
+    `z.number()` — when the field declares `min`/`max` it threads them into the
+    validator (`n.min(f.min)` / `n.max(f.max)`). This is the server-side
+    backstop, so a declared `min: 0` now 400s a POST of quantity:-30 instead of
+    persisting it. The guard is conditional on the declaration (opt-in), not
+    automatic — there is no blanket `.nonnegative()`/`.int()` on every number."""
     arm = _zod_for_field_number_arm()
     assert "z.number()" in arm
-    assert ".min(" not in arm
-    assert ".int(" not in arm
-    assert ".nonnegative(" not in arm
+    # Range guards are wired in, gated on the field's declared bound.
+    assert "f.min !== undefined" in arm
+    assert "f.max !== undefined" in arm
+    assert ".min(f.min" in arm
+    assert ".max(f.max" in arm
 
 
-def test_number_widget_has_no_min_today() -> None:
-    """EVIDENCE (green today): the number form control is `<Input type="number">`
-    with no `min`/`step`, so the client doesn't guard against negatives or
-    fractions either — both layers are open."""
+def test_number_widget_has_min_when_declared() -> None:
+    """FIXED (P-NUMRANGE landed): the number form control is now
+    `<Input type="number" min={f.min} max={f.max} step={f.step} ...>`, so when a
+    field declares a bound the client guards it too (and the form's own validate()
+    rejects `n < f.min` / `n > f.max` before submit). Both layers now close."""
     src = _FORM.read_text(encoding="utf-8")
     assert 'type="number"' in src
-    # The number Input arm renders without a min/step bound today.
+    # The number Input arm now wires min/max/step bounds from the field spec.
     m = re.search(r'f\.kind === "number" &&.*?<Input(.*?)/>', src, re.S)
     assert m, "number Input arm not found in entity-form.tsx"
     number_input = m.group(1)
-    assert "min=" not in number_input
-    assert "step=" not in number_input
+    assert "min={f.min}" in number_input
+    assert "max={f.max}" in number_input
+    assert "step={f.step}" in number_input
+
+
+def test_number_fields_should_be_constrainable() -> None:
+    """DESIRED (now satisfied): a number field can declare a value-range
+    constraint (a `min`/`max`), and the server validator enforces it — so a
+    generated inventory/booking/age field can reject an out-of-domain value
+    instead of persisting it as valid data. The mechanism is declared-not-
+    automatic: the model opts a field in with `min`, and the engine threads that
+    into z.number(); there is no implicit nonnegativity on every number."""
+    field_def = _field_def_block()
+    number_arm = _zod_for_field_number_arm()
+
+    model_has_constraint = "min" in field_def or "max" in field_def
+    validator_enforces = ".min(f.min" in number_arm or ".max(f.max" in number_arm
+
+    assert model_has_constraint and validator_enforces
 
 
 @pytest.mark.xfail(
     strict=False,
-    reason="BS-33 / P-NUMRANGE not yet landed: a number field has no way to "
-    "declare a value-range constraint, so an inventory app accepts negative "
-    "price/stock. When FieldDef carries an optional numeric bound AND "
-    "zodForField threads it into z.number() (e.g. .min/.int), flip to XPASS.",
+    reason="PARTIAL: the value-range constraint (min/max) landed and is enforced "
+    "server-side, but there is still no INTEGER constraint — the engine has no "
+    "`integer` FieldDef member and no `.int()` in zodForField(number). So a stock "
+    "field declared `min: 0` still accepts 2.5; a whole-count can't be enforced as "
+    "an integer. Flip to XPASS when FieldDef gains `integer`/`.int()` threading.",
 )
-def test_number_fields_should_be_constrainable() -> None:
-    """DESIRED: a number field must be able to declare a value-range constraint
-    (at minimum a `min`, ideally `integer`), and the server validator must
-    enforce it — so a generated inventory/booking/age field can reject an
-    out-of-domain value instead of persisting it as valid data."""
+def test_number_integer_constraint_should_be_enforceable() -> None:
+    """DESIRED (genuinely remaining gap): a number field should also be able to
+    declare that it is a whole number (e.g. a stock count, an age), so the server
+    rejects 2.5 — not just out-of-range. This part of P-NUMRANGE has NOT landed:
+    no `integer` member on FieldDef, no `.int()` in the number validator."""
     field_def = _field_def_block()
     number_arm = _zod_for_field_number_arm()
 
-    model_has_constraint = (
-        "min" in field_def or "integer" in field_def or "nonnegative" in field_def
-    )
-    validator_enforces = (
-        ".min(" in number_arm or ".int(" in number_arm or ".nonnegative(" in number_arm
-    )
+    model_has_integer = "integer" in field_def
+    validator_has_int = ".int(" in number_arm
 
-    assert model_has_constraint and validator_enforces
+    assert model_has_integer and validator_has_int

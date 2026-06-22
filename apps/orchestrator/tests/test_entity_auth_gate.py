@@ -1,24 +1,25 @@
-"""Acceptance-lock for BS-7 (dogfood run #6, 2026-06-16): generated entity apps
-gate their protected `(app)` route group CLIENT-SIDE ONLY.
+"""Acceptance-lock for BS-7 / P-AUTHGATE — the protected `(app)` route group is
+now gated SERVER-SIDE / at the EDGE, not client-side only.
 
-Live evidence (sandbox dogfood-crm-live-b4c0c7): an anonymous GET of `/dashboard`
-and `/dashboard/clients` returns **HTTP 200 with the full app-shell HTML**
-(sidebar «Дашборд / Клиенты / Заметки»), not a redirect to `/signin`. Data is
-not leaked — `/api/entities/Client` 401s for anon and `owner` entities scope to
-`created_by` — but the operational chrome of a "приватный кабинет" is served to
-anyone (and to no-JS clients indefinitely), and because the SDK's
-`safeCollection` swallows the 401 into `[]`, an expired-session user sees a
-silently-empty app («Пока пусто») instead of being bounced to re-login.
+Original gap (dogfood run #6, 2026-06-16, sandbox dogfood-crm-live-b4c0c7): an
+anonymous GET of `/dashboard` and `/dashboard/clients` returned HTTP 200 with
+the full app-shell HTML (sidebar «Дашборд / Клиенты / Заметки») instead of a
+redirect to `/signin`. Data was never leaked (`/api/entities/Client` 401s for
+anon; `owner` entities scope to `created_by`), but the operational chrome of a
+"приватный кабинет" was served to anyone and to no-JS clients, and the SDK's
+`safeCollection` swallowed the 401 into `[]` so an expired-session user saw a
+silently-empty app instead of being bounced to re-login. Root cause was
+prompt-level: the writer-generated `(app)/layout.tsx` gated via `auth.me()` in a
+`useEffect` (renders the shell before the redirect; no JS = no gate), faithful to
+a SYSTEM_PROMPT that only "permitted" the server `requireUser()`.
 
-Root cause is prompt-level: the writer-generated `(app)/layout.tsx` is a
-`"use client"` component that gates via `auth.me()` in a `useEffect` →
-`router.push("/signin")` (renders + hydrates the shell before the redirect; no
-JS = no gate). It is faithful to SYSTEM_PROMPT.md, which makes the client
-`auth.me()` gate the PRIMARY instruction and presents the server-side
-`requireUser()` only as an optional "you may". The template ships no
-`middleware.ts`. The fix (mandate a server gate on the route-group layout, or
-ship an edge-safe gating middleware) is security-sensitive + cross-zone + needs
-a base-image rebuild + regen-verify → PROPOSAL P-AUTHGATE, not a blind ship.
+The P-AUTHGATE fix landed: the template now ships a fixed `src/middleware.ts`
+(edge cookie-presence probe → redirect `/dashboard/*` and `/admin/*` to
+`/signin` before any page renders — the deterministic security floor), and
+SYSTEM_PROMPT now MANDATES a SERVER `(app)/layout.tsx` whose first line is
+`await requireUser()`. The middleware is a presence-probe only (no JWT verify at
+the edge — the Drizzle adapter isn't edge-compatible); the real identity/
+ownership check stays in `requireUser()` + the owner-scoped entity API.
 
 These are deterministic file-content asserts (money-free, no container).
 """
@@ -27,8 +28,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-
-import pytest
 
 _ENTITIES = Path(__file__).resolve().parents[1] / "templates" / "nextjs-entities"
 _SESSION = _ENTITIES / "src" / "lib" / "session.ts"
@@ -47,31 +46,48 @@ def test_server_gate_building_block_is_already_shipped() -> None:
     assert 'redirect(`/signin' in src
 
 
-def test_entity_template_ships_no_route_middleware_today() -> None:
-    """EVIDENCE (green today): there is no `middleware.ts` gating the protected
-    routes at the edge — the only auth gate is whatever the writer puts in the
-    page/layout. Documents the gap the fix would close."""
-    assert not (_ENTITIES / "middleware.ts").exists()
-    assert not (_ENTITIES / "src" / "middleware.ts").exists()
+def test_entity_template_ships_edge_route_middleware_is_enforced() -> None:
+    """ENFORCED (the P-AUTHGATE fix landed): a fixed `src/middleware.ts` now
+    ships and gates the protected route groups at the EDGE — before any page
+    renders — so the gate no longer depends on whatever the writer puts in the
+    page/layout. This is the deterministic security floor.
+
+    It is a cookie-PRESENCE probe (not a JWT verify at the edge: the Drizzle
+    adapter isn't edge-compatible), so we assert it makes the logged-OUT case
+    unreachable and redirects to `/signin` — the real identity/ownership check
+    stays in `requireUser()` + the owner-scoped entity API."""
+    mw = _ENTITIES / "src" / "middleware.ts"
+    assert mw.exists(), "the edge auth-floor middleware.ts must ship in the template"
+    src = mw.read_text(encoding="utf-8")
+
+    # Gates only the protected cabinet groups — /dashboard/* and /admin/* — via
+    # the matcher (public `/`, /signin, /api/* stay open).
+    assert "matcher" in src
+    assert "/dashboard/:path*" in src
+    assert "/admin/:path*" in src
+
+    # Cookie-presence probe over the Auth.js session-cookie names (v4 + v5,
+    # bare and __Secure- prefixed) → anyone without it is bounced to /signin.
+    assert "authjs.session-token" in src
+    assert "__Secure-authjs.session-token" in src
+    assert "cookies.has" in src
+    assert "NextResponse.redirect" in src
+    assert "/signin" in src
+
+    # Presence-probe ONLY — the real identity check is requireUser() on the
+    # page, not a JWT verify in the edge (documented in the file itself).
+    assert "jwtVerify" not in src and "decode(" not in src
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="BS-7 / P-AUTHGATE not yet landed: SYSTEM_PROMPT still presents the "
-    "server gate as optional ('you may use requireUser()') and never requires "
-    "the (app)/layout.tsx to be server-gated, so writers ship a client-only "
-    "auth.me() gate. XPASSES once the protected route-group layout MUST be "
-    "server-gated (or an edge-safe middleware ships).",
-)
 def test_protected_route_group_layout_must_be_server_gated() -> None:
-    """The fix: the prompt must REQUIRE the protected `(app)` route-group layout
-    to be server-gated with `requireUser()` (so the shell is never served to an
-    unauthenticated request), not merely permit it.
+    """The fix landed: the prompt now REQUIRES the protected `(app)` route-group
+    layout to be server-gated with `requireUser()` (so the shell is never served
+    to an unauthenticated request), not merely permits it.
 
-    Today the only `requireUser` mention is the optional "you may use
-    `requireUser()`" sentence, which is NOT tied to the `(app)/layout.tsx` and
-    carries no mandatory force → this assertion fails (xfail). When the fix makes
-    server-gating the route-group layout mandatory, it XPASSES."""
+    SYSTEM_PROMPT now mandates the `(app)/layout.tsx` be a SERVER component whose
+    first line is `await requireUser()`, and a mandatory window (requireUser +
+    `(app)`/route-group/layout + a MUST/Always/обяз directive) exists — so this
+    asserts the closed gap (previously @pytest.mark.xfail before P-AUTHGATE)."""
     prompt = _PROMPT.read_text(encoding="utf-8")
 
     # A mandatory directive (MUST / обязан / всегда / Always / required) must

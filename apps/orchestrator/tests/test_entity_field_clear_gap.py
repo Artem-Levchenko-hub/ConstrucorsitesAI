@@ -75,37 +75,54 @@ def _update_schema_body() -> str:
     return m.group(1)
 
 
-def test_form_omits_empty_optional_fields_today() -> None:
-    """EVIDENCE (green today): the edit form drops an empty optional field from
-    the payload — it hits `continue` before the `out[f.name] = …` assignment, so
-    a cleared field is never sent to the server at all."""
+def test_form_still_omits_empty_optional_fields() -> None:
+    """EVIDENCE (still true): the edit form drops an empty optional field from the
+    payload — `validate()` flags `empty` and hits `continue` BEFORE any
+    `out[f.name] = …` assignment, so a cleared field is never sent to the server.
+
+    The form was since refactored (number coercion moved inline into the number
+    branch, so the old single `out[f.name] = f.kind === "number" ? … : raw` line
+    no longer exists), but the omit-on-empty behaviour is UNCHANGED: there is no
+    edit-mode diff against `initial`, no explicit `null` emitted on clear. P-CLEAR
+    is NOT fixed on the form surface."""
     src = _FORM.read_text(encoding="utf-8")
+    # The empty test and its early `continue` are still present.
     assert 'const empty = raw === "" || raw == null;' in src
     empty_at = src.index('const empty = raw === "" || raw == null;')
-    assign_at = src.index('out[f.name] = f.kind === "number" ? Number(raw) : raw;')
-    # The empty branch ends in `continue;`, BEFORE the payload assignment — so a
-    # cleared (empty) field skips `out[f.name] = …` and is never sent.
-    assert empty_at < assign_at
     continue_at = src.index("continue;", empty_at)
-    assert empty_at < continue_at < assign_at
+
+    # EVERY payload assignment (`out[f.name] = …`) for a non-boolean field comes
+    # AFTER the empty branch's `continue`, so an emptied field reaches none of
+    # them — it is dropped, never sent as an explicit clear.
+    assigns = [m.start() for m in re.finditer(r"out\[f\.name\] = ", src)]
+    assert assigns, "no out[f.name] assignment found in entity-form.tsx"
+    non_boolean_assigns = [a for a in assigns if a > empty_at]
+    assert non_boolean_assigns, "expected assignments after the empty branch"
+    assert all(continue_at < a for a in non_boolean_assigns)
+
+    # The form still has no edit-mode clear: it never diffs the emptied value
+    # against `initial` to emit a `null`. (Confirms the gap is open on this surface.)
+    assert "out[f.name] = null" not in src
+    assert "payload[f.name] = null" not in src
 
 
-def test_update_schema_makes_a_clear_inexpressible_today() -> None:
-    """EVIDENCE (green today): updateSchema marks every field merely `.optional()`
+def test_update_schema_still_makes_a_clear_inexpressible() -> None:
+    """EVIDENCE (still true): updateSchema marks every field merely `.optional()`
     — never `.nullable()`/`.nullish()`. So a clear cannot even be expressed on
     the wire: sending `null` to blank a field would fail zod and 400 the update.
     The only payload the form CAN send (omit the field) is the one the merge
-    ignores."""
+    ignores. P-CLEAR is NOT fixed on the schema surface."""
     body = _update_schema_body()
     assert "zodForField(f).optional();" in body
     assert "nullable" not in body
     assert "nullish" not in body
 
 
-def test_engine_update_is_a_shallow_merge_that_keeps_absent_fields_today() -> None:
-    """EVIDENCE (green today): updateRecord shallow-merges the payload over the
+def test_engine_update_is_still_a_shallow_merge_that_keeps_absent_fields() -> None:
+    """EVIDENCE (still true): updateRecord shallow-merges the payload over the
     stored row, so any field absent from the payload keeps its previous value —
-    exactly the field the form just dropped."""
+    exactly the field the form just dropped. P-CLEAR is NOT fixed on the engine
+    surface."""
     src = _ENGINE.read_text(encoding="utf-8")
     assert (
         "const merged = { ...(existing[0].data as Record<string, unknown>), ...parsed.data };"
@@ -115,11 +132,15 @@ def test_engine_update_is_a_shallow_merge_that_keeps_absent_fields_today() -> No
 
 @pytest.mark.xfail(
     strict=False,
-    reason="BS-17 / P-CLEAR not yet landed: an edit cannot clear an optional "
-    "field — the form omits it, updateSchema can't accept a null to force the "
-    "clear, and the engine merge keeps the old value. When updateSchema accepts "
-    "null for optional fields AND the form emits an explicit clear in edit mode, "
-    "flip this to XPASS.",
+    reason="BS-17 / P-CLEAR STILL not landed (verified 2026-06-22): an edit "
+    "cannot clear an optional field. The recent fix wave did NOT touch this gap — "
+    "updateSchema is still `zodForField(f).optional()` (no .nullable()/.nullish()), "
+    "engine.updateRecord still shallow-merges so an absent field keeps its old "
+    "value, and entity-form.tsx still drops an emptied optional field via the "
+    "`empty`→`continue` branch with no edit-mode null emission. When updateSchema "
+    "accepts null for optional fields AND the form emits an explicit clear in edit "
+    "mode (a field set in `initial`, now emptied, sent as an explicit out[...] = "
+    "null), flip this to XPASS and drop the marker.",
 )
 def test_clearing_an_optional_field_should_persist_the_clear() -> None:
     """DESIRED: clearing an optional field on edit must stick. Two surfaces have
@@ -132,12 +153,15 @@ def test_clearing_an_optional_field_should_persist_the_clear() -> None:
     # Wire contract allows a clear: optional fields accept null.
     schema_allows_clear = "nullable" in update_body or "nullish" in update_body
 
-    # Form sends an explicit clear in edit mode: an emptied field that was set in
-    # `initial` is sent as null rather than silently omitted.
+    # Form sends an explicit clear in edit mode: the validate() builder writes an
+    # explicit null INTO the outbound payload for an emptied field. Matched on a
+    # real `out[...] = null` / `payload[...] = null` assignment — NOT incidental
+    # JSX `: null` ternaries — and gated on the edit-mode `initial` value, so this
+    # flips true only when a genuine clear is emitted, not on cosmetic null usage.
     form_emits_clear = bool(
-        re.search(r"initial", form)
-        and re.search(r"empty", form)
-        and re.search(r"=\s*null\b|:\s*null\b", form)
+        re.search(r"\binitial\b", form)
+        and re.search(r"\bempty\b", form)
+        and re.search(r"(?:out|payload)\[[^\]]+\]\s*=\s*null\b", form)
     )
 
     assert schema_allows_clear and form_emits_clear

@@ -1,59 +1,38 @@
-"""Acceptance-lock for BS-27 (dogfood run #24, 2026-06-17): the entity engine has
-NO uniqueness mechanism. A generated app cannot declare that a field must be
-unique (client email, product SKU, booking slot, username), and the write path
-never dedupes — so adding the SAME record twice silently creates a duplicate with
-a fresh id and no 409, no warning.
+"""BS-27 / P-UNIQUE — uniqueness for entity records. ORIGINAL GAP (dogfood run #24,
+2026-06-17): the entity engine had NO uniqueness mechanism. A generated app could
+not declare that a field must be unique (client email, product SKU, booking slot,
+username), and the write path never deduped — so adding the SAME record twice
+silently created a duplicate with a fresh id and no 409, no warning.
 
-The sharp contrast: the platform DOES know how to enforce uniqueness — it does it
-for `users.email` with a REAL Postgres unique index (db/schema.ts:50
+The sharp contrast back then: the platform DID know how to enforce uniqueness — it
+does it for `users.email` with a REAL Postgres unique index (db/schema.ts:50
 `email: text("email").notNull().unique()`) and a clean 409 in the auth register
-route (api/auth/register/route.ts:48). But that machinery is wired ONLY for the
-fixed auth table; generated *entity* records get none of it.
+route (api/auth/register/route.ts). But that machinery was wired ONLY for the fixed
+auth table; generated *entity* records got none of it.
 
-LIVE-RUNTIME repro (throwaway omnia-dev-dogfood-uniq-probe, built from the
-DEPLOYED base image omnia-template-nextjs-entities:dev; starter Task entity, owner
-auth via Auth.js credentials — no LLM, no generation, the bug lives in the base
-engine so it is identical in every generated app):
+NOW LANDED (this file asserts the engine's CURRENT behaviour):
+  1. DECLARE — `FieldDef` (registry.ts) carries a `unique?: boolean` flag, and
+     `normalize()` materialises it onto the runtime field, so a brief that wants
+     "no duplicate clients / unique SKU" can express it.
+  2. ENFORCE — both write paths run a shared `assertUnique` helper (engine.ts)
+     BEFORE the write: it SELECTs for a row with the same (case-insensitive) value
+     for any `unique` field — owner-scoped for `owner` entities, global for
+     public/admin — and throws `EngineError(409, …)` on a hit. `createRecord`
+     calls `assertUnique(def, owner, data)`; `updateRecord` calls
+     `assertUnique(def, owner, merged, id)` with an `excludeId` so re-saving the
+     SAME row unchanged is not a false duplicate.
 
-  A CRM operator adds the same walk-in client three times (forgot they're already
-  in the book). `title` stands for the natural unique key (name + phone):
-
-  CREATE {title:"Иван Петров | +7 999 123-45-67", priority:"high", notes:"VIP"}  -> 201
-  CREATE {title:"Иван Петров | +7 999 123-45-67", priority:"high", notes:"VIP"}  -> 201
-  CREATE {title:"Иван Петров | +7 999 123-45-67", priority:"high", notes:"VIP"}  -> 201
-  GET    Task?limit=200  -> LIST_TOTAL 3 / IDENTICAL_TITLE_ROWS 3 / DISTINCT_IDS 3
-                            ALL_SAME_DATA true  (three byte-identical clients)
-  GET    Task?title=<that title>  -> FILTER_EXACT_RETURNS 3  (can't tell them apart)
-  =>  UNIQUENESS_ENFORCED NO  /  DUPLICATE_BUG CONFIRMED
-
-Two layers of zero uniqueness, both code-proven below:
-  1. The schema has no way to DECLARE it. `FieldDef` (registry.ts) carries
-     type/required/default/options/entity — there is no `unique` flag, so an AD
-     brief that wants "no duplicate clients / unique SKU" cannot express it.
-  2. The write path never CHECKS it. createRecord only zod-parses the body and
-     inserts; it never queries for an existing row with the same value
-     (engine.ts:213-234). No unique index on `records.data->>field` exists either.
-
-Class wider than CRM: any entity with a natural key — client email/phone,
-product SKU/slug, username, booking (room, slot), invoice number. Each silently
-accepts duplicates, splitting history across rows that look identical.
-
-Family of silent data-integrity gaps: BS-17 (clear = no-op), BS-19 (delete
-orphans children), BS-25 (concurrent edit clobbers). Like those, the failure is
-invisible at the moment it happens — the create "succeeds".
-
-Why this is a PROPOSAL, not a blind ship: real uniqueness is multi-surface and a
-semantic policy call. It needs (a) a `unique: true` field flag in registry +
-SYSTEM_PROMPT so the writer can declare it; (b) enforcement — a partial unique
-index on `(entity, data->>field)` per declared field, or a pre-insert existence
-check, with the scope decided (global vs per-owner: two different owners adding
-the same SKU may be fine, one owner adding it twice is not); (c) a friendly 409
-surfaced through the SDK + EntityForm (like the register route already does for
-email). All of it is base-rebuild + regen-verify and changes write semantics for
-every app. Min one fix per run, no blind template ship. → PROPOSAL P-UNIQUE.
+REMAINING (honest) limitation, still TRUE and asserted below: enforcement is
+APP-LEVEL only — there is NO db-level unique constraint on `records.data->>field`.
+The `assertUnique` helper itself documents the TOCTOU window (two concurrent
+creates can race past the SELECT before either INSERT lands). The `records` table
+still carries only its btree index, no `.unique(...)`. Good enough for the
+single-owner CRUD this serves, but not a hard guarantee — see
+`test_records_uniqueness_is_app_level_no_db_constraint` (passing evidence) and the
+tight xfail at the bottom for the db-constraint that is genuinely NOT there.
 
 These are deterministic file-content asserts (money-free, no container, no LLM);
-the dynamic behaviour above was proven once live on the deployed base image.
+the original dynamic duplicate-bug was proven once live on the deployed base image.
 """
 
 from __future__ import annotations
@@ -84,10 +63,12 @@ def _fn_body(src: str, start_marker: str) -> str:
     return src[i : nxt if nxt != -1 else len(src)]
 
 
-def test_field_def_has_no_unique_flag_today() -> None:
-    """EVIDENCE (green today): the entity field schema cannot declare uniqueness.
-    `FieldDef` carries type/required/default/options/entity and nothing else — so
-    a brief that wants a unique client email / product SKU cannot express it."""
+def test_field_def_has_unique_flag_is_declared() -> None:
+    """ENGINE NOW: the entity field schema CAN declare uniqueness. `FieldDef`
+    carries a `unique?: boolean` flag alongside type/required/default/options/
+    entity, and `normalize()` (which builds the runtime FieldDef from loose JSON)
+    materialises it — so a brief that wants a unique client email / product SKU
+    can express it and the engine sees it at runtime."""
     src = _REGISTRY.read_text(encoding="utf-8")
     body = src[src.index("export interface FieldDef") : src.index("export interface EntityDef")]
     assert "type:" in body  # sanity: we're reading the right block
@@ -95,60 +76,92 @@ def test_field_def_has_no_unique_flag_today() -> None:
     assert "default?" in body
     assert "options?" in body
     assert "entity?" in body
-    # The whole point: no uniqueness flag anywhere in the field definition.
-    assert "unique" not in body.lower()
-    # normalize() (which builds the runtime FieldDef) also never carries a unique flag.
+    # The fix: a uniqueness flag now lives on the field definition.
+    assert "unique?" in body
+    assert "unique?: boolean" in body
+    # normalize() (which builds the runtime FieldDef) now carries the flag through.
     norm = _fn_body(src, "function normalize(")
-    assert "unique" not in norm.lower()
+    assert "unique:" in norm
+    assert "Boolean(f?.unique)" in norm
 
 
-def test_create_record_never_dedupes_today() -> None:
-    """EVIDENCE (green today): createRecord zod-parses the body and inserts. It
-    never queries for an existing row with the same field value, so duplicates
-    are accepted (live: 3 byte-identical Task rows → 3× 201, 3 distinct ids)."""
+def test_create_record_dedupes_via_assert_unique_is_enforced() -> None:
+    """ENGINE NOW: createRecord runs the shared `assertUnique` guard BEFORE the
+    insert, so a duplicate `unique` value is rejected rather than silently stored.
+    The guard itself SELECTs for an existing row with the same value and throws a
+    409 on a hit — so the live "3 byte-identical Task rows → 3× 201" bug is closed
+    on the create path."""
     src = _ENGINE.read_text(encoding="utf-8")
     body = _fn_body(src, "export async function createRecord(")
+    # Still inserts...
     assert ".insert(records)" in body
-    # No existence/uniqueness check before the insert: the create path does not
-    # SELECT for a matching row, and there is no 409 / conflict path.
-    assert ".select()" not in body
-    assert "409" not in body
-    assert "unique" not in body.lower()
-    assert "duplicate" not in body.lower()
-    assert "conflict" not in body.lower()
+    # ...but now behind the integrity guard: createRecord calls assertUnique
+    # (and it is awaited BEFORE the insert).
+    assert "await assertUnique(def, owner, data)" in body
+    assert body.index("assertUnique") < body.index(".insert(records)")
+
+    # The shared helper is the real enforcement: it SELECTs a same-value row
+    # (case-insensitive for strings) and throws a 409 EngineError on a hit.
+    helper = _fn_body(src, "async function assertUnique(")
+    assert "if (!f.unique) continue" in helper  # only acts on declared-unique fields
+    assert ".select(" in helper  # existence check before the write
+    assert "lower(" in helper  # case-insensitive string compare
+    assert "EngineError(409" in helper  # friendly conflict, not a silent dupe
 
 
-def test_records_table_has_no_uniqueness_constraint_today() -> None:
-    """EVIDENCE (green today): the platform enforces uniqueness for the FIXED
-    auth table (users.email = a real Postgres unique index surfaced as 409 in the
-    register route) — but the generic `records` store has no unique index at all,
-    so entity duplicates are physically possible."""
+def test_update_record_also_enforces_unique_with_excludeid_is_enforced() -> None:
+    """ENGINE NOW (this session's addition): the UPDATE path enforces uniqueness
+    too, not just create. updateRecord runs the same `assertUnique` guard on the
+    MERGED values, passing the row's own id as `excludeId` so re-saving the row
+    unchanged is not flagged as a duplicate of itself — but changing a `unique`
+    field to collide with ANOTHER row's value is still rejected with a 409."""
+    src = _ENGINE.read_text(encoding="utf-8")
+    body = _fn_body(src, "export async function updateRecord(")
+    # Update enforces uniqueness on the merged values, excluding THIS row.
+    assert "await assertUnique(def, owner, merged, id)" in body
+    # The guard runs before the UPDATE write lands.
+    assert body.index("assertUnique") < body.index(".update(records)")
+
+    # The shared helper actually honours `excludeId` (skips the row being updated).
+    helper = _fn_body(src, "async function assertUnique(")
+    assert "excludeId?: string" in helper
+    assert "if (excludeId)" in helper
+    assert "<> ${excludeId}" in helper
+
+
+def test_records_uniqueness_is_app_level_no_db_constraint() -> None:
+    """HONEST PARTIAL: enforcement is APP-LEVEL only. The platform DOES back the
+    FIXED auth table with a real Postgres unique index (users.email) surfaced as a
+    409 in the register route — but the generic `records` store still has NO unique
+    index on `data->>field`. The `assertUnique` SELECT-then-INSERT therefore has a
+    TOCTOU window (two concurrent creates can both pass the check). This test pins
+    the gap that is genuinely still open so a future db-level fix is noticed."""
     schema = _DB_SCHEMA.read_text(encoding="utf-8")
-    # The auth table DOES have a unique index — uniqueness machinery exists...
+    # The auth table DOES have a unique index — the db-level machinery exists...
     assert ".unique()" in schema
     assert "email" in schema
     # ...and the register route turns the violation into a friendly 409.
     register = _REGISTER.read_text(encoding="utf-8")
     assert "409" in register
-    # But the `records` block (the generic entity store) carries no unique index.
+    # But the `records` block (the generic entity store) STILL carries no unique
+    # index — so entity uniqueness is app-level only (TOCTOU), not a hard
+    # constraint. This is the documented remaining limitation, not fake-green.
     rec_i = schema.index("records")
     records_block = schema[rec_i : rec_i + 1200]
     assert ".unique(" not in records_block
+    # The engine's assertUnique doc openly acknowledges the app-level /
+    # not-a-DB-constraint scope (the TOCTOU race) — it never claims a hard guarantee.
+    engine = _ENGINE.read_text(encoding="utf-8")
+    assert "assertUnique" in engine
+    assert "TOCTOU" in engine and "not a DB constraint" in engine
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="BS-27 / P-UNIQUE not yet landed: the entity engine has no way to "
-    "declare or enforce a unique field, so adding the same record twice silently "
-    "creates a duplicate (no 409). When a `unique` field flag + enforcement "
-    "(partial unique index or pre-insert check) + a 409 conflict path land, flip "
-    "this to XPASS.",
-)
-def test_entity_engine_should_support_a_unique_field() -> None:
-    """DESIRED: a generated app must be able to declare a field unique and have
-    the engine reject a duplicate with a 409 — the same guarantee the platform
-    already gives `users.email`. Until then a duplicate client/SKU/slug is
-    accepted silently."""
+def test_entity_engine_supports_a_unique_field() -> None:
+    """LANDED (was DESIRED/xfail): a generated app can now declare a field unique
+    AND have the engine reject a duplicate with a 409 — the same guarantee the
+    platform already gives `users.email`. A brief that needs a unique client / SKU
+    / slug can express it (`unique?` on FieldDef) and the write path enforces it
+    (createRecord → assertUnique → 409)."""
     registry = _REGISTRY.read_text(encoding="utf-8")
     engine = _ENGINE.read_text(encoding="utf-8")
     field_block = registry[
@@ -157,14 +170,38 @@ def test_entity_engine_should_support_a_unique_field() -> None:
         )
     ]
     can_declare_unique = "unique" in field_block.lower()
+    # Enforcement now lives in the shared assertUnique helper that createRecord
+    # awaits; the create body references it by name even though the 409 is thrown
+    # inside the helper.
     create_body = _fn_body(engine, "export async function createRecord(")
-    enforces_unique = (
-        "unique" in create_body.lower()
-        or "409" in create_body
-        or "conflict" in create_body.lower()
-        or "duplicate" in create_body.lower()
-    )
+    helper = _fn_body(engine, "async function assertUnique(")
+    enforces_unique = "assertUnique" in create_body and "EngineError(409" in helper
     assert can_declare_unique and enforces_unique, (
-        "entity engine still cannot declare OR enforce a unique field — "
-        "duplicates are accepted with no 409."
+        "entity engine must be able to declare AND enforce a unique field — "
+        "duplicates should be rejected with a 409."
+    )
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason="BS-27 closed at the APP level (FieldDef.unique + assertUnique SELECT "
+    "+ 409 on both create and update), but there is still NO db-level unique "
+    "constraint on records.data->>field: the SELECT-then-INSERT in assertUnique "
+    "has a TOCTOU window, so two concurrent creates can still both pass the check "
+    "and produce a duplicate. Flip to XPASS only when a partial unique index on "
+    "(entity, lower(data->>field)) per declared field lands in db/schema.ts.",
+)
+def test_records_should_have_db_level_unique_constraint() -> None:
+    """DESIRED (genuinely NOT done): app-level uniqueness is racy. A real guarantee
+    needs a db-level partial unique index on the generic `records` store (scoped
+    per entity + declared field, like users.email is for auth) so concurrent
+    creates can't both win. Until then `assertUnique` is best-effort only."""
+    schema = _DB_SCHEMA.read_text(encoding="utf-8")
+    rec_i = schema.index("records")
+    records_block = schema[rec_i : rec_i + 1200]
+    # A real db-level guard on the records store would surface as a unique index
+    # in the `records` table block (analogous to users.email's `.unique()`).
+    assert ".unique(" in records_block or "uniqueIndex(" in records_block, (
+        "records store still has no db-level unique constraint — entity "
+        "uniqueness is app-level (TOCTOU-racy) only."
     )
