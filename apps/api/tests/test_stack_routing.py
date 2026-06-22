@@ -17,7 +17,11 @@ import pytest
 
 from omnia_api.services import orchestrator_client, stack_routing
 from omnia_api.services import repo as repo_svc
-from omnia_api.services.discovery import _infer_stack_from_text
+from omnia_api.services.discovery import (
+    _infer_stack_from_text,
+    infer_result_type_from_text,
+    result_type_to_stack,
+)
 
 # ─── discovery_stack_to_template ─────────────────────────────────────────
 
@@ -384,25 +388,24 @@ _CONSUMER_BOOKING_LANDINGS = [
 ]
 
 
-@pytest.mark.xfail(
-    reason="BS-7 blind spot: a consumer lead-capture booking landing (no account "
-    "ask) is force-escalated to a customer-auth entity-app, gating booking behind "
-    "/signin. Remove this marker when the fix lands.",
-    strict=False,
-)
 @pytest.mark.parametrize("prompt", _CONSUMER_BOOKING_LANDINGS)
-def test_consumer_booking_landing_should_not_force_customer_auth(prompt: str) -> None:
-    # Desired: a "запись/бронирование" landing where the user never asked for
-    # accounts must NOT be escalated to an auth-gated stack — the booking is a
-    # lead-capture form, not user registration.
-    assert _infer_stack_from_text(prompt) != "nextjs_entities"
+def test_consumer_booking_landing_resolves_to_landing_spa(prompt: str) -> None:
+    """BS-7 FIXED (RT-1): a "запись/бронирование" landing with no account ask is a
+    `landing` result-type → spa (public lead-form), NOT a customer-auth entity-app
+    behind /signin. The result-type router is the fix; the legacy stack net stays
+    as a safety-net (see the evidence test below)."""
+    assert infer_result_type_from_text(prompt) == "landing"
+    assert result_type_to_stack(infer_result_type_from_text(prompt)) == "spa"
 
 
 @pytest.mark.parametrize("prompt", _CONSUMER_BOOKING_LANDINGS)
-def test_consumer_booking_landing_is_currently_force_escalated_evidence(
+def test_consumer_booking_landing_legacy_net_still_escalates_evidence(
     prompt: str,
 ) -> None:
-    """Evidence lock (not desired behavior): documents that, TODAY, every consumer
-    booking landing is force-escalated to nextjs_entities. If this changes, the
-    xfail above starts XPASSing and both markers should be revisited together."""
+    """Safety-net evidence: the LEGACY keyword net (`_infer_stack_from_text`) still
+    reads booking words as backend intent and would escalate to nextjs_entities —
+    which is exactly why the result-type router OVERRIDES it for a no-account
+    landing (the `result_type_landing_lead_sink` slice). If this ever stops
+    escalating, the router's landing override becomes a no-op and both tests should
+    be revisited together."""
     assert _infer_stack_from_text(prompt) == "nextjs_entities"

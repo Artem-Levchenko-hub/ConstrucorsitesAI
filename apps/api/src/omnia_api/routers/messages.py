@@ -61,24 +61,31 @@ from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.contrast_guard import enforce_contrast
 from omnia_api.services.director_polish import director_polish_generate
 from omnia_api.services.discovery import (
+    ASK as DISCOVERY_ASK,
     BUILD as DISCOVERY_BUILD,
 )
 from omnia_api.services.discovery import (
     DiscoveryResult,
     _explicit_static,
+    _has_account_intent,
+    _has_conversion_intent,
     _infer_code_from_text,
     _infer_run_intent,
     _infer_run_intent_maybe,
     _infer_stack_from_text,
     _infer_web_pivot,
     _is_run_decline,
+    classify_result_type,
     confident_enough_to_build,
     cumulative_idea,
     detect_appification,
     gather_answers,
     infer_niche_label,
+    infer_result_type_from_text,
     plan_discovery_questions,
     recap_labels,
+    resolve_result_type,
+    result_type_to_stack,
     run_discovery,
     serve_planned_question,
     wants_build_now,
@@ -538,6 +545,45 @@ def _build_onboarding_survey(plan: object) -> list[dict[str, object]] | None:
     return out
 
 
+_RESULT_TYPE_QUESTION = (
+    "Что именно сделать — лендинг с заявкой, приложение с аккаунтами, "
+    "или интерактивный инструмент?"
+)
+_RESULT_TYPE_CHOICES = (
+    "Лендинг с заявкой",
+    "Приложение с аккаунтами",
+    "Интерактивный инструмент",
+    "Просто сайт",
+)
+
+
+async def _maybe_result_type_question(
+    prompt: str, language: str
+) -> DiscoveryResult | None:
+    """One clarifying question about the RESULT TYPE when genuinely ambiguous
+    (RT-1 bug 3). Returns an ASK DiscoveryResult, or None when the type is clear.
+    Gated by result_type_clarify_question; off → always None (today)."""
+    s = get_settings()
+    if not (s.use_result_type_router and s.result_type_clarify_question):
+        return None
+    if infer_result_type_from_text(prompt) is not None:
+        return None  # keyword net is sure
+    rt, conf = await classify_result_type(prompt, language=language)
+    if rt is not None and conf >= 0.6:
+        return None  # classifier is sure
+    return DiscoveryResult(
+        action=DISCOVERY_ASK,
+        message=_RESULT_TYPE_QUESTION,
+        brief="",
+        stack="spa",
+        choices=_RESULT_TYPE_CHOICES,
+        allow_custom=True,
+        multi_select=False,
+        question_index=1,
+        question_total=0,
+    )
+
+
 async def _batch_discovery_turn(
     project: Project,
     history: list[dict[str, str]],
@@ -583,6 +629,12 @@ async def _batch_discovery_turn(
         zero = zero_question_build(history, prompt)
         if zero is not None:
             return zero
+        # RT-1 (bug 3): when the RESULT TYPE is genuinely ambiguous, ask ONE type
+        # question first. The design plan is built on the NEXT turn once the type is
+        # known (discovery_plan stays unset → planning re-runs). Gated/off by default.
+        _rtq = await _maybe_result_type_question(prompt, language)
+        if _rtq is not None:
+            return _rtq
         questions = await plan_discovery_questions(prompt, language=language)
         project.discovery_plan = [q.to_dict() for q in questions]
     # LIVE niche (pillar 2 causality): re-infer on the CUMULATIVE answers (idea +
@@ -961,11 +1013,47 @@ async def post_prompt(
         # auth-backed web app (owner 2026-06-18). And static is opt-in: if nothing
         # specific fires, default to `spa` (interactive React) unless the user
         # EXPLICITLY asked for a plain static HTML page — same policy as discovery.
-        _inferred_stack = (
-            _infer_code_from_text(payload.prompt)
-            or _infer_stack_from_text(payload.prompt)
-            or (None if _explicit_static(payload.prompt) else "spa")
-        )
+        if settings.use_result_type_router:
+            # RT-1: decide the RESULT TYPE first (semantic LLM + keyword safety-net),
+            # then map type→stack. Each sub-slice is independently gated so OFF = the
+            # legacy net behaviour, byte-identical.
+            _rt_llm, _rt_conf = await classify_result_type(
+                payload.prompt, language=project.language
+            )
+            _rt = resolve_result_type(payload.prompt, _rt_llm, _rt_conf)
+            if _rt is None:
+                # Unsure → legacy nets (preserves today's behaviour for the un-typed tail).
+                _inferred_stack = (
+                    _infer_code_from_text(payload.prompt)
+                    or _infer_stack_from_text(payload.prompt)
+                    or (None if _explicit_static(payload.prompt) else "spa")
+                )
+            else:
+                # web_app from FRAMING only ships when the appify slice is on; without
+                # it (and without a real account ask) framing falls back to today's path.
+                if (
+                    _rt == "web_app"
+                    and not settings.result_type_firstbuild_appify
+                    and not _has_account_intent(payload.prompt)
+                ):
+                    _rt = "landing" if _has_conversion_intent(payload.prompt) else "site"
+                # landing→entities suppression (BS-7) ships only with the lead-sink slice.
+                if (
+                    _rt == "landing"
+                    and not settings.result_type_landing_lead_sink
+                    and _infer_stack_from_text(payload.prompt) == "nextjs_entities"
+                ):
+                    _inferred_stack = "nextjs_entities"  # keep today's escalation
+                else:
+                    _inferred_stack = result_type_to_stack(_rt)
+                    if _inferred_stack == "static" and not _explicit_static(payload.prompt):
+                        _inferred_stack = "spa"
+        else:
+            _inferred_stack = (
+                _infer_code_from_text(payload.prompt)
+                or _infer_stack_from_text(payload.prompt)
+                or (None if _explicit_static(payload.prompt) else "spa")
+            )
         if _inferred_stack:
             try:
                 await stack_routing.switch_to_stack(

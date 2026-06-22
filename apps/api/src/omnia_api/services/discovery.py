@@ -56,6 +56,29 @@ _STACKS: frozenset[str] = frozenset(
 )
 _DEFAULT_STACK = "static"
 
+# ── Result type (RT-1, 2026-06-22) ───────────────────────────────────────
+# `result_type` is WHAT the user wants; `stack` is HOW we build it. The router
+# decides the type first (semantically), then maps it to a build stack. The key
+# split: a conversion word («запись/бронь/заказ») is a `landing` (public lead
+# form, NO /signin), NOT a `web_app` — only an explicit account/cabinet ask is.
+RESULT_TYPES: frozenset[str] = frozenset(
+    {"landing", "web_app", "tool", "site", "code", "static"}
+)
+_RESULT_TYPE_TO_STACK: dict[str, str] = {
+    "landing": "spa",              # public lead-form, NO /signin
+    "web_app": "nextjs_entities",  # accounts / saved data
+    "tool": "spa",
+    "site": "spa",
+    "code": "code",
+    "static": "static",
+}
+
+
+def result_type_to_stack(rt: str) -> str | None:
+    """Map a result_type to its build stack id, or None for an unknown type."""
+    return _RESULT_TYPE_TO_STACK.get((rt or "").strip().lower())
+
+
 # Hard cap so discovery can never loop forever — after this many questions we
 # build with whatever we have. The user can always force a build sooner.
 MAX_DISCOVERY_QUESTIONS = 5
@@ -110,6 +133,47 @@ _BACKEND_SIGNALS: frozenset[str] = frozenset(
         "inventory", "tracker",
     }
 )
+
+
+# Account / per-user-data signals — the SUBSET of backend intent that genuinely
+# needs customer auth (a private cabinet), vs a public conversion (заявка/запись/
+# бронь — covered by a landing lead form without accounts). RU stems + EN. This
+# is the BS-7 narrowing: a conversion word alone is NOT proof of a web_app.
+_ACCOUNT_SIGNALS: frozenset[str] = frozenset(
+    {
+        "регистрац", "зарегистр", "личный кабинет", "профиль пользоват",
+        "аккаунт", "каждый пользователь", "пользователи видят",
+        "роли пользоват", "админк", "сохраня",
+        "crm", "crud", "база данных", "сущност", "каталог товар", "корзин",
+        "sign up", "signup", "register", "account", "user account",
+        "user profile", "dashboard", "per-user", "admin panel",
+        "user roles", "role-based", "database", "save data", "user data",
+        "shopping cart", "product catalog",
+    }
+)
+# Conversion words a LANDING satisfies with a public lead form (POST /lead),
+# NOT a customer account. Present-but-no-_ACCOUNT_SIGNALS ⇒ landing (BS-7).
+_CONVERSION_SIGNALS: frozenset[str] = frozenset(
+    {
+        "запись на", "записаться", "бронирован", "забронир", "оформить заказ",
+        "заявк", "обратн", "перезвон", "booking", "appointment", "appointments",
+        "book a", "order now", "request a", "contact form", "lead",
+    }
+)
+
+
+def _has_account_intent(text: str) -> bool:
+    """True when a NON-negated account/per-user signal fires — the only thing
+    that lifts a conversion landing into a web_app (BS-7 split)."""
+    low = (text or "").lower()
+    return any(_signal_fires(low, sig) for sig in _ACCOUNT_SIGNALS)
+
+
+def _has_conversion_intent(text: str) -> bool:
+    """True when the prompt asks for a lead/booking conversion (covered by a
+    public landing form without accounts)."""
+    low = (text or "").lower()
+    return any(sig in low for sig in _CONVERSION_SIGNALS)
 
 
 # A backend signal that is immediately NEGATED ("без регистрации", "без
@@ -248,6 +312,29 @@ def _infer_code_from_text(text: str) -> str | None:
         w in low for w in _WEBSITE_SIGNALS
     ):
         return "code"
+    return None
+
+
+def infer_result_type_from_text(text: str) -> str | None:
+    """Deterministic result-type from product intent (safety-net behind the LLM
+    classifier). Priority mirrors the legacy stack net:
+      code > explicit-static > web_app(account|framing) > landing(conversion) > None.
+    BS-7 split: a conversion word WITHOUT an account/per-user signal is a
+    `landing` (public lead form), never a `web_app` behind /signin. An
+    app-ification framing phrase (`_APPIFY_FRAMING`) counts as a web_app signal
+    too (bug 2 — raise framing into the first build). None → caller asks /
+    defaults to site/spa."""
+    low = (text or "").lower()
+    if _infer_code_from_text(low):
+        return "code"
+    if _explicit_static(low):
+        return "static"
+    if _explicit_no_backend(low):
+        return "landing" if _has_conversion_intent(low) else None
+    if _has_account_intent(low) or any(f in low for f in _APPIFY_FRAMING):
+        return "web_app"
+    if _has_conversion_intent(low):
+        return "landing"
     return None
 
 
@@ -1032,6 +1119,90 @@ async def plan_discovery_questions(
     return _plan_fallback()
 
 
+# ── Result-type classifier (RT-1) — the primary signal behind the keyword net ──
+_RESULT_TYPE_SYSTEM = (
+    "Ты — продуктовый аналитик Omnia.AI. Пользователь прислал ПЕРВЫЙ запрос на "
+    "сайт/приложение. Определи ТИП результата. Ровно один из:\n"
+    "- \"landing\" — маркетинговый лендинг/промо. Цель — заявка, запись, бронь, "
+    "звонок. Форма-заявка БЕЗ регистрации и личных кабинетов («лендинг с записью "
+    "на приём»). Запись/бронь сами по себе — это landing, НЕ web_app.\n"
+    "- \"web_app\" — приложение с АККАУНТАМИ и сохраняемыми данными: личный "
+    "кабинет, регистрация, у каждого пользователя свои данные, CRM, каталог+"
+    "корзина+оформление, админка.\n"
+    "- \"tool\" — интерактивный инструмент на фронтенде без бэкенда.\n"
+    "- \"site\" — обычный информационный сайт (портфолио, блог, визитка).\n"
+    "- \"code\" — НЕ сайт, а программа/скрипт на любом языке.\n\n"
+    "Аккаунты/кабинет → web_app. Заявка/запись без кабинета → landing. Сомнения "
+    "между двумя — меньшая confidence.\n"
+    "ФОРМАТ — СТРОГО один JSON-объект на одной строке:\n"
+    '{"type":"landing|web_app|tool|site|code","confidence":0.0}'
+)
+_RESULT_TYPE_TIMEOUT = 12.0
+_RESULT_TYPE_ATTEMPTS = 2
+_RESULT_TYPE_MIN_CONFIDENCE = 0.6
+
+
+async def classify_result_type(
+    prompt: str, language: str = "ru"
+) -> tuple[str | None, float]:
+    """Classify the first prompt's RESULT TYPE → (type, confidence) or (None, 0.0)
+    on any failure / unknown type. Never raises (R-10). One fast structured call
+    inside the POST /prompt budget; a couple of retries shake off a transient
+    non-strict reply (like plan_discovery_questions)."""
+    settings = get_settings()
+    url = f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions"
+    convo = [
+        {"role": "system", "content": _RESULT_TYPE_SYSTEM + _reply_language_line(language)},
+        {"role": "user", "content": (prompt or "").strip()[:2000] or "(пусто)"},
+    ]
+    payload = {
+        "model": model_for_role("result_type"),
+        "messages": convo,
+        "max_tokens": 60,
+        "stream": False,
+    }
+    for attempt in range(_RESULT_TYPE_ATTEMPTS):
+        try:
+            async with httpx.AsyncClient(timeout=_RESULT_TYPE_TIMEOUT) as client:
+                resp = await client.post(url, json=payload)
+            if resp.status_code < 400:
+                body = resp.json()
+                content = (body.get("choices") or [{}])[0].get("message", {}).get(
+                    "content", ""
+                )
+                parsed = _parse(content)
+                if parsed:
+                    rt = str(parsed.get("type") or "").strip().lower()
+                    if rt in RESULT_TYPES:
+                        try:
+                            conf = float(parsed.get("confidence") or 0.0)
+                        except (TypeError, ValueError):
+                            conf = 0.0
+                        return rt, max(0.0, min(1.0, conf))
+            else:
+                log.warning(
+                    "result_type: gateway %d (attempt %d)", resp.status_code, attempt + 1
+                )
+        except Exception as exc:
+            log.warning("result_type: gateway error (attempt %d): %r", attempt + 1, exc)
+    return None, 0.0
+
+
+def resolve_result_type(
+    prompt: str, llm_type: str | None, llm_conf: float
+) -> str | None:
+    """Combine the LLM verdict with the deterministic net. The keyword net WINS
+    when it fires (code/explicit-static/account/conversion are high-precision and
+    override even a confident LLM — the LLM can drift «запись»→web_app, the exact
+    BS-7 mistake). Else trust a CONFIDENT LLM; else None (→ clarify / default)."""
+    det = infer_result_type_from_text(prompt)
+    if det is not None:
+        return det
+    if llm_type and llm_conf >= _RESULT_TYPE_MIN_CONFIDENCE:
+        return llm_type
+    return None
+
+
 def serve_planned_question(
     plan: object, asked_count: int
 ) -> DiscoveryResult | None:
@@ -1200,9 +1371,31 @@ async def run_discovery(
                 log.info("discovery: stack '%s'→'code' (program/script intent)", stack)
             stack = "code"
         inferred = _infer_stack_from_text(intent_text)
-        if stack not in ("fullstack", "nextjs_entities", "code") and inferred and not _static_req:
+        # Landing override (RT-1 / BS-7, DARK): a conversion landing («запись/
+        # бронь/заявка») WITHOUT an account ask must stay a public lead-form spa,
+        # not escalate to an auth-gated entities app behind /signin. Gated by both
+        # router flags; getattr-defensive so an older Settings degrades to legacy.
+        _s = get_settings()
+        _low_intent = intent_text.lower()
+        _landing_override = (
+            getattr(_s, "use_result_type_router", False)
+            and getattr(_s, "result_type_landing_lead_sink", False)
+            and _has_conversion_intent(intent_text)
+            and not _has_account_intent(intent_text)
+            and not any(f in _low_intent for f in _APPIFY_FRAMING)
+        )
+        if (
+            stack not in ("fullstack", "nextjs_entities", "code")
+            and inferred
+            and not _static_req
+            and not _landing_override
+        ):
             log.info("discovery: stack '%s'→'%s' (backend intent signals)", stack, inferred)
             stack = inferred
+        elif _landing_override:
+            log.info("discovery: landing override — public lead form, stay spa (BS-7)")
+            if stack == "static" and not _static_req:
+                stack = "spa"
         # Negative safety-net (Phase 7.x): the mirror of the upgrade above. The
         # model OVER-escalated a tool the user explicitly said needs no accounts
         # ("без регистрации") to an auth-backed stack — which would gate the tool
@@ -1264,16 +1457,23 @@ __all__ = [
     "ASK",
     "BUILD",
     "MAX_DISCOVERY_QUESTIONS",
+    "RESULT_TYPES",
     "DiscoveryResult",
     "PlannedQuestion",
+    "classify_result_type",
     "confident_enough_to_build",
     "cumulative_idea",
     "gather_answers",
     "infer_niche_label",
+    "infer_result_type_from_text",
     "plan_discovery_questions",
     "recap_labels",
+    "resolve_result_type",
+    "result_type_to_stack",
     "run_discovery",
     "serve_planned_question",
     "wants_build_now",
     "zero_question_build",
+    "_has_account_intent",
+    "_has_conversion_intent",
 ]

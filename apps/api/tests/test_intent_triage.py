@@ -179,3 +179,13 @@ def test_appification_false_positives_stay_cheap() -> None:
         assert (
             decide_intent(prompt, is_first_prompt=False, appify_enabled=True) == CHEAP
         ), prompt
+
+
+def test_result_type_router_does_not_change_followup_triage() -> None:
+    """RT-1 orthogonality: the first-build result-type router steers the STACK on a
+    first prompt only — it must never touch follow-up build-vs-edit triage. A
+    booking / app-ification phrase on an EXISTING project stays a surgical CHEAP
+    edit (without appify_enabled), exactly as before the router existed."""
+    assert decide_intent("запись на приём", is_first_prompt=False) == CHEAP
+    assert decide_intent("сделай веб-приложение", is_first_prompt=False) == CHEAP
+    assert decide_intent("лендинг с бронированием", is_first_prompt=False) == CHEAP

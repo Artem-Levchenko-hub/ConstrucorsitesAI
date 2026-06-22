@@ -29,12 +29,16 @@ from omnia_api.services.discovery import (
     _infer_stack_from_text,
     _infer_web_pivot,
     _is_run_decline,
+    classify_result_type,
     confident_enough_to_build,
     cumulative_idea,
     gather_answers,
     infer_niche_label,
+    infer_result_type_from_text,
     plan_discovery_questions,
     recap_labels,
+    resolve_result_type,
+    result_type_to_stack,
     run_discovery,
     serve_planned_question,
     wants_build_now,
@@ -1151,3 +1155,120 @@ def test_confidence_skip_holds_early_in_interview() -> None:
     assert not confident_enough_to_build(
         history, "тёмный премиум каталог", asked_count=1, niche="интернет-магазин"
     )
+
+
+# ─── Result-type router (RT-1, 2026-06-22) ───────────────────────────────
+
+
+def test_infer_result_type_landing_for_booking() -> None:
+    """BS-7 core: a conversion landing (запись/бронь) with NO account ask → landing."""
+    assert (
+        infer_result_type_from_text(
+            "сделай сайт для автосервиса: услуги, запись на ремонт онлайн, цены"
+        )
+        == "landing"
+    )
+    assert infer_result_type_from_text("лендинг барбершопа: запись на стрижку") == "landing"
+
+
+def test_infer_result_type_web_app_for_account() -> None:
+    assert (
+        infer_result_type_from_text("CRM с личным кабинетом и регистрацией") == "web_app"
+    )
+    # Account ask WINS over a conversion word (a booking app with a master cabinet).
+    assert (
+        infer_result_type_from_text(
+            "бронирование с личным кабинетом мастера и регистрацией"
+        )
+        == "web_app"
+    )
+
+
+def test_infer_result_type_web_app_for_appify_framing() -> None:
+    """Bug 2: app-ification framing is a web_app signal even with no backend noun."""
+    assert infer_result_type_from_text("сделай веб-приложение") == "web_app"
+    assert (
+        infer_result_type_from_text(
+            "сделай приложение, чтобы пользователи могли регистрироваться"
+        )
+        == "web_app"
+    )
+
+
+def test_infer_result_type_code() -> None:
+    assert infer_result_type_from_text("напиши скрипт-парсер на python") == "code"
+
+
+def test_infer_result_type_explicit_static() -> None:
+    assert infer_result_type_from_text("простая статичная html-страница") == "static"
+
+
+def test_infer_result_type_none_for_vague() -> None:
+    assert infer_result_type_from_text("сделай сайт") is None
+
+
+@pytest.mark.parametrize(
+    ("rt", "expected"),
+    [
+        ("landing", "spa"),
+        ("web_app", "nextjs_entities"),
+        ("tool", "spa"),
+        ("site", "spa"),
+        ("code", "code"),
+        ("static", "static"),
+        ("LANDING", "spa"),  # case-insensitive
+        ("  web_app  ", "nextjs_entities"),  # trimmed
+        ("garbage", None),
+        ("", None),
+    ],
+)
+def test_result_type_to_stack_mapping(rt: str, expected: str | None) -> None:
+    assert result_type_to_stack(rt) == expected
+
+
+async def test_classify_result_type_parses_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(
+        monkeypatch,
+        resp=_gateway_returning('{"type":"landing","confidence":0.9}'),
+    )
+    rt, conf = await classify_result_type("сделай мне что-нибудь", language="ru")
+    assert rt == "landing"
+    assert conf == 0.9
+
+
+async def test_classify_result_type_failsoft_on_exc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch, exc=RuntimeError("gateway down"))
+    assert await classify_result_type("x") == (None, 0.0)
+
+
+async def test_classify_result_type_failsoft_on_garbage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch, resp=_gateway_returning("not json at all"))
+    assert await classify_result_type("x") == (None, 0.0)
+
+
+async def test_classify_result_type_rejects_unknown_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(
+        monkeypatch,
+        resp=_gateway_returning('{"type":"django","confidence":0.95}'),
+    )
+    assert await classify_result_type("x") == (None, 0.0)
+
+
+def test_resolve_result_type_keyword_wins_over_confident_llm() -> None:
+    """The BS-7 guard: a booking prompt resolves to landing even when a confident
+    LLM drifts to web_app (the exact human-intuitive-but-wrong call)."""
+    assert resolve_result_type("запись на приём", "web_app", 0.95) == "landing"
+
+
+def test_resolve_result_type_trusts_confident_llm_on_vague() -> None:
+    assert resolve_result_type("сделай сайт", "tool", 0.8) == "tool"
+
+
+def test_resolve_result_type_none_on_low_confidence() -> None:
+    assert resolve_result_type("сделай сайт", "web_app", 0.3) is None
