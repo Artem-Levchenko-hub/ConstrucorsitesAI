@@ -266,6 +266,61 @@ export async function listRecords(opts: {
   return expand.length ? await expandRecords(def, shaped, expand, user) : shaped;
 }
 
+/** Reject a write whose `unique` field value duplicates another row's. Shared by
+ *  create and update; `excludeId` skips the row being updated so re-saving it
+ *  unchanged isn't a false duplicate. Scoped like reads (owner rows for `owner`
+ *  entities, global for `public`/`admin`); case-insensitive for strings.
+ *  NB: app-level guard, not a DB constraint — two concurrent creates can still
+ *  race past it (TOCTOU); good enough for the single-owner CRUD this serves. */
+async function assertUnique(
+  def: EntityDef,
+  owner: CurrentUser,
+  values: Record<string, unknown>,
+  excludeId?: string,
+) {
+  for (const [key, f] of Object.entries(def.fields)) {
+    if (!f.unique) continue;
+    const val = values[key];
+    if (val === undefined || val === null || val === "") continue;
+    const dupConds: SQL[] = [
+      eq(records.entity, def.name),
+      sql`lower(${records.data} ->> ${key}) = lower(${String(val)})`,
+    ];
+    if (def.access === "owner") dupConds.push(eq(records.createdBy, owner.id));
+    if (excludeId) dupConds.push(sql`${records.id} <> ${excludeId}`);
+    const [dup] = await db
+      .select({ id: records.id })
+      .from(records)
+      .where(and(...dupConds))
+      .limit(1);
+    if (dup) throw new EngineError(409, `Такое значение поля «${key}» уже есть`);
+  }
+}
+
+/** Reject a write that points a `reference` field at a non-existent target row, so
+ *  a record can't be saved with a dangling relation. This is the create/update half
+ *  of referential integrity (the delete half is `applyOnDelete`). Empty/optional refs
+ *  are allowed; a reference to an UNKNOWN entity type is skipped — that's a schema
+ *  issue, not bad data, and we never hard-block a write on a misconfigured schema. */
+async function assertReferencesExist(
+  def: EntityDef,
+  values: Record<string, unknown>,
+) {
+  const refs = referenceFields(def);
+  for (const [field, target] of Object.entries(refs)) {
+    const val = values[field];
+    if (typeof val !== "string" || val.length === 0) continue;
+    if (!(await loadEntity(target))) continue; // unknown target type — skip, don't block
+    const [hit] = await db
+      .select({ id: records.id })
+      .from(records)
+      .where(and(eq(records.entity, target), eq(records.id, val)))
+      .limit(1);
+    if (!hit)
+      throw new EngineError(400, `Связанная запись в поле «${field}» не найдена`);
+  }
+}
+
 export async function createRecord(opts: {
   def: EntityDef;
   user: CurrentUser | null;
@@ -282,26 +337,10 @@ export async function createRecord(opts: {
   }
   const data = applyDefaults(def, parsed.data as Record<string, unknown>);
 
-  // Uniqueness guard: reject a create that duplicates an existing row's value on
-  // a field marked `unique` (e.g. a client's phone/email), so the same record
-  // can't be entered three times. Scoped like reads — within the owner's rows for
-  // `owner` entities, globally for `public`/`admin`. Case-insensitive for strings.
-  for (const [key, f] of Object.entries(def.fields)) {
-    if (!f.unique) continue;
-    const val = data[key];
-    if (val === undefined || val === null || val === "") continue;
-    const dupConds: SQL[] = [
-      eq(records.entity, def.name),
-      sql`lower(${records.data} ->> ${key}) = lower(${String(val)})`,
-    ];
-    if (def.access === "owner") dupConds.push(eq(records.createdBy, owner.id));
-    const [dup] = await db
-      .select({ id: records.id })
-      .from(records)
-      .where(and(...dupConds))
-      .limit(1);
-    if (dup) throw new EngineError(409, `Такое значение поля «${key}» уже есть`);
-  }
+  // Integrity guards (shared with updateRecord): no duplicate `unique` value, and
+  // every `reference` must point at a row that actually exists.
+  await assertUnique(def, owner, data);
+  await assertReferencesExist(def, data);
 
   const [row] = await db
     .insert(records)
@@ -385,6 +424,12 @@ export async function updateRecord(opts: {
   }
 
   const merged = { ...(existing[0].data as Record<string, unknown>), ...parsed.data };
+
+  // Same integrity guards as create: uniqueness (excluding THIS row so an unchanged
+  // re-save isn't a false duplicate) and reference existence on the merged values.
+  await assertUnique(def, owner, merged, id);
+  await assertReferencesExist(def, merged);
+
   const [row] = await db
     .update(records)
     .set({ data: merged, updatedAt: sql`now()` })
