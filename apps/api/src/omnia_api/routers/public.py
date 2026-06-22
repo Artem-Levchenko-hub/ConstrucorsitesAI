@@ -1,17 +1,20 @@
 import asyncio
 import html
+import json
 import logging
 from mimetypes import guess_type
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
 from omnia_api.core.deps import OptionalUserDep, SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.core.redis import get_redis
+from omnia_api.models.lead import Lead
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers.projects import perform_fork
@@ -99,6 +102,82 @@ async def _resolve_snapshot(
     if snapshot is None or snapshot.project_id != project.id:
         raise ApiError("not_found", "snapshot not found", status.HTTP_404_NOT_FOUND)
     return project, snapshot
+
+
+# ── Lead capture (P-LEAD) ────────────────────────────────────────────────────
+# A generated public site's form POSTs here (relative `lead` → /p/<slug>/lead), so
+# a lead form actually DELIVERS instead of showing a fake «Спасибо» and discarding
+# the data. No auth — anyone on the public page can submit; the row lands in `leads`
+# and the owner reads it from the workspace «Заявки» inbox. Abuse-guarded by payload
+# size/shape caps + a per-IP+project Redis throttle (fail-open so a Redis hiccup
+# never loses a real lead).
+_LEAD_MAX_FIELDS = 40
+_LEAD_MAX_VALUE_LEN = 4000
+_LEAD_MAX_BYTES = 16_384
+_LEAD_RATE_MAX = 20  # submissions
+_LEAD_RATE_WINDOW = 600  # per 10 min, per IP+project
+
+
+@router.post("/{slug}/lead", include_in_schema=False)
+async def submit_lead(slug: str, request: Request, session: SessionDep) -> Response:
+    res = await session.execute(select(Project).where(Project.slug == slug))
+    project = res.scalar_one_or_none()
+    if project is None:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+
+    raw = await request.body()
+    if len(raw) > _LEAD_MAX_BYTES:
+        raise ApiError(
+            "validation_failed",
+            "форма слишком большая",
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+    try:
+        body = json.loads(raw or b"{}")
+    except (ValueError, TypeError):
+        raise ApiError(
+            "validation_failed", "ожидался JSON", status.HTTP_400_BAD_REQUEST
+        ) from None
+    if not isinstance(body, dict) or not body:
+        raise ApiError("validation_failed", "пустая заявка", status.HTTP_400_BAD_REQUEST)
+
+    # Keep only short string-ish fields; cap count + length. A `_source`/`source`
+    # control field becomes the row's source hint, not a lead field.
+    source: str | None = None
+    clean: dict[str, str] = {}
+    for key_raw, value in list(body.items())[:_LEAD_MAX_FIELDS]:
+        key = str(key_raw)[:120]
+        if key in ("_source", "source") and isinstance(value, str):
+            source = value[:200]
+            continue
+        if value is None:
+            continue
+        clean[key] = str(value)[:_LEAD_MAX_VALUE_LEN]
+    if not clean:
+        raise ApiError("validation_failed", "пустая заявка", status.HTTP_400_BAD_REQUEST)
+
+    # Per-IP+project throttle. Fail-open: a Redis error must never drop a real lead.
+    ip = request.client.host if request.client else "unknown"
+    try:
+        redis = get_redis()
+        rkey = f"lead_rl:{project.id}:{ip}"
+        count = await redis.incr(rkey)
+        if count == 1:
+            await redis.expire(rkey, _LEAD_RATE_WINDOW)
+        if count > _LEAD_RATE_MAX:
+            raise ApiError(
+                "rate_limited",
+                "слишком много заявок, попробуйте позже",
+                status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+    except ApiError:
+        raise
+    except Exception as exc:
+        log.warning("lead throttle skipped (redis): %r", exc)
+
+    session.add(Lead(project_id=project.id, data=clean, source=source))
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _file_response(path: str, content: bytes) -> Response:

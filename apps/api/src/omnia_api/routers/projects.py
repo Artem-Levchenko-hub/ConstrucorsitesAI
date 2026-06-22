@@ -8,11 +8,12 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Response, status
 from fastapi.responses import StreamingResponse
 from slugify import slugify
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.config import get_settings
+from omnia_api.core.crypto import decrypt_secret
 from omnia_api.core.deps import (
     CurrentUserDep,
     OptionalUserDep,
@@ -23,12 +24,12 @@ from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import get_exe_object, preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.core.security import create_access_token
+from omnia_api.models.lead import Lead
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
-from omnia_api.core.crypto import decrypt_secret
 from omnia_api.schemas.project import (
     ProjectCreate,
     ProjectImportRequest,
@@ -36,14 +37,13 @@ from omnia_api.schemas.project import (
     ProjectUpdate,
     is_fullstack,
 )
-from omnia_api.services import orchestrator_client
+from omnia_api.services import orchestrator_client, repo_import
 from omnia_api.services import repo as repo_svc
-from omnia_api.services import repo_import
 from omnia_api.services.design_presets import PRESETS
-from omnia_api.services.run_bundle import build_launchers
 from omnia_api.services.fork_recap import build_fork_recap
 from omnia_api.services.preset_classifier import classify_preset_sync
-from omnia_api.services.queue import enqueue_preview, enqueue_build_exe
+from omnia_api.services.queue import enqueue_build_exe, enqueue_preview
+from omnia_api.services.run_bundle import build_launchers
 
 _UNTITLED_NAMES = frozenset({"untitled", "новый проект", "проект", "new project"})
 
@@ -510,6 +510,42 @@ async def get_project(
             project.forked_from_name = source.name
             project.forked_from_slug = source.slug
     return project
+
+
+@router.get("/{project_id}/leads")
+async def list_leads(
+    project_id: UUID, session: SessionDep, current_user: CurrentUserDep
+) -> dict[str, object]:
+    """Owner «Заявки» inbox — lead-form submissions captured from the public site
+    (P-LEAD). Owner-scoped; newest first, capped at 200 with a real total count."""
+    project = await session.get(Project, project_id)
+    if project is None or project.owner_id != current_user.id:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    total = (
+        await session.execute(
+            select(func.count())
+            .select_from(Lead)
+            .where(Lead.project_id == project_id)
+        )
+    ).scalar_one()
+    res = await session.execute(
+        select(Lead)
+        .where(Lead.project_id == project_id)
+        .order_by(Lead.created_at.desc())
+        .limit(200)
+    )
+    return {
+        "count": int(total),
+        "leads": [
+            {
+                "id": str(row.id),
+                "data": row.data,
+                "source": row.source,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in res.scalars().all()
+        ],
+    }
 
 
 @router.get("/{project_id}/download")
