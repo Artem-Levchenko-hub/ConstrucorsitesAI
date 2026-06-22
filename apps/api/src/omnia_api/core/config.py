@@ -706,7 +706,11 @@ class Settings(BaseSettings):
     # pipeline (the loop is never entered). Flip per-project for dogfood first.
     # Env: USE_AGENTIC_BUILDER. `agent_builder_max_steps` bounds the loop.
     use_agentic_builder: bool = Field(default=False)
-    agent_builder_max_steps: int = Field(default=14)
+    # Step budget for the loop. Explore-then-build on the entity template needs
+    # headroom: the agent reads a couple of examples, declares N entities, writes
+    # the screens, then build+fix. 14 was too tight (all spent exploring); 40
+    # gives room to actually write + repair. Env: AGENT_BUILDER_MAX_STEPS.
+    agent_builder_max_steps: int = Field(default=40)
 
     # Honest chat content (2026-06-21). The assistant message saved to the DB is
     # the model's RAW output (<file>/<edit> blocks + any stray prose/code). The

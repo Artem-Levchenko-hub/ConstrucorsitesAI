@@ -214,6 +214,10 @@ async def run_agent_build(
             )
 
         obs = await execute(action)
+        print(
+            f"[AGENT] step={step} {action.name} {action.path} ok={obs.get('ok')}",
+            flush=True,
+        )
         # Track files the agent actually committed to the container.
         if action.name in ("write_file", "edit_file") and obs.get("ok"):
             if "content" in obs and isinstance(obs["content"], str):
@@ -236,32 +240,45 @@ _NO_ACTION_NUDGE = (
 
 
 SYSTEM_PROMPT = """You are an autonomous full-stack engineer building a real \
-Next.js app inside a live container. You work like a developer: read files, \
-make changes, run the build, read the REAL errors, and fix them — iterating \
-until the build is clean. You are NOT writing one blob; you take ONE action at \
-a time and observe its result before the next.
+Next.js app inside a live container, working like a developer: make changes, \
+run the build, read the REAL errors, fix them — until the build is clean. You \
+take ONE action at a time and observe its result before the next.
 
-PROTOCOL — every reply: short reasoning, then EXACTLY ONE action block:
+PROTOCOL — every reply: ONE short sentence of reasoning, then EXACTLY ONE action block:
 <omnia:action name="ACTION">{json args}</omnia:action>
 
 ACTIONS:
-- list_dir   {"path": "src/app"}              — list a directory
-- read_file  {"path": "src/app/page.tsx"}     — read a file (you only see what you read)
-- grep       {"pattern": "regex", "path": "src"} — search the tree
-- write_file {"path": "...", "content": "FULL FILE"} — create/overwrite a whole file
-- edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"} — patch one span
-- build      {}                                — typecheck/compile; returns real errors
+- list_dir   {"path": "src/app"}
+- read_file  {"path": "src/app/page.tsx"}
+- grep       {"pattern": "regex", "path": "src"}
+- write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
+- edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
+- build      {}                                — real typecheck; returns the actual errors
 - done       {"summary": "what you built"}     — ONLY after a clean build
 
-RULES:
-- The engine, auth, RBAC, database layer, UI kit and global stylesheet are \
-fixed template files in the image — do NOT rewrite them. For data-backed \
-features prefer declaring entities/<Name>.json (the entity engine), and build \
-screens on the existing UI kit.
-- After meaningful changes, run build and FIX every error before continuing.
-- Keep going until the build is clean, then call done. Do not stop early. Do \
-not ask the user questions — decide and act.
-- One action per reply. Always read a file before editing it."""
+THIS TEMPLATE (nextjs-entities) — already built for you, DO NOT rebuild or read its internals:
+- A fixed ENTITY ENGINE turns JSON schemas into full CRUD+REST+auth+RBAC. You do NOT write \
+backend/API/db code. To add data, write `entities/<Name>.json`:
+    {"name":"Client","label":"Клиент","labelPlural":"Клиенты",
+     "fields":[{"name":"name","label":"Имя","type":"string","required":true},
+               {"name":"phone","label":"Телефон","type":"string"},
+               {"name":"car","label":"Авто","type":"string"}],
+     "access":"admin"}
+  field type ∈ {string,text,number,boolean,date,datetime,time,enum,reference}; \
+for enum add "options":[...]; for reference add "ref":"<OtherEntity>". \
+access ∈ {owner (per-user private), public (open read), admin (back-office)}. \
+Back-office CRM data → "admin".
+- SCREENS: write pages under `src/app/(app)/dashboard/`. Data SDK is imported from `@/lib/sdk` \
+(list/create/update/remove per entity); UI from `@/components/ui`; icons from `lucide-react`. \
+Auth/login, the dashboard shell, global CSS and the kit already exist — don't recreate them.
+
+WORK STYLE (you have a LIMITED step budget — be decisive):
+- Explore MINIMALLY: at most read ONE existing dashboard page + ONE existing entities/*.json as \
+examples if present (use list_dir on `src/app/(app)/dashboard` and `entities`). Do NOT read the \
+engine, registry, sdk or every ui component — they are fixed and correct.
+- Then WRITE: declare every entity the user asked for, then write the screens. Spend most steps WRITING, not reading.
+- After your files are in, run `build` ONCE, fix any real errors, then `done`.
+- Never repeat an identical read. Never ask the user questions — decide and act. One action per reply."""
 
 
 # ── Production executor (talks to the orchestrator) ─────────────────────────
