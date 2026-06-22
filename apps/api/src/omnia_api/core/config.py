@@ -697,6 +697,17 @@ class Settings(BaseSettings):
     # block). Recommended flip: true. Env: USE_FEATURE_SCAFFOLD.
     use_feature_scaffold: bool = Field(default=False)
 
+    # Agentic builder (2026-06-22, Phase 0 of the "like Claude Code" engine).
+    # When ON, container-app BUILDS (nextjs_entities/fullstack/spa, first build)
+    # run through a real plan→act→observe→verify agent loop
+    # (services/agent_builder.py): the model reads/writes files, runs a real
+    # typecheck, sees the actual errors, and iterates until the build is clean —
+    # instead of one-shot text→regex. Default OFF = byte-identical to today's
+    # pipeline (the loop is never entered). Flip per-project for dogfood first.
+    # Env: USE_AGENTIC_BUILDER. `agent_builder_max_steps` bounds the loop.
+    use_agentic_builder: bool = Field(default=False)
+    agent_builder_max_steps: int = Field(default=14)
+
     # Honest chat content (2026-06-21). The assistant message saved to the DB is
     # the model's RAW output (<file>/<edit> blocks + any stray prose/code). The
     # frontend renders anything NOT wrapped in a recognised block as raw text, so

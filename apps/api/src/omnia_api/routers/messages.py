@@ -2186,6 +2186,131 @@ async def _process_prompt(
                 _log.warning("preset classify failed: %r", cls_exc)
                 project_design_preset_id = None
 
+        # ── Agentic builder (Phase 0) ───────────────────────────────────────
+        # When USE_AGENTIC_BUILDER is on, a container-app FIRST BUILD runs a real
+        # plan→act→observe→verify agent loop instead of one-shot text→regex: the
+        # model reads/writes files in the live dev container, runs a real
+        # typecheck, sees the actual errors and iterates until clean. Isolated
+        # early-return path that reuses the standard commit/snapshot/finalise
+        # helpers. When the flag is OFF this block is skipped and generation runs
+        # exactly as before (byte-identical).
+        if (
+            get_settings().use_agentic_builder
+            and orchestrate
+            and not surgical
+            and project_template in CONTAINER_NEXT
+            and project_slug
+            and not project_is_imported
+        ):
+            from omnia_api.services import agent_builder
+
+            async def _agent_emit(event: str, data: dict[str, Any]) -> None:
+                # Surface each agent step as a chat delta so the user SEES the
+                # agent working (read/write/build/fix), like watching a developer.
+                act = data.get("action", "")
+                pth = data.get("path", "")
+                await publish_event(
+                    project_id,
+                    "llm.chunk",
+                    {
+                        "message_id": str(assistant_message_id),
+                        "delta": f"\n[агент] {act} {pth}".rstrip(),
+                    },
+                )
+
+            _agent_executor = agent_builder.make_container_executor(
+                project_id=project_id, slug=project_slug
+            )
+            _agent_user = (
+                f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
+                f"Тип проекта: {project_template}. Работай итеративно: читай "
+                f"файлы, пиши/правь, запускай build и чини КАЖДУЮ ошибку, пока "
+                f"сборка не станет чистой, затем вызови done."
+            )
+            _agent_res = await agent_builder.run_agent_build(
+                system_prompt=agent_builder.SYSTEM_PROMPT,
+                user_prompt=_agent_user,
+                model=model_id,
+                execute=_agent_executor,
+                max_steps=int(get_settings().agent_builder_max_steps),
+                emit=_agent_emit,
+                user_id=str(user_id),
+                project_id=str(project_id),
+            )
+            files = _agent_res.files
+            accumulated = (
+                _agent_res.summary
+                or ("Готово — приложение собрано." if _agent_res.done else "Сборка прервана.")
+            )
+            print(
+                f"[PP] agentic_build done={_agent_res.done} steps={_agent_res.steps} "
+                f"files={len(files)} stop={_agent_res.stop_reason}",
+                flush=True,
+            )
+
+            if files:
+                new_sha = await asyncio.to_thread(
+                    repo_svc.commit_files,
+                    project_id,
+                    files,
+                    f"AI(agent): {prompt_text[:50]}",
+                    current_sha,
+                )
+                async with factory() as session:
+                    snapshot = Snapshot(
+                        project_id=project_id,
+                        commit_sha=new_sha,
+                        prompt_text=prompt_text,
+                        model_id=model_id,
+                        parent_id=current_snapshot_id,
+                    )
+                    session.add(snapshot)
+                    await session.flush()
+                    _agent_snap_id = snapshot.id
+                    project = await session.get(Project, project_id)
+                    if project is not None:
+                        project.current_snapshot_id = snapshot.id
+                    msg = await session.get(Message, assistant_message_id)
+                    if msg is not None:
+                        msg.content = accumulated
+                        msg.snapshot_id = snapshot.id
+                        msg.tokens_out = msg.tokens_out or 0
+                    if is_free:
+                        user_row = await session.get(User, user_id)
+                        if user_row is not None:
+                            user_row.free_generations_used = (
+                                user_row.free_generations_used or 0
+                            ) + 1
+                    await session.commit()
+                    await session.refresh(snapshot)
+                await asyncio.to_thread(enqueue_preview, _agent_snap_id)
+                await publish_event(
+                    project_id,
+                    "snapshot.created",
+                    {"snapshot": _snapshot_payload(snapshot)},
+                )
+            else:
+                # Nothing written — mark the row done so the UI unblocks.
+                async with factory() as session:
+                    msg = await session.get(Message, assistant_message_id)
+                    if msg is not None:
+                        msg.content = accumulated
+                        msg.tokens_out = msg.tokens_out or 0
+                    await session.commit()
+
+            await publish_event(
+                project_id,
+                "llm.done",
+                {
+                    "message_id": str(assistant_message_id),
+                    "tokens_in": None,
+                    "tokens_out": None,
+                    "cost_rub": None,
+                },
+            )
+            await clear_stream_state(project_id, assistant_message_id)
+            return
+
         messages = build_messages(
             current_files,
             history_serialized,

@@ -262,6 +262,59 @@ async def read_container_file(
     return content if isinstance(content, str) else None
 
 
+# ── Agentic builder tools (Phase 0) ─────────────────────────────────────────
+# Thin wrappers the api-side agent loop (services/agent_builder.py) calls to act
+# on the live dev container. Each maps to a /agent/* orchestrator endpoint.
+
+
+async def agent_read_file(
+    project_id: UUID, slug: str, path: str
+) -> str | None:
+    """Read ANY file under /app from the dev container; None if missing/down."""
+    resp = await _request(
+        "GET",
+        f"/internal/projects/{project_id}/agent/read-file",
+        params={"slug": slug, "path": path},
+    )
+    if not resp.get("found"):
+        return None
+    content = resp.get("content")
+    return content if isinstance(content, str) else None
+
+
+async def agent_list_dir(project_id: UUID, slug: str, path: str = ".") -> str:
+    """List a directory under /app; returns the ls output (or an error line)."""
+    resp = await _request(
+        "GET",
+        f"/internal/projects/{project_id}/agent/list-dir",
+        params={"slug": slug, "path": path},
+    )
+    detail = resp.get("detail")
+    return detail if isinstance(detail, str) else ""
+
+
+async def agent_grep(
+    project_id: UUID, slug: str, *, pattern: str, path: str = "src"
+) -> str:
+    """Recursive text search under /app; returns matches (or '(no matches)')."""
+    resp = await _request(
+        "GET",
+        f"/internal/projects/{project_id}/agent/grep",
+        params={"slug": slug, "pattern": pattern, "path": path},
+    )
+    detail = resp.get("detail")
+    return detail if isinstance(detail, str) else ""
+
+
+async def agent_build(project_id: UUID, slug: str) -> dict[str, Any]:
+    """Run the container typecheck; returns {ok: bool, detail/error: str}."""
+    return await _request(
+        "POST",
+        f"/internal/projects/{project_id}/agent/build",
+        params={"slug": slug},
+    )
+
+
 async def hot_reload(
     project_id: UUID, slug: str, files: dict[str, str]
 ) -> dict[str, Any]:

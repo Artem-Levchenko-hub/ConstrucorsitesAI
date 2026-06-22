@@ -70,6 +70,36 @@ router = APIRouter(prefix="/internal/projects", tags=["runtime"])
 # override block, so we expose a narrow, read-only door — strictly whitelisted.
 _READABLE_FILES = frozenset({"src/app/globals.css"})
 
+# Agentic builder (Phase 0) caps — bound each observation so one fat result
+# can't blow the agent's context window.
+_AGENT_MAX_READ = 1_000_000
+_AGENT_MAX_LIST = 16_000
+_AGENT_MAX_GREP = 16_000
+_AGENT_MAX_BUILD = 24_000
+
+
+def _safe_app_path(path: str) -> str:
+    """Validate an agent-supplied path stays inside /app and return it relative.
+
+    Rejects absolute paths, ``~``, NUL, and any ``..`` segment (traversal). The
+    container already runs non-root + cap-dropped; this is defense-in-depth so a
+    tool call can never escape the project tree.
+    """
+    p = (path or "").strip()
+    if (
+        not p
+        or p.startswith("/")
+        or p.startswith("~")
+        or "\x00" in p
+        or ".." in p.split("/")
+    ):
+        raise OrchestratorError(
+            code="validation_failed",
+            message=f"unsafe path: {path!r}",
+            status_code=403,
+        )
+    return p
+
 
 def _verify_token(token: str | None) -> None:
     expected = get_settings().internal_token.get_secret_value()
@@ -341,6 +371,117 @@ async def read_file(
         return {"found": False, "content": ""}
     found = result["exit_code"] == "0"
     return {"found": found, "content": result["stdout"] if found else ""}
+
+
+# ── Agentic builder tools (Phase 0) ─────────────────────────────────────────
+# Internal-token-gated capability surface the api-side agent loop calls to act
+# on the live dev container: read any /app file, list, grep, and run a real
+# typecheck/build. Separate from the whitelisted ``read-file`` above (used by
+# style edits) so that path is untouched. exec_cmd already runs non-root
+# (1000:1000) inside the cap-dropped container; `_safe_app_path` blocks escape.
+
+
+@router.get("/{project_id}/agent/read-file")
+async def agent_read_file(
+    project_id: str,
+    slug: str,
+    path: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """Read ANY file under /app from the running dev container (agent loop)."""
+    _verify_token(x_internal_token)
+    rel = _safe_app_path(path)
+    container_name = f"omnia-dev-{slug}"
+    try:
+        result = await exec_cmd(
+            container_name, cmd=["cat", "--", rel],
+            workdir="/app", max_output=_AGENT_MAX_READ,
+        )
+    except OrchestratorError:
+        return {"found": False, "content": ""}
+    found = result["exit_code"] == "0"
+    return {
+        "found": found,
+        "content": result["stdout"] if found else "",
+        "error": "" if found else (result["stderr"][:500] or "not found"),
+    }
+
+
+@router.get("/{project_id}/agent/list-dir")
+async def agent_list_dir(
+    project_id: str,
+    slug: str,
+    path: str = ".",
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """List a directory under /app (agent loop)."""
+    _verify_token(x_internal_token)
+    rel = _safe_app_path(path)
+    container_name = f"omnia-dev-{slug}"
+    try:
+        result = await exec_cmd(
+            container_name, cmd=["ls", "-la", "--", rel],
+            workdir="/app", max_output=_AGENT_MAX_LIST,
+        )
+    except OrchestratorError:
+        return {"ok": False, "detail": "container not running"}
+    ok = result["exit_code"] == "0"
+    return {"ok": ok, "detail": result["stdout"] if ok else result["stderr"]}
+
+
+@router.get("/{project_id}/agent/grep")
+async def agent_grep(
+    project_id: str,
+    slug: str,
+    pattern: str,
+    path: str = "src",
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """Recursive text search under /app (agent loop). grep exit 1 = no match."""
+    _verify_token(x_internal_token)
+    rel = _safe_app_path(path)
+    if not pattern:
+        raise OrchestratorError(
+            code="validation_failed", message="empty pattern", status_code=400,
+        )
+    container_name = f"omnia-dev-{slug}"
+    try:
+        # argv (no shell) → no injection; `--` ends options so a pattern that
+        # starts with `-` can't become a flag.
+        result = await exec_cmd(
+            container_name, cmd=["grep", "-rnI", "--", pattern, rel],
+            workdir="/app", max_output=_AGENT_MAX_GREP,
+        )
+    except OrchestratorError:
+        return {"ok": False, "detail": "container not running"}
+    out = result["stdout"]
+    return {"ok": True, "detail": out if out else "(no matches)"}
+
+
+@router.post("/{project_id}/agent/build")
+async def agent_build(
+    project_id: str,
+    slug: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """Run the project's local TypeScript typecheck — a real, deterministic
+    correctness signal independent of HMR timing. Non-zero exit returns the
+    actual compiler errors so the agent can fix them."""
+    _verify_token(x_internal_token)
+    container_name = f"omnia-dev-{slug}"
+    try:
+        result = await exec_cmd(
+            container_name,
+            cmd=["/app/node_modules/.bin/tsc", "--noEmit", "-p", "/app/tsconfig.json"],
+            workdir="/app",
+            timeout_sec=180,
+            max_output=_AGENT_MAX_BUILD,
+        )
+    except OrchestratorError as exc:
+        return {"ok": False, "error": exc.message}
+    ok = result["exit_code"] == "0"
+    detail = (result["stdout"] + "\n" + result["stderr"]).strip()
+    return {"ok": ok, "detail": "typecheck clean" if ok else detail[:_AGENT_MAX_BUILD]}
 
 
 def _deploy_record_to_response(rec: deploy_state.DeployRecord) -> DeployResponse:
