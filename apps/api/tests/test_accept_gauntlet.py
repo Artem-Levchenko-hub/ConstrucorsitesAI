@@ -1019,3 +1019,176 @@ async def test_cabinet_leg_not_fanned_without_dial(monkeypatch):
     _stub_rendered(monkeypatch, wow=_wow(), perf=_perf(), chip=_chip(checked=("palette-bg",)))
     v = await accept_gauntlet.run(files={"index.html": _CLEAN_HTML})  # include_rendered=True
     assert accept_gauntlet.CABINET not in {g.gate for g in v.gates}
+
+
+# ── Area D — composition-gate retune (anti-sameness, DARK) ────────────────────
+# The ALWAYS-ON composition floor (taste 4/5 + hierarchy 2/3) rewards ONE
+# silhouette. These prove the retune knobs: (1) demoting hierarchy's
+# focal-dominance + asymmetry to advisory unblocks a multi-focal / 3-card-row
+# layout while keeping type-dominance as the floor; (2) advisory-failed classes
+# never leak into failed_classes / repair; (3) a lowered taste score floor ships a
+# 3/5 page; (4) the defaults are byte-identical to today's hard floor; (5) typo'd
+# check ids are dropped, never a blanket-advisory footgun.
+from omnia_api.services.hierarchy_gate import (  # noqa: E402
+    ASYMMETRY,
+    FOCAL_DOMINANCE,
+    TYPE_DOMINANCE,
+    HierarchyFinding,
+)
+
+
+async def test_hierarchy_advisory_unblocks_focal_and_asymmetry(monkeypatch):
+    # a symmetric, multi-focal, 3-equal-card layout fails focal-dominance +
+    # asymmetry (score 1/3 — today a HARD fail). Demoting both to advisory keeps
+    # only type-dominance as the floor → it ships, and the advisory classes do NOT
+    # leak into the blocked-ship issue set.
+    _stub_selective(
+        monkeypatch,
+        hier=_hier(
+            score=1,
+            findings=(
+                HierarchyFinding(FOCAL_DOMINANCE, "2 competing visuals"),
+                HierarchyFinding(ASYMMETRY, "generic 3-card row"),
+            ),
+        ),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        hierarchy_advisory_checks=("focal-dominance", "asymmetry"),
+    )
+    assert v.passed is True
+    assert v.hard_failed == ()
+    assert all(not c.startswith("hierarchy:") for c in v.failed_classes)
+    # ...but the leg still SURFACES its findings in the subscore (advisory, visible).
+    hier_sub = next(g for g in v.subscore()["gates"] if g["gate"] == "hierarchy")
+    assert hier_sub["checks"]["focal-dominance"] is False
+
+
+async def test_hierarchy_advisory_keeps_type_dominance_as_floor(monkeypatch):
+    # with focal + asymmetry advisory, a TYPE-DOMINANCE failure (flat type — the
+    # real "generic AI" tell) still HARD-fails: the floor is the blocking check.
+    _stub_selective(
+        monkeypatch,
+        hier=_hier(
+            score=2, findings=(HierarchyFinding(TYPE_DOMINANCE, "flat type 1.1×"),)
+        ),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        hierarchy_advisory_checks=("focal-dominance", "asymmetry"),
+    )
+    assert v.passed is False
+    assert accept_gauntlet.HIERARCHY in {g.gate for g in v.hard_failed}
+    assert "hierarchy:type-dominance" in v.failed_classes
+
+
+async def test_taste_lowered_min_score_ships_three_of_five(monkeypatch):
+    # a 3/5 taste page (today a HARD fail at the 4/5 floor) ships when the owner
+    # drops the floor to 3 — and a passing leg contributes no blocked classes.
+    _stub_selective(
+        monkeypatch,
+        taste=_taste(
+            score=3,
+            findings=(
+                TasteFinding("hero-imagery", "solid plate"),
+                TasteFinding("layout-variety", "monotone column"),
+            ),
+        ),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        taste_min_score=3,
+    )
+    assert v.passed is True
+    assert v.hard_failed == ()
+    assert all(not c.startswith("taste:") for c in v.failed_classes)
+
+
+async def test_taste_advisory_hero_imagery_unblocks_imageless_hero(monkeypatch):
+    # demoting hero-imagery to advisory lets a type-only / poster hero (no big
+    # image) ship — the check still surfaces but no longer blocks.
+    _stub_selective(
+        monkeypatch,
+        taste=_taste(score=4, findings=(TasteFinding("hero-imagery", "solid plate"),)),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        taste_advisory_checks=("hero-imagery",),
+    )
+    assert v.passed is True
+    assert "taste:hero-imagery" not in v.failed_classes
+
+
+async def test_retune_defaults_are_byte_identical(monkeypatch):
+    # the DARK guarantee: with no policy args (and stock settings) a 2/5 taste page
+    # still HARD-fails — the retune adds nothing until the owner flips a flag.
+    _stub_selective(
+        monkeypatch,
+        taste=_taste(score=2, findings=(TasteFinding("hero-imagery", "solid plate"),)),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML}, include_rendered=False, composition=True
+    )
+    assert v.passed is False
+    assert accept_gauntlet.TASTE in {g.gate for g in v.hard_failed}
+    assert "taste:hero-imagery" in v.failed_classes
+
+
+async def test_advisory_class_does_not_leak_when_sibling_hard_fails(monkeypatch):
+    # hierarchy advisory passes (focal+asymmetry demoted) while taste hard-fails:
+    # the blocked-ship issue set carries the taste class but NOT the advisory ones.
+    _stub_selective(
+        monkeypatch,
+        taste=_taste(score=2, findings=(TasteFinding("hero-imagery", "solid plate"),)),
+        hier=_hier(score=1, findings=(HierarchyFinding(ASYMMETRY, "3-card row"),)),
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        hierarchy_advisory_checks=("focal-dominance", "asymmetry"),
+    )
+    assert v.passed is False
+    assert "taste:hero-imagery" in v.failed_classes
+    assert all(not c.startswith("hierarchy:") for c in v.failed_classes)
+
+
+def test_resolve_composition_policy_drops_unknown_checks():
+    # a typo'd id is intersected away → no accidental blanket-advisory.
+    pol = accept_gauntlet._resolve_composition_policy(
+        taste_advisory_checks=("bogus-check", "hero-imagery"),
+        taste_min_score=None,
+        hierarchy_advisory_checks=("nonsense",),
+        hierarchy_min_score=None,
+    )
+    assert pol[accept_gauntlet.TASTE]["advisory"] == frozenset({"hero-imagery"})
+    assert pol[accept_gauntlet.HIERARCHY]["advisory"] == frozenset()
+
+
+async def test_composition_abstain_unchanged_under_retune(monkeypatch):
+    # a flaky render still ABSTAINS (strict fail, not hard) even with the retune on
+    # — the advisory policy never converts "no evidence" into a pass.
+    _stub_selective(
+        monkeypatch, taste=_taste(rendered=False), hier=_hier(rendered=False)
+    )
+    v = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=False,
+        composition=True,
+        taste_min_score=3,
+        hierarchy_advisory_checks=("focal-dominance", "asymmetry"),
+    )
+    assert v.passed is False
+    assert v.hard_failed == ()
+    assert {g.gate for g in v.abstained} == {
+        accept_gauntlet.TASTE,
+        accept_gauntlet.HIERARCHY,
+    }

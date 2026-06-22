@@ -97,3 +97,33 @@ async def test_remember_pushes_tagged_entry(monkeypatch):
     monkeypatch.setattr(redis_mod, "get_redis", lambda: fake)
     await originality.remember("projZ", 42)
     assert fake.entries == ["projZ:42"]
+
+
+# ── measure() — single source of distance + issue (Area D shadow metric) ──────
+
+
+async def test_measure_returns_distance_and_issue_on_near_duplicate(monkeypatch):
+    png = _grad_png(False)
+    fp = originality.fingerprint(png)
+    monkeypatch.setattr(redis_mod, "get_redis", lambda: _FakeRedis([f"other:{fp}"]))
+    out_fp, dist, issue = await originality.measure("mine", png, max_distance=10)
+    assert out_fp == fp
+    assert dist == 0  # identical fingerprint in another project
+    assert issue is not None and "оригинальность" in issue
+
+
+async def test_measure_reports_distance_without_issue_when_far(monkeypatch):
+    # a maximally-different sibling page → large distance, no near-dup issue, but
+    # the distance is still reported (this is what the shadow metric logs).
+    mine = _grad_png(False)
+    other_fp = originality.fingerprint(_grad_png(True))
+    monkeypatch.setattr(redis_mod, "get_redis", lambda: _FakeRedis([f"other:{other_fp}"]))
+    out_fp, dist, issue = await originality.measure("mine", mine, max_distance=10)
+    assert out_fp is not None
+    assert dist is not None and dist > 10
+    assert issue is None
+
+
+async def test_measure_failsoft_on_garbage():
+    out_fp, dist, issue = await originality.measure("p", b"not a png", max_distance=10)
+    assert (out_fp, dist, issue) == (None, None, None)

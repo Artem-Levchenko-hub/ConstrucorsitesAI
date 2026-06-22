@@ -162,6 +162,10 @@ async def evaluate(
     if run_originality is None:
         run_originality = settings.use_originality
     vision_blocks = settings.acceptance_vision_block_enabled
+    # Area D — originality SHADOW metric: measure + log the cross-project dHash
+    # distance (and seed the pool) WITHOUT blocking ship or feeding repair. Lets
+    # us quantify how alike the generated sites are as the diversity phases land.
+    originality_shadow = settings.originality_shadow
 
     html_pool = _html_pool(files)
     if not html_pool or "index.html" not in files:
@@ -235,15 +239,33 @@ async def evaluate(
         )
 
     # ── 5. originality (optional, fail-soft) — Sprint 4 anti-generic ──────
+    # `run_originality` (use_originality) is the BLOCKING path: a near-duplicate
+    # sets originality_ok=False (kept OFF by the owner — with auto-regen off it
+    # just drops the page to the catalog fallback). `originality_shadow` (Area D)
+    # is the observability path: MEASURE + LOG the cross-project distance and seed
+    # the pool, but never block and never feed repair. Either switch (or both)
+    # triggers the single fingerprint; only `run_originality` gates `passed`.
     orig_fp: int | None = None
     orig_issue: str | None = None
-    if run_originality and screenshots:
+    if (run_originality or originality_shadow) and screenshots:
         widest = max(screenshots)
-        orig_fp, orig_issue = await originality.originality_issue(
+        orig_fp, orig_dist, _measured_issue = await originality.measure(
             project_id,
             screenshots[widest],
             max_distance=settings.originality_max_distance,
         )
+        if run_originality:
+            orig_issue = _measured_issue  # blocking signal (unchanged behaviour)
+        if originality_shadow and orig_fp is not None:
+            log.info(
+                "originality[shadow] project=%s nearest_cross=%s/64 near_dup=%s",
+                project_id,
+                orig_dist,
+                orig_dist is not None and orig_dist <= settings.originality_max_distance,
+            )
+            # Seed the pool so cross-project distance is meaningful for later
+            # builds. Fail-soft — a Redis miss never sinks the gate (R-10).
+            await originality.remember(project_id, orig_fp)
     originality_ok = orig_issue is None
 
     # ── 6. acceptance gauntlet — the SHIP DECISION (V1.6 keystone) ────────

@@ -3858,6 +3858,18 @@ async def _process_prompt(
                 _max_acc = max(
                     _max_acc, int(_acc_settings.acceptance_taste_repair_passes)
                 )
+            # Area D (anti-sameness, DARK): soften the catalog fallback. A gauntlet/
+            # structural fail (verdict "broken" / struct-not-ok — both already
+            # `_repair_worthy`) earns up to `acceptance_gate_repair_passes` freeform
+            # re-rolls WITH the gate's failed-class feedback BEFORE dropping to the
+            # single catalog template — so a diverse page fixes the specific issue
+            # instead of being wholesale-replaced. Decoupled from
+            # `auto_regenerate_enabled` (a targeted feedback re-roll, not a blind
+            # full-page regen). Default 0 → straight to catalog (today's behaviour).
+            if int(_acc_settings.acceptance_gate_repair_passes) > 0:
+                _max_acc = max(
+                    _max_acc, int(_acc_settings.acceptance_gate_repair_passes)
+                )
             # Repair floor: only spend a repair re-roll on a genuinely deficient
             # page (see acceptance_repair_floor docstring) — not on every
             # borderline vision score.

@@ -98,6 +98,33 @@ async def remember(project_id: str, fp: int) -> None:
         log.warning("originality: remember failed (ignored): %r", exc)
 
 
+async def measure(
+    project_id: str, png: bytes, *, max_distance: int
+) -> tuple[int | None, int | None, str | None]:
+    """Fingerprint `png` and return (fingerprint, nearest_cross_distance, issue).
+
+    The single source of both the cross-project distance and the near-duplicate
+    repair issue: `originality_issue` (the blocking path) and the SHADOW metric
+    (Area D — measure + log, never block) both read it. `dist` is the min Hamming
+    distance to any OTHER project's page (`_HASH_BITS` when the pool is empty);
+    `issue` is the concrete repair signal, set only when `dist <= max_distance`.
+    Returns (None, None, None) when fingerprinting is unavailable (fail-soft).
+    """
+    fp = fingerprint(png)
+    if fp is None:
+        return None, None, None
+    dist = await nearest_cross_project_distance(project_id, fp)
+    issue = None
+    if dist <= max_distance:
+        issue = (
+            f"[оригинальность] вёрстка слишком похожа на ранее сгенерированный сайт "
+            f"другого проекта (визуальное расстояние {dist}/{_HASH_BITS}). Сделай "
+            f"принципиально другую композицию: другой герой, другой ритм и порядок "
+            f"секций, другие визуальные приёмы — не повторяй типовой шаблон."
+        )
+    return fp, dist, issue
+
+
 async def originality_issue(
     project_id: str, png: bytes, *, max_distance: int
 ) -> tuple[int | None, str | None]:
@@ -106,24 +133,15 @@ async def originality_issue(
     The issue fires only when the page is within `max_distance` of a different
     project's page — a concrete "you produced a near-duplicate" signal the
     repair loop can act on. Returns (None, None) when fingerprinting is
-    unavailable.
+    unavailable. Thin wrapper over :func:`measure` (single-sourced).
     """
-    fp = fingerprint(png)
-    if fp is None:
-        return None, None
-    dist = await nearest_cross_project_distance(project_id, fp)
-    if dist <= max_distance:
-        return fp, (
-            f"[оригинальность] вёрстка слишком похожа на ранее сгенерированный сайт "
-            f"другого проекта (визуальное расстояние {dist}/{_HASH_BITS}). Сделай "
-            f"принципиально другую композицию: другой герой, другой ритм и порядок "
-            f"секций, другие визуальные приёмы — не повторяй типовой шаблон."
-        )
-    return fp, None
+    fp, _dist, issue = await measure(project_id, png, max_distance=max_distance)
+    return fp, issue
 
 
 __all__ = [
     "fingerprint",
+    "measure",
     "nearest_cross_project_distance",
     "originality_issue",
     "remember",

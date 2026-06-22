@@ -29,6 +29,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from omnia_api.core.config import get_settings
 from omnia_api.services import (
     cabinet_gate,
     catalog_coherence_gate,
@@ -398,6 +399,108 @@ def _from_rendered(gate: str, rep: Any) -> GateVerdict:
     )
 
 
+# ── Area D — composition-gate retune (anti-sameness) ──────────────────────────
+# The composition legs (taste + hierarchy) are an ALWAYS-ON hard ship-block that
+# mechanically rewards ONE silhouette. This policy lets the owner DEMOTE the
+# deviation-punishing checks to advisory (surface, never block) or lower the score
+# floor, WITHOUT touching the pure rubric in the gate modules (so their unit tests
+# stay green) and without weakening the real quality floor (correctness/a11y, the
+# compose catastrophe floor). See `config.py` Area D. Defaults reproduce today's
+# behaviour byte-for-byte (the leg falls through to ``_from_rendered``).
+
+
+def _check_floor(gate: str) -> int:
+    """The gate module's own pass floor — the score-model default for this leg."""
+    return taste_gate.MIN_SCORE if gate == TASTE else hierarchy_gate.MIN_SCORE
+
+
+def _known_checks(gate: str) -> frozenset[str]:
+    return frozenset(taste_gate.CHECKS if gate == TASTE else hierarchy_gate.CHECKS)
+
+
+def _csv_checks(value: str, gate: str) -> frozenset[str]:
+    """Parse a comma-list of check ids, lowercased, intersected with the gate's
+    real check vocabulary (an unknown/typo'd id is silently dropped, never a
+    blanket-advisory footgun)."""
+    raw = {x.strip().lower() for x in (value or "").split(",") if x.strip()}
+    return frozenset(raw & _known_checks(gate))
+
+
+def _resolve_composition_policy(
+    *,
+    taste_advisory_checks: tuple[str, ...] | None,
+    taste_min_score: int | None,
+    hierarchy_advisory_checks: tuple[str, ...] | None,
+    hierarchy_min_score: int | None,
+) -> dict[str, dict[str, object]]:
+    """Build the per-leg {advisory, min_score} policy. Explicit args win; ``None``
+    falls back to settings (so every caller — freeform, entity, CLI — honours the
+    DARK flags uniformly without threading them through)."""
+    s = get_settings()
+    t_adv = (
+        frozenset(c.lower() for c in taste_advisory_checks) & _known_checks(TASTE)
+        if taste_advisory_checks is not None
+        else _csv_checks(s.gate_taste_advisory_checks, TASTE)
+    )
+    h_adv = (
+        frozenset(c.lower() for c in hierarchy_advisory_checks) & _known_checks(HIERARCHY)
+        if hierarchy_advisory_checks is not None
+        else _csv_checks(s.gate_hierarchy_advisory_checks, HIERARCHY)
+    )
+    t_min = taste_min_score if taste_min_score is not None else int(s.gate_taste_min_score)
+    h_min = (
+        hierarchy_min_score
+        if hierarchy_min_score is not None
+        else int(s.gate_hierarchy_min_score)
+    )
+    return {
+        TASTE: {"advisory": t_adv, "min_score": t_min},
+        HIERARCHY: {"advisory": h_adv, "min_score": h_min},
+    }
+
+
+def _from_composition_leg(
+    gate: str, rep: Any, *, advisory: frozenset[str], min_score: int
+) -> GateVerdict:
+    """Adapt a composition leg (taste/hierarchy) honouring the Area D retune.
+
+    Default (no advisory checks AND the gate's own score floor) → byte-identical to
+    ``_from_rendered``. Otherwise:
+      * advisory non-empty → the floor is "every NON-advisory (blocking) check
+        passes"; advisory-failed classes are dropped from ``classes`` (so they
+        never enter ``failed_classes`` / repair) but still surface in the leg's
+        ``summary`` / ``subscore``.
+      * advisory empty + a lowered ``min_score`` → the score model with the new
+        floor (a passing leg contributes no blocking classes).
+    An ABSTAIN (no render) and a WAIVED login surface are unchanged.
+    """
+    if not advisory and min_score == _check_floor(gate):
+        return _from_rendered(gate, rep)  # default path — identical behaviour
+    if not rep.rendered:
+        return _from_rendered(gate, rep)  # abstain unchanged (no evidence ≠ pass)
+    if getattr(rep, "surface", "content") == "login":
+        # the composition rubric is WAIVED on a sparse auth surface — preserve it
+        return GateVerdict(
+            gate=gate, passed=True, abstained=False, classes=(),
+            summary=rep.summary(), subscore=rep.subscore(),
+        )
+    if advisory:
+        blocking = tuple(c for c in rep.classes if c not in advisory)
+        passed = not blocking
+        classes = blocking
+    else:
+        passed = rep.score >= min_score
+        classes = () if passed else rep.classes
+    return GateVerdict(
+        gate=gate,
+        passed=passed,
+        abstained=False,
+        classes=classes,
+        summary=rep.summary(),
+        subscore=rep.subscore(),
+    )
+
+
 async def _audit_one(
     gate: str,
     *,
@@ -489,6 +592,14 @@ async def run(
     include_rendered: bool = True,
     compose: bool = False,
     composition: bool = False,
+    # Area D — composition-gate retune (anti-sameness). ``None`` → read the DARK
+    # flags from settings (so all callers honour them uniformly); pass explicit
+    # values to override (tests / future per-call policy). Defaults reproduce
+    # today's behaviour byte-for-byte.
+    taste_advisory_checks: tuple[str, ...] | None = None,
+    taste_min_score: int | None = None,
+    hierarchy_advisory_checks: tuple[str, ...] | None = None,
+    hierarchy_min_score: int | None = None,
     fidelity: bool = False,
     reference: bool = False,
     reference_enforce_score: bool = False,
@@ -567,6 +678,12 @@ async def run(
       **regardless** of ``include_rendered``. These are the awwwards richness
       floor with no 44px false-positive, so they are the ALWAYS-ON hard ship-block
       on the product path while the touch leg stays behind calibration (11/5).
+      Area D (anti-sameness): the composition floor mechanically rewards ONE
+      silhouette, so ``taste_advisory_checks`` / ``hierarchy_advisory_checks``
+      (DARK) DEMOTE named checks to advisory — they still surface in the leg's
+      card but no longer block ship or feed repair — and ``taste_min_score`` /
+      ``hierarchy_min_score`` lower the score floor. ``None`` reads the flags from
+      settings; the defaults reproduce today's hard floor byte-for-byte.
     * ``fidelity=True`` adds the ``FIDELITY_LEGS`` (chip-pixel) the same way —
       independent of ``include_rendered``. chip-pixel has no 44px false-positive
       and is inert without a ``spec`` (asserts nothing → passes), so the caller
@@ -684,6 +801,13 @@ async def run(
     render_expected = bool(legs) and has_target
     if render_expected:
         spec = spec or FidelitySpec()
+        # Area D — resolve the composition retune once (settings unless overridden).
+        comp_policy = _resolve_composition_policy(
+            taste_advisory_checks=taste_advisory_checks,
+            taste_min_score=taste_min_score,
+            hierarchy_advisory_checks=hierarchy_advisory_checks,
+            hierarchy_min_score=hierarchy_min_score,
+        )
         for gate in RENDERED_GATES:  # stable order; only the selected legs run
             if gate in legs:
                 rep = await _audit_one(
@@ -697,7 +821,18 @@ async def run(
                     reference_tolerance=reference_tolerance,
                     storage_state=storage_state,
                 )
-                gates.append(_from_rendered(gate, rep))
+                if gate in COMPOSITION_LEGS:
+                    pol = comp_policy[gate]
+                    gates.append(
+                        _from_composition_leg(
+                            gate,
+                            rep,
+                            advisory=pol["advisory"],  # type: ignore[arg-type]
+                            min_score=pol["min_score"],  # type: ignore[arg-type]
+                        )
+                    )
+                else:
+                    gates.append(_from_rendered(gate, rep))
 
     return GauntletVerdict(tuple(gates), render_expected=render_expected)
 

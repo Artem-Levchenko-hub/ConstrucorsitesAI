@@ -381,6 +381,19 @@ class Settings(BaseSettings):
     # `acceptance_taste_repair_on_generic` is also ON. Default 0 = no taste
     # re-roll (today's behaviour); 1 = exactly one generic→repair pass.
     acceptance_taste_repair_passes: int = Field(default=0)
+    # Phase 1 / Area D — soften the catalog fallback (anti-sameness, DARK). Today,
+    # with `auto_regenerate_enabled` OFF, a freeform page that fails the gauntlet
+    # gets ZERO repair re-rolls and drops STRAIGHT to the single catalog template —
+    # so the harder the floors bite, the more diverse-but-rejected pages collapse to
+    # the SAME fallback look. This budgets N freeform repair re-rolls with the
+    # gate's own failed-class feedback BEFORE the catalog fallback fires, so the
+    # rich (diverse) freeform page gets a chance to FIX the specific issue instead
+    # of being wholesale-replaced by the template. Decoupled from
+    # `auto_regenerate_enabled` (same discipline as `acceptance_taste_repair_passes`)
+    # so it can be calibrated in isolation; the repair is a TARGETED feedback re-roll,
+    # not a blind full-page regeneration. Default 0 = today's behaviour (no extra
+    # re-roll; straight to catalog). Recommended flip: 1. Env: ACCEPTANCE_GATE_REPAIR_PASSES.
+    acceptance_gate_repair_passes: int = Field(default=0)
     # OWNER 2026-06-14 — AUTOMATIC FULL-PAGE REGENERATION OFF (default False).
     # The owner saw a build auto-"перегенерирую с рабочими ссылками" mid-session
     # and ruled: NEVER auto-regenerate the whole page — only deterministic
@@ -502,6 +515,46 @@ class Settings(BaseSettings):
     # carried as 16/5b. CLI / niche-E2E always run the legs regardless.
     acceptance_entity_composition_gate: bool = Field(default=False)
 
+    # ── Phase 1 / Area D — composition-gate retune (anti-sameness, DARK) ───
+    # Why: the ALWAYS-ON composition floor (taste 4/5 + hierarchy 2/3) mechanically
+    # rewards ONE silhouette — a single towering hero, ONE dominant focal element,
+    # a hero image, NO equal 3-card rows. Flat/swiss/modular/multi-focal/poster
+    # layouts hard-fail, so diverse-but-valid generations are funnelled back to the
+    # one "safe enterprise landing" (and a freeform fail then drops to the single
+    # catalog template). These knobs let the owner DEMOTE the deviation-punishing
+    # checks to advisory (they still surface in the gauntlet card, but no longer
+    # block ship or feed repair) WITHOUT touching the real quality floor, which is
+    # correctness/a11y (contrast/WCAG/dead-link/44px) + the catastrophe compose
+    # floor — none of which these touch. Applied in `accept_gauntlet` at the
+    # composition-leg verdict, so EVERY ship path (freeform + entity + CLI) honours
+    # them uniformly; the pure taste/hierarchy rubrics are unchanged.
+    #
+    # ALL DEFAULTS = today's behaviour (byte-identical). Recommended flip values are
+    # noted per flag; the owner enables them on the stand when ready (DARK rollout).
+    #
+    # Comma-list of HIERARCHY check ids to treat as ADVISORY (surface, never block).
+    # Known ids: "type-dominance", "focal-dominance", "asymmetry". When non-empty
+    # the hierarchy floor becomes "every NON-advisory (blocking) check passes" (the
+    # 2/3 score model is bypassed). Recommended: "focal-dominance,asymmetry" — keep
+    # only `type-dominance` as the floor, so modular grids / symmetric posters /
+    # multi-focal layouts stop being rejected. Empty (default) → 2/3 score model.
+    gate_hierarchy_advisory_checks: str = Field(default="")
+    # Comma-list of TASTE check ids to treat as ADVISORY (surface, never block).
+    # Known ids: "font-pairing", "type-scale", "hierarchy", "layout-variety",
+    # "hero-imagery". When non-empty the taste floor becomes "every NON-advisory
+    # check passes" (the score model below is bypassed). Recommended: "hero-imagery"
+    # — stop forcing every page to carry a big hero image. Empty (default) → score
+    # model with `gate_taste_min_score`.
+    gate_taste_advisory_checks: str = Field(default="")
+    # TASTE score floor (0..5) when no taste advisory checks are set. Default 4 =
+    # `taste_gate.MIN_SCORE` (today). Recommended flip: 3 — loosen the single-shape
+    # demand without dropping the floor to the bootstrap baseline.
+    gate_taste_min_score: int = Field(default=4)
+    # HIERARCHY score floor (0..3) when no hierarchy advisory checks are set.
+    # Default 2 = `hierarchy_gate.MIN_SCORE` (today). Kept for symmetry; prefer the
+    # advisory-checks knob above (more targeted than a blunt score drop).
+    gate_hierarchy_min_score: int = Field(default=2)
+
     # ── Area C (authenticated cabinet gate) — DARK, default OFF ───────────
     # When ON the live-app gate LOGS IN to the generated app with a seeded
     # operator account and scores the real CABINET (/dashboard + CRUD) instead
@@ -538,9 +591,21 @@ class Settings(BaseSettings):
     # screenshot — unreliable when remote images haven't painted — and in
     # score-only mode only labels, never blocks. Dead weight; killed with vision.
     use_originality: bool = Field(default=False)
+    # Phase 1 / Area D — originality SHADOW metric (anti-sameness instrumentation).
+    # `use_originality` (above) makes a near-duplicate BLOCK ship + feed repair —
+    # which, with auto-regenerate off, just drops the page to the uglier catalog
+    # fallback (owner kept it OFF). Shadow mode is the safe observability path: it
+    # fingerprints the accepted page, MEASURES the nearest cross-project dHash
+    # distance, LOGS it as a diversity metric, and REMEMBERS it in the pool —
+    # but NEVER blocks ship and NEVER feeds repair. This quantifies how alike the
+    # generated sites are, so each diversity phase (D→C→A→B+E) can be measured.
+    # Independent of `use_originality`; default OFF = no extra work, no log. Flip
+    # ORIGINALITY_SHADOW=true to start collecting the metric. Fail-soft (R-10).
+    originality_shadow: bool = Field(default=False)
     # Hamming distance (0..64 over a 64-bit dHash) at/below which two pages are
     # "too similar". Lower = stricter. ~10 catches near-duplicates without
-    # flagging merely same-vibe pages.
+    # flagging merely same-vibe pages. Also the threshold the shadow metric logs
+    # against (to flag near-duplicates without blocking).
     originality_max_distance: int = Field(default=10)
     # Gradual rollout: freeform applies to this % of projects (deterministic
     # bucket by project_id). 100 = everyone (when USE_FREEFORM_RENDER is on);
