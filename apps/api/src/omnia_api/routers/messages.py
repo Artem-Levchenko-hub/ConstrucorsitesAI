@@ -2279,6 +2279,25 @@ async def _process_prompt(
                 flush=True,
             )
 
+            # Phase 3 — runtime smoke gate: a clean typecheck does NOT prove the
+            # app actually serves. Probe the live container for a 5xx render and
+            # surface it honestly instead of shipping a broken app as «готово».
+            # Deterministic (one HTTP probe), fail-soft.
+            try:
+                _rt = await orchestrator_client.runtime_status(
+                    project_id, slug=project_slug, path="/")
+                if not _rt.get("ok"):
+                    _rt_err = _rt.get("error") or _rt.get("status_code") or "5xx"
+                    accumulated += (
+                        f"\n\n⚠️ Рантайм-проверка: приложение отвечает ошибкой "
+                        f"({_rt_err}). Открой превью и нажми «Починить» или уточни запрос."
+                    )
+                    print(f"[PP] agentic_smoke runtime FAIL {_rt.get('status_code')}", flush=True)
+                else:
+                    print("[PP] agentic_smoke runtime ok", flush=True)
+            except Exception as _sm_exc:
+                print(f"[PP] agentic_smoke skipped: {_sm_exc!r}", flush=True)
+
             if files:
                 new_sha = await asyncio.to_thread(
                     repo_svc.commit_files,
