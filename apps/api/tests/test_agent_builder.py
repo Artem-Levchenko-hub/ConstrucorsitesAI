@@ -132,6 +132,17 @@ def test_loop_gateway_error_is_soft():
     assert "gateway" in res.summary
 
 
+def test_loop_breaks_on_repeated_action():
+    # Model stuck re-issuing the same grep → circuit breaker stops it.
+    replies = ['<omnia:action name="grep">{"pattern":"x","path":"src"}</omnia:action>']
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_ok_executor([]), complete=_scripted(replies), max_steps=30,
+    ))
+    assert res.stop_reason == "looping"
+    assert res.steps < 30
+
+
 def test_failed_write_not_tracked():
     async def _fail_exec(action: ab.Action):
         if action.name == "write_file":

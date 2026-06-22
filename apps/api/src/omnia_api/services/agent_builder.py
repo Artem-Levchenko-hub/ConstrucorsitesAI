@@ -168,6 +168,8 @@ async def run_agent_build(
     ]
     written: dict[str, str] = {}
     stalls = 0
+    last_sig = ""
+    repeat_count = 0
 
     for step in range(max_steps):
         # Retry the model call on transient gateway errors (ReadTimeout / 5xx /
@@ -226,6 +228,37 @@ async def run_agent_build(
                 files=written, steps=step + 1, transcript=convo,
                 stop_reason="done",
             )
+
+        # Circuit breaker: the model sometimes gets stuck re-issuing the SAME
+        # action (observed live: 34x identical grep → max_steps, no progress).
+        # Detect consecutive identical actions → nudge to move on → then abort.
+        sig = (
+            f"{action.name}|{action.path}|"
+            f"{json.dumps(action.args, sort_keys=True, ensure_ascii=False)}"
+        )
+        if sig == last_sig:
+            repeat_count += 1
+        else:
+            repeat_count, last_sig = 0, sig
+        if repeat_count >= 5:
+            return AgentResult(
+                done=False,
+                summary=f"stuck repeating {action.name} {action.path}",
+                files=written, steps=step + 1, transcript=convo,
+                stop_reason="looping",
+            )
+        if repeat_count >= 2:
+            print(
+                f"[AGENT] step={step} REPEAT x{repeat_count} {action.name} {action.path}",
+                flush=True,
+            )
+            convo.append({"role": "user", "content": (
+                f"STOP — you ran this EXACT action {repeat_count + 1} times with the "
+                "same result. Do NOT repeat it. You have enough context: WRITE the "
+                "next file now (a dashboard page renders <CrudResource entity=\"...\"/>; "
+                "also write dashboard/page.tsx), or run build, or call done."
+            )})
+            continue
 
         obs = await execute(action)
         print(
