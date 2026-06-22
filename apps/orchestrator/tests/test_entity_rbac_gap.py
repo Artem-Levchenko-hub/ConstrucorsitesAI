@@ -67,22 +67,24 @@ _AUTH = _ENTITIES / "src" / "lib" / "auth.ts"
 _ENGINE = _ENTITIES / "src" / "lib" / "entities" / "engine.ts"
 
 
-def test_access_policy_has_only_three_modes_today() -> None:
-    """EVIDENCE (green today): the access vocabulary is exactly
-    owner|public|admin — there is no room for an app-specific role like
-    teacher/student/parent, so any role-scoped brief must be flattened."""
+def test_access_policy_includes_submit_for_public_intake() -> None:
+    """The access vocabulary is owner|public|admin|submit. `submit` (P-EC) is the
+    public-intake mode — anyone incl. anonymous may CREATE (orders/bookings/leads),
+    only admin reads/edits. Per-role visibility beyond these is layered via
+    readRoles/writeRoles (the RBAC tests below)."""
     src = _REGISTRY.read_text(encoding="utf-8")
-    assert 'export type AccessPolicy = "owner" | "public" | "admin";' in src
+    assert 'export type AccessPolicy = "owner" | "public" | "admin" | "submit";' in src
 
 
-def test_unknown_access_is_silently_coerced_to_owner_today() -> None:
-    """EVIDENCE (green today): normalize() turns any access value that isn't
-    "public"/"admin" into "owner" — so a writer that emits a role name (or the
-    brief's compound "teacher (write), student/parent (read-own)") gets a silent
-    owner-scope, not an error. This is exactly how JournalEntry became
-    owner-scoped → empty for parents."""
+def test_unknown_access_is_coerced_to_owner() -> None:
+    """normalize() accepts the known access modes (public/admin/submit) and coerces
+    any UNKNOWN value to the safe `owner` default — a typo never silently opens data
+    up. (Per-role gating is separate, via readRoles/writeRoles.)"""
     src = _REGISTRY.read_text(encoding="utf-8")
-    assert 'raw.access === "public" || raw.access === "admin" ? raw.access : "owner"' in src
+    assert (
+        'raw.access === "public" || raw.access === "admin" || raw.access === "submit"'
+        in src
+    )
 
 
 def test_new_users_can_only_be_admin_or_user_today() -> None:

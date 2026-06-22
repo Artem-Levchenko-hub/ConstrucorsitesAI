@@ -1,53 +1,22 @@
-"""Acceptance-lock for BS-17 (dogfood run #14, 2026-06-16): in a generated
-entity app you can CHANGE a field on edit, but you can NEVER CLEAR an optional
-field — clearing silently no-ops while the UI toasts "Изменения сохранены".
+"""BS-17 / P-CLEAR — clearing an optional field on edit.
 
-LIVE RUNTIME PROOF (deployed binary, not just source — no LLM/generation, the
-bug lives in the base engine that every entity app bakes in):
-  app  = omnia-dev-dogfood-barber-crm-25cc9e   (starter Task entity:
-         notes/due/priority are optional)
-  auth = register + credentials login over public HTTPS (AuthJS sets the
-         __Secure session cookie only over TLS)
+WAS the bug (dogfood run #14, 2026-06-16): you could CHANGE a field on edit but
+never CLEAR an optional one — clearing silently no-op'd while the UI toasted
+"Изменения сохранены". Three surfaces conspired:
+  1. entity-form.tsx validate(): an empty non-required field hit `continue`
+     BEFORE any `out[f.name] = …`, so a cleared field was dropped from the payload.
+  2. registry.ts updateSchema(): every field was `zodForField(f).optional()` —
+     NOT `.nullable()` — so even an explicit `null` would 400 the update.
+  3. engine.ts merge `{...existing, ...parsed.data}`: a field absent from the
+     payload kept its old value.
 
-  CREATE Task  notes="перезвонить клиенту в 18:00"  due="2026-07-01"   -> 200
-  PUT    {title, priority}   (the EXACT payload the edit form sends when the
-         user clears notes+due — the form omits empty optional fields)   -> 200
-         updated_at advanced 15:05:51 -> 15:05:55, so the update DID run
-  GET    after the clear-attempt:
-         notes == "перезвонить клиенту в 18:00"   (SURVIVED)
-         due   == "2026-07-01"                    (SURVIVED)     -> CLEAR_BUG
-  CONTROL PUT {title:"Стрижка Пётр", notes:"новая заметка", priority:"low"}
-         -> applies fine.  Editing to a NEW non-empty value works; only
-         UN-SETTING an optional field is the silent no-op.
-
-Root cause (code-proven, three surfaces):
-  1. entity-form.tsx:158-164  validate(): an empty non-required field hits
-     `continue` BEFORE `out[f.name] = …`, so a cleared field is dropped from
-     the payload entirely — the form never tells the server "make this empty".
-  2. registry.ts:176-182      updateSchema(): every field is
-     `zodForField(f).optional()` — NOT `.nullable()`. So even if the form sent
-     `notes: null` to force a clear, zod would reject it and 400 the whole
-     update. A clear is INEXPRESSIBLE in the wire contract.
-  3. engine.ts:286            merge = {...existing, ...parsed.data} — a field
-     absent from the payload keeps its old value.
-
-So omit-on-empty (1) + merge-keeps-absent (3) = the clear vanishes, and even a
-deliberate null (a naive form fix alone) would be rejected by (2).
-
-Class wider than the barber CRM: every entity app, every optional field, the
-clear/un-set operation (remove a phone, blank a note, drop a due date, unset a
-status). Fits the recurring "false confirmation" family — BS-11 (orphaned
-anchors shipped as if fixed), BS-15 (lead form that toasts success and drops
-the lead).
-
-Why this is a PROPOSAL, not a blind ship (P-CLEAR): the correct fix is
-multi-surface and changes write-validation SEMANTICS for every app —
-updateSchema must accept null for optional fields (`.nullable().optional()`),
-the form must emit an explicit clear in EDIT mode (diff against `initial`,
-sending null for fields that had a value and are now empty), and number/date/
-reference fields each need their own null handling. It is a TEMPLATE change
-(base-image rebuild on prod) and needs regen-verify across niches. One fix per
-run, no blind template ship.
+FIXED 2026-06-22 (template change, base-image rebuild). The fix touches the two
+surfaces that were wrong (the merge was already correct — absent=keep,
+present-null=overwrite):
+  - updateSchema is now `zodForField(f).optional().nullable()` → a clear is
+    expressible on the wire (sending `null` blanks the field).
+  - entity-form.tsx now emits an explicit `null` for an emptied optional field in
+    EDIT mode (gated on `initial`); CREATE still omits it so defaults apply.
 
 These are deterministic file-content asserts (money-free, no container, no LLM).
 """
@@ -56,8 +25,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-
-import pytest
 
 _ENTITIES = Path(__file__).resolve().parents[1] / "templates" / "nextjs-entities"
 _FORM = _ENTITIES / "src" / "components" / "omnia" / "entity-form.tsx"
@@ -75,54 +42,35 @@ def _update_schema_body() -> str:
     return m.group(1)
 
 
-def test_form_still_omits_empty_optional_fields() -> None:
-    """EVIDENCE (still true): the edit form drops an empty optional field from the
-    payload — `validate()` flags `empty` and hits `continue` BEFORE any
-    `out[f.name] = …` assignment, so a cleared field is never sent to the server.
-
-    The form was since refactored (number coercion moved inline into the number
-    branch, so the old single `out[f.name] = f.kind === "number" ? … : raw` line
-    no longer exists), but the omit-on-empty behaviour is UNCHANGED: there is no
-    edit-mode diff against `initial`, no explicit `null` emitted on clear. P-CLEAR
-    is NOT fixed on the form surface."""
+def test_form_emits_explicit_null_clear_on_edit() -> None:
+    """FIXED: on EDIT (initial present) the form now sends an emptied optional field
+    as an explicit `null` instead of omitting it, so the engine overwrites the stored
+    value. On CREATE it's still omitted (so a field's `default` applies)."""
     src = _FORM.read_text(encoding="utf-8")
-    # The empty test and its early `continue` are still present.
     assert 'const empty = raw === "" || raw == null;' in src
-    empty_at = src.index('const empty = raw === "" || raw == null;')
-    continue_at = src.index("continue;", empty_at)
-
-    # EVERY payload assignment (`out[f.name] = …`) for a non-boolean field comes
-    # AFTER the empty branch's `continue`, so an emptied field reaches none of
-    # them — it is dropped, never sent as an explicit clear.
-    assigns = [m.start() for m in re.finditer(r"out\[f\.name\] = ", src)]
-    assert assigns, "no out[f.name] assignment found in entity-form.tsx"
-    non_boolean_assigns = [a for a in assigns if a > empty_at]
-    assert non_boolean_assigns, "expected assignments after the empty branch"
-    assert all(continue_at < a for a in non_boolean_assigns)
-
-    # The form still has no edit-mode clear: it never diffs the emptied value
-    # against `initial` to emit a `null`. (Confirms the gap is open on this surface.)
-    assert "out[f.name] = null" not in src
-    assert "payload[f.name] = null" not in src
+    # The empty branch now emits an explicit clear…
+    assert re.search(r"(?:out|payload)\[[^\]]+\]\s*=\s*null\b", src), (
+        "the form must emit an explicit null clear for an emptied field"
+    )
+    # …gated on EDIT mode (initial != null), so a CREATE still omits empties.
+    assert re.search(r"else if \(initial != null\)", src), (
+        "the null clear must be gated on edit mode (initial)"
+    )
 
 
-def test_update_schema_still_makes_a_clear_inexpressible() -> None:
-    """EVIDENCE (still true): updateSchema marks every field merely `.optional()`
-    — never `.nullable()`/`.nullish()`. So a clear cannot even be expressed on
-    the wire: sending `null` to blank a field would fail zod and 400 the update.
-    The only payload the form CAN send (omit the field) is the one the merge
-    ignores. P-CLEAR is NOT fixed on the schema surface."""
+def test_update_schema_accepts_null_to_express_a_clear() -> None:
+    """FIXED: updateSchema marks every field `.optional().nullable()`, so a clear is
+    expressible on the wire — sending `null` blanks the field instead of a 400."""
     body = _update_schema_body()
-    assert "zodForField(f).optional();" in body
-    assert "nullable" not in body
-    assert "nullish" not in body
+    assert "nullable" in body or "nullish" in body
+    assert ".optional()" in body
 
 
-def test_engine_update_is_still_a_shallow_merge_that_keeps_absent_fields() -> None:
-    """EVIDENCE (still true): updateRecord shallow-merges the payload over the
-    stored row, so any field absent from the payload keeps its previous value —
-    exactly the field the form just dropped. P-CLEAR is NOT fixed on the engine
-    surface."""
+def test_engine_merge_applies_an_explicit_null_clear() -> None:
+    """The shallow merge is correct: a field ABSENT from the payload keeps its value
+    (partial update), while a field PRESENT as null overwrites it (the clear). With
+    the form now sending null and updateSchema accepting it, the merge persists the
+    clear — so this third surface needed no change."""
     src = _ENGINE.read_text(encoding="utf-8")
     assert (
         "const merged = { ...(existing[0].data as Record<string, unknown>), ...parsed.data };"
@@ -130,38 +78,16 @@ def test_engine_update_is_still_a_shallow_merge_that_keeps_absent_fields() -> No
     )
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="BS-17 / P-CLEAR STILL not landed (verified 2026-06-22): an edit "
-    "cannot clear an optional field. The recent fix wave did NOT touch this gap — "
-    "updateSchema is still `zodForField(f).optional()` (no .nullable()/.nullish()), "
-    "engine.updateRecord still shallow-merges so an absent field keeps its old "
-    "value, and entity-form.tsx still drops an emptied optional field via the "
-    "`empty`→`continue` branch with no edit-mode null emission. When updateSchema "
-    "accepts null for optional fields AND the form emits an explicit clear in edit "
-    "mode (a field set in `initial`, now emptied, sent as an explicit out[...] = "
-    "null), flip this to XPASS and drop the marker.",
-)
-def test_clearing_an_optional_field_should_persist_the_clear() -> None:
-    """DESIRED: clearing an optional field on edit must stick. Two surfaces have
-    to change together — the wire contract must ALLOW a clear (updateSchema
-    accepts null for optional fields) AND the form must SEND one in edit mode
-    (an emptied field that had an initial value is sent as null, not omitted)."""
+def test_clearing_an_optional_field_persists_the_clear() -> None:
+    """FIXED (was xfail): clearing an optional field on edit now sticks — both
+    surfaces changed together: updateSchema accepts null AND the form sends an
+    explicit null in edit mode for an emptied field."""
     update_body = _update_schema_body()
     form = _FORM.read_text(encoding="utf-8")
-
-    # Wire contract allows a clear: optional fields accept null.
     schema_allows_clear = "nullable" in update_body or "nullish" in update_body
-
-    # Form sends an explicit clear in edit mode: the validate() builder writes an
-    # explicit null INTO the outbound payload for an emptied field. Matched on a
-    # real `out[...] = null` / `payload[...] = null` assignment — NOT incidental
-    # JSX `: null` ternaries — and gated on the edit-mode `initial` value, so this
-    # flips true only when a genuine clear is emitted, not on cosmetic null usage.
     form_emits_clear = bool(
         re.search(r"\binitial\b", form)
         and re.search(r"\bempty\b", form)
         and re.search(r"(?:out|payload)\[[^\]]+\]\s*=\s*null\b", form)
     )
-
     assert schema_allows_clear and form_emits_clear

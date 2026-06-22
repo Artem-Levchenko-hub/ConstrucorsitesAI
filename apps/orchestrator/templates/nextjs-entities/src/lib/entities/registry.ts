@@ -266,11 +266,13 @@ export function createSchema(def: EntityDef) {
   return z.object(shape).strip();
 }
 
-/** zod schema for an UPDATE payload — every field optional. */
+/** zod schema for an UPDATE payload — every field optional AND nullable, so a
+ *  field can be CLEARED (P-CLEAR): an omitted field is left unchanged, while an
+ *  explicit `null` clears the stored value (engine's merge overwrites it). */
 export function updateSchema(def: EntityDef) {
   const shape: z.ZodRawShape = {};
   for (const [key, f] of Object.entries(def.fields)) {
-    shape[key] = zodForField(f).optional();
+    shape[key] = zodForField(f).optional().nullable();
   }
   return z.object(shape).strip();
 }

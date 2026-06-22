@@ -179,7 +179,14 @@ export function EntityForm({
       }
       const empty = raw === "" || raw == null;
       if (empty) {
-        if (f.required) errs[f.name] = `Заполните поле «${f.label}»`;
+        if (f.required) {
+          errs[f.name] = `Заполните поле «${f.label}»`;
+        } else if (initial != null) {
+          // P-CLEAR: on EDIT, an empty optional field is an explicit CLEAR — send
+          // `null` so the engine overwrites the stored value (do NOT omit it). On
+          // CREATE it's omitted so the field's `default` (if any) still applies.
+          out[f.name] = null;
+        }
         continue;
       }
       if (f.kind === "number") {
