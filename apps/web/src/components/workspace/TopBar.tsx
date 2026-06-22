@@ -30,6 +30,7 @@ import { BuildExeButton } from "./BuildExeButton";
 import { DownloadButton } from "./DownloadButton";
 import { GithubPushButton } from "./GithubPushButton";
 import { ImageGenToggle } from "./ImageGenToggle";
+import { LeadsButton } from "./LeadsButton";
 import { LogsViewer } from "./LogsViewer";
 import { PublishButton } from "./PublishButton";
 import { RuntimeButton } from "./RuntimeButton";
@@ -121,6 +122,7 @@ export function TopBar({
             {projectId && <BuildExeButton projectId={projectId} />}
             {projectId && <LogsViewer projectId={projectId} />}
             {projectSlug && <PublishButton projectSlug={projectSlug} />}
+            {projectId && <LeadsButton projectId={projectId} />}
             {projectId && projectSlug && (
               <GithubPushButton
                 projectId={projectId}
