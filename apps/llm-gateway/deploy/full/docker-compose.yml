@@ -280,6 +280,11 @@ services:
       # entity-JSON + CrudResource + nav-wiring contract so DeepSeek ships a complete,
       # connected feature (not a half-built page). 0/false = OFF (today).
       USE_FEATURE_SCAFFOLD: ${USE_FEATURE_SCAFFOLD:-false}
+      # Agentic builder (Phase 0): container first-builds run a real
+      # plan→act→observe→verify agent loop (file tools + typecheck) instead of
+      # one-shot generation. false = today's pipeline (byte-identical).
+      USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-false}
+      AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
       # Reference ceiling ratchet (область R) — continuous richness-score floor vs
       # the curated enterprise corpus. DARK; needs ACCEPTANCE_GAUNTLET_REFERENCE_GATE on too.
       ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
@@ -408,6 +413,11 @@ services:
       # entity-JSON + CrudResource + nav-wiring contract so DeepSeek ships a complete,
       # connected feature (not a half-built page). 0/false = OFF (today).
       USE_FEATURE_SCAFFOLD: ${USE_FEATURE_SCAFFOLD:-false}
+      # Agentic builder (Phase 0): container first-builds run a real
+      # plan→act→observe→verify agent loop (file tools + typecheck) instead of
+      # one-shot generation. false = today's pipeline (byte-identical).
+      USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-false}
+      AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
     restart: unless-stopped
     networks:
       - omnia-prod
