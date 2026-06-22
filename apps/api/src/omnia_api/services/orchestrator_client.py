@@ -315,6 +315,15 @@ async def agent_build(project_id: UUID, slug: str) -> dict[str, Any]:
     )
 
 
+async def agent_exec(project_id: UUID, slug: str, cmd: str) -> dict[str, Any]:
+    """Run a shell command in the dev container (agent `bash` tool)."""
+    return await _request(
+        "POST",
+        f"/internal/projects/{project_id}/agent/exec",
+        params={"slug": slug, "cmd": cmd},
+    )
+
+
 async def hot_reload(
     project_id: UUID, slug: str, files: dict[str, str]
 ) -> dict[str, Any]:

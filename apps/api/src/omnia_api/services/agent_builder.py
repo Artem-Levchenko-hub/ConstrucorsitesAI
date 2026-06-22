@@ -57,7 +57,7 @@ _ACTION_RE = re.compile(
 )
 
 _KNOWN_ACTIONS = frozenset(
-    {"list_dir", "read_file", "grep", "write_file", "edit_file", "build", "done"}
+    {"list_dir", "read_file", "grep", "write_file", "edit_file", "build", "bash", "done"}
 )
 
 # Caps so one fat observation can't blow the context window.
@@ -322,6 +322,7 @@ ACTIONS:
 - write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
 - build      {}                                — real typecheck; returns the actual errors
+- bash       {"cmd": "npm run lint"}           — run a shell command in the container (lint/test/install)
 - done       {"summary": "what you built"}     — ONLY after a clean build
 
 THIS TEMPLATE (nextjs-entities) — already built for you, DO NOT rebuild or read its internals:
@@ -426,6 +427,14 @@ def make_container_executor(
                 ok = bool(res.get("ok"))
                 detail = res.get("detail") or res.get("error") or "build clean"
                 return {"ok": ok, "detail": detail}
+
+            if action.name == "bash":
+                cmd = action.args.get("cmd")
+                if not isinstance(cmd, str) or not cmd.strip():
+                    return {"ok": False, "error": "bash needs a non-empty cmd string"}
+                res = await orchestrator_client.agent_exec(project_id, slug, cmd)
+                return {"ok": bool(res.get("ok")),
+                        "detail": res.get("detail") or "(no output)"}
 
             return {"ok": False, "error": f"unknown action {action.name}"}
         except Exception as exc:  # never let an executor crash kill the loop

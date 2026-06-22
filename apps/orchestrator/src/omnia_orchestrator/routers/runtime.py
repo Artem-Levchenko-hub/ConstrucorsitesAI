@@ -484,6 +484,49 @@ async def agent_build(
     return {"ok": ok, "detail": "typecheck clean" if ok else detail[:_AGENT_MAX_BUILD]}
 
 
+# Phase 1: a bounded shell tool for the agent. Runs an arbitrary command inside
+# the project's dev container via `sh -lc`. Safe-by-construction: the container
+# is cap-dropped (ALL), non-root (1000:1000), memory-capped, loopback-bound, on
+# an isolated network, with a schema-scoped DB role — so the blast radius is the
+# project's own container. Bounded by timeout + output cap. (Egress lockdown is
+# a follow-up; today outbound is open.) A small denylist blocks the obvious
+# foot-guns. Lets the agent run npm install / lint / tests / the dev server.
+_EXEC_DENY = ("rm -rf /", ":(){", "mkfs", "dd if=", "/dev/sd", "shutdown", "reboot")
+
+
+@router.post("/{project_id}/agent/exec")
+async def agent_exec(
+    project_id: str,
+    slug: str,
+    cmd: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """Run a shell command in the project's dev container (agent `bash` tool)."""
+    _verify_token(x_internal_token)
+    low = (cmd or "").strip()
+    if not low:
+        raise OrchestratorError(
+            code="validation_failed", message="empty cmd", status_code=400,
+        )
+    if any(bad in low for bad in _EXEC_DENY):
+        return {"ok": False, "detail": "command blocked by safety denylist"}
+    container_name = f"omnia-dev-{slug}"
+    try:
+        result = await exec_cmd(
+            container_name, cmd=["sh", "-lc", cmd],
+            workdir="/app", timeout_sec=180, max_output=_AGENT_MAX_BUILD,
+        )
+    except OrchestratorError as exc:
+        return {"ok": False, "detail": exc.message}
+    ok = result["exit_code"] == "0"
+    out = (result["stdout"] + "\n" + result["stderr"]).strip()
+    return {
+        "ok": ok,
+        "exit_code": result["exit_code"],
+        "detail": out[:_AGENT_MAX_BUILD] or ("ok" if ok else "non-zero exit"),
+    }
+
+
 def _deploy_record_to_response(rec: deploy_state.DeployRecord) -> DeployResponse:
     from uuid import UUID
 
