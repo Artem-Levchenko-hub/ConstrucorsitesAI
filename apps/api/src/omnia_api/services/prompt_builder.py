@@ -31,7 +31,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-from omnia_api.core.config import tier_for_model
+from omnia_api.core.config import get_settings, tier_for_model
 from omnia_api.services import skill_library
 from omnia_api.services.design_presets import (
     AWWWARDS_PRINCIPLES,
@@ -4093,6 +4093,34 @@ lucide-react, next/link). Несуществующие компоненты не
 СТИЛЬ: одно предложение плана → <edit>/<file> → строка «готово, посмотри в превью»."""
 
 
+# ── Feature-scaffold hint for CONTAINER stacks (give-it-functionality) ─────────
+# Appended to the container EDIT prompt when the request is an ADD-FUNCTIONALITY
+# ask AND use_feature_scaffold is on. The base container edit prompt can create a
+# page but never gives the entity-JSON contract or the nav-wiring rule, so a
+# data-backed feature shipped half-built. This teaches the model to scaffold a
+# COMPLETE, connected feature (entity JSON + CrudResource route + nav edit). The
+# schema mirrors entities/Task.json + the BUILD path's entity contract verbatim.
+_EDIT_SCAFFOLD_NEXT = """\
+ДОБАВЛЕНИЕ ФУНКЦИОНАЛА (новая фича/раздел/сущность — собери ПОЛНОСТЬЮ и СВЯЖИ, без тупиков):
+• ДАННЫЕ → новая сущность = новый <file path="entities/<Имя>.json"> РОВНО такого формата:
+  {"name":"Booking","access":"owner","fields":{
+     "title":{"type":"string","required":true},
+     "status":{"type":"enum","options":["new","done"],"default":"new"},
+     "date":{"type":"date"},"notes":{"type":"text"}}}
+  Типы поля: string | text | number | boolean | date | enum(+"options") | reference(+"entity":"<Имя>").
+  access: owner (личные данные юзера) | public (общий список/публичная форма) | admin.
+  Бэкенд/таблицы/миграции РУКАМИ НЕ пиши — движок поднимет их по этому JSON сам.
+• ЭКРАН → новый маршрут кабинета = <file path="src/app/(app)/dashboard/<route>/page.tsx"> ("use client"):
+  список/CRUD рисуй ОДНИМ <CrudResource entity="<Имя>" columns={[...]} fields={[...]} />, данные бери через
+  @/lib/sdk (entities.<Имя>.list()/create()/update()/delete()). НИКОГДА не хардкодь строки, не пиши свой
+  <table>/форму/модалку. ⛔ Не создавай (app)/page.tsx (конфликт с публичной «/»).
+• СВЯЗЬ (ОБЯЗАТЕЛЬНО, иначе «добавил, но не видно») → <edit> по массиву навигации в
+  src/app/(app)/layout.tsx: добавь пункт {label, href:"/dashboard/<route>", иконка lucide} на новый маршрут.
+• Публичная форма заявки (без кабинета) → сущность с "access":"public" + entities.<Имя>.create() в обработчике
+  кнопки на нужной странице. Импорты только существующие (@/components/ui/*, @/components/omnia/*, @/lib/sdk,
+  lucide-react, next/link); несуществующие компоненты не выдумывай."""
+
+
 _IMAGE_GEN_HINT = """\
 КАРТИНКИ: существующие `<img src="...">` НЕ ломай (оставь те же src) — КРОМЕ случая,
 когда пользователь просит сгенерировать / добавить / поменять картинку. Тогда поставь
@@ -4185,6 +4213,17 @@ def _build_edit_messages(
     _wants_add = any(
         k in _p for k in ("добав", "вставь", "встав", "ещё", "еще", "новый блок", "секци")
     )
+    # Add-FUNCTIONALITY signal (container scaffold): data/feature nouns, not just a
+    # visual tweak. Drives the _EDIT_SCAFFOLD_NEXT block on container stacks when
+    # use_feature_scaffold is on (give-it-functionality, DARK).
+    _wants_feature = any(
+        k in _p for k in (
+            "раздел", "страниц", "форм", "сущност", "crud", "каталог", "табл",
+            "записи", "запис", "бронир", "заявк", "учёт", "учет", "дашборд",
+            "панель", "панел", "управлен", "заказ", "корзин", "entity", "функци",
+            "эндпоинт", "endpoint", "база данных", "базу данных",
+        )
+    )
     # Stack-aware: container stacks (Next.js/React/entities/Vite-spa) have NO
     # editable index.html — pages are src/app/**/page.tsx or src/App.tsx. The
     # static-HTML edit prompt (index.html, DOCTYPE, omnia-kit) makes the model
@@ -4199,6 +4238,12 @@ def _build_edit_messages(
         _blocks: list[str] = [_EDIT_IDENTITY_GENERIC, _EDIT_FAITHFUL, _EDIT_RESPONSE]
     elif template in ("fullstack", "nextjs_entities", "spa"):
         _blocks = [_EDIT_IDENTITY_NEXT, _EDIT_FAITHFUL, _EDIT_RESPONSE_NEXT]
+        # Give-it-functionality (DARK): on an add-functionality ask, teach the
+        # model to scaffold a COMPLETE feature (entity JSON + CrudResource route +
+        # nav wiring) instead of a half-built page. Default OFF → block omitted →
+        # byte-identical to today.
+        if _wants_feature and get_settings().use_feature_scaffold:
+            _blocks.append(_EDIT_SCAFFOLD_NEXT)
     else:
         _blocks = [_EDIT_IDENTITY, _EDIT_FAITHFUL]
         if _wants_add:

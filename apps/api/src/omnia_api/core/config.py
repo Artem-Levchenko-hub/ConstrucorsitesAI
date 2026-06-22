@@ -682,6 +682,21 @@ class Settings(BaseSettings):
     # 2. Env: APP_SELF_REPAIR_PASSES.
     app_self_repair_passes: int = Field(default=0)
 
+    # ── Feature scaffolding for container apps (give-it-functionality, DARK) ──
+    # A follow-up like «добавь раздел бронирований / форму записи / каталог» on a
+    # container app (Next/entities) routes to the surgical EDIT path (bias-to-edit,
+    # by design). That path can create a page file, but it is NOT told the
+    # entity-JSON contract or to WIRE the new route into the nav — so a data-backed
+    # feature ships calling `entities.X.list()` with no `entities/X.json` (runtime
+    # "unknown entity") or as an unreachable page ("добавил, но не видно"). When ON,
+    # an "add functionality" edit on a container app gets a SCAFFOLD block in its
+    # prompt: the exact entities/<Name>.json schema, the <CrudResource> route under
+    # (app)/dashboard, and the mandatory nav-wiring edit — so DeepSeek creates a
+    # COMPLETE, connected feature. Pairs with the self-repair loop (new files that
+    # don't compile get auto-healed). Default OFF = byte-identical (no extra prompt
+    # block). Recommended flip: true. Env: USE_FEATURE_SCAFFOLD.
+    use_feature_scaffold: bool = Field(default=False)
+
     # Honest chat content (2026-06-21). The assistant message saved to the DB is
     # the model's RAW output (<file>/<edit> blocks + any stray prose/code). The
     # frontend renders anything NOT wrapped in a recognised block as raw text, so

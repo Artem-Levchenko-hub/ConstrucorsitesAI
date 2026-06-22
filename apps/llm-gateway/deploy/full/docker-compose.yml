@@ -276,6 +276,10 @@ services:
       # N>0 = probe live container for a real compile/runtime error → app_doctor
       # (DeepSeek) fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
       APP_SELF_REPAIR_PASSES: ${APP_SELF_REPAIR_PASSES:-0}
+      # Feature scaffolding for container apps: "add a section/form/entity" gets the
+      # entity-JSON + CrudResource + nav-wiring contract so DeepSeek ships a complete,
+      # connected feature (not a half-built page). 0/false = OFF (today).
+      USE_FEATURE_SCAFFOLD: ${USE_FEATURE_SCAFFOLD:-false}
       # Reference ceiling ratchet (область R) — continuous richness-score floor vs
       # the curated enterprise corpus. DARK; needs ACCEPTANCE_GAUNTLET_REFERENCE_GATE on too.
       ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
@@ -400,6 +404,10 @@ services:
       # N>0 = probe live container for a real compile/runtime error → app_doctor
       # (DeepSeek) fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
       APP_SELF_REPAIR_PASSES: ${APP_SELF_REPAIR_PASSES:-0}
+      # Feature scaffolding for container apps: "add a section/form/entity" gets the
+      # entity-JSON + CrudResource + nav-wiring contract so DeepSeek ships a complete,
+      # connected feature (not a half-built page). 0/false = OFF (today).
+      USE_FEATURE_SCAFFOLD: ${USE_FEATURE_SCAFFOLD:-false}
     restart: unless-stopped
     networks:
       - omnia-prod
