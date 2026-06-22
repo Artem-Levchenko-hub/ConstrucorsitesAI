@@ -272,6 +272,10 @@ services:
       GATE_HIERARCHY_MIN_SCORE: ${GATE_HIERARCHY_MIN_SCORE:-2}
       ORIGINALITY_SHADOW: ${ORIGINALITY_SHADOW:-false}
       ACCEPTANCE_GATE_REPAIR_PASSES: ${ACCEPTANCE_GATE_REPAIR_PASSES:-0}
+      # App self-repair loop (Claude-Code verify→fix). 0 = OFF (card-only, today);
+      # N>0 = probe live container for a real compile/runtime error → app_doctor
+      # (DeepSeek) fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
+      APP_SELF_REPAIR_PASSES: ${APP_SELF_REPAIR_PASSES:-0}
       # Reference ceiling ratchet (область R) — continuous richness-score floor vs
       # the curated enterprise corpus. DARK; needs ACCEPTANCE_GAUNTLET_REFERENCE_GATE on too.
       ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
@@ -392,6 +396,10 @@ services:
       GATE_HIERARCHY_MIN_SCORE: ${GATE_HIERARCHY_MIN_SCORE:-2}
       ORIGINALITY_SHADOW: ${ORIGINALITY_SHADOW:-false}
       ACCEPTANCE_GATE_REPAIR_PASSES: ${ACCEPTANCE_GATE_REPAIR_PASSES:-0}
+      # App self-repair loop (Claude-Code verify→fix). 0 = OFF (card-only, today);
+      # N>0 = probe live container for a real compile/runtime error → app_doctor
+      # (DeepSeek) fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
+      APP_SELF_REPAIR_PASSES: ${APP_SELF_REPAIR_PASSES:-0}
     restart: unless-stopped
     networks:
       - omnia-prod

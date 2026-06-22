@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -44,6 +44,7 @@ from omnia_api.schemas.message import (
 )
 from omnia_api.schemas.project import is_fullstack
 from omnia_api.services import (
+    app_doctor,
     app_errors,
     image_edit,
     orchestrator_client,
@@ -272,6 +273,91 @@ def _spawn_compile_probe(
     )
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
+async def _probe_app_error(
+    project_id: UUID, slug: str, *, compile_tries: int = 3, sleep: float = 3.0
+) -> tuple[dict[str, Any] | None, str]:
+    """Probe the live dev container for a REAL error → ``(status, category)``.
+
+    Returns ``(None, "")`` when the app is compiling clean AND renders without a
+    5xx (or the probe itself was inconclusive — a probe hiccup is never reported
+    as "broken"). Otherwise ``(status_dict, "compile"|"runtime")`` where status
+    carries ``error`` / ``file``. Mirrors ``_probe_compile_errors`` but RETURNS the
+    verdict instead of publishing a card — the self-repair loop drives it."""
+    for _ in range(max(1, compile_tries)):
+        await asyncio.sleep(sleep)
+        try:
+            st = await orchestrator_client.compile_status(project_id, slug=slug)
+        except Exception as exc:
+            print(f"[PP] self_repair compile probe failed (inconclusive): {exc!r}", flush=True)
+            return None, ""
+        if st.get("ok", True):
+            continue  # clean or still compiling — keep watching
+        return st, "compile"
+    try:
+        rt = await orchestrator_client.runtime_status(project_id, slug=slug)
+    except Exception as exc:
+        print(f"[PP] self_repair runtime probe failed (inconclusive): {exc!r}", flush=True)
+        return None, ""
+    if rt.get("ok", True):
+        return None, ""
+    return rt, "runtime"
+
+
+async def _run_app_self_repair(
+    project_id: UUID,
+    slug: str,
+    files: dict[str, str],
+    *,
+    passes: int,
+    on_notice: Callable[[str], Awaitable[None]] | None = None,
+) -> tuple[dict[str, str], dict[str, Any] | None, str]:
+    """Bounded «probe → fix → hot-reload → re-probe» loop (Claude-Code verify→fix).
+
+    Returns ``(changed_files, final_error_status, final_category)``:
+    * ``changed_files`` — cumulative repaired files (``{}`` if nothing changed);
+      the caller commits them as a follow-up snapshot so the fix survives a rebuild.
+    * ``final_error_status`` — ``None`` when the app ends up GREEN; otherwise the
+      last error status dict (the caller surfaces it as a card — old behaviour).
+
+    Fully fail-soft (R-10): the model giving nothing usable, or any orchestrator
+    hiccup, ends the loop and falls back to the card. ``files`` is not mutated."""
+    changed: dict[str, str] = {}
+    work = dict(files)
+    last_status: dict[str, Any] | None = None
+    last_category = ""
+    for i in range(max(0, passes)):
+        status, category = await _probe_app_error(project_id, slug)
+        if status is None:
+            return changed, None, ""  # green (or probe inconclusive → don't claim broken)
+        last_status, last_category = status, category
+        fix = await app_doctor.propose_fix(
+            category=category,
+            detail=str(status.get("error") or ""),
+            file_path=status.get("file"),
+            files=work,
+        )
+        if not fix:
+            break  # model gave nothing usable → stop, surface the card
+        work.update(fix)
+        changed.update(fix)
+        try:
+            await orchestrator_client.hot_reload(project_id=project_id, slug=slug, files=fix)
+        except Exception as exc:
+            print(f"[PP] self_repair hot_reload failed: {exc!r}", flush=True)
+            break
+        print(f"[PP] self_repair pass={i + 1} fixed={list(fix)} cat={category}", flush=True)
+        if on_notice:
+            await on_notice(
+                f"\n\n*Нашёл ошибку ({category}) — чиню и пересобираю "
+                f"({i + 1}/{passes})…*\n\n"
+            )
+    # Final verdict after the last fix recompiled.
+    status, category = await _probe_app_error(project_id, slug)
+    if status is None:
+        return changed, None, ""
+    return changed, (last_status or status), (last_category or category)
 
 
 def _spawn_process_prompt(**kwargs: object) -> None:
@@ -2773,15 +2859,8 @@ async def _process_prompt(
             messages.append({"role": "assistant", "content": accumulated})
             messages.append({"role": "user", "content": retry_note})
             print("[PP] surgical_retry (no patch applied) -> re-ask", flush=True)
-            # Escalate the re-ask to a STRONGER model — re-asking the SAME cheap
-            # model with the same byte-exact demand just misses again. edit_escalation
-            # (reasoning DeepSeek; swap via ROLE_MODELS env) reproduces the exact span
-            # far more reliably. Fires only AFTER the cheap edit already failed →
-            # strictly better than the old same-model retry.
-            _esc_model = model_for_role("edit_escalation", override=force_model)
-            print(f"[PP] surgical_retry escalate -> {_esc_model}", flush=True)
             await _run_stream(
-                _esc_model, force_single_shot=True, force_all=_esc_model
+                model_id, force_single_shot=True, force_all=force_model
             )
             _retry_acc = str(state["accumulated"])
             if _retry_acc.strip():
@@ -2820,13 +2899,8 @@ async def _process_prompt(
                 f"[PP] surgical_conflict_retry conflicts={len(edit_conflicts)}",
                 flush=True,
             )
-            # Escalate the conflict re-ask to the stronger edit_escalation model
-            # (same rationale): the cheap model already mis-copied the anchor once;
-            # a reasoning model lands it.
-            _esc_model = model_for_role("edit_escalation", override=force_model)
-            print(f"[PP] surgical_conflict_retry escalate -> {_esc_model}", flush=True)
             await _run_stream(
-                _esc_model, force_single_shot=True, force_all=_esc_model
+                model_id, force_single_shot=True, force_all=force_model
             )
             _cr_acc = str(state["accumulated"])
             if _cr_acc.strip():
@@ -4362,6 +4436,82 @@ async def _process_prompt(
                             ),
                             file="src/lib/db/schema.ts",
                         )
+                    elif int(get_settings().app_self_repair_passes) > 0:
+                        # App self-repair loop (Claude-Code verify→fix, DARK). Probe
+                        # the live container for a REAL compile/runtime error, ask the
+                        # app_doctor model (DeepSeek) to fix it, hot-reload, re-probe —
+                        # up to N passes — then commit the repaired files as a FOLLOW-UP
+                        # snapshot so the fix survives a rebuild. Fail-soft: any trouble
+                        # (or still broken) falls back to surfacing the card as before.
+                        _sr_passes = int(get_settings().app_self_repair_passes)
+
+                        async def _sr_notice(delta: str) -> None:
+                            await publish_event(
+                                project_id,
+                                "llm.chunk",
+                                {"message_id": str(assistant_message_id), "delta": delta},
+                            )
+
+                        try:
+                            _repaired, _sr_err, _sr_cat = await _run_app_self_repair(
+                                project_id, project.slug, files,
+                                passes=_sr_passes, on_notice=_sr_notice,
+                            )
+                        except Exception as _sr_exc:
+                            print(f"[PP] self_repair loop failed: {_sr_exc!r}", flush=True)
+                            _repaired, _sr_err, _sr_cat = {}, None, ""
+                        if _repaired and _sr_err is None:
+                            # GREEN after repair — commit the fix as a follow-up snapshot
+                            # (the first snapshot already shipped; this records the heal
+                            # and keeps it rollback-able + in git for the next rebuild).
+                            try:
+                                files = {**files, **_repaired}
+                                _rep_sha = await asyncio.to_thread(
+                                    repo_svc.commit_files, project_id, files,
+                                    "AI: авто-починка сборки", new_sha,
+                                )
+                                async with factory() as _s:
+                                    _rep_snap = Snapshot(
+                                        project_id=project_id, commit_sha=_rep_sha,
+                                        prompt_text="авто-починка сборки",
+                                        model_id=snapshot_model_id,
+                                        parent_id=new_snapshot_id,
+                                    )
+                                    _s.add(_rep_snap)
+                                    await _s.flush()
+                                    _rep_proj = await _s.get(Project, project_id)
+                                    if _rep_proj is not None:
+                                        _rep_proj.current_snapshot_id = _rep_snap.id
+                                    _rep_msg = await _s.get(Message, assistant_message_id)
+                                    if _rep_msg is not None:
+                                        _rep_msg.content = (_rep_msg.content or "") + (
+                                            "\n\n*✓ Нашёл и починил ошибку сборки — "
+                                            "приложение собирается.*"
+                                        )
+                                        _rep_msg.snapshot_id = _rep_snap.id
+                                    await _s.commit()
+                                    await _s.refresh(_rep_snap)
+                                await asyncio.to_thread(enqueue_preview, _rep_snap.id)
+                                await publish_event(
+                                    project_id, "snapshot.created",
+                                    {"snapshot": _snapshot_payload(_rep_snap)},
+                                )
+                                await _sr_notice(
+                                    "\n\n*✓ Починил ошибку — приложение собирается.*\n\n"
+                                )
+                                print(f"[PP] self_repair committed sha={_rep_sha[:8]}", flush=True)
+                            except Exception as _rc_exc:
+                                print(f"[PP] self_repair commit failed: {_rc_exc!r}", flush=True)
+                        elif _sr_err is not None:
+                            # Still broken after the loop — surface the card (old path).
+                            await app_errors.publish(
+                                factory, project_id, assistant_message_id,
+                                category=_sr_cat or "compile",
+                                detail=str(
+                                    _sr_err.get("error") or "Не удалось собрать приложение."
+                                ),
+                                file=_sr_err.get("file"),
+                            )
                     elif probe_compile:
                         # Files synced cleanly — Turbopack now recompiles async.
                         # Probe for a compile error in the background so the card

@@ -666,6 +666,22 @@ class Settings(BaseSettings):
     # dead-ends. Kill per-env: USE_CONTAINER_EDIT_REWRITE=false.
     use_container_edit_rewrite: bool = Field(default=True)
 
+    # ── App self-repair loop (Claude-Code «verify → fix», DARK) ───────────
+    # After a container app (Next/entities/spa) hot-reloads generated files, the
+    # dev server may fail to COMPILE or 5xx at RUNTIME. Today we only SURFACE that
+    # as a chat card (`_probe_compile_errors`) and stop — the user is left with a
+    # broken app and «добавь фичу» that didn't actually land. When > 0, the server
+    # instead runs a BOUNDED self-repair loop: probe the real compile/runtime error
+    # from the live container, feed it + the failing file to the `app_doctor` model
+    # role (DeepSeek), hot-reload the fix, re-probe — up to N passes — then commit
+    # the repaired files as a follow-up snapshot so the fix survives a rebuild. This
+    # is the Claude-Code reliability step that lets DeepSeek actually ADD working
+    # functionality, not just emit code that may not compile. Bounded + fail-soft
+    # (R-10): any orchestrator/model hiccup falls back to surfacing the card (the
+    # old behaviour). Default 0 = OFF (byte-identical to today). Recommended flip:
+    # 2. Env: APP_SELF_REPAIR_PASSES.
+    app_self_repair_passes: int = Field(default=0)
+
     # Honest chat content (2026-06-21). The assistant message saved to the DB is
     # the model's RAW output (<file>/<edit> blocks + any stray prose/code). The
     # frontend renders anything NOT wrapped in a recognised block as raw text, so
@@ -917,14 +933,6 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "art_director": "kimi-k2.6",
     "freeform_writer": "deepseek-v4-pro",
     "edit":         "deepseek-chat",  # cheap-path targeted edit
-    # Edit ESCALATION (owner 2026-06-22 «чтобы как клауд-код точечно правил»). When
-    # the cheap `edit`/`freeform_writer` SEARCH/REPLACE didn't land (no patch, or a
-    # partial conflict), the surgical retry re-asks on THIS stronger model instead of
-    # the SAME cheap one — re-asking the cheap model with the same byte-exact demand
-    # just misses again. Reasoning DeepSeek reproduces the exact span far more
-    # reliably; same vsegpt provider (no new failure mode). Swap to a frontier model
-    # without a deploy via ROLE_MODELS env (e.g. edit_escalation=claude-sonnet-4-6).
-    "edit_escalation": "deepseek-v4-pro-thinking",
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
     # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
     # reliable model that emits strict JSON. Owner directive 2026-06-16: route via
@@ -941,6 +949,11 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # class as discovery_plan. Swap via ROLE_MODELS env.
     "result_type":   "deepseek-chat",
     "exe_doctor":    "deepseek-chat",  # self-heal patch for failed PyInstaller/NSIS builds
+    # App self-repair (Claude-Code verify→fix for the web/container path). Fixes a
+    # real Next.js compile/runtime error from a minimal <edit>. DeepSeek v4-pro (the
+    # reliable full-file writer) — same workhorse the rewrite fallbacks trust; swap
+    # via ROLE_MODELS env. See Settings.app_self_repair_passes.
+    "app_doctor":    "deepseek-v4-pro",
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.
