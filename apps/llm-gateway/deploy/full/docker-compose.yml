@@ -363,6 +363,10 @@ services:
       GATE_AUTHENTICATED_CABINET: ${GATE_AUTHENTICATED_CABINET:-false}
       GATE_SEED_EMAIL: ${GATE_SEED_EMAIL:-gate@omnia.local}
       GATE_CABINET_STATES_ADVISORY: ${GATE_CABINET_STATES_ADVISORY:-true}
+      # b2: host-resolver rule so the gate browser reaches a generated app's public
+      # preview host (canonical Auth.js origin) via the host nginx. Empty = authed
+      # path off. E.g. "MAP *.preview.lead-generator.ru 172.21.0.1".
+      GATE_PREVIEW_RESOLVER_RULES: ${GATE_PREVIEW_RESOLVER_RULES:-}
       # Reference ceiling ratchet (R) — also read on the worker gauntlet path.
       ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
       REFERENCE_CEILING_ENFORCED: ${REFERENCE_CEILING_ENFORCED:-false}

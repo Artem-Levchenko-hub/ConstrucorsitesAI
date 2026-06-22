@@ -233,7 +233,7 @@ async def test_gate_async_passing_verdict_no_publish(monkeypatch) -> None:
     async def _status(_pid, *, slug):
         return {"ok": True}
 
-    async def _gate(_pid, _slug, _route="/", *, storage_state=None):
+    async def _gate(_pid, _slug, _route="/", *, storage_state=None, public_base=None):
         # abstained=True skips the V4.9 viral-eligibility DB write (orthogonal to
         # this test's publish assertion; the stubbed factory has no real session).
         return SimpleNamespace(hard_failed=(), failed_classes=(), abstained=True)
@@ -262,7 +262,7 @@ async def test_gate_async_hard_fail_publishes_card(monkeypatch) -> None:
     async def _status(_pid, *, slug):
         return {"ok": True}
 
-    async def _gate(_pid, _slug, route="/", *, storage_state=None):
+    async def _gate(_pid, _slug, route="/", *, storage_state=None, public_base=None):
         captured["route"] = route
         return SimpleNamespace(
             hard_failed=(object(),), failed_classes=("taste", "hierarchy"),
@@ -299,7 +299,8 @@ def test_worker_resolves_target_route() -> None:
     left orphaned. Without this the gate scores the bare `/` login wall."""
     src = (_SRC / "workers" / "quality.py").read_text(encoding="utf-8")
     assert "route_target.resolve_target_route" in src
-    assert "gate_live_app(pid, slug, route, storage_state=storage_state)" in src
+    assert "storage_state=storage_state" in src
+    assert "public_base=public_base" in src  # b2: authed render on the canonical origin
 
 
 def test_queue_points_entity_gate_at_worker_job() -> None:
@@ -351,11 +352,16 @@ async def test_gate_live_app_authenticated_runs_cabinet_and_390(monkeypatch) -> 
     monkeypatch.setattr(entity_gate.accept_gauntlet, "run", _run)
 
     state = {"cookies": [{"name": "authjs.session-token"}]}
-    out = await entity_gate.gate_live_app(uuid4(), "sushi", "/dashboard", storage_state=state)
+    pub = "https://sushi-dev.preview.lead-generator.ru"
+    out = await entity_gate.gate_live_app(
+        uuid4(), "sushi", "/dashboard", storage_state=state, public_base=pub
+    )
 
     assert len(calls) == 2  # desktop + @390
     assert calls[0]["cabinet"] is True
     assert calls[0]["storage_state"] is state
+    # b2: authed render targets the canonical https origin, not the internal url
+    assert calls[0]["url"] == pub + "/dashboard"
     assert any(c.get("composition_width") == 390 for c in calls)
     gates = {g.gate for g in out.gates}
     assert "hierarchy@390" in gates  # @390 leg merged in renamed
@@ -384,8 +390,13 @@ async def test_gate_async_authenticated_logs_in(monkeypatch) -> None:
     async def _base(_pid, route="/"):
         return "http://omnia-dev-x:3000"
 
+    pub = "https://shop-dev.preview.lead-generator.ru"
+
     async def _get_status(_pid):
-        return {"gate_seed": {"email": "gate@omnia.local", "auth_secret": "s3cret"}}
+        return {
+            "gate_seed": {"email": "gate@omnia.local", "auth_secret": "s3cret"},
+            "dev_url": pub,
+        }
 
     async def _establish(base, email, auth_secret, **kw):
         captured["login"] = (base, email, auth_secret)
@@ -394,9 +405,10 @@ async def test_gate_async_authenticated_logs_in(monkeypatch) -> None:
     async def _route_boom(*a, **kw):  # pragma: no cover
         raise AssertionError("route_target must NOT run on the authenticated path")
 
-    async def _gate(_pid, _slug, route="/", *, storage_state=None):
+    async def _gate(_pid, _slug, route="/", *, storage_state=None, public_base=None):
         captured["route"] = route
         captured["storage_state"] = storage_state
+        captured["public_base"] = public_base
         return SimpleNamespace(hard_failed=(), failed_classes=(), abstained=True)
 
     monkeypatch.setattr(quality.orchestrator_client, "compile_status", _status)
@@ -409,7 +421,10 @@ async def test_gate_async_authenticated_logs_in(monkeypatch) -> None:
     await quality._gate_async(str(uuid4()), str(uuid4()), "shop")
     assert captured["route"] == "/dashboard"
     assert captured["storage_state"] == {"cookies": [{"name": "authjs.session-token"}]}
+    # b2: login + render use the canonical public dev_url, not the internal base
+    assert captured["login"][0] == pub
     assert captured["login"][1] == "gate@omnia.local"
+    assert captured["public_base"] == pub
 
 
 async def test_gate_async_seed_missing_falls_back_to_anonymous(monkeypatch) -> None:
@@ -439,9 +454,10 @@ async def test_gate_async_seed_missing_falls_back_to_anonymous(monkeypatch) -> N
     async def _route(_base_url, *, candidate_route="/dashboard"):
         return "/"
 
-    async def _gate(_pid, _slug, route="/", *, storage_state=None):
+    async def _gate(_pid, _slug, route="/", *, storage_state=None, public_base=None):
         captured["route"] = route
         captured["storage_state"] = storage_state
+        captured["public_base"] = public_base
         return SimpleNamespace(hard_failed=(), failed_classes=(), abstained=True)
 
     monkeypatch.setattr(quality.orchestrator_client, "compile_status", _status)
@@ -452,6 +468,7 @@ async def test_gate_async_seed_missing_falls_back_to_anonymous(monkeypatch) -> N
 
     await quality._gate_async(str(uuid4()), str(uuid4()), "shop")
     assert captured["storage_state"] is None
+    assert captured["public_base"] is None
     assert captured["route"] == "/"  # anonymous route-probe path
 
 

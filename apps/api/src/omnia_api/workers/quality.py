@@ -77,32 +77,42 @@ async def _gate_async(message_id: str, project_id: str, slug: str) -> None:
 
     # Area C (DARK): log INTO the generated app with the seeded operator so the
     # gate scores the real CABINET (/dashboard + CRUD), not the public storefront.
-    # The orchestrator exposes the seed creds over its token-guarded /status only
-    # when OMNIA_GATE_SEED=1; establish_session drives a real credentials login and
-    # returns a Playwright storage_state. Any miss → None → anonymous path (the gate
-    # is byte-identical to today when the flag/seed is off). Fail-soft (R-10).
+    # The login + the cabinet render must hit the app's CANONICAL https origin (its
+    # Auth.js AUTH_URL = the public preview host) — secure cookies don't ride the
+    # internal http url (b2). The worker reaches that host via the Chromium
+    # host-resolver rule (gate_preview_resolver_rules) → host nginx → container. The
+    # orchestrator exposes seed creds + dev_url over its token-guarded /status only
+    # when OMNIA_GATE_SEED=1. Any miss → None → anonymous path (byte-identical to
+    # today when the flag/seed is off). Fail-soft (R-10).
     storage_state = None
+    public_base = None
     if settings.gate_authenticated_cabinet and base is not None:
         try:
             status = await orchestrator_client.get_status(pid)
             seed = status.get("gate_seed") or {}
-            if seed.get("email") and seed.get("auth_secret"):
+            dev_url = status.get("dev_url")
+            if seed.get("email") and seed.get("auth_secret") and dev_url:
                 storage_state = await auth_session.establish_session(
-                    base, seed["email"], seed["auth_secret"]
+                    dev_url, seed["email"], seed["auth_secret"]
                 )
+                if storage_state is not None:
+                    public_base = dev_url
         except Exception as exc:
             print(f"[quality] gate session error {slug}: {exc!r}", flush=True)
             storage_state = None
+            public_base = None
 
-    # Authenticated → score the cabinet directly (/dashboard). Anonymous (no
-    # session / flag off) → keep the 16/5d route-probe (`/` or a PUBLIC dashboard),
-    # so the OFF path is byte-identical.
+    # Authenticated → score the cabinet directly (/dashboard) over the public origin
+    # the session cookie is bound to. Anonymous (no session / flag off) → keep the
+    # 16/5d route-probe (`/` or a PUBLIC dashboard), so the OFF path is byte-identical.
     if storage_state is not None:
         route = route_target.DEFAULT_CANDIDATE_ROUTE  # "/dashboard"
     else:
         route = "/" if base is None else await route_target.resolve_target_route(base)
 
-    verdict = await entity_gate.gate_live_app(pid, slug, route, storage_state=storage_state)
+    verdict = await entity_gate.gate_live_app(
+        pid, slug, route, storage_state=storage_state, public_base=public_base
+    )
     if verdict is None:
         return
 

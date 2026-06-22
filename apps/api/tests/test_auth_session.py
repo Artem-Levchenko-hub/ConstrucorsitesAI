@@ -95,7 +95,7 @@ class _FakeChromium:
     def __init__(self, browser: _FakeBrowser) -> None:
         self._browser = browser
 
-    async def launch(self, *, headless: bool) -> _FakeBrowser:
+    async def launch(self, *, headless: bool, args: list | None = None) -> _FakeBrowser:
         return self._browser
 
 
@@ -224,3 +224,23 @@ async def test_establish_session_playwright_import_failure_returns_none(
     monkeypatch.setattr(pw_async, "async_playwright", _boom)
     result = await establish_session("http://app:3000", "gate@omnia.local", "s")
     assert result is None
+
+
+def test_preview_resolver_args_empty_by_default(monkeypatch):
+    """Default (empty setting) → no launch args (authenticated path off)."""
+    from types import SimpleNamespace
+    from omnia_api.services import auth_session
+    monkeypatch.setattr(auth_session, "get_settings", lambda: SimpleNamespace(gate_preview_resolver_rules=""), raising=False)
+    import omnia_api.core.config as cfg
+    monkeypatch.setattr(cfg, "get_settings", lambda: SimpleNamespace(gate_preview_resolver_rules=""))
+    assert auth_session.preview_resolver_args() == []
+
+
+def test_preview_resolver_args_emits_host_resolver_rule(monkeypatch):
+    """When set → a single --host-resolver-rules Chromium arg (b2)."""
+    from types import SimpleNamespace
+    from omnia_api.services import auth_session
+    import omnia_api.core.config as cfg
+    rule = "MAP *.preview.lead-generator.ru 172.21.0.1"
+    monkeypatch.setattr(cfg, "get_settings", lambda: SimpleNamespace(gate_preview_resolver_rules=rule))
+    assert auth_session.preview_resolver_args() == [f"--host-resolver-rules={rule}"]

@@ -29,6 +29,22 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+def preview_resolver_args() -> list[str]:
+    """Chromium launch args that let a gate browser reach a generated app's PUBLIC
+    preview host from inside the worker network (Area C, b2). Returns a
+    ``--host-resolver-rules`` arg from ``gate_preview_resolver_rules`` (e.g. "MAP
+    *.preview.lead-generator.ru 172.21.0.1") so the headless browser resolves the
+    canonical https preview host to the docker-gateway IP where the host nginx
+    listens — nginx terminates TLS and proxies to the container as https, so the
+    app sees its canonical AUTH_URL origin and secure cookies work. Empty setting →
+    no arg (authenticated path off; renders use the URL as-is). Import-cycle-free:
+    a lazy get_settings read, no module-level config import."""
+    from omnia_api.core.config import get_settings
+
+    rules = (get_settings().gate_preview_resolver_rules or "").strip()
+    return [f"--host-resolver-rules={rules}"] if rules else []
+
+
 def derive_seed_password(auth_secret: str) -> str:
     """Re-derive the seed operator's plaintext password from ``AUTH_SECRET``.
 
@@ -57,7 +73,9 @@ async def establish_session(
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(
+                headless=True, args=preview_resolver_args()
+            )
             try:
                 context = await browser.new_context()
                 try:
@@ -96,4 +114,4 @@ async def establish_session(
         return None
 
 
-__all__ = ["derive_seed_password", "establish_session"]
+__all__ = ["derive_seed_password", "establish_session", "preview_resolver_args"]

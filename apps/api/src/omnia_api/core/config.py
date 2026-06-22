@@ -518,6 +518,16 @@ class Settings(BaseSettings):
     # surfaces a quality card but never blocks ship until calibrated (same
     # discipline as acceptance_gauntlet_catalog_gate).
     gate_cabinet_states_advisory: bool = Field(default=True)
+    # Area C (b2) — Chromium host-resolver rule so the gate's headless browser can
+    # reach a generated app's PUBLIC preview host (its canonical Auth.js AUTH_URL,
+    # where secure cookies work) from inside the worker network. The worker can only
+    # route to the host nginx by the docker-gateway IP, so we map the preview
+    # wildcard → that IP; nginx terminates TLS (valid wildcard cert) and proxies to
+    # the container with X-Forwarded-Proto=https, so the app sees its canonical https
+    # origin and the credentials login + cabinet render succeed. Empty (default) →
+    # the authenticated path is OFF (gate stays anonymous). Example value:
+    # "MAP *.preview.lead-generator.ru 172.21.0.1". Env: GATE_PREVIEW_RESOLVER_RULES.
+    gate_preview_resolver_rules: str = Field(default="")
 
     # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
     # Originality: fingerprint each accepted freeform page and penalise the

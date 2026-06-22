@@ -74,6 +74,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .auth_session import preview_resolver_args
 from .render_settle import goto_and_settle
 from .surface_class import is_login_surface
 
@@ -534,7 +535,7 @@ async def audit_url(
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(headless=True, args=preview_resolver_args())
             try:
                 context = await browser.new_context(
                     viewport={"width": int(width), "height": GATE_HEIGHT},
@@ -572,7 +573,7 @@ async def audit_files(
             index_uri = (workdir / "index.html").as_uri()
 
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
+                browser = await p.chromium.launch(headless=True, args=preview_resolver_args())
                 try:
                     page = await browser.new_page(
                         viewport={"width": int(width), "height": GATE_HEIGHT},

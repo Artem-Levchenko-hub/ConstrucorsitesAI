@@ -63,6 +63,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from . import data_gate
+from .auth_session import preview_resolver_args
 from .render_settle import goto_and_settle
 
 if TYPE_CHECKING:
@@ -281,7 +282,7 @@ async def audit_url(
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(headless=True, args=preview_resolver_args())
             try:
                 context = await browser.new_context(
                     viewport={"width": int(width), "height": GATE_HEIGHT},

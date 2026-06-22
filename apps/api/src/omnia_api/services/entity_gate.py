@@ -55,6 +55,7 @@ async def gate_live_app(
     route: str = "/",
     *,
     storage_state: dict | None = None,
+    public_base: str | None = None,
 ) -> GauntletVerdict | None:
     """Run the composition legs (taste + hierarchy) against the live entity
     container and return the verdict.
@@ -72,6 +73,12 @@ async def gate_live_app(
     When ``None`` (flag off / login failed) behaviour is byte-identical to before —
     desktop composition on the resolved route, no cabinet leg, no @390.
 
+    ``public_base`` (Area C, b2) is the app's CANONICAL https origin (its public
+    preview host). When authenticated it MUST be used as the render base instead of
+    the internal http url, because the session cookie is bound to that https host;
+    the worker's browser reaches it via the host-resolver rule. Anonymous path
+    ignores it and renders the internal url as before.
+
     Returns ``None`` (the caller skips the card this round) when the gate is
     disabled, the container isn't reachable, or the gauntlet errors. No ``files``
     are passed, so the source-scan registry leg is skipped — a container app has no
@@ -79,10 +86,14 @@ async def gate_live_app(
     """
     if not get_settings().acceptance_entity_composition_gate:
         return None
-    url = await resolve_live_url(project_id, route)
+    authed = storage_state is not None
+    if authed and public_base:
+        # Render the cabinet on the canonical https origin the session is bound to.
+        url = public_base.rstrip("/") + (route if route.startswith("/") else "/" + route)
+    else:
+        url = await resolve_live_url(project_id, route)
     if url is None:
         return None
-    authed = storage_state is not None
     try:
         verdict = await accept_gauntlet.run(
             url=url,
