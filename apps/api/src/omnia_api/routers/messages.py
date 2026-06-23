@@ -2361,25 +2361,79 @@ async def _process_prompt(
                 )
                 _agent_system = agent_builder.SYSTEM_PROMPT
                 _agent_steps = int(get_settings().agent_builder_max_steps)
+            # Cost-safe: dedicated `agent` role = deepseek-v4-pro (cheap, not the
+            # opus 1-req/sec bottleneck). Swap via ROLE_MODELS env.
+            _agent_model = model_for_role("agent", override=force_model)
             _agent_res = await agent_builder.run_agent_build(
                 system_prompt=_agent_system,
                 user_prompt=_agent_user,
-                # Cost-safe: dedicated `agent` role = deepseek-v4-pro (cheap,
-                # not the opus 1-req/sec bottleneck). Swap via ROLE_MODELS env.
-                model=model_for_role("agent", override=force_model),
+                model=_agent_model,
                 execute=_agent_executor,
                 max_steps=_agent_steps,
                 emit=_agent_emit,
                 user_id=str(user_id),
                 project_id=str(project_id),
             )
-            files = _agent_res.files
+            _all_files = dict(_agent_res.files)
+            _total_steps = _agent_res.steps
+            # AUTO-CONTINUE (builds only): one run is capped at `_agent_steps`, but a
+            # full first build usually needs more. Instead of stopping at that cap and
+            # making the user click «Продолжить» against an arbitrary limit, keep
+            # running SEGMENTS — each re-reads the live container it's been writing to
+            # (finish-the-partial-build prompt) — until the agent calls done, OR a
+            # whole segment writes NOTHING new (genuinely stuck → stop, don't spin),
+            # OR the segment backstop (`agent_max_segments`) is hit. Only a max_steps
+            # exit auto-continues; a stalled/looping/exploring/error exit means the
+            # agent is stuck, so we stop and surface the «Продолжить» card.
+            _max_segments = max(1, int(get_settings().agent_max_segments))
+            _seg = 1
+            while (
+                not _is_edit
+                and not _agent_res.done
+                and _agent_res.stop_reason == "max_steps"
+                and _seg < _max_segments
+            ):
+                await _agent_emit(
+                    "agent.step",
+                    {
+                        "step": _total_steps,
+                        "action": f"продолжаю сборку (этап {_seg + 1})",
+                        "path": "",
+                    },
+                )
+                _cont_res = await agent_builder.run_agent_build(
+                    system_prompt=agent_builder.SYSTEM_PROMPT,
+                    user_prompt=(
+                        "Приложение уже ЧАСТИЧНО собрано в этом проекте (часть файлов "
+                        "уже на месте в контейнере). Доведи сборку ДО КОНЦА: запусти "
+                        "build, посмотри текущие файлы, допиши недостающие "
+                        "entities/<Name>.json и страницы (включая dashboard/page.tsx), "
+                        "почини ошибки до чистоты, затем done. НЕ начинай с нуля и НЕ "
+                        f"переписывай работающее.{_seed_block}"
+                    ),
+                    model=_agent_model,
+                    execute=_agent_executor,
+                    max_steps=_agent_steps,
+                    emit=_agent_emit,
+                    user_id=str(user_id),
+                    project_id=str(project_id),
+                )
+                _seg += 1
+                _total_steps += _cont_res.steps
+                _new = {p: c for p, c in _cont_res.files.items() if _all_files.get(p) != c}
+                _all_files.update(_cont_res.files)
+                _agent_res = _cont_res
+                if not _new and not _cont_res.done:
+                    print(f"[PP] agentic_build auto-continue stuck seg={_seg}", flush=True)
+                    break
+
+            files = _all_files
             # Honest chat: never surface the raw internal summary on a non-done exit
             # (the "hit step budget without calling done" leak). See helper.
             accumulated = _agent_result_message(_agent_res, is_edit=_is_edit)
             print(
-                f"[PP] agentic_build done={_agent_res.done} steps={_agent_res.steps} "
-                f"files={len(files)} stop={_agent_res.stop_reason}",
+                f"[PP] agentic_build done={_agent_res.done} segs={_seg} "
+                f"total_steps={_total_steps} files={len(files)} stop={_agent_res.stop_reason}",
                 flush=True,
             )
 

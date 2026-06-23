@@ -711,6 +711,15 @@ class Settings(BaseSettings):
     # the screens, then build+fix. 14 was too tight (all spent exploring); 40
     # gives room to actually write + repair. Env: AGENT_BUILDER_MAX_STEPS.
     agent_builder_max_steps: int = Field(default=40)
+    # Auto-continue: a single run is capped at agent_builder_max_steps, but a full
+    # first build often needs more than one segment. Rather than stop at that cap and
+    # make the user keep clicking «Продолжить» against an arbitrary low limit, the
+    # build handler runs up to this many SEGMENTS back-to-back (each re-reads the live
+    # container it's been writing to) until the agent calls done OR a whole segment
+    # makes NO new file progress (genuinely stuck). This is the real stop condition;
+    # the segment count is just a runaway backstop (a truly unbounded loop is unsafe —
+    # a model that never finishes would run forever). Env: AGENT_MAX_SEGMENTS.
+    agent_max_segments: int = Field(default=6)
 
     # Honest chat content (2026-06-21). The assistant message saved to the DB is
     # the model's RAW output (<file>/<edit> blocks + any stray prose/code). The
