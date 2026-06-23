@@ -183,6 +183,7 @@ async def run_agent_build(
     stalls = 0
     last_sig = ""
     repeat_count = 0
+    no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
 
     for step in range(max_steps):
         # Retry the model call on transient gateway errors (ReadTimeout / 5xx /
@@ -281,6 +282,35 @@ async def run_agent_build(
             )})
             continue
 
+        # Cycle breaker: the consecutive-identical check above MISSES a multi-step
+        # read loop (observed live: read→grep→list→read→read repeating for the whole
+        # 80-step budget, 0 files written) because each step differs from the last,
+        # so `repeat_count` keeps resetting. Track a no-WRITE streak instead: too
+        # many actions in a row that produce no file means the model is exploring,
+        # not building. Nudge HARD to write; if it still won't, abort early (with a
+        # distinct stop_reason) rather than burning the whole budget reading.
+        if action.name in ("write_file", "edit_file"):
+            no_write_streak = 0
+        else:
+            no_write_streak += 1
+            if no_write_streak >= _NO_WRITE_ABORT_AT:
+                return AgentResult(
+                    done=False,
+                    summary="stuck exploring (reading) without writing any file",
+                    files=written, steps=step + 1, transcript=convo,
+                    stop_reason="exploring",
+                )
+            if no_write_streak >= _NO_WRITE_NUDGE_AT:
+                print(
+                    f"[AGENT] step={step} EXPLORE-STALL x{no_write_streak} "
+                    f"({action.name}) → nudge WRITE",
+                    flush=True,
+                )
+                if emit:
+                    await emit("agent.stalled", {"step": step})
+                convo.append({"role": "user", "content": _EXPLORE_STALL_NUDGE})
+                continue  # don't execute another read — force a write next
+
         obs = await execute(action)
         print(
             f"[AGENT] step={step} {action.name} {action.path} ok={obs.get('ok')}",
@@ -296,6 +326,25 @@ async def run_agent_build(
         done=False, summary="hit step budget without calling done",
         files=written, steps=max_steps, transcript=convo, stop_reason="max_steps",
     )
+
+
+# Cycle breaker thresholds (no-WRITE streak): after this many consecutive actions
+# that write nothing (read_file/grep/list_dir/build), nudge HARD to write; after the
+# abort threshold, give up exploring rather than burn the whole step budget. A real
+# build writes within a few reads (the seed context is handed up-front), so a long
+# read-only streak is always a stall, never legitimate orientation.
+_NO_WRITE_NUDGE_AT = 5
+_NO_WRITE_ABORT_AT = 14
+
+_EXPLORE_STALL_NUDGE = (
+    "STOP READING. You have already read the entity JSON, the CrudResource "
+    "component and use-entity — that is ENOUGH context. Do NOT read_file / grep / "
+    "list_dir again. Your VERY NEXT action MUST be write_file: create the next "
+    "missing page now — an entity page is \"use client\" and renders "
+    "<CrudResource entity=\"Name\" .../>; the dashboard index is "
+    "src/app/(app)/dashboard/page.tsx. When every page exists, run build; when the "
+    "build is clean, call done. Writing a file is the ONLY way to make progress."
+)
 
 
 _NO_ACTION_NUDGE = (
