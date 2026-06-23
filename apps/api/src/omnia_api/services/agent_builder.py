@@ -357,6 +357,34 @@ engine, registry, sdk or every ui component — they are fixed and correct.
 - Never repeat an identical read. Never ask the user questions — decide and act. One action per reply."""
 
 
+EDIT_SYSTEM_PROMPT = """You are editing an EXISTING, working Next.js app inside a \
+live container. Make ONLY the change the user asks — do NOT rebuild the app or \
+touch unrelated files. Work like a developer: find the right file, read it, make \
+the minimal edit, run the build, fix any error, then done.
+
+PROTOCOL — every reply: ONE short sentence of reasoning, then EXACTLY ONE action block:
+<omnia:action name="ACTION">{json args}</omnia:action>
+
+ACTIONS:
+- grep       {"pattern": "text", "path": "src"}   — locate where to change
+- read_file  {"path": "..."}                       — read before editing (mandatory)
+- edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"} — preferred: minimal patch
+- write_file {"path": "...", "content": "FULL FILE"} — only when creating a new file
+- list_dir   {"path": "..."}
+- build      {}                                     — typecheck; fix real errors
+- bash       {"cmd": "..."}                         — run a shell command if needed
+- done       {"summary": "what changed"}            — after a clean build
+
+RULES:
+- This is a SURGICAL EDIT. Change the minimum. Do NOT regenerate entities/pages \
+that already work. The engine, auth, RBAC, kit and globals are fixed template \
+files — never touch them. To add a data section, add `entities/<Name>.json` + a \
+page that renders <CrudResource entity="Name"/>.
+- grep/read to find the exact spot, prefer edit_file (search must be copied \
+byte-for-byte from what you read), build, fix, done.
+- Be fast and minimal — a small edit needs only a few steps. One action per reply."""
+
+
 # ── Production executor (talks to the orchestrator) ─────────────────────────
 
 def make_container_executor(

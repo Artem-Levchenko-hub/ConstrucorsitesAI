@@ -2196,13 +2196,18 @@ async def _process_prompt(
         # exactly as before (byte-identical).
         if (
             get_settings().use_agentic_builder
-            and orchestrate
-            and not surgical
             and project_template in CONTAINER_NEXT
             and project_slug
             and not project_is_imported
+            and (orchestrate or surgical)
         ):
             from omnia_api.services import agent_builder
+
+            # Phase 2: container EDITS go through the agent too (read→edit→build→
+            # fix), not blind SEARCH/REPLACE — fixes the "точечные правки" pain.
+            # First-build/rebuild = full build prompt; a surgical follow-up = a
+            # minimal edit prompt with a smaller step budget.
+            _is_edit = not orchestrate
 
             async def _agent_emit(event: str, data: dict[str, Any]) -> None:
                 # Surface each agent step as a chat delta so the user SEES the
@@ -2247,23 +2252,44 @@ async def _process_prompt(
                 "\n\nPROJECT CONTEXT (already gathered — do NOT re-explore these):\n"
                 + "\n\n".join(_seed_parts)
             ) if _seed_parts else ""
-            _agent_user = (
-                f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
-                f"Тип проекта: {project_template}.{_seed_block}\n\n"
-                f"Действуй: объяви нужные entities/<Name>.json, напиши страницы "
-                f"(включая обязательный dashboard/page.tsx индекс), затем build и "
-                f"чини ошибки до чистоты, затем done. Минимизируй разведку — "
-                f"раскладка выше уже дана."
-            )
+            if _is_edit:
+                _sel_block = ""
+                try:
+                    if selected_elements:
+                        _sel_block = (
+                            "\n\nПользователь выделил элемент(ы) в превью: "
+                            + str(selected_elements)[:800]
+                        )
+                except Exception:
+                    _sel_block = ""
+                _agent_user = (
+                    f"Внеси ТОЧЕЧНОЕ изменение в существующее приложение по "
+                    f"запросу:\n\n{prompt_text}\n{_sel_block}{_seed_block}\n\n"
+                    f"Найди нужный файл (grep/read), внеси МИНИМАЛЬНУЮ правку "
+                    f"(edit_file), запусти build, затем done. Не пересобирай "
+                    f"работающее."
+                )
+                _agent_system = agent_builder.EDIT_SYSTEM_PROMPT
+                _agent_steps = 12
+            else:
+                _agent_user = (
+                    f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
+                    f"Тип проекта: {project_template}.{_seed_block}\n\n"
+                    f"Действуй: объяви нужные entities/<Name>.json, напиши страницы "
+                    f"(включая обязательный dashboard/page.tsx индекс), затем build и "
+                    f"чини ошибки до чистоты, затем done. Минимизируй разведку — "
+                    f"раскладка выше уже дана."
+                )
+                _agent_system = agent_builder.SYSTEM_PROMPT
+                _agent_steps = int(get_settings().agent_builder_max_steps)
             _agent_res = await agent_builder.run_agent_build(
-                system_prompt=agent_builder.SYSTEM_PROMPT,
+                system_prompt=_agent_system,
                 user_prompt=_agent_user,
-                # The loop needs a strong instruction-follower for the strict
-                # action protocol — route to the dedicated `agent` role
-                # (claude-opus-4-8) rather than the build-routing model.
+                # Cost-safe: dedicated `agent` role = deepseek-v4-pro (cheap,
+                # not the opus 1-req/sec bottleneck). Swap via ROLE_MODELS env.
                 model=model_for_role("agent", override=force_model),
                 execute=_agent_executor,
-                max_steps=int(get_settings().agent_builder_max_steps),
+                max_steps=_agent_steps,
                 emit=_agent_emit,
                 user_id=str(user_id),
                 project_id=str(project_id),
@@ -2271,7 +2297,11 @@ async def _process_prompt(
             files = _agent_res.files
             accumulated = (
                 _agent_res.summary
-                or ("Готово — приложение собрано." if _agent_res.done else "Сборка прервана.")
+                or (
+                    ("Готово — правка применена." if _is_edit else "Готово — приложение собрано.")
+                    if _agent_res.done
+                    else ("Не удалось завершить правку." if _is_edit else "Сборка прервана.")
+                )
             )
             print(
                 f"[PP] agentic_build done={_agent_res.done} steps={_agent_res.steps} "
