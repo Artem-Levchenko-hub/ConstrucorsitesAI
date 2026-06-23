@@ -53,9 +53,34 @@ def test_cycle_of_distinct_reads_aborts_as_exploring():
         )
     )
     assert res.done is False
-    assert res.stop_reason == "exploring"
-    assert res.steps < 40  # aborted early — did NOT burn the whole budget
+    # Caught as a stuck cycle — either the global repeat guard ("looping") or the
+    # no-write streak ("exploring") fires first; both mean "stuck", and both abort
+    # well before the 40-step budget. The point is it does NOT run to the cap.
+    assert res.stop_reason in ("looping", "exploring")
+    assert res.steps < 40
     assert res.files == {}
+
+
+def test_write_cycle_same_content_aborts_as_looping():
+    # The live bug the no-write streak MISSED: a cycle that re-WRITES the same files
+    # with identical content (write a → write b → build → repeat). Writes reset the
+    # no-write streak and the steps differ from the last, so only the GLOBAL repeat
+    # guard catches it — abort as "looping" well before the 40-step budget.
+    record: list = []
+    replies = [
+        '<omnia:action name="write_file">{"path":"entities/A.json","content":"X"}</omnia:action>',
+        '<omnia:action name="write_file">{"path":"entities/B.json","content":"Y"}</omnia:action>',
+        '<omnia:action name="build"></omnia:action>',
+    ]
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="sys", user_prompt="x", model="m",
+            execute=_ok_executor(record), complete=_cycle(replies), max_steps=40,
+        )
+    )
+    assert res.done is False
+    assert res.stop_reason == "looping"
+    assert res.steps < 40  # caught, not run to budget
 
 
 def test_reads_then_write_is_not_falsely_aborted():

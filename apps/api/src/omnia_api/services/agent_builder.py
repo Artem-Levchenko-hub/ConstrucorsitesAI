@@ -184,6 +184,7 @@ async def run_agent_build(
     last_sig = ""
     repeat_count = 0
     no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
+    sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
 
     for step in range(max_steps):
         # Retry the model call on transient gateway errors (ReadTimeout / 5xx /
@@ -258,6 +259,34 @@ async def run_agent_build(
             f"{action.name}|{action.path}|"
             f"{json.dumps(action.args, sort_keys=True, ensure_ascii=False)}"
         )
+        # GLOBAL repeat guard (non-consecutive cycle). A multi-step loop that
+        # re-issues the SAME action — INCLUDING re-WRITING a file with identical
+        # content (observed live: the same 5 entities, then the same 2 dashboard
+        # pages + build, on a loop) — is missed by both the consecutive check below
+        # (steps differ within the cycle) and the no-write streak (a write resets
+        # it). Count every exact signature across the whole run: an exact repeat is
+        # never progress, so nudge to MOVE ON, then abort as looping.
+        # Only NON-consecutive occurrences count here — back-to-back repeats are the
+        # job of the `repeat_count` check below; this guard is for a multi-step CYCLE
+        # that returns to the same action (a,b,c,a,b,c… / re-writing the same file).
+        if sig != last_sig:
+            sig_seen[sig] = sig_seen.get(sig, 0) + 1
+            if sig_seen[sig] >= _REPEAT_ABORT_AT:
+                return AgentResult(
+                    done=False,
+                    summary=f"stuck re-issuing {action.name} {action.path}",
+                    files=written, steps=step + 1, transcript=convo,
+                    stop_reason="looping",
+                )
+            if sig_seen[sig] >= _REPEAT_NUDGE_AT:
+                print(
+                    f"[AGENT] step={step} CYCLE x{sig_seen[sig]} {action.name} {action.path}",
+                    flush=True,
+                )
+                if emit:
+                    await emit("agent.stalled", {"step": step})
+                convo.append({"role": "user", "content": _REPEAT_CYCLE_NUDGE})
+                continue
         if sig == last_sig:
             repeat_count += 1
         else:
@@ -335,6 +364,20 @@ async def run_agent_build(
 # read-only streak is always a stall, never legitimate orientation.
 _NO_WRITE_NUDGE_AT = 5
 _NO_WRITE_ABORT_AT = 14
+
+# Global (non-consecutive) repeat guard: the SAME exact action issued this many
+# times in one run is a cycle, not progress (re-writing identical content counts).
+# An exact repeat never advances the build, so nudge to move on, then abort.
+_REPEAT_NUDGE_AT = 2
+_REPEAT_ABORT_AT = 4
+_REPEAT_CYCLE_NUDGE = (
+    "STOP — you have ALREADY issued this EXACT action before (same file + same "
+    "content, or the same command); repeating it changes NOTHING and the build is "
+    "not advancing. The file is already written. Move to the NEXT unfinished step: "
+    "write a still-MISSING page/file, fix the specific build error you were shown, "
+    "or — if the build is clean and every screen exists — call done. Never re-write "
+    "a file with the same content you already wrote."
+)
 
 _EXPLORE_STALL_NUDGE = (
     "STOP READING. You have already read the entity JSON, the CrudResource "
