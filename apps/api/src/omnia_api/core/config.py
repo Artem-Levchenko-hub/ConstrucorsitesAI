@@ -988,6 +988,13 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # fraction of the cost (Prompt-Engineering ch.9: cheapest model that does the
     # job). Swap to claude-opus-4-8 via ROLE_MODELS env if max-quality is needed.
     "agent": "deepseek-v4-pro",
+    # When the build loop trips an anti-loop guard (cycle / no-write / repeat),
+    # it escalates ONCE to this stronger reasoning model for the rest of the run.
+    # deepseek-v4-pro-thinking is already live on the gateway (director /
+    # edit_escalation) — stronger than the cheap default, far cheaper than Opus
+    # (which drained the wallet on a 1-req/sec char-billed loop, 2026-06-22).
+    # Tunable without deploy via ROLE_MODELS env.
+    "agent_escalation": "deepseek-v4-pro-thinking",
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
     # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
     # reliable model that emits strict JSON. Owner directive 2026-06-16: route via
