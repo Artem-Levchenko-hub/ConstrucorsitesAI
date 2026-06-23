@@ -380,6 +380,34 @@ async def _run_app_self_repair(
     return changed, (last_status or status), (last_category or category)
 
 
+def _agent_result_message(res: Any, *, is_edit: bool) -> str:
+    """User-facing chat text for an agentic-build run — NEVER leaks the raw summary.
+
+    ``res.summary`` is the model's own prose ONLY when it actually FINISHED (the
+    model called ``done``). On every NON-done exit (ran out of steps / stalled /
+    looping / gateway error) ``summary`` is an internal English diagnostic — e.g.
+    "hit step budget without calling done" / "stuck repeating ..." — which must
+    stay in the logs, NOT the chat (the bug: it was surfaced verbatim as Omnia's
+    reply). Partial files still commit, so on a non-finish we show a friendly RU
+    message that keeps the user moving («Починить» / повтори), keyed to why the
+    agent stopped."""
+    if getattr(res, "done", False):
+        return (getattr(res, "summary", "") or "").strip() or (
+            "Готово — правка применена." if is_edit else "Готово — приложение собрано."
+        )
+    if getattr(res, "stop_reason", "") == "max_steps":
+        head = (
+            "Не успел доделать правку за отведённые шаги"
+            if is_edit
+            else "Собрал приложение не полностью за отведённые шаги — часть уже на месте"
+        )
+        return head + ". Нажми «Починить» или повтори запрос — продолжу с того же места."
+    return (
+        ("Не удалось завершить правку" if is_edit else "Сборка прервана")
+        + ". Попробуй ещё раз или нажми «Починить»."
+    )
+
+
 def _spawn_process_prompt(**kwargs: object) -> None:
     """Fire-and-forget _process_prompt with a guaranteed strong reference.
 
@@ -2295,14 +2323,9 @@ async def _process_prompt(
                 project_id=str(project_id),
             )
             files = _agent_res.files
-            accumulated = (
-                _agent_res.summary
-                or (
-                    ("Готово — правка применена." if _is_edit else "Готово — приложение собрано.")
-                    if _agent_res.done
-                    else ("Не удалось завершить правку." if _is_edit else "Сборка прервана.")
-                )
-            )
+            # Honest chat: never surface the raw internal summary on a non-done exit
+            # (the "hit step budget without calling done" leak). See helper.
+            accumulated = _agent_result_message(_agent_res, is_edit=_is_edit)
             print(
                 f"[PP] agentic_build done={_agent_res.done} steps={_agent_res.steps} "
                 f"files={len(files)} stop={_agent_res.stop_reason}",
