@@ -2364,10 +2364,15 @@ async def _process_prompt(
             # Cost-safe: dedicated `agent` role = deepseek-v4-pro (cheap, not the
             # opus 1-req/sec bottleneck). Swap via ROLE_MODELS env.
             _agent_model = model_for_role("agent", override=force_model)
+            # Cheap default; the loop upgrades to this stronger model the first
+            # time a stall-guard nudges (cycle / repeat / no-write) — smart only
+            # when stuck, so cost stays bounded (no full strong-model run).
+            _escalate_model = model_for_role("agent_escalation", override=force_model)
             _agent_res = await agent_builder.run_agent_build(
                 system_prompt=_agent_system,
                 user_prompt=_agent_user,
                 model=_agent_model,
+                escalate_model=_escalate_model,
                 execute=_agent_executor,
                 max_steps=_agent_steps,
                 emit=_agent_emit,
