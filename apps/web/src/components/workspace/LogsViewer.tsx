@@ -63,7 +63,7 @@ export function LogsViewer({ projectId }: { projectId: string }) {
           title="Логи dev-контейнера"
         >
           <ScrollText className="h-3.5 w-3.5" />
-          <span className="text-xs">Логи</span>
+          <span className="hidden 2xl:inline text-xs">Логи</span>
         </Button>
       </DialogTrigger>
 

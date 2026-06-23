@@ -113,7 +113,7 @@ export function ImageGenToggle({
       ) : (
         <ImageOff className="h-3.5 w-3.5" />
       )}
-      <span>Картинки</span>
+      <span className="hidden 2xl:inline">Картинки</span>
     </button>
   );
 }

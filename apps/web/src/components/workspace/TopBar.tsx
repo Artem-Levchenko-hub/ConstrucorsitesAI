@@ -71,7 +71,7 @@ export function TopBar({
   const tNav = useTranslations("nav");
 
   return (
-    <header className="shrink-0 h-14 flex items-center justify-between px-6 bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
+    <header className="shrink-0 h-14 flex items-center justify-between gap-3 px-6 bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
       <div className="flex shrink-0 items-center gap-4">
         <Link
           href="/projects"
@@ -83,13 +83,16 @@ export function TopBar({
 
         {projectName && (
           <>
-            <span className="text-fg-tertiary">/</span>
+            {/* Back-to-projects breadcrumb — redundant with the logo link, so it
+                only appears on very wide screens; compact view is just
+                «Omnia.AI / <project>». */}
+            <span className="hidden 2xl:inline text-fg-tertiary">/</span>
             <Link
               href="/projects"
-              className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-sm text-fg-secondary transition-colors hover:bg-surface-overlay hover:text-fg-primary"
+              className="hidden 2xl:flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-sm text-fg-secondary transition-colors hover:bg-surface-overlay hover:text-fg-primary"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
-              {tNav("projects")}
+              <span>{tNav("projects")}</span>
             </Link>
             <span className="text-fg-tertiary">/</span>
             <span className="max-w-[12rem] truncate text-sm font-medium">{projectName}</span>

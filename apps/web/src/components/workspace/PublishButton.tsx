@@ -61,7 +61,7 @@ export function PublishButton({ projectSlug }: { projectSlug: string }) {
         title="Поделиться публичной ссылкой на проект"
       >
         <Share2 className="h-3 w-3" />
-        Поделиться
+        <span className="hidden 2xl:inline">Поделиться</span>
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>

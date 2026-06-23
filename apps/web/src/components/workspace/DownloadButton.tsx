@@ -48,7 +48,7 @@ export function DownloadButton({
       ) : (
         <Download className="h-3.5 w-3.5" />
       )}
-      Скачать
+      <span className="hidden 2xl:inline">Скачать</span>
     </Button>
   );
 }

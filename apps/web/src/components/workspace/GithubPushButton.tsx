@@ -61,7 +61,7 @@ export function GithubPushButton({
       >
         <Link href="/account">
           <Github className="h-3 w-3" />
-          Подключить GitHub
+          <span className="hidden 2xl:inline">Подключить GitHub</span>
         </Link>
       </Button>
     );
@@ -77,7 +77,7 @@ export function GithubPushButton({
         title={`Залить проект в репозиторий на github.com/${data.login}`}
       >
         <Github className="h-3 w-3" />
-        На GitHub
+        <span className="hidden 2xl:inline">На GitHub</span>
       </Button>
       <GithubPushDialog
         open={open}

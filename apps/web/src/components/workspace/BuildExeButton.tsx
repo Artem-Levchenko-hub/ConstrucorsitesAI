@@ -85,7 +85,9 @@ export function BuildExeButton({ projectId }: { projectId: string }) {
       }
     >
       <Hammer className="h-3.5 w-3.5" />
-      {stage === "failed" ? "Повторить .exe" : "Собрать .exe"}
+      <span className="hidden 2xl:inline">
+        {stage === "failed" ? "Повторить .exe" : "Собрать .exe"}
+      </span>
     </Button>
   );
 }

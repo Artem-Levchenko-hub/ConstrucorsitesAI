@@ -42,7 +42,7 @@ export function LeadsButton({ projectId }: { projectId: string }) {
         title="Заявки с сайта"
       >
         <Inbox className="h-3.5 w-3.5" />
-        Заявки
+        <span className="hidden 2xl:inline">Заявки</span>
         {count > 0 && (
           <span className="ml-0.5 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
             {count}
