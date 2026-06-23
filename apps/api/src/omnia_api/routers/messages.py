@@ -2446,10 +2446,12 @@ async def _process_prompt(
             # app actually serves. Probe the live container for a 5xx render and
             # surface it honestly instead of shipping a broken app as «готово».
             # Deterministic (one HTTP probe), fail-soft.
+            _runtime_ok = True  # fail-soft default: a probe error ≠ a broken app
             try:
                 _rt = await orchestrator_client.runtime_status(
                     project_id, slug=project_slug, path="/")
-                if not _rt.get("ok"):
+                _runtime_ok = bool(_rt.get("ok"))
+                if not _runtime_ok:
                     _rt_err = _rt.get("error") or _rt.get("status_code") or "5xx"
                     accumulated += (
                         f"\n\n⚠️ Рантайм-проверка: приложение отвечает ошибкой "
@@ -2460,6 +2462,27 @@ async def _process_prompt(
                     print("[PP] agentic_smoke runtime ok", flush=True)
             except Exception as _sm_exc:
                 print(f"[PP] agentic_smoke skipped: {_sm_exc!r}", flush=True)
+
+            # Honest result: a loop-guard abort (looping/exploring) that STILL
+            # wrote files AND whose app actually serves is NOT a failure — the
+            # work landed, the guard just tripped. Don't scare the user with
+            # «Сборка прервана» when the preview is live. (max_steps keeps its own
+            # «часть на месте» + «Продолжить» card, so it is excluded here.)
+            if (
+                not _agent_res.done
+                and _agent_res.stop_reason in ("looping", "exploring")
+                and files
+                and _runtime_ok
+            ):
+                accumulated = (
+                    "Готово — правка применена."
+                    if _is_edit
+                    else "Готово — приложение собрано."
+                )
+                print(
+                    "[PP] agentic_build looped-but-serves → reported as done",
+                    flush=True,
+                )
 
             if files:
                 new_sha = await asyncio.to_thread(
