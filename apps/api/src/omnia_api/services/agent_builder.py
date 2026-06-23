@@ -132,12 +132,42 @@ def _truncate(s: str, n: int) -> str:
 # loop still holds the full transcript for its own logic; only the MODEL CALL is
 # windowed. This is what keeps a 30-step loop at roughly one-step cost.
 def _window_messages(
-    convo: list[dict[str, Any]], keep_last: int = 8
+    convo: list[dict[str, Any]], keep_last: int = 12
 ) -> list[dict[str, Any]]:
     head = 2  # system + first user (orientation + seeded layout)
     if len(convo) <= head + keep_last:
         return convo
     return convo[:head] + convo[-keep_last:]
+
+
+def _progress_note(written: dict[str, str], last_build_ok: bool | None) -> str:
+    """A compact live-state reminder injected into the system slot of EVERY model
+    call. The sliding window (keep_last) drops the middle of a long build, so the
+    model forgets which files it already wrote and re-writes them on a loop (the
+    #1 cause of the cycle/exploring aborts). Telling it the current state every
+    turn — what exists, whether the last build was clean — kills that amnesia.
+    """
+    parts: list[str] = []
+    if written:
+        listing = "\n".join(f"  - {p}" for p in sorted(written))
+        parts.append(
+            "FILES YOU HAVE ALREADY WRITTEN this run — they EXIST. Do NOT write "
+            "them again with the same content. Only touch one with edit_file if "
+            "you must FIX a specific build error in it:\n" + listing
+        )
+    if last_build_ok is True:
+        parts.append(
+            "LAST build: CLEAN. If every file the task needs now exists, call "
+            "done — do not keep re-writing existing files."
+        )
+    elif last_build_ok is False:
+        parts.append(
+            "LAST build: FAILED — read the reported error, fix the named file "
+            "with edit_file, then build again. Do not blindly re-write."
+        )
+    if not parts:
+        return ""
+    return "\n\n[PROGRESS — current container state]\n" + "\n".join(parts)
 
 
 def _format_observation(action: Action, obs: dict[str, Any]) -> str:
@@ -186,6 +216,7 @@ async def run_agent_build(
     repeat_count = 0
     no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
     sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
+    last_build_ok: bool | None = None  # result of the most recent `build` action
     active_model = model
     escalated = False
 
@@ -223,6 +254,16 @@ async def run_agent_build(
         # sliding window (system + the seed/task + the last N turns) → per-step
         # payload stays ~constant regardless of step count → "same cost".
         call_msgs = _window_messages(convo)
+        # Inject the live state (files already written + last build result) into
+        # the system slot so the windowed model never forgets what it has done →
+        # stops re-writing existing files (the root cycle/exploring cause).
+        _note = _progress_note(written, last_build_ok)
+        if _note and call_msgs:
+            call_msgs = [
+                {"role": call_msgs[0]["role"],
+                 "content": call_msgs[0]["content"] + _note},
+                *call_msgs[1:],
+            ]
         # 429-resilience: vsegpt enforces ~1 req/sec globally; under concurrent
         # prod traffic a step can 429 for several seconds. 5 attempts w/ growing
         # backoff (4/8/12/16/20s) ride it out instead of aborting the build.
@@ -370,6 +411,8 @@ async def run_agent_build(
                 continue  # don't execute another read — force a write next
 
         obs = await execute(action)
+        if action.name == "build":
+            last_build_ok = bool(obs.get("ok"))
         print(
             f"[AGENT] step={step} {action.name} {action.path} ok={obs.get('ok')}",
             flush=True,
