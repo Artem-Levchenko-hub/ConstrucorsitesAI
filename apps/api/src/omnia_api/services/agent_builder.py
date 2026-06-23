@@ -160,6 +160,7 @@ async def run_agent_build(
     user_prompt: str,
     model: str,
     execute: Executor,
+    escalate_model: str | None = None,
     max_steps: int = 12,
     emit: Emit | None = None,
     complete: Callable[..., Awaitable[str]] | None = None,
@@ -185,6 +186,31 @@ async def run_agent_build(
     repeat_count = 0
     no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
     sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
+    active_model = model
+    escalated = False
+
+    async def _escalate(step: int, reason: str) -> None:
+        """First stall-nudge of any kind → upgrade to the stronger model, once.
+
+        Cheap model by default; the moment a guard signals the loop is stuck
+        (cycle / repeat / no-write) we switch to a stronger reasoning model for
+        the rest of the run. The existing abort guards still bound the run, so
+        this stays a handful of strong-model steps, not a full strong-model
+        build (which on a char-billed 1-req/sec gateway blew cost + reliability).
+        """
+        nonlocal active_model, escalated
+        if escalate_model and not escalated:
+            active_model = escalate_model
+            escalated = True
+            print(
+                f"[AGENT] step={step} ESCALATE → {escalate_model} (reason={reason})",
+                flush=True,
+            )
+            if emit:
+                await emit(
+                    "agent.escalate",
+                    {"step": step, "to": escalate_model, "reason": reason},
+                )
 
     for step in range(max_steps):
         # Retry the model call on transient gateway errors (ReadTimeout / 5xx /
@@ -204,7 +230,7 @@ async def run_agent_build(
             try:
                 reply = await complete(
                     call_msgs,
-                    model,
+                    active_model,
                     user_id=user_id,
                     project_id=project_id,
                     max_tokens=max_tokens,
@@ -279,6 +305,7 @@ async def run_agent_build(
                     stop_reason="looping",
                 )
             if sig_seen[sig] >= _REPEAT_NUDGE_AT:
+                await _escalate(step, "cycle")
                 print(
                     f"[AGENT] step={step} CYCLE x{sig_seen[sig]} {action.name} {action.path}",
                     flush=True,
@@ -299,6 +326,7 @@ async def run_agent_build(
                 stop_reason="looping",
             )
         if repeat_count >= 2:
+            await _escalate(step, "repeat")
             print(
                 f"[AGENT] step={step} REPEAT x{repeat_count} {action.name} {action.path}",
                 flush=True,
@@ -330,6 +358,7 @@ async def run_agent_build(
                     stop_reason="exploring",
                 )
             if no_write_streak >= _NO_WRITE_NUDGE_AT:
+                await _escalate(step, "explore")
                 print(
                     f"[AGENT] step={step} EXPLORE-STALL x{no_write_streak} "
                     f"({action.name}) → nudge WRITE",
