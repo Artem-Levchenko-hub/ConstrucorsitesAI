@@ -2265,7 +2265,12 @@ async def _process_prompt(
             # CONTINUE («продолжи») on a non-first-build re-enters the BUILD loop to
             # finish a partial app (the agent reads the live container state), so it
             # is neither a from-scratch build nor a 12-step minimal edit.
-            _is_continue = (not is_first_build) and _is_continue_request(prompt_text)
+            # «продолжи» only makes sense when there is a prior build to finish.
+            # NB: `is_first_build` lives in the POST handler (post_prompt), NOT in
+            # this worker fn — use the in-scope `current_snapshot_id` (None on a
+            # brand-new project's first build) so this never NameErrors.
+            _has_prior_build = current_snapshot_id is not None
+            _is_continue = _has_prior_build and _is_continue_request(prompt_text)
             _is_edit = (not orchestrate) and not _is_continue
 
             async def _agent_emit(event: str, data: dict[str, Any]) -> None:
