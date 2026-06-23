@@ -982,19 +982,18 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # strict <omnia:action> protocol and writes real code over many steps.
     # Owner constraint: SAME COST. vsegpt bills by characters, so a multi-step
     # loop on claude-opus-4-8 (expensive char-rate + the 1-req/sec 429
-    # bottleneck) blew both cost and reliability. deepseek-v4-pro is the cheap,
-    # fast workhorse coder; with the strong orientation + seed-context + circuit
-    # breaker + windowed transcript it follows the protocol reliably at a
-    # fraction of the cost (Prompt-Engineering ch.9: cheapest model that does the
-    # job). Swap to claude-opus-4-8 via ROLE_MODELS env if max-quality is needed.
-    "agent": "deepseek-v4-pro",
-    # When the build loop trips an anti-loop guard (cycle / no-write / repeat),
-    # it escalates ONCE to this stronger reasoning model for the rest of the run.
-    # deepseek-v4-pro-thinking is already live on the gateway (director /
-    # edit_escalation) — stronger than the cheap default, far cheaper than Opus
-    # (which drained the wallet on a 1-req/sec char-billed loop, 2026-06-22).
-    # Tunable without deploy via ROLE_MODELS env.
-    "agent_escalation": "deepseek-v4-pro-thinking",
+    # bottleneck) blew both cost and reliability. Owner directive 2026-06-23:
+    # run the agent on the STRONGEST deepseek from step 0 — never sit on the
+    # cheap coder. deepseek-v4-pro-thinking is the top deepseek on the gateway
+    # (reasoning variant, already proven on director / edit_escalation).
+    # Tunable via ROLE_MODELS env.
+    "agent": "deepseek-v4-pro-thinking",
+    # If even the strong model trips an anti-loop guard (cycle / no-write /
+    # repeat), escalate ONCE to a DIFFERENT family for the rest of the run —
+    # a stuck model usually needs a different model, not a restart of itself.
+    # kimi-k2.6-thinking is a strong non-deepseek reasoner already live on the
+    # gateway (design-brain); far cheaper than Opus. Tunable via ROLE_MODELS env.
+    "agent_escalation": "kimi-k2.6-thinking",
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
     # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
     # reliable model that emits strict JSON. Owner directive 2026-06-16: route via
