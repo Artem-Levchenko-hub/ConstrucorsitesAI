@@ -66,3 +66,30 @@ def test_edit_max_steps_message_is_edit_flavoured() -> None:
     )
     assert "step budget" not in m
     assert "правку" in m
+
+
+# ── continue/resume detection — «продолжи» finishes a partial build ──────────
+
+from omnia_api.routers.messages import _is_continue_request  # noqa: E402
+
+
+def test_continue_detected() -> None:
+    for p in (
+        "продолжи",
+        "продолжай сборку",
+        "доделай приложение",
+        "доведи до конца",
+        "достройка не закончилась, дострой",
+        "finish the build please",
+    ):
+        assert _is_continue_request(p) is True, p
+
+
+def test_continue_not_detected_for_edits_or_features() -> None:
+    for p in (
+        "поменяй цвет кнопки на синий",
+        "добавь раздел отзывов",
+        "сделай заголовок крупнее",
+        "",
+    ):
+        assert _is_continue_request(p) is False, p

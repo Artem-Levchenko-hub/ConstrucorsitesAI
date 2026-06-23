@@ -408,6 +408,32 @@ def _agent_result_message(res: Any, *, is_edit: bool) -> str:
     )
 
 
+# A follow-up that means «finish the partially-built app», not a fresh surgical
+# edit. The agentic builder operates on the LIVE dev container, which still holds
+# the partial build from the prior turn — so «продолжи» re-enters the BUILD loop
+# (full prompt + the build step budget) and the agent reads what's there and
+# finishes it, instead of being treated as a 12-step minimal edit.
+_CONTINUE_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "продолж",  # продолжи / продолжай / продолжить
+        "доделай", "доделать", "доведи", "довести",
+        "дособери", "дособерите", "достро",  # дострой/достроить
+        "доработай", "допиши", "заверши сбор", "закончи сбор",
+        "не доделал", "не докончил", "до конца",
+        "finish the build", "continue building", "keep building",
+    }
+)
+
+
+def _is_continue_request(prompt: str) -> bool:
+    """True when a follow-up asks to FINISH the partial agentic build (see above).
+
+    Caller gates this on a non-first-build CONTAINER project so it only fires when
+    there is actually a partial app to continue."""
+    t = (prompt or "").strip().lower()
+    return any(k in t for k in _CONTINUE_KEYWORDS)
+
+
 def _spawn_process_prompt(**kwargs: object) -> None:
     """Fire-and-forget _process_prompt with a guaranteed strong reference.
 
@@ -2235,7 +2261,11 @@ async def _process_prompt(
             # fix), not blind SEARCH/REPLACE — fixes the "точечные правки" pain.
             # First-build/rebuild = full build prompt; a surgical follow-up = a
             # minimal edit prompt with a smaller step budget.
-            _is_edit = not orchestrate
+            # CONTINUE («продолжи») on a non-first-build re-enters the BUILD loop to
+            # finish a partial app (the agent reads the live container state), so it
+            # is neither a from-scratch build nor a 12-step minimal edit.
+            _is_continue = (not is_first_build) and _is_continue_request(prompt_text)
+            _is_edit = (not orchestrate) and not _is_continue
 
             async def _agent_emit(event: str, data: dict[str, Any]) -> None:
                 # Surface each agent step as a chat delta so the user SEES the
@@ -2280,7 +2310,22 @@ async def _process_prompt(
                 "\n\nPROJECT CONTEXT (already gathered — do NOT re-explore these):\n"
                 + "\n\n".join(_seed_parts)
             ) if _seed_parts else ""
-            if _is_edit:
+            if _is_continue:
+                # Resume: finish the partial app the agent left in the live
+                # container (the prior turn committed + hot-reloaded what it had).
+                # Full build prompt + the build step budget; the agent re-orients
+                # from the current files (seed block) and carries on to `done`.
+                _agent_user = (
+                    "Приложение в проекте уже ЧАСТИЧНО собрано (часть файлов на месте). "
+                    "Доведи сборку ДО КОНЦА: запусти build, посмотри текущие файлы "
+                    "(раскладка ниже), допиши недостающие entities/<Name>.json и страницы "
+                    "(включая обязательный dashboard/page.tsx индекс), почини ошибки до "
+                    "чистоты, затем done. НЕ начинай с нуля и НЕ переписывай работающее."
+                    f"\n\nДоп. пожелание пользователя: {prompt_text}{_seed_block}"
+                )
+                _agent_system = agent_builder.SYSTEM_PROMPT
+                _agent_steps = int(get_settings().agent_builder_max_steps)
+            elif _is_edit:
                 _sel_block = ""
                 try:
                     if selected_elements:
