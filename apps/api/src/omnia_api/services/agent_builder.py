@@ -445,8 +445,18 @@ WORK STYLE (you have a LIMITED step budget — be decisive):
 examples if present (use list_dir on `src/app/(app)/dashboard` and `entities`). Do NOT read the \
 engine, registry, sdk or every ui component — they are fixed and correct.
 - Then WRITE: declare every entity the user asked for, then write the screens. Spend most steps WRITING, not reading.
-- After your files are in, run `build` ONCE, fix any real errors, then `done`.
-- Never repeat an identical read. Never ask the user questions — decide and act. One action per reply."""
+- Write ONE page per entity YOU declared in entities/*.json (at \
+`src/app/(app)/dashboard/<entity>/page.tsx`). The template's example Task/Product are \
+NOT the user's data — build pages for the entities the USER asked for, then remove or \
+ignore the examples; do not loop building a `tasks` page for an app that has none.
+- After your files are in, run `build` ONCE. ON A FAILED BUILD: the observation shows \
+the EXACT file + error — make a TARGETED fix to THAT file/line (common causes: a custom \
+column/prop passed to <CrudResource> — pass ONLY `entity` + optional title; a wrong \
+import path; or an entity field type the engine rejects). NEVER re-issue write_file with \
+the SAME content — an identical re-write fixes NOTHING; read the error and change exactly \
+what it points at. Repeat build→fix until clean, then `done`.
+- Never repeat an identical read OR an identical write. Never ask the user questions — \
+decide and act. One action per reply."""
 
 
 EDIT_SYSTEM_PROMPT = """You are editing an EXISTING, working Next.js app inside a \
@@ -546,6 +556,14 @@ def make_container_executor(
                 res = await orchestrator_client.agent_build(project_id, slug)
                 ok = bool(res.get("ok"))
                 detail = res.get("detail") or res.get("error") or "build clean"
+                if not ok:
+                    # The agent gets the full `detail` in its observation; log a
+                    # tail here too so operators can SEE the real compiler error
+                    # behind a stuck loop (grep "build FAILED" in the api logs).
+                    print(
+                        f"[AGENT] build FAILED slug={slug}: {str(detail)[:600]}",
+                        flush=True,
+                    )
                 return {"ok": ok, "detail": detail}
 
             if action.name == "bash":
