@@ -11,7 +11,10 @@ export type AppErrorCategory =
   | "compile"
   | "schema"
   | "runtime"
-  | "client";
+  | "client"
+  // Resumable partial agentic build (max_steps exit). Rendered as a neutral
+  // amber card with a «Продолжить» button (onFix("продолжи")), NOT a red error.
+  | "incomplete";
 
 export type AssistantPart =
   | { kind: "text"; text: string }

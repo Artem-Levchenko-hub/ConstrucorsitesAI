@@ -396,12 +396,13 @@ def _agent_result_message(res: Any, *, is_edit: bool) -> str:
             "Готово — правка применена." if is_edit else "Готово — приложение собрано."
         )
     if getattr(res, "stop_reason", "") == "max_steps":
-        head = (
-            "Не успел доделать правку за отведённые шаги"
+        # Status prose only — a «Продолжить» card is published alongside (see the
+        # agent path) and carries the resume action, so don't repeat it here.
+        return (
+            "Не успел доделать правку за отведённые шаги — часть уже на месте."
             if is_edit
-            else "Собрал приложение не полностью за отведённые шаги — часть уже на месте"
+            else "Собрал приложение не полностью за отведённые шаги — часть уже на месте."
         )
-        return head + ". Нажми «Починить» или повтори запрос — продолжу с того же места."
     return (
         ("Не удалось завершить правку" if is_edit else "Сборка прервана")
         + ". Попробуй ещё раз или нажми «Починить»."
@@ -2445,6 +2446,30 @@ async def _process_prompt(
                         msg.content = accumulated
                         msg.tokens_out = msg.tokens_out or 0
                     await session.commit()
+
+            # Resumable partial build: the agent ran out of step budget without
+            # calling done, but any partial files already committed above. Surface
+            # a NEUTRAL «Продолжить» card (not an error) — the web UI renders it
+            # amber with a button that sends «продолжи», which _is_continue_request
+            # routes back into the build loop on the live container. Published AFTER
+            # the msg.content=accumulated overwrite above (else it'd be wiped) and
+            # BEFORE llm.done so the card both persists and animates in.
+            if (
+                not getattr(_agent_res, "done", False)
+                and getattr(_agent_res, "stop_reason", "") == "max_steps"
+            ):
+                await app_errors.publish(
+                    factory,
+                    project_id,
+                    assistant_message_id,
+                    category="incomplete",
+                    title="Сборка не завершена",
+                    detail=(
+                        "Агент исчерпал лимит шагов, не закончив. Часть уже сохранена "
+                        "— нажми «Продолжить», доделаю с того же места, не начиная заново."
+                    ),
+                    fixable=True,
+                )
 
             await publish_event(
                 project_id,

@@ -38,7 +38,9 @@ def test_max_steps_does_not_leak_raw_summary() -> None:
         is_edit=False,
     )
     assert "step budget" not in m and "done" not in m  # raw English never shown
-    assert "Починить" in m and "продолжу" in m  # friendly + resumable hint
+    # status prose only — the «Продолжить» action lives on the card published
+    # alongside (app_errors category="incomplete"), so the prose no longer repeats it.
+    assert "часть уже на месте" in m
 
 
 def test_looping_does_not_leak_internal_diagnostic() -> None:
@@ -93,3 +95,24 @@ def test_continue_not_detected_for_edits_or_features() -> None:
         "",
     ):
         assert _is_continue_request(p) is False, p
+
+
+# ── «incomplete» card — the resumable-build affordance ──────────────────────
+
+
+def test_app_errors_incomplete_category_renders_card() -> None:
+    # The backend emits the exact <app-error> shape the web parser keys off; a
+    # missing _DEFAULT_TITLE key would KeyError in publish()'s WS payload.
+    from omnia_api.services import app_errors
+
+    assert app_errors._DEFAULT_TITLE["incomplete"] == "Сборка не завершена"
+    block = app_errors.render_block(
+        category="incomplete",
+        title="Сборка не завершена",
+        detail="часть уже на месте",
+        file=None,
+        fixable=True,
+    )
+    assert 'category="incomplete"' in block
+    assert 'fixable="1"' in block
+    assert block.strip().startswith("<app-error") and block.strip().endswith("</app-error>")

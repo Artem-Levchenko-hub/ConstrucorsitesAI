@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from omnia_api.core.redis import publish_event
 from omnia_api.models.message import Message
 
-ErrorCategory = Literal["build", "compile", "schema", "runtime", "client"]
+ErrorCategory = Literal["build", "compile", "schema", "runtime", "client", "incomplete"]
 
 # Human title per category — shown bold on the card when the caller doesn't pass
 # a more specific one.
@@ -36,6 +36,9 @@ _DEFAULT_TITLE: dict[str, str] = {
     "schema": "Ошибка миграции базы данных",
     "runtime": "Ошибка среды выполнения",
     "client": "Ошибка в браузере",
+    # Not an error — a resumable partial agentic build (ran out of step budget).
+    # Rendered by the web UI as a neutral amber card with a «Продолжить» button.
+    "incomplete": "Сборка не завершена",
 }
 
 

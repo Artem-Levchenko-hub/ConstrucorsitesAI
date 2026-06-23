@@ -440,6 +440,7 @@ const CATEGORY_LABEL: Record<AppErrorCategory, string> = {
   schema: "База данных",
   runtime: "Среда выполнения",
   client: "Браузер",
+  incomplete: "Не завершено",
 };
 
 /** A build/compile/schema/runtime failure of the generated app, surfaced as a
@@ -455,6 +456,10 @@ function AppErrorCard({
   const [open, setOpen] = useState(false);
   const detail = part.body.trim();
   const hasDetail = detail.length > 0;
+  // "incomplete" is a resumable partial build, not a failure — render it as a
+  // neutral amber card whose action CONTINUES the build («продолжи») rather than
+  // a red «Починить» fix.
+  const isIncomplete = part.category === "incomplete";
 
   const handleFix = () => {
     if (!onFix) return;
@@ -470,18 +475,40 @@ function AppErrorCard({
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: EASE_OUT }}
-      className="overflow-hidden rounded-xl border border-red-500/30 bg-red-500/5"
+      className={cn(
+        "overflow-hidden rounded-xl border",
+        isIncomplete
+          ? "border-amber-500/30 bg-amber-500/5"
+          : "border-red-500/30 bg-red-500/5",
+      )}
     >
       <div className="flex items-start gap-3 px-3 py-2.5">
-        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-500/15">
-          <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+        <span
+          className={cn(
+            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
+            isIncomplete ? "bg-amber-500/15" : "bg-red-500/15",
+          )}
+        >
+          <AlertTriangle
+            className={cn(
+              "h-3.5 w-3.5",
+              isIncomplete ? "text-amber-400" : "text-red-400",
+            )}
+          />
         </span>
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[13px] font-semibold text-fg-primary">
               {part.title}
             </span>
-            <span className="rounded-md bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-300">
+            <span
+              className={cn(
+                "rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                isIncomplete
+                  ? "bg-amber-500/15 text-amber-300"
+                  : "bg-red-500/15 text-red-300",
+              )}
+            >
               {CATEGORY_LABEL[part.category] ?? part.category}
             </span>
           </div>
@@ -494,11 +521,25 @@ function AppErrorCard({
             {part.fixable && onFix && (
               <button
                 type="button"
-                onClick={handleFix}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-200 transition-colors hover:bg-red-500/20"
+                onClick={() => (isIncomplete ? onFix("продолжи") : handleFix())}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors",
+                  isIncomplete
+                    ? "border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+                    : "border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20",
+                )}
               >
-                <Wrench className="h-3 w-3" />
-                Починить
+                {isIncomplete ? (
+                  <>
+                    <ChevronRight className="h-3 w-3" />
+                    Продолжить
+                  </>
+                ) : (
+                  <>
+                    <Wrench className="h-3 w-3" />
+                    Починить
+                  </>
+                )}
               </button>
             )}
             {hasDetail && (
@@ -527,7 +568,10 @@ function AppErrorCard({
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2, ease: EASE_OUT }}
-            className="overflow-hidden border-t border-red-500/20"
+            className={cn(
+              "overflow-hidden border-t",
+              isIncomplete ? "border-amber-500/20" : "border-red-500/20",
+            )}
           >
             <pre className="scrollbar-elegant max-h-64 overflow-auto bg-surface-base/60 p-3 text-[11px] font-mono leading-relaxed text-fg-secondary">
               {detail}
