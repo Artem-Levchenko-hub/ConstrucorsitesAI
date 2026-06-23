@@ -72,10 +72,10 @@ export function TopBar({
 
   return (
     <header className="shrink-0 h-14 flex items-center justify-between px-6 bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
-      <div className="flex items-center gap-4 min-w-0">
+      <div className="flex shrink-0 items-center gap-4">
         <Link
           href="/projects"
-          className="flex items-center gap-2 text-fg-primary font-semibold tracking-tight"
+          className="flex shrink-0 items-center gap-2 text-fg-primary font-semibold tracking-tight"
         >
           <span className="inline-block h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] shadow-[0_4px_12px_-2px_rgba(124,92,255,0.5)]" />
           <span className="hidden sm:inline">Omnia.AI</span>
@@ -92,7 +92,7 @@ export function TopBar({
               {tNav("projects")}
             </Link>
             <span className="text-fg-tertiary">/</span>
-            <span className="truncate text-sm font-medium">{projectName}</span>
+            <span className="max-w-[12rem] truncate text-sm font-medium">{projectName}</span>
             {remixSource && projectId && (
               <RemixSourceModal projectId={projectId} source={remixSource} />
             )}
@@ -112,7 +112,11 @@ export function TopBar({
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      {/* Middle: project action buttons. They SCROLL horizontally when the toolbar
+          is narrower than their total width, instead of overflowing onto the logo
+          (the old single right-cluster couldn't shrink, so the min-w-0 left cluster
+          collapsed to 0 and the buttons rendered on top of the brand). */}
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-2 overflow-x-auto omnia-no-scrollbar">
         {showProjectControls && (
           <>
             {projectId && <RuntimeButton projectId={projectId} />}
@@ -135,9 +139,14 @@ export function TopBar({
                 imageGenEnabled={imageGenEnabled ?? true}
               />
             )}
-            <WalletBadge />
           </>
         )}
+      </div>
+
+      {/* Right rail: balance + language + account stay ALWAYS visible — never part
+          of the scroll — so the user can always reach the wallet/account menu. */}
+      <div className="flex shrink-0 items-center gap-2 pl-1">
+        {showProjectControls && <WalletBadge />}
 
         <LocaleSwitcher />
 
