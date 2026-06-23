@@ -982,17 +982,23 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # strict <omnia:action> protocol and writes real code over many steps.
     # Owner constraint: SAME COST. vsegpt bills by characters, so a multi-step
     # loop on claude-opus-4-8 (expensive char-rate + the 1-req/sec 429
-    # bottleneck) blew both cost and reliability. Owner directive 2026-06-23:
-    # run the agent on the STRONGEST deepseek from step 0 — never sit on the
-    # cheap coder. deepseek-v4-pro-thinking is the top deepseek on the gateway
-    # (reasoning variant, already proven on director / edit_escalation).
-    # Tunable via ROLE_MODELS env.
-    "agent": "deepseek-v4-pro-thinking",
-    # If even the strong model trips an anti-loop guard (cycle / no-write /
-    # repeat), escalate ONCE to a DIFFERENT family for the rest of the run —
-    # a stuck model usually needs a different model, not a restart of itself.
-    # kimi-k2.6-thinking is a strong non-deepseek reasoner already live on the
-    # gateway (design-brain); far cheaper than Opus. Tunable via ROLE_MODELS env.
+    # bottleneck) blew both cost and reliability. Model choice for the AGENT LOOP
+    # is about PROTOCOL RELIABILITY, not raw reasoning: it must emit exactly one
+    # <omnia:action> block per turn. deepseek-v4-pro-thinking (the reasoning
+    # variant) spends its output on hidden reasoning and intermittently emits ZERO
+    # visible action → the loop stalls with 0 files (observed live 2026-06-23, 2/2
+    # builds). So the agent base is deepseek-v4-pro — the PREMIUM, non-thinking
+    # coder (NOT the cheap deepseek-chat): it follows the action protocol reliably,
+    # and the new written-files PROGRESS note (agent_builder._progress_note) cures
+    # the re-write loop that was its only weakness. Reasoning models stay where
+    # they can think freely (director / art_director / edit_escalation), not in a
+    # strict-protocol tool loop. Tunable via ROLE_MODELS env.
+    "agent": "deepseek-v4-pro",
+    # If the agent still trips an anti-loop guard (cycle / no-write / repeat),
+    # escalate ONCE to a DIFFERENT family for the rest of the run — a stuck model
+    # usually needs a different model, not a restart of itself. kimi-k2.6-thinking
+    # is a strong non-deepseek reasoner already live on the gateway (design-brain)
+    # that DOES emit the action protocol (verified live); far cheaper than Opus.
     "agent_escalation": "kimi-k2.6-thinking",
     # Onboarding question planner (owner rule 13 #1). A small structured meta-call
     # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
