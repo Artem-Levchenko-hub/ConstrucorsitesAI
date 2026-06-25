@@ -1,0 +1,39 @@
+# Dev image — used by orchestrator for the per-project dev container.
+# Builds once at template-cache time; project files mount as volumes so
+# AI edits are picked up by Turbopack HMR without rebuild.
+#
+# Debian-slim instead of Alpine — Alpine's dl-cdn.alpinelinux.org is
+# blocked by some Russian DPI, while Debian's deb.debian.org stays
+# reachable. node:22-slim already has glibc, so libc6-compat is not needed.
+
+FROM node:22-slim
+
+# node:22-slim ships with a builtin `node` user at uid/gid 1000.
+# The orchestrator's --user 1000:1000 maps to that user.
+WORKDIR /app
+RUN chown -R node:node /app
+
+# Install pnpm (Next 15 + Turbopack work cleanly with it).
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
+USER node
+
+# Pre-install dependencies to warm the layer cache. The orchestrator
+# bind-mounts /app/src on top of the template at run time so AI writes
+# show up immediately.
+COPY --chown=node:node package.json pnpm-lock.yaml* ./
+RUN pnpm install --frozen-lockfile || pnpm install
+
+COPY --chown=node:node . .
+
+# entrypoint runs `init-db` so the auth/channels/messages tables exist
+# before Next starts. Without it the first signup or message request
+# would 500 with "relation users does not exist".
+RUN chmod +x docker-entrypoint.sh
+
+EXPOSE 3000
+
+# Default: hot-reload dev server with a one-shot schema sync first.
+# Container envs (DATABASE_URL, AUTH_SECRET, AUTH_URL, etc.) come from
+# the orchestrator at run time.
+CMD ["./docker-entrypoint.sh"]

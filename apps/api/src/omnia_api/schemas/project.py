@@ -42,6 +42,7 @@ Template = Literal[
     "tgbot",
     "api",
     "code",
+    "realtime",
 ]
 
 # Map from API-side `template` value → orchestrator's template directory
@@ -54,6 +55,9 @@ _ORCHESTRATOR_TEMPLATE_BY_API: dict[str, str] = {
     "spa": "vite-react-spa",
     "tgbot": "telegram-bot-aiogram",
     "api": "fastapi-postgres",
+    # G001 — real-time stack: Next.js 15 + SSE/Redis pub-sub hub + membership ACL
+    # + presence (messengers, live-chat CRMs). Template dir: templates/nextjs-realtime.
+    "realtime": "nextjs-realtime",
 }
 
 

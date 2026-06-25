@@ -1,0 +1,117 @@
+{
+  "updatedAt": "2026-06-25T09:57:48.044Z",
+  "missions": [
+    {
+      "id": "session:97607d0c-66be-4a4a-a4b5-b2d61a91a1b8:none",
+      "source": "session",
+      "name": "none",
+      "objective": "Session mission",
+      "createdAt": "2026-06-25T09:54:09.241Z",
+      "updatedAt": "2026-06-25T09:57:48.044Z",
+      "status": "done",
+      "workerCount": 1,
+      "taskCounts": {
+        "total": 1,
+        "pending": 0,
+        "blocked": 0,
+        "inProgress": 0,
+        "completed": 1,
+        "failed": 0
+      },
+      "agents": [
+        {
+          "name": "ecc:typescript-reviewer:a2b22c2",
+          "role": "ecc:typescript-reviewer",
+          "ownership": "a2b22c245843c0e88",
+          "status": "done",
+          "currentStep": null,
+          "latestUpdate": "completed",
+          "completedSummary": null,
+          "updatedAt": "2026-06-25T09:57:48.044Z"
+        }
+      ],
+      "timeline": [
+        {
+          "id": "session-start:a2b22c245843c0e88:2026-06-25T09:54:09.241Z",
+          "at": "2026-06-25T09:54:09.241Z",
+          "kind": "update",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "started ecc:typescript-reviewer:a2b22c2",
+          "sourceKey": "session-start:a2b22c245843c0e88"
+        },
+        {
+          "id": "session-stop:a2b22c245843c0e88:2026-06-25T09:56:30.356Z",
+          "at": "2026-06-25T09:56:30.356Z",
+          "kind": "completion",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "completed",
+          "sourceKey": "session-stop:a2b22c245843c0e88"
+        },
+        {
+          "id": "session-stop:a2b22c245843c0e88:2026-06-25T09:56:46.965Z",
+          "at": "2026-06-25T09:56:46.965Z",
+          "kind": "completion",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "completed",
+          "sourceKey": "session-stop:a2b22c245843c0e88"
+        },
+        {
+          "id": "session-stop:a2b22c245843c0e88:2026-06-25T09:56:58.285Z",
+          "at": "2026-06-25T09:56:58.285Z",
+          "kind": "completion",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "completed",
+          "sourceKey": "session-stop:a2b22c245843c0e88"
+        },
+        {
+          "id": "session-stop:a2b22c245843c0e88:2026-06-25T09:57:07.957Z",
+          "at": "2026-06-25T09:57:07.957Z",
+          "kind": "completion",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "completed",
+          "sourceKey": "session-stop:a2b22c245843c0e88"
+        },
+        {
+          "id": "session-stop:a2b22c245843c0e88:2026-06-25T09:57:16.253Z",
+          "at": "2026-06-25T09:57:16.253Z",
+          "kind": "completion",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "completed",
+          "sourceKey": "session-stop:a2b22c245843c0e88"
+        },
+        {
+          "id": "session-stop:a2b22c245843c0e88:2026-06-25T09:57:23.697Z",
+          "at": "2026-06-25T09:57:23.697Z",
+          "kind": "completion",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "completed",
+          "sourceKey": "session-stop:a2b22c245843c0e88"
+        },
+        {
+          "id": "session-stop:a2b22c245843c0e88:2026-06-25T09:57:31.062Z",
+          "at": "2026-06-25T09:57:31.062Z",
+          "kind": "completion",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "completed",
+          "sourceKey": "session-stop:a2b22c245843c0e88"
+        },
+        {
+          "id": "session-stop:a2b22c245843c0e88:2026-06-25T09:57:40.115Z",
+          "at": "2026-06-25T09:57:40.115Z",
+          "kind": "completion",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "completed",
+          "sourceKey": "session-stop:a2b22c245843c0e88"
+        },
+        {
+          "id": "session-stop:a2b22c245843c0e88:2026-06-25T09:57:48.044Z",
+          "at": "2026-06-25T09:57:48.044Z",
+          "kind": "completion",
+          "agent": "ecc:typescript-reviewer:a2b22c2",
+          "detail": "completed",
+          "sourceKey": "session-stop:a2b22c245843c0e88"
+        }
+      ]
+    }
+  ]
+}

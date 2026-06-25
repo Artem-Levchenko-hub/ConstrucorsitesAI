@@ -1,0 +1,10 @@
+node_modules
+.next
+.turbo
+out
+dist
+drizzle/meta
+.env
+.env.local
+*.log
+.DS_Store
