@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-06-25T09:23:45.174Z",
-  "updatedAt": "2026-06-25T10:14:30.477Z",
+  "updatedAt": "2026-06-25T10:30:23.440Z",
   "briefPath": ".omc/ultragoal/brief.md",
   "goalsPath": ".omc/ultragoal/goals.json",
   "ledgerPath": ".omc/ultragoal/ledger.jsonl",
@@ -23,10 +23,13 @@
       "id": "G002-membership-and-acl-primitive",
       "title": "Membership and ACL primitive",
       "objective": "Extend the entity engine with a relation-based membership model of conversation members and per-record gates keyed on membership and a role graph, so multi-party data like DMs and class chats cannot leak by default. Depends on the realtime shape from G01.",
-      "status": "pending",
-      "attempt": 0,
+      "status": "complete",
+      "attempt": 1,
       "createdAt": "2026-06-25T09:23:45.174Z",
-      "updatedAt": "2026-06-25T09:23:45.174Z"
+      "updatedAt": "2026-06-25T10:30:23.440Z",
+      "startedAt": "2026-06-25T10:30:22.861Z",
+      "completedAt": "2026-06-25T10:30:23.440Z",
+      "evidence": "access members relation-based ACL in nextjs-entities engine. registry.ts AccessPolicy members plus MembershipConfig plus fail-closed parse to owner. engine.ts authorize members branch, membershipPredicate subquery, assertMember create check, read scoping listRecords and findScoped, expand admin-only. Strictly additive guarded by access===members. Bound params plus NAME_RE no injection. Code-review SHIP zero blockers plus manual adversarial pass. SYSTEM_PROMPT class-chat example. Commit 30e0475. Functional proof deferred to G004."
     },
     {
       "id": "G003-controlled-backend-authoring",
