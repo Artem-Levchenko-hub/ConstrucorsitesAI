@@ -278,6 +278,14 @@ class Settings(BaseSettings):
     # denied write doesn't silently succeed). OFF by default; for role-gated apps.
     use_role_gate: bool = Field(default=False)
 
+    # Security negative-path gate (G005) — aggregates the leak-attempt results
+    # (functional/role gates: another user denied another's records + cross-
+    # conversation messages) with transport-surface assertions (security headers
+    # present, payload cap 413, CORS not wildcard-with-credentials). Any leak or
+    # missing protection fails. OFF by default; makes "secure from prompt 1"
+    # enforceable once wired into the ship boolean.
+    use_security_gate: bool = Field(default=False)
+
     # Clarify interview (2026-06-05) — on the FIRST message of a brand-new
     # project, ask the user 3–4 short business-specific questions BEFORE building
     # (precise brief → точечнее сайт). Their answers (next message) drive the
