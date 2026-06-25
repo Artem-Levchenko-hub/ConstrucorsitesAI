@@ -104,5 +104,65 @@ a real app.
 
 ## Flags (all default OFF — prod generation byte-unchanged)
 
-`USE_AGENTIC_BUILDER` (the loop), `USE_AGENT_GATE_FEEDBACK` (self-heal),
-`USE_FUNCTIONAL_GATE`, `USE_SECURITY_GATE`, `USE_ROLE_GATE`, `USE_BACKEND_GUARDRAIL`.
+`USE_AGENTIC_BUILDER` (the loop), `USE_AGENT_GATE_FEEDBACK` (guardrail self-heal),
+`USE_RUNTIME_GATES` (functional gate in the loop), `USE_FUNCTIONAL_GATE`,
+`USE_SECURITY_GATE`, `USE_ROLE_GATE`, `USE_BACKEND_GUARDRAIL`.
+
+## Research findings (deep-research, folded in 2026-06-25)
+
+A 4-angle cited deep-research pass (agent-loop reliability, LLM-backend security,
+realtime-at-scale; the AI-builder-landscape angle dropped on a connection error)
+**audited the code itself** and sharpened the plan. Sources incl. Reflexion
+(arXiv 2303.11366), SWE-agent (2405.15793), TDFlow (2510.23761), Veracode 2025
+GenAI Code Security, Cedar (2407.01688), BACFuzz (2507.15984), Postgres RLS docs.
+
+**Validated by the evidence** (no change needed): the agent loop is a real harness
+(anti-stall guards, recoverable-vs-terminal classification, structured execution
+feedback — the Reflexion/SWE-agent pattern that drove HumanEval 80→91%); the
+realtime ACL gates every subscribe/publish fail-closed; SSE-as-default is the
+correct server-push choice; the backend-guardrail self-heal is correctly wired.
+
+**The #1 gap it found — now FIXED:** `run_functional_gate`/`run_role_gate` were
+defined + unit-tested but had **zero call sites** — the "gates prove no leak" spine
+was never connected. The functional gate is now wired into the self-heal loop
+(commit `d084707`, `USE_RUNTIME_GATES`).
+
+**Honest reframe (adopted):** you cannot *prove* no-leak end-to-end — SAST/regex
+(the backend guardrail) structurally **cannot** catch IDOR/BOLA, the dominant
+AI-code flaw (Veracode: ~45% of AI code is insecure; broken access control is
+OWASP A01). The correct framing is **"prove the primitive, fuzz the output"**: the
+small auditable ACL is provable; the generated surface is verified by runtime
+cross-tenant probes. So the negative-path gate must be *mandatory-blocking*, not
+advisory.
+
+**Remaining top actions (ranked), open as the work tail:**
+
+1. **Generalize the cross-tenant probe to the model's OWN authored routes.** The
+   functional gate today probes the FIXED messenger flow only; "unleash + verify the
+   output" is unproven for generated surface until every generated `/<resource>/:id`
+   gets an auto outsider-403 assertion (BACFuzz-style oracle — BAC failures are
+   silent, so only this detects them).
+2. **Postgres RLS deny-by-default backstop** in every tenant-scoped template table
+   (`tenant_id NOT NULL`+FK, `ENABLE`+`FORCE ROW LEVEL SECURITY`, `USING`+`WITH
+   CHECK` on `current_setting('app.current_tenant')`, non-owner/non-superuser app
+   role, `SET LOCAL` per request) + a CI lint failing the build on any table missing
+   it. Today isolation rests entirely on app-code `WHERE` clauses — one bug = silent
+   cross-tenant leak with **no DB backstop**. This is the single highest-value
+   security addition.
+3. **Wire the role gate** (entities) into the same loop (needs a per-app role matrix)
+   and make the **done-predicate gate-green**, not typecheck+5xx-smoke.
+4. **Namespace the Redis bus per project** — `hub.ts` publishes all events to one
+   global `omnia:realtime` channel; under prod replicas every project rebroadcasts to
+   every other. Namespace `omnia:realtime:{project_id}` + authorize on subscribe.
+5. **Per-connection SSE backpressure** — the stream enqueues unbounded; one slow
+   tenant can OOM a shared gateway (multi-tenant blast radius). Add a bounded buffer
+   with pause/drop.
+6. **Redis Streams** (not just pub/sub) for durable/ordered events that must replay —
+   the in-memory ring (`RING_SIZE=100`) is per-process and lost on hibernate.
+
+**Standing risk:** all gates default **OFF** (`use_*_gate=False`), so the
+"verification proves no leak" promise is **inert in prod today** — the architecture
+exists; enforcement is switched off pending a live validation run, then flip the
+flags. A messenger/CRM generated right now is verified by typecheck + a 5xx probe
+only. Turning the flags on (after one live gate run confirms no false-blocking) is
+the gate-to-real-product step.
