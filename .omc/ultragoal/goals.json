@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-06-25T09:23:45.174Z",
-  "updatedAt": "2026-06-25T09:23:45.174Z",
+  "updatedAt": "2026-06-25T10:14:30.477Z",
   "briefPath": ".omc/ultragoal/brief.md",
   "goalsPath": ".omc/ultragoal/goals.json",
   "ledgerPath": ".omc/ultragoal/ledger.jsonl",
@@ -11,10 +11,13 @@
       "id": "G001-realtime-full-stack-template",
       "title": "Realtime full-stack template",
       "objective": "Ship an orchestrator stack with WebSocket and SSE transport, Redis pub-sub, room-channel abstraction and presence as first-class primitives. This is the substrate without which no realtime app can be generated and it unblocks G02, G04 and G07.",
-      "status": "pending",
-      "attempt": 0,
+      "status": "complete",
+      "attempt": 1,
       "createdAt": "2026-06-25T09:23:45.174Z",
-      "updatedAt": "2026-06-25T09:23:45.174Z"
+      "updatedAt": "2026-06-25T10:14:30.477Z",
+      "startedAt": "2026-06-25T09:26:11.936Z",
+      "completedAt": "2026-06-25T10:14:30.477Z",
+      "evidence": "Shipped apps/orchestrator/templates/nextjs-realtime 42 files. SSE transport stream and publish routes, hub.ts in-process pub-sub plus optional Redis fan-out, room-channel abstraction, presence, membership ACL in policy.ts gating every subscribe and publish against channel_members, persisted messages, rate limit, reconnect plus offline-queue client SDK and useChannel hook, working two-pane chat demo, NextAuth v5 credentials JWT, channel REST create list invite history. Registered as container stack realtime in schemas/project.py and migration 0021. TypeScript reviewed BUILD-CLEAN zero blockers. Commits fc06e3b and 28f1ee0 on main. Integration tail in commit body discovery routing, image build, manual prod migration 0021, web label sync, functional proof deferred to G004."
     },
     {
       "id": "G002-membership-and-acl-primitive",
