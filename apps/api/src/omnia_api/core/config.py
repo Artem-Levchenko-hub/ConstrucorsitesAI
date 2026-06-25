@@ -255,6 +255,16 @@ class Settings(BaseSettings):
     # USE_DESIGN_JUDGE=false.
     use_design_judge: bool = Field(default=True)
 
+    # Functional+security E2E gate (G004) — the ONLY gate that proves a feature
+    # WORKS and does not LEAK (vs every other gate, which judges looks/structure).
+    # Drives a live realtime-stack preview through the messenger north-star: two
+    # members exchange a message live over SSE in <1s, and a non-member is denied
+    # (403) the stream/history/publish — the behavioural proof for G001/G002 and
+    # "secure from the first prompt". OFF by default (needs a live preview + the
+    # realtime contract; advisory until wired into the ship boolean). Enable per
+    # realtime project with USE_FUNCTIONAL_GATE=true.
+    use_functional_gate: bool = Field(default=False)
+
     # Clarify interview (2026-06-05) — on the FIRST message of a brand-new
     # project, ask the user 3–4 short business-specific questions BEFORE building
     # (precise brief → точечнее сайт). Their answers (next message) drive the
