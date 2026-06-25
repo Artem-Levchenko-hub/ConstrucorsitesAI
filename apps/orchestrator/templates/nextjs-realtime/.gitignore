@@ -8,3 +8,7 @@ drizzle/meta
 .env.local
 *.log
 .DS_Store
+
+# Tooling scratch (must never ship in a scaffolded project)
+.omc/
+_tmp/
