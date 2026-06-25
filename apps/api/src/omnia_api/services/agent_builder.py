@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from pathlib import Path
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -562,6 +563,61 @@ page that renders <CrudResource entity="Name"/>.
 - grep/read to find the exact spot, prefer edit_file (search must be copied \
 byte-for-byte from what you read), build, fix, done.
 - Be fast and minimal — a small edit needs only a few steps. One action per reply."""
+
+
+# ── Per-stack prompts (the loop builds on ANY stack, not just entities) ──────
+# The hardcoded SYSTEM_PROMPT above is the entity-engine guide. To build a realtime
+# app, a Vue app, an API, the agent needs the SAME ReAct protocol but the RIGHT
+# stack knowledge (and the right safe PRIMITIVES — e.g. the realtime hub + members
+# ACL). LOOP_PROTOCOL is the stack-agnostic protocol; build_system_prompt composes
+# it with a per-stack guide loaded from that template's SYSTEM_PROMPT.md. This is
+# what lets the model "use its full power" on any stack instead of being boxed into
+# CRUD-over-entities.
+
+_TEMPLATES_DIR = Path(__file__).resolve().parents[4] / "orchestrator" / "templates"
+
+LOOP_PROTOCOL = """You are an autonomous full-stack engineer building a REAL app \
+inside a live container, working like a developer: make changes, run the build, \
+read the REAL errors, fix them — until the build is clean and the app actually \
+works. You take ONE action at a time and observe its result before the next.
+
+PROTOCOL — every reply: ONE short sentence of reasoning, then EXACTLY ONE action block:
+<omnia:action name="ACTION">{json args}</omnia:action>
+
+ACTIONS:
+- list_dir   {"path": "src/app"}
+- read_file  {"path": "src/app/page.tsx"}
+- grep       {"pattern": "regex", "path": "src"}
+- write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
+- edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
+- build      {}                                — real typecheck; returns the actual errors
+- bash       {"cmd": "pnpm test"}              — run a shell command (lint / test / install)
+- done       {"summary": "what you built"}     — ONLY after a clean build
+
+WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
+read or write, never ask the user questions — decide and act. When you author tests, \
+run them with bash. One action per reply."""
+
+
+def build_system_prompt(stack_guide: str) -> str:
+    """Compose the agent system prompt for ANY stack: the shared loop protocol +
+    the stack-specific guide (typically a template's SYSTEM_PROMPT.md). Same loop,
+    right primitives — so the model can build a realtime app, a CRUD app or an API
+    with equal fluency instead of being boxed into one shape."""
+    return LOOP_PROTOCOL + "\n\n" + stack_guide.strip()
+
+
+def load_stack_system_prompt(orch_template: str | None) -> str | None:
+    """Read a stack's SYSTEM_PROMPT.md (the per-stack guide that documents its
+    primitives + conventions), or None when absent. `orch_template` is the
+    orchestrator directory name, e.g. 'nextjs-realtime'. Fail-soft."""
+    if not orch_template:
+        return None
+    path = _TEMPLATES_DIR / orch_template / "SYSTEM_PROMPT.md"
+    try:
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+    except Exception:
+        return None
 
 
 # ── Production executor (talks to the orchestrator) ─────────────────────────

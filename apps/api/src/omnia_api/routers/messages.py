@@ -42,7 +42,7 @@ from omnia_api.schemas.message import (
     PromptRequest,
     PromptResponse,
 )
-from omnia_api.schemas.project import is_fullstack
+from omnia_api.schemas.project import is_fullstack, orchestrator_template
 from omnia_api.services import (
     app_doctor,
     app_errors,
@@ -1554,7 +1554,7 @@ _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 # is the Vite + React no-backend stack (Phase 7.2) — despite the historical name,
 # it's container-backed and file-extracted, so it belongs to this group, not the
 # freeform-HTML path. (tgbot/api are backend-only and handled elsewhere.)
-CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa")
+CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime")
 
 
 # A6a — managed auth columns the AI must never drop when it rewrites
@@ -2316,6 +2316,21 @@ async def _process_prompt(
                 "\n\nPROJECT CONTEXT (already gathered — do NOT re-explore these):\n"
                 + "\n\n".join(_seed_parts)
             ) if _seed_parts else ""
+            # Per-stack agent prompt: entities keep their finely-tuned prompt; any
+            # OTHER container stack (realtime, …) gets the shared LOOP_PROTOCOL + its
+            # own SYSTEM_PROMPT.md, so the agent builds it with the right primitives
+            # (e.g. the realtime hub + members ACL) instead of the entity guide.
+            _orch_name = orchestrator_template(project_template)
+            _stack_guide = (
+                agent_builder.load_stack_system_prompt(_orch_name)
+                if _orch_name and _orch_name != "nextjs-entities"
+                else None
+            )
+            _stack_system = (
+                agent_builder.build_system_prompt(_stack_guide)
+                if _stack_guide
+                else agent_builder.SYSTEM_PROMPT
+            )
             if _is_continue:
                 # Resume: finish the partial app the agent left in the live
                 # container (the prior turn committed + hot-reloaded what it had).
@@ -2329,7 +2344,7 @@ async def _process_prompt(
                     "чистоты, затем done. НЕ начинай с нуля и НЕ переписывай работающее."
                     f"\n\nДоп. пожелание пользователя: {prompt_text}{_seed_block}"
                 )
-                _agent_system = agent_builder.SYSTEM_PROMPT
+                _agent_system = _stack_system
                 _agent_steps = int(get_settings().agent_builder_max_steps)
             elif _is_edit:
                 _sel_block = ""
@@ -2359,7 +2374,7 @@ async def _process_prompt(
                     f"чини ошибки до чистоты, затем done. Минимизируй разведку — "
                     f"раскладка выше уже дана."
                 )
-                _agent_system = agent_builder.SYSTEM_PROMPT
+                _agent_system = _stack_system
                 _agent_steps = int(get_settings().agent_builder_max_steps)
             # Cost-safe: dedicated `agent` role = deepseek-v4-pro (cheap, not the
             # opus 1-req/sec bottleneck). Swap via ROLE_MODELS env.
@@ -2407,7 +2422,7 @@ async def _process_prompt(
                     },
                 )
                 _cont_res = await agent_builder.run_agent_build(
-                    system_prompt=agent_builder.SYSTEM_PROMPT,
+                    system_prompt=_stack_system,
                     user_prompt=(
                         "Приложение уже ЧАСТИЧНО собрано в этом проекте (часть файлов "
                         "уже на месте в контейнере). Доведи сборку ДО КОНЦА: запусти "
