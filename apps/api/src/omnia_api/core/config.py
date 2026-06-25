@@ -265,6 +265,13 @@ class Settings(BaseSettings):
     # realtime project with USE_FUNCTIONAL_GATE=true.
     use_functional_gate: bool = Field(default=False)
 
+    # Backend-authoring guardrail (G003) — lifts the "never write backend" ban and
+    # replaces it with a static check: writer-authored server code may author real
+    # logic but must go through the engine/SDK, never the DB raw (drizzle/pg/
+    # @/lib/db outside the fixed engine — the only way to bypass owner/membership
+    # scoping). Advisory by default; flip on to BLOCK ship on a raw-DB escape.
+    use_backend_guardrail: bool = Field(default=False)
+
     # Clarify interview (2026-06-05) — on the FIRST message of a brand-new
     # project, ask the user 3–4 short business-specific questions BEFORE building
     # (precise brief → точечнее сайт). Their answers (next message) drive the
