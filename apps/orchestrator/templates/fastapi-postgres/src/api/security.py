@@ -35,11 +35,21 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
 
 
+# Brute-forceable below this; boot-time validate_runtime_config() also enforces it.
+_MIN_SECRET_LEN = 16
+
+
 def _secret() -> str:
     secret = os.environ.get("AUTH_SECRET") or os.environ.get("JWT_SECRET")
     if not secret:
         raise RuntimeError(
             "AUTH_SECRET missing — orchestrator provisions it; restart container"
+        )
+    # Defense in depth: never sign with a weak key even if the boot check was
+    # somehow bypassed (e.g. the var was set after start).
+    if len(secret) < _MIN_SECRET_LEN:
+        raise RuntimeError(
+            f"AUTH_SECRET too short (need >= {_MIN_SECRET_LEN} chars)"
         )
     return secret
 
