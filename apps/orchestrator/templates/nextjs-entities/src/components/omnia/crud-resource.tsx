@@ -164,10 +164,23 @@ export function CrudResource({
   // Make every column sortable by default so operators can order a managed list
   // without the writer remembering `sortable: true` per column. A column can opt
   // out with an explicit `sortable: false`. Spread keeps render/align/className.
-  const tableColumns = React.useMemo(
-    () => columns.map((c) => ({ ...c, sortable: c.sortable ?? true })),
-    [columns],
-  );
+  const tableColumns = React.useMemo(() => {
+    // Defensive: a generated page may render <CrudResource> without `columns`
+    // (or with an undefined value at runtime). NEVER crash on `undefined.map`
+    // ("Cannot read properties of undefined (reading 'map')") — derive sensible
+    // columns from `fields` so the table still renders instead of white-screening.
+    const base: Column<Row>[] =
+      columns && columns.length > 0
+        ? columns
+        : (fields ?? []).map(
+            (f) =>
+              ({
+                key: f.name,
+                header: (f as { label?: string }).label ?? f.name,
+              }) as Column<Row>,
+          );
+    return base.map((c) => ({ ...c, sortable: c.sortable ?? true }));
+  }, [columns, fields]);
   // Auto-expand reference fields so columns can render the related row
   // (e.g. `row._expanded.clientId.name`) without the caller wiring `expand`.
   const expand = React.useMemo(

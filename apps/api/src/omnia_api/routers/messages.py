@@ -2360,11 +2360,16 @@ async def _process_prompt(
                     f"Внеси ТОЧЕЧНОЕ изменение в существующее приложение по "
                     f"запросу:\n\n{prompt_text}\n{_sel_block}{_seed_block}\n\n"
                     f"Найди нужный файл (grep/read), внеси МИНИМАЛЬНУЮ правку "
-                    f"(edit_file), запусти build, затем done. Не пересобирай "
-                    f"работающее."
+                    f"(edit_file/write_file), запусти build, затем done. НЕ зацикливайся "
+                    f"на чтении — как только нашёл причину, СРАЗУ пиши правку (а не ещё "
+                    f"один read). Если ошибка указывает на бандл (src_*.js) — найди "
+                    f"реальный исходник в src/ по симптому. Не пересобирай работающее."
                 )
                 _agent_system = agent_builder.EDIT_SYSTEM_PROMPT
-                _agent_steps = 12
+                # Budget above the no-write/stall thresholds so the loop's
+                # escalate-to-stronger-model actually fires before max_steps when a
+                # cheap model explores without writing (the "Починить" did nothing bug).
+                _agent_steps = 18
             else:
                 _agent_user = (
                     f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
