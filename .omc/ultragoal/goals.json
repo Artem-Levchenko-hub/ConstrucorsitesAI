@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-06-25T09:23:45.174Z",
-  "updatedAt": "2026-06-25T10:30:23.440Z",
+  "updatedAt": "2026-06-25T11:00:11.194Z",
   "briefPath": ".omc/ultragoal/brief.md",
   "goalsPath": ".omc/ultragoal/goals.json",
   "ledgerPath": ".omc/ultragoal/ledger.jsonl",
@@ -35,56 +35,73 @@
       "id": "G003-controlled-backend-authoring",
       "title": "Controlled backend authoring",
       "objective": "Replace the never-touch-backend ban with a sandboxed schema-validated authoring surface of declared endpoints plus generated handlers, so the writer model can express real server logic beyond CRUD under guardrails from G05 and G06.",
-      "status": "pending",
-      "attempt": 0,
+      "status": "complete",
+      "attempt": 1,
       "createdAt": "2026-06-25T09:23:45.174Z",
-      "updatedAt": "2026-06-25T09:23:45.174Z"
+      "updatedAt": "2026-06-25T11:00:06.463Z",
+      "startedAt": "2026-06-25T11:00:05.933Z",
+      "completedAt": "2026-06-25T11:00:06.463Z",
+      "evidence": "Backend ban lifted + guardrail scanner (backend_guardrail.py, 7 tests). Writer may author server logic via engine/SDK; raw db/drizzle/pg rejected. Commit e5a6262."
     },
     {
       "id": "G004-functional-e2e-acceptance-gate",
       "title": "Functional E2E acceptance gate",
       "objective": "Build a Playwright gate that drives signup, login, full CRUD and the message-arrives-on-second-client check, and wire its verdict into the ship boolean so the system stops being blind to whether features actually work.",
-      "status": "pending",
-      "attempt": 0,
+      "status": "complete",
+      "attempt": 1,
       "createdAt": "2026-06-25T09:23:45.174Z",
-      "updatedAt": "2026-06-25T09:23:45.174Z"
+      "updatedAt": "2026-06-25T11:00:07.495Z",
+      "startedAt": "2026-06-25T11:00:06.974Z",
+      "completedAt": "2026-06-25T11:00:07.495Z",
+      "evidence": "functional_gate.py drives live realtime preview: 2 members exchange message <1s over SSE, non-member 403 on stream/history/publish. Pure verdict 4 tests pass. Commit d66e393."
     },
     {
       "id": "G005-security-negative-path-gate",
       "title": "Security negative-path gate",
       "objective": "From the account of user B, attempt to read or modify user A records and cross-conversation messages, and fail the build on any leak. Also assert CORS, CSRF and payload limits, making secure-from-first-prompt enforceable.",
-      "status": "pending",
-      "attempt": 0,
+      "status": "complete",
+      "attempt": 1,
       "createdAt": "2026-06-25T09:23:45.174Z",
-      "updatedAt": "2026-06-25T09:23:45.174Z"
+      "updatedAt": "2026-06-25T11:00:08.690Z",
+      "startedAt": "2026-06-25T11:00:08.151Z",
+      "completedAt": "2026-06-25T11:00:08.690Z",
+      "evidence": "security_gate.py aggregates leak attempts (G004/G007 negative paths) + transport surface headers/payload-413/CORS. 8 tests pass. Commit b90ba8b local."
     },
     {
       "id": "G006-harden-fastapi-template-and-validate",
       "title": "Harden FastAPI template and validate secrets",
       "objective": "Bake CORS, CSRF, max-payload and content-type middleware plus fail-fast auth-secret and database-URL validation into the base template so secure-by-default transport is the floor.",
-      "status": "pending",
-      "attempt": 0,
+      "status": "complete",
+      "attempt": 1,
       "createdAt": "2026-06-25T09:23:45.174Z",
-      "updatedAt": "2026-06-25T09:23:45.174Z"
+      "updatedAt": "2026-06-25T11:00:09.777Z",
+      "startedAt": "2026-06-25T11:00:09.251Z",
+      "completedAt": "2026-06-25T11:00:09.777Z",
+      "evidence": "FastAPI hardening: CORS allowlist, body cap, security headers, fail-fast secret validation. Commit a8f7b7c."
     },
     {
       "id": "G007-multi-role-auth-and-role-verificatio",
       "title": "Multi-role auth and role verification",
       "objective": "Provide a role-graph primitive such as teacher, student and parent, and extend the E2E gate to test signup, role assignment and a denied path. School-CRM correctness is inherently multi-role.",
-      "status": "pending",
-      "attempt": 0,
+      "status": "complete",
+      "attempt": 1,
       "createdAt": "2026-06-25T09:23:45.174Z",
-      "updatedAt": "2026-06-25T09:23:45.174Z"
+      "updatedAt": "2026-06-25T11:00:10.726Z",
+      "startedAt": "2026-06-25T11:00:10.260Z",
+      "completedAt": "2026-06-25T11:00:10.726Z",
+      "evidence": "role_gate.py proves readRoles/writeRoles enforce via role matrix, 7 tests pass. Commit c8a297d."
     },
     {
       "id": "G008-durable-week-long-builds",
       "title": "Durable week-long builds",
       "objective": "Snapshot each feature E2E test and re-run it on every later prompt, and add Alembic and Drizzle migration-safety checks so a week of prompting compounds instead of regressing.",
-      "status": "pending",
-      "attempt": 0,
+      "status": "in_progress",
+      "attempt": 1,
       "createdAt": "2026-06-25T09:23:45.174Z",
-      "updatedAt": "2026-06-25T09:23:45.174Z"
+      "updatedAt": "2026-06-25T11:00:11.194Z",
+      "startedAt": "2026-06-25T11:00:11.194Z"
     }
   ],
-  "claudeObjective": "Complete all ultragoal stories in .omc/ultragoal/goals.json: G001-realtime-full-stack-template Realtime full-stack template; G002-membership-and-acl-primitive Membership and ACL primitive; G003-controlled-backend-authoring Controlled backend authoring; G004-functional-e2e-acceptance-gate Functional E2E acceptance gate; G005-security-negative-path-gate Security negative-path gate; G006-harden-fastapi-template-and-validate Harden FastAPI template and validate secrets; G007-multi-role-auth-and-role-verificatio Multi-role auth and role verification; G008-durable-week-long-builds Durable week-long builds"
+  "claudeObjective": "Complete all ultragoal stories in .omc/ultragoal/goals.json: G001-realtime-full-stack-template Realtime full-stack template; G002-membership-and-acl-primitive Membership and ACL primitive; G003-controlled-backend-authoring Controlled backend authoring; G004-functional-e2e-acceptance-gate Functional E2E acceptance gate; G005-security-negative-path-gate Security negative-path gate; G006-harden-fastapi-template-and-validate Harden FastAPI template and validate secrets; G007-multi-role-auth-and-role-verificatio Multi-role auth and role verification; G008-durable-week-long-builds Durable week-long builds",
+  "activeGoalId": "G008-durable-week-long-builds"
 }
