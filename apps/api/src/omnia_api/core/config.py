@@ -761,6 +761,14 @@ class Settings(BaseSettings):
     # prod generation is unchanged. Env: USE_AGENT_GATE_FEEDBACK.
     use_agent_gate_feedback: bool = Field(default=False)
     agent_gate_max_attempts: int = Field(default=2)
+    # Runtime gates in the loop (research finding: functional/role gates were
+    # defined+tested but UNWIRED — only the static guardrail ran). When on, after
+    # the agent says done we drive the live preview through the functional gate
+    # (signup → live SSE delivery → outsider-403) and feed a red verdict back as a
+    # BLOCKING outcome, so a broken/leaky feature self-heals before the snapshot.
+    # Realtime stacks only (functional gate is self-contained); fail-soft + off by
+    # default → prod ship decision unchanged. Env: USE_RUNTIME_GATES.
+    use_runtime_gates: bool = Field(default=False)
 
     # Honest chat content (2026-06-21). The assistant message saved to the DB is
     # the model's RAW output (<file>/<edit> blocks + any stray prose/code). The

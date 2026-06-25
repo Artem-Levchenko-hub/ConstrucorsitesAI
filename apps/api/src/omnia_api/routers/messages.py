@@ -2562,6 +2562,69 @@ async def _process_prompt(
                     flush=True,
                 )
 
+            # Runtime functional gate — the behavioural "works + does not leak" proof
+            # (research finding: this gate was defined+unit-tested but UNWIRED; only
+            # the static guardrail ran). Drive the live realtime preview and feed a red
+            # verdict back to the agent as a BLOCKING outcome so a broken/leaky feature
+            # self-heals BEFORE the snapshot lands — a clean typecheck is exactly what a
+            # model hallucinates completion around. Realtime-only (the functional gate
+            # is self-contained), fail-soft, off by default → prod ship unchanged.
+            try:
+                if (
+                    get_settings().use_runtime_gates
+                    and not _is_edit
+                    and _orch_name == "nextjs-realtime"
+                ):
+                    from omnia_api.services import agent_gate_feedback as _agf2
+                    from omnia_api.services.functional_gate import run_functional_gate
+
+                    _rg_attempt = 0
+                    _rg_max = max(0, int(get_settings().agent_gate_max_attempts))
+                    while True:
+                        _st = await orchestrator_client.get_status(project_id)
+                        _base = _st.get("dev_url") if isinstance(_st, dict) else None
+                        if not _base:
+                            print("[PP] runtime_gate: no dev_url — skip", flush=True)
+                            break
+                        _fv = await run_functional_gate(_base)
+                        _fout = [
+                            _agf2.outcome_from_checks(
+                                "functional", _fv.passed, _fv.checks
+                            )
+                        ]
+                        _fix = _agf2.build_fix_instruction(_fout, _rg_attempt, _rg_max)
+                        if _fix is None:
+                            if not _fv.passed:
+                                accumulated += (
+                                    "\n\n⚠️ Проверка работоспособности/безопасности не "
+                                    "прошла — открой превью и уточни запрос."
+                                )
+                                print(
+                                    "[PP] runtime_gate functional FAIL (out of attempts)",
+                                    flush=True,
+                                )
+                            else:
+                                print("[PP] runtime_gate functional PASS", flush=True)
+                            break
+                        _rg_attempt += 1
+                        print(
+                            f"[PP] runtime_gate functional heal attempt={_rg_attempt}",
+                            flush=True,
+                        )
+                        _fheal = await agent_builder.run_agent_build(
+                            system_prompt=_stack_system,
+                            user_prompt=_fix + _seed_block,
+                            model=_escalate_model or _agent_model,
+                            execute=_agent_executor,
+                            max_steps=_agent_steps,
+                            emit=_agent_emit,
+                            user_id=str(user_id),
+                            project_id=str(project_id),
+                        )
+                        files.update(_fheal.files)
+            except Exception as _rg_exc:  # a gate must never crash the build
+                print(f"[PP] runtime_gate skipped: {_rg_exc!r}", flush=True)
+
             if files:
                 new_sha = await asyncio.to_thread(
                     repo_svc.commit_files,

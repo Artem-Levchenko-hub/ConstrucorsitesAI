@@ -48,3 +48,32 @@ def test_non_blocking_failure_does_not_force_retry() -> None:
     outs = [GateOutcome("advisory", passed=False, failures=["nit"], blocking=False)]
     assert build_fix_instruction(outs, attempt=0, max_attempts=2) is None
     assert should_retry(outs, attempt=0, max_attempts=2) is False
+
+
+class _Check:
+    def __init__(self, name: str, ok: bool, detail: str = "") -> None:
+        self.name = name
+        self.ok = ok
+        self.detail = detail
+
+
+def test_outcome_from_checks_maps_only_failures() -> None:
+    from omnia_api.services.agent_gate_feedback import outcome_from_checks
+
+    checks = [
+        _Check("signup", True),
+        _Check("outsider DENIED history", False, "got 200"),
+        _Check("live delivery", False, ""),
+    ]
+    o = outcome_from_checks("functional", False, checks)
+    assert o.name == "functional" and o.passed is False
+    assert "outsider DENIED history: got 200" in o.failures
+    assert "live delivery" in o.failures  # empty detail trims cleanly, no trailing ": "
+    assert len(o.failures) == 2  # the passed check is excluded
+
+
+def test_outcome_from_checks_all_pass() -> None:
+    from omnia_api.services.agent_gate_feedback import outcome_from_checks
+
+    o = outcome_from_checks("functional", True, [_Check("a", True), _Check("b", True)])
+    assert o.passed is True and o.failures == []

@@ -74,3 +74,18 @@ def build_fix_instruction(
 def should_retry(outcomes: list[GateOutcome], attempt: int, max_attempts: int) -> bool:
     """True iff there is a blocking failure AND retry budget remains."""
     return bool(blocking_failures(outcomes)) and attempt < max_attempts
+
+
+def outcome_from_checks(name: str, passed: bool, checks: object) -> GateOutcome:
+    """Map a live gate verdict to a GateOutcome. Works for any verdict whose
+    `checks` is an iterable of objects exposing ``ok``/``name``/``detail``
+    (functional_gate.Check, role_gate.RoleCheck) — so the same self-heal loop
+    consumes functional, role and guardrail results uniformly."""
+    failures: list[str] = []
+    for c in checks or []:  # type: ignore[union-attr]
+        if getattr(c, "ok", True):
+            continue
+        cname = getattr(c, "name", "check")
+        detail = getattr(c, "detail", "") or ""
+        failures.append(f"{cname}: {detail}".rstrip(": ").rstrip())
+    return GateOutcome(name=name, passed=bool(passed), failures=failures)
