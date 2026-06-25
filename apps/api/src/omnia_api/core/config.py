@@ -752,6 +752,16 @@ class Settings(BaseSettings):
     # a model that never finishes would run forever). Env: AGENT_MAX_SEGMENTS.
     agent_max_segments: int = Field(default=6)
 
+    # Gate-feedback self-heal (unleash-the-model layer C). The agent now MAY write
+    # custom server logic (the backend ban is lifted) — so after it says done we
+    # statically verify the one unsafe thing (raw-DB escape via the backend
+    # guardrail) and, when this flag is on, feed any violation back as the next
+    # turn so the loop FIXES it (bounded by agent_gate_max_attempts) before commit.
+    # OFF by default → the guardrail runs advisory-only (logs, never re-loops), so
+    # prod generation is unchanged. Env: USE_AGENT_GATE_FEEDBACK.
+    use_agent_gate_feedback: bool = Field(default=False)
+    agent_gate_max_attempts: int = Field(default=2)
+
     # Honest chat content (2026-06-21). The assistant message saved to the DB is
     # the model's RAW output (<file>/<edit> blocks + any stray prose/code). The
     # frontend renders anything NOT wrapped in a recognised block as raw text, so

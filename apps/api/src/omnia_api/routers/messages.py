@@ -2433,6 +2433,69 @@ async def _process_prompt(
                     break
 
             files = _all_files
+
+            # Layer C — backend-guardrail self-heal. The ban on writing backend is
+            # lifted (the agent may author custom server logic), so STATICALLY
+            # verify the one unsafe thing it must never do — reach the DB raw
+            # (@/lib/db / drizzle / pg outside the engine), the only way to bypass
+            # auth+ownership+membership. A static scan over the written files (cheap,
+            # deterministic, no container). When USE_AGENT_GATE_FEEDBACK is on, any
+            # escape is fed back to the agent to fix (bounded), so the model writes
+            # freely and the GATE — not a template — guarantees safety. When off,
+            # it is advisory-only (logs) → prod generation is byte-unchanged.
+            try:
+                from omnia_api.services import agent_gate_feedback as _agf
+                from omnia_api.services.backend_guardrail import (
+                    check_backend as _check_backend,
+                )
+
+                _guard_attempt = 0
+                _guard_max = max(0, int(get_settings().agent_gate_max_attempts))
+                while (
+                    get_settings().use_agent_gate_feedback
+                    and not _is_edit
+                ):
+                    _gv = _check_backend(files)
+                    _outcomes = [
+                        _agf.GateOutcome(
+                            name="backend_guardrail",
+                            passed=_gv.safe,
+                            failures=[f"{v.path}: {v.rule}" for v in _gv.violations],
+                        )
+                    ]
+                    _instr = _agf.build_fix_instruction(
+                        _outcomes, _guard_attempt, _guard_max
+                    )
+                    if _instr is None:
+                        break  # clean, or out of retry budget
+                    _guard_attempt += 1
+                    print(
+                        f"[PP] agent_gate_feedback heal attempt={_guard_attempt} "
+                        f"violations={len(_gv.violations)}",
+                        flush=True,
+                    )
+                    _heal = await agent_builder.run_agent_build(
+                        system_prompt=_agent_system,
+                        user_prompt=_instr + _seed_block,
+                        model=_escalate_model or _agent_model,
+                        execute=_agent_executor,
+                        max_steps=_agent_steps,
+                        emit=_agent_emit,
+                        user_id=str(user_id),
+                        project_id=str(project_id),
+                    )
+                    files.update(_heal.files)
+                # Advisory log regardless of the heal flag — operators SEE a raw-DB
+                # escape even when self-heal is off (the silent-failure guard).
+                _final_guard = _check_backend(files)
+                if not _final_guard.safe:
+                    print(
+                        f"[PP] backend_guardrail VIOLATIONS: {_final_guard.summary}",
+                        flush=True,
+                    )
+            except Exception as _guard_exc:  # never let the guardrail break a build
+                print(f"[PP] agent_gate_feedback skipped: {_guard_exc!r}", flush=True)
+
             # Honest chat: never surface the raw internal summary on a non-done exit
             # (the "hit step budget without calling done" leak). See helper.
             accumulated = _agent_result_message(_agent_res, is_edit=_is_edit)

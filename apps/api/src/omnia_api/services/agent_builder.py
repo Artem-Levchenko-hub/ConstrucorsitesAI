@@ -491,7 +491,12 @@ ACTIONS:
 
 THIS TEMPLATE (nextjs-entities) — already built for you, DO NOT rebuild or read its internals:
 - A fixed ENTITY ENGINE turns JSON schemas into full CRUD+REST+auth+RBAC. You do NOT write \
-backend/API/db code. To add data, write `entities/<Name>.json`:
+backend/API/db code for PLAIN data — declare entities instead. But you MAY author \
+CUSTOM server logic (a server action, or a route under src/app/api/custom/**) for \
+real workflows BEYOND crud — reaching data ONLY through the SDK (@/lib/sdk) or the \
+engine (@/lib/entities/engine), which enforce auth+ownership+membership. NEVER import \
+@/lib/db, drizzle-orm or pg in your own files (that bypasses the access model and is \
+rejected before ship). To add data, write `entities/<Name>.json`:
     {"name":"Client","label":"Клиент","labelPlural":"Клиенты",
      "fields":[{"name":"name","label":"Имя","type":"string","required":true},
                {"name":"phone","label":"Телефон","type":"string"},
