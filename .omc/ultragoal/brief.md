@@ -1,0 +1,1 @@
+Omnia generates real multi-user real-time apps such as a school CRM with live teacher-student chat at messenger grade, over about a week of prompting, correct and secure from the first prompt, proven by functional, security and realtime gates, not Base44-style prototypes.
