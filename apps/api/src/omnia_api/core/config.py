@@ -272,6 +272,12 @@ class Settings(BaseSettings):
     # scoping). Advisory by default; flip on to BLOCK ship on a raw-DB escape.
     use_backend_guardrail: bool = Field(default=False)
 
+    # Multi-role enforcement gate (G007) — proves the entity engine's readRoles/
+    # writeRoles primitive actually enforces: drives a live entities app across two
+    # role sessions and checks a role matrix (right role allowed, wrong role 403,
+    # denied write doesn't silently succeed). OFF by default; for role-gated apps.
+    use_role_gate: bool = Field(default=False)
+
     # Clarify interview (2026-06-05) — on the FIRST message of a brand-new
     # project, ask the user 3–4 short business-specific questions BEFORE building
     # (precise brief → точечнее сайт). Their answers (next message) drive the
