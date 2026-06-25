@@ -3,15 +3,15 @@
  * redirect) so a client fetch can branch on the result, then call signIn. FIXED.
  */
 
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { hashPassword, roleForNewUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   let body: { email?: string; password?: string; name?: string };

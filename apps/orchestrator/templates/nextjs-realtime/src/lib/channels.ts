@@ -44,6 +44,7 @@ export async function createChannel(
     .insert(channels)
     .values({ id, kind: "conversation", title: title.trim() || "Беседа", createdBy: userId })
     .returning();
+  if (!channel) throw new Error("createChannel: insert returned no row");
   await db
     .insert(channelMembers)
     .values({ channelId: id, userId, role: "admin" })

@@ -61,7 +61,8 @@ export function useChannel(channel: string, opts?: UseChannelOpts) {
   }, [channel]);
 
   const send = useCallback(
-    (type: string, data: unknown) => handle.current?.send(type, data),
+    (type: string, data: unknown): Promise<void> =>
+      handle.current?.send(type, data) ?? Promise.resolve(),
     [],
   );
 
