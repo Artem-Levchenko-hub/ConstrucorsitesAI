@@ -78,12 +78,54 @@ export interface FieldDef {
  *  - `submit` — public intake (orders/bookings/leads): ANYONE incl. anonymous may
  *    CREATE a row (rate-limited at the route); only `admin` may read/update/delete.
  *    So a storefront/booking form takes submissions with NO account, and the
- *    operator processes them in the dashboard. */
-export type AccessPolicy = "owner" | "public" | "admin" | "submit";
+ *    operator processes them in the dashboard.
+ *  - `members` — RELATION-BASED membership ACL. A row belongs to a PARENT (its
+ *    `membership.parentField`, e.g. a Message's `conversationId`) and is readable
+ *    by exactly the users listed in a membership entity for that parent. This is
+ *    what owner-scoping cannot express: "every MEMBER of conversation X may read a
+ *    message, but no one else" — the secure way to model DMs, group/class chats,
+ *    shared docs, team boards. See {@link MembershipConfig}. Reads are membership-
+ *    scoped; create requires membership of the target parent; update/delete stay
+ *    author-scoped (you edit your own rows); `admin` sees/does everything. */
+export type AccessPolicy = "owner" | "public" | "admin" | "submit" | "members";
+
+/** Config for `access: "members"`. Declares HOW a row maps to the set of users
+ *  allowed to see it, via a separate membership entity (a join row per member).
+ *
+ *  Example — a class chat:
+ *    Conversation        { access: "admin" }   // the rooms (operator/teacher manages)
+ *    ConversationMember  { access: "admin",     // join rows (operator/teacher invites)
+ *      fields: { conversationId: {type:"reference", entity:"Conversation"},
+ *                userId: {type:"string"} } }   // userId holds a real users.id
+ *    Message {
+ *      access: "members",
+ *      membership: { parentField: "conversationId", via: "ConversationMember",
+ *                    viaParentField: "conversationId", viaUserField: "userId" },
+ *      fields: { conversationId: {type:"reference", entity:"Conversation"},
+ *                body: {type:"text"} }
+ *    }
+ *  A user reads a Message iff a ConversationMember row exists whose
+ *  `conversationId` equals the message's `conversationId` AND whose `userId`
+ *  equals the reader. The engine reads the membership entity DIRECTLY for this
+ *  check (it bypasses access policy), so the join entity can be `admin`/`owner`
+ *  without making the rule circular. Enforced server-side — the model cannot
+ *  forget it because it never writes the query. */
+export interface MembershipConfig {
+  /** Field on THIS entity holding the parent id (e.g. "conversationId"). */
+  parentField: string;
+  /** Membership entity name — one row per (parent, member) pair. */
+  via: string;
+  /** Field on the membership entity holding the parent id. */
+  viaParentField: string;
+  /** Field on the membership entity holding the MEMBER user id (users.id). */
+  viaUserField: string;
+}
 
 export interface EntityDef {
   name: string;
   access: AccessPolicy;
+  /** Present (and required) only when `access === "members"`. */
+  membership?: MembershipConfig;
   fields: Record<string, FieldDef>;
   /** Named-role gating (multi-role apps: teacher/student/parent, doctor/patient,
    *  manager/agent). When set, only a signed-in user whose `users.role` is in the
@@ -148,12 +190,33 @@ export async function listEntities(): Promise<string[]> {
   }
 }
 
+/** Validate a `membership` block. Every field must be a safe identifier and all
+ *  four must be present — a partial/garbled config returns undefined so the entity
+ *  falls back to `owner` instead of an unguarded read. */
+function parseMembership(raw: unknown): MembershipConfig | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const m = raw as Record<string, unknown>;
+  const ident = (v: unknown): string | undefined =>
+    typeof v === "string" && NAME_RE.test(v) ? v : undefined;
+  const parentField = ident(m.parentField);
+  const via = ident(m.via);
+  const viaParentField = ident(m.viaParentField);
+  const viaUserField = ident(m.viaUserField);
+  if (!parentField || !via || !viaParentField || !viaUserField) return undefined;
+  return { parentField, via, viaParentField, viaUserField };
+}
+
 /** Coerce a loose JSON object into a valid EntityDef (defensive defaults). */
 function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
+  // `members` is valid only WITH a well-formed membership config; otherwise fall
+  // back to the safest existing mode (`owner`) — never silently expose rows.
+  const membership = parseMembership(raw.membership);
   const access: AccessPolicy =
     raw.access === "public" || raw.access === "admin" || raw.access === "submit"
       ? raw.access
-      : "owner";
+      : raw.access === "members" && membership
+        ? "members"
+        : "owner";
   const fields: Record<string, FieldDef> = {};
   for (const [key, f] of Object.entries(raw.fields ?? {})) {
     if (!NAME_RE.test(key)) continue;
@@ -193,6 +256,7 @@ function normalize(name: string, raw: Partial<EntityDef>): EntityDef {
   return {
     name,
     access,
+    membership: access === "members" ? membership : undefined,
     fields,
     readRoles: roleList(raw.readRoles),
     writeRoles: roleList(raw.writeRoles),

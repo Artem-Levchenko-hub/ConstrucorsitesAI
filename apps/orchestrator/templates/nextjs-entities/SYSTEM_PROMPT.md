@@ -45,6 +45,20 @@ migrations, no server code, no restart**.
 ```
 
 - `name` matches the filename. `access`: `owner` (each user sees only their own — the default and right choice for dashboards/CRM/SaaS), `public` (anyone reads, author edits — blogs, catalogs), `admin` (role admin only).
+- **Shared, multi-party data that must NOT leak (DMs, group/class chats, shared docs, team boards) — use `"access": "members"`.** Owner-scoping (each user sees only their OWN rows) cannot express "every MEMBER of conversation X may read this message, but no one else" — using `owner` or `public` for chat LEAKS the thread across users. With `members` a row belongs to a PARENT and is readable only by users listed in a membership entity for that parent. Declare it with a `membership` block:
+  ```json
+  // ConversationMember.json  — the join rows (operator/admin invites members)
+  { "name": "ConversationMember", "access": "admin",
+    "fields": { "conversationId": {"type":"reference","entity":"Conversation"},
+                "userId": {"type":"string"} } }   // userId holds a real users.id (use <UserSelect>)
+  // Message.json — visible ONLY to members of its conversation
+  { "name": "Message", "access": "members",
+    "membership": { "parentField":"conversationId", "via":"ConversationMember",
+                    "viaParentField":"conversationId", "viaUserField":"userId" },
+    "fields": { "conversationId": {"type":"reference","entity":"Conversation"},
+                "body": {"type":"text","required":true} } }
+  ```
+  The engine then enforces server-side: a user READS a Message only if a ConversationMember row links them to its `conversationId`; CREATE is rejected (403) unless the author is a member of that conversation; update/delete stay author-scoped; `admin` (operator) sees all. This is how you build a leak-proof chat/messenger on this stack. (For LIVE message delivery — sub-second push, presence, typing — that needs the realtime stack; here a list re-fetch/poll shows new messages.)
 - **Multi-role apps (teacher/student/parent, doctor/patient, manager/agent) — use named roles, don't fake it.** When different KINDS of user must see/do different things, set `"access": "public"` (shared visibility) and gate per role with `"readRoles"` / `"writeRoles"` — arrays of role names. Example: a Grade entity with `"writeRoles": ["teacher"]`, `"readRoles": ["teacher","student","parent"]` — only teachers post grades, those three roles read them, anyone else gets 403. `admin` always passes (the operator). The FIRST account that signs up is `admin`; it assigns everyone else's role. **So you MUST give the admin a «Пользователи» screen — and build it with the kit component `<UsersAdmin roles={[…]} />`, NOT your own entity.** Drop `<UsersAdmin>` on an admin-gated page (`requireUser({ role: "admin" })`), passing your role vocabulary: it lists the REAL registered accounts and assigns roles for you. Keep the role list small and name it in RU.
   - **⛔ НИКОГДА не заводи сущность `User`/`Profile`/`Account`/«Пользователь» для людей.** Люди — это аккаунты аутентификации (таблица `users`), куда попадают регистрации; сущности живут в ОТДЕЛЬНОЙ таблице `records`. Сущность `User` всегда будет ПУСТА (зарегавшиеся коллеги в неё не попадают) — это была частая поломка. Управление людьми = ТОЛЬКО `<UsersAdmin>` + `admin.listUsers()/setUserRole()`.
   - **Чтобы СОСЛАТЬСЯ на человека (получатель сообщения, ответственный, классный руководитель) — поле типа `string` + компонент `<UserSelect>`**, который даёт выбрать РЕАЛЬНОГО зарегистрированного человека (`users.directory()`), а НЕ `reference` на выдуманную `User`-сущность. Сохраняй выбранный `id` в это string-поле; показывай сохранённого человека через `<UserName id={row.receiverId} />` (не голый uuid). Пример формы: `<UserSelect value={form.receiverId} onChange={(id)=>set("receiverId", id)} placeholder="Кому" />`. Это то, что чинит «не могу найти другого человека / написать сообщение».

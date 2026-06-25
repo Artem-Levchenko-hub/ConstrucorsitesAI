@@ -71,7 +71,7 @@ function authorize(
   def: EntityDef,
   user: CurrentUser | null,
   mode: "read" | "write",
-): { scopeOwner: boolean } {
+): { scopeOwner: boolean; scopeMembers: boolean } {
   // Named-role overlay (multi-role apps: teacher/student/parent, doctor/patient).
   // Runs FIRST and is stricter than `access`: an entity that restricts a mode to
   // specific roles is no longer reachable by other roles — and a `public` entity
@@ -87,7 +87,7 @@ function authorize(
   if (def.access === "admin") {
     if (!user) throw new EngineError(401, "authentication required");
     if (user.role !== "admin") throw new EngineError(403, "admin only");
-    return { scopeOwner: false };
+    return { scopeOwner: false, scopeMembers: false };
   }
   if (def.access === "submit") {
     // Public intake: anonymous CREATE is allowed by createRecord BEFORE it reaches
@@ -95,16 +95,70 @@ function authorize(
     // READ / UPDATE / DELETE — admin only. Submissions are not owner-scoped.
     if (!user) throw new EngineError(401, "authentication required");
     if (user.role !== "admin") throw new EngineError(403, "admin only");
-    return { scopeOwner: false };
+    return { scopeOwner: false, scopeMembers: false };
+  }
+  if (def.access === "members") {
+    // Relation-based membership ACL. Auth always required. `admin` (operator) sees
+    // and does everything. A normal user's READS are scoped to the parents they
+    // belong to (scopeMembers → the engine adds membershipPredicate). WRITES are
+    // author-scoped by the callers (update/delete use created_by) and CREATE checks
+    // membership of the target parent explicitly (assertMember), so there is
+    // nothing to scope here on the write path.
+    if (!user) throw new EngineError(401, "authentication required");
+    if (user.role === "admin") return { scopeOwner: false, scopeMembers: false };
+    if (mode === "read") return { scopeOwner: false, scopeMembers: true };
+    return { scopeOwner: false, scopeMembers: false };
   }
   if (def.access === "public") {
-    if (mode === "read") return { scopeOwner: false };
+    if (mode === "read") return { scopeOwner: false, scopeMembers: false };
     if (!user) throw new EngineError(401, "authentication required");
-    return { scopeOwner: true };
+    return { scopeOwner: true, scopeMembers: false };
   }
   // owner (default)
   if (!user) throw new EngineError(401, "authentication required");
-  return { scopeOwner: true };
+  return { scopeOwner: true, scopeMembers: false };
+}
+
+/**
+ * SQL predicate selecting only rows of a `members` entity whose PARENT the user
+ * belongs to:
+ *   (data->>parentField) IN (
+ *     SELECT data->>viaParentField FROM records
+ *     WHERE entity = via AND data->>viaUserField = user.id)
+ * Relation-based row security the engine builds centrally, so generated code can
+ * never forget it. The `->>` keys are bound as parameters (injection-safe); the
+ * subquery's bare `data`/`entity` resolve to its own `records` scope, the outer
+ * qualified `records.data` to the outer query.
+ */
+function membershipPredicate(def: EntityDef, user: CurrentUser): SQL {
+  const m = def.membership!;
+  return sql`(${records.data} ->> ${m.parentField}) in (select (data ->> ${m.viaParentField}) from ${records} where entity = ${m.via} and (data ->> ${m.viaUserField}) = ${user.id})`;
+}
+
+/** Throw 403 unless `user` is a member of `parentId` (create-time check for a
+ *  `members` entity). `admin` may create anywhere. A missing parent is a 400. */
+async function assertMember(
+  def: EntityDef,
+  user: CurrentUser,
+  parentId: unknown,
+): Promise<void> {
+  const m = def.membership!;
+  if (user.role === "admin") return;
+  if (typeof parentId !== "string" || !parentId) {
+    throw new EngineError(400, `Поле «${m.parentField}» обязательно`);
+  }
+  const [hit] = await db
+    .select({ id: records.id })
+    .from(records)
+    .where(
+      and(
+        eq(records.entity, m.via),
+        sql`(${records.data} ->> ${m.viaParentField}) = ${parentId}`,
+        sql`(${records.data} ->> ${m.viaUserField}) = ${user.id}`,
+      ),
+    )
+    .limit(1);
+  if (!hit) throw new EngineError(403, "вы не участник этого раздела");
 }
 
 /** Build the `data->>field` extraction with the cast the field's type needs. */
@@ -173,6 +227,11 @@ function scopeForExpand(
   }
   if (targetDef.access === "admin")
     return { allowed: user?.role === "admin", scopeOwner: false };
+  if (targetDef.access === "members")
+    // Fail-closed: a member-scoped relation is expandable only by admin. A
+    // non-admin gets null for it (never a cross-membership leak) and reads the
+    // row directly via its own membership-scoped list instead.
+    return { allowed: user?.role === "admin", scopeOwner: false };
   if (targetDef.access === "public") return { allowed: true, scopeOwner: false };
   return { allowed: !!user, scopeOwner: true }; // owner
 }
@@ -240,10 +299,12 @@ export async function listRecords(opts: {
   params: URLSearchParams;
 }) {
   const { def, user, params } = opts;
-  const { scopeOwner } = authorize(def, user, "read");
+  const { scopeOwner, scopeMembers } = authorize(def, user, "read");
 
   const conds: SQL[] = [eq(records.entity, def.name)];
   if (scopeOwner && user) conds.push(eq(records.createdBy, user.id));
+  if (scopeMembers && user && def.membership)
+    conds.push(membershipPredicate(def, user));
 
   // Equality filters on whitelisted fields only — unknown keys are ignored.
   for (const [key, value] of params.entries()) {
@@ -360,6 +421,12 @@ export async function createRecord(opts: {
   }
   const data = applyDefaults(def, parsed.data as Record<string, unknown>);
 
+  // members access: the author must belong to the parent they post into, so a
+  // non-member cannot inject a message/row into a conversation they are not in.
+  if (def.access === "members" && def.membership) {
+    await assertMember(def, owner, data[def.membership.parentField]);
+  }
+
   // Integrity guards (shared with updateRecord): no duplicate `unique` value, and
   // every `reference` must point at a row that actually exists.
   await assertUnique(def, owner, data);
@@ -374,9 +441,11 @@ export async function createRecord(opts: {
 
 /** Shared row lookup honouring entity + ownership scope. */
 async function findScoped(def: EntityDef, user: CurrentUser | null, id: string) {
-  const { scopeOwner } = authorize(def, user, "read");
+  const { scopeOwner, scopeMembers } = authorize(def, user, "read");
   const conds: SQL[] = [eq(records.id, id), eq(records.entity, def.name)];
   if (scopeOwner && user) conds.push(eq(records.createdBy, user.id));
+  if (scopeMembers && user && def.membership)
+    conds.push(membershipPredicate(def, user));
   const [row] = await db
     .select()
     .from(records)
