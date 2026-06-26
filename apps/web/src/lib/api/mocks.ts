@@ -97,6 +97,7 @@ const TEMPLATE_LABELS: Record<ProjectTemplate, string> = {
   fullstack: "Full-stack SaaS",
   nextjs_entities: "SaaS на сущностях",
   code: "Код (любой язык)",
+  realtime: "Мессенджер / realtime",
 };
 
 type Store = {

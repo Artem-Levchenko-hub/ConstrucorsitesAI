@@ -52,7 +52,7 @@ _ZERO_QUESTION_MIN_AXES = 2
 # INTERACTIVE tool/app that needs real build tooling but no accounts/DB — see the
 # stack-choice rules in ``_SYSTEM`` (Phase 7.2 multi-stack).
 _STACKS: frozenset[str] = frozenset(
-    {"static", "fullstack", "nextjs_entities", "spa", "code"}
+    {"static", "fullstack", "nextjs_entities", "spa", "code", "realtime"}
 )
 _DEFAULT_STACK = "static"
 
@@ -213,6 +213,45 @@ def _infer_stack_from_text(text: str) -> str | None:
     if any(_signal_fires(haystack, sig) for sig in _BACKEND_SIGNALS):
         return "nextjs_entities"
     return None
+
+
+# Live / real-time intent → the `realtime` stack (SSE+Redis hub, membership ACL,
+# presence). High precision: a messenger / chat / live-feed / collab ask must NOT
+# fall to `nextjs_entities`, where "messages" degrade into a refresh-to-see CRUD
+# TABLE instead of a live conversation (the #1 "it built nonsense for my
+# messenger" failure). Strong terms fire alone; a bare "чат" needs a live/social
+# qualifier so a one-off "чат-бот поддержки" widget request doesn't trip it.
+_REALTIME_STRONG: frozenset[str] = frozenset(
+    {
+        "мессенджер", "messenger", "real-time", "realtime", "в реальном времени",
+        "реальном времени", "живой чат", "онлайн-чат", "онлайн чат", "online chat",
+        "live chat", "мгновенные сообщения", "обмен сообщениями", "переписк",
+        "семейный чат", "командный чат", "групповой чат", "рабочий чат",
+        "чат для команды", "чат для семьи", "общий чат", "совместная доска",
+        "живая лента", "кто онлайн", "присутствие онлайн",
+    }
+)
+_REALTIME_CHAT_WORDS = ("чат", "chat", "месседж")
+_REALTIME_QUALIFIERS = (
+    "семь", "команд", "друзь", "группов", "реальн", "мгновен", "живой",
+    "онлайн", "сообщени", "общени", "общать",
+)
+
+
+def _infer_realtime_from_text(text: str) -> bool:
+    """True when the product is fundamentally a real-time messaging/collab app.
+
+    Deterministic floor (mirrors ``_infer_stack_from_text``) so routing a
+    messenger to the realtime stack never depends on the model picking it. A
+    strong term fires alone; a bare chat word needs a live/social qualifier."""
+    low = (text or "").lower()
+    if any(s in low for s in _REALTIME_STRONG):
+        return True
+    if any(c in low for c in _REALTIME_CHAT_WORDS) and any(
+        q in low for q in _REALTIME_QUALIFIERS
+    ):
+        return True
+    return False
 
 
 # App-ification framing (P-H1, owner 2026-06-21). On a FOLLOW-UP, an UNMISTAKABLE
@@ -769,6 +808,12 @@ _SYSTEM = (
     "- \"nextjs_entities\" — есть пользователи, каталог/товары, корзина, запись/"
     "бронирование, CRM, личный кабинет, любые сохраняемые данные. Полноценное "
     "приложение с БД.\n"
+    "- \"realtime\" — приложения РЕАЛЬНОГО ВРЕМЕНИ: мессенджер, чат, личные/групповые "
+    "сообщения, семейный/командный чат, живая лента, совместная доска, презенс «кто "
+    "онлайн», уведомления в реальном времени. Готовый realtime-движок (каналы + SSE + "
+    "контроль доступа по участникам + presence). Если СУТЬ продукта — мгновенный обмен "
+    "сообщениями/событиями между людьми, это \"realtime\", а НЕ \"nextjs_entities\" "
+    "(таблица сообщений ≠ живой чат).\n"
     "- \"static\" — ТОЛЬКО если пользователь ЯВНО просит простую СТАТИЧНУЮ "
     "HTML-страницу («просто html», «статичная страница», «без интерактива/без js»). "
     "Обычный лендинг/портфолио/блог сюда НЕ относится — это \"spa\". Не выбирай "
@@ -800,7 +845,7 @@ _SYSTEM = (
     '{"action":"build","message":"<короткая фраза: «Отлично, собираю…»>",'
     '"brief":"<сжатый бриф для генератора на русском: тип продукта, цель, '
     'аудитория, обязательные разделы/возможности, тон, цвета/референс, важные '
-    'детали>","stack":"static|spa|nextjs_entities|fullstack|code"}'
+    'детали>","stack":"static|spa|nextjs_entities|realtime|fullstack|code"}'
 )
 
 
@@ -1392,7 +1437,7 @@ async def run_discovery(
             and not any(f in _low_intent for f in _APPIFY_FRAMING)
         )
         if (
-            stack not in ("fullstack", "nextjs_entities", "code")
+            stack not in ("fullstack", "nextjs_entities", "code", "realtime")
             and inferred
             and not _static_req
             and not _landing_override
@@ -1418,6 +1463,22 @@ async def run_discovery(
         ):
             log.info("discovery: stack '%s'→'spa' (explicit no-account tool)", stack)
             stack = "spa"
+        # Real-time net (G001) — a messenger / chat / live-feed / collab ask is a
+        # REAL-TIME app, not a CRUD entities app: on nextjs_entities "messages"
+        # become a refresh-to-see TABLE, never a live chat (the #1 "it built
+        # nonsense for my messenger" failure). Route it to the realtime stack (SSE
+        # hub + membership ACL + presence). Overrides static/spa/nextjs_entities;
+        # never overrides an explicit static page or a `code` program; a model that
+        # already picked realtime is left as-is. Runs after the backend net so it
+        # can correct a wrong entities escalation, before the static→spa fallback.
+        if (
+            _infer_realtime_from_text(intent_text)
+            and not _static_req
+            and not code_inferred
+            and stack != "realtime"
+        ):
+            log.info("discovery: stack '%s'→'realtime' (live/chat intent, G001)", stack)
+            stack = "realtime"
         # Static is opt-in (owner 2026-06-18: «убрать статику, оставляем только
         # если задача явно требует»). Anything that ended up `static` but isn't an
         # EXPLICIT request for a plain HTML page becomes `spa` (interactive React) —

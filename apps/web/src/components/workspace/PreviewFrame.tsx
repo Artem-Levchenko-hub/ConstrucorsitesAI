@@ -135,7 +135,9 @@ export function PreviewFrame({ project }: { project: Project }) {
   });
   const template = liveProject?.template ?? project.template;
   const isFullstack =
-    template === "fullstack" || template === "nextjs_entities";
+    template === "fullstack" ||
+    template === "nextjs_entities" ||
+    template === "realtime";
   // `code` projects (owner 2026-06-18) are language-agnostic source, not a
   // website — there's nothing to render in an iframe. Land the user on the «Код»
   // tab and show an explainer panel in Preview mode instead of a blank /p/<slug>.

@@ -18,10 +18,56 @@ import pytest
 from omnia_api.services import orchestrator_client, stack_routing
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.discovery import (
+    _infer_realtime_from_text,
     _infer_stack_from_text,
     infer_result_type_from_text,
     result_type_to_stack,
 )
+
+
+# ─── realtime routing (G001 — messenger / chat / live) ───────────────────
+
+
+def test_realtime_stack_maps_to_template() -> None:
+    """A `realtime` discovery pick resolves to the `realtime` project template
+    (→ orchestrator `nextjs-realtime`). Without this entry a messenger could
+    never reach the realtime substrate (the original "builds a CRUD table, not a
+    chat" bug)."""
+    assert stack_routing.discovery_stack_to_template("realtime") == "realtime"
+    assert stack_routing.discovery_stack_to_template("REALTIME") == "realtime"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "создай семейный мессенджер",
+        "я хочу чат в реальном времени с семьёй",
+        "messenger для команды",
+        "приложение для общения, обмен сообщениями",
+        "групповой чат с друзьями",
+    ],
+)
+def test_realtime_intent_detected(text: str) -> None:
+    """The deterministic floor routes clear live/chat intent to realtime — it
+    must not depend on the model picking it (which is what failed before)."""
+    assert _infer_realtime_from_text(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "лендинг для пиццерии с меню и формой заказа",
+        "интернет-магазин косметики с корзиной",
+        "портфолио фотографа",
+        "напиши парсер на python",
+        "сайт-визитка для стоматологии",
+    ],
+)
+def test_realtime_intent_not_overfired(text: str) -> None:
+    """Precision guard: a normal site / shop / tool / script must NOT be routed
+    to the realtime stack."""
+    assert _infer_realtime_from_text(text) is False
+
 
 # ─── discovery_stack_to_template ─────────────────────────────────────────
 

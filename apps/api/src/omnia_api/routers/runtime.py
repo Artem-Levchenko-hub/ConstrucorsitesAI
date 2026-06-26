@@ -49,7 +49,7 @@ router = APIRouter(prefix="/api/projects", tags=["runtime"])
 # — the "Новый проект на Omnia.AI" starter — instead of the user's app, unless
 # we re-push the latest snapshot. start_runtime does exactly that. `spa` (Vite +
 # React, Phase 7.2) holds its AI files in the writable layer too.
-_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa")
+_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime")
 
 
 async def _project_owned_by(

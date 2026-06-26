@@ -29,7 +29,11 @@ export type ProjectTemplate =
   // Language-agnostic source (Python script, Go CLI, parser, …). NOT a website
   // and NOT container-backed — stored as files like a GitHub repo. The workspace
   // shows the «Код» tab + download/GitHub-push instead of a preview iframe.
-  | "code";
+  | "code"
+  // Real-time app (messenger / chat / live feed / collab). Container-backed
+  // Next.js on the `nextjs-realtime` substrate (SSE+Redis hub + membership ACL
+  // + presence). Preview points at the live container, same as fullstack.
+  | "realtime";
 
 export type Project = {
   id: Uuid;
