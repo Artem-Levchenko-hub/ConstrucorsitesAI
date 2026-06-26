@@ -13,7 +13,6 @@
  */
 
 import * as React from "react";
-import { useSession } from "next-auth/react";
 
 import { type Row } from "@/lib/sdk";
 import { cn } from "@/lib/utils";
@@ -82,12 +81,14 @@ export interface ChatViewProps {
   onSend: (text: string) => Promise<void> | void;
   loading?: boolean;
   emptyHint?: string;
+  /** Current user / author id for own-vs-others bubble alignment (optional). The
+   *  entity app has no client SessionProvider, so the caller passes this when it
+   *  knows who "me" is; without it the thread renders left-aligned (still valid). */
+  meId?: string;
 }
 
-export function ChatView({ rows, onSend, loading, emptyHint }: ChatViewProps) {
-  const { data: session } = useSession();
-  const meId = (session?.user as { id?: string } | undefined)?.id;
-  const meEmail = session?.user?.email ?? undefined;
+export function ChatView({ rows, onSend, loading, emptyHint, meId }: ChatViewProps) {
+  const meEmail: string | undefined = undefined;
 
   const [text, setText] = React.useState("");
   const [sending, setSending] = React.useState(false);
