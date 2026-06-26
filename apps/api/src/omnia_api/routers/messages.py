@@ -71,6 +71,7 @@ from omnia_api.services.discovery import (
     _has_account_intent,
     _has_conversion_intent,
     _infer_code_from_text,
+    _infer_realtime_from_text,
     _infer_run_intent,
     _infer_run_intent_maybe,
     _infer_stack_from_text,
@@ -1218,6 +1219,25 @@ async def post_prompt(
                 or _infer_stack_from_text(payload.prompt)
                 or (None if _explicit_static(payload.prompt) else "spa")
             )
+        # Real-time override (G001): a messenger / chat / live-feed / collab prompt
+        # is a REAL-TIME app, not a CRUD entities app — on nextjs_entities the
+        # "messages" become a refresh-to-see TABLE, never a live chat (the #1
+        # "опять эти entities" messenger failure). The result-type router has no
+        # realtime type (web_app → nextjs_entities), so the realtime net is bypassed
+        # on this path; force realtime here when the messenger/chat net fires (and
+        # the user didn't ask for plain static or a script). Mirrors the realtime
+        # net in discovery.plan_discovery.
+        if (
+            _inferred_stack not in ("realtime", "code")
+            and _infer_realtime_from_text(payload.prompt)
+            and not _explicit_static(payload.prompt)
+            and not _infer_code_from_text(payload.prompt)
+        ):
+            logging.getLogger(__name__).info(
+                "first-build realtime override: '%s'→'realtime' (messenger/chat)",
+                _inferred_stack,
+            )
+            _inferred_stack = "realtime"
         if _inferred_stack:
             try:
                 await stack_routing.switch_to_stack(
