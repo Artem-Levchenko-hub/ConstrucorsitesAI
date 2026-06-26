@@ -711,6 +711,24 @@ def load_stack_system_prompt(orch_template: str | None) -> str | None:
         return None
 
 
+def is_agentic_enabled(
+    global_flag: bool, canary_csv: str | None, user_id: str | None
+) -> bool:
+    """Whether the agentic builder runs for THIS request.
+
+    True when the global flag is on (everyone), OR the user is in the canary list
+    (comma-separated user ids). This lets the agent loop be dogfooded on prod for
+    SPECIFIC users without flipping it on for everyone — there is no per-project
+    canary, so a per-user allowlist is how «flip on a canary» is done safely.
+    Pure → unit-tested. Empty canary + global off → False (today's behaviour)."""
+    if global_flag:
+        return True
+    if not canary_csv or not user_id:
+        return False
+    ids = {u.strip() for u in canary_csv.split(",") if u.strip()}
+    return str(user_id) in ids
+
+
 def load_stack_skills(orch_template: str | None) -> str | None:
     """Read a stack's ``.omnia/skills`` (INDEX first, then each ``*.md``) into one
     block, or None when absent. Mirrors :func:`load_stack_system_prompt`.

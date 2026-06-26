@@ -400,6 +400,27 @@ def test_load_stack_skills_absent_or_none_is_none():
     assert ab.load_stack_skills("definitely-not-a-real-template-xyz") is None
 
 
+# ── agentic builder canary gate ──────────────────────────────────────────────
+
+def test_agentic_global_on_enables_everyone():
+    assert ab.is_agentic_enabled(True, "", "u1") is True
+    assert ab.is_agentic_enabled(True, None, None) is True
+
+
+def test_agentic_canary_user_enabled_when_global_off():
+    assert ab.is_agentic_enabled(False, "u1, u2 ,u3", "u2") is True
+
+
+def test_agentic_non_canary_user_disabled_when_global_off():
+    assert ab.is_agentic_enabled(False, "u1,u2", "u9") is False
+
+
+def test_agentic_off_by_default():
+    assert ab.is_agentic_enabled(False, "", "u1") is False
+    assert ab.is_agentic_enabled(False, None, "u1") is False
+    assert ab.is_agentic_enabled(False, "u1", None) is False
+
+
 if __name__ == "__main__":
     # Allow `python tests/test_agent_builder.py` without pytest.
     import sys

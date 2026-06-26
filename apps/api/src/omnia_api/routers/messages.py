@@ -2250,7 +2250,11 @@ async def _process_prompt(
         # helpers. When the flag is OFF this block is skipped and generation runs
         # exactly as before (byte-identical).
         if (
-            get_settings().use_agentic_builder
+            agent_builder.is_agentic_enabled(
+                get_settings().use_agentic_builder,
+                get_settings().agentic_builder_canary_users,
+                str(user_id),
+            )
             and project_template in CONTAINER_NEXT
             and project_slug
             and not project_is_imported

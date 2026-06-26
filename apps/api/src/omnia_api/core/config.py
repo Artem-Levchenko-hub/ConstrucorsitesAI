@@ -775,6 +775,12 @@ class Settings(BaseSettings):
     # never hangs. Default OFF = today's behaviour. Env:
     # AGENT_REQUIRE_GREEN_BEFORE_DONE.
     agent_require_green_before_done: bool = Field(default=False)
+    # Agentic-builder CANARY (2026-06-27): comma-separated user ids for whom the
+    # agent loop runs even when use_agentic_builder is globally OFF. Lets the
+    # agent be dogfooded on prod for specific accounts WITHOUT changing generation
+    # for everyone (the flag is global; there's no per-project canary). Empty =
+    # nobody (today's behaviour). Env: AGENTIC_BUILDER_CANARY_USERS.
+    agentic_builder_canary_users: str = Field(default="")
     # Auto-continue: a single run is capped at agent_builder_max_steps, but a full
     # first build often needs more than one segment. Rather than stop at that cap and
     # make the user keep clicking «Продолжить» against an arbitrary low limit, the
