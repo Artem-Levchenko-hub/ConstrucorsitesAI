@@ -467,3 +467,12 @@
   }
   .omnia-row-born { animation: omnia-row-born 1.5s var(--omnia-ease, cubic-bezier(.16, 1, .3, 1)) both; }
 }
+
+/* Headings ride the display face (Unbounded, Cyrillic) for designed typography,
+   not default bold-sans. Falls back to the body sans when no display font is set. */
+@layer base {
+  h1, h2, h3 {
+    font-family: var(--font-display, var(--font-sans));
+    letter-spacing: -0.015em;
+  }
+}

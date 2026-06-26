@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Manrope, JetBrains_Mono } from "next/font/google";
+import { Manrope, JetBrains_Mono, Unbounded } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
@@ -17,6 +17,15 @@ const sans = Manrope({
 const mono = JetBrains_Mono({
   subsets: ["latin", "cyrillic"],
   variable: "--font-mono",
+  display: "swap",
+});
+/* Display face for headings — a distinctive geometric display with full Cyrillic,
+ * so page titles read DESIGNED, not default-bold-sans. Headings map to it via
+ * `--font-display` in globals.css. The art-director may swap it per brand. */
+const display = Unbounded({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-display",
+  weight: ["500", "600", "700", "800"],
   display: "swap",
 });
 
@@ -54,7 +63,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="ru" suppressHydrationWarning className={`${sans.variable} ${mono.variable}`}>
+    <html lang="ru" suppressHydrationWarning className={`${sans.variable} ${mono.variable} ${display.variable}`}>
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         {/* No-flash dark-mode init — runs synchronously before the body paints so
             the first frame is already in the right theme (OS-aware: an explicit
