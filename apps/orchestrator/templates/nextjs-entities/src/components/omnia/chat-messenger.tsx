@@ -22,6 +22,13 @@ import { type Row } from "@/lib/sdk";
 import { ChatView } from "./chat-view";
 import { useEntity } from "./use-entity";
 
+/** A reference field may serialize as the id string OR an expanded {id,...} object. */
+function refId(v: unknown): string {
+  return v && typeof v === "object"
+    ? String((v as { id?: unknown }).id ?? "")
+    : String(v ?? "");
+}
+
 export interface ChatMessengerProps {
   roomsEntity: string;
   messagesEntity: string;
@@ -63,9 +70,7 @@ export function ChatMessenger({
   const roomMessages = React.useMemo(
     () =>
       messages.rows.filter(
-        (m) =>
-          String((m as Record<string, unknown>)[linkField] ?? "") ===
-          String(activeId ?? ""),
+        (m) => refId((m as Record<string, unknown>)[linkField]) === String(activeId ?? ""),
       ),
     [messages.rows, linkField, activeId],
   );
