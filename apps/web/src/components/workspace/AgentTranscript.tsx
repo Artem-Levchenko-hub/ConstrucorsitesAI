@@ -1,0 +1,177 @@
+"use client";
+
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  ChevronRight,
+  FolderTree,
+  FileCode2,
+  Search,
+  PencilLine,
+  Hammer,
+  Terminal,
+  ScrollText,
+  Globe,
+  CheckCircle2,
+  Zap,
+  RefreshCw,
+  Loader2,
+  Sparkles,
+} from "lucide-react";
+import type { AgentStep } from "@/lib/api/types";
+import { cn } from "@/lib/utils";
+import { EASE_OUT } from "@/lib/motion";
+
+// Tool → icon. `typeof FileCode2` matches the codebase's icon-typing style
+// (ChatMessage.iconForLabel) so we don't depend on lucide's LucideIcon export.
+const ACTION_ICON: Record<string, typeof FileCode2> = {
+  list_dir: FolderTree,
+  read_file: FileCode2,
+  grep: Search,
+  write_file: FileCode2,
+  edit_file: PencilLine,
+  build: Hammer,
+  bash: Terminal,
+  read_logs: ScrollText,
+  runtime_check: Globe,
+  done: CheckCircle2,
+};
+
+// Tool → short Russian verb, so the row reads like a developer narrating.
+const ACTION_LABEL: Record<string, string> = {
+  list_dir: "Смотрю папку",
+  read_file: "Читаю",
+  grep: "Ищу в коде",
+  write_file: "Пишу",
+  edit_file: "Правлю",
+  build: "Проверяю сборку",
+  bash: "Команда",
+  read_logs: "Читаю логи",
+  runtime_check: "Проверяю запуск",
+  done: "Готово",
+};
+
+function stepIcon(s: AgentStep): typeof FileCode2 {
+  if (s.kind === "escalate") return Zap;
+  if (s.kind === "retry" || s.kind === "stalled") return RefreshCw;
+  return ACTION_ICON[s.action] ?? Sparkles;
+}
+
+function stepLabel(s: AgentStep): string {
+  // escalate/stalled/retry already carry a ready human label from the backend.
+  if (s.kind !== "step") return s.action;
+  return ACTION_LABEL[s.action] ?? s.action;
+}
+
+/**
+ * Live "what the agent is doing" transcript — the Claude-Code feel. Reads the
+ * per-message ["agent-steps", projectId, messageId] cache that usePromptStream
+ * fills from `agent.step` WS events and renders each tool step (icon + verb +
+ * path) as it happens. Self-hides when the message has no agent steps (a plain
+ * LLM/multipass turn), so it's safe to mount on every assistant message.
+ */
+export function AgentTranscript({
+  projectId,
+  messageId,
+  streaming,
+}: {
+  projectId?: string;
+  messageId: string;
+  streaming?: boolean;
+}) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(true);
+  const { data: steps } = useQuery<AgentStep[]>({
+    queryKey: ["agent-steps", projectId, messageId],
+    // Data is pushed via setQueryData from usePromptStream's `agent.step`
+    // handler; this observer just re-renders on each push. Mirrors the
+    // discovery-chips / passes cache pattern (client-only, staleTime Infinity).
+    queryFn: () =>
+      qc.getQueryData<AgentStep[]>(["agent-steps", projectId, messageId]) ?? [],
+    enabled: !!projectId,
+    staleTime: Infinity,
+  });
+
+  if (!projectId || !steps || steps.length === 0) return null;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 transition-colors hover:bg-surface-overlay/60"
+      >
+        <ChevronRight
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 text-fg-tertiary transition-transform",
+            open && "rotate-90",
+          )}
+        />
+        {streaming ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
+        ) : (
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
+        )}
+        <span className="text-xs font-medium text-fg-primary">
+          {streaming ? "Агент работает" : "Агент построил"}
+        </span>
+        <span className="ml-auto font-mono text-[11px] tabular-nums text-fg-tertiary">
+          {steps.length} шаг.
+        </span>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: EASE_OUT }}
+            className="overflow-hidden border-t border-border-subtle"
+          >
+            <ol className="scrollbar-elegant max-h-72 space-y-0.5 overflow-y-auto p-1.5">
+              {steps.map((s, i) => {
+                const Icon = stepIcon(s);
+                const last = i === steps.length - 1;
+                const live =
+                  streaming && last && s.kind === "step" && s.action !== "done";
+                return (
+                  <motion.li
+                    key={i}
+                    initial={{ opacity: 0, x: -4 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.18, ease: EASE_OUT }}
+                    className="flex items-center gap-2 rounded-md px-2 py-1"
+                  >
+                    <Icon
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0",
+                        s.kind !== "step"
+                          ? "text-amber-400"
+                          : s.action === "done"
+                            ? "text-accent"
+                            : "text-fg-secondary",
+                      )}
+                    />
+                    <span className="shrink-0 text-[12px] text-fg-secondary">
+                      {stepLabel(s)}
+                    </span>
+                    {s.path && (
+                      <span className="truncate font-mono text-[11px] text-fg-tertiary">
+                        {s.path}
+                      </span>
+                    )}
+                    {live && (
+                      <Loader2 className="ml-auto h-3 w-3 shrink-0 animate-spin text-accent" />
+                    )}
+                  </motion.li>
+                );
+              })}
+            </ol>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}

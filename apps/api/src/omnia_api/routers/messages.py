@@ -2274,16 +2274,27 @@ async def _process_prompt(
             _is_edit = (not orchestrate) and not _is_continue
 
             async def _agent_emit(event: str, data: dict[str, Any]) -> None:
-                # Surface each agent step as a chat delta so the user SEES the
-                # agent working (read/write/build/fix), like watching a developer.
-                act = data.get("action", "")
-                pth = data.get("path", "")
+                # Surface each agent step as a STRUCTURED transcript event so the
+                # frontend renders a live Claude-Code-style step list (tool + path)
+                # instead of gray "[агент] …" text. One WS event type `agent.step`
+                # carries every loop signal via `kind` (step/escalate/stalled/retry).
+                kind = (event.rsplit(".", 1)[-1] or "step").lower()
+                action = str(data.get("action", "") or "")
+                if kind == "escalate":
+                    action = action or f"усиливаю модель → {data.get('to', '')}"
+                elif kind == "stalled":
+                    action = action or "застрял — меняю подход"
+                elif kind == "retry":
+                    action = action or f"повтор запроса (#{data.get('attempt', 0)})"
                 await publish_event(
                     project_id,
-                    "llm.chunk",
+                    "agent.step",
                     {
                         "message_id": str(assistant_message_id),
-                        "delta": f"\n[агент] {act} {pth}".rstrip(),
+                        "step": data.get("step"),
+                        "kind": kind,
+                        "action": action,
+                        "path": str(data.get("path", "") or ""),
                     },
                 )
 

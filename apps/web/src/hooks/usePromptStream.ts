@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { simulatePromptStream } from "@/lib/ws-mock";
 import type {
+  AgentStep,
   Message,
   PassProgress,
   SelectedElement,
@@ -297,6 +298,37 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               currentModel: ending ? null : base.currentModel,
               completed,
             };
+          },
+        );
+        return;
+      }
+
+      if (event.type === "agent.step") {
+        // Agentic builder transcript: accumulate each tool step per message so
+        // AgentTranscript renders the live Claude-Code-style step list. Append in
+        // arrival order; skip an exact consecutive duplicate (the loop can re-emit
+        // a step around a retry/escalate).
+        const mid = event.data.message_id;
+        qc.setQueryData<AgentStep[]>(
+          ["agent-steps", projectId, mid],
+          (prev) => {
+            const list = prev ?? [];
+            const next: AgentStep = {
+              step: event.data.step ?? null,
+              kind: event.data.kind ?? "step",
+              action: event.data.action ?? "",
+              path: event.data.path ?? "",
+            };
+            const last = list[list.length - 1];
+            if (
+              last &&
+              last.kind === next.kind &&
+              last.action === next.action &&
+              last.path === next.path
+            ) {
+              return list;
+            }
+            return [...list, next];
           },
         );
         return;

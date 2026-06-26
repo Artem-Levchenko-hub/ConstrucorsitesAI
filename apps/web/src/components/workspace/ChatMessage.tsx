@@ -34,6 +34,7 @@ import {
 } from "@/lib/parse-assistant";
 import { SelectedChips } from "./SelectedChips";
 import { PassProgressBar } from "./PassProgressBar";
+import { AgentTranscript } from "./AgentTranscript";
 import { RemixRecapCard } from "./RemixRecapCard";
 
 // The onboarding quiz folds its answers into the user prompt after this marker
@@ -106,6 +107,18 @@ export function ChatMessage({
         <div className="text-sm text-fg-primary leading-6 space-y-2">
           {!isUser && streaming && projectId && (
             <PassProgressBar projectId={projectId} messageId={message.id} />
+          )}
+
+          {/* Live agentic-builder transcript (Claude-Code-style tool steps).
+              Not gated on `streaming` — it self-hides when the message has no
+              agent steps, and stays visible after the build so the user can
+              review what the agent did. */}
+          {!isUser && projectId && (
+            <AgentTranscript
+              projectId={projectId}
+              messageId={message.id}
+              streaming={!!streaming}
+            />
           )}
 
           {isUser ? (

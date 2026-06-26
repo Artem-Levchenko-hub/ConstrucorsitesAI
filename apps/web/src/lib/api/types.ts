@@ -393,6 +393,19 @@ export type MultipassStage =
  * so `ChatMessage` re-renders the progress bar reactively without a Zustand
  * store. Cleared on `llm.done` / `llm.error`.
  */
+/**
+ * One step in the agentic builder's live transcript (see the `agent.step` WS
+ * event). Accumulated per assistant message in React Query cache under
+ * `["agent-steps", projectId, messageId]` and rendered by `AgentTranscript` as
+ * a Claude-Code-style step list while the agent works.
+ */
+export type AgentStep = {
+  step: number | null;
+  kind: "step" | "escalate" | "stalled" | "retry";
+  action: string;
+  path: string;
+};
+
 export type PassProgress = {
   current: MultipassStage | null;
   /**
@@ -505,7 +518,21 @@ export type WsEvent =
   | { type: "runtime.crashed"; data: { error: string } }
   | { type: "deploy.progress"; data: { deploy: DeployStatus } }
   | { type: "deploy.done"; data: { deploy: DeployStatus } }
-  | { type: "deploy.failed"; data: { error: string } };
+  | { type: "deploy.failed"; data: { error: string } }
+  | {
+      // Agentic builder transcript (messages.py `_agent_emit`). One event per
+      // loop step so the chat renders a live Claude-Code-style step list (tool +
+      // path). `kind` separates a normal tool step from escalate/stalled/retry
+      // signals. Cached per-message under ["agent-steps", projectId, messageId].
+      type: "agent.step";
+      data: {
+        message_id: Uuid;
+        step: number | null;
+        kind: "step" | "escalate" | "stalled" | "retry";
+        action: string;
+        path: string;
+      };
+    };
 
 export type WsEventType = WsEvent["type"];
 
