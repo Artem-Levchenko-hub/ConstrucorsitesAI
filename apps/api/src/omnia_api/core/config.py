@@ -742,6 +742,13 @@ class Settings(BaseSettings):
     # the screens, then build+fix. 14 was too tight (all spent exploring); 40
     # gives room to actually write + repair. Env: AGENT_BUILDER_MAX_STEPS.
     agent_builder_max_steps: int = Field(default=40)
+    # Green-gate (Phase 2): when ON, the agent loop refuses a `done` until the
+    # last build was clean AND the running app was re-checked after the last
+    # write (a clean typecheck is exactly what a model hallucinates completion
+    # around → a runtime-broken app shipped). Bounded internally so it nudges,
+    # never hangs. Default OFF = today's behaviour. Env:
+    # AGENT_REQUIRE_GREEN_BEFORE_DONE.
+    agent_require_green_before_done: bool = Field(default=False)
     # Auto-continue: a single run is capped at agent_builder_max_steps, but a full
     # first build often needs more than one segment. Rather than stop at that cap and
     # make the user keep clicking «Продолжить» against an arbitrary low limit, the

@@ -304,6 +304,73 @@ def test_see_loop_fixes_then_done():
     assert sum(1 for n, _ in record if n == "see") == 2  # ran twice, no false abort
 
 
+# ── green-gate: require_green_before_done ────────────────────────────────────
+
+def test_green_gate_off_by_default_allows_immediate_done():
+    """Default (flag off): a `done` is honoured immediately — current behaviour,
+    byte-identical to pre-Phase-2."""
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_ok_executor([]),
+        complete=_scripted(['<omnia:action name="done">{"summary":"x"}</omnia:action>']),
+        max_steps=8,
+    ))
+    assert res.done is True and res.stop_reason == "done" and res.steps == 1
+
+
+def test_green_gate_honors_done_when_verified():
+    """flag on: write → build(clean) → runtime_check(ok) → done is honoured with
+    ZERO rejections (the app was actually verified)."""
+    record: list = []
+    replies = [
+        '<omnia:action name="write_file">{"path":"src/app/page.tsx","content":"v1"}</omnia:action>',
+        '<omnia:action name="build"></omnia:action>',
+        '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
+        '<omnia:action name="done">{"summary":"verified"}</omnia:action>',
+    ]
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_ok_executor(record), complete=_scripted(replies), max_steps=12,
+        require_green_before_done=True,
+    ))
+    assert res.done is True and res.stop_reason == "done"
+    assert ("build", "") in record and ("runtime_check", "/") in record
+    assert res.steps == 4
+
+
+def test_green_gate_rejects_premature_done():
+    """flag on: a `done` before any build/runtime_check is REJECTED — the loop
+    continues, the model is forced to build + runtime_check, THEN done."""
+    record: list = []
+    replies = [
+        '<omnia:action name="done">{"summary":"too early"}</omnia:action>',
+        '<omnia:action name="build"></omnia:action>',
+        '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
+        '<omnia:action name="done">{"summary":"now verified"}</omnia:action>',
+    ]
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_ok_executor(record), complete=_scripted(replies), max_steps=12,
+        require_green_before_done=True,
+    ))
+    # The step-0 `done` was rejected (else it would have ended at steps==1).
+    assert res.done is True and res.steps == 4
+    assert ("build", "") in record and ("runtime_check", "/") in record
+
+
+def test_green_gate_cap_prevents_hang():
+    """flag on but the app is never verifiable: after _DONE_REJECT_CAP rejections
+    the `done` is honoured anyway (fail-soft — the server gate is the backstop)."""
+    replies = ['<omnia:action name="done">{"summary":"insist"}</omnia:action>']
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_ok_executor([]), complete=_scripted(replies), max_steps=12,
+        require_green_before_done=True,
+    ))
+    assert res.done is True and res.stop_reason == "done"
+    assert res.steps == ab._DONE_REJECT_CAP + 1  # rejected CAP times, then honoured
+
+
 if __name__ == "__main__":
     # Allow `python tests/test_agent_builder.py` without pytest.
     import sys

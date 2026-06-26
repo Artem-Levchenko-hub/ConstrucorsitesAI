@@ -216,6 +216,7 @@ async def run_agent_build(
     user_id: str | None = None,
     project_id: str | None = None,
     max_tokens: int = 8192,
+    require_green_before_done: bool = False,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -236,6 +237,13 @@ async def run_agent_build(
     no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
     sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
     last_build_ok: bool | None = None  # result of the most recent `build` action
+    # `require_green_before_done` bookkeeping: a `done` is only honoured once the
+    # last build was clean AND the running app was re-checked after the last write
+    # (a clean typecheck is exactly what a model hallucinates completion around —
+    # see SYSTEM_PROMPT). Bounded by `_DONE_REJECT_CAP` so it nudges, never hangs.
+    last_runtime_ok: bool | None = None  # result of the most recent `runtime_check`
+    wrote_since_check = False  # a write happened with no runtime_check after it
+    done_rejections = 0
     active_model = model
     escalated = False
 
@@ -332,6 +340,32 @@ async def run_agent_build(
             })
 
         if action.name == "done":
+            # Green-gate: refuse a premature `done`. The model loves to declare
+            # victory on a clean typecheck without ever opening the route, so a
+            # broken-at-runtime app ships. Require last build clean + a
+            # runtime_check AFTER the last write. Bounded by _DONE_REJECT_CAP so
+            # a genuinely-unverifiable build (e.g. no reachable route) still
+            # finishes instead of looping (R-10 fail-soft). Default OFF.
+            if require_green_before_done and done_rejections < _DONE_REJECT_CAP:
+                gap = None
+                if last_build_ok is not True:
+                    gap = (
+                        "run `build` and fix errors until it is CLEAN before done"
+                    )
+                elif wrote_since_check or last_runtime_ok is not True:
+                    gap = (
+                        "you wrote files but did not confirm they RUN — "
+                        'runtime_check the main route(s) (e.g. {"path":"/"}), '
+                        "fix any 5xx, THEN done"
+                    )
+                if gap is not None:
+                    done_rejections += 1
+                    if emit:
+                        await emit("agent.stalled", {"step": step})
+                    convo.append({"role": "user", "content": (
+                        "NOT DONE YET — " + gap + "."
+                    )})
+                    continue
             return AgentResult(
                 done=True, summary=str(action.args.get("summary", "")),
                 files=written, steps=step + 1, transcript=convo,
@@ -435,6 +469,11 @@ async def run_agent_build(
         obs = await execute(action)
         if action.name == "build":
             last_build_ok = bool(obs.get("ok"))
+        if action.name == "runtime_check":
+            # A runtime_check observed the CURRENT app state → clears the
+            # "wrote but never verified" debt; its ok/fail feeds the green-gate.
+            last_runtime_ok = bool(obs.get("ok"))
+            wrote_since_check = False
         print(
             f"[AGENT] step={step} {action.name} {action.path} ok={obs.get('ok')}",
             flush=True,
@@ -443,6 +482,7 @@ async def run_agent_build(
         if action.name in ("write_file", "edit_file") and obs.get("ok"):
             if "content" in obs and isinstance(obs["content"], str):
                 written[action.path] = obs["content"]
+            wrote_since_check = True  # a new write is unverified until re-checked
         convo.append({"role": "user", "content": _format_observation(action, obs)})
 
     return AgentResult(
@@ -464,6 +504,11 @@ _NO_WRITE_ABORT_AT = 14
 # An exact repeat never advances the build, so nudge to move on, then abort.
 _REPEAT_NUDGE_AT = 2
 _REPEAT_ABORT_AT = 4
+
+# Green-gate: how many premature `done`s to reject (nudging the model to build +
+# runtime_check) before honouring it anyway. Bounded so an app with no checkable
+# route can still finish — the server-side acceptance gate is the hard backstop.
+_DONE_REJECT_CAP = 2
 _REPEAT_CYCLE_NUDGE = (
     "STOP — you have ALREADY issued this EXACT action before (same file + same "
     "content, or the same command); repeating it changes NOTHING and the build is "

@@ -2409,6 +2409,7 @@ async def _process_prompt(
                 emit=_agent_emit,
                 user_id=str(user_id),
                 project_id=str(project_id),
+                require_green_before_done=get_settings().agent_require_green_before_done,
             )
             _all_files = dict(_agent_res.files)
             _total_steps = _agent_res.steps
@@ -2453,6 +2454,7 @@ async def _process_prompt(
                     emit=_agent_emit,
                     user_id=str(user_id),
                     project_id=str(project_id),
+                    require_green_before_done=get_settings().agent_require_green_before_done,
                 )
                 _seg += 1
                 _total_steps += _cont_res.steps
