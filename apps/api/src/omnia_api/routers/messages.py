@@ -2249,6 +2249,12 @@ async def _process_prompt(
         # early-return path that reuses the standard commit/snapshot/finalise
         # helpers. When the flag is OFF this block is skipped and generation runs
         # exactly as before (byte-identical).
+        # Imported here (function-local, as before) but BEFORE the gate that
+        # uses it — referencing agent_builder in the `if` while the import sat
+        # inside the block made it an UnboundLocalError for every build (the
+        # canary gate). Bind it first.
+        from omnia_api.services import agent_builder
+
         if (
             agent_builder.is_agentic_enabled(
                 get_settings().use_agentic_builder,
@@ -2260,7 +2266,6 @@ async def _process_prompt(
             and not project_is_imported
             and (orchestrate or surgical)
         ):
-            from omnia_api.services import agent_builder
 
             # Phase 2: container EDITS go through the agent too (read→edit→build→
             # fix), not blind SEARCH/REPLACE — fixes the "точечные правки" pain.
