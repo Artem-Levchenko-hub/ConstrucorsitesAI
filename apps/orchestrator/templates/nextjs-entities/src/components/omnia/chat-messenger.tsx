@@ -43,6 +43,7 @@ export function ChatMessenger({
   const rooms = useEntity(roomsEntity);
   const messages = useEntity(messagesEntity);
   const [activeId, setActiveId] = React.useState<string | null>(null);
+  const [creating, setCreating] = React.useState(false);
 
   // Auto-select the first room.
   React.useEffect(() => {
@@ -74,14 +75,33 @@ export function ChatMessenger({
     await messages.create({ [linkField]: activeId, [textField]: text });
   }
 
+  async function createRoom() {
+    setCreating(true);
+    try {
+      const room = await rooms.create({ [titleField]: "Новая беседа" });
+      const id = String((room as { id?: unknown }).id ?? "");
+      if (id) setActiveId(id);
+    } finally {
+      setCreating(false);
+    }
+  }
+
   const roomTitle = (r: Row) =>
     String((r as Record<string, unknown>)[titleField] ?? "Беседа");
 
   return (
     <div className="flex h-[72vh] min-h-0 gap-4">
       <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card">
-        <div className="border-b border-border/70 px-4 py-3 text-sm font-semibold">
-          Беседы
+        <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
+          <span className="text-sm font-semibold">Беседы</span>
+          <button
+            type="button"
+            onClick={createRoom}
+            disabled={creating}
+            className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+          >
+            + Новая
+          </button>
         </div>
         <nav className="min-h-0 flex-1 overflow-y-auto p-2">
           {rooms.rows.length === 0 && (
