@@ -135,3 +135,5 @@ export {
   DonutStat,
   type DonutStatProps,
 } from "./charts";
+
+export { ChatMessenger, type ChatMessengerProps } from "./chat-messenger";
