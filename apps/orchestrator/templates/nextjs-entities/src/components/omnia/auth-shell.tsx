@@ -70,12 +70,13 @@ function readableOn(hex: string): string {
  *  wore the brand. We close that by deriving the same tokens from `share.accent`
  *  and pinning them on the auth root, so the WHOLE screen is on-brand — no
  *  dependency on where (or whether) the generated app themed its own layout. */
-function brandTokens(accent: string): React.CSSProperties {
-  return {
-    "--primary": accent,
-    "--primary-foreground": readableOn(accent),
-    "--ring": accent,
-  } as React.CSSProperties;
+function brandTokens(_accent: string): React.CSSProperties {
+  // Inherit the app's GLOBAL theme (globals.css --primary, set per-project by the
+  // design-DNA) instead of pinning a baked share.accent. Pinning it forced the
+  // auth screen to the default indigo while the app was on its real brand — the
+  // mismatch we just fixed. globals.css is imported by the root layout, so it
+  // cascades to the auth route too; an empty object means "inherit".
+  return {} as React.CSSProperties;
 }
 
 /** A deep, brand-tinted gradient for the showcase panel. `accent` is a hex from

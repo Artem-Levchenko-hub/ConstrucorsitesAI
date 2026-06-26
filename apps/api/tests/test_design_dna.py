@@ -15,6 +15,8 @@ def test_two_projects_get_different_identity() -> None:
     for css in (a, b):
         assert MARKER in css and ":root{" in css
         assert "--primary" in css and "--radius" in css
+        # Brand overridden in dark mode too, or it loses to the template default.
+        assert ":root.dark{" in css
 
 
 def test_stable_per_project() -> None:

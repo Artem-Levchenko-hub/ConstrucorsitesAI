@@ -31,8 +31,10 @@ from omnia_api.services.design_tokens import tokens_for_project
 
 MARKER = "/* omnia:design-dna */"
 
-# Our managed block: the marker + the :root{...} that follows it.
-_BLOCK_RE = re.compile(re.escape(MARKER) + r"\s*\n:root\s*\{[^}]*\}\s*", re.MULTILINE)
+# Our managed block: the marker + the one-or-more :root/:root.dark blocks after it.
+_BLOCK_RE = re.compile(
+    re.escape(MARKER) + r"\s*\n(?::root[^{]*\{[^}]*\}\s*)+", re.MULTILINE
+)
 # Clean up ANY google-fonts @import — including a prior BROKEN injection that landed
 # mid-file and fails Turbopack's "@import must precede all rules" CSS parse.
 _FONT_IMPORT_RE = re.compile(
@@ -58,14 +60,15 @@ def design_dna_css(project_id: str, industry_hint: str | None = None) -> str:
     t = tokens_for_project(project_id, industry_hint=industry_hint)
     p = t.palette
     radius = _RADII[_seed(project_id, "radius") % len(_RADII)]
+    brand = f"--primary:{p.primary};--accent:{p.accent};--ring:{p.primary};"
+    # Override the brand in BOTH light (:root) and dark (:root.dark): the template
+    # sets a dark-mode --primary at specificity (0,2,0) that beats a plain :root, so
+    # without the :root.dark rule the theme silently loses in dark mode (the indigo
+    # auth gradient bug). Brand tokens only — never the canvas neutrals.
     return (
         f"{MARKER}\n"
-        ":root{"
-        f"--primary:{p.primary};"
-        f"--accent:{p.accent};"
-        f"--ring:{p.primary};"
-        f"--radius:{radius}"
-        "}"
+        f":root{{{brand}--radius:{radius}}}\n"
+        f":root.dark{{{brand}}}"
     )
 
 
