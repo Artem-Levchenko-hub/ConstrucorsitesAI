@@ -2574,6 +2574,34 @@ async def _process_prompt(
             except Exception as _tc_exc:
                 print(f"[PP] agentic_typecheck skipped: {_tc_exc!r}", flush=True)
 
+            # Design DNA — give this entity/agent app a DISTINCT identity (seeded
+            # accent + font pairing) so it stops looking identical to every other
+            # one ("дизайн одинаковый"). The agent never writes globals.css (it is
+            # baked), so we inject a per-project :root override into the container's
+            # globals.css directly. Reuses the curated, WCAG-checked, per-project
+            # seeded tokens; touches only safe brand knobs (never the canvas
+            # neutrals). Fail-soft: any error leaves the default theme.
+            if not _is_edit:
+                try:
+                    from omnia_api.services import design_dna
+
+                    _gcss = await orchestrator_client.agent_read_file(
+                        project_id, project_slug, "src/app/globals.css"
+                    )
+                    if _gcss:
+                        _newg = design_dna.inject_into_globals(
+                            _gcss, str(project_id), None
+                        )
+                        if _newg != _gcss:
+                            await orchestrator_client.hot_reload(
+                                project_id,
+                                project_slug,
+                                {"src/app/globals.css": _newg},
+                            )
+                            print("[PP] design_dna injected globals.css", flush=True)
+                except Exception as _dd_exc:
+                    print(f"[PP] design_dna skipped: {_dd_exc!r}", flush=True)
+
             # Honest result: a loop-guard abort (looping/exploring) that STILL
             # wrote files, whose app SERVES, AND whose typecheck is CLEAN is not a
             # failure — the work landed, the guard just tripped. Don't scare the
