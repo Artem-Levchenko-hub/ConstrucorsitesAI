@@ -154,6 +154,14 @@ services:
       dockerfile: Dockerfile
     image: omnia-api:prod
     container_name: omnia-prod-api
+    # The agentic builder loads per-stack guides (SYSTEM_PROMPT.md) + skills from
+    # the orchestrator templates dir at /orchestrator/templates (agent_builder.
+    # _TEMPLATES_DIR resolves there in-container). The api image only ships
+    # apps/api, so without this mount load_stack_system_prompt() returns None and
+    # EVERY agentic build falls back to the entities prompt — the "опять эти
+    # entities" bug. Read-only.
+    volumes:
+      - ../../../orchestrator/templates:/orchestrator/templates:ro
     # Bypass `uv run` — avoids on-start network calls to pypi.org.
     # Everything is already installed in /app/.venv inside the image.
     command: ["/app/.venv/bin/uvicorn", "omnia_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -306,6 +314,10 @@ services:
     # build step (both Compose race on the same tag otherwise).
     image: omnia-api:prod
     container_name: omnia-prod-worker
+    # Same as api: the agent loads per-stack guides/skills from the mounted
+    # orchestrator templates dir, else it defaults to the entities prompt.
+    volumes:
+      - ../../../orchestrator/templates:/orchestrator/templates:ro
     # Same uv-run bypass as api — direct python from the venv.
     command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.run"]
     depends_on:
