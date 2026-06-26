@@ -113,3 +113,49 @@ async def test_provision_memory_is_config_driven(
 
     spec = await _provision_capturing_spec(monkeypatch)
     assert spec.memory_mb == 8192
+
+
+# ── Phase 1 egress + network isolation (default OFF = current behaviour) ─────
+
+
+async def test_provision_default_no_egress_proxy_and_shared_net(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defaults OFF: no proxy env injected, network_name None (shared net) —
+    byte-identical to pre-Phase-1."""
+    spec = await _provision_capturing_spec(monkeypatch)
+    assert "HTTP_PROXY" not in spec.env
+    assert "http_proxy" not in spec.env
+    assert spec.network_name is None
+
+
+async def test_provision_injects_egress_proxy_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With container_egress_proxy set, the container is forced through the
+    allowlisting proxy (HTTP(S)_PROXY) while internal services bypass via
+    NO_PROXY — the real egress allowlist for the agent's bash."""
+    monkeypatch.setenv("CONTAINER_EGRESS_PROXY", "http://omnia-egress:3128")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    spec = await _provision_capturing_spec(monkeypatch)
+    assert spec.env["HTTP_PROXY"] == "http://omnia-egress:3128"
+    assert spec.env["HTTPS_PROXY"] == "http://omnia-egress:3128"
+    assert spec.env["http_proxy"] == "http://omnia-egress:3128"
+    assert "omnia-postgres-users" in spec.env["NO_PROXY"]
+
+
+async def test_provision_isolates_network_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With isolate_project_network, the container joins its OWN per-project
+    bridge net instead of the shared runtime net (no lateral reach)."""
+    monkeypatch.setenv("ISOLATE_PROJECT_NETWORK", "true")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    spec = await _provision_capturing_spec(monkeypatch)
+    assert spec.network_name == "omnia-proj-00000000-0000-0000-0000-000000000001"

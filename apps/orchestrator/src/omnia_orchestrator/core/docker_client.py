@@ -98,6 +98,16 @@ async def start_container(spec: ContainerSpec) -> str:
 
     def _do() -> str:
         client = _get_client()
+        # Per-project network isolation (Phase 1): when the spec names a network
+        # other than the shared runtime net, ensure it exists before the run.
+        # Idempotent + suppressed so a concurrent provision can't race-fail here.
+        # No-op on the default path (network_name None → shared net).
+        if spec.network_name and spec.network_name != _RUNTIME_NETWORK:
+            try:
+                client.networks.get(spec.network_name)
+            except docker.errors.NotFound:
+                with suppress(docker.errors.APIError):
+                    client.networks.create(spec.network_name, driver="bridge")
         try:
             existing = client.containers.get(spec.name)
         except docker.errors.NotFound:

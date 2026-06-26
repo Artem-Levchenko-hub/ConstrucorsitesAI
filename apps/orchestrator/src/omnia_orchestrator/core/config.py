@@ -53,6 +53,30 @@ class Settings(BaseSettings):
     # while still stopping a runaway fork bomb from exhausting host PIDs.
     container_pids_limit: int = Field(default=512)
 
+    # `container_egress_proxy` — when set (e.g. "http://omnia-egress:3128") every
+    # user container gets HTTP(S)_PROXY + NO_PROXY injected, so ALL outbound
+    # traffic is forced through an allowlisting proxy (run a squid/tinyproxy with
+    # a host whitelist — see the Phase-1 runbook). Empty = direct egress
+    # (current behaviour). This is the real egress allowlist: the agent's bash
+    # can no longer exfiltrate to or call arbitrary hosts.
+    container_egress_proxy: str = Field(default="")
+    # Hosts that bypass the egress proxy — the internal services a container must
+    # still reach directly (DB / gateway / MinIO / loopback). Only consulted when
+    # `container_egress_proxy` is set.
+    container_egress_no_proxy: str = Field(
+        default=(
+            "localhost,127.0.0.1,host.docker.internal,"
+            "omnia-postgres-users,omnia-prod-gw,omnia-prod-minio"
+        )
+    )
+    # `isolate_project_network` — when True each dev container joins its OWN
+    # `omnia-proj-<id>` bridge network instead of the shared runtime network, so
+    # a compromised container can't reach OTHER projects' containers laterally.
+    # Requires the shared services be reachable via host.docker.internal + the
+    # egress proxy (runbook) — until then leave False (shared net, current
+    # behaviour).
+    isolate_project_network: bool = Field(default=False)
+
     # Filesystem layout on the VPS — see docs/08-vps-setup.md.
     projects_root: str = Field(default="/opt/omnia-runtime/projects")
     nginx_sites_dir: str = Field(default="/opt/omnia-runtime/nginx/sites-enabled")

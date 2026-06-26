@@ -119,9 +119,26 @@ class _FakeContainers:
         return _FakeContainer("new-container-id", image)
 
 
+class _FakeNetworks:
+    def __init__(self, existing: set[str] | None = None) -> None:
+        self.existing = existing or set()
+        self.created: list[str] = []
+
+    def get(self, name: str) -> object:
+        if name not in self.existing:
+            raise docker.errors.NotFound(name)
+        return object()
+
+    def create(self, name: str, **_: Any) -> object:
+        self.created.append(name)
+        self.existing.add(name)
+        return object()
+
+
 class _FakeClient:
     def __init__(self, existing: _FakeContainer | None) -> None:
         self.containers = _FakeContainers(existing)
+        self.networks = _FakeNetworks()
 
 
 def _spec(image: str) -> ContainerSpec:
@@ -258,3 +275,35 @@ async def test_start_container_harden_without_pids_limit_omits_it(
     assert kw.get("security_opt") == ["no-new-privileges:true"]
     assert "pids_limit" not in kw
     assert "runtime" not in kw  # runtime empty → omitted
+
+
+async def test_start_container_default_creates_no_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default spec (network_name None) → shared runtime net, NO per-project
+    network created — byte-identical to pre-Phase-1."""
+    client = _FakeClient(None)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    await docker_client.start_container(_spec("omnia-template-x:dev"))
+
+    assert client.networks.created == []
+
+
+async def test_start_container_creates_per_project_network_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the spec names a per-project network, start_container ensures it
+    exists (idempotent) and runs the container on it (isolation)."""
+    client = _FakeClient(None)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    spec = ContainerSpec(
+        name="omnia-dev-x", image="omnia-template-x:dev", port=3200,
+        project_id="00000000-0000-0000-0000-000000000001", env={},
+        network_name="omnia-proj-1",
+    )
+    await docker_client.start_container(spec)
+
+    assert "omnia-proj-1" in client.networks.created
+    assert client.containers.run_kwargs.get("network") == "omnia-proj-1"

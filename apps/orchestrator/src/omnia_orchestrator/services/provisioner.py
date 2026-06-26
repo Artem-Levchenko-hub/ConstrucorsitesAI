@@ -77,6 +77,22 @@ def _integration_env() -> dict[str, str]:
     return out
 
 
+def _egress_env() -> dict[str, str]:
+    """Proxy env that forces container egress through the allowlisting proxy when
+    configured (Phase 1). Empty proxy → empty dict → direct egress (current
+    behaviour). Both upper- and lower-case variants are set because libraries
+    disagree on which they read."""
+    s = get_settings()
+    proxy = (s.container_egress_proxy or "").strip()
+    if not proxy:
+        return {}
+    nop = s.container_egress_no_proxy
+    return {
+        "HTTP_PROXY": proxy, "HTTPS_PROXY": proxy, "NO_PROXY": nop,
+        "http_proxy": proxy, "https_proxy": proxy, "no_proxy": nop,
+    }
+
+
 def _load_or_create_auth_secret(project_id: str) -> str:
     """Auth.js v5 `AUTH_SECRET` — per-project, persisted under
     ``secrets_root/<project_id>/auth.secret`` so re-provisions reuse the
@@ -191,6 +207,7 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         "AUTH_URL": dev_origin,
         "AUTH_TRUST_HOST": "true",
         **_integration_env(),
+        **_egress_env(),
         **req.initial_env,
     }
 
@@ -213,6 +230,14 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
     # self-heal: docker re-runs it automatically. Hibernation is unaffected —
     # docker only restarts containers that exited on their own, never ones the
     # daemon API stopped/paused, so an idle-sweep `stop` stays down until /wake.
+    # Per-project network isolation (Phase 1) — own bridge net per project when
+    # enabled, else None → docker_client uses the shared runtime net (current).
+    network_name = (
+        f"omnia-proj-{req.project_id}"
+        if settings.isolate_project_network
+        else None
+    )
+
     spec = ContainerSpec(
         name=container_name,
         image=image_tag,
@@ -224,6 +249,7 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         restart_policy_name="unless-stopped",
         tier=req.tier,
         container_port=stack.container_port,
+        network_name=network_name,
         # Sandbox hardening (Phase 1) — the agent runs arbitrary bash in this
         # dev container, so it is the untrusted boundary. All knobs default to
         # OFF (current behaviour); enable per-env once the host is prepared.
