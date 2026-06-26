@@ -48,8 +48,12 @@ export interface CrudResourceProps {
   entity: string;
   title?: string;
   description?: string;
-  columns: Column<Row>[];
-  fields: FieldSpec[];
+  // Optional with safe [] defaults: a chat/messaging page renders `<CrudResource
+  // entity="Message"/>` with no columns/fields, and omitting them must NOT TS2739
+  // the build (the real prod failure). Table pages still derive columns from
+  // fields, and the brief still asks the writer to supply them for rich tables.
+  columns?: Column<Row>[];
+  fields?: FieldSpec[];
   listParams?: ListParams;
   searchable?: boolean;
   searchKeys?: string[];
@@ -140,8 +144,8 @@ export function CrudResource({
   entity,
   title,
   description,
-  columns,
-  fields,
+  columns = [],
+  fields = [],
   listParams,
   searchable = true,
   searchKeys,
