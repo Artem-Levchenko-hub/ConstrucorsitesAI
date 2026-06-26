@@ -285,6 +285,11 @@ services:
       # one-shot generation. false = today's pipeline (byte-identical).
       USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-false}
       AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
+      # Per-user canary: run the agent loop for these user ids even when the
+      # global flag is off (safe prod dogfood, no change for anyone else).
+      AGENTIC_BUILDER_CANARY_USERS: ${AGENTIC_BUILDER_CANARY_USERS:-}
+      # Green-gate: agent can't call done until build clean + runtime re-checked.
+      AGENT_REQUIRE_GREEN_BEFORE_DONE: ${AGENT_REQUIRE_GREEN_BEFORE_DONE:-false}
       # Reference ceiling ratchet (область R) — continuous richness-score floor vs
       # the curated enterprise corpus. DARK; needs ACCEPTANCE_GAUNTLET_REFERENCE_GATE on too.
       ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
@@ -418,6 +423,11 @@ services:
       # one-shot generation. false = today's pipeline (byte-identical).
       USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-false}
       AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
+      # Per-user canary: run the agent loop for these user ids even when the
+      # global flag is off (safe prod dogfood, no change for anyone else).
+      AGENTIC_BUILDER_CANARY_USERS: ${AGENTIC_BUILDER_CANARY_USERS:-}
+      # Green-gate: agent can't call done until build clean + runtime re-checked.
+      AGENT_REQUIRE_GREEN_BEFORE_DONE: ${AGENT_REQUIRE_GREEN_BEFORE_DONE:-false}
     restart: unless-stopped
     networks:
       - omnia-prod
