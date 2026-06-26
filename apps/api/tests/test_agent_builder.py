@@ -262,6 +262,48 @@ def test_consecutive_build_spam_still_caught():
     assert res.steps < 30
 
 
+# ── vision tool: see ─────────────────────────────────────────────────────────
+
+def test_parse_see_action():
+    a = ab.parse_action('look\n<omnia:action name="see">{"path":"/dashboard"}</omnia:action>')
+    assert a is not None and a.name == "see" and a.path == "/dashboard"
+
+
+def test_see_loop_fixes_then_done():
+    """build clean → see (ugly) → fix → see (beautiful) → done. `see` is a verify
+    action: it runs twice non-consecutively without a false looping abort."""
+    record: list = []
+    state = {"ugly": True}
+
+    async def _exec(action: ab.Action):
+        record.append((action.name, action.path))
+        if action.name == "build":
+            return {"ok": True, "detail": "typecheck clean"}
+        if action.name == "see":
+            return ({"ok": True, "detail": "verdict: generic (4/10)\n- hero too small"}
+                    if state["ugly"]
+                    else {"ok": True, "detail": "verdict: beautiful (9/10)\n(no concrete issues)"})
+        if action.name == "edit_file":
+            state["ugly"] = False
+            return {"ok": True, "content": action.args.get("replace", "x")}
+        return {"ok": True, "detail": "ok"}
+
+    replies = [
+        '<omnia:action name="write_file">{"path":"src/app/page.tsx","content":"v1"}</omnia:action>',
+        '<omnia:action name="build"></omnia:action>',
+        '<omnia:action name="see">{"path":"/"}</omnia:action>',
+        '<omnia:action name="edit_file">{"path":"src/app/page.tsx","search":"v1","replace":"v2"}</omnia:action>',
+        '<omnia:action name="see">{"path":"/"}</omnia:action>',
+        '<omnia:action name="done">{"summary":"made it pretty"}</omnia:action>',
+    ]
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_exec, complete=_scripted(replies), max_steps=20,
+    ))
+    assert res.done is True and res.stop_reason == "done"
+    assert sum(1 for n, _ in record if n == "see") == 2  # ran twice, no false abort
+
+
 if __name__ == "__main__":
     # Allow `python tests/test_agent_builder.py` without pytest.
     import sys

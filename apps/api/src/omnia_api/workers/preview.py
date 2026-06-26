@@ -222,6 +222,53 @@ async def capture(
 _resolve_live_url = dev_container.resolve_live_url
 
 
+async def capture_live_url(
+    url: str,
+    widths: Sequence[int] = (1440, 360),
+    *,
+    height: int = 900,
+    settle_container: bool = True,
+    full_page: bool = False,
+) -> dict[int, bytes]:
+    """Screenshot a LIVE running URL (the dev container's preview) at each width.
+
+    The agent's `see` tool uses this to LOOK at the page it just built; the
+    bytes pipe straight into ``vision_audit.audit_screenshots``. Mirrors the
+    live-container branch of ``_render_async`` (await client-side data + paint
+    before the shot) but returns raw PNG bytes per width like ``capture()``.
+
+    Fail-soft per viewport: a width that times out / crashes is skipped (not
+    raised), so one flaky viewport can't blind the whole audit. Returns an empty
+    dict if every width failed — the caller treats that as "couldn't see".
+    """
+    out: dict[int, bytes] = {}
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            for w in widths:
+                page = await browser.new_page(
+                    viewport={"width": int(w), "height": height},
+                    reduced_motion="reduce",
+                )
+                try:
+                    await page.goto(
+                        url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS
+                    )
+                    if settle_container:
+                        await _await_container_ready(page)
+                    await _await_paint(page)
+                    out[int(w)] = await page.screenshot(full_page=full_page)
+                except Exception:
+                    # One bad viewport must never blind the whole audit (or raise
+                    # into the agent loop). Skip it; other widths still land.
+                    pass
+                finally:
+                    await page.close()
+        finally:
+            await browser.close()
+    return out
+
+
 async def _render_async(snapshot_id: str) -> None:
     settings = get_settings()
     sid = UUID(snapshot_id)

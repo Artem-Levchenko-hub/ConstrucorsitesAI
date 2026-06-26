@@ -34,11 +34,14 @@ Actions (file tools + real build/runtime observations):
     bash         {"cmd": "pnpm test"}    # arbitrary shell in the container
     read_logs    {}                      # live dev-server stdout/stderr (runtime errors)
     runtime_check{"path": "/"}           # hit a route, get the REAL HTTP status / crash file
+    see          {"path": "/"}           # screenshot the live page → vision-model design critique
     done         {"summary": "what I built"}
 
-`read_logs` + `runtime_check` give the loop EYES on the running app: `build`
-proves it typechecks, these prove it actually renders — closing the gap between
-"compiles" and "works" (the prototype-vs-real-app line).
+`read_logs` + `runtime_check` + `see` give the loop EYES on the running app:
+`build` proves it typechecks, `runtime_check`/`read_logs` prove it actually
+renders, and `see` shows what it LOOKS like (vision judge → concrete design
+fixes) — closing the gap between "compiles", "works" and "good-looking" (the
+prototype-vs-real-product line).
 """
 
 from __future__ import annotations
@@ -64,7 +67,7 @@ _ACTION_RE = re.compile(
 
 _KNOWN_ACTIONS = frozenset(
     {"list_dir", "read_file", "grep", "write_file", "edit_file", "build", "bash",
-     "read_logs", "runtime_check", "done"}
+     "read_logs", "runtime_check", "see", "done"}
 )
 
 # Idempotent "observe the world after acting" actions. Re-running them across a
@@ -74,7 +77,7 @@ _KNOWN_ACTIONS = frozenset(
 # exploration spinning). The consecutive-repeat guard (back-to-back spamming)
 # and the no-write streak still bound them, so a model that does nothing but
 # `build`/`runtime_check` in a row is still stopped.
-_VERIFY_ACTIONS = frozenset({"build", "read_logs", "runtime_check"})
+_VERIFY_ACTIONS = frozenset({"build", "read_logs", "runtime_check", "see"})
 
 # Caps so one fat observation can't blow the context window.
 _MAX_OBS_CHARS = 6_000
@@ -508,7 +511,8 @@ ACTIONS:
 - bash       {"cmd": "npm run lint"}           — run a shell command in the container (lint/test/install)
 - read_logs  {}                                — live dev-server stdout/stderr (find RUNTIME crashes build can't see)
 - runtime_check {"path": "/dashboard"}         — open a real route, get the REAL HTTP status + crash file
-- done       {"summary": "what you built"}     — ONLY after a clean build AND the main route renders
+- see        {"path": "/dashboard"}            — LOOK at the rendered page (screenshot → design critique); fix the issues it returns
+- done       {"summary": "what you built"}     — ONLY after a clean build, the main route renders, AND `see` is happy
 
 THIS TEMPLATE (nextjs-entities) — already built for you, DO NOT rebuild or read its internals:
 - A fixed ENTITY ENGINE turns JSON schemas into full CRUD+REST+auth+RBAC. You do NOT write \
@@ -554,8 +558,10 @@ import path; or an entity field type the engine rejects). NEVER re-issue write_f
 the SAME content — an identical re-write fixes NOTHING; read the error and change exactly \
 what it points at. Repeat build→fix until clean. THEN verify it actually RUNS: \
 `runtime_check {"path":"/dashboard"}` — a typecheck-clean app can still 5xx on render. If it \
-fails, `read_logs` to see the real runtime error, fix the named file, re-check. Call `done` \
-ONLY after the build is clean AND the main route renders.
+fails, `read_logs` to see the real runtime error, fix the named file, re-check. THEN `see` the \
+main route: the vision judge returns CONCRETE design fixes (hero too small, 3 identical cards, \
+weak contrast) — apply them so the page is not just working but genuinely good-looking. Call \
+`done` ONLY after the build is clean, the route renders, AND `see` has no blocking issues.
 - Never repeat an identical read OR an identical write. Never ask the user questions — \
 decide and act. One action per reply."""
 
@@ -578,7 +584,8 @@ ACTIONS:
 - bash       {"cmd": "..."}                         — run a shell command if needed
 - read_logs  {}                                     — live dev-server logs (runtime errors)
 - runtime_check {"path": "/"}                        — open the changed route, confirm it still renders
-- done       {"summary": "what changed"}            — after a clean build (runtime_check the touched route first)
+- see        {"path": "/"}                           — LOOK at the changed page; fix any visual regression it reports
+- done       {"summary": "what changed"}            — after a clean build (runtime_check + see the touched route first)
 
 RULES:
 - This is a SURGICAL EDIT. Change the minimum. Do NOT regenerate entities/pages \
@@ -619,13 +626,15 @@ ACTIONS:
 - bash       {"cmd": "pnpm test"}              — run a shell command (lint / test / install)
 - read_logs  {}                                — live dev-server stdout/stderr (RUNTIME errors build can't see)
 - runtime_check {"path": "/"}                  — open a real route, get the REAL HTTP status + crash file
-- done       {"summary": "what you built"}     — ONLY after a clean build AND the app renders
+- see        {"path": "/"}                     — LOOK at the rendered page (screenshot → design critique); fix what it reports
+- done       {"summary": "what you built"}     — ONLY after a clean build, the app renders, AND `see` is happy
 
 WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
 read or write, never ask the user questions — decide and act. When you author tests, \
 run them with bash. After the build is clean, `runtime_check` the main route(s) — a \
 typecheck-clean app can still crash on render; if it 5xx, `read_logs`, fix, re-check. \
-One action per reply."""
+Then `see` the main route — the vision judge returns concrete design fixes; apply them \
+so the result is good-looking, not just working. One action per reply."""
 
 
 def build_system_prompt(stack_guide: str) -> str:
@@ -770,6 +779,15 @@ def make_container_executor(
                         + (f" — in {where}" if where else "")
                     )
                 return {"ok": ok, "detail": detail}
+
+            if action.name == "see":
+                # Real EYES: screenshot the live page → vision judge → concrete
+                # fix-deltas. Lazily imported so the pure engine + its tests carry
+                # no Playwright/vision dependency. Fail-soft inside see_page.
+                from omnia_api.services import agent_vision
+
+                return await agent_vision.see_page(
+                    project_id, path=action.path or "/")
 
             return {"ok": False, "error": f"unknown action {action.name}"}
         except Exception as exc:  # never let an executor crash kill the loop
