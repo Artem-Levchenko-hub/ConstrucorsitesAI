@@ -16,9 +16,32 @@
  * cannot orphan open SSE connections by constructing a second empty hub.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { RealtimeEvent, PresenceState } from "./types";
+
+/**
+ * Per-PROJECT Redis channel so one generated app's cross-replica fan-out can
+ * NEVER reach another app's replicas — the Redis bus is shared infrastructure in
+ * prod. Without this, every project published to one global `omnia:realtime`
+ * channel: events for fixed-name channels (`public:lobby`, `presence:*`) were
+ * re-injected into every other project's hub and delivered to its legitimate
+ * same-named subscribers — a cross-tenant leak the per-subscribe ACL can't catch
+ * (the event arrives already "inside" the other project). The namespace is a
+ * one-way hash (never the raw secret in a channel name) of a per-project,
+ * replica-IDENTICAL seed; it falls back to a literal for the single-container
+ * dev preview, where there is no cross-project bus anyway.
+ */
+function realtimeChannel(): string {
+  const seed =
+    process.env.OMNIA_PROJECT_NS ||
+    process.env.AUTH_SECRET ||
+    process.env.AUTH_URL ||
+    process.env.DATABASE_URL ||
+    "local";
+  const ns = createHash("sha256").update(seed).digest("hex").slice(0, 16);
+  return `omnia:realtime:${ns}`;
+}
 
 type Subscriber = (event: RealtimeEvent) => void;
 
@@ -178,7 +201,7 @@ export async function ensureRedis(): Promise<void> {
   if (!url) return;
   try {
     const { default: Redis } = await import("ioredis");
-    const CHANNEL = "omnia:realtime";
+    const CHANNEL = realtimeChannel();
     const pub = new Redis(url);
     const sub = new Redis(url);
     await sub.subscribe(CHANNEL);
