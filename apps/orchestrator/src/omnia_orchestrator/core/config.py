@@ -30,6 +30,29 @@ class Settings(BaseSettings):
     # Docker daemon socket. On prod Linux: unix:///var/run/docker.sock.
     docker_host: str = Field(default="unix:///var/run/docker.sock")
 
+    # ── Sandbox hardening (Phase 1, security) ───────────────────────────────
+    # The agent (USE_AGENTIC_BUILDER) runs ARBITRARY code + bash inside dev
+    # containers, so a dev container is an UNTRUSTED boundary, not a convenience.
+    # These knobs tighten that boundary WITHOUT a code deploy. Every default
+    # preserves today's behaviour byte-for-byte, so the feature ships dark
+    # (R-10 instant rollback); flip per-env once the host is prepared.
+    #
+    # `container_runtime` — passed to `docker run --runtime`. Set to "runsc"
+    # (gVisor) to run user containers under a userspace kernel that intercepts
+    # syscalls, so a container escape never reaches the host kernel. The daemon
+    # must have the runtime registered (/etc/docker/daemon.json) FIRST; until
+    # then leave empty = the daemon default (runc, current behaviour).
+    container_runtime: str = Field(default="")
+    # `container_harden` — host-free, in-container hardening safe for our
+    # non-root Node/Python images: `no-new-privileges` (a setuid binary cannot
+    # re-grant the caps we dropped) + a PID ceiling (fork-bomb guard). Off by
+    # default so prod is unchanged until validated on a live container.
+    container_harden: bool = Field(default=False)
+    # PID ceiling applied only when `container_harden` is on. 512 is generous
+    # for a Next.js/Turbopack dev server plus the agent's occasional pnpm/bash,
+    # while still stopping a runaway fork bomb from exhausting host PIDs.
+    container_pids_limit: int = Field(default=512)
+
     # Filesystem layout on the VPS — see docs/08-vps-setup.md.
     projects_root: str = Field(default="/opt/omnia-runtime/projects")
     nginx_sites_dir: str = Field(default="/opt/omnia-runtime/nginx/sites-enabled")

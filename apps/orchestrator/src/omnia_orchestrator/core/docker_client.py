@@ -50,6 +50,10 @@ class ContainerSpec:
     restart_policy_name: str = "no"  # "unless-stopped" for deployed prod
     tier: str = "free"  # `omnia.tier` label — drives hibernate pause/stop policy
     container_port: int = 3000  # internal port the app listens on (StackSpec-driven)
+    # ── Sandbox hardening (Phase 1) — all default to current behaviour ───────
+    runtime: str = ""        # docker --runtime, e.g. "runsc" (gVisor); "" = daemon default (runc)
+    harden: bool = False     # add no-new-privileges + a PID ceiling (safe for non-root images)
+    pids_limit: int = 0      # PID ceiling applied only when `harden` is on (0 = unset)
 
 
 _client: docker.DockerClient | None = None
@@ -119,6 +123,19 @@ async def start_container(spec: ContainerSpec) -> str:
                     existing.start()
                 return str(existing.id)
 
+        # Sandbox hardening (Phase 1) — every entry is OFF by default, so when
+        # the spec carries no overrides the run kwargs are byte-identical to
+        # before. `runtime` selects gVisor (runsc) when registered on the
+        # daemon; `harden` adds no-new-privileges + a PID ceiling. Building a
+        # dict and splatting it keeps the default call path untouched (R-10).
+        security_kwargs: dict[str, object] = {}
+        if spec.runtime:
+            security_kwargs["runtime"] = spec.runtime
+        if spec.harden:
+            security_kwargs["security_opt"] = ["no-new-privileges:true"]
+            if spec.pids_limit and spec.pids_limit > 0:
+                security_kwargs["pids_limit"] = spec.pids_limit
+
         try:
             container = client.containers.run(
                 image=spec.image,
@@ -148,6 +165,7 @@ async def start_container(spec: ContainerSpec) -> str:
                     "omnia.kind": spec.kind,
                     "omnia.tier": spec.tier,
                 },
+                **security_kwargs,
             )
         except docker.errors.ImageNotFound as exc:
             raise OrchestratorError(

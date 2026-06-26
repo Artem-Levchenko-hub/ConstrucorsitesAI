@@ -224,6 +224,12 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
         restart_policy_name="unless-stopped",
         tier=req.tier,
         container_port=stack.container_port,
+        # Sandbox hardening (Phase 1) — the agent runs arbitrary bash in this
+        # dev container, so it is the untrusted boundary. All knobs default to
+        # OFF (current behaviour); enable per-env once the host is prepared.
+        runtime=settings.container_runtime,
+        harden=settings.container_harden,
+        pids_limit=settings.container_pids_limit,
     )
 
     container_id = await start_container(spec)

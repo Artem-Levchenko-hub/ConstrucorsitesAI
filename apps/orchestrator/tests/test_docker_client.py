@@ -105,15 +105,17 @@ class _FakeContainers:
         self._existing = existing
         self.run_image: str | None = None
         self.run_called = False
+        self.run_kwargs: dict[str, Any] = {}
 
     def get(self, name: str) -> _FakeContainer:
         if self._existing is None:
             raise docker.errors.NotFound(name)
         return self._existing
 
-    def run(self, *, image: str, **_: Any) -> _FakeContainer:
+    def run(self, *, image: str, **kwargs: Any) -> _FakeContainer:
         self.run_called = True
         self.run_image = image
+        self.run_kwargs = kwargs
         return _FakeContainer("new-container-id", image)
 
 
@@ -185,3 +187,74 @@ def test_module_exposes_expected_public_api() -> None:
     }
     for name in expected:
         assert hasattr(docker_client, name), f"missing public symbol: {name}"
+
+
+# ── Sandbox hardening (Phase 1) ─────────────────────────────────────────────
+
+
+def test_container_spec_hardening_defaults_off() -> None:
+    """Hardening knobs default to OFF so a bare spec produces today's exact
+    run kwargs — the feature ships dark (R-10). A change here means prod
+    container behaviour changed and must be intentional."""
+    spec = ContainerSpec(name="x", image="y", port=1, project_id="p", env={})
+    assert spec.runtime == ""
+    assert spec.harden is False
+    assert spec.pids_limit == 0
+
+
+async def test_start_container_default_adds_no_security_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With default spec, start_container passes NO runtime/security_opt/
+    pids_limit — byte-identical to pre-Phase-1 so OFF is a true no-op."""
+    client = _FakeClient(None)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    await docker_client.start_container(_spec("omnia-template-x:dev"))
+
+    assert client.containers.run_called is True
+    assert "runtime" not in client.containers.run_kwargs
+    assert "security_opt" not in client.containers.run_kwargs
+    assert "pids_limit" not in client.containers.run_kwargs
+
+
+async def test_start_container_applies_hardening_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the spec carries gVisor runtime + harden, those land on the
+    docker run kwargs: runtime=runsc, no-new-privileges, PID ceiling."""
+    client = _FakeClient(None)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    spec = ContainerSpec(
+        name="omnia-dev-x", image="omnia-template-x:dev", port=3200,
+        project_id="00000000-0000-0000-0000-000000000001", env={},
+        runtime="runsc", harden=True, pids_limit=512,
+    )
+    await docker_client.start_container(spec)
+
+    kw = client.containers.run_kwargs
+    assert kw.get("runtime") == "runsc"
+    assert kw.get("security_opt") == ["no-new-privileges:true"]
+    assert kw.get("pids_limit") == 512
+
+
+async def test_start_container_harden_without_pids_limit_omits_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """harden on but pids_limit=0 → no-new-privileges applies, pids_limit is
+    omitted (0 must not become a real, accidental ceiling)."""
+    client = _FakeClient(None)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    spec = ContainerSpec(
+        name="omnia-dev-x", image="omnia-template-x:dev", port=3200,
+        project_id="00000000-0000-0000-0000-000000000001", env={},
+        harden=True, pids_limit=0,
+    )
+    await docker_client.start_container(spec)
+
+    kw = client.containers.run_kwargs
+    assert kw.get("security_opt") == ["no-new-privileges:true"]
+    assert "pids_limit" not in kw
+    assert "runtime" not in kw  # runtime empty → omitted
