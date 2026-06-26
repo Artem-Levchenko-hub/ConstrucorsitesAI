@@ -24,16 +24,21 @@ Design rules that keep it safe to ship:
   * Gated by ``Settings.use_agentic_builder`` (default False) at the call site —
     when off, this module is never entered and current generation is untouched.
 
-Actions in Phase 0 (file tools + a real build observation):
-    list_dir   {"path": "src/app"}
-    read_file  {"path": "src/app/page.tsx"}
-    grep       {"pattern": "useState", "path": "src"}
-    write_file {"path": "...", "content": "...full file..."}
-    edit_file  {"path": "...", "search": "...", "replace": "..."}
-    build      {}                      # real typecheck/compile observation
-    done       {"summary": "what I built"}
+Actions (file tools + real build/runtime observations):
+    list_dir     {"path": "src/app"}
+    read_file    {"path": "src/app/page.tsx"}
+    grep         {"pattern": "useState", "path": "src"}
+    write_file   {"path": "...", "content": "...full file..."}
+    edit_file    {"path": "...", "search": "...", "replace": "..."}
+    build        {}                      # real typecheck/compile observation
+    bash         {"cmd": "pnpm test"}    # arbitrary shell in the container
+    read_logs    {}                      # live dev-server stdout/stderr (runtime errors)
+    runtime_check{"path": "/"}           # hit a route, get the REAL HTTP status / crash file
+    done         {"summary": "what I built"}
 
-Phase 1 adds {"name": "bash"} on the same loop; Phase 3 adds {"name": "test"}.
+`read_logs` + `runtime_check` give the loop EYES on the running app: `build`
+proves it typechecks, these prove it actually renders — closing the gap between
+"compiles" and "works" (the prototype-vs-real-app line).
 """
 
 from __future__ import annotations
@@ -58,8 +63,18 @@ _ACTION_RE = re.compile(
 )
 
 _KNOWN_ACTIONS = frozenset(
-    {"list_dir", "read_file", "grep", "write_file", "edit_file", "build", "bash", "done"}
+    {"list_dir", "read_file", "grep", "write_file", "edit_file", "build", "bash",
+     "read_logs", "runtime_check", "done"}
 )
+
+# Idempotent "observe the world after acting" actions. Re-running them across a
+# build→fix loop is legitimate progress, NOT a cycle: a clean way to verify the
+# last edit. They are therefore EXEMPT from the global non-consecutive repeat
+# guard (which exists to catch repeated identical WRITES or read/grep/list
+# exploration spinning). The consecutive-repeat guard (back-to-back spamming)
+# and the no-write streak still bound them, so a model that does nothing but
+# `build`/`runtime_check` in a row is still stopped.
+_VERIFY_ACTIONS = frozenset({"build", "read_logs", "runtime_check"})
 
 # Caps so one fat observation can't blow the context window.
 _MAX_OBS_CHARS = 6_000
@@ -337,7 +352,10 @@ async def run_agent_build(
         # Only NON-consecutive occurrences count here — back-to-back repeats are the
         # job of the `repeat_count` check below; this guard is for a multi-step CYCLE
         # that returns to the same action (a,b,c,a,b,c… / re-writing the same file).
-        if sig != last_sig:
+        # Idempotent verify actions (build / read_logs / runtime_check) are exempt:
+        # re-observing the app after a fix is progress, not a cycle — caging them
+        # here is what falsely aborted long build→fix→build loops as "looping".
+        if sig != last_sig and action.name not in _VERIFY_ACTIONS:
             sig_seen[sig] = sig_seen.get(sig, 0) + 1
             if sig_seen[sig] >= _REPEAT_ABORT_AT:
                 return AgentResult(
@@ -488,7 +506,9 @@ ACTIONS:
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
 - build      {}                                — real typecheck; returns the actual errors
 - bash       {"cmd": "npm run lint"}           — run a shell command in the container (lint/test/install)
-- done       {"summary": "what you built"}     — ONLY after a clean build
+- read_logs  {}                                — live dev-server stdout/stderr (find RUNTIME crashes build can't see)
+- runtime_check {"path": "/dashboard"}         — open a real route, get the REAL HTTP status + crash file
+- done       {"summary": "what you built"}     — ONLY after a clean build AND the main route renders
 
 THIS TEMPLATE (nextjs-entities) — already built for you, DO NOT rebuild or read its internals:
 - A fixed ENTITY ENGINE turns JSON schemas into full CRUD+REST+auth+RBAC. You do NOT write \
@@ -532,7 +552,10 @@ the EXACT file + error — make a TARGETED fix to THAT file/line (common causes:
 column/prop passed to <CrudResource> — pass ONLY `entity` + optional title; a wrong \
 import path; or an entity field type the engine rejects). NEVER re-issue write_file with \
 the SAME content — an identical re-write fixes NOTHING; read the error and change exactly \
-what it points at. Repeat build→fix until clean, then `done`.
+what it points at. Repeat build→fix until clean. THEN verify it actually RUNS: \
+`runtime_check {"path":"/dashboard"}` — a typecheck-clean app can still 5xx on render. If it \
+fails, `read_logs` to see the real runtime error, fix the named file, re-check. Call `done` \
+ONLY after the build is clean AND the main route renders.
 - Never repeat an identical read OR an identical write. Never ask the user questions — \
 decide and act. One action per reply."""
 
@@ -553,7 +576,9 @@ ACTIONS:
 - list_dir   {"path": "..."}
 - build      {}                                     — typecheck; fix real errors
 - bash       {"cmd": "..."}                         — run a shell command if needed
-- done       {"summary": "what changed"}            — after a clean build
+- read_logs  {}                                     — live dev-server logs (runtime errors)
+- runtime_check {"path": "/"}                        — open the changed route, confirm it still renders
+- done       {"summary": "what changed"}            — after a clean build (runtime_check the touched route first)
 
 RULES:
 - This is a SURGICAL EDIT. Change the minimum. Do NOT regenerate entities/pages \
@@ -592,11 +617,15 @@ ACTIONS:
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
 - build      {}                                — real typecheck; returns the actual errors
 - bash       {"cmd": "pnpm test"}              — run a shell command (lint / test / install)
-- done       {"summary": "what you built"}     — ONLY after a clean build
+- read_logs  {}                                — live dev-server stdout/stderr (RUNTIME errors build can't see)
+- runtime_check {"path": "/"}                  — open a real route, get the REAL HTTP status + crash file
+- done       {"summary": "what you built"}     — ONLY after a clean build AND the app renders
 
 WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
 read or write, never ask the user questions — decide and act. When you author tests, \
-run them with bash. One action per reply."""
+run them with bash. After the build is clean, `runtime_check` the main route(s) — a \
+typecheck-clean app can still crash on render; if it 5xx, `read_logs`, fix, re-check. \
+One action per reply."""
 
 
 def build_system_prompt(stack_guide: str) -> str:
@@ -706,6 +735,41 @@ def make_container_executor(
                 res = await orchestrator_client.agent_exec(project_id, slug, cmd)
                 return {"ok": bool(res.get("ok")),
                         "detail": res.get("detail") or "(no output)"}
+
+            if action.name == "read_logs":
+                # Live dev-server stdout/stderr — the RUNTIME errors `build`
+                # (typecheck) can't see (an unhandled exception, a failed import
+                # at request time, a crashed route). Tail is bounded; the loop
+                # truncates the observation to _MAX_OBS_CHARS on top.
+                try:
+                    _tail = int(action.args.get("tail", 120))
+                except (TypeError, ValueError):
+                    _tail = 120
+                res = await orchestrator_client.get_logs(
+                    project_id, tail=max(20, min(_tail, 400)))
+                logs = res.get("logs") if isinstance(res, dict) else ""
+                return {"ok": True, "detail": (logs or "").strip() or "(no logs yet)"}
+
+            if action.name == "runtime_check":
+                # Actually HIT a route in the running app and report the REAL HTTP
+                # status. ok=False ONLY on a 5xx (a compile-clean app that still
+                # crashes on render) — that's a real failure observation, not an
+                # executor error, so the loop reads it and fixes the named file.
+                path = action.args.get("path") or "/"
+                res = await orchestrator_client.runtime_status(
+                    project_id, slug=slug, path=str(path))
+                ok = bool(res.get("ok", True))
+                code = res.get("status_code")
+                if ok:
+                    detail = f"route {path} renders OK (HTTP {code or 200})"
+                else:
+                    err = res.get("error") or "5xx"
+                    where = res.get("file")
+                    detail = (
+                        f"route {path} FAILED (HTTP {code or 500}): {err}"
+                        + (f" — in {where}" if where else "")
+                    )
+                return {"ok": ok, "detail": detail}
 
             return {"ok": False, "error": f"unknown action {action.name}"}
         except Exception as exc:  # never let an executor crash kill the loop

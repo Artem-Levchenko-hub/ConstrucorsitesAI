@@ -176,6 +176,92 @@ def test_failed_write_not_tracked():
     assert res.done is True
 
 
+# ── runtime-sight tools: read_logs + runtime_check ──────────────────────────
+
+def test_parse_new_observe_actions():
+    a = ab.parse_action('check it\n<omnia:action name="runtime_check">{"path":"/dashboard"}</omnia:action>')
+    assert a is not None and a.name == "runtime_check" and a.path == "/dashboard"
+    b = ab.parse_action('<omnia:action name="read_logs">{}</omnia:action>')
+    assert b is not None and b.name == "read_logs"
+
+
+def test_runtime_debug_loop_recovers_then_done():
+    """build clean → runtime_check 5xx → read_logs → fix → re-check ok → done.
+
+    Proves the new tools close the compiles-vs-renders gap: the agent SEES the
+    runtime failure, fixes it, re-verifies, and only then finishes.
+    """
+    record: list = []
+    state = {"crashed": True}  # the app 5xx until the edit "fixes" it
+
+    async def _exec(action: ab.Action):
+        record.append((action.name, action.path))
+        if action.name == "build":
+            return {"ok": True, "detail": "typecheck clean"}
+        if action.name == "read_logs":
+            return {"ok": True, "detail": "TypeError: x is not a function at page.tsx:12"}
+        if action.name == "runtime_check":
+            return ({"ok": False, "detail": "route / FAILED (HTTP 500)"}
+                    if state["crashed"] else {"ok": True, "detail": "route / renders OK"})
+        if action.name == "edit_file":
+            state["crashed"] = False  # only the FIX (the edit) clears the crash
+            return {"ok": True, "content": action.args.get("replace", "patched")}
+        if action.name == "write_file":
+            return {"ok": True, "content": action.args.get("content", "v1")}
+        return {"ok": True, "detail": "ok"}
+
+    replies = [
+        '<omnia:action name="write_file">{"path":"src/app/page.tsx","content":"v1"}</omnia:action>',
+        '<omnia:action name="build"></omnia:action>',
+        '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
+        '<omnia:action name="read_logs">{}</omnia:action>',
+        '<omnia:action name="edit_file">{"path":"src/app/page.tsx","search":"v1","replace":"v2"}</omnia:action>',
+        '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
+        '<omnia:action name="done">{"summary":"fixed runtime crash"}</omnia:action>',
+    ]
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_exec, complete=_scripted(replies), max_steps=20,
+    ))
+    assert res.done is True and res.stop_reason == "done"
+    # The SAME runtime_check ran twice (non-consecutive) WITHOUT a false looping abort.
+    assert sum(1 for n, _ in record if n == "runtime_check") == 2
+    assert ("read_logs", "") in record
+
+
+def test_verify_actions_exempt_from_global_repeat_guard():
+    """A real build→fix loop runs `build` many non-consecutive times. Before the
+    exemption that tripped the global repeat guard (_REPEAT_ABORT_AT=4) and
+    aborted as "looping". Now it must run to done."""
+    record: list = []
+    # 5 edit→build cycles (5 identical `build`s, edits differ) then done.
+    replies = []
+    for i in range(5):
+        replies.append(
+            f'<omnia:action name="edit_file">{{"path":"a.ts","search":"v{i}","replace":"v{i+1}"}}</omnia:action>'
+        )
+        replies.append('<omnia:action name="build"></omnia:action>')
+    replies.append('<omnia:action name="done">{"summary":"clean"}</omnia:action>')
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_ok_executor(record), complete=_scripted(replies), max_steps=30,
+    ))
+    assert res.stop_reason == "done"
+    assert record.count(("build", "")) == 5  # every build actually executed
+
+
+def test_consecutive_build_spam_still_caught():
+    """The exemption must NOT defang the consecutive-repeat guard: a model that
+    emits `build` back-to-back with nothing between is still stopped as looping."""
+    replies = ['<omnia:action name="build"></omnia:action>']
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_ok_executor([]), complete=_scripted(replies), max_steps=30,
+    ))
+    assert res.stop_reason == "looping"
+    assert res.steps < 30
+
+
 if __name__ == "__main__":
     # Allow `python tests/test_agent_builder.py` without pytest.
     import sys
