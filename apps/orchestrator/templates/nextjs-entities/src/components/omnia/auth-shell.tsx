@@ -81,12 +81,16 @@ function brandTokens(accent: string): React.CSSProperties {
 /** A deep, brand-tinted gradient for the showcase panel. `accent` is a hex from
  *  the project's share payload; we ride it from a light top to a near-black
  *  bottom so light/dark accents both stay legible under white text. */
-function panelGradient(accent: string): string {
+function panelGradient(_accent: string): string {
+  // Theme-driven: ride the app's live --primary so the auth screen matches the
+  // generated app's brand instead of a baked default accent (the indigo-slop
+  // mismatch). `_accent` kept for API compat; the gradient is theme-token based.
+  const c = "var(--primary)";
   return [
     "linear-gradient(155deg,",
-    `color-mix(in oklab, ${accent}, white 10%) 0%,`,
-    `${accent} 34%,`,
-    `color-mix(in oklab, ${accent}, #060810 86%) 100%)`,
+    `color-mix(in oklab, ${c}, white 10%) 0%,`,
+    `${c} 34%,`,
+    `color-mix(in oklab, ${c}, #060810 86%) 100%)`,
   ].join(" ");
 }
 
