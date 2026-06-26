@@ -296,6 +296,14 @@ class Settings(BaseSettings):
     use_sast_gate: bool = Field(default=False)
     sast_gate_blocking: bool = Field(default=False)
 
+    # Skill injection (K1, knowledge-layer plan §2) — when on, the agent's system
+    # prompt for a container build is composed with the stack's .omnia/skills
+    # (security/a11y/perf canons aligned with the gates), raising the first
+    # draft's floor. OFF by default → the agent prompt is unchanged. Env:
+    # USE_SKILL_INJECTION. (Effect is unproven on its own — validate via A/B vs
+    # the gates per the plan; the gates remain the guaranteed ceiling.)
+    use_skill_injection: bool = Field(default=False)
+
     # Clarify interview (2026-06-05) — on the FIRST message of a brand-new
     # project, ask the user 3–4 short business-specific questions BEFORE building
     # (precise brief → точечнее сайт). Their answers (next message) drive the

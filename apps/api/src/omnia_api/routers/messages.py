@@ -2337,8 +2337,15 @@ async def _process_prompt(
                 if _orch_name and _orch_name != "nextjs-entities"
                 else None
             )
+            # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
+            # perf canons aligned with the gates) when enabled. None → unchanged.
+            _skills = (
+                agent_builder.load_stack_skills(_orch_name)
+                if get_settings().use_skill_injection
+                else None
+            )
             _stack_system = (
-                agent_builder.build_system_prompt(_stack_guide)
+                agent_builder.build_system_prompt(_stack_guide, skills=_skills)
                 if _stack_guide
                 else agent_builder.SYSTEM_PROMPT
             )

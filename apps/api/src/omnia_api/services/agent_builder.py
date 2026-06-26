@@ -682,12 +682,20 @@ Then `see` the main route — the vision judge returns concrete design fixes; ap
 so the result is good-looking, not just working. One action per reply."""
 
 
-def build_system_prompt(stack_guide: str) -> str:
+def build_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     """Compose the agent system prompt for ANY stack: the shared loop protocol +
     the stack-specific guide (typically a template's SYSTEM_PROMPT.md). Same loop,
     right primitives — so the model can build a realtime app, a CRUD app or an API
-    with equal fluency instead of being boxed into one shape."""
-    return LOOP_PROTOCOL + "\n\n" + stack_guide.strip()
+    with equal fluency instead of being boxed into one shape.
+
+    Optional ``skills`` (a stack's ``.omnia/skills`` content) is appended so the
+    first draft already carries the security/a11y/perf canons the gates enforce —
+    knowledge ALIGNED with enforcement. None/empty → unchanged (current behaviour).
+    """
+    parts = [LOOP_PROTOCOL, stack_guide.strip()]
+    if skills and skills.strip():
+        parts.append(skills.strip())
+    return "\n\n".join(parts)
 
 
 def load_stack_system_prompt(orch_template: str | None) -> str | None:
@@ -699,6 +707,36 @@ def load_stack_system_prompt(orch_template: str | None) -> str | None:
     path = _TEMPLATES_DIR / orch_template / "SYSTEM_PROMPT.md"
     try:
         return path.read_text(encoding="utf-8") if path.is_file() else None
+    except Exception:
+        return None
+
+
+def load_stack_skills(orch_template: str | None) -> str | None:
+    """Read a stack's ``.omnia/skills`` (INDEX first, then each ``*.md``) into one
+    block, or None when absent. Mirrors :func:`load_stack_system_prompt`.
+
+    These are the security/a11y/perf canons the deterministic gates enforce —
+    injected so the FIRST draft already follows them. For these CRITICAL canons we
+    deliberately do NOT rely on the model probabilistically pulling a skill
+    (research caveat: auto-trigger is unreliable) — we inject them; selective
+    per-task disclosure is a later optimization once there are many domain skills.
+    Fail-soft."""
+    if not orch_template:
+        return None
+    skills_dir = _TEMPLATES_DIR / orch_template / ".omnia" / "skills"
+    if not skills_dir.is_dir():
+        return None
+    try:
+        bodies: list[str] = []
+        index = skills_dir / "INDEX.md"
+        if index.is_file():
+            bodies.append(index.read_text(encoding="utf-8"))
+        for p in sorted(skills_dir.glob("*.md")):
+            if p.name == "INDEX.md":
+                continue
+            bodies.append(p.read_text(encoding="utf-8"))
+        block = "\n\n".join(b.strip() for b in bodies if b.strip())
+        return block or None
     except Exception:
         return None
 

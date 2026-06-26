@@ -371,6 +371,35 @@ def test_green_gate_cap_prevents_hang():
     assert res.steps == ab._DONE_REJECT_CAP + 1  # rejected CAP times, then honoured
 
 
+# ── K1 knowledge layer: skills injection ─────────────────────────────────────
+
+def test_build_system_prompt_without_skills_is_unchanged():
+    p = ab.build_system_prompt("STACK GUIDE")
+    assert p == ab.LOOP_PROTOCOL + "\n\n" + "STACK GUIDE"
+    # None / empty skills must not alter the output
+    assert ab.build_system_prompt("STACK GUIDE", skills=None) == p
+    assert ab.build_system_prompt("STACK GUIDE", skills="   ") == p
+
+
+def test_build_system_prompt_appends_skills():
+    p = ab.build_system_prompt("GUIDE", skills="SKILL BODY")
+    assert p.endswith("SKILL BODY")
+    assert "GUIDE" in p and ab.LOOP_PROTOCOL in p
+
+
+def test_load_stack_skills_reads_real_drizzle_skills():
+    """The committed .omnia/skills for the default skeleton load + concatenate."""
+    block = ab.load_stack_skills("nextjs-postgres-drizzle")
+    assert block is not None
+    low = block.lower()
+    assert "security" in low and "a11y" in low and "perf" in low
+
+
+def test_load_stack_skills_absent_or_none_is_none():
+    assert ab.load_stack_skills(None) is None
+    assert ab.load_stack_skills("definitely-not-a-real-template-xyz") is None
+
+
 if __name__ == "__main__":
     # Allow `python tests/test_agent_builder.py` without pytest.
     import sys
