@@ -421,6 +421,30 @@ def test_agentic_off_by_default():
     assert ab.is_agentic_enabled(False, "u1", None) is False
 
 
+def test_green_explore_stall_nudges_done_not_write():
+    """After build+runtime are green, a no-write thrash (bash spiral) must nudge
+    the model to FINISH (done), not to write — fixes the observed see-driven
+    bash spiral that wasted ~10 steps post-success."""
+    record: list = []
+    replies = [
+        '<omnia:action name="write_file">{"path":"src/app/page.tsx","content":"v1"}</omnia:action>',
+        '<omnia:action name="build"></omnia:action>',
+        '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
+        '<omnia:action name="bash">{"cmd":"pnpm test"}</omnia:action>',
+        '<omnia:action name="bash">{"cmd":"pnpm lint"}</omnia:action>',
+        '<omnia:action name="bash">{"cmd":"echo hi"}</omnia:action>',
+        '<omnia:action name="done">{"summary":"crm built"}</omnia:action>',
+    ]
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_ok_executor(record), complete=_scripted(replies), max_steps=20,
+    ))
+    assert res.done is True and res.stop_reason == "done"
+    # the GREEN done-nudge was issued (not the write nudge)
+    user_msgs = [m["content"] for m in res.transcript if m["role"] == "user"]
+    assert any(m == ab._DONE_WHEN_GREEN_NUDGE for m in user_msgs)
+
+
 if __name__ == "__main__":
     # Allow `python tests/test_agent_builder.py` without pytest.
     import sys

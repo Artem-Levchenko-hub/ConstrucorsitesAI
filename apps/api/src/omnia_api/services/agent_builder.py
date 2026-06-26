@@ -455,16 +455,28 @@ async def run_agent_build(
                     stop_reason="exploring",
                 )
             if no_write_streak >= _NO_WRITE_NUDGE_AT:
+                # If the app is already GREEN (build clean + route verified + no
+                # unverified writes) there is nothing left to write — the model is
+                # thrashing on bash/see/build AFTER success (observed live: a
+                # failed `see` sent it into a bash spiral, ~10 wasted steps). Nudge
+                # it to FINISH (call done), not to write. Otherwise nudge to write.
+                _green = (
+                    last_build_ok is True
+                    and last_runtime_ok is True
+                    and not wrote_since_check
+                )
                 await _escalate(step, "explore")
                 print(
                     f"[AGENT] step={step} EXPLORE-STALL x{no_write_streak} "
-                    f"({action.name}) → nudge WRITE",
+                    f"({action.name}) → nudge {'DONE' if _green else 'WRITE'}",
                     flush=True,
                 )
                 if emit:
                     await emit("agent.stalled", {"step": step})
-                convo.append({"role": "user", "content": _EXPLORE_STALL_NUDGE})
-                continue  # don't execute another read — force a write next
+                convo.append({"role": "user", "content": (
+                    _DONE_WHEN_GREEN_NUDGE if _green else _EXPLORE_STALL_NUDGE
+                )})
+                continue  # don't execute another read — force write/done next
 
         obs = await execute(action)
         if action.name == "build":
@@ -509,6 +521,18 @@ _REPEAT_ABORT_AT = 4
 # runtime_check) before honouring it anyway. Bounded so an app with no checkable
 # route can still finish — the server-side acceptance gate is the hard backstop.
 _DONE_REJECT_CAP = 2
+
+# Issued when the loop stalls (no-write streak) but the app is already GREEN —
+# nothing left to build, the model is just thrashing after success. Push it to
+# finish rather than invent more work (kills the see-driven bash spiral).
+_DONE_WHEN_GREEN_NUDGE = (
+    "STOP — the build is CLEAN and the main route already renders (verified). The "
+    "app is DONE. Do NOT run more bash / see / build / reads. Call "
+    '<omnia:action name="done">{"summary": "what you built"}</omnia:action> NOW. '
+    "A cosmetic `see` nitpick is NOT a reason to keep working once it builds and "
+    "runs — ship it."
+)
+
 _REPEAT_CYCLE_NUDGE = (
     "STOP — you have ALREADY issued this EXACT action before (same file + same "
     "content, or the same command); repeating it changes NOTHING and the build is "
