@@ -578,6 +578,17 @@ async def download_project(
     # never clobber a launcher the project already ships. No-op for plain websites.
     for name, content in build_launchers(files).items():
         files.setdefault(name, content)
+    # Full runnable export (P5): for a CONTAINER stack the git snapshot is only the
+    # generated files — overlay the skeleton template UNDER them so the zip is a
+    # runnable repo (skeleton + your code + README), generated files winning. Gated
+    # + fail-soft (no skeleton on disk → unchanged snapshot-only zip).
+    if get_settings().use_full_container_export:
+        from omnia_api.schemas.project import orchestrator_template
+        from omnia_api.services import project_export
+
+        _orch = orchestrator_template(project.template)
+        if _orch:
+            files = project_export.build_runnable_export(_orch, files)
     # A .zip drops the Unix executable bit, so a double-clicked run.command/run.sh
     # would open in TextEdit on macOS instead of running. Stamp the exec bit on the
     # shell launchers via ZipInfo.external_attr (S_IFREG | mode) << 16.

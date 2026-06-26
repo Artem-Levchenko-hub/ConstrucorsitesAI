@@ -304,6 +304,14 @@ class Settings(BaseSettings):
     # the gates per the plan; the gates remain the guaranteed ceiling.)
     use_skill_injection: bool = Field(default=False)
 
+    # Full runnable export (P5, knowledge-layer/master plan) — when on, the
+    # project download for a CONTAINER stack overlays the skeleton template tree
+    # under the generated files so the zip is a RUNNABLE repo (skeleton + your
+    # code + README), not just the generated files. Fail-soft: if the template
+    # tree isn't available it falls back to today's snapshot-only zip, so it can
+    # never produce a worse download. OFF by default. Env: USE_FULL_CONTAINER_EXPORT.
+    use_full_container_export: bool = Field(default=False)
+
     # Clarify interview (2026-06-05) — on the FIRST message of a brand-new
     # project, ask the user 3–4 short business-specific questions BEFORE building
     # (precise brief → точечнее сайт). Their answers (next message) drive the
