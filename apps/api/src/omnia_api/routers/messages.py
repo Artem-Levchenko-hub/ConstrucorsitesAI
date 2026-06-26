@@ -2546,16 +2546,45 @@ async def _process_prompt(
             except Exception as _sm_exc:
                 print(f"[PP] agentic_smoke skipped: {_sm_exc!r}", flush=True)
 
+            # Honesty gate: a page that SERVES can still be typecheck-RED — a client
+            # TS error (e.g. TS2739 «missing columns, fields») is NOT a 5xx, so the
+            # smoke probe is green while the app is broken. The «looped-but-serves»
+            # override below must NOT report «Готово» on a red typecheck (the
+            # "делает вид что работает" lie). Run one real typecheck; on a DEFINITE
+            # red, surface the first error honestly + keep the fixable card. Fail-soft:
+            # an agent_build exception leaves _typecheck_ok=True (unknown ≠ broken).
+            _typecheck_ok = True
+            try:
+                _tc = await orchestrator_client.agent_build(project_id, project_slug)
+                _typecheck_ok = bool(_tc.get("ok", True))
+                if not _typecheck_ok:
+                    _tc_detail = str(_tc.get("detail") or "").strip()
+                    _tc_first = (
+                        _tc_detail.splitlines()[0][:240]
+                        if _tc_detail
+                        else "ошибка типизации"
+                    )
+                    accumulated += (
+                        f"\n\n⚠️ Почти готово, но осталась ошибка: {_tc_first}. "
+                        f"Нажми «Починить» — доведу до чистоты."
+                    )
+                    print(f"[PP] agentic_typecheck RED: {_tc_first}", flush=True)
+                else:
+                    print("[PP] agentic_typecheck clean", flush=True)
+            except Exception as _tc_exc:
+                print(f"[PP] agentic_typecheck skipped: {_tc_exc!r}", flush=True)
+
             # Honest result: a loop-guard abort (looping/exploring) that STILL
-            # wrote files AND whose app actually serves is NOT a failure — the
-            # work landed, the guard just tripped. Don't scare the user with
-            # «Сборка прервана» when the preview is live. (max_steps keeps its own
-            # «часть на месте» + «Продолжить» card, so it is excluded here.)
+            # wrote files, whose app SERVES, AND whose typecheck is CLEAN is not a
+            # failure — the work landed, the guard just tripped. Don't scare the
+            # user with «Сборка прервана» when the preview is live and clean. A red
+            # typecheck (above) excludes this path → no false «Готово».
             if (
                 not _agent_res.done
                 and _agent_res.stop_reason in ("looping", "exploring")
                 and files
                 and _runtime_ok
+                and _typecheck_ok
             ):
                 accumulated = (
                     "Готово — правка применена."
