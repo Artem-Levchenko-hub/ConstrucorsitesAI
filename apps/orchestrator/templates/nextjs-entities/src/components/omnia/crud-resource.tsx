@@ -20,6 +20,7 @@ import { DataTable, type Column, type FilterTab } from "./data-table";
 import { GalleryGrid, type GalleryItem, type MediaCardProps } from "./gallery-grid";
 import { BoardView, type BoardCard, type BoardColumn } from "./board-view";
 import { CalendarView, parseLocalDate, type CalendarEvent } from "./calendar-view";
+import { ChatView, CHAT_TEXT_KEYS } from "./chat-view";
 import { MasterDetailView, type SplitItem } from "./master-detail-view";
 import { RecordDetail } from "./record-detail";
 import { EntityForm, type FieldSpec } from "./entity-form";
@@ -99,7 +100,7 @@ export interface CrudResourceProps {
    *    selected record's full detail in a reading pane, for read-heavy "one rich
    *    record at a time" entities (досье, профили, дела, обращения, документы).
    */
-  view?: "table" | "gallery" | "board" | "calendar" | "split";
+  view?: "table" | "gallery" | "board" | "calendar" | "split" | "chat";
   /** Row→card mapping for `view="gallery"` / `view="board"` / `view="calendar"` / `view="split"`. Ignored in table view. */
   media?: MediaMap;
   /** The row field holding the date for `view="calendar"` (ISO string, epoch
@@ -334,6 +335,46 @@ export function CrudResource({
   // mapping for the rail and the same RecordDetail node for the reading pane.
   const useSplit = view === "split";
 
+  // Chat: render a messaging entity as a REAL conversation, not a table. Explicit
+  // view="chat", or AUTO-detected from the entity name + a message-text field — so
+  // existing "Message"/"Chat"/"мессенджер" apps become real chats with no help from
+  // the writer (the #1 "это просто таблица, а не чат" complaint).
+  const chatTextField = React.useMemo(() => {
+    const f = (fields ?? []).find((x) =>
+      CHAT_TEXT_KEYS.includes(x.name.toLowerCase()),
+    );
+    return f?.name ?? "body";
+  }, [fields]);
+  const useChat = React.useMemo(() => {
+    if (view === "chat") return true;
+    const n = (entity || "").toLowerCase();
+    const nameHit =
+      /(message|сообщен|chat|чат|messenger|мессендж|переписк|dialog|диалог)/.test(
+        n,
+      );
+    const fieldHit = (fields ?? []).some((x) =>
+      CHAT_TEXT_KEYS.includes(x.name.toLowerCase()),
+    );
+    return nameHit && (fieldHit || (fields ?? []).length === 0);
+  }, [view, entity, fields]);
+
+  // Near-real-time: poll while the chat is open (true SSE arrives with the
+  // realtime stack). One cheap GET; depends on the stable `reload` callback.
+  React.useEffect(() => {
+    if (!useChat) return;
+    const id = setInterval(() => {
+      void data.reload();
+    }, 3000);
+    return () => clearInterval(id);
+  }, [useChat, data.reload]);
+
+  const handleSendMessage = React.useCallback(
+    async (textValue: string) => {
+      await data.create({ [chatTextField]: textValue });
+    },
+    [data, chatTextField],
+  );
+
   // The reading-pane body for one record — the SAME rich <RecordDetail> the
   // row-detail dialog shows, so the split view and the modal stay in lockstep.
   const detailFor = React.useCallback(
@@ -510,7 +551,14 @@ export function CrudResource({
         <div className="mb-4 flex justify-end">{createButton}</div>
       ) : null}
 
-      {useSplit ? (
+      {useChat ? (
+        <ChatView
+          rows={data.rows}
+          onSend={handleSendMessage}
+          loading={data.loading}
+          emptyHint={`Напишите первое сообщение${title ? ` в «${title}»` : ""}.`}
+        />
+      ) : useSplit ? (
         <MasterDetailView
           items={splitItems}
           loading={data.loading}
