@@ -2496,6 +2496,17 @@ async def _process_prompt(
                             failures=[f"{v.path}: {v.rule}" for v in _gv.violations],
                         )
                     ]
+                    # SAST gate (K3a) — static injection/secret scan; blocking only
+                    # when sast_gate_blocking is on (else advisory-logged below).
+                    if get_settings().use_sast_gate:
+                        from omnia_api.services.sast_gate import check_sast as _check_sast
+                        _sv = _check_sast(files)
+                        _outcomes.append(_agf.GateOutcome(
+                            name="sast",
+                            passed=_sv.safe,
+                            failures=[f"{f.path}: {f.cwe} {f.rule}" for f in _sv.findings],
+                            blocking=get_settings().sast_gate_blocking,
+                        ))
                     _instr = _agf.build_fix_instruction(
                         _outcomes, _guard_attempt, _guard_max
                     )
@@ -2526,6 +2537,16 @@ async def _process_prompt(
                         f"[PP] backend_guardrail VIOLATIONS: {_final_guard.summary}",
                         flush=True,
                     )
+                # SAST advisory log — operators SEE injection/secret findings even
+                # when blocking/heal is off (runs regardless of the feedback loop).
+                if get_settings().use_sast_gate:
+                    from omnia_api.services.sast_gate import check_sast as _check_sast2
+                    _final_sast = _check_sast2(files)
+                    if not _final_sast.safe:
+                        print(
+                            f"[PP] sast_gate FINDINGS: {_final_sast.summary}",
+                            flush=True,
+                        )
             except Exception as _guard_exc:  # never let the guardrail break a build
                 print(f"[PP] agent_gate_feedback skipped: {_guard_exc!r}", flush=True)
 

@@ -286,6 +286,16 @@ class Settings(BaseSettings):
     # enforceable once wired into the ship boolean.
     use_security_gate: bool = Field(default=False)
 
+    # SAST gate (K3a, knowledge-layer plan §3.1) — deterministic STATIC source
+    # scan of writer files for the top AI-code CWEs (injection sinks + hard-coded
+    # secrets — CWE-89/78/94/798, the heaviest classes per arXiv 2510.26103).
+    # `use_sast_gate` runs it + advisory-logs findings (sibling to the runtime
+    # security_gate); `sast_gate_blocking` makes a finding a BLOCKING outcome that
+    # the agent_gate_feedback loop heals before ship. Both OFF by default →
+    # prod generation byte-unchanged. Env: USE_SAST_GATE / SAST_GATE_BLOCKING.
+    use_sast_gate: bool = Field(default=False)
+    sast_gate_blocking: bool = Field(default=False)
+
     # Clarify interview (2026-06-05) — on the FIRST message of a brand-new
     # project, ask the user 3–4 short business-specific questions BEFORE building
     # (precise brief → точечнее сайт). Their answers (next message) drive the
