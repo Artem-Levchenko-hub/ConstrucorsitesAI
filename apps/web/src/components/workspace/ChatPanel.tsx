@@ -161,6 +161,23 @@ export function ChatPanel({
     el.scrollTop = el.scrollHeight;
   }, [messages?.length, last?.content, chips]);
 
+  // `/deep-research` entry hands the user's task over via `?p=`: auto-fire it
+  // ONCE on a fresh (empty) project so they land mid-agent-run — the cloud
+  // Claude Code experience — instead of re-typing it. `skipClarify` sends it
+  // straight to the agent (no onboarding interview). Strip the param afterwards
+  // so a refresh never replays the prompt.
+  const autoFiredRef = useRef(false);
+  useEffect(() => {
+    if (autoFiredRef.current) return;
+    if (messages === undefined) return; // wait for the first load
+    const p = new URLSearchParams(window.location.search).get("p");
+    if (p && p.trim() && messages.length === 0) {
+      autoFiredRef.current = true;
+      submit(p.trim(), modelId, [], { skipClarify: true });
+      window.history.replaceState(null, "", `/projects/${projectId}`);
+    }
+  }, [messages, submit, projectId]);
+
   return (
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
