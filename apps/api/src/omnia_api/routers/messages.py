@@ -1112,9 +1112,38 @@ async def post_prompt(
             # of a flat page. Fail-soft (R-10) — a hiccup falls back to a static
             # build rather than dead-ending onboarding.
             if settings.use_auto_stack_routing:
+                _build_stack = discovery_result.stack
+                # Real-time net on the FULL conversation intent, not just this turn's
+                # trigger. A skip-survey / "Постройте сейчас" build sends a trigger
+                # phrase with NO "мессенджер"/"чат" word, so discovery's stack pick
+                # (which weighs the current turn) loses the original intent and ships
+                # an spa/entities dashboard — the owner's "создай мессенджер → не чат"
+                # failure (live: prompt «создай мессенджер», trigger «Постройте
+                # сейчас» → spa dashboard). Re-check across EVERY user message so the
+                # original messenger intent still forces the realtime chat stack.
+                try:
+                    _full_intent = " ".join(
+                        m["content"] for m in _history if m.get("role") == "user"
+                    ) + " " + payload.prompt
+                    if (
+                        _build_stack not in ("realtime", "code")
+                        and _infer_realtime_from_text(_full_intent)
+                        and not _explicit_static(_full_intent)
+                        and not _infer_code_from_text(_full_intent)
+                    ):
+                        logging.getLogger(__name__).info(
+                            "discovery-build realtime override (full intent): "
+                            "'%s'→'realtime' (messenger/chat)",
+                            _build_stack,
+                        )
+                        _build_stack = "realtime"
+                except Exception as _rt_exc:
+                    logging.getLogger(__name__).warning(
+                        "realtime full-intent inference failed: %r", _rt_exc
+                    )
                 try:
                     await stack_routing.switch_to_stack(
-                        session, project, discovery_result.stack
+                        session, project, _build_stack
                     )
                 except Exception as _sr_exc:
                     await session.rollback()
