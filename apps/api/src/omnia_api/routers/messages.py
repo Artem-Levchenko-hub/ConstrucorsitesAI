@@ -2448,6 +2448,28 @@ async def _process_prompt(
                 if _stack_guide
                 else agent_builder.SYSTEM_PROMPT
             )
+            # Thin-base step 1 (owner «шаблоны накрывают дизайн»): on realtime the
+            # agent kept the baked dark globals.css + layout → every chat looked
+            # identical. Make it OWN the visual shell — rewrite its own globals.css
+            # + layout in the design mood — while the realtime/auth/db primitives
+            # stay LOCKED (import, never rewrite). Full realtime build only; the
+            # extra files lean harder on the model (accepted — loop is hardened).
+            if (
+                orchestrate
+                and _orch_name == "nextjs-realtime"
+                and get_settings().use_design_mood
+            ):
+                _seed_block = _seed_block + (
+                    "\n\nТЫ ВЛАДЕЕШЬ ВСЕМ ВИЗУАЛОМ. Перепиши src/app/globals.css и "
+                    "src/app/(app)/layout.tsx ПОЛНОСТЬЮ под дизайн-настроение выше — НЕ "
+                    "оставляй дефолтный тёмный #0a0a0a вид шаблона: задай свой фон, "
+                    "типографику, плотность; оформи шапку, список бесед и пузыри "
+                    "сообщений в этом настроении.\n"
+                    "ЗАПЕРТО — импортируй, НЕ переписывай (это безопасные примитивы): "
+                    "src/lib/realtime/* (hub + useChannel(channel) → "
+                    "{messages, send, presence, status}), src/lib/auth, src/lib/db, "
+                    "src/app/api/* (channels, messages, realtime/stream, auth)."
+                )
             if _is_continue:
                 # Resume: finish the partial app the agent left in the live
                 # container (the prior turn committed + hot-reloaded what it had).
