@@ -33,7 +33,6 @@ from dataclasses import dataclass, field
 # A member must see a peer's message within this budget — the whole point of
 # realtime is sub-second delivery, so a slow path is a functional failure.
 _DELIVERY_BUDGET_MS = 1000
-_LOGIN_TIMEOUT_MS = 15_000
 
 
 @dataclass
@@ -70,14 +69,41 @@ def summarize(checks: list[Check]) -> FunctionalVerdict:
 
 
 async def _login(page: object, base_url: str, email: str, password: str) -> None:
-    """Sign a user in through the real /signin UI so the session cookie is set on
-    the page's context (the realtime template signs in then routes to /chat)."""
+    """Sign a user in via the NextAuth credentials endpoint (CSRF token + callback),
+    not the /signin UI form, then confirm the session cookie actually landed.
+
+    The form-driven path (`fill input[type=email]` … `wait_for_url **/chat`) is
+    fragile: it assumes specific input markup and a /chat redirect target that vary
+    per generated app, so it silently fails (stays on /signin → timeout) on many
+    real apps. The csrf+callback flow is exactly what the signin server action runs
+    (mirrors :func:`auth_session.establish_session`) and is markup-independent —
+    verified live against a generated messenger. Requires the gate browser to reach
+    the app's canonical auth origin (see :func:`preview_resolver_args`)."""
     await page.goto(f"{base_url}/signin", wait_until="domcontentloaded")  # type: ignore[attr-defined]
-    await page.fill("input[type=email]", email)  # type: ignore[attr-defined]
-    await page.fill("input[type=password]", password)  # type: ignore[attr-defined]
-    await page.click("button[type=submit]")  # type: ignore[attr-defined]
-    # Land on the authed chat home — proof the credentials were accepted.
-    await page.wait_for_url("**/chat", timeout=_LOGIN_TIMEOUT_MS)  # type: ignore[attr-defined]
+    result = await page.evaluate(  # type: ignore[attr-defined]
+        """async ([email, password]) => {
+            const c = await fetch('/api/auth/csrf', { credentials: 'include' });
+            const { csrfToken } = await c.json();
+            const body = new URLSearchParams({
+                csrfToken, email, password, callbackUrl: '/',
+            });
+            const r = await fetch('/api/auth/callback/credentials', {
+                method: 'POST',
+                headers: { 'content-type': 'application/x-www-form-urlencoded' },
+                body: body.toString(),
+                credentials: 'include',
+            });
+            // Confirm the session cookie took — a credentials failure still 200s
+            // (NextAuth redirects to /signin?error=…), so trust /session, not status.
+            const s = await fetch('/api/auth/session', { credentials: 'include' });
+            let user = null;
+            try { user = (await s.json()).user || null; } catch (_) {}
+            return { status: r.status, authed: !!user };
+        }""",
+        [email, password],
+    )
+    if not result.get("authed"):
+        raise RuntimeError(f"login failed for {email}: {result}")
 
 
 async def _api(

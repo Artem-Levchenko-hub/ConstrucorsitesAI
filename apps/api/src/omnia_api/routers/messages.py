@@ -2753,7 +2753,32 @@ async def _process_prompt(
                             user_id=str(user_id),
                             project_id=str(project_id),
                         )
-                        files.update(_fheal.files)
+                        # Never regress a clean build: accept the heal's files ONLY
+                        # if it left the typecheck GREEN. A failed/unverifiable heal
+                        # must NOT overwrite the clean done-build snapshot — the worst
+                        # outcome of an enforcement gate is shipping WORSE code than
+                        # gate-off. Unknown ≠ green here (opposite of the done-build
+                        # check): only an explicit ok=True earns the merge.
+                        _heal_green = False
+                        try:
+                            _hc = await orchestrator_client.agent_build(
+                                project_id, project_slug
+                            )
+                            _heal_green = bool(_hc.get("ok", False))
+                        except Exception as _hc_exc:
+                            print(
+                                f"[PP] runtime_gate heal verify skipped: {_hc_exc!r}",
+                                flush=True,
+                            )
+                        if _heal_green:
+                            files.update(_fheal.files)
+                        else:
+                            print(
+                                "[PP] runtime_gate heal not green — discarding heal, "
+                                "keeping clean build",
+                                flush=True,
+                            )
+                            break
             except Exception as _rg_exc:  # a gate must never crash the build
                 print(f"[PP] runtime_gate skipped: {_rg_exc!r}", flush=True)
 
