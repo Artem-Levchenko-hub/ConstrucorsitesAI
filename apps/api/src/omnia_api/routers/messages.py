@@ -2467,16 +2467,19 @@ async def _process_prompt(
                     "сообщений в этом настроении.\n"
                     "ЗАПЕРТЫ (импортируй, НЕ переписывай — безопасные примитивы): "
                     "src/lib/realtime/*, src/lib/channels.ts, src/lib/session.ts, "
-                    "src/lib/auth/*, src/lib/db/*, src/app/api/*.\n"
-                    "⚠️ КРИТИЧНО: НЕ ВЫДУМЫВАЙ имена функций/экспортов. ПЕРЕД тем как "
-                    "писать страницы — read_file этих примитивов и используй ТОЛЬКО "
-                    "реальные экспорты:\n"
-                    "  • src/lib/channels.ts — список/создание бесед (напр. "
-                    "listUserChannels, createChannel — проверь точные сигнатуры чтением)\n"
-                    "  • src/lib/session.ts — текущий юзер (напр. requireUser/getCurrentUser)\n"
-                    "  • src/components/realtime/use-channel.ts — хук useChannel(channel) "
-                    "для живого списка сообщений + send\n"
-                    "Сначала прочитай эти файлы, потом пиши UI поверх них."
+                    "src/lib/auth/*, src/lib/db/*, src/app/api/*."
+                )
+            # Hand the agent the EXACT signatures of the locked primitives (instead
+            # of «read the files + check yourself» — a weak model skipped the reads
+            # and hallucinated `getChannels` / its own `Channel` type / `useChannel()`
+            # then looped on TS2305/TS2322/TS2554). Independent of design_mood and of
+            # `orchestrate` so an EDIT on a realtime app gets the contract too.
+            if (
+                _orch_name == "nextjs-realtime"
+                and get_settings().use_primitive_contract
+            ):
+                _seed_block = _seed_block + (
+                    "\n\n" + agent_builder.realtime_primitives_contract()
                 )
             if _is_continue:
                 # Resume: finish the partial app the agent left in the live

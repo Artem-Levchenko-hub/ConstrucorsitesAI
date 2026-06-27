@@ -773,6 +773,17 @@ class Settings(BaseSettings):
     # token injection is inert). Default ON; flip USE_DESIGN_MOOD=0 to revert.
     use_design_mood: bool = Field(default=True)
 
+    # Locked-primitive CONTRACT card (2026-06-27, harness-hardening). On a realtime
+    # build the seed used to tell the agent «read the fixed files and check the
+    # signatures yourself» — a weak model skips the reads and HALLUCINATES names /
+    # shapes / arity (live: `getChannels` vs `listUserChannels` → TS2305; own
+    # `Channel` type vs `@/lib/db/schema` → TS2322; `useChannel()` no-arg → TS2554),
+    # then loops on the type errors. When ON we instead HAND the agent the exact
+    # `.d.ts`-style signatures of the locked primitives up front (deep-module: a
+    # narrow, exact interface beats "go discover it"), killing those error classes
+    # deterministically. Default ON; flip USE_PRIMITIVE_CONTRACT=0 to revert.
+    use_primitive_contract: bool = Field(default=True)
+
     # Agentic builder (2026-06-22, Phase 0 of the "like Claude Code" engine).
     # When ON, container-app BUILDS (nextjs_entities/fullstack/spa, first build)
     # run through a real plan→act→observe→verify agent loop
