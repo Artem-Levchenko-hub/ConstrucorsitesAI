@@ -2465,10 +2465,18 @@ async def _process_prompt(
                     "оставляй дефолтный тёмный #0a0a0a вид шаблона: задай свой фон, "
                     "типографику, плотность; оформи шапку, список бесед и пузыри "
                     "сообщений в этом настроении.\n"
-                    "ЗАПЕРТО — импортируй, НЕ переписывай (это безопасные примитивы): "
-                    "src/lib/realtime/* (hub + useChannel(channel) → "
-                    "{messages, send, presence, status}), src/lib/auth, src/lib/db, "
-                    "src/app/api/* (channels, messages, realtime/stream, auth)."
+                    "ЗАПЕРТЫ (импортируй, НЕ переписывай — безопасные примитивы): "
+                    "src/lib/realtime/*, src/lib/channels.ts, src/lib/session.ts, "
+                    "src/lib/auth/*, src/lib/db/*, src/app/api/*.\n"
+                    "⚠️ КРИТИЧНО: НЕ ВЫДУМЫВАЙ имена функций/экспортов. ПЕРЕД тем как "
+                    "писать страницы — read_file этих примитивов и используй ТОЛЬКО "
+                    "реальные экспорты:\n"
+                    "  • src/lib/channels.ts — список/создание бесед (напр. "
+                    "listUserChannels, createChannel — проверь точные сигнатуры чтением)\n"
+                    "  • src/lib/session.ts — текущий юзер (напр. requireUser/getCurrentUser)\n"
+                    "  • src/components/realtime/use-channel.ts — хук useChannel(channel) "
+                    "для живого списка сообщений + send\n"
+                    "Сначала прочитай эти файлы, потом пиши UI поверх них."
                 )
             if _is_continue:
                 # Resume: finish the partial app the agent left in the live
