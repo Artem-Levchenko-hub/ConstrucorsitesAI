@@ -1197,6 +1197,32 @@ async def post_prompt(
         and not selected_dump
         and settings.use_auto_stack_routing
     ):
+        # Routing intent across the WHOLE conversation, not just this turn. The
+        # skip-survey build trigger is «Постройте сейчас» (no messenger/chat word),
+        # so a realtime net on payload.prompt alone misses and ships an spa/entities
+        # dashboard — the owner's "создай мессенджер → не чат" failure (live: prompt
+        # «создай мессенджер», skip → trigger «Постройте сейчас» → spa). Pull the
+        # project's prior user messages so the original intent still routes.
+        _fb_intent = payload.prompt
+        try:
+            _prior_user = list(
+                (
+                    await session.execute(
+                        select(Message.content)
+                        .where(
+                            Message.project_id == project_id,
+                            Message.role == "user",
+                        )
+                        .order_by(Message.created_at.asc())
+                        .limit(40)
+                    )
+                ).scalars().all()
+            )
+            _fb_intent = " ".join([*(c for c in _prior_user if c), payload.prompt])
+        except Exception as _fbi_exc:
+            logging.getLogger(__name__).warning(
+                "first-build intent load failed (using current turn): %r", _fbi_exc
+            )
         # Code intent (program/script, any language) takes priority over the
         # backend net — "напиши скрипт на python" must not be pulled into an
         # auth-backed web app (owner 2026-06-18). And static is opt-in: if nothing
@@ -1258,12 +1284,12 @@ async def post_prompt(
         # net in discovery.plan_discovery.
         if (
             _inferred_stack not in ("realtime", "code")
-            and _infer_realtime_from_text(payload.prompt)
-            and not _explicit_static(payload.prompt)
-            and not _infer_code_from_text(payload.prompt)
+            and _infer_realtime_from_text(_fb_intent)
+            and not _explicit_static(_fb_intent)
+            and not _infer_code_from_text(_fb_intent)
         ):
             logging.getLogger(__name__).info(
-                "first-build realtime override: '%s'→'realtime' (messenger/chat)",
+                "first-build realtime override: '%s'→'realtime' (messenger/chat, full intent)",
                 _inferred_stack,
             )
             _inferred_stack = "realtime"
