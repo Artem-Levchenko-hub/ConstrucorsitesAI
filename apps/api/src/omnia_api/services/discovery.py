@@ -75,8 +75,18 @@ _RESULT_TYPE_TO_STACK: dict[str, str] = {
 
 
 def result_type_to_stack(rt: str) -> str | None:
-    """Map a result_type to its build stack id, or None for an unknown type."""
-    return _RESULT_TYPE_TO_STACK.get((rt or "").strip().lower())
+    """Map a result_type to its build stack id, or None for an unknown type.
+
+    Real-backend default (owner «ентитиз не нужны»): a `web_app` builds on the REAL
+    full-stack (`fullstack` → nextjs-postgres-drizzle: Next API routes + Postgres +
+    Drizzle + Auth, where the agent writes real handlers + schema) instead of the
+    managed-CRUD `nextjs_entities` abstraction. Flag-gated (USE_REAL_BACKEND_DEFAULT,
+    default ON) for instant rollback.
+    """
+    stack = _RESULT_TYPE_TO_STACK.get((rt or "").strip().lower())
+    if stack == "nextjs_entities" and get_settings().use_real_backend_default:
+        return "fullstack"
+    return stack
 
 
 # Hard cap so discovery can never loop forever — after this many questions we

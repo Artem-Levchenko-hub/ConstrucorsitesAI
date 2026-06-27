@@ -754,6 +754,16 @@ class Settings(BaseSettings):
     # block). Recommended flip: true. Env: USE_FEATURE_SCAFFOLD.
     use_feature_scaffold: bool = Field(default=False)
 
+    # Real-backend default (2026-06-27, owner: «мне ентитиз не нужны, нужен реальный
+    # бэкенд»). When ON, a `web_app` result-type (accounts + saved data) routes to
+    # the REAL full-stack stack (`fullstack` → nextjs-postgres-drizzle: Next API
+    # routes + Postgres + Drizzle + Auth — the agent writes real route handlers and
+    # schema) INSTEAD of the managed-CRUD `nextjs_entities` abstraction the owner
+    # calls a prototype. Entities stays available (discovery can still recommend it
+    # explicitly). Default ON; flip USE_REAL_BACKEND_DEFAULT=0 to restore today's
+    # entities routing. Consumed by `services.discovery.result_type_to_stack`.
+    use_real_backend_default: bool = Field(default=True)
+
     # Agentic builder (2026-06-22, Phase 0 of the "like Claude Code" engine).
     # When ON, container-app BUILDS (nextjs_entities/fullstack/spa, first build)
     # run through a real plan→act→observe→verify agent loop
