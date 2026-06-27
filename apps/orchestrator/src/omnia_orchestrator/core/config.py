@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     # behaviour).
     isolate_project_network: bool = Field(default=False)
 
+    # `use_dep_doctor` — before each agent typecheck, scan the dev container's
+    # src/ imports vs package.json and `pnpm add` any MISSING package that is on
+    # the curated allowlist (services/dep_doctor.py). Heals the "kit file / model
+    # imports a package the baked node_modules lacks" → TS2307 → whole build
+    # aborts class of failure the agent's source-only edits can't fix. Bounded by
+    # the allowlist (a hallucinated import name is never installed). Default ON —
+    # it only acts when a build would otherwise fail; kill with USE_DEP_DOCTOR=0.
+    use_dep_doctor: bool = Field(default=True)
+
     # Filesystem layout on the VPS — see docs/08-vps-setup.md.
     projects_root: str = Field(default="/opt/omnia-runtime/projects")
     nginx_sites_dir: str = Field(default="/opt/omnia-runtime/nginx/sites-enabled")

@@ -88,3 +88,50 @@ def test_no_escalation_when_escalate_model_none():
     )
     # No escalate model → byte-identical model usage throughout.
     assert all(m == "cheap" for m in models)
+
+
+def _alternating_edit_build_complete(models: list[str]):
+    """Alternate a unique edit_file with a build, so neither the consecutive-
+    repeat guard nor the no-write streak fires — isolating the red-build trigger.
+    """
+    counter = {"n": 0}
+
+    async def _complete(messages, model, **kwargs):
+        models.append(model)
+        counter["n"] += 1
+        if counter["n"] % 2 == 1:
+            return (
+                f'<omnia:action name="edit_file">'
+                f'{{"path": "src/f{counter["n"]}.tsx", "search": "a", "replace": "b"}}'
+                f'</omnia:action>'
+            )
+        return '<omnia:action name="build">{}</omnia:action>'
+
+    return _complete
+
+
+async def _red_build_executor(action: ab.Action) -> dict:
+    # Builds are RED (the cheap model can't clear the typecheck); edits succeed.
+    if action.name == "build":
+        return {"ok": False, "detail": "src/x.tsx: error TS2307: Cannot find module 'z'"}
+    return {"ok": True, "content": "x"}
+
+
+def test_escalates_after_consecutive_red_builds():
+    # Two failed builds (non-consecutive, edits between) → escalate to the strong
+    # model so the loop grinds to green instead of giving up on the cheap one.
+    models: list[str] = []
+    asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="u",
+            model="cheap",
+            escalate_model="strong",
+            execute=_red_build_executor,
+            complete=_alternating_edit_build_complete(models),
+            max_steps=8,
+        )
+    )
+    assert models[0] == "cheap"
+    assert "strong" in models  # the 2nd red build escalated
+    assert models[-1] == "strong"

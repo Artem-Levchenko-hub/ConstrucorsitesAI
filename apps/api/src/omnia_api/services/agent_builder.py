@@ -237,6 +237,7 @@ async def run_agent_build(
     no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
     sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
     last_build_ok: bool | None = None  # result of the most recent `build` action
+    red_build_streak = 0  # consecutive failed builds → escalate to the strong model
     # `require_green_before_done` bookkeeping: a `done` is only honoured once the
     # last build was clean AND the running app was re-checked after the last write
     # (a clean typecheck is exactly what a model hallucinates completion around —
@@ -481,6 +482,17 @@ async def run_agent_build(
         obs = await execute(action)
         if action.name == "build":
             last_build_ok = bool(obs.get("ok"))
+            # A persistent red typecheck the cheap model can't clear is exactly
+            # when the stronger reasoner earns its cost. Escalate ONCE (the
+            # `escalated` one-shot in `_escalate` bounds it) after two consecutive
+            # red builds, so the loop grinds to green with the strong model
+            # instead of declaring done on a broken app. Green resets the streak.
+            if last_build_ok:
+                red_build_streak = 0
+            else:
+                red_build_streak += 1
+                if red_build_streak >= _RED_BUILD_ESCALATE_AT:
+                    await _escalate(step, "red_build")
         if action.name == "runtime_check":
             # A runtime_check observed the CURRENT app state → clears the
             # "wrote but never verified" debt; its ok/fail feeds the green-gate.
@@ -521,6 +533,11 @@ _REPEAT_ABORT_AT = 4
 # runtime_check) before honouring it anyway. Bounded so an app with no checkable
 # route can still finish — the server-side acceptance gate is the hard backstop.
 _DONE_REJECT_CAP = 2
+
+# Escalate to the strong model after this many consecutive RED builds — a cheap
+# model that can't clear a typecheck in two tries usually needs a different model,
+# not more tries. Bounded by the one-shot `escalated` flag in `_escalate`.
+_RED_BUILD_ESCALATE_AT = 2
 
 # Issued when the loop stalls (no-write streak) but the app is already GREEN —
 # nothing left to build, the model is just thrashing after success. Push it to

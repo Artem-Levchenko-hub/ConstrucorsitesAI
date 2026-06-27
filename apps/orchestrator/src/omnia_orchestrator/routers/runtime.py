@@ -50,6 +50,7 @@ from omnia_orchestrator.schemas.runtime import (
 from omnia_orchestrator.services import (
     builder,
     demo_seed_writer,
+    dep_doctor,
     deploy_state,
     nginx_writer,
 )
@@ -458,6 +459,48 @@ async def agent_grep(
     return {"ok": True, "detail": out if out else "(no matches)"}
 
 
+async def _run_dep_doctor(container_name: str) -> str:
+    """Install missing allowlisted deps BEFORE typecheck so a TS2307 "Cannot find
+    module" (kit-file drift or a generated import of an undeclared package) heals
+    instead of aborting the whole build — the agent edits source, but a baked
+    ``node_modules`` is not a source file. Returns a short status line (empty when
+    nothing was installed). Fail-soft: any error → "" and the typecheck then
+    surfaces the real module error exactly as today (no regression)."""
+    if not get_settings().use_dep_doctor:
+        return ""
+    try:
+        pj = await exec_cmd(
+            container_name, cmd=["cat", "--", "package.json"],
+            workdir="/app", max_output=_AGENT_MAX_READ,
+        )
+        if pj["exit_code"] != "0":
+            return ""
+        imports = await exec_cmd(
+            container_name,
+            cmd=["sh", "-lc", 'grep -rhsE "(from|import|require)" src 2>/dev/null || true'],
+            # Generous cap: import lines across a whole src/ tree already exceed the
+            # 16 KB grep cap on the default nextjs-entities template (~28 KB), which
+            # would silently drop packages past the cut and leave them uninstalled.
+            workdir="/app", max_output=_AGENT_MAX_READ,
+        )
+        missing = dep_doctor.plan_installs(pj["stdout"], imports["stdout"])
+        if not missing:
+            return ""
+        # Names passed the allowlist AND a strict package-name regex, so they
+        # carry no shell metacharacters — safe to interpolate into `pnpm add`.
+        res = await exec_cmd(
+            container_name,
+            cmd=["sh", "-lc", f"cd /app && pnpm add {' '.join(missing)}"],
+            workdir="/app", timeout_sec=120, max_output=_AGENT_MAX_BUILD,
+        )
+        verb = "installed" if res["exit_code"] == "0" else "FAILED to install"
+        note = f"[dep-doctor] {verb}: {' '.join(missing)}"
+        print(note, flush=True)
+        return note
+    except OrchestratorError:
+        return ""
+
+
 @router.post("/{project_id}/agent/build")
 async def agent_build(
     project_id: str,
@@ -466,9 +509,11 @@ async def agent_build(
 ) -> dict[str, object]:
     """Run the project's local TypeScript typecheck — a real, deterministic
     correctness signal independent of HMR timing. Non-zero exit returns the
-    actual compiler errors so the agent can fix them."""
+    actual compiler errors so the agent can fix them. A dep-doctor pass first
+    installs any missing allowlisted package (see ``_run_dep_doctor``)."""
     _verify_token(x_internal_token)
     container_name = f"omnia-dev-{slug}"
+    dep_note = await _run_dep_doctor(container_name)
     try:
         result = await exec_cmd(
             container_name,
@@ -481,7 +526,12 @@ async def agent_build(
         return {"ok": False, "error": exc.message}
     ok = result["exit_code"] == "0"
     detail = (result["stdout"] + "\n" + result["stderr"]).strip()
-    return {"ok": ok, "detail": "typecheck clean" if ok else detail[:_AGENT_MAX_BUILD]}
+    body = "typecheck clean" if ok else detail[:_AGENT_MAX_BUILD]
+    # Surface the dep-doctor action in the observation so the agent + operators
+    # see "[dep-doctor] installed: sonner" instead of a silent self-heal.
+    if dep_note:
+        body = f"{dep_note}\n{body}"
+    return {"ok": ok, "detail": body}
 
 
 # Phase 1: a bounded shell tool for the agent. Runs an arbitrary command inside
