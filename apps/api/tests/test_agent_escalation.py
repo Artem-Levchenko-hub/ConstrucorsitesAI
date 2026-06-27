@@ -135,3 +135,57 @@ def test_escalates_after_consecutive_red_builds():
     assert models[0] == "cheap"
     assert "strong" in models  # the 2nd red build escalated
     assert models[-1] == "strong"
+
+
+def _stall_then_act_complete(models: list[str], misses: int):
+    """No valid <omnia:action> for the first `misses` turns (→ parse None → stall),
+    then a clean `done`. Exercises the no-action recovery path."""
+    counter = {"n": 0}
+
+    async def _complete(messages, model, **kwargs):
+        models.append(model)
+        counter["n"] += 1
+        if counter["n"] <= misses:
+            return "I am thinking about the problem, no action yet."
+        return '<omnia:action name="done">{"summary": "ok"}</omnia:action>'
+
+    return _complete
+
+
+def test_stall_escalates_before_abort():
+    # The cheap model emits zero action twice (the "stalled, 0 files" first-build
+    # failure), then recovers. Must NOT abort at the 2nd miss — it escalates to the
+    # strong model and finishes.
+    models: list[str] = []
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="u",
+            model="cheap",
+            escalate_model="strong",
+            execute=_ok_executor,
+            complete=_stall_then_act_complete(models, misses=2),
+            max_steps=8,
+        )
+    )
+    assert res.done is True            # recovered instead of aborting at miss 2
+    assert "strong" in models          # escalated on the 2nd no-action
+    assert models[-1] == "strong"
+
+
+def test_stall_aborts_after_cap():
+    # A model that NEVER emits a valid action still aborts (bounded), as stalled.
+    models: list[str] = []
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="u",
+            model="cheap",
+            escalate_model="strong",
+            execute=_ok_executor,
+            complete=_stall_then_act_complete(models, misses=99),
+            max_steps=8,
+        )
+    )
+    assert res.done is False
+    assert res.stop_reason == "stalled"

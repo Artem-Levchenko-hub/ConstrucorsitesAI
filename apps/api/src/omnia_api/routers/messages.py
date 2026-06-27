@@ -2693,6 +2693,30 @@ async def _process_prompt(
                     "[PP] agentic_build looped-but-serves → reported as done",
                     flush=True,
                 )
+            # Honest result (edit no-op): a surgical follow-up that tripped a loop/
+            # stall guard and wrote NOTHING, but left the app GREEN (serves +
+            # typecheck clean), broke nothing — the prior build is intact. Saying
+            # «Сборка прервана»/«Не удалось завершить правку» here is the false alarm
+            # the owner hit live (stop=looping, 0 files, app green). Tell the truth:
+            # unchanged and working; invite a re-phrase. Edits only — a FIRST build
+            # with 0 files genuinely failed (the scaffold always typechecks green),
+            # so it keeps its failure message.
+            elif (
+                not _agent_res.done
+                and _is_edit
+                and not files
+                and _runtime_ok
+                and _typecheck_ok
+            ):
+                accumulated = (
+                    "Не смог применить правку за отведённые шаги — приложение не "
+                    "изменилось и осталось рабочим. Переформулируй запрос или нажми "
+                    "«Починить»."
+                )
+                print(
+                    "[PP] agentic_build edit no-op on green app → honest no-change",
+                    flush=True,
+                )
 
             # Runtime functional gate — the behavioural "works + does not leak" proof
             # (research finding: this gate was defined+unit-tested but UNWIRED; only

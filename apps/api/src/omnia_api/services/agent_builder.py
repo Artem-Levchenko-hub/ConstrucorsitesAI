@@ -325,12 +325,19 @@ async def run_agent_build(
             stalls += 1
             if emit:
                 await emit("agent.stalled", {"step": step})
-            if stalls >= 2:
+            if stalls >= _NO_ACTION_ABORT_AT:
                 return AgentResult(
-                    done=False, summary="model emitted no valid action twice",
+                    done=False, summary="model emitted no valid action repeatedly",
                     files=written, steps=step + 1, transcript=convo,
                     stop_reason="stalled",
                 )
+            # A model that can't emit the action protocol usually needs a DIFFERENT
+            # model, not more tries on the same one. On the 2nd miss, escalate to the
+            # strong model BEFORE giving up — this is the #1 reliability fix for the
+            # "stalled, 0 files" first-build failure (deepseek intermittently emits
+            # zero visible action). Bounded by _NO_ACTION_ABORT_AT.
+            if stalls >= 2:
+                await _escalate(step, "no_action")
             convo.append({"role": "user", "content": _NO_ACTION_NUDGE})
             continue
         stalls = 0
@@ -538,6 +545,12 @@ _DONE_REJECT_CAP = 2
 # model that can't clear a typecheck in two tries usually needs a different model,
 # not more tries. Bounded by the one-shot `escalated` flag in `_escalate`.
 _RED_BUILD_ESCALATE_AT = 2
+
+# How many consecutive "no valid action emitted" turns before aborting as stalled.
+# Was an implicit 2 (abort on the 2nd miss). Raised so the loop can re-prompt AND
+# escalate to the strong model before giving up — the cheap model intermittently
+# emits zero visible action, which used to kill the whole first build at step 2.
+_NO_ACTION_ABORT_AT = 4
 
 # Issued when the loop stalls (no-write streak) but the app is already GREEN —
 # nothing left to build, the model is just thrashing after success. Push it to
