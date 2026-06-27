@@ -28,7 +28,7 @@
  */
 
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, isNotNull } from "drizzle-orm";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
@@ -127,4 +127,20 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
  *  10 rounds = ~80 ms on modern hardware; balances UX and brute-force cost. */
 export async function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, 10);
+}
+
+/** Role for a brand-new signup. The first real (password-bearing) account is the
+ *  owner → "admin"; everyone after → "user". `<Protected role="admin">` checks it.
+ *  Fail-soft: any DB error defaults to "user" (never auto-grant admin on error). */
+export async function roleForNewUser(): Promise<"admin" | "user"> {
+  try {
+    const [row] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(isNotNull(users.passwordHash))
+      .limit(1);
+    return row ? "user" : "admin";
+  } catch {
+    return "user";
+  }
 }
