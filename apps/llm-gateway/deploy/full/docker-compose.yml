@@ -301,6 +301,10 @@ services:
       # Runtime functional gate (realtime only): drive the live preview, verify
       # create/live-delivery/no-leak, feed red verdicts back so the agent self-heals.
       USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-false}
+      # Host-resolver map so the gate browser (runs in api) reaches the app's
+      # canonical public preview host from inside docker (e.g.
+      # "MAP *.preview.lead-generator.ru 172.21.0.1" → host nginx bridge gateway).
+      GATE_PREVIEW_RESOLVER_RULES: ${GATE_PREVIEW_RESOLVER_RULES:-}
       # Reference ceiling ratchet (область R) — continuous richness-score floor vs
       # the curated enterprise corpus. DARK; needs ACCEPTANCE_GAUNTLET_REFERENCE_GATE on too.
       ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
