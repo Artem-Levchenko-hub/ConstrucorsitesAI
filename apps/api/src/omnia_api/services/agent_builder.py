@@ -815,6 +815,67 @@ def load_stack_skills(orch_template: str | None) -> str | None:
 
 # ── Production executor (talks to the orchestrator) ─────────────────────────
 
+_BUILD_MOD_ERR_RE = re.compile(r"""(?:Cannot find module|Module)\s*['"]([^'"]+)['"]""")
+_BUILD_NO_MEMBER_RE = re.compile(
+    r"""['"]([^'"]+)['"]\s+has no exported member\s+['"]([^'"]+)['"]"""
+)
+_EXPORT_DECL_RE = re.compile(
+    r"export\s+(?:async\s+)?(?:function|const|let|class|type|interface|enum)\s+([A-Za-z0-9_]+)"
+)
+_EXPORT_LIST_RE = re.compile(r"export\s*\{([^}]+)\}")
+
+
+def _resolve_app_module(spec: str) -> list[str]:
+    """Candidate src/ paths for a `@/...` tsconfig-alias import specifier."""
+    if not spec.startswith("@/"):
+        return []
+    base = "src/" + spec[2:]
+    return [f"{base}.ts", f"{base}.tsx", f"{base}/index.ts", f"{base}/index.tsx"]
+
+
+async def _enrich_build_failure(detail: str, project_id: Any, slug: str) -> str:
+    """On a tsc failure, attach the SOURCE OF TRUTH so the model fixes it instead
+    of guessing/looping: the REAL exports of an `@/...` module it imported wrong
+    (the «getChannels vs listUserChannels» hallucination that looped a build to
+    death). Harness-hardening — a weak model is only as good as the feedback it
+    gets. Bounded (≤4 modules) + fail-soft (any error → original detail)."""
+    from omnia_api.services import orchestrator_client
+
+    specs: set[str] = set(_BUILD_MOD_ERR_RE.findall(detail or ""))
+    specs |= {m for m, _member in _BUILD_NO_MEMBER_RE.findall(detail or "")}
+    specs = {s for s in specs if s.startswith("@/")}
+    if not specs:
+        return detail
+    blocks: list[str] = []
+    for spec in sorted(specs)[:4]:
+        for cand in _resolve_app_module(spec):
+            try:
+                content = await orchestrator_client.agent_read_file(
+                    project_id, slug, cand
+                )
+            except Exception:
+                content = None
+            if not content:
+                continue
+            names: list[str] = list(_EXPORT_DECL_RE.findall(content))
+            for grp in _EXPORT_LIST_RE.findall(content):
+                names += [
+                    x.strip().split(" as ")[-1].strip()
+                    for x in grp.split(",")
+                    if x.strip()
+                ]
+            names = sorted({n for n in names if n})
+            if names:
+                blocks.append(
+                    f"{spec} реально экспортирует: {', '.join(names)} — "
+                    "импортируй ТОЛЬКО эти имена, не выдумывай."
+                )
+            break
+    if not blocks:
+        return detail
+    return (detail or "") + "\n\nПОДСКАЗКА ХАРНЕССА (реальные API):\n" + "\n".join(blocks)
+
+
 def make_container_executor(
     *,
     project_id: Any,
@@ -883,6 +944,13 @@ def make_container_executor(
                 ok = bool(res.get("ok"))
                 detail = res.get("detail") or res.get("error") or "build clean"
                 if not ok:
+                    # Enrich the failure with the REAL exports of any @/ module the
+                    # model imported wrong, so it fixes the import instead of looping
+                    # on a hallucinated name. Fail-soft.
+                    try:
+                        detail = await _enrich_build_failure(detail, project_id, slug)
+                    except Exception:
+                        pass
                     # The agent gets the full `detail` in its observation; log a
                     # tail here too so operators can SEE the real compiler error
                     # behind a stuck loop (grep "build FAILED" in the api logs).
