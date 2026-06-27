@@ -2465,9 +2465,17 @@ async def _process_prompt(
                     "оставляй дефолтный тёмный #0a0a0a вид шаблона: задай свой фон, "
                     "типографику, плотность; оформи шапку, список бесед и пузыри "
                     "сообщений в этом настроении.\n"
+                    "⚠️ src/app/(app)/layout.tsx — это ВЛОЖЕННЫЙ layout. НЕ пиши в нём "
+                    "`<html>`, `<head>` ни `<body>` — они уже есть в КОРНЕВОМ "
+                    "src/app/layout.tsx (он ЗАПЕРТ, не трогай). Верни ТОЛЬКО внутреннюю "
+                    "оболочку — `export default function AppLayout({children}) { return "
+                    "(<div className=\"...\"><header>…шапка/нав…</header><main>{children}"
+                    "</main></div>); }`. Дубль `<html>`/`<body>` ломает гидрацию React и "
+                    "убивает реалтайм (сообщения перестают приходить).\n"
                     "ЗАПЕРТЫ (импортируй, НЕ переписывай — безопасные примитивы): "
                     "src/lib/realtime/*, src/lib/channels.ts, src/lib/session.ts, "
-                    "src/lib/auth/*, src/lib/db/*, src/app/api/*."
+                    "src/lib/auth/*, src/lib/db/*, src/app/api/*, src/app/layout.tsx "
+                    "(корневой html/body)."
                 )
             # Hand the agent the EXACT signatures of the locked primitives (instead
             # of «read the files + check yourself» — a weak model skipped the reads
