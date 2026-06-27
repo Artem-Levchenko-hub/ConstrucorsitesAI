@@ -991,6 +991,50 @@ async def _enrich_build_failure(detail: str, project_id: Any, slug: str) -> str:
     return (detail or "") + "\n\nПОДСКАЗКА ХАРНЕССА (реальные API):\n" + "\n".join(blocks)
 
 
+# ── Nested-layout sanitizer (harness-hardening, deterministic) ──────────────
+#
+# In Next.js App Router ONLY the root `src/app/layout.tsx` may render <html>/
+# <body>; a nested group layout (e.g. `src/app/(app)/layout.tsx`) that also emits
+# them produces a duplicate <html>/<body>, which BREAKS React hydration — and a
+# broken hydration kills every client component, including the realtime
+# `useChannel` hook, so messages silently stop arriving. The thin-base design
+# directive asks the model to restyle `(app)/layout.tsx`, and a weak model adds
+# <html><body> there even when told not to (observed live twice). A prompt can't
+# guarantee this; the engine can. Strip the offending wrapper on write — a nested
+# layout NEVER legitimately contains <html>/<head>/<body>, so this only ever fixes
+# a real bug. Code-level kill switch below (no config plumbing into the executor).
+_SANITIZE_NESTED_LAYOUTS = True
+_HTML_OPEN_RE = re.compile(r"<html\b[^>]*>", re.IGNORECASE)
+_HTML_CLOSE_RE = re.compile(r"</html\s*>", re.IGNORECASE)
+_HEAD_BLOCK_RE = re.compile(r"<head\b[^>]*>.*?</head\s*>", re.IGNORECASE | re.DOTALL)
+_BODY_OPEN_RE = re.compile(r"<body\b([^>]*)>", re.IGNORECASE)
+_BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
+
+
+def _is_nested_layout(path: str) -> bool:
+    """A `layout.tsx` that is NOT the root `src/app/layout.tsx`."""
+    p = (path or "").replace("\\", "/").lstrip("./")
+    return p.endswith("/layout.tsx") and p != "src/app/layout.tsx"
+
+
+def _sanitize_nested_layout(path: str, content: str) -> str:
+    """Drop <html>/<head>/<body> from a NESTED layout (root keeps them). Returns
+    the content unchanged when it's not a nested layout or has no such tags — so a
+    correct layout is byte-identical. <body className=…> becomes <div className=…>
+    to preserve the styling the model attached to it."""
+    if not _SANITIZE_NESTED_LAYOUTS or not _is_nested_layout(path):
+        return content
+    low = content.lower()
+    if "<html" not in low and "<body" not in low and "<head" not in low:
+        return content
+    out = _HEAD_BLOCK_RE.sub("", content)
+    out = _HTML_OPEN_RE.sub("", out)
+    out = _HTML_CLOSE_RE.sub("", out)
+    out = _BODY_OPEN_RE.sub(r"<div\1>", out)
+    out = _BODY_CLOSE_RE.sub("</div>", out)
+    return out
+
+
 def make_container_executor(
     *,
     project_id: Any,
@@ -1028,6 +1072,9 @@ def make_container_executor(
                 content = action.args.get("content")
                 if not isinstance(content, str) or not action.path:
                     return {"ok": False, "error": "write_file needs path + content"}
+                # Deterministic guard: a nested layout must never carry <html>/<body>
+                # (duplicate root tags break hydration → kill the realtime client).
+                content = _sanitize_nested_layout(action.path, content)
                 await orchestrator_client.hot_reload(
                     project_id=project_id, slug=slug, files={action.path: content})
                 return {"ok": True, "content": content,
@@ -1049,6 +1096,7 @@ def make_container_executor(
                     return {"ok": False,
                             "error": "search text is not unique; add surrounding lines"}
                 new_content = current.replace(search, str(replace), 1)
+                new_content = _sanitize_nested_layout(action.path, new_content)
                 await orchestrator_client.hot_reload(
                     project_id=project_id, slug=slug, files={action.path: new_content})
                 return {"ok": True, "content": new_content,
