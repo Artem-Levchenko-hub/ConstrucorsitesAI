@@ -2549,6 +2549,7 @@ async def _process_prompt(
                 user_id=str(user_id),
                 project_id=str(project_id),
                 require_green_before_done=get_settings().agent_require_green_before_done,
+                ship_green_on_abort=get_settings().agent_ship_green_on_abort,
             )
             _all_files = dict(_agent_res.files)
             _total_steps = _agent_res.steps

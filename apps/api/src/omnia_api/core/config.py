@@ -784,6 +784,16 @@ class Settings(BaseSettings):
     # deterministically. Default ON; flip USE_PRIMITIVE_CONTRACT=0 to revert.
     use_primitive_contract: bool = Field(default=True)
 
+    # Ship-green-on-abort (2026-06-27, harness-hardening). A loop-guard abort
+    # (cycle / repeat / explore / budget) used to ALWAYS return done=False →
+    # «Сборка прервана», even when the last build was GREEN — so a compiling app
+    # got discarded because the model fussed re-reading files after success (live:
+    # messenger built green at step 15, then cycled on layout.tsx → thrown away).
+    # When ON, any such abort with a clean last build ships as a success instead
+    # (the `done` gate itself only requires a green build, so this meets the same
+    # bar). Default ON; flip AGENT_SHIP_GREEN_ON_ABORT=0 to revert.
+    agent_ship_green_on_abort: bool = Field(default=True)
+
     # Agentic builder (2026-06-22, Phase 0 of the "like Claude Code" engine).
     # When ON, container-app BUILDS (nextjs_entities/fullstack/spa, first build)
     # run through a real plan→act→observe→verify agent loop

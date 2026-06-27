@@ -217,6 +217,7 @@ async def run_agent_build(
     project_id: str | None = None,
     max_tokens: int = 8192,
     require_green_before_done: bool = False,
+    ship_green_on_abort: bool = True,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -270,6 +271,29 @@ async def run_agent_build(
                     "agent.escalate",
                     {"step": step, "to": escalate_model, "reason": reason},
                 )
+
+    def _ship_green_or(fallback: AgentResult, step_no: int, reason: str) -> AgentResult:
+        """A loop-abort is about to discard the run — but if the LAST build was
+        green the app already compiles, so SHIP it as a success instead of telling
+        the user «Сборка прервана» about a working app (owner's exact complaint:
+        the messenger built green at step 15, then the model fussed re-reading
+        layout and the cycle-guard threw the green app away). Honest: the `done`
+        gate itself only requires a clean build (see `require_green_before_done`),
+        so a green abort meets the same bar. Falls through to the original abort
+        when there is no green build to rescue."""
+        if ship_green_on_abort and last_build_ok is True:
+            print(
+                f"[AGENT] step={step_no} SHIP-GREEN-ON-{reason} "
+                f"(build clean → ship instead of {fallback.stop_reason})",
+                flush=True,
+            )
+            return AgentResult(
+                done=True,
+                summary="Приложение собрано — билд проходит чисто.",
+                files=written, steps=step_no + 1, transcript=convo,
+                stop_reason="done_on_green",
+            )
+        return fallback
 
     for step in range(max_steps):
         # Retry the model call on transient gateway errors (ReadTimeout / 5xx /
@@ -403,11 +427,14 @@ async def run_agent_build(
         if sig != last_sig and action.name not in _VERIFY_ACTIONS:
             sig_seen[sig] = sig_seen.get(sig, 0) + 1
             if sig_seen[sig] >= _REPEAT_ABORT_AT:
-                return AgentResult(
-                    done=False,
-                    summary=f"stuck re-issuing {action.name} {action.path}",
-                    files=written, steps=step + 1, transcript=convo,
-                    stop_reason="looping",
+                return _ship_green_or(
+                    AgentResult(
+                        done=False,
+                        summary=f"stuck re-issuing {action.name} {action.path}",
+                        files=written, steps=step + 1, transcript=convo,
+                        stop_reason="looping",
+                    ),
+                    step, "cycle",
                 )
             if sig_seen[sig] >= _REPEAT_NUDGE_AT:
                 await _escalate(step, "cycle")
@@ -424,11 +451,14 @@ async def run_agent_build(
         else:
             repeat_count, last_sig = 0, sig
         if repeat_count >= 5:
-            return AgentResult(
-                done=False,
-                summary=f"stuck repeating {action.name} {action.path}",
-                files=written, steps=step + 1, transcript=convo,
-                stop_reason="looping",
+            return _ship_green_or(
+                AgentResult(
+                    done=False,
+                    summary=f"stuck repeating {action.name} {action.path}",
+                    files=written, steps=step + 1, transcript=convo,
+                    stop_reason="looping",
+                ),
+                step, "repeat",
             )
         if repeat_count >= 2:
             await _escalate(step, "repeat")
@@ -456,11 +486,14 @@ async def run_agent_build(
         else:
             no_write_streak += 1
             if no_write_streak >= _NO_WRITE_ABORT_AT:
-                return AgentResult(
-                    done=False,
-                    summary="stuck exploring (reading) without writing any file",
-                    files=written, steps=step + 1, transcript=convo,
-                    stop_reason="exploring",
+                return _ship_green_or(
+                    AgentResult(
+                        done=False,
+                        summary="stuck exploring (reading) without writing any file",
+                        files=written, steps=step + 1, transcript=convo,
+                        stop_reason="exploring",
+                    ),
+                    step, "explore",
                 )
             if no_write_streak >= _NO_WRITE_NUDGE_AT:
                 # If the app is already GREEN (build clean + route verified + no
@@ -516,9 +549,12 @@ async def run_agent_build(
             wrote_since_check = True  # a new write is unverified until re-checked
         convo.append({"role": "user", "content": _format_observation(action, obs)})
 
-    return AgentResult(
-        done=False, summary="hit step budget without calling done",
-        files=written, steps=max_steps, transcript=convo, stop_reason="max_steps",
+    return _ship_green_or(
+        AgentResult(
+            done=False, summary="hit step budget without calling done",
+            files=written, steps=max_steps, transcript=convo, stop_reason="max_steps",
+        ),
+        max_steps - 1, "budget",
     )
 
 
