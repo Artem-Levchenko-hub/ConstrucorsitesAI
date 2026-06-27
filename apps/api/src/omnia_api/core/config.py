@@ -764,6 +764,15 @@ class Settings(BaseSettings):
     # entities routing. Consumed by `services.discovery.result_type_to_stack`.
     use_real_backend_default: bool = Field(default=True)
 
+    # Per-project design MOOD (2026-06-27, owner «дизайн всегда одинаковый, сделай
+    # уникально»). When ON, a container-app BUILD prompt carries a seeded design
+    # mood (curated WCAG-vetted palette + font + density + heading personality from
+    # services.design_dna.design_mood_directive) so the agent writes a DISTINCT
+    # look per project instead of the baked dark zinc/indigo template. Steers what
+    # the agent writes → works even for the hardcoded realtime template (where CSS
+    # token injection is inert). Default ON; flip USE_DESIGN_MOOD=0 to revert.
+    use_design_mood: bool = Field(default=True)
+
     # Agentic builder (2026-06-22, Phase 0 of the "like Claude Code" engine).
     # When ON, container-app BUILDS (nextjs_entities/fullstack/spa, first build)
     # run through a real plan→act→observe→verify agent loop

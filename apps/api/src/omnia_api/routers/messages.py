@@ -2411,6 +2411,21 @@ async def _process_prompt(
                 "\n\nPROJECT CONTEXT (already gathered — do NOT re-explore these):\n"
                 + "\n\n".join(_seed_parts)
             ) if _seed_parts else ""
+            # Per-project DESIGN MOOD — make every app look UNIQUE instead of the
+            # baked dark zinc/indigo template («дизайн всегда одинаковый»). Seeded
+            # curated palette + font + density fed into the BUILD prompt so the
+            # agent writes distinct UI; works even on the hardcoded realtime
+            # template where CSS-token injection is inert. Build only (orchestrate),
+            # not surgical edits — a follow-up must not re-theme. Flag-gated, fail-soft.
+            if orchestrate and get_settings().use_design_mood:
+                try:
+                    from omnia_api.services.design_dna import design_mood_directive
+                    _seed_block = _seed_block + design_mood_directive(
+                        str(project_id), industry_hint=prompt_text
+                    )
+                    print("[PP] design_mood injected", flush=True)
+                except Exception as _dm_exc:
+                    print(f"[PP] design_mood skipped: {_dm_exc!r}", flush=True)
             # Per-stack agent prompt: entities keep their finely-tuned prompt; any
             # OTHER container stack (realtime, …) gets the shared LOOP_PROTOCOL + its
             # own SYSTEM_PROMPT.md, so the agent builds it with the right primitives

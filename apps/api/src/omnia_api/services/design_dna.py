@@ -44,6 +44,20 @@ _FONT_IMPORT_RE = re.compile(
 # Seeded corner radius — a second, cheap axis of visible variation beyond colour.
 _RADII = ("0.25rem", "0.375rem", "0.5rem", "0.625rem", "0.75rem", "1rem")
 
+# Extra per-project axes fed to the AGENT (layout + typographic personality), so
+# apps differ in more than colour — the «дизайн всегда одинаковый» complaint.
+_DENSITY = (
+    "компактная — плотные отступы (p-2/p-3, gap-2), много на экране",
+    "сбалансированная — средние отступы (p-4, gap-3)",
+    "просторная — много воздуха (p-6/p-8, gap-5/gap-6), крупные зоны",
+)
+_HEADINGS = (
+    "крупные жирные заголовки, плотный трекинг (text-2xl/3xl font-bold tracking-tight)",
+    "лёгкие тонкие заголовки, обычный трекинг (font-medium)",
+    "заголовки КАПСОМ с широким трекингом (uppercase tracking-wide text-sm font-semibold)",
+    "контрастные: огромный display-заголовок + мелкие подписи (text-4xl + text-xs)",
+)
+
 
 def _seed(project_id: str, salt: str) -> int:
     return int.from_bytes(
@@ -87,4 +101,46 @@ def inject_into_globals(
     return css.rstrip() + "\n\n" + block + "\n"
 
 
-__all__ = ["MARKER", "design_dna_css", "inject_into_globals"]
+def design_mood_directive(project_id: str, industry_hint: str | None = None) -> str:
+    """A per-project DESIGN MOOD the agent must build the UI in — so every app is
+    visually UNIQUE instead of the baked dark zinc/indigo template look.
+
+    Reuses the curated, WCAG-vetted palette + font pairing (60+ palettes / 16
+    pairs already seeded per project) and adds seeded density + heading
+    personality. Unlike CSS-token injection (inert on the hardcoded realtime
+    template), this steers what the AGENT WRITES, so it works for EVERY container
+    stack. Seeded by project_id → stable across re-prompts, distinct across
+    projects. The curated colours are pre-checked for AA contrast, so honoring
+    them keeps text readable.
+    """
+    t = tokens_for_project(project_id, industry_hint=industry_hint)
+    p = t.palette
+    density = _DENSITY[_seed(project_id, "density") % len(_DENSITY)]
+    heading = _HEADINGS[_seed(project_id, "heading") % len(_HEADINGS)]
+    radius = _RADII[_seed(project_id, "radius") % len(_RADII)]
+    return (
+        "\n\nДИЗАЙН-НАСТРОЕНИЕ ЭТОГО ПРОЕКТА — собери весь интерфейс ИМЕННО в нём. "
+        "НЕ используй дефолтный тёмный zinc/indigo вид шаблона: каждое приложение "
+        "должно выглядеть уникально.\n"
+        f"• Вайб: {p.vibe}\n"
+        f"• Холст: фон {p.bg}, основной текст {p.text}, поверхности/карточки "
+        f"{p.surface}, приглушённый текст {p.muted}, границы {p.border}\n"
+        f"• Акцент (кнопки/ссылки/активные пузыри): {p.primary}; вторичный {p.accent}\n"
+        f"• Скругления: {radius}\n"
+        f"• Плотность: {density}\n"
+        f"• Заголовки: {heading}\n"
+        f"• Шрифты: display «{t.display_font}», body «{t.body_font}» — подключи их "
+        f'через <link rel="stylesheet" href="{t.google_fonts_url}"> в layout и '
+        "примени font-family по интерфейсу.\n"
+        "Применяй эти цвета/отступы/типографику ко ВСЕМ экранам (шапка, сайдбар, "
+        "список бесед, карточки, инпуты, пузыри сообщений). Под запретом "
+        "training-дефолты indigo/violet/purple вне указанного акцента."
+    )
+
+
+__all__ = [
+    "MARKER",
+    "design_dna_css",
+    "inject_into_globals",
+    "design_mood_directive",
+]
