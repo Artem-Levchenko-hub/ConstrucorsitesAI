@@ -68,6 +68,24 @@ set up access; one React hook renders it.
 1. **Create a channel** (a conversation/room) — `POST /api/channels { title }` (the
    creator is added as an `admin` member automatically), or the server helper
    `createChannel(userId, title)` from `@/lib/channels`.
+   - ⚠️ **EVERY API response is wrapped in an envelope: `{ "data": ... }` on
+     success, `{ "error": ... }` on failure.** You MUST unwrap `.data`. Reading
+     the raw JSON (e.g. `json.id`) gives `undefined` → you navigate to
+     `/chat/undefined` and the room 500s. This is the #1 client bug on this stack.
+   - Correct CLIENT create-then-open pattern:
+     ```tsx
+     "use client";
+     // ...inside an async handler, with const router = useRouter();
+     const res = await fetch("/api/channels", {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ title }),
+     });
+     const { data } = await res.json();   // ← unwrap the envelope
+     router.push(`/chat/${data.id}`);     // open the new room (NEVER `${json.id}`)
+     ```
+   - Same for reads: `const { data } = await (await fetch("/api/channels")).json();`
+     — `data` is the array. A `[id]` page must guard `if (!id || id === "undefined") notFound()`.
 2. **Add members** — `POST /api/channels/<id>/members { email }`, or
    `addMemberByEmail(channelId, email)` from `@/lib/channels`. **ONLY members can
    read or write the channel — this is the entire security model.** To make a class
