@@ -2713,12 +2713,14 @@ async def _process_prompt(
             # surface it honestly instead of shipping a broken app as «готово».
             # Deterministic (one HTTP probe), fail-soft.
             _runtime_ok = True  # fail-soft default: a probe error ≠ a broken app
+            _rt_error = ""
             try:
                 _rt = await orchestrator_client.runtime_status(
                     project_id, slug=project_slug, path="/")
                 _runtime_ok = bool(_rt.get("ok"))
                 if not _runtime_ok:
                     _rt_err = _rt.get("error") or _rt.get("status_code") or "5xx"
+                    _rt_error = str(_rt_err)
                     accumulated += (
                         f"\n\n⚠️ Рантайм-проверка: приложение отвечает ошибкой "
                         f"({_rt_err}). Открой превью и нажми «Починить» или уточни запрос."
@@ -2737,6 +2739,7 @@ async def _process_prompt(
             # red, surface the first error honestly + keep the fixable card. Fail-soft:
             # an agent_build exception leaves _typecheck_ok=True (unknown ≠ broken).
             _typecheck_ok = True
+            _tc_error = ""
             try:
                 _tc = await orchestrator_client.agent_build(project_id, project_slug)
                 _typecheck_ok = bool(_tc.get("ok", True))
@@ -2747,6 +2750,7 @@ async def _process_prompt(
                         if _tc_detail
                         else "ошибка типизации"
                     )
+                    _tc_error = _tc_first
                     accumulated += (
                         f"\n\n⚠️ Почти готово, но осталась ошибка: {_tc_first}. "
                         f"Нажми «Починить» — доведу до чистоты."
@@ -2756,6 +2760,115 @@ async def _process_prompt(
                     print("[PP] agentic_typecheck clean", flush=True)
             except Exception as _tc_exc:
                 print(f"[PP] agentic_typecheck skipped: {_tc_exc!r}", flush=True)
+
+            # ── Edit auto-repair «до талого» ──────────────────────────────────
+            # A point-edit that didn't land cleanly — nothing written, a red
+            # typecheck, or a 5xx render — used to surface «Не удалось завершить
+            # правку — нажми Починить». Owner 2026-06-28: just DO the repair. Re-run
+            # the agent on the STRONG model with a forceful «apply the change NOW +
+            # here is the concrete error» edit prompt, then re-probe green — up to
+            # N times. Bounded + fail-soft (a repair-run exception stops the loop,
+            # never breaks the build).
+            if (
+                _is_edit
+                and get_settings().use_edit_auto_repair
+                and (not files or not _typecheck_ok or not _runtime_ok)
+            ):
+                _ar_max = max(0, int(get_settings().edit_auto_repair_attempts))
+                _ar = 0
+                while _ar < _ar_max and (
+                    not files or not _typecheck_ok or not _runtime_ok
+                ):
+                    _ar += 1
+                    _why = (
+                        f"осталась ошибка типизации: {_tc_error}"
+                        if not _typecheck_ok
+                        else f"приложение отвечает ошибкой ({_rt_error})"
+                        if not _runtime_ok
+                        else "ни один файл не был изменён — правка не применилась"
+                    )
+                    _repair_user = (
+                        "Предыдущая попытка НЕ применила правку до конца. Запрос "
+                        f"пользователя:\n\n{prompt_text}\n\n"
+                        f"Что не так ПРЯМО СЕЙЧАС: {_why}.\n\n"
+                        "Найди нужный файл (grep/read — максимум 1-2 чтения), затем "
+                        "СРАЗУ внеси правку через edit_file/write_file (твоя следующая "
+                        "запись ОБЯЗАТЕЛЬНА — не делай ещё один read), запусти build, "
+                        "почини ошибки до чистоты, затем done. Не переписывай "
+                        f"работающее.{_seed_block}"
+                    )
+                    print(
+                        f"[PP] edit_auto_repair attempt={_ar}/{_ar_max} why={_why[:90]}",
+                        flush=True,
+                    )
+                    try:
+                        await _agent_emit(
+                            "agent.step",
+                            {
+                                "action": f"чиню правку до конца ({_ar}/{_ar_max})…",
+                                "kind": "step",
+                            },
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        _rep = await agent_builder.run_agent_build(
+                            system_prompt=agent_builder.EDIT_SYSTEM_PROMPT,
+                            user_prompt=_repair_user,
+                            model=_escalate_model or _agent_model,
+                            escalate_model=_escalate_model,
+                            execute=_agent_executor,
+                            max_steps=max(int(_agent_steps), 24),
+                            emit=_agent_emit,
+                            user_id=str(user_id),
+                            project_id=str(project_id),
+                            require_green_before_done=get_settings().agent_require_green_before_done,
+                            ship_green_on_abort=get_settings().agent_ship_green_on_abort,
+                            edit_mode=True,
+                        )
+                    except Exception as _rep_exc:
+                        print(f"[PP] edit_auto_repair run failed: {_rep_exc!r}", flush=True)
+                        break
+                    if _rep.files:
+                        files.update(_rep.files)
+                    # Re-probe green after this repair attempt.
+                    try:
+                        _rt2 = await orchestrator_client.runtime_status(
+                            project_id, slug=project_slug, path="/"
+                        )
+                        _runtime_ok = bool(_rt2.get("ok"))
+                        _rt_error = (
+                            ""
+                            if _runtime_ok
+                            else str(_rt2.get("error") or _rt2.get("status_code") or "5xx")
+                        )
+                    except Exception:
+                        _runtime_ok = True
+                    try:
+                        _tc2 = await orchestrator_client.agent_build(
+                            project_id, project_slug
+                        )
+                        _typecheck_ok = bool(_tc2.get("ok", True))
+                        _tc_error = (
+                            ""
+                            if _typecheck_ok
+                            else (str(_tc2.get("detail") or "").splitlines() or [""])[0][:240]
+                        )
+                    except Exception:
+                        _typecheck_ok = True
+                if files and _typecheck_ok and _runtime_ok:
+                    accumulated = "Готово — правка применена."
+                    print(
+                        f"[PP] edit_auto_repair SUCCESS after {_ar} attempt(s)",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[PP] edit_auto_repair exhausted attempts={_ar} "
+                        f"files={len(files)} tc={_typecheck_ok} rt={_runtime_ok}",
+                        flush=True,
+                    )
+            # ──────────────────────────────────────────────────────────────────
 
             # Design DNA — give this entity/agent app a DISTINCT identity (seeded
             # accent + font pairing) so it stops looking identical to every other

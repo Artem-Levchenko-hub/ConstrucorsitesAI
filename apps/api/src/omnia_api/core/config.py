@@ -831,6 +831,17 @@ class Settings(BaseSettings):
     # a model that never finishes would run forever). Env: AGENT_MAX_SEGMENTS.
     agent_max_segments: int = Field(default=6)
 
+    # Edit auto-repair (owner 2026-06-28: «надо чтобы он ПРЯМ ЧИНИЛ, а не выдавал
+    # „Не удалось завершить правку — нажми Починить“»). When a point-EDIT doesn't
+    # land cleanly — nothing written, a red typecheck, or a 5xx render — don't ask
+    # the user to click «Починить»: re-run the agent on the STRONG model with a
+    # forceful «apply the change NOW + here is the concrete error» prompt and
+    # build-to-green, up to edit_auto_repair_attempts times. Bounded + fail-soft
+    # (a repair-run exception just stops the loop, never breaks the build). Kill
+    # per-env: USE_EDIT_AUTO_REPAIR=false.
+    use_edit_auto_repair: bool = Field(default=True)
+    edit_auto_repair_attempts: int = Field(default=4)
+
     # Gate-feedback self-heal (unleash-the-model layer C). The agent now MAY write
     # custom server logic (the backend ban is lifted) — so after it says done we
     # statically verify the one unsafe thing (raw-DB escape via the backend
