@@ -845,9 +845,14 @@ class Settings(BaseSettings):
     # the agent says done we drive the live preview through the functional gate
     # (signup → live SSE delivery → outsider-403) and feed a red verdict back as a
     # BLOCKING outcome, so a broken/leaky feature self-heals before the snapshot.
-    # Realtime stacks only (functional gate is self-contained); fail-soft + off by
-    # default → prod ship decision unchanged. Env: USE_RUNTIME_GATES.
-    use_runtime_gates: bool = Field(default=False)
+    # Realtime stacks only (functional gate is self-contained); fail-soft. ON by
+    # default (owner 2026-06-28: a realtime build must PROVE two users can chat +
+    # an outsider is denied 403 BEFORE it ships «зелёным» — a clean typecheck is
+    # exactly what a weak model hallucinates «done» around, so realtime apps were
+    # shipping unusable-but-green). Heal is discarded unless it stays typecheck-
+    # green, so the gate can never ship WORSE than gate-off. Kill per-env:
+    # USE_RUNTIME_GATES=false.
+    use_runtime_gates: bool = Field(default=True)
 
     # Honest chat content (2026-06-21). The assistant message saved to the DB is
     # the model's RAW output (<file>/<edit> blocks + any stray prose/code). The

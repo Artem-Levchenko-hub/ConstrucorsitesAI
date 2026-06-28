@@ -218,6 +218,7 @@ async def run_agent_build(
     max_tokens: int = 8192,
     require_green_before_done: bool = False,
     ship_green_on_abort: bool = True,
+    edit_mode: bool = False,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -444,7 +445,9 @@ async def run_agent_build(
                 )
                 if emit:
                     await emit("agent.stalled", {"step": step})
-                convo.append({"role": "user", "content": _REPEAT_CYCLE_NUDGE})
+                convo.append({"role": "user", "content": (
+                    _EDIT_REPEAT_CYCLE_NUDGE if edit_mode else _REPEAT_CYCLE_NUDGE
+                )})
                 continue
         if sig == last_sig:
             repeat_count += 1
@@ -467,10 +470,19 @@ async def run_agent_build(
                 flush=True,
             )
             convo.append({"role": "user", "content": (
-                f"STOP — you ran this EXACT action {repeat_count + 1} times with the "
-                "same result. Do NOT repeat it. You have enough context: WRITE the "
-                "next file now (a dashboard page renders <CrudResource entity=\"...\"/>; "
-                "also write dashboard/page.tsx), or run build, or call done."
+                (
+                    f"STOP — you ran this EXACT action {repeat_count + 1} times with "
+                    "the same result. Do NOT repeat it. You have enough context: emit "
+                    "the edit_file / write_file patch for the requested change NOW, "
+                    "then run build, then call done."
+                )
+                if edit_mode
+                else (
+                    f"STOP — you ran this EXACT action {repeat_count + 1} times with the "
+                    "same result. Do NOT repeat it. You have enough context: WRITE the "
+                    "next file now (a dashboard page renders <CrudResource entity=\"...\"/>; "
+                    "also write dashboard/page.tsx), or run build, or call done."
+                )
             )})
             continue
 
@@ -495,7 +507,9 @@ async def run_agent_build(
                     ),
                     step, "explore",
                 )
-            if no_write_streak >= _NO_WRITE_NUDGE_AT:
+            if no_write_streak >= (
+                _EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT
+            ):
                 # If the app is already GREEN (build clean + route verified + no
                 # unverified writes) there is nothing left to write — the model is
                 # thrashing on bash/see/build AFTER success (observed live: a
@@ -515,7 +529,11 @@ async def run_agent_build(
                 if emit:
                     await emit("agent.stalled", {"step": step})
                 convo.append({"role": "user", "content": (
-                    _DONE_WHEN_GREEN_NUDGE if _green else _EXPLORE_STALL_NUDGE
+                    _DONE_WHEN_GREEN_NUDGE
+                    if _green
+                    else (
+                        _EDIT_EXPLORE_STALL_NUDGE if edit_mode else _EXPLORE_STALL_NUDGE
+                    )
                 )})
                 continue  # don't execute another read — force write/done next
 
@@ -616,6 +634,31 @@ _EXPLORE_STALL_NUDGE = (
     "<CrudResource entity=\"Name\" .../>; the dashboard index is "
     "src/app/(app)/dashboard/page.tsx. When every page exists, run build; when the "
     "build is clean, call done. Writing a file is the ONLY way to make progress."
+)
+
+# Edit-mode nudges. The build nudges above name ENTITY primitives (CrudResource,
+# dashboard/page.tsx) — nonsense on a realtime / other-stack EDIT. Observed live:
+# an "add member by name" edit on a realtime app got nudged to write a
+# <CrudResource> page, so even the escalated strong model ignored the nudge and
+# kept reading (14 steps, 0 writes → honest no-change, the «правка ничего не
+# меняет» bug). A point edit needs a stack-agnostic "stop reading, emit the patch"
+# push instead, and it needs it SOONER than a from-scratch build.
+_EDIT_NO_WRITE_NUDGE_AT = 3
+
+_EDIT_EXPLORE_STALL_NUDGE = (
+    "STOP READING. You have already located the code for this change — that is "
+    "ENOUGH. Do NOT read_file / grep / list_dir / bash again. Your VERY NEXT action "
+    "MUST be edit_file or write_file that implements the requested change (add the "
+    "UI control, wire the call, fix the handler — whatever was asked). After "
+    "writing, run build; when it is clean, call done. Emitting the file patch is "
+    "the ONLY way to apply the edit — another read applies nothing."
+)
+
+_EDIT_REPEAT_CYCLE_NUDGE = (
+    "STOP — you have already issued this exact action; repeating it applies "
+    "NOTHING and the edit is not advancing. You have the context you need. Emit the "
+    "edit_file / write_file patch for the requested change NOW, then build, then "
+    "done. Do not read the same file again."
 )
 
 

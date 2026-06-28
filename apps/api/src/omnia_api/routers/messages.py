@@ -2558,6 +2558,7 @@ async def _process_prompt(
                 project_id=str(project_id),
                 require_green_before_done=get_settings().agent_require_green_before_done,
                 ship_green_on_abort=get_settings().agent_ship_green_on_abort,
+                edit_mode=_is_edit,
             )
             _all_files = dict(_agent_res.files)
             _total_steps = _agent_res.steps
@@ -2837,10 +2838,27 @@ async def _process_prompt(
             # self-heals BEFORE the snapshot lands — a clean typecheck is exactly what a
             # model hallucinates completion around. Realtime-only (the functional gate
             # is self-contained), fail-soft, off by default → prod ship unchanged.
+            # Gate also re-runs on an EDIT that touched the realtime UI surface
+            # (chat/room/layout/components/globals) — such an edit can silently
+            # re-break two-user live delivery or the membership ACL, and an edit
+            # was NEVER gated before (`not _is_edit`), so a working messenger could
+            # be degraded with no behavioural re-check. Unrelated edits (0 files or
+            # non-UI files only) stay fast — the gate is skipped for them.
+            _edit_touched_ui = bool(_is_edit) and any(
+                _p.endswith((".tsx", ".ts", ".css"))
+                and (
+                    "chat" in _p
+                    or "realtime" in _p
+                    or "layout" in _p
+                    or "/components/" in _p
+                    or _p.endswith("globals.css")
+                )
+                for _p in files
+            )
             try:
                 if (
                     get_settings().use_runtime_gates
-                    and not _is_edit
+                    and (not _is_edit or _edit_touched_ui)
                     and _orch_name == "nextjs-realtime"
                 ):
                     from omnia_api.services import agent_gate_feedback as _agf2
