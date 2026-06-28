@@ -20,6 +20,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 import docker  # type: ignore[import-untyped]
+import requests  # docker SDK transport — its timeouts surface as requests errors
 import structlog
 
 from omnia_orchestrator.core.config import get_settings
@@ -555,10 +556,23 @@ async def destroy_container(name: str) -> None:
             return
         try:
             c.stop(timeout=5)
-        except docker.errors.APIError:
-            pass  # may already be stopped
+        except (docker.errors.APIError, requests.exceptions.Timeout):
+            pass  # already stopped, or daemon busy — the force-remove handles it
         try:
             c.remove(v=True, force=True)
+        except docker.errors.NotFound:
+            return  # already gone — idempotent
+        except requests.exceptions.Timeout:
+            # The force-remove (SIGKILL + rm) was dispatched, but under heavy
+            # daemon load the SDK's 60s read can elapse before the daemon
+            # answers — the removal still completes in the background. Treat the
+            # timeout as best-effort success so a slow daemon never blocks the
+            # user's «удалить»: the teardown is idempotent, so any leftover is a
+            # no-op on the next pass / reaped by hibernate. Owner bug — projects
+            # with a live container 503'd forever because this ReadTimeout (NOT a
+            # docker.errors.APIError) escaped and failed the whole deletion.
+            log.warning("docker.destroy_container.remove_timeout", name=name)
+            return
         except docker.errors.APIError as exc:
             raise OrchestratorError(
                 code="container_failure",
