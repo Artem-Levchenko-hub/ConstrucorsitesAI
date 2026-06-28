@@ -683,6 +683,7 @@ ACTIONS:
 - list_dir   {"path": "src/app"}
 - read_file  {"path": "src/app/page.tsx"}
 - grep       {"pattern": "regex", "path": "src"}
+- docs       {"library": "drizzle-orm", "query": "select where"}  — pull CURRENT official docs/signatures for an EXTERNAL library (Next.js, Drizzle, NextAuth, aiogram…) when unsure of an API; use it INSTEAD of guessing
 - write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
 - build      {}                                — real typecheck; returns the actual errors
@@ -798,6 +799,7 @@ ACTIONS:
 - list_dir   {"path": "src/app"}
 - read_file  {"path": "src/app/page.tsx"}
 - grep       {"pattern": "regex", "path": "src"}
+- docs       {"library": "drizzle-orm", "query": "select where"}  — pull CURRENT official docs/signatures for an EXTERNAL library (Next.js, Drizzle, NextAuth, aiogram…) when unsure of an API; use it INSTEAD of guessing
 - write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
 - build      {}                                — real typecheck; returns the actual errors
@@ -808,7 +810,9 @@ ACTIONS:
 - done       {"summary": "what you built"}     — ONLY after a clean build, the app renders, AND `see` is happy
 
 WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
-read or write, never ask the user questions — decide and act. When you author tests, \
+read or write, never ask the user questions — decide and act. When an EXTERNAL library's \
+API bites you (a build error about a wrong signature, a renamed export, a removed option), \
+call `docs` for that library BEFORE guessing — current docs beat a stale memory. When you author tests, \
 run them with bash. After the build is clean, `runtime_check` the main route(s) — a \
 typecheck-clean app can still crash on render; if it 5xx, `read_logs`, fix, re-check. \
 Then `see` the main route — the vision judge returns concrete design fixes; apply them \
@@ -1119,6 +1123,26 @@ def make_container_executor(
                     pattern=str(action.args.get("pattern", "")),
                     path=action.path or "src")
                 return {"ok": True, "detail": detail}
+
+            if action.name == "docs":
+                # Up-to-date EXTERNAL-library docs from Context7 — so the model uses
+                # the real CURRENT API instead of a hallucinated/stale one (the #1
+                # source of build-loop / edit-fail churn). Fail-soft: a miss returns
+                # ok=False with a «continue from what you know» nudge, never raises.
+                from omnia_api.services import context7_client
+                _lib = str(action.args.get("library") or action.args.get("lib") or "")
+                _q = str(action.args.get("query") or action.args.get("topic") or "")
+                _docs = await context7_client.fetch_docs(_lib, _q)
+                if not _docs:
+                    return {
+                        "ok": False,
+                        "error": f"no up-to-date docs for {_lib!r} — continue from what you know",
+                    }
+                return {
+                    "ok": True,
+                    "content": _truncate(_docs, _MAX_READ_CHARS),
+                    "detail": f"docs: {_lib} / {_q}",
+                }
 
             if action.name == "write_file":
                 content = action.args.get("content")
