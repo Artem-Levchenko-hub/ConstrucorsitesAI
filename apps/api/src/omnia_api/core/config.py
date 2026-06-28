@@ -243,7 +243,7 @@ class Settings(BaseSettings):
     #                          gateway multimodal support; best-effort, fail-soft)
     use_freeform_render: bool = Field(default=True)
     use_acceptance_gate: bool = Field(default=True)
-    use_vision_audit: bool = Field(default=False)
+    use_vision_audit: bool = Field(default=True)
     # Design judge (2026-06-05) — premium / on-button Awwwards critic. Runs ONE
     # vision-critic pass + at most ONE repair re-roll (cost-bounded — owner
     # directive: judge must NOT loop many times), then ship. When on, forces the
@@ -263,7 +263,7 @@ class Settings(BaseSettings):
     # "secure from the first prompt". OFF by default (needs a live preview + the
     # realtime contract; advisory until wired into the ship boolean). Enable per
     # realtime project with USE_FUNCTIONAL_GATE=true.
-    use_functional_gate: bool = Field(default=False)
+    use_functional_gate: bool = Field(default=True)
 
     # Backend-authoring guardrail (G003) — lifts the "never write backend" ban and
     # replaces it with a static check: writer-authored server code may author real
@@ -276,7 +276,7 @@ class Settings(BaseSettings):
     # writeRoles primitive actually enforces: drives a live entities app across two
     # role sessions and checks a role matrix (right role allowed, wrong role 403,
     # denied write doesn't silently succeed). OFF by default; for role-gated apps.
-    use_role_gate: bool = Field(default=False)
+    use_role_gate: bool = Field(default=True)
 
     # Security negative-path gate (G005) — aggregates the leak-attempt results
     # (functional/role gates: another user denied another's records + cross-
@@ -284,7 +284,7 @@ class Settings(BaseSettings):
     # present, payload cap 413, CORS not wildcard-with-credentials). Any leak or
     # missing protection fails. OFF by default; makes "secure from prompt 1"
     # enforceable once wired into the ship boolean.
-    use_security_gate: bool = Field(default=False)
+    use_security_gate: bool = Field(default=True)
 
     # SAST gate (K3a, knowledge-layer plan §3.1) — deterministic STATIC source
     # scan of writer files for the top AI-code CWEs (injection sinks + hard-coded
@@ -293,7 +293,7 @@ class Settings(BaseSettings):
     # security_gate); `sast_gate_blocking` makes a finding a BLOCKING outcome that
     # the agent_gate_feedback loop heals before ship. Both OFF by default →
     # prod generation byte-unchanged. Env: USE_SAST_GATE / SAST_GATE_BLOCKING.
-    use_sast_gate: bool = Field(default=False)
+    use_sast_gate: bool = Field(default=True)
     sast_gate_blocking: bool = Field(default=False)
 
     # Skill injection (K1, knowledge-layer plan §2) — when on, the agent's system
@@ -302,7 +302,7 @@ class Settings(BaseSettings):
     # draft's floor. OFF by default → the agent prompt is unchanged. Env:
     # USE_SKILL_INJECTION. (Effect is unproven on its own — validate via A/B vs
     # the gates per the plan; the gates remain the guaranteed ceiling.)
-    use_skill_injection: bool = Field(default=False)
+    use_skill_injection: bool = Field(default=True)
 
     # Full runnable export (P5, knowledge-layer/master plan) — when on, the
     # project download for a CONTAINER stack overlays the skeleton template tree
@@ -310,7 +310,7 @@ class Settings(BaseSettings):
     # code + README), not just the generated files. Fail-soft: if the template
     # tree isn't available it falls back to today's snapshot-only zip, so it can
     # never produce a worse download. OFF by default. Env: USE_FULL_CONTAINER_EXPORT.
-    use_full_container_export: bool = Field(default=False)
+    use_full_container_export: bool = Field(default=True)
 
     # Clarify interview (2026-06-05) — on the FIRST message of a brand-new
     # project, ask the user 3–4 short business-specific questions BEFORE building
@@ -355,34 +355,34 @@ class Settings(BaseSettings):
     # rollback-able and the orchestrated build writes the app on top. Default OFF:
     # the feature ships dark and is enabled (USE_FOLLOWUP_APPIFICATION=true) only
     # after live verification, so prod behaviour is unchanged until then.
-    use_followup_appification: bool = Field(default=False)
+    use_followup_appification: bool = Field(default=True)
     # ── Result-type router (RT-1, 2026-06-22) ────────────────────────────
     # First-class `result_type` (landing/web_app/tool/site/code) decided on the
     # FIRST prompt SEPARATELY from the stack, by a cheap LLM classifier (role
     # `result_type`) with the existing keyword nets as a deterministic safety-net.
     # Master switch: OFF → the first-build stack decision is byte-identical to
     # today (only the legacy _infer_* nets run). Kill: USE_RESULT_TYPE_ROUTER=false.
-    use_result_type_router: bool = Field(default=False)
+    use_result_type_router: bool = Field(default=True)
     # Sub-slice (independently flippable): a `landing` result-type with a conversion
     # word («запись/бронь/оформить заказ») builds as a PUBLIC lead-capture landing
     # (spa + POST /p/<slug>/lead) instead of being force-escalated to an auth-gated
     # nextjs_entities app behind /signin (BS-7). Requires use_result_type_router.
     # OFF → today's escalation. Highest-value, lowest-risk slice — flip FIRST.
     # Env: RESULT_TYPE_LANDING_LEAD_SINK=true.
-    result_type_landing_lead_sink: bool = Field(default=False)
+    result_type_landing_lead_sink: bool = Field(default=True)
     # Raise app-ification framing into the FIRST build (bug 2): «сделай
     # веб-приложение / приложение / чтобы пользователи могли …» on the first prompt,
     # even without a precise backend noun, routes to web_app (nextjs_entities)
     # instead of falling through to spa. Requires use_result_type_router. OFF →
     # first build ignores framing (today). Env: RESULT_TYPE_FIRSTBUILD_APPIFY=true.
-    result_type_firstbuild_appify: bool = Field(default=False)
+    result_type_firstbuild_appify: bool = Field(default=True)
     # ONE clarifying question about the RESULT TYPE when it is genuinely ambiguous
     # (classifier unsure AND keyword net silent). Folds "type clarity" into the
     # build-readiness gate so an ambiguous «приложение» earns one type question
     # instead of design questions about an unknown product. Requires
     # use_result_type_router. OFF → no extra question. Env:
     # RESULT_TYPE_CLARIFY_QUESTION=true.
-    result_type_clarify_question: bool = Field(default=False)
+    result_type_clarify_question: bool = Field(default=True)
     # App-error cards (2026-06-09, owner P2). After a container-app build, surface
     # build/compile/schema failures as structured cards in the chat (instead of
     # plain italic notices) and probe the dev server for a Next.js compile error
@@ -430,7 +430,7 @@ class Settings(BaseSettings):
     # re-roll with the vision issues as concrete feedback, so "not ugly but
     # generic" regenerates instead of shipping. Only fires when vision really ran.
     # Default OFF = today's behaviour (only broken / score<repair_floor re-rolls).
-    acceptance_taste_repair_on_generic: bool = Field(default=False)
+    acceptance_taste_repair_on_generic: bool = Field(default=True)
     # Taste-specific repair budget — how many extra Loop A re-rolls the taste
     # barrier may spend. Decoupled from the global `auto_regenerate_enabled`
     # (owner: never auto-regenerate the whole page) so the taste path can be
@@ -469,7 +469,7 @@ class Settings(BaseSettings):
     # they are OFF by default — flip ACCEPTANCE_GAUNTLET_RENDER_GATES=true to add
     # their teeth to the hot path. The standalone CLI / niche-E2E always runs the
     # full fan-out (it audits a live container URL, no per-attempt cost).
-    acceptance_gauntlet_render_gates: bool = Field(default=False)
+    acceptance_gauntlet_render_gates: bool = Field(default=True)
     # V1.6 14/5 — DECOUPLE the composition floor from the touch leg. Taste +
     # hierarchy (the COMPOSITION_LEGS) score awwwards richness at DESKTOP width and
     # have NO 44px-touch false-positive, so they are the ALWAYS-ON hard ship-block
@@ -520,7 +520,7 @@ class Settings(BaseSettings):
     # `--out` report. CI runs `--mode guard` (via test_reference_flip_milestone):
     # this flag ON without a recorded passing milestone turns the suite RED. Mirror
     # of `acceptance_gauntlet_render_gates` / 16/5e. Default OFF.
-    acceptance_gauntlet_reference_gate: bool = Field(default=False)
+    acceptance_gauntlet_reference_gate: bool = Field(default=True)
     # V1.13d — the CEILING RATCHET strength. The reference leg today compares only
     # the BOOLEAN per-axis verdicts (axis passed / failed), so once a generation
     # independently clears the taste/hierarchy floor it "meets or beats" every
@@ -534,7 +534,7 @@ class Settings(BaseSettings):
     # render miss or a thin reference ABSTAINS (R-10), so a flaky corpus render can
     # never sink an otherwise-good page. Independent of the `reference_gate` dial
     # (that decides WHETHER the leg runs; this decides HOW STRICT it is when it does).
-    reference_ceiling_enforced: bool = Field(default=False)
+    reference_ceiling_enforced: bool = Field(default=True)
     # Points a generation may fall below the reference's own richness before the
     # ceiling ratchet fails it (only consulted when `reference_ceiling_enforced`).
     # 0 = strict meet-or-beat; 1 (default) forgives one soft regression so a single
@@ -554,7 +554,7 @@ class Settings(BaseSettings):
     # hot path — it adds one headless render per generation, so the owner flips it on
     # (or the paid-run manifest folds it in) once the niche heuristics have earned
     # trust; the CLI folds it in already.
-    acceptance_gauntlet_catalog_gate: bool = Field(default=False)
+    acceptance_gauntlet_catalog_gate: bool = Field(default=True)
     # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
     # (container-backed), so the composition floor never touched the dominant
     # pillar-1 class. This wires the live-URL path: after a clean hot-reload +
@@ -570,7 +570,7 @@ class Settings(BaseSettings):
     # discriminates with precise classes); flip ON once the legs are calibrated for
     # real entity apps (strip dev-overlay nodes + taste single-family tolerance) —
     # carried as 16/5b. CLI / niche-E2E always run the legs regardless.
-    acceptance_entity_composition_gate: bool = Field(default=False)
+    acceptance_entity_composition_gate: bool = Field(default=True)
 
     # ── Phase 1 / Area D — composition-gate retune (anti-sameness, DARK) ───
     # Why: the ALWAYS-ON composition floor (taste 4/5 + hierarchy 2/3) mechanically
@@ -620,7 +620,7 @@ class Settings(BaseSettings):
     # @390, and verifies empty-state/onboarding/skeleton hygiene. OFF = current
     # behaviour byte-identical (taste+hierarchy on `/`, no login). Requires the
     # orchestrator's OMNIA_GATE_SEED=1 so a login-able seed account exists.
-    gate_authenticated_cabinet: bool = Field(default=False)
+    gate_authenticated_cabinet: bool = Field(default=True)
     # Login email for the gate's seed operator account (matches the orchestrator
     # seed). Fixed local address — it can never receive mail, only sign in.
     gate_seed_email: str = Field(default="gate@omnia.local")
@@ -752,7 +752,7 @@ class Settings(BaseSettings):
     # COMPLETE, connected feature. Pairs with the self-repair loop (new files that
     # don't compile get auto-healed). Default OFF = byte-identical (no extra prompt
     # block). Recommended flip: true. Env: USE_FEATURE_SCAFFOLD.
-    use_feature_scaffold: bool = Field(default=False)
+    use_feature_scaffold: bool = Field(default=True)
 
     # Real-backend default (2026-06-27, owner: «мне ентитиз не нужны, нужен реальный
     # бэкенд»). When ON, a `web_app` result-type (accounts + saved data) routes to
@@ -802,7 +802,7 @@ class Settings(BaseSettings):
     # instead of one-shot text→regex. Default OFF = byte-identical to today's
     # pipeline (the loop is never entered). Flip per-project for dogfood first.
     # Env: USE_AGENTIC_BUILDER. `agent_builder_max_steps` bounds the loop.
-    use_agentic_builder: bool = Field(default=False)
+    use_agentic_builder: bool = Field(default=True)
     # Step budget for the loop. Explore-then-build on the entity template needs
     # headroom: the agent reads a couple of examples, declares N entities, writes
     # the screens, then build+fix. 14 was too tight (all spent exploring); 40
@@ -814,7 +814,7 @@ class Settings(BaseSettings):
     # around → a runtime-broken app shipped). Bounded internally so it nudges,
     # never hangs. Default OFF = today's behaviour. Env:
     # AGENT_REQUIRE_GREEN_BEFORE_DONE.
-    agent_require_green_before_done: bool = Field(default=False)
+    agent_require_green_before_done: bool = Field(default=True)
     # Agentic-builder CANARY (2026-06-27): comma-separated user ids for whom the
     # agent loop runs even when use_agentic_builder is globally OFF. Lets the
     # agent be dogfooded on prod for specific accounts WITHOUT changing generation
@@ -838,7 +838,7 @@ class Settings(BaseSettings):
     # turn so the loop FIXES it (bounded by agent_gate_max_attempts) before commit.
     # OFF by default → the guardrail runs advisory-only (logs, never re-loops), so
     # prod generation is unchanged. Env: USE_AGENT_GATE_FEEDBACK.
-    use_agent_gate_feedback: bool = Field(default=False)
+    use_agent_gate_feedback: bool = Field(default=True)
     agent_gate_max_attempts: int = Field(default=2)
     # Runtime gates in the loop (research finding: functional/role gates were
     # defined+tested but UNWIRED — only the static guardrail ran). When on, after
@@ -887,7 +887,7 @@ class Settings(BaseSettings):
     # route. Off by default (the omnia-exe-builder image is an optional
     # sidecar; flip on once it is present in docker-compose). Kill switch:
     # USE_EXE_BUILD=false.
-    use_exe_build: bool = Field(default=False)
+    use_exe_build: bool = Field(default=True)
     # Hard-limit on the Setup.exe size (MB) the worker will accept before
     # refusing to upload. Prevents a runaway PyInstaller from exhausting
     # MinIO quota. Env: EXE_BUILD_MAX_MB.
