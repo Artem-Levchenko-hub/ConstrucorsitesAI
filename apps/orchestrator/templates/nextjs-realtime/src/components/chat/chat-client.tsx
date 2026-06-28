@@ -10,7 +10,9 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { InviteMember } from "@/components/realtime/invite-member";
 import { useChannel } from "@/components/realtime/use-channel";
+import { useChannelHistory } from "@/components/realtime/use-channel-history";
 import type { Message } from "@/lib/db/schema";
 import type { RealtimeEvent } from "@/lib/realtime/types";
 
@@ -70,7 +72,7 @@ function MessagePane({
   function onType(v: string) {
     setText(v);
     const now = Date.now();
-    if (now - lastTyping.current > 1500) {
+    if (now - lastTyping.current > 2500) {
       lastTyping.current = now;
       void send("typing", {});
     }
@@ -169,64 +171,17 @@ function ChannelView({
   channelId: string;
   currentUserId: string;
 }) {
-  const [initial, setInitial] = useState<RealtimeEvent[] | null>(null);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteMsg, setInviteMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    setInitial(null);
-    fetch(`/api/channels/${channelId}/messages`, { credentials: "include" })
-      .then((r) => r.json())
-      .then((j: { data?: RealtimeEvent[] }) => {
-        if (alive) setInitial(j.data ?? []);
-      })
-      .catch(() => {
-        if (alive) setInitial([]);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [channelId]);
-
-  async function invite(e: React.FormEvent) {
-    e.preventDefault();
-    const email = inviteEmail.trim();
-    if (!email) return;
-    const r = await fetch(`/api/channels/${channelId}/members`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-      credentials: "include",
-    });
-    const j = (await r.json().catch(() => ({}))) as { error?: string };
-    setInviteMsg(r.ok ? "Участник добавлен" : (j.error ?? "Ошибка"));
-    setInviteEmail("");
-    setTimeout(() => setInviteMsg(null), 3000);
-  }
+  // Fixed primitives: history is loaded envelope-safe (useChannelHistory unwraps
+  // `.data` and guards an undefined id — the #1 client bug), and the invite
+  // control is the locked <InviteMember> so a restyle can never drop "add a
+  // friend" and leave the user alone in the channel.
+  const { initial } = useChannelHistory(channelId);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <form
-        onSubmit={invite}
-        className="flex items-center gap-2 border-b border-neutral-800 px-4 py-2"
-      >
-        <input
-          value={inviteEmail}
-          onChange={(e) => setInviteEmail(e.target.value)}
-          placeholder="Добавить участника по email"
-          className="min-w-0 flex-1 rounded-md border border-neutral-700 bg-neutral-950 px-3 py-1.5 text-sm outline-none focus:border-neutral-500"
-        />
-        <button
-          type="submit"
-          className="rounded-md border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 transition hover:bg-neutral-800"
-        >
-          Пригласить
-        </button>
-        {inviteMsg && (
-          <span className="text-xs text-neutral-400">{inviteMsg}</span>
-        )}
-      </form>
+      <div className="border-b border-neutral-800 px-4 py-2">
+        <InviteMember channelId={channelId} />
+      </div>
       {initial === null ? (
         <div className="p-4 text-sm text-neutral-500">Загрузка…</div>
       ) : (

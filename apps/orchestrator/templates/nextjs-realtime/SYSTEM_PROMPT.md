@@ -51,8 +51,10 @@ Everything below is already built and wired. **Never recreate or edit it.**
   Other types (`typing`, `reaction`, `cursor`, …) are **ephemeral** — delivered
   live, never stored. `presence` is **engine-managed — do NOT publish it**; the hub
   tracks who's subscribed and emits presence for you.
-- **Rate limit:** 20 publishes / 10s per user+channel (fixed, in-memory). Don't
-  build your own throttle; don't spam the channel in a loop.
+- **Rate limit:** separate per-kind budgets per user+channel (fixed, in-memory):
+  30 messages / 10s and 120 ephemeral signals (typing/reactions) / 10s, so a
+  typing stream never 429s a real message. Don't build your own throttle; don't
+  spam the channel in a loop.
 - **DB tables** (Drizzle, `src/lib/db/schema.ts` — **FIXED**): `users`, `channels`,
   `channel_members`, `messages`. You never declare or migrate these.
 - **Auth** is NextAuth v5 (credentials + JWT, no adapter). Register at
@@ -117,11 +119,21 @@ set up access; one React hook renders it.
   OWN Drizzle tables in a **NEW file** (e.g. `src/lib/db/app-schema.ts`), never in
   `schema.ts`.
 - **You NEVER TOUCH:** `src/lib/realtime/**` (hub, policy, transport),
-  `src/lib/db/schema.ts`, `src/lib/auth.ts`, `src/lib/session.ts`,
-  `src/lib/channels.ts`, and the route handlers under `src/app/api/realtime/**`,
-  `src/app/api/auth/**`, `src/app/api/channels/**`. The channel string format, the
-  `{type,data}` event contract, and the membership ACL are fixed contracts — build
-  on them, don't fork them.
+  `src/components/realtime/**` (the `useChannel` / `useChannelHistory` hooks and
+  the `<InviteMember>` control), `src/lib/db/schema.ts`, `src/lib/auth.ts`,
+  `src/lib/session.ts`, `src/lib/channels.ts`, and the route handlers under
+  `src/app/api/realtime/**`, `src/app/api/auth/**`, `src/app/api/channels/**`. The
+  channel string format, the `{type,data}` event contract, and the membership ACL
+  are fixed contracts — build on them, don't fork them.
+- **Keep these two controls in every channel view — import them, never reinvent**
+  (dropping them is the #1 way a generated chat becomes unusable: the user ends up
+  alone with no way to add anyone, or 403s on their own history):
+  - `import { InviteMember } from "@/components/realtime/invite-member";` → render
+    `<InviteMember channelId={id} />` so a user can ALWAYS add a member by email
+    and see the roster. A chat with no invite control is a single-user dead end.
+  - `import { useChannelHistory } from "@/components/realtime/use-channel-history";`
+    → `const { initial } = useChannelHistory(id);` loads history envelope-safe (it
+    unwraps `.data` and guards an `undefined` id for you); seed `useChannel({ initial })`.
 
 ## Auth & guards (pre-wired — DO NOT reinvent)
 
@@ -189,15 +201,18 @@ Good shape:
 
    ```tsx
    <file path="src/app/(app)/class/[id]/page.tsx">
+   import { notFound } from "next/navigation";
    import { requireUser } from "@/lib/session";
    import Room from "./room";
 
    export default async function Page({ params }: { params: Promise<{ id: string }> }) {
      await requireUser();
      const { id } = await params;
+     if (!id || id === "undefined") notFound();   // guard the #1 bug (bad id-unwrap)
      // membership-gated: a non-member fetching this 403s before any data leaks
      const res = await fetch(`/api/channels/${id}/messages`, { cache: "no-store" });
-     const initial = res.ok ? await res.json() : [];
+     const body = res.ok ? await res.json() : { data: [] };
+     const initial = body.data ?? [];   // ← unwrap the envelope, never the raw JSON
      return <Room channelId={id} initial={initial} />;
    }
    </file>

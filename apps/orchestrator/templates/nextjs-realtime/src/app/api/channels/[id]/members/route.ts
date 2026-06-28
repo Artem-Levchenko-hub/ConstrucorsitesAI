@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 
-import { addMemberByEmail } from "@/lib/channels";
+import { addMemberByEmail, listMembers } from "@/lib/channels";
 import {
   assertChannelAccess,
   ChannelForbiddenError,
@@ -45,4 +45,25 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
   return NextResponse.json({ data: { ok: true, userId: addedUserId } });
+}
+
+// GET /api/channels/<id>/members — the channel roster. Any member may see who
+// is in the conversation (membership-gated, same as history; a non-member gets
+// 403). Gives the UI a member list to render + an "add someone" affordance, so a
+// generated chat can never become a single-user dead end.
+export async function GET(_req: Request, ctx: Ctx) {
+  const { id } = await ctx.params;
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  try {
+    await assertChannelAccess(`conversation:${id}`, user.id, "read");
+  } catch (e) {
+    if (e instanceof ChannelForbiddenError) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+    throw e;
+  }
+  return NextResponse.json({ data: await listMembers(id) });
 }

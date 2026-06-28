@@ -46,10 +46,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     throw e;
   }
 
-  if (!allowPublish(user.id, decoded)) {
-    return NextResponse.json({ error: "rate limited" }, { status: 429 });
-  }
-
   const body = (await req.json().catch(() => ({}))) as Partial<PublishBody>;
   const type =
     typeof body.type === "string" && body.type.trim() ? body.type : "message";
@@ -58,6 +54,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { error: "presence is engine-managed" },
       { status: 400 },
     );
+  }
+
+  // Rate-limit AFTER the kind is known, with SEPARATE budgets: a chatty
+  // ephemeral stream (typing/reactions) must never 429 a real message — that
+  // shared-bucket starvation was the live "messages feel stuck" self-DoS.
+  const kind = type === "message" ? "message" : "ephemeral";
+  if (!allowPublish(user.id, decoded, kind)) {
+    return NextResponse.json({ error: "rate limited" }, { status: 429 });
   }
 
   let data: unknown = body.data ?? null;

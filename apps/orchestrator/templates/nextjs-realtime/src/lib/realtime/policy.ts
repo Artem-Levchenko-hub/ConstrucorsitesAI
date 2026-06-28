@@ -21,7 +21,7 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { channelMembers } from "@/lib/db/schema";
+import { channelMembers, channels } from "@/lib/db/schema";
 
 export type Access = "read" | "write";
 
@@ -55,6 +55,17 @@ async function isMember(channelId: string, userId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/** True iff `userId` created the channel (`channels.createdBy`). */
+async function isCreator(channelId: string, userId: string): Promise<boolean> {
+  if (!channelId) return false;
+  const rows = await db
+    .select({ createdBy: channels.createdBy })
+    .from(channels)
+    .where(eq(channels.id, channelId))
+    .limit(1);
+  return rows.length > 0 && rows[0].createdBy === userId;
+}
+
 /**
  * Throw {@link ChannelForbiddenError} unless `userId` may `access` `channel`.
  * Pure authorization — callers map the throw to a 403.
@@ -70,6 +81,17 @@ export async function assertChannelAccess(
     case "conversation":
     case "presence": {
       if (await isMember(id, userId)) return;
+      // Self-heal: the channel CREATOR must never be locked out of their own
+      // conversation. If an edit or migration ever dropped the creator's
+      // channel_members row, restore it idempotently instead of 403-ing them
+      // out of a chat they own. Non-creators still get a hard 403.
+      if (await isCreator(id, userId)) {
+        await db
+          .insert(channelMembers)
+          .values({ channelId: id, userId, role: "admin" })
+          .onConflictDoNothing();
+        return;
+      }
       throw new ChannelForbiddenError(channel);
     }
     case "user": {

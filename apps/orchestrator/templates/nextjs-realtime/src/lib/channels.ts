@@ -88,6 +88,23 @@ export async function addMemberByEmail(
   return user.id;
 }
 
+/** Channel roster: every member with their user identity + role, oldest first. */
+export async function listMembers(
+  channelId: string,
+): Promise<{ userId: string; email: string; name: string | null; role: string }[]> {
+  return db
+    .select({
+      userId: channelMembers.userId,
+      email: users.email,
+      name: users.name,
+      role: channelMembers.role,
+    })
+    .from(channelMembers)
+    .innerJoin(users, eq(users.id, channelMembers.userId))
+    .where(eq(channelMembers.channelId, channelId))
+    .orderBy(asc(channelMembers.createdAt));
+}
+
 /** Recent persisted messages for a channel as resumable realtime events. */
 export async function getHistory(
   channelId: string,

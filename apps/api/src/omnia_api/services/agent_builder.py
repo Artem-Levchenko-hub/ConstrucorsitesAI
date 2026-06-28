@@ -941,6 +941,13 @@ useChannel(channel: string, opts?: { initial?: RealtimeEvent[]; onEvent?: (e: Re
 // channel — строка `conversation:<channel.id>`. Отправить сообщение: send("message", { body: text }).
 // Текст сообщения в UI рендери из event.data.body (event.data — строка таблицы messages).
 
+// @/components/realtime/use-channel-history — история канала (ТОЛЬКО в "use client"), envelope-safe
+useChannelHistory(channelId: string): { initial: RealtimeEvent[] | null; error: boolean }
+// initial=null пока грузится; сам разворачивает { data } и гардит undefined-id; сидируй им useChannel({ initial }).
+
+// @/components/realtime/invite-member — ФИКС-контрол «добавить участника» (ТОЛЬКО в "use client")
+<InviteMember channelId={string} />   // email-инвайт + ростер; ВСЕГДА рендери в виде канала, НЕ переписывай свой
+
 // @/lib/realtime/types
 type RealtimeEvent<T = unknown> = { id: number; channel: string; type: string; data: T; userId: string | null; ts: number };
 type PresenceState = { userId: string; since: number };
@@ -960,6 +967,8 @@ REALTIME_CONTRACT_EXPORTS: dict[str, tuple[str, ...]] = {
     "src/lib/session.ts": ("APP_HOME", "getCurrentUser", "requireUser", "CurrentUser"),
     "src/lib/auth.ts": ("hashPassword", "roleForNewUser", "signIn", "signOut", "auth"),
     "src/components/realtime/use-channel.ts": ("useChannel", "UseChannelOpts"),
+    "src/components/realtime/use-channel-history.ts": ("useChannelHistory",),
+    "src/components/realtime/invite-member.tsx": ("InviteMember",),
     "src/lib/realtime/types.ts": ("RealtimeEvent", "PresenceState"),
 }
 
