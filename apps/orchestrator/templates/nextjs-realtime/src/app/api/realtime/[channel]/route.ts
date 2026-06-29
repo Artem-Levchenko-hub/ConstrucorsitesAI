@@ -41,6 +41,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     await assertChannelAccess(decoded, user.id, "write");
   } catch (e) {
     if (e instanceof ChannelForbiddenError) {
+      // Loud diagnostic so `read_logs` shows the exact reason a message "vanished"
+      // (the agent's screenshot/typecheck can't see a 403 on a user POST).
+      console.warn(
+        `[realtime] DENY publish 403 — user=${user.id} is NOT a member of ${decoded}`,
+      );
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     throw e;
@@ -61,6 +66,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // shared-bucket starvation was the live "messages feel stuck" self-DoS.
   const kind = type === "message" ? "message" : "ephemeral";
   if (!allowPublish(user.id, decoded, kind)) {
+    console.warn(
+      `[realtime] 429 rate-limited ${kind} on ${decoded} by ${user.id}`,
+    );
     return NextResponse.json({ error: "rate limited" }, { status: 429 });
   }
 
@@ -83,6 +91,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             : "";
     const text = raw.trim().slice(0, MAX_MESSAGE_CHARS);
     if (!text) {
+      // Loud diagnostic: name the keys the client actually sent so `read_logs`
+      // reveals a client/server field mismatch instantly (the exact failure that
+      // made a generated chat look permanently dead).
+      const keys =
+        _d && typeof _d === "object"
+          ? Object.keys(_d as object).join(",")
+          : typeof _d;
+      console.warn(
+        `[realtime] REJECT 400 empty-message on ${decoded} by ${user.id} — ` +
+          `client sent data keys=[${keys}]; expected a non-empty string in ` +
+          `data.text | data.body | a bare string`,
+      );
       return NextResponse.json({ error: "empty message" }, { status: 400 });
     }
     const { id: channelId } = parseChannel(decoded);

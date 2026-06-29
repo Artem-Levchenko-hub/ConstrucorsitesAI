@@ -818,6 +818,11 @@ API bites you (a build error about a wrong signature, a renamed export, a remove
 call `docs` for that library BEFORE guessing — current docs beat a stale memory. When you author tests, \
 run them with bash. After the build is clean, `runtime_check` the main route(s) — a \
 typecheck-clean app can still crash on render; if it 5xx, `read_logs`, fix, re-check. \
+For an INTERACTIVE feature (send a message, save, submit a form, log in), a clean build \
+and a 200 page do NOT prove it works — the real failure is a 4xx on the user's POST that \
+a screenshot can never show. After editing one, `read_logs` and look for a 4xx/5xx with \
+its reason — the server logs the EXACT cause (e.g. a rejected/mismatched field); fix until \
+the action's own request is 2xx, not just until the page loads. \
 Then `see` the main route — the vision judge returns concrete design fixes; apply them \
 so the result is good-looking, not just working. One action per reply."""
 
