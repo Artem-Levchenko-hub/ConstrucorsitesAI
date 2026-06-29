@@ -105,9 +105,20 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
 }
 
 
+# Natively multimodal models that accept OpenAI image_url blocks even though their
+# vsegpt slug carries no `vis-` prefix. Anthropic Claude is multimodal, so vsegpt
+# forwards image_url to anthropic/claude-opus-4.8. Owner 2026-06-29: Opus 4.8 is the
+# screenshot/vision judge (acceptance gate + agent `see` tool), so it MUST keep the
+# image blocks instead of having them flattened away.
+_NATIVE_MULTIMODAL: frozenset[str] = frozenset({"claude-opus-4-8"})
+
+
 def _is_vision(model_id: str) -> bool:
-    """A vsegpt vision (multimodal) model — its slug carries the `vis-` prefix.
-    These keep image_url blocks; text-only models get content flattened."""
+    """A vsegpt multimodal model — keeps image_url blocks instead of flattening them.
+    True for `vis-`-prefixed slugs AND for natively-multimodal models (Claude Opus).
+    Text-only models get image blocks dropped (`_flatten_content`)."""
+    if model_id in _NATIVE_MULTIMODAL:
+        return True
     return _VSEGPT_MODEL_SLUG.get(model_id, "").startswith("vis-")
 
 # Default ceiling for a thinking model: chain-of-thought shares the token budget

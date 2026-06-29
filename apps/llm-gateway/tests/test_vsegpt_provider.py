@@ -110,6 +110,9 @@ def test_vision_model_keeps_image_blocks() -> None:
     # `vis-` models PASS the OpenAI multimodal array (text + image_url) so the
     # screenshot reaches the judge; text-only models flatten it away.
     assert vsegpt._is_vision("gemini-3-flash-vision") is True
+    # Owner 2026-06-29: Opus 4.8 is the vision judge — natively multimodal, kept as a
+    # vision model (no vis- prefix) so its screenshot image_url blocks are forwarded.
+    assert vsegpt._is_vision("claude-opus-4-8") is True
     assert vsegpt._is_vision("deepseek-chat") is False
     msgs = [
         {

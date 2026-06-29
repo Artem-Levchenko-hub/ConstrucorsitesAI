@@ -17,11 +17,10 @@ from omnia_api.core.config import (  # noqa: E402
 
 
 def test_role_map_full_opus_switch() -> None:
-    # Owner directive (2026-06-29): FULL SWITCH to Claude Opus 4.8 for EVERY LLM
-    # role — DeepSeek/Kimi/Gemini dropped. The ONLY exception is the VISION judge
-    # (audit/audit_retry), kept on the image-capable model per «кроме изображений»
-    # (vsegpt forwards screenshots only to vis- slugs). Image GENERATION (flux) is
-    # not in this map.
+    # Owner directive (2026-06-29): FULL SWITCH to Claude Opus 4.8 for EVERY LLM role —
+    # DeepSeek/Kimi/Gemini dropped EVERYWHERE, including the screenshot/VISION judge
+    # (Opus is multimodal; vsegpt forwards image_url to it via _NATIVE_MULTIMODAL). The
+    # ONLY thing off Opus is image GENERATION (flux), which is not in this map.
     assert model_for_role("director") == "claude-opus-4-8"
     assert model_for_role("polish") == "claude-opus-4-8"
     assert model_for_role("classify") == "claude-opus-4-8"
@@ -29,16 +28,21 @@ def test_role_map_full_opus_switch() -> None:
     assert model_for_role("single_shot") == "claude-opus-4-8"
     assert model_for_role("agent") == "claude-opus-4-8"
     assert model_for_role("agent_escalation") == "claude-opus-4-8"
-    assert model_for_role("audit") == "gemini-3-flash-vision"
-    assert model_for_role("audit_retry") == "gemini-3-flash-vision"
-    # Every NON-vision role is Opus 4.8; no DeepSeek/Kimi remains anywhere.
+    assert model_for_role("audit") == "claude-opus-4-8"
+    assert model_for_role("audit_retry") == "claude-opus-4-8"
+    # EVERY role is Opus 4.8 — no exceptions left in the map.
     for role, m in ROLE_MODEL_MAP.items():
-        if role in ("audit", "audit_retry"):
-            continue
         assert m == "claude-opus-4-8", f"{role} -> {m}"
-    # No proxyapi-backed Anthropic model may back any role (Opus 4.8 is vsegpt).
+    assert DEFAULT_ROLE_MODEL == "claude-opus-4-8"
+    # No legacy worker / vision model may back ANY role.
+    banned = {
+        "deepseek-chat", "deepseek-v4-pro", "deepseek-v4-pro-thinking",
+        "kimi-k2.6", "kimi-k2.6-thinking", "gemini-3-flash-vision",
+        "gemini-3.5-flash-high", "claude-sonnet-4-6", "claude-haiku-4-5",
+        "claude-opus-4-7",
+    }
     for m in ROLE_MODEL_MAP.values():
-        assert m not in {"claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-7"}
+        assert m not in banned
 
 
 def test_art_director_writer_both_opus() -> None:

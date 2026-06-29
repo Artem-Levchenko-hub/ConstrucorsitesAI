@@ -1090,20 +1090,18 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # (e.g. agent=deepseek-v4-pro) with no code change; FORCE_MODEL pins one model
     # over the whole map.
     #
-    # EXCEPTION — «кроме изображений» (owner): the image pipeline stays as-is.
-    #   * image GENERATION = Settings.image_gen_model (flux) + the gpt-image path —
-    #     untouched (not part of this map).
-    #   * image UNDERSTANDING = the `audit` / `audit_retry` screenshot judge stays on
-    #     the vision model: the vsegpt provider only forwards image_url blocks to
-    #     `vis-` slugs, so Opus-via-vsegpt would NOT receive the screenshot, blinding
-    #     the judge. This is also the `see`-tool judge in the agent loop.
+    # EXCEPTION — «кроме изображений» (owner): ONLY image GENERATION stays off Opus —
+    # Settings.image_gen_model (flux) + the gpt-image path are untouched (not part of
+    # this map). EVERYTHING else, including the screenshot/VISION judge, is Opus 4.8:
+    # Opus is natively multimodal and the vsegpt provider now forwards image_url blocks
+    # to it (`_is_vision` treats claude-opus-4-8 as multimodal), so the screenshot
+    # actually reaches the judge.
     "classify":        "claude-opus-4-8",  # pick 1 of N presets
     "director":        "claude-opus-4-8",  # catalog orchestrator — structure
     "polish":          "claude-opus-4-8",  # writes the real PageIR content (RU copy)
-    # VISION judge (screenshots) — kept on the image-capable model per «кроме
-    # изображений» (see header note on vsegpt `vis-` image routing).
-    "audit":        "gemini-3-flash-vision",  # acceptance-gate screenshot judge
-    "audit_retry":  "gemini-3-flash-vision",  # escalation re-roll judge
+    # VISION judge (screenshots) — Opus 4.8 (multimodal); also the `see`-tool judge.
+    "audit":           "claude-opus-4-8",  # acceptance-gate screenshot judge
+    "audit_retry":     "claude-opus-4-8",  # escalation re-roll judge
     "skeleton":        "claude-opus-4-8",  # multipass fallback — structure
     "content":         "claude-opus-4-8",  # multipass fallback — copy
     "visual":          "claude-opus-4-8",  # multipass fallback — style tokens
