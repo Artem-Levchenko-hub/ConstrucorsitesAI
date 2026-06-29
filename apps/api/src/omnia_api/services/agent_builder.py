@@ -66,8 +66,8 @@ _ACTION_RE = re.compile(
 )
 
 _KNOWN_ACTIONS = frozenset(
-    {"list_dir", "read_file", "grep", "write_file", "edit_file", "build", "bash",
-     "read_logs", "runtime_check", "see", "done"}
+    {"list_dir", "read_file", "grep", "docs", "write_file", "edit_file", "build",
+     "bash", "read_logs", "runtime_check", "see", "done"}
 )
 
 # Idempotent "observe the world after acting" actions. Re-running them across a
@@ -215,7 +215,10 @@ async def run_agent_build(
     complete: Callable[..., Awaitable[str]] | None = None,
     user_id: str | None = None,
     project_id: str | None = None,
-    max_tokens: int = 8192,
+    max_tokens: int = 16384,  # Opus emits a full page/route in one write; 8192
+    # truncated large files mid-content (→ broken file the next build must fix).
+    # The model stops when done, so short replies are unaffected — this only lifts
+    # the ceiling so a big file isn't cut off. No call site overrides it.
     require_green_before_done: bool = False,
     ship_green_on_abort: bool = True,
     edit_mode: bool = False,

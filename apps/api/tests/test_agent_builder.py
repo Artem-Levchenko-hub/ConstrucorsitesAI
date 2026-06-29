@@ -37,6 +37,29 @@ def test_parse_build_empty():
     assert a is not None and a.name == "build" and a.args == {}
 
 
+def test_docs_action_known_and_parses():
+    # The Context7 `docs` tool is advertised in LOOP_PROTOCOL and handled by the
+    # executor; it MUST be in the allowlist or parse_action rejects every call as a
+    # stall (the regression fixed 2026-06-29). Opus relies on it for current APIs.
+    assert "docs" in ab._KNOWN_ACTIONS
+    a = ab.parse_action(
+        '<omnia:action name="docs">{"library":"drizzle-orm","query":"select where"}</omnia:action>'
+    )
+    assert a is not None and a.name == "docs"
+    assert a.args.get("library") == "drizzle-orm"
+
+
+def test_protocol_actions_all_in_allowlist():
+    # Contract: every action documented in LOOP_PROTOCOL is in _KNOWN_ACTIONS, so a
+    # newly-added tool can never silently ship dead like `docs` did.
+    import re
+
+    advertised = set(re.findall(r"^- (\w+)\s", ab.LOOP_PROTOCOL, re.MULTILINE))
+    assert advertised, "no actions parsed from LOOP_PROTOCOL"
+    missing = advertised - ab._KNOWN_ACTIONS
+    assert not missing, f"advertised but not in allowlist: {missing}"
+
+
 def test_parse_takes_last_action():
     reply = (
         '<omnia:action name="read_file">{"path":"a"}</omnia:action>\n'
@@ -252,13 +275,34 @@ def test_verify_actions_exempt_from_global_repeat_guard():
 
 def test_consecutive_build_spam_still_caught():
     """The exemption must NOT defang the consecutive-repeat guard: a model that
-    emits `build` back-to-back with nothing between is still stopped as looping."""
+    emits `build` back-to-back with NOTHING to ship is still stopped as looping.
+    The build must be RED here — a clean build is legitimately shipped by the
+    ship-green-on-repeat rescue (see test_consecutive_green_build_ships), so the
+    'looping' stop only applies when the repeated build keeps FAILING."""
+    async def _red_build(action):
+        if action.name == "build":
+            return {"ok": False, "detail": "TS2304: Cannot find name 'x'"}
+        return {"ok": True, "detail": "ok"}
+
+    replies = ['<omnia:action name="build"></omnia:action>']
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m",
+        execute=_red_build, complete=_scripted(replies), max_steps=30,
+    ))
+    assert res.stop_reason == "looping"
+    assert res.steps < 30
+
+
+def test_consecutive_green_build_ships():
+    """A model that repeats `build` on an already-CLEAN build should NOT be killed
+    as looping — the ship-green-on-repeat rescue finishes it (don't loop forever on
+    a working app)."""
     replies = ['<omnia:action name="build"></omnia:action>']
     res = asyncio.run(ab.run_agent_build(
         system_prompt="s", user_prompt="x", model="m",
         execute=_ok_executor([]), complete=_scripted(replies), max_steps=30,
     ))
-    assert res.stop_reason == "looping"
+    assert res.stop_reason == "done_on_green"
     assert res.steps < 30
 
 
