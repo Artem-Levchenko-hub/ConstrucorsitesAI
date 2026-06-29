@@ -2949,33 +2949,59 @@ async def _process_prompt(
             # the static guardrail ran). Drive the live realtime preview and feed a red
             # verdict back to the agent as a BLOCKING outcome so a broken/leaky feature
             # self-heals BEFORE the snapshot lands — a clean typecheck is exactly what a
-            # model hallucinates completion around. Realtime-only (the functional gate
-            # is self-contained), fail-soft, off by default → prod ship unchanged.
+            # model hallucinates completion around. Per-stack gate (realtime →
+            # functional, drizzle/fullstack → isolation/no-leak), fail-soft.
             # Gate also re-runs on an EDIT that touched the realtime UI surface
             # (chat/room/layout/components/globals) — such an edit can silently
             # re-break two-user live delivery or the membership ACL, and an edit
             # was NEVER gated before (`not _is_edit`), so a working messenger could
             # be degraded with no behavioural re-check. Unrelated edits (0 files or
             # non-UI files only) stay fast — the gate is skipped for them.
-            _edit_touched_ui = bool(_is_edit) and any(
-                _p.endswith((".tsx", ".ts", ".css"))
-                and (
-                    "chat" in _p
-                    or "realtime" in _p
-                    or "layout" in _p
-                    or "/components/" in _p
-                    or _p.endswith("globals.css")
-                )
-                for _p in files
+            # Which behavioural gate applies to this stack, and whether an EDIT
+            # touched the surface that gate guards (a first build always gates):
+            #   realtime  → functional_gate (works live + membership ACL holds)
+            #   drizzle   → isolation_gate  (no data route leaks rows to anon)
+            _gate_kind = (
+                "functional"
+                if _orch_name == "nextjs-realtime"
+                else "isolation"
+                if _orch_name == "nextjs-postgres-drizzle"
+                else None
             )
+            if _gate_kind == "functional":
+                _gate_touched = bool(_is_edit) and any(
+                    _p.endswith((".tsx", ".ts", ".css"))
+                    and (
+                        "chat" in _p
+                        or "realtime" in _p
+                        or "layout" in _p
+                        or "/components/" in _p
+                        or _p.endswith("globals.css")
+                    )
+                    for _p in files
+                )
+            elif _gate_kind == "isolation":
+                # A data app starts leaking when a route handler or its data layer
+                # (schema / lib / api) changes — re-prove isolation on those edits.
+                _gate_touched = bool(_is_edit) and any(
+                    _p.endswith(".ts")
+                    and (
+                        "/api/" in _p
+                        or "/lib/" in _p
+                        or "schema" in _p
+                        or _p.endswith("route.ts")
+                    )
+                    for _p in files
+                )
+            else:
+                _gate_touched = False
             try:
                 if (
                     get_settings().use_runtime_gates
-                    and (not _is_edit or _edit_touched_ui)
-                    and _orch_name == "nextjs-realtime"
+                    and (not _is_edit or _gate_touched)
+                    and _gate_kind is not None
                 ):
                     from omnia_api.services import agent_gate_feedback as _agf2
-                    from omnia_api.services.functional_gate import run_functional_gate
 
                     _rg_attempt = 0
                     _rg_max = max(0, int(get_settings().agent_gate_max_attempts))
@@ -2985,13 +3011,26 @@ async def _process_prompt(
                         if not _base:
                             print("[PP] runtime_gate: no dev_url — skip", flush=True)
                             break
-                        _fv = await run_functional_gate(_base)
+                        if _gate_kind == "functional":
+                            from omnia_api.services.functional_gate import (
+                                run_functional_gate,
+                            )
+
+                            _fv = await run_functional_gate(_base)
+                        else:
+                            from omnia_api.services import isolation_gate
+
+                            _fv = await isolation_gate.run_public_access_gate(
+                                project_id, project_slug, _base
+                            )
                         _fout = [
                             _agf2.outcome_from_checks(
-                                "functional", _fv.passed, _fv.checks
+                                _gate_kind, _fv.passed, _fv.checks
                             )
                         ]
-                        _fix = _agf2.build_fix_instruction(_fout, _rg_attempt, _rg_max)
+                        _fix = _agf2.build_fix_instruction(
+                            _fout, _rg_attempt, _rg_max, stack=_orch_name
+                        )
                         if _fix is None:
                             if not _fv.passed:
                                 accumulated += (
@@ -2999,15 +3038,17 @@ async def _process_prompt(
                                     "прошла — открой превью и уточни запрос."
                                 )
                                 print(
-                                    "[PP] runtime_gate functional FAIL (out of attempts)",
+                                    f"[PP] runtime_gate {_gate_kind} FAIL (out of attempts)",
                                     flush=True,
                                 )
                             else:
-                                print("[PP] runtime_gate functional PASS", flush=True)
+                                print(
+                                    f"[PP] runtime_gate {_gate_kind} PASS", flush=True
+                                )
                             break
                         _rg_attempt += 1
                         print(
-                            f"[PP] runtime_gate functional heal attempt={_rg_attempt}",
+                            f"[PP] runtime_gate {_gate_kind} heal attempt={_rg_attempt}",
                             flush=True,
                         )
                         _fheal = await agent_builder.run_agent_build(

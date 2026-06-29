@@ -39,16 +39,42 @@ def blocking_failures(outcomes: list[GateOutcome]) -> list[GateOutcome]:
     return [o for o in outcomes if not o.passed and o.blocking]
 
 
+def _security_rule(stack: str | None) -> str:
+    """The remediation rule appended to a fix instruction, keyed to the stack.
+
+    On the real-backend stack (``nextjs-postgres-drizzle`` / ``fullstack``) the
+    agent writes Drizzle queries DIRECTLY — so the entities "use the SDK, never
+    @/lib/db" rule is WRONG there; the right rule is per-user scoping + auth on
+    every route (the cause of an isolation-gate failure). Other stacks keep the
+    original entities-SDK rule unchanged.
+    """
+    if stack in ("nextjs-postgres-drizzle", "fullstack"):
+        return (
+            "Правило изоляции данных: КАЖДЫЙ обработчик data-роута обязан требовать "
+            "аутентификацию (auth()/getServerSession) и фильтровать строки по id "
+            "текущего пользователя — НИКОГДА не возвращай и не изменяй чужие строки "
+            "и не оставляй data-роут доступным анониму (это причина отказа "
+            "isolation-гейта)."
+        )
+    return (
+        "Правило безопасности: доступ к данным ТОЛЬКО через SDK/engine "
+        "(@/lib/sdk, @/lib/entities/engine) — НИКОГДА напрямую @/lib/db, "
+        "drizzle-orm или pg (это и есть причина отказа security-гейта)."
+    )
+
+
 def build_fix_instruction(
     outcomes: list[GateOutcome],
     attempt: int,
     max_attempts: int,
+    stack: str | None = None,
 ) -> str | None:
     """Next-segment instruction for the agent, or None when there is nothing to
     fix (all blocking gates green) or we are out of retry budget.
 
     Concrete by design: it names each red gate and its specific failures so the
-    model fixes the RIGHT thing instead of rewriting working code.
+    model fixes the RIGHT thing instead of rewriting working code. ``stack`` keys
+    the remediation rule (see :func:`_security_rule`); omitted → entities default.
     """
     red = blocking_failures(outcomes)
     if not red:
@@ -65,9 +91,7 @@ def build_fix_instruction(
         "Сборка НЕ прошла проверки качества/безопасности. Почини ИМЕННО это "
         "(не переписывай работающее), затем вызови done:\n"
         f"{body}\n\n"
-        "Правило безопасности: доступ к данным ТОЛЬКО через SDK/engine "
-        "(@/lib/sdk, @/lib/entities/engine) — НИКОГДА напрямую @/lib/db, "
-        "drizzle-orm или pg (это и есть причина отказа security-гейта)."
+        f"{_security_rule(stack)}"
     )
 
 

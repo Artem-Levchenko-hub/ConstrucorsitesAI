@@ -49,9 +49,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from pathlib import Path
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from omnia_api.services import llm_client
@@ -67,7 +67,7 @@ _ACTION_RE = re.compile(
 
 _KNOWN_ACTIONS = frozenset(
     {"list_dir", "read_file", "grep", "docs", "write_file", "edit_file", "build",
-     "bash", "read_logs", "runtime_check", "see", "probe", "done"}
+     "bash", "read_logs", "runtime_check", "see", "probe", "verify_isolation", "done"}
 )
 
 # Idempotent "observe the world after acting" actions. Re-running them across a
@@ -77,7 +77,9 @@ _KNOWN_ACTIONS = frozenset(
 # exploration spinning). The consecutive-repeat guard (back-to-back spamming)
 # and the no-write streak still bound them, so a model that does nothing but
 # `build`/`runtime_check` in a row is still stopped.
-_VERIFY_ACTIONS = frozenset({"build", "read_logs", "runtime_check", "see", "probe"})
+_VERIFY_ACTIONS = frozenset(
+    {"build", "read_logs", "runtime_check", "see", "probe", "verify_isolation"}
+)
 
 # Caps so one fat observation can't blow the context window.
 _MAX_OBS_CHARS = 6_000
@@ -334,7 +336,7 @@ async def run_agent_build(
                     temperature=0.0,
                 )
                 break
-            except Exception as exc:  # noqa: BLE001 — fail-soft + retry
+            except Exception as exc:
                 last_exc = exc
                 if emit:
                     await emit("agent.retry", {"step": step, "attempt": attempt})
@@ -811,6 +813,7 @@ ACTIONS:
 - runtime_check {"path": "/"}                  — open a real route, get the REAL HTTP status + crash file
 - see        {"path": "/"}                     — LOOK at the rendered page (screenshot → design critique); fix what it reports
 - probe      {"method":"POST","path":"/api/...","body":{...}}  — make a REAL request AS A LOGGED-IN test user; returns the EXACT status+body. The only way to prove an interactive feature works end-to-end (catches a 4xx on a user POST that build/runtime_check/see all miss)
+- verify_isolation {"create":{"method":"POST","path":"/api/<resource>","body":{...}},"read":{"path":"/api/<resource>/{id}"}}  — PROVE no data leak: logs in TWO users, user A creates the resource, then asserts user B is DENIED reading it AND it is absent from B's list. Run this for EVERY owned resource — a green build never proves isolation
 - done       {"summary": "what you built"}     — ONLY after a clean build, the app renders, AND `see` is happy
 
 WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
@@ -826,6 +829,11 @@ its reason — the server logs the EXACT cause (e.g. a rejected/mismatched field
 the action's own request is 2xx, not just until the page loads. PROVE it with `probe`: \
 perform the real action as a logged-in user (e.g. probe POST to create a resource, then \
 probe POST to act on it) and require a 2xx with the expected body before `done`. \
+For any OWNED data (records a user creates and others must not see), scope EVERY query \
+by the authenticated user (the session user id) — never return rows the current user \
+does not own, and protect every data route with auth. Then PROVE it with `verify_isolation` \
+on that resource: a green build and a working create do NOT prove that another user can't \
+read it. Fix until isolation passes before `done`. \
 Then `see` the main route — the vision judge returns concrete design fixes; apply them \
 so the result is good-looking, not just working. One action per reply."""
 
@@ -1275,6 +1283,28 @@ def make_container_executor(
                     path=action.path or "/",
                     body=action.args.get("body"),
                 )
+
+            if action.name == "verify_isolation":
+                # Cross-tenant proof: log in TWO users, A creates, B must be denied.
+                # The agent supplies its OWN create/read endpoints (it just wrote
+                # them), so there is no guessing and no false block. Returns a
+                # functional verdict; ok=False on any leak so the loop fixes it.
+                from omnia_api.services import isolation_gate
+
+                _iv = await isolation_gate.run_isolation_probe(
+                    project_id,
+                    create=action.args.get("create"),
+                    read=action.args.get("read"),
+                )
+                return {
+                    "ok": _iv.passed,
+                    "detail": _iv.summary
+                    + "\n"
+                    + "\n".join(
+                        f"  - {'OK' if c.ok else 'FAIL'} {c.name}: {c.detail}"
+                        for c in _iv.checks
+                    ),
+                }
 
             return {"ok": False, "error": f"unknown action {action.name}"}
         except Exception as exc:  # never let an executor crash kill the loop
