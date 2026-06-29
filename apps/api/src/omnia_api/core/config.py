@@ -1080,97 +1080,62 @@ def generation_mode(
 # ──────────────────────────────────────────────────────────────────────────
 
 ROLE_MODEL_MAP: dict[str, str] = {
-    # Owner directive (2026-05-30): ONE strong orchestrator (Opus) decides
-    # structure; every worker/developer role runs on DeepSeek. DeepSeek is
-    # served by the direct vsegpt provider — proxyapi's DeepSeek surface 404s,
-    # vsegpt is the only working route (apps/llm-gateway providers/vsegpt.py).
-    "classify":     "deepseek-chat",  # pick 1 of N presets
-    # catalog ORCHESTRATOR (dormant in freeform) — was Sonnet/proxyapi, now vsegpt
-    "director":     "deepseek-v4-pro-thinking",
-    "polish":       "deepseek-chat",  # writes the real PageIR content (RU copy)
-    # proxyapi.ru FULLY RETIRED (owner 2026-06-02). The acceptance-gate VISION
-    # judge now runs on Gemini 3 Flash Preview via vsegpt (DeepSeek has no vision
-    # model). The vsegpt provider was taught to PASS image_url blocks for `vis-`
-    # models, so the screenshot reaches the judge. Enable with USE_VISION_AUDIT=true.
+    # Owner directive (2026-06-29): FULL SWITCH to Claude Opus 4.8 for EVERY LLM
+    # role — DeepSeek / Kimi / Gemini dropped entirely. ONE model now runs the
+    # whole orchestrator: classify → design (art_director + writer) → multipass →
+    # agent loop → edit → self-heal → meta-calls (discovery / result_type). Served
+    # by the vsegpt provider ("anthropic/claude-opus-4.8", same VSEGPT_API_KEY as
+    # the old workers) and already a `premium` tier model (full single-shot prompt,
+    # MODEL_TIER_MAP). Retune any single role at runtime via the ROLE_MODELS env
+    # (e.g. agent=deepseek-v4-pro) with no code change; FORCE_MODEL pins one model
+    # over the whole map.
+    #
+    # EXCEPTION — «кроме изображений» (owner): the image pipeline stays as-is.
+    #   * image GENERATION = Settings.image_gen_model (flux) + the gpt-image path —
+    #     untouched (not part of this map).
+    #   * image UNDERSTANDING = the `audit` / `audit_retry` screenshot judge stays on
+    #     the vision model: the vsegpt provider only forwards image_url blocks to
+    #     `vis-` slugs, so Opus-via-vsegpt would NOT receive the screenshot, blinding
+    #     the judge. This is also the `see`-tool judge in the agent loop.
+    "classify":        "claude-opus-4-8",  # pick 1 of N presets
+    "director":        "claude-opus-4-8",  # catalog orchestrator — structure
+    "polish":          "claude-opus-4-8",  # writes the real PageIR content (RU copy)
+    # VISION judge (screenshots) — kept on the image-capable model per «кроме
+    # изображений» (see header note on vsegpt `vis-` image routing).
     "audit":        "gemini-3-flash-vision",  # acceptance-gate screenshot judge
     "audit_retry":  "gemini-3-flash-vision",  # escalation re-roll judge
-    "skeleton":     "deepseek-chat",  # multipass fallback — structure
-    "content":      "deepseek-chat",  # multipass fallback — copy
-    "visual":       "deepseek-chat",  # multipass fallback — style tokens
-    "link_repair":  "deepseek-chat",  # rewrite dead hrefs
-    "image_prompt": "deepseek-chat",  # short image-gen prompt
-    "single_shot":  "deepseek-chat",  # non-catalog freeform fallback path
-    # Art-Director → Writer 2-pass, ALL DeepSeek (owner 2026-06-02: «везде дипсик,
-    # чтобы точно отрабатывал»). ORCHESTRATOR (design-brain → brief) =
-    # deepseek-v4-pro-thinking (reasoning helps design, separate reasoning field →
-    # clean content). DEVELOPER (writes the HTML) = deepseek-v4-pro NON-thinking
-    # (no reasoning overhead → faster, clean HTML). Both 1M context, both vsegpt.
-    # Swap at runtime via ROLE_MODELS env — no code change.
-    # Design-brain → Kimi K2.6 (owner 2026-06-03): native multimodal + stronger
-    # design taste than DeepSeek. NON-thinking variant (2026-06-07): the -thinking
-    # one 502s as art_director — deep reasoning on the large brief prompt (≈40K-token
-    # system + directive) blows the gateway 240s timeout → empty brief → generic
-    # build (caught live in an E2E). Non-thinking returns the brief fast, same price,
-    # keeps Kimi's taste. Kimi writes the brief; DeepSeek freeform_writer transcribes.
-    # Swap without a deploy via ROLE_MODELS env (e.g. art_director=gemini-3.5-flash-high).
-    "art_director": "kimi-k2.6",
-    "freeform_writer": "deepseek-v4-pro",
-    "edit":         "deepseek-chat",  # cheap-path targeted edit
-    # Edit RETRY escalation: when the cheap `edit` model's SEARCH misses, the
-    # surgical retries re-ask on this STRONGER reasoning model — it reproduces
-    # byte-exact SEARCH blocks far more reliably than the cheap edit model.
-    # Restores d61214b (accidentally clobbered by 2133cfd on a stale base).
-    # Swap via ROLE_MODELS env (e.g. edit_escalation=claude-sonnet-4-6).
-    "edit_escalation": "deepseek-v4-pro-thinking",
-    # Agentic builder loop (Phase 0). The plan→act→observe→verify loop emits a
-    # strict <omnia:action> protocol and writes real code over many steps.
-    # Owner constraint: SAME COST. vsegpt bills by characters, so a multi-step
-    # loop on claude-opus-4-8 (expensive char-rate + the 1-req/sec 429
-    # bottleneck) blew both cost and reliability. Model choice for the AGENT LOOP
-    # is about PROTOCOL RELIABILITY, not raw reasoning: it must emit exactly one
-    # <omnia:action> block per turn. deepseek-v4-pro-thinking (the reasoning
-    # variant) spends its output on hidden reasoning and intermittently emits ZERO
-    # visible action → the loop stalls with 0 files (observed live 2026-06-23, 2/2
-    # builds). So the agent base is deepseek-v4-pro — the PREMIUM, non-thinking
-    # coder (NOT the cheap deepseek-chat): it follows the action protocol reliably,
-    # and the new written-files PROGRESS note (agent_builder._progress_note) cures
-    # the re-write loop that was its only weakness. Reasoning models stay where
-    # they can think freely (director / art_director / edit_escalation), not in a
-    # strict-protocol tool loop. Tunable via ROLE_MODELS env.
-    "agent": "deepseek-v4-pro",
-    # If the agent still trips an anti-loop guard (cycle / no-write / repeat),
-    # escalate ONCE to a DIFFERENT family for the rest of the run — a stuck model
-    # usually needs a different model, not a restart of itself. kimi-k2.6-thinking
-    # is a strong non-deepseek reasoner already live on the gateway (design-brain)
-    # that DOES emit the action protocol (verified live); far cheaper than Opus.
-    "agent_escalation": "kimi-k2.6-thinking",
-    # Onboarding question planner (owner rule 13 #1). A small structured meta-call
-    # (NOT generation), runs INSIDE the 30s POST /prompt budget, so it needs a FAST,
-    # reliable model that emits strict JSON. Owner directive 2026-06-16: route via
-    # vsegpt (proxyapi.ru removed).
-    # 2026-06-19: gemini-3.5-flash-high was BROKEN here — live on prod it returned
-    # non-JSON junk / ReadTimeout'd at 22s → the planner fell to the GENERIC batch
-    # for EVERY web prompt (the «вопросы не в попад / шаблонные» the owner hit). The
-    # "-high" reasoning variant burns the token budget thinking. deepseek-chat
-    # returns a tailored, parseable batch in ~3.6s (proven). Swap via ROLE_MODELS env.
-    "discovery_plan": "deepseek-chat",
-    # Result-type classifier (RT-1). A tiny structured meta-call (NOT generation):
-    # one prompt → {"type":"landing|web_app|tool|site|code","confidence":0..1}.
-    # Runs inside the first-turn POST /prompt budget → a FAST JSON model, same
-    # class as discovery_plan. Swap via ROLE_MODELS env.
-    "result_type":   "deepseek-chat",
-    "exe_doctor":    "deepseek-chat",  # self-heal patch for failed PyInstaller/NSIS builds
-    # App self-repair (Claude-Code verify→fix for the web/container path). Fixes a
-    # real Next.js compile/runtime error from a minimal <edit>. DeepSeek v4-pro (the
-    # reliable full-file writer) — same workhorse the rewrite fallbacks trust; swap
-    # via ROLE_MODELS env. See Settings.app_self_repair_passes.
-    "app_doctor":    "deepseek-v4-pro",
+    "skeleton":        "claude-opus-4-8",  # multipass fallback — structure
+    "content":         "claude-opus-4-8",  # multipass fallback — copy
+    "visual":          "claude-opus-4-8",  # multipass fallback — style tokens
+    "link_repair":     "claude-opus-4-8",  # rewrite dead hrefs
+    "image_prompt":    "claude-opus-4-8",  # writes the TEXT prompt for image-gen (gen model stays flux)
+    "single_shot":     "claude-opus-4-8",  # non-catalog freeform fallback path
+    # Art-Director -> Writer 2-pass: design-brain writes the brief, writer/developer
+    # writes the HTML. Both on Opus 4.8 now (was Kimi brief + DeepSeek writer).
+    "art_director":    "claude-opus-4-8",
+    "freeform_writer": "claude-opus-4-8",
+    "edit":            "claude-opus-4-8",  # targeted edit
+    "edit_escalation": "claude-opus-4-8",  # edit retry escalation (byte-exact SEARCH)
+    # Agentic builder loop (plan->act->observe->verify, strict <omnia:action>
+    # protocol, writes real code over many steps). Opus 4.8 follows the action
+    # protocol and reasons over real build/runtime errors. NOTE: vsegpt bills by
+    # characters and rate-limits ~1 req/sec, so a long Opus loop is heavier than
+    # the old DeepSeek base; accepted per the owner's full-switch directive,
+    # retunable via ROLE_MODELS.
+    "agent":           "claude-opus-4-8",
+    "agent_escalation":"claude-opus-4-8",  # one-shot escalation on a stuck loop
+    # Meta-calls (onboarding question planner / result-type classifier) — tiny
+    # structured JSON calls inside the POST /prompt budget. On Opus 4.8 now.
+    "discovery_plan":  "claude-opus-4-8",
+    "result_type":     "claude-opus-4-8",
+    "exe_doctor":      "claude-opus-4-8",  # self-heal patch for failed PyInstaller/NSIS builds
+    "app_doctor":      "claude-opus-4-8",  # app self-repair (verify->fix), Settings.app_self_repair_passes
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.
-# vsegpt deepseek-chat is the safe bottom — proxyapi.ru is RETIRED (owner
-# 2026-06-02), so Haiku-via-proxyapi can no longer be the fallback.
-DEFAULT_ROLE_MODEL = "deepseek-chat"
+# Owner 2026-06-29 full switch: the safe bottom is Opus 4.8 too (was deepseek-chat),
+# served by vsegpt ("anthropic/claude-opus-4.8").
+DEFAULT_ROLE_MODEL = "claude-opus-4-8"
 
 # First-N free "wow-effect" generations per user before wallet billing starts.
 # Counter lives on User.free_generations_used; the gate is in routers/messages.py

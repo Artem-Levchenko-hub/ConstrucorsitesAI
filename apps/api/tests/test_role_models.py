@@ -16,33 +16,36 @@ from omnia_api.core.config import (  # noqa: E402
 )
 
 
-def test_role_map_all_vsegpt_no_proxyapi() -> None:
-    # Owner directive (2026-06-02): proxyapi.ru fully retired. EVERY role routes
-    # via vsegpt — no claude-*-via-proxyapi anywhere. director → vsegpt thinking
-    # model; audit/audit_retry → vsegpt (vision-audit disabled, vsegpt can't send
-    # images); workers → deepseek-chat.
-    assert model_for_role("director") == "deepseek-v4-pro-thinking"
-    assert model_for_role("polish") == "deepseek-chat"
-    assert model_for_role("classify") == "deepseek-chat"
-    assert model_for_role("edit") == "deepseek-chat"
-    assert model_for_role("single_shot") == "deepseek-chat"
+def test_role_map_full_opus_switch() -> None:
+    # Owner directive (2026-06-29): FULL SWITCH to Claude Opus 4.8 for EVERY LLM
+    # role — DeepSeek/Kimi/Gemini dropped. The ONLY exception is the VISION judge
+    # (audit/audit_retry), kept on the image-capable model per «кроме изображений»
+    # (vsegpt forwards screenshots only to vis- slugs). Image GENERATION (flux) is
+    # not in this map.
+    assert model_for_role("director") == "claude-opus-4-8"
+    assert model_for_role("polish") == "claude-opus-4-8"
+    assert model_for_role("classify") == "claude-opus-4-8"
+    assert model_for_role("edit") == "claude-opus-4-8"
+    assert model_for_role("single_shot") == "claude-opus-4-8"
+    assert model_for_role("agent") == "claude-opus-4-8"
+    assert model_for_role("agent_escalation") == "claude-opus-4-8"
     assert model_for_role("audit") == "gemini-3-flash-vision"
     assert model_for_role("audit_retry") == "gemini-3-flash-vision"
-    # No proxyapi-backed Anthropic model may back any role.
+    # Every NON-vision role is Opus 4.8; no DeepSeek/Kimi remains anywhere.
+    for role, m in ROLE_MODEL_MAP.items():
+        if role in ("audit", "audit_retry"):
+            continue
+        assert m == "claude-opus-4-8", f"{role} -> {m}"
+    # No proxyapi-backed Anthropic model may back any role (Opus 4.8 is vsegpt).
     for m in ROLE_MODEL_MAP.values():
         assert m not in {"claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-7"}
 
 
-def test_art_director_writer_split() -> None:
-    # Owner directive (2026-06-03): Kimi K2.6 thinking is the design-brain
-    # (art_director) — native multimodal + stronger taste than DeepSeek; the
-    # developer (freeform_writer, writes HTML) stays deepseek-v4-pro NON-thinking.
-    # Brain=Kimi, hands=DeepSeek. Both vsegpt. Swap via ROLE_MODELS.
-    # NON-thinking variant is the default since 2026-06-07 (the -thinking one 502s
-    # on the large brief prompt → empty brief). Prod may override to
-    # gemini-3.5-flash-high via ROLE_MODELS; both are vsegpt-served.
-    assert model_for_role("art_director") == "kimi-k2.6"
-    assert model_for_role("freeform_writer") == "deepseek-v4-pro"
+def test_art_director_writer_both_opus() -> None:
+    # Owner directive (2026-06-29): design-brain (art_director) and developer
+    # (freeform_writer) BOTH on Opus 4.8 — was Kimi brief + DeepSeek writer.
+    assert model_for_role("art_director") == "claude-opus-4-8"
+    assert model_for_role("freeform_writer") == "claude-opus-4-8"
 
 
 def test_no_role_uses_flaky_gemini() -> None:
