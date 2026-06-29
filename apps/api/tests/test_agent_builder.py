@@ -49,6 +49,16 @@ def test_docs_action_known_and_parses():
     assert a.args.get("library") == "drizzle-orm"
 
 
+def test_probe_action_parses():
+    # The `probe` E2E tool (authenticated real request) must parse with method+path+body.
+    a = ab.parse_action(
+        '<omnia:action name="probe">{"method":"POST","path":"/api/realtime/x","body":{"data":{"body":"hi"}}}</omnia:action>'
+    )
+    assert a is not None and a.name == "probe" and a.path == "/api/realtime/x"
+    assert a.args.get("method") == "POST"
+    assert "probe" in ab._VERIFY_ACTIONS  # exempt from the global repeat guard
+
+
 def test_protocol_actions_all_in_allowlist():
     # Contract: every action documented in LOOP_PROTOCOL is in _KNOWN_ACTIONS, so a
     # newly-added tool can never silently ship dead like `docs` did.

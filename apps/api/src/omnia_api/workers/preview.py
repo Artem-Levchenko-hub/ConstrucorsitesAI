@@ -269,6 +269,62 @@ async def capture_live_url(
     return out
 
 
+async def capture_diagnostics(
+    url: str, *, timeout_ms: int = GOTO_TIMEOUT_MS
+) -> dict[str, list[str]]:
+    """Load a live URL once and collect BROWSER-side signals a screenshot can't
+    show: console errors/warnings, uncaught page errors, and failed (>=400) network
+    requests. The agent's `see` tool appends these to its observation so a JS error
+    or a broken fetch on load is visible, not just "the page looks off".
+
+    Fail-soft: any error returns whatever was collected so far (never raises)."""
+    console_errors: list[str] = []
+    failed: list[str] = []
+
+    def _on_console(msg: object) -> None:
+        try:
+            if getattr(msg, "type", "") in ("error", "warning"):
+                console_errors.append(f"{msg.type}: {msg.text}"[:300])  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    def _on_response(resp: object) -> None:
+        try:
+            if resp.status >= 400:  # type: ignore[attr-defined]
+                failed.append(f"{resp.status} {resp.request.method} {resp.url}"[:300])  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    def _on_pageerror(err: object) -> None:
+        try:
+            console_errors.append(f"pageerror: {err}"[:300])
+        except Exception:
+            pass
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page(viewport={"width": 1280, "height": 900})
+            page.on("console", _on_console)
+            page.on("response", _on_response)
+            page.on("pageerror", _on_pageerror)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                await _await_container_ready(page)
+                await _await_paint(page)
+            except Exception:
+                pass  # return whatever signals were captured before the failure
+            finally:
+                await page.close()
+        finally:
+            await browser.close()
+
+    return {
+        "console_errors": list(dict.fromkeys(console_errors))[:12],
+        "failed_requests": list(dict.fromkeys(failed))[:12],
+    }
+
+
 async def _render_async(snapshot_id: str) -> None:
     settings = get_settings()
     sid = UUID(snapshot_id)

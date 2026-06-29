@@ -67,7 +67,7 @@ _ACTION_RE = re.compile(
 
 _KNOWN_ACTIONS = frozenset(
     {"list_dir", "read_file", "grep", "docs", "write_file", "edit_file", "build",
-     "bash", "read_logs", "runtime_check", "see", "done"}
+     "bash", "read_logs", "runtime_check", "see", "probe", "done"}
 )
 
 # Idempotent "observe the world after acting" actions. Re-running them across a
@@ -77,7 +77,7 @@ _KNOWN_ACTIONS = frozenset(
 # exploration spinning). The consecutive-repeat guard (back-to-back spamming)
 # and the no-write streak still bound them, so a model that does nothing but
 # `build`/`runtime_check` in a row is still stopped.
-_VERIFY_ACTIONS = frozenset({"build", "read_logs", "runtime_check", "see"})
+_VERIFY_ACTIONS = frozenset({"build", "read_logs", "runtime_check", "see", "probe"})
 
 # Caps so one fat observation can't blow the context window.
 _MAX_OBS_CHARS = 6_000
@@ -810,6 +810,7 @@ ACTIONS:
 - read_logs  {}                                — live dev-server stdout/stderr (RUNTIME errors build can't see)
 - runtime_check {"path": "/"}                  — open a real route, get the REAL HTTP status + crash file
 - see        {"path": "/"}                     — LOOK at the rendered page (screenshot → design critique); fix what it reports
+- probe      {"method":"POST","path":"/api/...","body":{...}}  — make a REAL request AS A LOGGED-IN test user; returns the EXACT status+body. The only way to prove an interactive feature works end-to-end (catches a 4xx on a user POST that build/runtime_check/see all miss)
 - done       {"summary": "what you built"}     — ONLY after a clean build, the app renders, AND `see` is happy
 
 WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
@@ -822,7 +823,9 @@ For an INTERACTIVE feature (send a message, save, submit a form, log in), a clea
 and a 200 page do NOT prove it works — the real failure is a 4xx on the user's POST that \
 a screenshot can never show. After editing one, `read_logs` and look for a 4xx/5xx with \
 its reason — the server logs the EXACT cause (e.g. a rejected/mismatched field); fix until \
-the action's own request is 2xx, not just until the page loads. \
+the action's own request is 2xx, not just until the page loads. PROVE it with `probe`: \
+perform the real action as a logged-in user (e.g. probe POST to create a resource, then \
+probe POST to act on it) and require a 2xx with the expected body before `done`. \
 Then `see` the main route — the vision judge returns concrete design fixes; apply them \
 so the result is good-looking, not just working. One action per reply."""
 
@@ -1258,6 +1261,20 @@ def make_container_executor(
 
                 return await agent_vision.see_page(
                     project_id, path=action.path or "/")
+
+            if action.name == "probe":
+                # Real END-TO-END eye: make an authenticated request as a logged-in
+                # test user and read the EXACT status + body — the only way to prove
+                # an interactive feature (send/save/submit) actually works, which a
+                # clean build + 200 home page do NOT. Lazily imported (Playwright).
+                from omnia_api.services import agent_probe
+
+                return await agent_probe.run_probe(
+                    project_id,
+                    method=str(action.args.get("method") or "GET"),
+                    path=action.path or "/",
+                    body=action.args.get("body"),
+                )
 
             return {"ok": False, "error": f"unknown action {action.name}"}
         except Exception as exc:  # never let an executor crash kill the loop

@@ -76,11 +76,37 @@ async def see_page(
             "detail": f"saw {rel}, but the vision judge was unavailable (skipped)",
         }
     issues = "\n".join(f"- {i}" for i in verdict.issues) or "(no concrete issues)"
+
+    # Browser-side signals a screenshot can't show: failed (>=400) fetches and JS
+    # console/page errors on load. A failed request is a REAL runtime failure, so it
+    # flips the observation to not-ok (the agent must not `done` over a broken fetch).
+    diag_text = ""
+    has_failed = False
+    try:
+        diag = await preview.capture_diagnostics(url)
+        failed = diag.get("failed_requests") or []
+        cons = diag.get("console_errors") or []
+        has_failed = bool(failed)
+        if failed or cons:
+            blocks = []
+            if failed:
+                blocks.append(
+                    "Failed network requests (fix — real runtime failures):\n"
+                    + "\n".join(f"  - {x}" for x in failed)
+                )
+            if cons:
+                blocks.append(
+                    "Console / page errors:\n" + "\n".join(f"  - {x}" for x in cons)
+                )
+            diag_text = "\n\nBROWSER SIGNALS:\n" + "\n\n".join(blocks)
+    except Exception:  # noqa: BLE001 — diagnostics are best-effort, never fatal
+        pass
+
     return {
-        "ok": True,
+        "ok": not has_failed,
         "detail": (
             f"LOOKED at {rel} — verdict: {verdict.verdict} ({verdict.score}/10)\n"
-            f"Apply these concrete fixes:\n{issues}"
+            f"Apply these concrete fixes:\n{issues}{diag_text}"
         ),
     }
 
