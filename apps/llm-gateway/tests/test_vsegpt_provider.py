@@ -129,6 +129,29 @@ def test_vision_model_keeps_image_blocks() -> None:
     txt = vsegpt._to_vsegpt_messages(msgs, vision=False)
     assert isinstance(txt[0]["content"], str)
     assert "judge this" in txt[0]["content"]
+
+
+def test_opus_cache_control_survives_to_vsegpt_payload() -> None:
+    # Owner 2026-06-29: Anthropic prompt caching on the stable system prefix must
+    # reach the vsegpt payload for opus. apply_anthropic_cache wraps the system into
+    # a cache_control block; opus is vision-mode so _to_vsegpt_messages keeps the
+    # array (incl. cache_control) instead of flattening it. (No-op on vsegpt today —
+    # it doesn't honour the cache — but the block must be forwarded for a caching
+    # upstream / future vsegpt support.)
+    from omnia_gateway.services.prompt_cache import apply_anthropic_cache
+
+    msgs = [
+        {"role": "system", "content": "STABLE SYSTEM PREFIX " * 10},
+        {"role": "user", "content": "build it"},
+    ]
+    cached = apply_anthropic_cache("claude-opus-4-8", msgs)
+    out = vsegpt._to_vsegpt_messages(
+        cached, vision=vsegpt._is_vision("claude-opus-4-8")
+    )
+    sys_block = out[0]["content"]
+    assert isinstance(sys_block, list)
+    assert sys_block[0]["cache_control"] == {"type": "ephemeral"}
+    assert "STABLE SYSTEM PREFIX" in sys_block[0]["text"]
     # Opus 4.7 stays a proxyapi/Router model — not dispatched to vsegpt.
     assert vsegpt.is_vsegpt_model("claude-opus-4-7") is False
     assert vsegpt.is_vsegpt_model("gpt-5") is False

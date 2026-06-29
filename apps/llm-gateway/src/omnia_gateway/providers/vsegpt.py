@@ -41,6 +41,7 @@ import httpx
 
 from omnia_gateway.core.config import get_settings
 from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 
 # Transient transport faults worth one retry (vsegpt's TLS handshake to
 # api.vsegpt.ru intermittently stalls inside a long-lived process).
@@ -211,6 +212,14 @@ async def astream(
     if not settings.vsegpt_api_key:
         raise UpstreamProviderError("VSEGPT_API_KEY not configured")
 
+    # Anthropic prompt caching: wrap the stable system prefix in `cache_control:
+    # ephemeral`. For claude-* this turns the system content into a block array;
+    # _is_vision treats claude-opus-4-8 as multimodal so _to_vsegpt_messages keeps
+    # the array (incl. cache_control) instead of flattening it. NOTE: vsegpt does
+    # not currently honour Anthropic caching (it bills the full prompt each call) —
+    # this is a no-op there today, but it's correct plumbing that activates real
+    # cache savings the moment opus routes through a caching upstream (proxyapi).
+    messages = apply_anthropic_cache(model, messages)
     url = f"{settings.vsegpt_base_url.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
         "model": slug,
@@ -341,6 +350,10 @@ async def acompletion(
     if not settings.vsegpt_api_key:
         raise UpstreamProviderError("VSEGPT_API_KEY not configured")
 
+    # Anthropic prompt caching on the stable system prefix (see astream for the
+    # full note). No-op on vsegpt today (it doesn't honour Anthropic caching);
+    # correct plumbing that activates once opus routes through a caching upstream.
+    messages = apply_anthropic_cache(model, messages)
     url = f"{settings.vsegpt_base_url.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
         "model": slug,
