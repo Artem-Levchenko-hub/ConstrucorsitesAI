@@ -8,6 +8,7 @@ from omnia_api.services.security_gate import (
     assert_payload_cap,
     assert_security_headers,
     summarize,
+    surface_verdict_from_headers,
 )
 
 
@@ -68,3 +69,40 @@ def test_summary_combines_and_fails_on_any() -> None:
 
 def test_no_checks_is_not_a_pass() -> None:
     assert summarize([], []).passed is False
+
+
+# ── surface_verdict_from_headers (the WIRED blocking verdict) ────────────────
+
+
+def test_surface_passes_on_template_headers() -> None:
+    # What the templates actually serve: nosniff + Referrer-Policy, NO X-Frame.
+    v = surface_verdict_from_headers(
+        {"x-content-type-options": "nosniff", "referrer-policy": "no-referrer"}
+    )
+    assert v.passed is True  # absence of X-Frame-Options must NOT block (preview iframe)
+
+
+def test_surface_does_not_block_on_missing_xframe() -> None:
+    # The crux: a good app embedded in the preview has no X-Frame-Options — and the
+    # gate must still pass, or it would false-block every single build.
+    v = surface_verdict_from_headers({"x-content-type-options": "nosniff"})
+    assert v.passed is True
+    assert all("X-Frame" not in c.name for c in v.checks)
+
+
+def test_surface_blocks_on_missing_nosniff() -> None:
+    v = surface_verdict_from_headers({"referrer-policy": "no-referrer"})
+    assert v.passed is False
+    assert any("nosniff" in c.name and not c.ok for c in v.checks)
+
+
+def test_surface_blocks_on_wildcard_cors_with_credentials() -> None:
+    v = surface_verdict_from_headers(
+        {
+            "x-content-type-options": "nosniff",
+            "access-control-allow-origin": "*",
+            "access-control-allow-credentials": "true",
+        }
+    )
+    assert v.passed is False
+    assert any("CORS" in c.name and not c.ok for c in v.checks)

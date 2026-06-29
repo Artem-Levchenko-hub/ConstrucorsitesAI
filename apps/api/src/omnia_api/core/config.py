@@ -272,18 +272,23 @@ class Settings(BaseSettings):
     # scoping). Advisory by default; flip on to BLOCK ship on a raw-DB escape.
     use_backend_guardrail: bool = Field(default=False)
 
-    # Multi-role enforcement gate (G007) — proves the entity engine's readRoles/
-    # writeRoles primitive actually enforces: drives a live entities app across two
-    # role sessions and checks a role matrix (right role allowed, wrong role 403,
-    # denied write doesn't silently succeed). OFF by default; for role-gated apps.
+    # Multi-role enforcement gate (G007) — the entities-engine role-matrix check
+    # (readRoles/writeRoles on /api/entities/<E>). NOTE: only the pure
+    # `evaluate_matrix` core exists — there is NO live driver and NO call site, so
+    # this flag is currently a NO-OP regardless of value. On the real-backend
+    # (drizzle) path the same goal (a wrong user is denied) is covered by the
+    # runtime isolation_gate. Wire a live `run_role_gate` (or drop the flag) before
+    # relying on it. Kept True for the eventual entities driver.
     use_role_gate: bool = Field(default=True)
 
-    # Security negative-path gate (G005) — aggregates the leak-attempt results
-    # (functional/role gates: another user denied another's records + cross-
-    # conversation messages) with transport-surface assertions (security headers
-    # present, payload cap 413, CORS not wildcard-with-credentials). Any leak or
-    # missing protection fails. OFF by default; makes "secure from prompt 1"
-    # enforceable once wired into the ship boolean.
+    # Transport-surface security gate (G005) — WIRED on the agentic path (realtime +
+    # drizzle) via security_gate.run_security_gate through the blocking heal loop.
+    # Captures the main route's response headers and BLOCKS only on product
+    # guarantees / zero-false-positive invariants: X-Content-Type-Options=nosniff
+    # present + CORS not wildcard-with-credentials. X-Frame-Options and the 413
+    # payload cap are deliberately NOT blocked (preview-iframe embedding needs no
+    # X-Frame-Options; the templates don't enforce 413) — see
+    # security_gate.surface_verdict_from_headers.
     use_security_gate: bool = Field(default=True)
 
     # SAST gate (K3a, knowledge-layer plan §3.1) — deterministic STATIC source

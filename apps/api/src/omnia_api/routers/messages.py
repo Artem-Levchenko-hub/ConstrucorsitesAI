@@ -3028,6 +3028,21 @@ async def _process_prompt(
                                 _gate_kind, _fv.passed, _fv.checks
                             )
                         ]
+                        # Transport-surface security (G005) — stack-agnostic, runs
+                        # alongside the functional/isolation leg through the SAME
+                        # blocking heal loop. Was built+unit-tested but UNWIRED
+                        # ("галочка стоит, гейт мёртвый"); now live. Blocks only on
+                        # product guarantees (nosniff present, CORS not wildcard-
+                        # with-credentials) → never false-blocks a good build.
+                        if get_settings().use_security_gate:
+                            from omnia_api.services import security_gate as _secg
+
+                            _sv = await _secg.run_security_gate(_base)
+                            _fout.append(
+                                _agf2.outcome_from_checks(
+                                    "security", _sv.passed, _sv.checks
+                                )
+                            )
                         _fix = _agf2.build_fix_instruction(
                             _fout, _rg_attempt, _rg_max, stack=_orch_name
                         )
