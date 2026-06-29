@@ -78,8 +78,10 @@ def test_write_cycle_same_content_aborts_as_looping():
             execute=_ok_executor(record), complete=_cycle(replies), max_steps=40,
         )
     )
-    assert res.done is False
-    assert res.stop_reason == "looping"
+    # Since 35306d5 (ship-green-on-abort), a re-write cycle whose build is GREEN is
+    # shipped as done_on_green rather than discarded as "looping" — both mean the
+    # cycle was CAUGHT early (not run to budget), which is the point of this guard.
+    assert res.stop_reason in ("looping", "done_on_green")
     assert res.steps < 40  # caught, not run to budget
 
 
@@ -110,3 +112,62 @@ def test_reads_then_write_is_not_falsely_aborted():
     assert res.done is True
     assert res.stop_reason == "done"
     assert "src/app/page.tsx" in res.files
+
+
+def test_rewrite_rotation_without_build_aborts_as_looping():
+    # The live messenger bug: the agent ROTATES rewrites across the same files with
+    # VARYING content and NEVER runs build. sig_seen misses it (content differs each
+    # step), the consecutive guard misses it (paths alternate), the no-write streak
+    # misses it (it's all writes). The build-pressure / rotation guard must catch it
+    # — force a build, then abort as "looping" well before the budget.
+    record: list = []
+    paths = ["src/app/(app)/chat/page.tsx", "src/app/(app)/chat/[id]/room.tsx"]
+    box = {"i": 0}
+
+    async def _complete(convo, model, **kw):
+        i = box["i"]
+        box["i"] += 1
+        p = paths[i % len(paths)]
+        # content varies every step → the signature never repeats
+        return f'<omnia:action name="write_file">{{"path":"{p}","content":"v{i}"}}</omnia:action>'
+
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="sys", user_prompt="x", model="m",
+            execute=_ok_executor(record), complete=_complete, max_steps=40,
+        )
+    )
+    assert res.done is False
+    assert res.stop_reason == "looping"
+    assert res.steps < 40  # caught early, not run to the step budget
+
+
+def test_distinct_writes_then_build_not_falsely_aborted():
+    # The guard must target REWRITES-without-build, NOT a legitimate first draft that
+    # writes several DISTINCT files then builds. No path repeats before the build, so
+    # no rotation is detected and the build reaches done.
+    record: list = []
+    replies = [
+        '<omnia:action name="write_file">{"path":"a.tsx","content":"1"}</omnia:action>',
+        '<omnia:action name="write_file">{"path":"b.tsx","content":"2"}</omnia:action>',
+        '<omnia:action name="write_file">{"path":"c.tsx","content":"3"}</omnia:action>',
+        '<omnia:action name="write_file">{"path":"d.tsx","content":"4"}</omnia:action>',
+        '<omnia:action name="build"></omnia:action>',
+        '<omnia:action name="done">{"summary":"messenger"}</omnia:action>',
+    ]
+    box = {"i": 0}
+
+    async def _complete(convo, model, **kw):
+        i = box["i"]
+        box["i"] += 1
+        return replies[i] if i < len(replies) else replies[-1]
+
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="sys", user_prompt="x", model="m",
+            execute=_ok_executor(record), complete=_complete, max_steps=12,
+        )
+    )
+    assert res.done is True
+    assert res.stop_reason == "done"
+    assert len(res.files) == 4  # all distinct writes landed, none blocked as churn

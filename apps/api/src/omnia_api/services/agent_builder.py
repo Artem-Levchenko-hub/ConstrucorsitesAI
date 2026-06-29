@@ -245,6 +245,12 @@ async def run_agent_build(
     sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
     last_build_ok: bool | None = None  # result of the most recent `build` action
     red_build_streak = 0  # consecutive failed builds → escalate to the strong model
+    # Build-pressure / rotation guard: counts writes since the last `build` so the
+    # loop can force a typecheck instead of churning files forever (see guard below).
+    writes_since_build = 0
+    paths_since_build: set[str] = set()  # distinct paths written since the last build
+    rewrites_since_build = 0  # writes to a path already written since the last build
+    build_pressure_nudged = False  # the gentle "run build" nudge fires once per window
     # `require_green_before_done` bookkeeping: a `done` is only honoured once the
     # last build was clean AND the running app was re-checked after the last write
     # (a clean typecheck is exactly what a model hallucinates completion around —
@@ -500,6 +506,57 @@ async def run_agent_build(
         # distinct stop_reason) rather than burning the whole budget reading.
         if action.name in ("write_file", "edit_file"):
             no_write_streak = 0
+            # Build-pressure / rotation guard. The model sometimes WRITES forever
+            # without ever running `build` — rewriting the same files in rotation
+            # with slight content variations (observed live: a messenger churned the
+            # same 6 chat files for 40+ steps, never typechecked; the user's stream
+            # dropped while it span and "ничего не отдало"). The sig/consecutive/
+            # no-write guards all MISS this: the writes rotate across files (so the
+            # consecutive + global-sig guards don't fire), content varies each time
+            # (so the identical-content guard doesn't fire), and it IS writing (so
+            # the no-write streak doesn't fire). Two signals close the gap:
+            #   * a REWRITE of a path already written SINCE THE LAST BUILD — never
+            #     legitimate without a build in between → force a build, then abort;
+            #   * a high count of writes with NO build at all → one gentle reminder.
+            writes_since_build += 1
+            if action.path in paths_since_build:
+                rewrites_since_build += 1
+            else:
+                paths_since_build.add(action.path)
+            if rewrites_since_build >= _REWRITE_LOOP_ABORT_AT:
+                return _ship_green_or(
+                    AgentResult(
+                        done=False,
+                        summary="rewriting the same files in a loop without ever building",
+                        files=written, steps=step + 1, transcript=convo,
+                        stop_reason="looping",
+                    ),
+                    step, "rewrite-loop",
+                )
+            if rewrites_since_build >= _REWRITE_BEFORE_BUILD_NUDGE:
+                await _escalate(step, "rewrite_loop")
+                print(
+                    f"[AGENT] step={step} REWRITE-LOOP x{rewrites_since_build} "
+                    f"(no build since {writes_since_build} writes) → nudge BUILD",
+                    flush=True,
+                )
+                if emit:
+                    await emit("agent.stalled", {"step": step})
+                convo.append({"role": "user", "content": _BUILD_PRESSURE_NUDGE})
+                continue  # don't execute the rewrite — force a build first
+            if (
+                not build_pressure_nudged
+                and writes_since_build >= _WRITES_BEFORE_BUILD_NUDGE
+            ):
+                build_pressure_nudged = True  # one gentle reminder per no-build window
+                await _escalate(step, "no_build")
+                print(
+                    f"[AGENT] step={step} BUILD-PRESSURE x{writes_since_build} "
+                    f"writes, no build yet → nudge BUILD",
+                    flush=True,
+                )
+                convo.append({"role": "user", "content": _BUILD_PRESSURE_NUDGE})
+                continue  # build once before piling on more files
         else:
             no_write_streak += 1
             if no_write_streak >= _NO_WRITE_ABORT_AT:
@@ -545,6 +602,13 @@ async def run_agent_build(
         obs = await execute(action)
         if action.name == "build":
             last_build_ok = bool(obs.get("ok"))
+            # Building clears the build-pressure / rotation window: the agent got
+            # real typecheck feedback, so writes that follow are progress (a
+            # targeted fix), not blind churn.
+            writes_since_build = 0
+            rewrites_since_build = 0
+            paths_since_build.clear()
+            build_pressure_nudged = False
             # A persistent red typecheck the cheap model can't clear is exactly
             # when the stronger reasoner earns its cost. Escalate ONCE (the
             # `escalated` one-shot in `_escalate` bounds it) after two consecutive
@@ -595,6 +659,16 @@ _NO_WRITE_ABORT_AT = 14
 _REPEAT_NUDGE_AT = 2
 _REPEAT_ABORT_AT = 4
 
+# Build-pressure / rotation guard. A REWRITE of a file already written SINCE THE
+# LAST BUILD (rotating across files with varied content, never typechecking) is the
+# churn the sig/consecutive/no-write guards all miss. Force a build at the 2nd such
+# rewrite; abort as looping at the 5th if it still won't build. Separately, this
+# many writes with NO build at all earns one gentle "run build" reminder — high
+# enough not to interrupt a legitimate from-scratch multi-file first draft.
+_REWRITE_BEFORE_BUILD_NUDGE = 2
+_REWRITE_LOOP_ABORT_AT = 5
+_WRITES_BEFORE_BUILD_NUDGE = 10
+
 # Green-gate: how many premature `done`s to reject (nudging the model to build +
 # runtime_check) before honouring it anyway. Bounded so an app with no checkable
 # route can still finish — the server-side acceptance gate is the hard backstop.
@@ -629,6 +703,16 @@ _REPEAT_CYCLE_NUDGE = (
     "write a still-MISSING page/file, fix the specific build error you were shown, "
     "or — if the build is clean and every screen exists — call done. Never re-write "
     "a file with the same content you already wrote."
+)
+
+_BUILD_PRESSURE_NUDGE = (
+    "STOP writing. You have written several files — and started REWRITING files you "
+    "already wrote — WITHOUT running `build` even once. That is exactly how a build "
+    "churns forever and never finishes (you keep tweaking blind instead of letting "
+    "the typecheck tell you what is actually wrong). Your VERY NEXT action MUST be "
+    '<omnia:action name="build">{}</omnia:action>. Read the REAL errors it returns, '
+    "fix the specific file/line it names, and once the build is clean call done. Do "
+    "NOT rewrite a file you already wrote before you have run build."
 )
 
 _EXPLORE_STALL_NUDGE = (
