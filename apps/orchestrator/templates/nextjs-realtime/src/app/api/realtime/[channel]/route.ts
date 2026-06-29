@@ -67,10 +67,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   let data: unknown = body.data ?? null;
 
   if (type === "message") {
+    // Forgiving wire contract: a generated client may send the text as
+    // `data.text` (canonical), `data.body` (the DB COLUMN name — a very common
+    // confusion the writer model makes), or a bare string `data`. Accept all three
+    // and store into the `body` column. Without this, a client/server field
+    // mismatch silently 400s every message ("empty message") and chat looks dead.
+    const _d: unknown = body.data;
     const raw =
-      body.data && typeof (body.data as { text?: unknown }).text === "string"
-        ? (body.data as { text: string }).text
-        : "";
+      typeof _d === "string"
+        ? _d
+        : _d && typeof (_d as { text?: unknown }).text === "string"
+          ? (_d as { text: string }).text
+          : _d && typeof (_d as { body?: unknown }).body === "string"
+            ? (_d as { body: string }).body
+            : "";
     const text = raw.trim().slice(0, MAX_MESSAGE_CHARS);
     if (!text) {
       return NextResponse.json({ error: "empty message" }, { status: 400 });
