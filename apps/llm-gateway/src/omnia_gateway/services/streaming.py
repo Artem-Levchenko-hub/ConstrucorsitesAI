@@ -21,7 +21,6 @@ from fastapi import Request
 
 from omnia_gateway.core.errors import GatewayError, UpstreamProviderError
 from omnia_gateway.providers import sber as sber_provider
-from omnia_gateway.providers import vsegpt as vsegpt_provider
 from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services import litellm_router as router_module
@@ -160,15 +159,10 @@ async def stream_completion(
         source = _custom_provider_pseudo_stream(
             sber_provider.acompletion, model, messages, temperature, max_tokens, 0.7
         )
-    elif vsegpt_provider.is_vsegpt_model(model):
-        # TRUE token streaming — the page builds LIVE in the preview as the coder
-        # writes (no more 3-6 min spinner then a flush). astream defaults to a
-        # wide max_tokens so a thinking model's CoT can't truncate the output.
-        _vkw: dict[str, Any] = {"temperature": 0.5 if temperature is None else temperature}
-        if max_tokens is not None:
-            _vkw["max_tokens"] = max_tokens
-        source = vsegpt_provider.astream(model, messages, **_vkw)
     else:
+        # vsegpt REMOVED (owner 2026-06-30) — every model streams via the LiteLLM
+        # Router now (claude-opus-4-8 → oneprovider.dev). cache_control is already
+        # applied above (apply_anthropic_cache) for the Anthropic path.
         source = _litellm_stream(model, messages, user_id, temperature, max_tokens)
 
     try:

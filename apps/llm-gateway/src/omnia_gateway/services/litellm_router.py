@@ -46,8 +46,8 @@ _EMPTY_RETRY_DELAY_S = 0.2
 # models routed through the Router.
 _NO_EMPTY_RETRY_MODELS: frozenset[str] = frozenset()
 from omnia_gateway.providers import sber as sber_provider
-from omnia_gateway.providers import vsegpt as vsegpt_provider
 from omnia_gateway.providers import yandex as yandex_provider
+from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 from omnia_gateway.services.pricing import PRICE_TABLE
 
 # Suppress LiteLLM's own debug printing — we use structlog for everything.
@@ -318,16 +318,8 @@ async def acompletion(
             max_tokens=2000 if max_tokens is None else max_tokens,
         )
 
-    # vsegpt.ru models (DeepSeek) bypass the LiteLLM Router entirely — see
-    # providers/vsegpt.py for why (proxy leak + AsyncClient TLS stall on prod).
-    if vsegpt_provider.is_vsegpt_model(model):
-        return await vsegpt_provider.acompletion(
-            model=model,
-            messages=messages,
-            temperature=0.5 if temperature is None else temperature,
-            max_tokens=16384 if max_tokens is None else max_tokens,
-        )
-
+    # vsegpt REMOVED (owner 2026-06-30 «полный отказ от vsegpt»). Every model now
+    # routes through the LiteLLM Router; claude-opus-4-8 → oneprovider.dev.
     if model not in _LITELLM_MODEL_SLUG:
         # Pricing knows it but routing doesn't — defensive guard.
         raise ModelNotFoundError(f"Model not routable: {model}")
@@ -336,6 +328,11 @@ async def acompletion(
     if not any(item["model_name"] == model for item in router.model_list):
         raise ModelUnavailableError(f"Provider key for model {model} is not configured")
 
+    # Anthropic prompt caching on the new-provider (oneprovider) path — the
+    # non-streaming half of «кэширование» (streaming.py:85 does the streaming
+    # half): wrap the stable system prefix in cache_control so claude-opus-4-8
+    # reuses it across calls. No-op for non-Anthropic models.
+    messages = apply_anthropic_cache(model, messages)
     kwargs: dict[str, Any] = {"model": model, "messages": messages}
     if user is not None:
         kwargs["user"] = user
