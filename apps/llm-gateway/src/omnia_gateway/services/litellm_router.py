@@ -361,6 +361,13 @@ async def acompletion(
     elif model in ("gpt-5", "gpt-5-nano"):
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "minimal")
+    elif model.startswith("claude-"):
+        # oneprovider's claude-opus-4-8 enables EXTENDED THINKING by default, which
+        # made the tiny meta-calls (discovery/result_type) slow AND token-starved
+        # (thinking ate the small max_tokens → empty reply → retry), tripping the
+        # api's gateway ReadTimeout → POST /prompt timed out. Disable thinking for
+        # snappy, deterministic replies — matches the prior non-thinking vsegpt opus.
+        kwargs.setdefault("thinking", {"type": "disabled"})
 
     async def _attempt() -> Any:
         try:

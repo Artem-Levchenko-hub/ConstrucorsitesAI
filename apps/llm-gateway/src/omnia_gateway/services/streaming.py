@@ -101,6 +101,11 @@ async def _litellm_stream(
     elif model in ("gpt-5", "gpt-5-nano"):
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "minimal")
+    elif model.startswith("claude-"):
+        # oneprovider's claude-opus-4-8 defaults extended thinking ON → slow +
+        # token-starved calls. Disable it (see litellm_router.acompletion). Keep
+        # both paths in sync.
+        kwargs.setdefault("thinking", {"type": "disabled"})
 
     router = router_module.get_router()
     try:
