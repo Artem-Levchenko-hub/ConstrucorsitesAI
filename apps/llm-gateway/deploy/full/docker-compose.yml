@@ -123,6 +123,11 @@ services:
       PROXYAPI_BASE_URL: ${PROXYAPI_BASE_URL:-https://api.proxyapi.ru/anthropic}
       ONEPROVIDER_API_KEY: ${ONEPROVIDER_API_KEY:-}
       ONEPROVIDER_BASE_URL: ${ONEPROVIDER_BASE_URL:-https://api.oneprovider.dev}
+      # Skip LiteLLM's remote cost-map fetch (raw.githubusercontent.com is
+      # unreachable on the prod VPS → a ~60s TLS-handshake timeout blocked the
+      # FIRST completion after every gateway restart). The gateway bills via its
+      # own PRICE_TABLE (services/pricing.py), so LiteLLM's cost map is unused.
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # --- Gemini-only outbound HTTP proxy (geo-bypass) ---
       # When GEMINI_HTTPS_PROXY is empty these vars are also empty, so they
