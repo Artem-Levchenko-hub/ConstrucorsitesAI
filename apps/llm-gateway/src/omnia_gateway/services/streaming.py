@@ -104,8 +104,10 @@ async def _litellm_stream(
     elif model.startswith("claude-"):
         # oneprovider's claude-opus-4-8 defaults extended thinking ON → slow +
         # token-starved calls. Disable it (see litellm_router.acompletion). Keep
-        # both paths in sync.
+        # both paths in sync. allowed_openai_params lets LiteLLM forward `thinking`
+        # (an otherwise-rejected param) verbatim to oneprovider.
         kwargs.setdefault("thinking", {"type": "disabled"})
+        kwargs.setdefault("allowed_openai_params", ["thinking"])
 
     router = router_module.get_router()
     try:

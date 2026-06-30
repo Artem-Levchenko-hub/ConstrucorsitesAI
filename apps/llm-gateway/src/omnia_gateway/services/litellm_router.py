@@ -367,7 +367,11 @@ async def acompletion(
         # (thinking ate the small max_tokens → empty reply → retry), tripping the
         # api's gateway ReadTimeout → POST /prompt timed out. Disable thinking for
         # snappy, deterministic replies — matches the prior non-thinking vsegpt opus.
+        # LiteLLM rejects `thinking` as an unknown anthropic param unless allowed;
+        # allowed_openai_params lets it pass through verbatim to oneprovider (which
+        # honors {type: disabled}).
         kwargs.setdefault("thinking", {"type": "disabled"})
+        kwargs.setdefault("allowed_openai_params", ["thinking"])
 
     async def _attempt() -> Any:
         try:
