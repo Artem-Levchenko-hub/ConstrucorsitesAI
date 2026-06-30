@@ -1,7 +1,0 @@
-@import "tailwindcss";
-
-/* Bare stack: just Tailwind v4. The agent owns ALL design — define your own
-   tokens, fonts, and theme here from scratch. */
-:root {
-  color-scheme: light dark;
-}

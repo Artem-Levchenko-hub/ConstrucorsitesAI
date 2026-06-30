@@ -2431,6 +2431,10 @@ async def _process_prompt(
             # own SYSTEM_PROMPT.md, so the agent builds it with the right primitives
             # (e.g. the realtime hub + members ACL) instead of the entity guide.
             _orch_name = orchestrator_template(project_template)
+            # Bare / no-stack experiment: the agent picks its OWN framework, so the
+            # Next-specific `build` typecheck (require_green_before_done) does not
+            # apply — completion is proven by runtime_check/probe/see instead.
+            _bare_stack = _orch_name == "bare-nextjs"
             _stack_guide = (
                 agent_builder.load_stack_system_prompt(_orch_name)
                 if _orch_name and _orch_name != "nextjs-entities"
@@ -2603,7 +2607,11 @@ async def _process_prompt(
                 emit=_agent_emit,
                 user_id=str(user_id),
                 project_id=str(project_id),
-                require_green_before_done=get_settings().agent_require_green_before_done,
+                require_green_before_done=(
+                    False
+                    if _bare_stack
+                    else get_settings().agent_require_green_before_done
+                ),
                 ship_green_on_abort=get_settings().agent_ship_green_on_abort,
                 edit_mode=_is_edit,
             )
