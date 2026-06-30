@@ -28,13 +28,13 @@ log = structlog.get_logger(__name__)
 
 # Models warmed once at startup. Both share the same proxyapi.ru balance,
 # both feed the same cold-start symptom, so we warm them together.
-WARMUP_MODELS: tuple[str, ...] = ("claude-haiku-4-5", "gpt-5-nano")
+WARMUP_MODELS: tuple[str, ...] = ("claude-opus-4-8",)
 
 # Model kept hot in the periodic loop. Haiku is the workhorse for the
 # preset classifier and the cheap-design generator path — the one that
 # silently fell back to "editorial-trust" when cold. gpt-5-nano is only
 # hit on the empty-fallback path, so the initial warmup is enough.
-PERIODIC_MODEL: str = "claude-haiku-4-5"
+PERIODIC_MODEL: str = "claude-opus-4-8"
 
 # proxyapi.ru drops idle upstream TCP sessions after ~5 min. 240s is just
 # under that window, with enough headroom for clock skew and the request
@@ -82,11 +82,11 @@ async def run_warmup_loop() -> None:
     forever, burning a useless upstream call each tick.
     """
     settings = get_settings()
-    if not settings.enable_warmup or settings.proxyapi_api_key is None:
+    if not settings.enable_warmup or settings.oneprovider_api_key is None:
         log.info(
             "warmup.skipped",
             enable_warmup=settings.enable_warmup,
-            proxyapi_configured=settings.proxyapi_api_key is not None,
+            oneprovider_configured=settings.oneprovider_api_key is not None,
         )
         return
     await asyncio.gather(*(_ping(m) for m in WARMUP_MODELS), return_exceptions=True)
