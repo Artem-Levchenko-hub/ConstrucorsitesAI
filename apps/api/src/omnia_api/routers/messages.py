@@ -2614,6 +2614,7 @@ async def _process_prompt(
                 ),
                 ship_green_on_abort=get_settings().agent_ship_green_on_abort,
                 edit_mode=_is_edit,
+                bare_mode=_bare_stack,
             )
             _all_files = dict(_agent_res.files)
             _total_steps = _agent_res.steps

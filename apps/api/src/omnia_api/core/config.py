@@ -295,7 +295,11 @@ class Settings(BaseSettings):
     # The substrate + harness are one co-designed system — removing templates makes
     # the harness fight the model. Re-enabling bare needs the harness adapted too
     # (relax guards for bash-scaffolding, generic typecheck/smoke), not just a flag.
-    bare_build_experiment: bool = Field(default=False)
+    # RE-ENABLED for the re-test after the harness fix (2026-06-30): in bare_mode the
+    # agent loop no longer counts `bash` as "exploring", so Opus can scaffold a whole
+    # app from a blank box (pnpm create / install / run its own dev server) without
+    # the explore-stall guard aborting it at 13 steps. Revert to False after the test.
+    bare_build_experiment: bool = Field(default=True)
 
     # Functional+security E2E gate (G004) — the ONLY gate that proves a feature
     # WORKS and does not LEAK (vs every other gate, which judges looks/structure).

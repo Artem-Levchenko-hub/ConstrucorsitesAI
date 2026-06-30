@@ -224,6 +224,7 @@ async def run_agent_build(
     require_green_before_done: bool = False,
     ship_green_on_abort: bool = True,
     edit_mode: bool = False,
+    bare_mode: bool = False,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -557,6 +558,14 @@ async def run_agent_build(
                 )
                 convo.append({"role": "user", "content": _BUILD_PRESSURE_NUDGE})
                 continue  # build once before piling on more files
+        elif bare_mode and action.name == "bash":
+            # Bare / no-stack: bash IS the productive work — scaffold (pnpm create),
+            # install, write the dev-server start script, run/build. It is NOT
+            # "exploring"; the template-flow assumption "progress == write_file" does
+            # not hold when the agent builds a whole app from a blank box. Resetting
+            # the streak stops the explore-abort from killing a from-scratch build
+            # mid-scaffold (the live failure: aborted at 13 steps, 0 files).
+            no_write_streak = 0
         else:
             no_write_streak += 1
             if no_write_streak >= _NO_WRITE_ABORT_AT:
