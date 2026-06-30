@@ -288,7 +288,9 @@ class Settings(BaseSettings):
     # unchanged. `orchestrator_template()` is the single chokepoint that swaps the
     # image+dir to `bare-nextjs`. Default OFF → templates as today; flip ON only
     # for the controlled comparison, then OFF. Env: BARE_BUILD_EXPERIMENT.
-    bare_build_experiment: bool = Field(default=False)
+    # TEMPORARILY ON (2026-06-30 controlled hypothesis test) — REVERT to False
+    # after the comparison so users go back to the templates.
+    bare_build_experiment: bool = Field(default=True)
 
     # Functional+security E2E gate (G004) — the ONLY gate that proves a feature
     # WORKS and does not LEAK (vs every other gate, which judges looks/structure).
