@@ -359,6 +359,26 @@ async def run_agent_build(
         action = parse_action(reply)
 
         if action is None:
+            # DIAGNOSTIC: the "stalled, 0 files" failure is opus emitting replies
+            # parse_action rejects. Probes proved opus writes fine in isolation, so
+            # the cause lives in the full prod context — log the VERBATIM reply +
+            # why it failed to parse (these replies are short) to root-cause it.
+            _tags = list(_ACTION_RE.finditer(reply or ""))
+            if not (reply or "").strip():
+                _why = "EMPTY reply from gateway"
+            elif not _tags:
+                _why = "no <omnia:action> tag"
+            else:
+                _nm = _tags[-1].group(1).strip().lower()
+                _why = (
+                    f"unknown name={_nm!r}" if _nm not in _KNOWN_ACTIONS
+                    else f"name={_nm} body-not-valid-json"
+                )
+            print(
+                f"[AGENT] step={step} NO-ACTION model={active_model} why=({_why}) "
+                f"reply={_truncate(reply or '', 1400)!r}",
+                flush=True,
+            )
             stalls += 1
             if emit:
                 await emit("agent.stalled", {"step": step})
