@@ -2489,6 +2489,52 @@ async def _process_prompt(
                 _seed_block = _seed_block + (
                     "\n\n" + agent_builder.realtime_primitives_contract()
                 )
+            # Build Plan (эскиз перед стройкой, owner 2026-06-30). On a fresh BUILD
+            # run the planner pass → a bounded feature spec (screens/entities/
+            # capabilities), persist it in discovery_spec JSONB, and ride its
+            # checklist into the agent prompt via _seed_block (the agent builds the
+            # WHOLE plan, not a thin green subset). On continue/edit, read the
+            # persisted plan back so the same checklist still guides. Fully fail-soft
+            # (R-10): empty plan or any error → nothing appended (today's behaviour).
+            # Gated by use_build_plan; the coverage gate (P2) verifies it later.
+            try:
+                from omnia_api.services import build_plan as _bplan
+
+                if get_settings().use_build_plan:
+                    _build_plan = _bplan.BuildPlan()
+                    if orchestrate and not _is_continue and not _is_edit:
+                        _build_plan = await _bplan.plan_build(
+                            prompt_text,
+                            stack=(_orch_name or project_template or ""),
+                            user_id=str(user_id),
+                            project_id=str(project_id),
+                        )
+                        if not _build_plan.is_empty and proj is not None:
+                            try:
+                                proj.discovery_spec = _bplan.merge_plan_into_spec(
+                                    proj.discovery_spec, _build_plan
+                                )
+                                await session.commit()
+                            except Exception as _bp_persist_exc:
+                                await session.rollback()
+                                print(
+                                    f"[PP] build_plan persist skipped: {_bp_persist_exc!r}",
+                                    flush=True,
+                                )
+                    else:
+                        _build_plan = _bplan.read_plan(project_discovery_spec)
+                    _bp_block = _build_plan.checklist_block()
+                    if _bp_block:
+                        _seed_block = _seed_block + _bp_block
+                        print(
+                            "[PP] build_plan injected "
+                            f"screens={len(_build_plan.screens)} "
+                            f"caps={len(_build_plan.capabilities)} "
+                            f"blocking={len(_build_plan.blocking_capabilities())}",
+                            flush=True,
+                        )
+            except Exception as _bp_exc:
+                print(f"[PP] build_plan skipped: {_bp_exc!r}", flush=True)
             if _is_continue:
                 # Resume: finish the partial app the agent left in the live
                 # container (the prior turn committed + hot-reloaded what it had).

@@ -255,6 +255,23 @@ class Settings(BaseSettings):
     # USE_DESIGN_JUDGE=false.
     use_design_judge: bool = Field(default=True)
 
+    # Build Plan + Coverage gate (owner directive 2026-06-30 «эскиз перед стройкой,
+    # не на зелёном минимуме»). `use_build_plan` runs a planner pass (role
+    # `planner` → Opus) BEFORE the agent build that emits a bounded feature spec
+    # (screens/entities/capabilities), persists it in
+    # projects.discovery_spec['build_plan'], and injects it into the build prompt
+    # as an explicit checklist (the agent builds the WHOLE plan, not a thin
+    # green-compiling subset). `use_coverage_gate` then makes completion mean "the
+    # plan's must-have capabilities actually return their expected status"
+    # (coverage_gate via agent_probe), auto-continuing the build until covered or
+    # `coverage_max_attempts` / token budget is exhausted — then ships an honest
+    # "N of M" via app_errors. ON by default per owner; fully fail-soft (empty
+    # plan or gate crash → EXACTLY today's behaviour). Env: USE_BUILD_PLAN /
+    # USE_COVERAGE_GATE / COVERAGE_MAX_ATTEMPTS.
+    use_build_plan: bool = Field(default=True)
+    use_coverage_gate: bool = Field(default=True)
+    coverage_max_attempts: int = Field(default=3)
+
     # Functional+security E2E gate (G004) — the ONLY gate that proves a feature
     # WORKS and does not LEAK (vs every other gate, which judges looks/structure).
     # Drives a live realtime-stack preview through the messenger north-star: two
@@ -1111,7 +1128,7 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "content":         "claude-opus-4-8",  # multipass fallback — copy
     "visual":          "claude-opus-4-8",  # multipass fallback — style tokens
     "link_repair":     "claude-opus-4-8",  # rewrite dead hrefs
-    "image_prompt":    "claude-opus-4-8",  # writes the TEXT prompt for image-gen (gen model stays flux)
+    "image_prompt":    "claude-opus-4-8",  # writes TEXT prompt for image-gen (gen stays flux)
     "single_shot":     "claude-opus-4-8",  # non-catalog freeform fallback path
     # Art-Director -> Writer 2-pass: design-brain writes the brief, writer/developer
     # writes the HTML. Both on Opus 4.8 now (was Kimi brief + DeepSeek writer).
@@ -1131,8 +1148,13 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # structured JSON calls inside the POST /prompt budget. On Opus 4.8 now.
     "discovery_plan":  "claude-opus-4-8",
     "result_type":     "claude-opus-4-8",
-    "exe_doctor":      "claude-opus-4-8",  # self-heal patch for failed PyInstaller/NSIS builds
-    "app_doctor":      "claude-opus-4-8",  # app self-repair (verify->fix), Settings.app_self_repair_passes
+    # Build-plan author (2026-06-30 «эскиз перед стройкой») — one structured-JSON
+    # pass that emits the feature spec (screens/entities/capabilities) the agent
+    # builds against and the coverage gate verifies. Opus: it must reason about a
+    # product's real screens + endpoints, not just paraphrase. Retune via ROLE_MODELS.
+    "planner":         "claude-opus-4-8",
+    "exe_doctor":      "claude-opus-4-8",  # self-heal failed PyInstaller/NSIS builds
+    "app_doctor":      "claude-opus-4-8",  # app self-repair (verify->fix)
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.
