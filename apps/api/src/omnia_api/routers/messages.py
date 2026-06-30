@@ -2476,10 +2476,14 @@ async def _process_prompt(
                     "(<div className=\"...\"><header>…шапка/нав…</header><main>{children}"
                     "</main></div>); }`. Дубль `<html>`/`<body>` ломает гидрацию React и "
                     "убивает реалтайм (сообщения перестают приходить).\n"
-                    "ЗАПЕРТЫ (импортируй, НЕ переписывай — безопасные примитивы): "
-                    "src/lib/realtime/*, src/lib/channels.ts, src/lib/session.ts, "
-                    "src/lib/auth/*, src/lib/db/*, src/app/api/*, src/app/layout.tsx "
-                    "(корневой html/body)."
+                    "ГОТОВЫЕ ПРИМИТИВЫ (переиспользуй ПО УМОЛЧАНИЮ — auth/realtime/"
+                    "channels/db/ACL уже рабочие, не изобретай свои копии, это экономит "
+                    "шаги): src/lib/realtime/*, src/lib/channels.ts, src/lib/session.ts, "
+                    "src/lib/auth/*, src/lib/db/*, src/app/api/*. НО ты можешь и ПРАВИТЬ "
+                    "их, если чинишь баг или добавляешь фичу — функциональный гейт "
+                    "перепроверит, что доставка сообщений и 403-для-чужого живы. "
+                    "Единственное исключение: НЕ дублируй <html>/<body> в "
+                    "src/app/layout.tsx (корневой) — это ломает гидрацию и реалтайм."
                 )
             # Hand the agent the EXACT signatures of the locked primitives (instead
             # of «read the files + check yourself» — a weak model skipped the reads

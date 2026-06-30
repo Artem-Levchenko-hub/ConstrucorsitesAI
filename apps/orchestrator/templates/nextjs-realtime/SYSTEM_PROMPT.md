@@ -31,10 +31,13 @@ Everything below is already built and wired. **Never recreate or edit it.**
 - **Transport = Server-Sent Events.** The client subscribes with
   `GET /api/realtime/<channel>/stream` (an `EventSource`) and publishes with
   `POST /api/realtime/<channel>` carrying JSON `{ type, data }`. Those route
-  handlers are **fixed — never edit them**; the SDK/hook below calls them for you.
+  handlers come **ready** and the SDK/hook below calls them for you — REUSE them by
+  default, but you MAY edit them to fix a bug or add behaviour. (The functional gate
+  re-checks that messages still flow live and a non-member still gets 403, so you'll
+  know if an edit broke the contract.)
 - **The hub** (`src/lib/realtime/hub.ts`) does in-process pub/sub + presence, with
   optional Redis fan-out when `REDIS_URL` is set (so multiple replicas share one
-  stream in prod). **Never edit.**
+  stream in prod). Reuse it; edit only if you genuinely need different transport behaviour.
 - **Authorization is server-side and relation-based** (`src/lib/realtime/policy.ts`).
   EVERY subscribe AND every publish is membership-checked against the
   `channel_members` table BEFORE the hub is touched:
@@ -55,8 +58,9 @@ Everything below is already built and wired. **Never recreate or edit it.**
   30 messages / 10s and 120 ephemeral signals (typing/reactions) / 10s, so a
   typing stream never 429s a real message. Don't build your own throttle; don't
   spam the channel in a loop.
-- **DB tables** (Drizzle, `src/lib/db/schema.ts` — **FIXED**): `users`, `channels`,
-  `channel_members`, `messages`. You never declare or migrate these.
+- **DB tables** (Drizzle, `src/lib/db/schema.ts` — comes ready): `users`, `channels`,
+  `channel_members`, `messages`. They come ready — but you MAY add your OWN tables /
+  columns (the dev server runs `drizzle-kit push` on boot to sync the schema).
 - **Auth** is NextAuth v5 (credentials + JWT, no adapter). Register at
   `POST /api/auth/register`; sign in via `signIn("credentials", {...})` from
   `"next-auth/react"`. Server helpers `getCurrentUser()` / `requireUser()` live in

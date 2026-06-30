@@ -1024,7 +1024,8 @@ def load_stack_skills(orch_template: str | None) -> str | None:
 # (test_primitive_contract.py) re-reads them and fails if a promised export is
 # renamed/removed, so the card can never silently lie.
 _REALTIME_PRIMITIVES_CONTRACT = """\
-🔒 КОНТРАКТ ЗАПЕРТЫХ ПРИМИТИВОВ — ТОЧНЫЕ сигнатуры. Импортируй ИМЕННО так, НЕ \
+ПРИМИТИВЫ СУБСТРАТА — готовые модули с ТОЧНЫМИ сигнатурами (переиспользуй по умолчанию; \
+можешь и ПРАВИТЬ эти файлы, если чинишь баг или добавляешь фичу — гейт перепроверит доставку + 403). Импортируй ИМЕННО так, НЕ \
 выдумывай имена/типы/аргументы и НЕ объявляй свои копии этих типов:
 
 // @/lib/db/schema — типы строк (Drizzle $inferSelect). ИМПОРТИРУЙ их, НЕ объявляй свои.
