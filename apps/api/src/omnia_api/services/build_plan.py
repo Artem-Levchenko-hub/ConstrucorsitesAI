@@ -311,6 +311,12 @@ class BuildPlan:
                 lines.append(
                     f"  - [{c.actor_role}] {c.action}{where} ⇒ {c.expect}{star}"
                 )
+        if self.blocking_capabilities():
+            lines.append(
+                "ПЕРЕД done: проверь КАЖДУЮ обязательную возможность инструментом "
+                "`probe` (реальный авторизованный запрос) — она ОБЯЗАНА вернуть "
+                "ожидаемый статус. Не вызывай done, пока probe каждой не зелёный."
+            )
         lines.append(
             "НЕ вызывай done, пока каждый экран не существует и каждая "
             "обязательная возможность не отвечает ожидаемым статусом."
@@ -347,6 +353,13 @@ _PLANNER_SYSTEM = """\
 запрос, который ОБЯЗАН реально отработать).
 
 Стек сборки: {stack}. Думай про реальные маршруты этого стека.
+
+КОНВЕНЦИИ РОУТОВ (реальные пути стека, не выдумывай):
+- nextjs-entities: сущность Name -> /api/entities/<Name> (GET/POST/PATCH/DELETE).
+- fullstack / drizzle: пишешь сам, обычно /api/<resource> и /api/<resource>/[id].
+- nextjs-realtime: сообщения /api/realtime/<channel>, каналы /api/channels.
+- vite-react-spa: без бэка -> UI-действия (path: "", must_have: false).
+Не уверен в пути — path: "" + must_have: false, не выдумывай эндпойнт.
 
 Верни СТРОГО валидный JSON (и больше НИЧЕГО — без markdown-ограждений, без \
 пояснений) по схеме:

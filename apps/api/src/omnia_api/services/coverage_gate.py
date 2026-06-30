@@ -8,6 +8,13 @@ plan declared it expects. Anything that doesn't answer as promised is a coverage
 GAP that the caller's self-heal loop feeds back to the agent — so completion
 means "the plan works", not "it builds".
 
+Route reconciliation (P3 A1): a probe failure has TWO meanings, and conflating
+them caused false heal-storms on WORKING apps. Given the app's REAL route set
+(:func:`api_routes_from_files`), each failing capability is classified:
+``wrong_status`` (the route EXISTS but misbehaves — a real bug, always heal) vs
+``missing_route`` (the planner declared a path the app never built — heal once
+with "build it", then advisory; never block a good app on a planner's guess).
+
 Efficiency: unlike the per-call ``agent_probe.run_probe`` (one browser per
 request), this opens ONE browser session and replays every capability through it
 — login once, then N in-page fetches — reusing the proven functional-gate
@@ -18,7 +25,8 @@ Bounded + fail-soft (R-10): at most ``max_probes`` capabilities are checked
 (the rest are logged, never silently dropped); no preview, a login failure, or
 any unexpected error returns a SKIPPED verdict (``passed=True``) so the gate can
 never block a build on its own infrastructure — it only ever blocks on a
-capability that DEFINITIVELY returned the wrong status.
+capability that DEFINITIVELY returned the wrong status against a route that
+exists.
 """
 
 from __future__ import annotations
@@ -41,11 +49,14 @@ _MAX_PROBES = 6
 class CoverageCheck:
     """One capability's result. Shape matches ``functional_gate.Check`` so
     ``agent_gate_feedback.outcome_from_checks`` consumes it unchanged
-    (``ok`` / ``name`` / ``detail``)."""
+    (``ok`` / ``name`` / ``detail``). ``kind`` classifies a failure for the
+    self-heal loop: ``ok`` | ``wrong_status`` (route exists, bad status — real
+    bug) | ``missing_route`` (route never built — planner over-specified)."""
 
     ok: bool
     name: str
     detail: str = ""
+    kind: str = "ok"
 
 
 @dataclass(frozen=True)
@@ -56,6 +67,17 @@ class CoverageVerdict:
     missing: list[str] = field(default_factory=list)
     checks: list[CoverageCheck] = field(default_factory=list)
     skipped: bool = False
+
+    def hard_missing(self) -> list[str]:
+        """Routes that EXIST but returned the wrong status — real bugs that
+        always block and heal (the messenger-class failure)."""
+        return [c.name for c in self.checks if not c.ok and c.kind == "wrong_status"]
+
+    def soft_missing(self) -> list[str]:
+        """Capabilities whose route was never built — the planner over-specified
+        or the app skipped it. Healed once ('build it'), then advisory; never a
+        hard block on a good app."""
+        return [c.name for c in self.checks if not c.ok and c.kind == "missing_route"]
 
 
 def status_matches(status: int, expect: str) -> bool:
@@ -73,6 +95,48 @@ def status_matches(status: int, expect: str) -> bool:
     if exp.isdigit():
         return status == int(exp)
     return 200 <= status < 300
+
+
+def api_routes_from_files(files: dict[str, str] | None) -> set[str]:
+    """Real ``/api/...`` route PREFIXES a generated app exposes, derived from its
+    ``src/app/api/**/route.ts`` file paths.
+
+    Used to reconcile a planner-declared capability path against what the app
+    ACTUALLY built, so coverage blocks on a real misbehaving route, not on a path
+    the planner guessed but the app never created. Route groups ``(x)`` are
+    dropped; the prefix stops at the first dynamic ``[seg]`` (so
+    ``/api/clients/[id]/route.ts`` → ``/api/clients``). Sibling of
+    :func:`isolation_gate.api_routes_from_grep` but reads the in-memory ``files``
+    dict instead of a grep dump (no extra orchestrator call).
+    """
+    routes: set[str] = set()
+    for raw in files or {}:
+        p = str(raw).replace("\\", "/")
+        marker = "/app/api/"
+        if marker not in p or not p.endswith("/route.ts"):
+            continue
+        seg = p.split(marker, 1)[1][: -len("/route.ts")]
+        parts: list[str] = []
+        for s in seg.split("/"):
+            if not s or (s.startswith("(") and s.endswith(")")):
+                continue
+            if s.startswith("[") and s.endswith("]"):
+                break
+            parts.append(s)
+        if parts:
+            routes.add("/api/" + "/".join(parts))
+    return routes
+
+
+def _route_known(path: str, known_routes: set[str]) -> bool:
+    """Does the app expose a route that could serve this capability path? Exact
+    or prefix match (a collection route covers its ``/{id}`` children)."""
+    p = (path or "").split("?", 1)[0].rstrip("/")
+    if not p:
+        return False
+    if p in known_routes:
+        return True
+    return any(p == r or p.startswith(r + "/") for r in known_routes)
 
 
 def _verdict_from_checks(
@@ -94,13 +158,19 @@ async def run_coverage_gate(
     plan: BuildPlan,
     *,
     stack: str | None = None,
+    known_routes: set[str] | None = None,
     max_probes: int = _MAX_PROBES,
 ) -> CoverageVerdict:
     """Replay the plan's blocking capabilities against the live preview.
 
-    Returns a SKIPPED (``passed=True``) verdict when there is nothing provable
-    or the preview/login is unavailable — the gate blocks ONLY on a capability
-    that returned a definitively wrong status.
+    ``known_routes`` (from :func:`api_routes_from_files`) enables reconciliation:
+    an ``/api/`` capability whose route the app never built is classified
+    ``missing_route`` (not probed) instead of failing as a fake bug. Pass ``None``
+    to skip reconciliation (probe everything — the pre-P3 behaviour).
+
+    Returns a SKIPPED (``passed=True``) verdict when there is nothing provable or
+    the preview/login is unavailable — the gate blocks ONLY on a capability that
+    returned a definitively wrong status against a route that exists.
     """
     caps = list(plan.blocking_capabilities()) if plan else []
     if not caps:
@@ -159,6 +229,27 @@ async def run_coverage_gate(
                     log.info("coverage_gate: login failed — skip (%r)", exc)
                     return CoverageVerdict(passed=True, covered=0, total=0, skipped=True)
                 for c in probed:
+                    # Reconcile against the app's REAL routes first: a planner-
+                    # guessed /api path the app never built is NOT a misbehaving
+                    # feature — don't fail it as a fake bug (kills heal-storms).
+                    if (
+                        known_routes is not None
+                        and c.path.startswith("/api/")
+                        and not _route_known(c.path, known_routes)
+                    ):
+                        checks.append(
+                            CoverageCheck(
+                                ok=False,
+                                name=c.id,
+                                kind="missing_route",
+                                detail=(
+                                    f"{c.action or c.id}: роут {c.method} {c.path} "
+                                    "НЕ построен в приложении — построй его, если эта "
+                                    "возможность нужна (иначе убери из плана)"
+                                ),
+                            )
+                        )
+                        continue
                     try:
                         res = await fg._api(page, c.method, c.path, c.body_hint or None)
                         status = int(res.get("status", 0))
@@ -170,6 +261,7 @@ async def run_coverage_gate(
                         CoverageCheck(
                             ok=ok,
                             name=c.id,
+                            kind="ok" if ok else "wrong_status",
                             detail=(
                                 f"{c.action or c.id}: {c.method} {c.path} -> HTTP "
                                 f"{status} (ожидалось {c.expect})"
@@ -184,11 +276,12 @@ async def run_coverage_gate(
 
     verdict = _verdict_from_checks(checks)
     log.info(
-        "coverage_gate: %s %d/%d (missing=%s)",
+        "coverage_gate: %s %d/%d (hard=%s soft=%s)",
         "PASS" if verdict.passed else "FAIL",
         verdict.covered,
         verdict.total,
-        ",".join(verdict.missing) or "-",
+        ",".join(verdict.hard_missing()) or "-",
+        ",".join(verdict.soft_missing()) or "-",
     )
     return verdict
 
@@ -196,6 +289,7 @@ async def run_coverage_gate(
 __all__ = [
     "CoverageCheck",
     "CoverageVerdict",
+    "api_routes_from_files",
     "run_coverage_gate",
     "status_matches",
 ]

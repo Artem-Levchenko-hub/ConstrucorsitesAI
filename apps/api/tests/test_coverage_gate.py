@@ -14,7 +14,10 @@ import uuid
 from omnia_api.services.build_plan import BuildPlan, Capability
 from omnia_api.services.coverage_gate import (
     CoverageCheck,
+    CoverageVerdict,
+    _route_known,
     _verdict_from_checks,
+    api_routes_from_files,
     run_coverage_gate,
     status_matches,
 )
@@ -77,3 +80,44 @@ async def test_no_dev_url_skipped(monkeypatch):
     plan = BuildPlan(capabilities=(Capability(id="c", path="/api/x", must_have=True),))
     v = await run_coverage_gate(str(uuid.uuid4()), plan)
     assert v.skipped and v.passed
+
+
+# ── A1 route reconciliation ──────────────────────────────────────────────────
+
+
+def test_api_routes_from_files():
+    files = {
+        "src/app/api/clients/route.ts": "...",
+        "src/app/api/clients/[id]/route.ts": "...",
+        "src/app/api/(admin)/stats/route.ts": "...",  # route group dropped
+        "src/app/dashboard/page.tsx": "...",  # not an api route
+        "src\\app\\api\\deals\\route.ts": "...",  # backslash path normalised
+    }
+    r = api_routes_from_files(files)
+    assert "/api/clients" in r
+    assert "/api/stats" in r
+    assert "/api/deals" in r
+    # [id] collapses under /api/clients (prefix stops at the dynamic segment)
+    assert "/api/clients/[id]" not in r
+    assert all(not x.endswith("page.tsx") for x in r)
+    assert api_routes_from_files(None) == set()
+
+
+def test_route_known():
+    known = {"/api/clients", "/api/deals"}
+    assert _route_known("/api/clients", known)
+    assert _route_known("/api/clients/123", known)  # prefix (collection covers /id)
+    assert _route_known("/api/clients?x=1", known)  # query stripped
+    assert not _route_known("/api/unknown", known)
+    assert not _route_known("", known)
+
+
+def test_hard_vs_soft_missing():
+    checks = [
+        CoverageCheck(True, "a", kind="ok"),
+        CoverageCheck(False, "b", kind="wrong_status"),
+        CoverageCheck(False, "c", kind="missing_route"),
+    ]
+    v = CoverageVerdict(passed=False, covered=1, total=3, checks=checks)
+    assert v.hard_missing() == ["b"]
+    assert v.soft_missing() == ["c"]

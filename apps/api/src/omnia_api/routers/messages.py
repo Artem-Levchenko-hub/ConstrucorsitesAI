@@ -3162,11 +3162,24 @@ async def _process_prompt(
             # (no preview / nothing provable) or any error → no heal, no card →
             # today's behaviour. A gate must never crash the build.
             try:
+                # A2: also run on EDITS that touch a capability surface (api route
+                # handler / lib / page), so an edit that 4xx-breaks a working action
+                # is caught — not only fresh builds. (_build_plan is read back from
+                # the persisted spec for edits by the injection block above.)
+                _cov_edit_touched = bool(_is_edit) and any(
+                    (
+                        _p.endswith("route.ts")
+                        or "/api/" in _p
+                        or "/lib/" in _p
+                        or _p.endswith("page.tsx")
+                    )
+                    for _p in files
+                )
                 _cov_on = (
                     get_settings().use_coverage_gate
                     and _build_plan is not None
                     and not _build_plan.is_empty
-                    and not _is_edit
+                    and (not _is_edit or _cov_edit_touched)
                 )
                 if _cov_on:
                     from omnia_api.services import agent_gate_feedback as _agf3
@@ -3176,23 +3189,43 @@ async def _process_prompt(
                     _cov_attempt = 0
                     _cov_max = max(0, int(get_settings().coverage_max_attempts))
                     while True:
+                        _known = _covg.api_routes_from_files(files)
                         _cv = await _covg.run_coverage_gate(
-                            project_id, _build_plan, stack=_orch_name
+                            project_id,
+                            _build_plan,
+                            stack=_orch_name,
+                            known_routes=_known or None,
                         )
+                        # A1: heal HARD gaps (route exists, wrong status) ALWAYS; a
+                        # missing route (planner over-specified) is healed once then
+                        # dropped to advisory — never a hard block / heal-storm on a
+                        # working app.
+                        _active_checks = [
+                            c
+                            for c in _cv.checks
+                            if not c.ok
+                            and (c.kind == "wrong_status" or _cov_attempt == 0)
+                        ]
                         _cout = [
-                            _agf3.outcome_from_checks(
-                                "coverage", _cv.passed, _cv.checks
+                            _agf3.GateOutcome(
+                                name="coverage",
+                                passed=not _active_checks,
+                                failures=[
+                                    f"{c.name}: {c.detail}" for c in _active_checks
+                                ],
                             )
                         ]
                         _cfix = _agf3.build_fix_instruction(
                             _cout, _cov_attempt, _cov_max, stack=_orch_name
                         )
                         if _cfix is None:
-                            if not _cv.passed:
-                                _miss = ", ".join(_cv.missing[:8]) or "часть функций"
+                            _hard_left = _cv.hard_missing()
+                            _soft_left = _cv.soft_missing()
+                            if _hard_left:
+                                _miss = ", ".join(_hard_left[:8])
                                 accumulated += (
                                     f"\n\n⚠️ Готово {_cv.covered} из {_cv.total} "
-                                    f"ключевых функций — пока не подтвердились: {_miss}."
+                                    f"ключевых функций — пока не работают: {_miss}."
                                 )
                                 try:
                                     await _app_errors.publish(
@@ -3204,8 +3237,8 @@ async def _process_prompt(
                                             f"Готово {_cv.covered} из {_cv.total} функций"
                                         ),
                                         detail=(
-                                            "Эти возможности из плана пока не отвечают "
-                                            "как ожидалось: " + _miss
+                                            "Эти возможности пока не отвечают как "
+                                            "ожидалось: " + _miss
                                         ),
                                         fixable=True,
                                     )
@@ -3215,8 +3248,14 @@ async def _process_prompt(
                                         flush=True,
                                     )
                                 print(
-                                    f"[PP] coverage_gate FAIL {_cv.covered}/{_cv.total} "
-                                    "(out of attempts)",
+                                    f"[PP] coverage_gate FAIL hard={_hard_left} "
+                                    f"({_cv.covered}/{_cv.total})",
+                                    flush=True,
+                                )
+                            elif _soft_left:
+                                print(
+                                    "[PP] coverage_gate soft-only (advisory) "
+                                    f"{_soft_left} — not blocking a good app",
                                     flush=True,
                                 )
                             else:
