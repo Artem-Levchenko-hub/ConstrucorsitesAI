@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     # Verify the exact path against the proxyapi dashboard before prod billing.
     proxyapi_deepseek_base_url: str = "https://api.proxyapi.ru/deepseek/v1"
 
+    # oneprovider.dev — native Anthropic-Messages endpoint serving claude-opus-4-8
+    # (owner key, 2026-06-30). Tested: HTTP 200 + prompt caching (cache_read /
+    # cache_creation tokens). LiteLLM's `anthropic` provider appends /v1/messages,
+    # so the base carries NO /v1. Routed in `_PROXY_ROUTES` (litellm_router.py);
+    # the key flows in via env ONEPROVIDER_API_KEY, never committed.
+    oneprovider_api_key: SecretStr | None = None
+    oneprovider_base_url: str = "https://api.oneprovider.dev"
+
     # Warmup keep-alive loop (services/warmup.py) exists ONLY to defeat
     # proxyapi.ru's ~5-min idle cold-start (Haiku/GPT-5-nano returning near-empty
     # on the first call after idle). proxyapi is retired — every role now routes

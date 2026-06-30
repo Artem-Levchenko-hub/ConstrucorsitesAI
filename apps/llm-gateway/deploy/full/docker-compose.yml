@@ -121,6 +121,8 @@ services:
       VSEGPT_BASE_URL: ${VSEGPT_BASE_URL:-https://api.vsegpt.ru/v1}
       PROXYAPI_API_KEY: ${PROXYAPI_API_KEY:-}
       PROXYAPI_BASE_URL: ${PROXYAPI_BASE_URL:-https://api.proxyapi.ru/anthropic}
+      ONEPROVIDER_API_KEY: ${ONEPROVIDER_API_KEY:-}
+      ONEPROVIDER_BASE_URL: ${ONEPROVIDER_BASE_URL:-https://api.oneprovider.dev}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # --- Gemini-only outbound HTTP proxy (geo-bypass) ---
       # When GEMINI_HTTPS_PROXY is empty these vars are also empty, so they

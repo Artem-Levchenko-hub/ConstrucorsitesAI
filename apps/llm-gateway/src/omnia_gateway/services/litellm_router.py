@@ -66,6 +66,10 @@ _LITELLM_MODEL_SLUG: dict[str, str] = {
     # on prod is a vsegpt key (sk-or-vv-), not an OpenRouter key (sk-or-v1-), and
     # OpenRouter rejected it. This route needs proxyapi.ru topped up to work.
     "claude-opus-4-7": "anthropic/claude-opus-4-5",
+    # Opus 4.8 — THE live model for every role — via oneprovider.dev (native
+    # Anthropic). Key/base in _PROXY_ROUTES below; dispatched here (LiteLLM) now
+    # that it's removed from the vsegpt map, with streaming.py applying cache_control.
+    "claude-opus-4-8": "anthropic/claude-opus-4-8",
     # Haiku 4.5 routed via proxyapi.ru native-Anthropic endpoint (the proxyapi
     # /openai/v1 surface doesn't carry Claude models — they live under
     # /anthropic/v1 in raw Anthropic Messages format). The proxy key flows in
@@ -108,6 +112,12 @@ class _ProxyRoute:
 # All three entries below share the same proxyapi.ru balance: one top-up
 # covers Claude Haiku, GPT-5, and GPT-5 Nano simultaneously.
 _PROXY_ROUTES: dict[str, _ProxyRoute] = {
+    # Opus 4.8 (the live model for EVERY role) via oneprovider.dev native Anthropic
+    # endpoint — its own key/base, separate from the proxyapi.ru balance below.
+    "claude-opus-4-8": _ProxyRoute(
+        api_key=lambda s: s.oneprovider_api_key.get_secret_value() if s.oneprovider_api_key else None,
+        api_base=lambda s: s.oneprovider_base_url,
+    ),
     "claude-haiku-4-5": _ProxyRoute(
         api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
         api_base=lambda s: s.proxyapi_base_url,
