@@ -2497,6 +2497,7 @@ async def _process_prompt(
             # persisted plan back so the same checklist still guides. Fully fail-soft
             # (R-10): empty plan or any error → nothing appended (today's behaviour).
             # Gated by use_build_plan; the coverage gate (P2) verifies it later.
+            _build_plan = None
             try:
                 from omnia_api.services import build_plan as _bplan
 
@@ -3150,6 +3151,121 @@ async def _process_prompt(
                             break
             except Exception as _rg_exc:  # a gate must never crash the build
                 print(f"[PP] runtime_gate skipped: {_rg_exc!r}", flush=True)
+
+            # Coverage gate (тезис 2 — «не на зелёном минимуме»). STACK-AGNOSTIC:
+            # when a Build Plan exists, completion means its must-have capabilities
+            # actually return their expected status — not just a green build. Reuses
+            # the SAME self-heal machinery as the runtime gate (build_fix_instruction
+            # → run_agent_build, accept files only if the heal stays green). On
+            # exhaustion it ships an HONEST "N из M" card (app_errors incomplete)
+            # instead of a silent thin app. Fully fail-soft: a SKIPPED verdict
+            # (no preview / nothing provable) or any error → no heal, no card →
+            # today's behaviour. A gate must never crash the build.
+            try:
+                _cov_on = (
+                    get_settings().use_coverage_gate
+                    and _build_plan is not None
+                    and not _build_plan.is_empty
+                    and not _is_edit
+                )
+                if _cov_on:
+                    from omnia_api.services import agent_gate_feedback as _agf3
+                    from omnia_api.services import app_errors as _app_errors
+                    from omnia_api.services import coverage_gate as _covg
+
+                    _cov_attempt = 0
+                    _cov_max = max(0, int(get_settings().coverage_max_attempts))
+                    while True:
+                        _cv = await _covg.run_coverage_gate(
+                            project_id, _build_plan, stack=_orch_name
+                        )
+                        _cout = [
+                            _agf3.outcome_from_checks(
+                                "coverage", _cv.passed, _cv.checks
+                            )
+                        ]
+                        _cfix = _agf3.build_fix_instruction(
+                            _cout, _cov_attempt, _cov_max, stack=_orch_name
+                        )
+                        if _cfix is None:
+                            if not _cv.passed:
+                                _miss = ", ".join(_cv.missing[:8]) or "часть функций"
+                                accumulated += (
+                                    f"\n\n⚠️ Готово {_cv.covered} из {_cv.total} "
+                                    f"ключевых функций — пока не подтвердились: {_miss}."
+                                )
+                                try:
+                                    await _app_errors.publish(
+                                        factory,
+                                        project_id,
+                                        assistant_message_id,
+                                        category="incomplete",
+                                        title=(
+                                            f"Готово {_cv.covered} из {_cv.total} функций"
+                                        ),
+                                        detail=(
+                                            "Эти возможности из плана пока не отвечают "
+                                            "как ожидалось: " + _miss
+                                        ),
+                                        fixable=True,
+                                    )
+                                except Exception as _ce_exc:
+                                    print(
+                                        f"[PP] coverage incomplete card skipped: {_ce_exc!r}",
+                                        flush=True,
+                                    )
+                                print(
+                                    f"[PP] coverage_gate FAIL {_cv.covered}/{_cv.total} "
+                                    "(out of attempts)",
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    f"[PP] coverage_gate PASS {_cv.covered}/{_cv.total}",
+                                    flush=True,
+                                )
+                            break
+                        _cov_attempt += 1
+                        print(
+                            f"[PP] coverage_gate heal attempt={_cov_attempt} "
+                            f"({_cv.covered}/{_cv.total})",
+                            flush=True,
+                        )
+                        _cheal = await agent_builder.run_agent_build(
+                            system_prompt=_stack_system,
+                            user_prompt=_cfix + _seed_block,
+                            model=_escalate_model or _agent_model,
+                            execute=_agent_executor,
+                            max_steps=_agent_steps,
+                            emit=_agent_emit,
+                            user_id=str(user_id),
+                            project_id=str(project_id),
+                        )
+                        # Never regress a clean build: accept the heal's files ONLY
+                        # if the typecheck stayed GREEN (same rule as the runtime
+                        # gate). A non-green / unverifiable heal is discarded.
+                        _cov_green = False
+                        try:
+                            _cc = await orchestrator_client.agent_build(
+                                project_id, project_slug
+                            )
+                            _cov_green = bool(_cc.get("ok", False))
+                        except Exception as _cc_exc:
+                            print(
+                                f"[PP] coverage heal verify skipped: {_cc_exc!r}",
+                                flush=True,
+                            )
+                        if _cov_green:
+                            files.update(_cheal.files)
+                        else:
+                            print(
+                                "[PP] coverage heal not green — discarding, keeping "
+                                "clean build",
+                                flush=True,
+                            )
+                            break
+            except Exception as _cov_exc:  # a gate must never crash the build
+                print(f"[PP] coverage_gate skipped: {_cov_exc!r}", flush=True)
 
             if files:
                 new_sha = await asyncio.to_thread(
