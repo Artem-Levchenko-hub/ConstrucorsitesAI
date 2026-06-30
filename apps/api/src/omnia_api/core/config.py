@@ -288,9 +288,14 @@ class Settings(BaseSettings):
     # unchanged. `orchestrator_template()` is the single chokepoint that swaps the
     # image+dir to `bare-nextjs`. Default OFF → templates as today; flip ON only
     # for the controlled comparison, then OFF. Env: BARE_BUILD_EXPERIMENT.
-    # TEMPORARILY ON (2026-06-30 controlled hypothesis test) — REVERT to False
-    # after the comparison so users go back to the templates.
-    bare_build_experiment: bool = Field(default=True)
+    # Back to False after the 2026-06-30 live test: bare/no-stack mode did NOT free
+    # the model — the agent loop's explore/stall/cycle guards (tuned for the template
+    # flow of write-files-not-bash) read Opus's bash-scaffolding as "looping" and
+    # aborted at 13 steps with 0 files; the typecheck/smoke also assume Next (`tsc`).
+    # The substrate + harness are one co-designed system — removing templates makes
+    # the harness fight the model. Re-enabling bare needs the harness adapted too
+    # (relax guards for bash-scaffolding, generic typecheck/smoke), not just a flag.
+    bare_build_experiment: bool = Field(default=False)
 
     # Functional+security E2E gate (G004) — the ONLY gate that proves a feature
     # WORKS and does not LEAK (vs every other gate, which judges looks/structure).
