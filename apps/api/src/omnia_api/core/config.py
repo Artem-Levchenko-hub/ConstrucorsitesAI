@@ -279,6 +279,17 @@ class Settings(BaseSettings):
     use_coverage_gate: bool = Field(default=False)
     coverage_max_attempts: int = Field(default=3)
 
+    # BARE experiment (owner 2026-06-30 «отключим шаблоны, Opus строит с нуля» —
+    # testing the hypothesis that the template substrate oppresses the model).
+    # When ON, every CONTAINER-backed build is provisioned + built on the BARE
+    # stack (templates/bare-nextjs: a blank runnable Next.js, no auth/db/entity-
+    # engine/realtime/kit) with a minimal "build everything from scratch" prompt,
+    # regardless of the discovery-recommended stack. Discovery/voting front is
+    # unchanged. `orchestrator_template()` is the single chokepoint that swaps the
+    # image+dir to `bare-nextjs`. Default OFF → templates as today; flip ON only
+    # for the controlled comparison, then OFF. Env: BARE_BUILD_EXPERIMENT.
+    bare_build_experiment: bool = Field(default=False)
+
     # Functional+security E2E gate (G004) — the ONLY gate that proves a feature
     # WORKS and does not LEAK (vs every other gate, which judges looks/structure).
     # Drives a live realtime-stack preview through the messenger north-star: two

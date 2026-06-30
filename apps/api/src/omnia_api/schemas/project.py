@@ -77,8 +77,24 @@ def orchestrator_template(template: str) -> str | None:
     Returns None for static templates (blank/landing/portfolio/blog) —
     those don't have a Docker image, the caller (`routers/runtime.py`)
     treats None as "no container needed; this stays on /p/<slug>".
+
+    BARE experiment (owner 2026-06-30): when `bare_build_experiment` is ON, every
+    CONTAINER-backed stack is swapped to the blank `bare-nextjs` image+dir, so the
+    agent builds from scratch with no substrate. This is the single chokepoint
+    both provisioning (runtime.py) and the build prompt (messages.py) flow through.
+    Static templates (None) are left alone — no container, nothing to swap.
     """
-    return _ORCHESTRATOR_TEMPLATE_BY_API.get(template)
+    base = _ORCHESTRATOR_TEMPLATE_BY_API.get(template)
+    if base is None:
+        return None
+    try:
+        from omnia_api.core.config import get_settings
+
+        if get_settings().bare_build_experiment:
+            return "bare-nextjs"
+    except Exception:
+        pass
+    return base
 
 
 class ProjectCreate(BaseModel):
