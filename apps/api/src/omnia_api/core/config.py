@@ -269,7 +269,14 @@ class Settings(BaseSettings):
     # plan or gate crash → EXACTLY today's behaviour). Env: USE_BUILD_PLAN /
     # USE_COVERAGE_GATE / COVERAGE_MAX_ATTEMPTS.
     use_build_plan: bool = Field(default=True)
-    use_coverage_gate: bool = Field(default=True)
+    # OFF after the 2026-06-30 live prod smoke: coverage probed a real messenger
+    # build, FAILed 1/6 and thrashed 3 heal rounds with no progress — false
+    # positives (auth-path caps like `register` 409 against the gate's own probe
+    # user; write caps 400 on planner-guessed bodies; realtime already covered by
+    # functional_gate). Re-enable after the fixes: drop auth-path caps, skip
+    # coverage where a dedicated functional gate runs, treat 400 as advisory, and
+    # log per-capability status. Build-plan (thesis 1) stays ON — it works.
+    use_coverage_gate: bool = Field(default=False)
     coverage_max_attempts: int = Field(default=3)
 
     # Functional+security E2E gate (G004) — the ONLY gate that proves a feature
