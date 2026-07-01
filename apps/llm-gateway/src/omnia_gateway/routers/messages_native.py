@@ -30,6 +30,9 @@ import httpx
 import structlog
 from fastapi import APIRouter, Request, Response
 
+from omnia_gateway.core.config import get_settings
+from omnia_gateway.providers.vsegpt import is_vsegpt_model
+from omnia_gateway.providers.vsegpt_native import anative_messages
 from omnia_gateway.services.litellm_router import proxy_route_for
 
 log = structlog.get_logger(__name__)
@@ -57,6 +60,31 @@ async def native_messages(request: Request) -> Response:
         return _err(400, "invalid_request_error", "body is not valid JSON")
 
     model = body.get("model", "") if isinstance(body, dict) else ""
+
+    # Owner 2026-07-01: the native agent rides vsegpt too — same ~3s no-thinking
+    # Opus as /v1/chat/completions. vsegpt has no /v1/messages, so the adapter
+    # converts Anthropic⇄OpenAI shapes (providers/vsegpt_native.py). Upstream
+    # status codes pass through verbatim (the agent retries 429 itself).
+    # Kill switch NATIVE_VIA_VSEGPT=false → the oneprovider passthrough below.
+    settings = get_settings()
+    if (
+        settings.native_via_vsegpt
+        and settings.vsegpt_api_key
+        and is_vsegpt_model(model)
+    ):
+        try:
+            status, out = await anative_messages(body)
+        except httpx.HTTPError as exc:
+            log.warning(
+                "native_messages.vsegpt_transport_error", model=model, error=str(exc)
+            )
+            return _err(502, "api_error", f"vsegpt transport: {type(exc).__name__}")
+        return Response(
+            content=json.dumps(out, ensure_ascii=False),
+            status_code=status,
+            media_type="application/json",
+        )
+
     route = proxy_route_for(model)
     if route is None:
         return _err(

@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     oneprovider_api_key: SecretStr | None = None
     oneprovider_base_url: str = "https://api.oneprovider.dev"
 
+    # Native tool-use agent (/v1/messages) upstream (owner 2026-07-01): vsegpt —
+    # same ~3s no-thinking Opus as the /v1/chat/completions path. vsegpt has no
+    # native Anthropic endpoint, so providers/vsegpt_native.py adapts the shapes
+    # (Anthropic Messages ⇄ OpenAI chat). Kill switch NATIVE_VIA_VSEGPT=false
+    # reverts to the raw oneprovider passthrough (forced thinking, ~71s/call).
+    native_via_vsegpt: bool = True
+
     # Warmup keep-alive loop (services/warmup.py) exists ONLY to defeat
     # proxyapi.ru's ~5-min idle cold-start (Haiku/GPT-5-nano returning near-empty
     # on the first call after idle). proxyapi is retired — every role now routes
