@@ -362,18 +362,19 @@ async def acompletion(
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "minimal")
     elif model.startswith("claude-"):
-        # oneprovider's claude-opus-4-8 keeps EXTENDED THINKING on and IGNORES
-        # {type: disabled} (verified 2026-07-01: a disabled request still returns a
-        # thinking block). The old "disable it" attempt never took — and the REAL
-        # failure was the small caller max_tokens (discovery's 900) being 100%
-        # consumed by the forced thinking → empty JSON → canned fallback questions.
-        # Fix: enable thinking EXPLICITLY (owner wants the most-thinking Opus) and
-        # FLOOR max_tokens far above the budget so the final answer always emits.
-        # budget_tokens is a CEILING the model self-limits to — an easy meta-call
-        # still returns in ~4s (validated), safe for the 15s discovery timeout, while
-        # hard passes get real reasoning depth. 32000 = Opus's practical max OUTPUT
-        # (the "1M" the owner asked for is the input/context window, not output).
-        kwargs.setdefault("thinking", {"type": "enabled", "budget_tokens": 8000})
+        # oneprovider's claude-opus-4-8 keeps EXTENDED THINKING on regardless of
+        # {type: disabled} — but with a LIGHT default budget the agentic builder
+        # tolerates. The canned-discovery-questions bug was NOT the thinking, it was
+        # the tiny caller max_tokens (discovery's 900) being consumed by it → empty
+        # JSON → fallback. The real fix is the max_tokens FLOOR below (room for the
+        # light thinking + the full answer). NOTE (2026-07-01): we briefly enabled
+        # thinking with an explicit budget_tokens=8000 ("самая думающая"); on a real
+        # messenger build it changed Opus's action-output pattern in the text-action
+        # agent loop → endless EXPLORE-STALL/CYCLE, ZERO files written. So we keep the
+        # request at {type: disabled} (light default) and rely on the floor alone for
+        # real, non-truncated results. Do NOT re-enable a big thinking budget without
+        # first making agent_builder thinking-aware.
+        kwargs.setdefault("thinking", {"type": "disabled"})
         kwargs["allowed_openai_params"] = ["thinking"]
         kwargs["max_tokens"] = max(int(kwargs.get("max_tokens") or 0), 32000)
 

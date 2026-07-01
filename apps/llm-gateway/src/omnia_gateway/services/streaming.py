@@ -103,14 +103,12 @@ async def _litellm_stream(
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "minimal")
     elif model.startswith("claude-"):
-        # oneprovider's claude-opus-4-8 keeps extended thinking ON and ignores
-        # {type: disabled} (verified 2026-07-01). Enable it explicitly (owner: the
-        # most-thinking Opus) and floor max_tokens high so a long page isn't
-        # truncated. Thinking arrives as separate reasoning deltas whose
-        # `delta.content` is empty, so the loop below already skips them — only the
-        # visible text streams into the page. Kept in sync with
-        # litellm_router.acompletion.
-        kwargs.setdefault("thinking", {"type": "enabled", "budget_tokens": 8000})
+        # Keep thinking at the light default ({type: disabled} — oneprovider thinks
+        # lightly regardless) and floor max_tokens so a long page isn't truncated
+        # (paired with the continuation wrapper). An explicit big thinking budget
+        # broke the agentic builder's action loop (see litellm_router.acompletion,
+        # 2026-07-01), so we DON'T force-enable it here either. Kept in sync.
+        kwargs.setdefault("thinking", {"type": "disabled"})
         kwargs["allowed_openai_params"] = ["thinking"]
         kwargs["max_tokens"] = max(int(kwargs.get("max_tokens") or 0), 32000)
 
