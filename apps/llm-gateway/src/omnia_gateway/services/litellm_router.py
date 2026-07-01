@@ -362,16 +362,20 @@ async def acompletion(
         kwargs.setdefault("max_tokens", 16384)
         kwargs.setdefault("reasoning_effort", "minimal")
     elif model.startswith("claude-"):
-        # oneprovider's claude-opus-4-8 enables EXTENDED THINKING by default, which
-        # made the tiny meta-calls (discovery/result_type) slow AND token-starved
-        # (thinking ate the small max_tokens → empty reply → retry), tripping the
-        # api's gateway ReadTimeout → POST /prompt timed out. Disable thinking for
-        # snappy, deterministic replies — matches the prior non-thinking vsegpt opus.
-        # LiteLLM rejects `thinking` as an unknown anthropic param unless allowed;
-        # allowed_openai_params lets it pass through verbatim to oneprovider (which
-        # honors {type: disabled}).
-        kwargs.setdefault("thinking", {"type": "disabled"})
-        kwargs.setdefault("allowed_openai_params", ["thinking"])
+        # oneprovider's claude-opus-4-8 keeps EXTENDED THINKING on and IGNORES
+        # {type: disabled} (verified 2026-07-01: a disabled request still returns a
+        # thinking block). The old "disable it" attempt never took — and the REAL
+        # failure was the small caller max_tokens (discovery's 900) being 100%
+        # consumed by the forced thinking → empty JSON → canned fallback questions.
+        # Fix: enable thinking EXPLICITLY (owner wants the most-thinking Opus) and
+        # FLOOR max_tokens far above the budget so the final answer always emits.
+        # budget_tokens is a CEILING the model self-limits to — an easy meta-call
+        # still returns in ~4s (validated), safe for the 15s discovery timeout, while
+        # hard passes get real reasoning depth. 32000 = Opus's practical max OUTPUT
+        # (the "1M" the owner asked for is the input/context window, not output).
+        kwargs.setdefault("thinking", {"type": "enabled", "budget_tokens": 8000})
+        kwargs["allowed_openai_params"] = ["thinking"]
+        kwargs["max_tokens"] = max(int(kwargs.get("max_tokens") or 0), 32000)
 
     async def _attempt() -> Any:
         try:
