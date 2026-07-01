@@ -204,6 +204,14 @@ async def run_native_build(
             # MUST be preserved for the next turn or Anthropic rejects the round-trip.
             convo.append({"role": "assistant", "content": content})
 
+            # Streaming (phase 8): surface Opus's own narration between tool calls to
+            # the UI so the workspace reads «как переписка с Claude» — the model
+            # explains what it's doing, live, next to the tool steps.
+            if emit:
+                _narration = _text_of(content)
+                if _narration:
+                    await emit("agent.text", {"step": step, "text": _narration})
+
             tool_uses = [
                 b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"
             ]

@@ -2601,11 +2601,13 @@ async def _process_prompt(
             # time a stall-guard nudges (cycle / repeat / no-write) — smart only
             # when stuck, so cost stays bounded (no full strong-model run).
             _escalate_model = model_for_role("agent_escalation", override=force_model)
-            if get_settings().use_native_agent and not _bare_stack:
+            if get_settings().use_native_agent:
                 # Native tool-use path (owner «как Claude Code, только на сервере»): ONE
                 # model end-to-end via native Anthropic tools + preserved thinking;
                 # fact-gate only (the `build` tool). Reuses the SAME executor; the
-                # native system prompt drops the text-action LOOP_PROTOCOL.
+                # native system prompt drops the text-action LOOP_PROTOCOL. Handles
+                # bare/from-scratch builds too (no forced template) — the native loop
+                # has no brittle stall-guards, so Opus can scaffold freely.
                 from omnia_api.services import agent_native
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(_stack_guide, _skills),
