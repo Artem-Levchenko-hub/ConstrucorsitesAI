@@ -234,6 +234,10 @@ services:
       USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
       USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
       USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
+      USE_DESIGN_JUDGE: ${USE_DESIGN_JUDGE:-false}
+      # Native tool-use agent (server-side «Claude Code»): one Opus end-to-end via
+      # native Anthropic tools + preserved thinking, fact-gates only. Flip in .env.
+      USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
       USE_EXE_BUILD: ${USE_EXE_BUILD:-false}
@@ -379,6 +383,10 @@ services:
       USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
       USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
       USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
+      USE_DESIGN_JUDGE: ${USE_DESIGN_JUDGE:-false}
+      # Native tool-use agent (server-side «Claude Code»): one Opus end-to-end via
+      # native Anthropic tools + preserved thinking, fact-gates only. Flip in .env.
+      USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
       USE_EXE_BUILD: ${USE_EXE_BUILD:-false}
