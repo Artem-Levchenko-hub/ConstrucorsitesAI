@@ -202,6 +202,26 @@ def slug_to_omnia(slug: str) -> str | None:
     return None
 
 
+def proxy_route_for(model: str) -> tuple[str, str] | None:
+    """(api_key, api_base) for a model whose key/base is overridden in _PROXY_ROUTES
+    (e.g. claude-opus-4-8 → oneprovider). None if the model has no override or its key
+    is unset.
+
+    Used by the native `/v1/messages` passthrough (routers/messages_native.py) to reach
+    the SAME upstream the Router uses, but WITHOUT LiteLLM's OpenAI-shape normalization —
+    which drops the Anthropic thinking-block `signature` the native tool-use agent must
+    echo back verbatim across tool turns (Anthropic 400s on a modified thinking block).
+    """
+    route = _PROXY_ROUTES.get(model)
+    if route is None:
+        return None
+    settings = get_settings()
+    key = route.api_key(settings)
+    if not key:
+        return None
+    return key, route.api_base(settings)
+
+
 _router: Router | None = None
 
 
