@@ -1199,8 +1199,13 @@ _RESULT_TYPE_SYSTEM = (
     "ФОРМАТ — СТРОГО один JSON-объект на одной строке:\n"
     '{"type":"landing|web_app|tool|site|code","confidence":0.0}'
 )
-_RESULT_TYPE_TIMEOUT = 12.0
-_RESULT_TYPE_ATTEMPTS = 2
+# Fail FAST to the deterministic keyword net (_infer_result_type) when the provider
+# is slow: this classifier runs SYNCHRONOUSLY before the build's 202, so 2×12s on a
+# slow oneprovider (~19s/call) blew the 30s POST /prompt budget → "timeout, 0 tokens"
+# (owner 2026-07-01 screenshot). One 8s attempt caps the pre-build wait; the keyword
+# floor (which already runs first and wins on a confident match) covers the miss.
+_RESULT_TYPE_TIMEOUT = 8.0
+_RESULT_TYPE_ATTEMPTS = 1
 _RESULT_TYPE_MIN_CONFIDENCE = 0.6
 
 
