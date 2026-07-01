@@ -77,6 +77,7 @@ async def _litellm_stream(
     user_id: UUID | None,
     temperature: float | None,
     max_tokens: int | None,
+    _state: dict[str, Any] | None = None,
 ) -> AsyncIterator[tuple[str, str]]:
     # Wrap the system prompt in `cache_control: ephemeral` for Anthropic models.
     # Saves 50-90% of input tokens on the 2nd+ request inside the 5-min TTL.
@@ -124,6 +125,9 @@ async def _litellm_stream(
                 delta_obj = getattr(choices[0], "delta", None)
                 if delta_obj is not None:
                     delta_text = getattr(delta_obj, "content", "") or ""
+                fr = getattr(choices[0], "finish_reason", None)
+                if fr and _state is not None:
+                    _state["finish_reason"] = fr
             yield delta_text, slug
     except litellm.AuthenticationError as exc:
         raise UpstreamProviderError(f"stream auth failure: {exc}") from exc
@@ -133,6 +137,54 @@ async def _litellm_stream(
         raise UpstreamProviderError(f"stream upstream error: {exc}") from exc
     except litellm.APIError as exc:
         raise UpstreamProviderError(f"stream provider error: {exc}") from exc
+
+
+# Owner directive (2026-07-01): a site / web-app must fully build even when one
+# pass hits the 32000-token OUTPUT cap — «начинает новый поток чтобы успело
+# создаться». When a claude stream ends with finish_reason == "length" (cut off at
+# the cap, mid-answer — NOT done), continue in a fresh call: feed the text so far
+# back as an assistant turn + a strict "continue verbatim from the cutoff"
+# instruction, and keep streaming. Bounded by _MAX_CONTINUATIONS so a runaway build
+# can't loop or burn unbounded tokens. A normal generation ends with
+# stop/end_turn → returns after round 0, byte-identical to before. Only the
+# LiteLLM/claude path uses this; the RU custom providers cap their own output.
+_MAX_CONTINUATIONS = 2
+_CONTINUE_TURN = (
+    "Продолжи вывод РОВНО с места обрыва. Выведи ТОЛЬКО продолжение — без повторов "
+    "уже выведенного, без преамбулы и без markdown-обёрток. Если это HTML/код — "
+    "продолжай прямо с оборванного символа, чтобы склейка была бесшовной."
+)
+
+
+async def _litellm_stream_with_continuation(
+    model: str,
+    messages: list[dict[str, str]],
+    user_id: UUID | None,
+    temperature: float | None,
+    max_tokens: int | None,
+) -> AsyncIterator[tuple[str, str]]:
+    produced_far: list[str] = []
+    convo: list[dict[str, str]] = list(messages)
+    for _round in range(_MAX_CONTINUATIONS + 1):
+        state: dict[str, Any] = {"finish_reason": None}
+        round_text: list[str] = []
+        async for delta, slug in _litellm_stream(
+            model, convo, user_id, temperature, max_tokens, _state=state
+        ):
+            if delta:
+                round_text.append(delta)
+            yield delta, slug
+        produced_far.extend(round_text)
+        # Continue ONLY on a real cap-truncation that produced text; any natural end
+        # (stop / end_turn / error) OR an empty round = done (avoid a continue-loop
+        # on nothing).
+        if state["finish_reason"] != "length" or not "".join(round_text).strip():
+            return
+        convo = [
+            *messages,
+            {"role": "assistant", "content": "".join(produced_far)},
+            {"role": "user", "content": _CONTINUE_TURN},
+        ]
 
 
 async def stream_completion(
@@ -173,8 +225,13 @@ async def stream_completion(
     else:
         # vsegpt REMOVED (owner 2026-06-30) — every model streams via the LiteLLM
         # Router now (claude-opus-4-8 → oneprovider.dev). cache_control is already
-        # applied above (apply_anthropic_cache) for the Anthropic path.
-        source = _litellm_stream(model, messages, user_id, temperature, max_tokens)
+        # applied above (apply_anthropic_cache) for the Anthropic path. The
+        # continuation wrapper auto-resumes a page that hits the 32k output cap so a
+        # full site/app finishes (owner 2026-07-01); a non-truncated build is
+        # unaffected (returns after round 0).
+        source = _litellm_stream_with_continuation(
+            model, messages, user_id, temperature, max_tokens
+        )
 
     try:
         try:
