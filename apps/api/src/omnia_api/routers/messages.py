@@ -619,6 +619,133 @@ def _spawn_text_turn(
     task.add_done_callback(_on_done)
 
 
+# Async onboarding (2026-07-01, owner). Opus via oneprovider answers a plan call
+# in ~60-70s — past the client's 30s POST /prompt budget — so the batch is planned
+# OUT OF BAND and delivered over the WebSocket. Streamed as: a short «подбираю
+# вопросы» placeholder now → the real first question (stream.sync replace) + the
+# whole survey (onboarding.survey) once Opus answers → llm.done. Reuses
+# `_run_text_turn`'s persist+publish contract, so the client needs no new streaming
+# path — only the extra `onboarding.survey` event to open the popup.
+_ASYNC_ONBOARDING_PLACEHOLDER = "Секунду — подбираю пару вопросов под твою задачу…"
+
+
+async def _run_async_onboarding(
+    project_id: UUID, assistant_message_id: UUID, prompt: str, language: str
+) -> None:
+    """Plan the onboarding question batch off-band and deliver it over WS.
+
+    Never raises (R-10): a gateway miss degrades to the deterministic batch so the
+    popup still opens, and the message is always finalized (llm.done) so the UI
+    never hangs on the spinner."""
+    # Placeholder so the assistant bubble isn't blank for the ~minute Opus thinks.
+    await publish_event(
+        project_id,
+        "llm.chunk",
+        {
+            "message_id": str(assistant_message_id),
+            "delta": _ASYNC_ONBOARDING_PLACEHOLDER,
+            "seq": 1,
+        },
+    )
+
+    # The slow part — one Opus call. Fail-soft to the deterministic batch so the
+    # popup opens regardless (mirrors plan_discovery_questions' own fallback).
+    try:
+        questions = await plan_discovery_questions(prompt, language=language)
+    except Exception:  # a gateway hiccup must never hang onboarding (R-10)
+        questions = []
+    try:
+        _type_q = await _maybe_result_type_question(prompt, language)
+        if _type_q is not None:
+            questions = [_type_q, *questions]
+    except Exception:  # the type-clarify question is best-effort (R-10)
+        pass
+    if not questions:
+        from omnia_api.services.discovery import _plan_fallback
+
+        questions = _plan_fallback()
+    plan = [q.to_dict() for q in questions]
+    survey = _build_onboarding_survey(plan)
+
+    # Stash the plan on the project + serve question 0, persisting the question as
+    # the assistant message content (single source of truth on reload).
+    ask = serve_planned_question(plan, 0)
+    question_text = (
+        ask.message if ask is not None else _ASYNC_ONBOARDING_PLACEHOLDER
+    )
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        project = await session.get(Project, project_id)
+        if project is not None:
+            project.discovery_plan = plan
+        msg = await session.get(Message, assistant_message_id)
+        if msg is not None:
+            msg.content = question_text
+            msg.tokens_in = 0
+            msg.tokens_out = 0
+        await session.commit()
+
+    # Replace the placeholder with the real first question (stream.sync sets the
+    # whole content), open the survey popup, then finalize the turn.
+    await publish_event(
+        project_id,
+        "stream.sync",
+        {
+            "message_id": str(assistant_message_id),
+            "content": question_text,
+            "seq": 1,
+        },
+    )
+    if survey:
+        await publish_event(
+            project_id,
+            "onboarding.survey",
+            {
+                "message_id": str(assistant_message_id),
+                "survey": survey,
+                "question_index": 1,
+                "question_total": len(plan),
+                "niche": infer_niche_label(prompt) or None,
+            },
+        )
+    await publish_event(
+        project_id,
+        "llm.done",
+        {"message_id": str(assistant_message_id), "snapshot_id": None},
+    )
+
+
+def _spawn_async_onboarding(
+    project_id: UUID, assistant_message_id: UUID, prompt: str, language: str
+) -> None:
+    """Fire-and-forget _run_async_onboarding with a strong ref + error finalize (so
+    a plan/publish hiccup never hangs the UI spinner; mirrors _spawn_text_turn)."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    task = asyncio.create_task(
+        _run_async_onboarding(project_id, assistant_message_id, prompt, language)
+    )
+    _BACKGROUND_TASKS.add(task)
+
+    def _on_done(t: asyncio.Task[None]) -> None:
+        _BACKGROUND_TASKS.discard(t)
+        exc = None if t.cancelled() else t.exception()
+        if exc is not None:
+            log.error("_run_async_onboarding failed", exc_info=exc)
+            _emerg = asyncio.create_task(
+                _emergency_error(
+                    project_id,
+                    assistant_message_id,
+                    f"{type(exc).__name__}: {exc}",
+                )
+            )
+            _BACKGROUND_TASKS.add(_emerg)
+            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
+
+    task.add_done_callback(_on_done)
+
+
 def _snapshot_payload(s: Snapshot) -> dict[str, object]:
     return {
         "id": str(s.id),
@@ -1057,6 +1184,10 @@ async def post_prompt(
                 )
 
     discovery_result: DiscoveryResult | None = None
+    # Async onboarding: set when the slow first-turn plan is deferred out of the
+    # request (delivered over WS). No build/ASK this turn — a placeholder streams
+    # now, the survey arrives via `onboarding.survey` (see _run_async_onboarding).
+    async_onboarding = False
     do_clarify = False
     effective_prompt = payload.prompt
     interview_eligible = (
@@ -1082,7 +1213,23 @@ async def post_prompt(
             {"role": m.role, "content": m.content} for m in _rows if m.content
         ]
         _asked = sum(1 for m in _rows if m.role == "assistant")
-        if settings.use_batch_discovery:
+        # Only the FIRST batch-discovery turn pays the ~60-70s Opus plan call; every
+        # later turn serves the stashed plan with no gateway hop. Defer just that
+        # first turn out of the request (survey over WS) so POST returns inside the
+        # 30s client budget. The predicate mirrors _batch_discovery_turn's own
+        # plan-needed gate (asked_count==0, no stashed plan, not a code prompt, no
+        # zero-question shortcut) so OFF is byte-identical to the legacy path.
+        if (
+            settings.use_async_onboarding
+            and settings.use_batch_discovery
+            and _asked == 0
+            and not project.discovery_plan
+            and not wants_build_now(payload.prompt)
+            and not _infer_code_from_text(payload.prompt)
+            and zero_question_build(_history, payload.prompt) is None
+        ):
+            async_onboarding = True
+        elif settings.use_batch_discovery:
             # Plan all 3–4 product-tailored questions in ONE upfront pass, then
             # serve them with zero per-question wait (owner rule 13 #1). The plan
             # is stashed on ``project`` and persisted by the commit below.
@@ -1194,6 +1341,7 @@ async def post_prompt(
         and discovery_result is None
         and not discovery_ask
         and not do_clarify
+        and not async_onboarding
         and not selected_dump
         and settings.use_auto_stack_routing
     ):
@@ -1374,7 +1522,14 @@ async def post_prompt(
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
 
-    if discovery_ask:
+    if async_onboarding:
+        # Deferred first-turn onboarding: no gateway call ran in-request. Plan the
+        # question batch out of band (Opus ~60-70s) and deliver the survey over WS
+        # so POST already returned inside the client's 30s budget.
+        _spawn_async_onboarding(
+            project_id, assistant_msg.id, payload.prompt, project.language
+        )
+    elif discovery_ask:
         # Progressive discovery: stream the next short question, no build this
         # turn. The user's reply (next message) continues the discovery; the
         # generator only runs once discovery decides it has enough.
@@ -1429,7 +1584,14 @@ async def post_prompt(
     # "точечная правка" copy; a build shows the full-generation experience.
     turn_mode = (
         "clarify"
-        if (discovery_ask or do_clarify or run_intent or run_ask or run_decline)
+        if (
+            discovery_ask
+            or async_onboarding
+            or do_clarify
+            or run_intent
+            or run_ask
+            or run_decline
+        )
         else ("build" if orchestrate else "edit")
     )
     # Quick-reply chips ride on the ASK turn only — the workspace renders them
@@ -1485,6 +1647,7 @@ async def post_prompt(
         recap=recap,
         design_preview=design_preview,
         survey=survey,
+        survey_pending=async_onboarding,
     )
 
 

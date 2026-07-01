@@ -138,3 +138,10 @@ class PromptResponse(BaseModel):
     # turns, and on build/edit turns. The single-question fields above stay
     # populated for back-compat (a client that ignores `survey` still works).
     survey: list[SurveyQuestion] | None = None
+    # Async onboarding (2026-07-01): True when the server deferred the slow
+    # question-planning out of the request (Opus ~60-70s > the 30s client budget)
+    # — the assistant turn streams a short placeholder now and the real `survey`
+    # arrives over the WebSocket (`onboarding.survey` event) when it's ready. The
+    # client shows the "готовлю вопросы" state instead of expecting a survey in
+    # this HTTP response. Absent/False on every other turn → older API type-checks.
+    survey_pending: bool = False

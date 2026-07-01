@@ -390,6 +390,16 @@ class Settings(BaseSettings):
     # timeout fallback). Kill switch (R-10): USE_BATCH_DISCOVERY=false reverts to
     # the per-question conversational discovery.
     use_batch_discovery: bool = Field(default=True)
+    # Async onboarding (2026-07-01, owner). The batch-discovery plan is ONE Opus
+    # call and Opus via oneprovider runs ~60-70s per call (forced extended
+    # thinking) — far past the client's 30s POST /prompt budget, so the FIRST
+    # prompt of a new project used to time out ("Request timed out after
+    # 30000ms", 0 tokens). When on, the first-turn plan is computed OUT OF BAND:
+    # POST returns instantly with a placeholder assistant turn, and the tailored
+    # question batch (survey) is streamed in over the WebSocket when Opus answers.
+    # OFF → the legacy synchronous plan (blocks the request). Env:
+    # USE_ASYNC_ONBOARDING.
+    use_async_onboarding: bool = Field(default=True)
     # Auto stack-routing (2026-06-09, owner P1 — last mile of zero-friction).
     # When progressive discovery decides to BUILD and recommends a container
     # stack (fullstack / nextjs_entities) for a still-static project, the server

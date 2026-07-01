@@ -256,6 +256,12 @@ export type PromptResponse = {
   // instead of a chat turn per question. Absent on code builds, follow-up turns,
   // and build/edit turns → older API still type-checks.
   survey?: SurveyQuestion[] | null;
+  // Async onboarding (2026-07-01): true when the server deferred the slow
+  // question-planning out of the request (Opus ~60-70s > the 30s client budget).
+  // The assistant turn streams a short placeholder now; the real `survey` arrives
+  // over the WebSocket (`onboarding.survey`) when ready. Absent/false on every
+  // other turn → older API still type-checks.
+  survey_pending?: boolean;
 };
 
 // One question in the upfront onboarding survey popup (owner 2026-06-19).
@@ -481,6 +487,20 @@ export type WsEvent =
       // client to refetch so it appears live without a manual reload.
       type: "app.error";
       data: { message_id: Uuid; category: string; title: string };
+    }
+  | {
+      // Async onboarding (2026-07-01): the first-turn question batch was planned
+      // out of band (Opus ~60-70s > the 30s POST budget) and arrives here. The
+      // client stashes `survey` under ["onboarding-survey", projectId] — the same
+      // cache key the synchronous HTTP path uses — so ChatPanel opens the popup.
+      type: "onboarding.survey";
+      data: {
+        message_id: Uuid;
+        survey: SurveyQuestion[];
+        question_index?: number | null;
+        question_total?: number | null;
+        niche?: string | null;
+      };
     }
   | {
       // Phase B.3 — multipass progress. Backend (multipass_generator.py)

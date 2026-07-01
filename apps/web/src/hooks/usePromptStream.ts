@@ -420,6 +420,18 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         return;
       }
 
+      if (event.type === "onboarding.survey") {
+        // Async onboarding: the first-turn question batch was planned out of band
+        // (Opus ~60-70s > the 30s POST budget) and arrives here. Stash it under the
+        // SAME cache key the synchronous HTTP path uses (see submit's resp.survey
+        // handling) so ChatPanel's useQuery re-renders and opens the popup. The
+        // assistant question text itself rode in via stream.sync + llm.done.
+        if (event.data.survey && event.data.survey.length > 0) {
+          qc.setQueryData(["onboarding-survey", projectId], event.data.survey);
+        }
+        return;
+      }
+
       if (event.type === "app.error") {
         // The card block is already persisted into the assistant message
         // (services/app_errors.py appended it). Refetch so it renders now —
