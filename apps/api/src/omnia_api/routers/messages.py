@@ -1249,7 +1249,9 @@ async def post_prompt(
                 force_build=wants_build_now(payload.prompt),
                 language=project.language,
             )
-        if discovery_result.action == DISCOVERY_BUILD:
+        # `discovery_result is None` on the async-onboarding turn (the plan is
+        # deferred to a background task) — no BUILD to compose this turn.
+        if discovery_result is not None and discovery_result.action == DISCOVERY_BUILD:
             # Build now — the compiled brief (with the recommended stack folded in)
             # becomes the generator's prompt; the raw idea stays as the user turn.
             effective_prompt = _compose_build_prompt(discovery_result)
