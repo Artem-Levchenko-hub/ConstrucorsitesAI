@@ -26,11 +26,7 @@ import httpx
 import structlog
 
 from omnia_api.core.config import get_settings
-from omnia_api.services.agent_builder import (
-    Action,
-    AgentResult,
-    make_container_executor,
-)
+from omnia_api.services.agent_builder import Action, AgentResult
 
 log = structlog.get_logger(__name__)
 
@@ -105,6 +101,28 @@ def _text_of(content: list[dict[str, Any]]) -> str:
     ).strip()
 
 
+_NATIVE_PREAMBLE = (
+    "Ты — автономный инженер: строишь РАБОЧЕЕ приложение в этом проекте, как Claude "
+    "Code. У тебя есть инструменты — вызывай их напрямую: read_file/list_dir/grep "
+    "чтобы понять существующий код, write_file/edit_file чтобы писать, build чтобы "
+    "проверить компиляцию, bash/read_logs чтобы проверить рантайм, docs для свежей "
+    "документации библиотек. Думай сколько нужно. Цикл: пиши код → build → чини "
+    "РЕАЛЬНЫЕ ошибки до чистоты → проверь что работает → done. Делай что задумал, "
+    "пиши полноценно, без заглушек и TODO. Когда приложение собрано и build чистый — "
+    "вызови done с кратким summary."
+)
+
+
+def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
+    """Native-tools system prompt: a short tool-loop preamble + the stack guide (+
+    skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
+    schemas ARE the protocol now, so keeping it would only confuse a native model."""
+    parts = [_NATIVE_PREAMBLE, (stack_guide or "").strip()]
+    if skills and skills.strip():
+        parts.append(skills.strip())
+    return "\n\n".join(p for p in parts if p)
+
+
 async def _call_messages(
     client: httpx.AsyncClient, url: str, convo: list[dict[str, Any]], system: str
 ) -> dict[str, Any]:
@@ -143,8 +161,7 @@ async def run_native_build(
     *,
     system: str,
     task: str,
-    project_id: Any,
-    slug: str,
+    execute: Callable[[Action], Awaitable[dict[str, Any]]],
     user_id: Any = None,
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     max_steps: int = 40,
@@ -159,7 +176,6 @@ async def run_native_build(
     """
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
-    execute = make_container_executor(project_id=project_id, slug=slug)
 
     convo: list[dict[str, Any]] = [{"role": "user", "content": task}]
     written: dict[str, str] = {}

@@ -2601,25 +2601,40 @@ async def _process_prompt(
             # time a stall-guard nudges (cycle / repeat / no-write) — smart only
             # when stuck, so cost stays bounded (no full strong-model run).
             _escalate_model = model_for_role("agent_escalation", override=force_model)
-            _agent_res = await agent_builder.run_agent_build(
-                system_prompt=_agent_system,
-                user_prompt=_agent_user,
-                model=_agent_model,
-                escalate_model=_escalate_model,
-                execute=_agent_executor,
-                max_steps=_agent_steps,
-                emit=_agent_emit,
-                user_id=str(user_id),
-                project_id=str(project_id),
-                require_green_before_done=(
-                    False
-                    if _bare_stack
-                    else get_settings().agent_require_green_before_done
-                ),
-                ship_green_on_abort=get_settings().agent_ship_green_on_abort,
-                edit_mode=_is_edit,
-                bare_mode=_bare_stack,
-            )
+            if get_settings().use_native_agent and not _bare_stack:
+                # Native tool-use path (owner «как Claude Code, только на сервере»): ONE
+                # model end-to-end via native Anthropic tools + preserved thinking;
+                # fact-gate only (the `build` tool). Reuses the SAME executor; the
+                # native system prompt drops the text-action LOOP_PROTOCOL.
+                from omnia_api.services import agent_native
+                _agent_res = await agent_native.run_native_build(
+                    system=agent_native.native_system_prompt(_stack_guide, _skills),
+                    task=_agent_user,
+                    execute=_agent_executor,
+                    user_id=str(user_id),
+                    emit=_agent_emit,
+                    max_steps=_agent_steps,
+                )
+            else:
+                _agent_res = await agent_builder.run_agent_build(
+                    system_prompt=_agent_system,
+                    user_prompt=_agent_user,
+                    model=_agent_model,
+                    escalate_model=_escalate_model,
+                    execute=_agent_executor,
+                    max_steps=_agent_steps,
+                    emit=_agent_emit,
+                    user_id=str(user_id),
+                    project_id=str(project_id),
+                    require_green_before_done=(
+                        False
+                        if _bare_stack
+                        else get_settings().agent_require_green_before_done
+                    ),
+                    ship_green_on_abort=get_settings().agent_ship_green_on_abort,
+                    edit_mode=_is_edit,
+                    bare_mode=_bare_stack,
+                )
             _all_files = dict(_agent_res.files)
             _total_steps = _agent_res.steps
             # AUTO-CONTINUE (builds only): one run is capped at `_agent_steps`, but a

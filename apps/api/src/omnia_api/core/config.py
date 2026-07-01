@@ -883,6 +883,17 @@ class Settings(BaseSettings):
     # a model that never finishes would run forever). Env: AGENT_MAX_SEGMENTS.
     agent_max_segments: int = Field(default=6)
 
+    # Native tool-use agent (2026-07-01, owner «как Claude Code, только на сервере»).
+    # When ON, a container-app build runs through agent_native.run_native_build: ONE
+    # model (opus-4-8) drives it end-to-end via NATIVE Anthropic tool-use through the
+    # gateway /v1/messages passthrough, extended thinking PRESERVED across tool turns,
+    # and the only gate is FACT-based (the `build` tool feeds real compiler errors back;
+    # no taste/vision judges) — instead of the brittle text-<omnia:action> protocol
+    # (agent_builder.run_agent_build) that stalled builds. Default OFF: the text
+    # protocol stays the prod default until the native path is verified on real builds
+    # and billing is wired. Env: USE_NATIVE_AGENT.
+    use_native_agent: bool = Field(default=False)
+
     # Edit auto-repair (owner 2026-06-28: «надо чтобы он ПРЯМ ЧИНИЛ, а не выдавал
     # „Не удалось завершить правку — нажми Починить“»). When a point-EDIT doesn't
     # land cleanly — nothing written, a red typecheck, or a 5xx render — don't ask
