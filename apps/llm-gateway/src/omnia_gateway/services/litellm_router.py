@@ -46,6 +46,7 @@ _EMPTY_RETRY_DELAY_S = 0.2
 # models routed through the Router.
 _NO_EMPTY_RETRY_MODELS: frozenset[str] = frozenset()
 from omnia_gateway.providers import sber as sber_provider
+from omnia_gateway.providers import vsegpt as vsegpt_provider
 from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 from omnia_gateway.services.pricing import PRICE_TABLE
@@ -338,8 +339,19 @@ async def acompletion(
             max_tokens=2000 if max_tokens is None else max_tokens,
         )
 
-    # vsegpt REMOVED (owner 2026-06-30 «полный отказ от vsegpt»). Every model now
-    # routes through the LiteLLM Router; claude-opus-4-8 → oneprovider.dev.
+    # Opus 4.8 via vsegpt (owner 2026-07-01) — the direct vsegpt provider (sync
+    # httpx, no-proxy) at ~3s/call with thinking OFF, vs oneprovider's ~71s. Checked
+    # BEFORE the Router; the Router's oneprovider route stays as a fallback target.
+    if vsegpt_provider.is_vsegpt_model(model):
+        return await vsegpt_provider.acompletion(
+            model=model,
+            messages=messages,
+            temperature=0.5 if temperature is None else temperature,
+            max_tokens=8192 if max_tokens is None else max_tokens,
+        )
+
+    # Everything else routes through the LiteLLM Router (Anthropic via proxyapi,
+    # OpenAI, OpenRouter, Gemini).
     if model not in _LITELLM_MODEL_SLUG:
         # Pricing knows it but routing doesn't — defensive guard.
         raise ModelNotFoundError(f"Model not routable: {model}")

@@ -63,12 +63,16 @@ _VSEGPT_MODEL_SLUG: dict[str, str] = {
     # and the IR fell back to the director / Haiku).
     "deepseek-chat": "deepseek/deepseek-chat",
     "deepseek-v4-flash-thinking": "deepseek/deepseek-v4-flash-thinking",
-    # Opus 4.8 MOVED to oneprovider.dev (native Anthropic) via the LiteLLM Router
-    # (owner 2026-06-30) — removed here so is_vsegpt_model() returns False and the
-    # call falls through to the Router's oneprovider route (key/base in
-    # litellm_router._PROXY_ROUTES). streaming.py applies cache_control on that
-    # path, and oneprovider also auto-caches. vsegpt stays the funded key for any
-    # remaining DeepSeek/Gemini worker slugs below.
+    # Opus 4.8 via vsegpt (owner 2026-07-01, key sk-or-vv-…). vsegpt sends NO
+    # `thinking` param → Opus runs with extended thinking OFF and answers in ~3s
+    # (MEASURED), versus ~71s on oneprovider.dev which forces thinking regardless
+    # of {type:disabled} → the 30s-POST-timeout root cause. is_vsegpt_model() now
+    # returns True, so Opus is dispatched by THIS direct provider (streaming.py +
+    # litellm_router.acompletion) BEFORE the Router; the oneprovider entry in
+    # litellm_router._PROXY_ROUTES stays as a fallback target. Note: no continuation
+    # wrapper on this native-stream path (the Router's 32k-cap auto-resume), and
+    # vsegpt doesn't honour Anthropic prompt caching — accepted for the latency win.
+    "claude-opus-4-8": "anthropic/claude-opus-4.8",
     # Orchestrator (art_director / design-brain) — owner pick 2026-06-02.
     "gemini-3.5-flash-high": "google/gemini-3.5-flash-high",
     # Developer (freeform_writer — writes the HTML) — owner pick 2026-06-02.

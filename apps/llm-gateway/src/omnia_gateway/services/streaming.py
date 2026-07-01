@@ -21,6 +21,7 @@ from fastapi import Request
 
 from omnia_gateway.core.errors import GatewayError, UpstreamProviderError
 from omnia_gateway.providers import sber as sber_provider
+from omnia_gateway.providers import vsegpt as vsegpt_provider
 from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services import litellm_router as router_module
@@ -220,9 +221,21 @@ async def stream_completion(
         source = _custom_provider_pseudo_stream(
             sber_provider.acompletion, model, messages, temperature, max_tokens, 0.7
         )
+    elif vsegpt_provider.is_vsegpt_model(model):
+        # Opus 4.8 via vsegpt (owner 2026-07-01): TRUE token streaming at ~3s/call
+        # with thinking OFF (vsegpt sends no `thinking` param), vs ~71s on
+        # oneprovider.dev (forced extended thinking). NOTE: this native path has no
+        # 32k-cap continuation wrapper (the Router's `_litellm_stream_with_continuation`)
+        # — a page whose output exceeds the cap truncates; accepted for the latency
+        # win, most builds fit. oneprovider stays the Router fallback for Opus.
+        source = vsegpt_provider.astream(
+            model,
+            messages,
+            temperature=0.5 if temperature is None else temperature,
+            **({"max_tokens": max_tokens} if max_tokens is not None else {}),
+        )
     else:
-        # vsegpt REMOVED (owner 2026-06-30) — every model streams via the LiteLLM
-        # Router now (claude-opus-4-8 → oneprovider.dev). cache_control is already
+        # Every other model streams via the LiteLLM Router. cache_control is already
         # applied above (apply_anthropic_cache) for the Anthropic path. The
         # continuation wrapper auto-resumes a page that hits the 32k output cap so a
         # full site/app finishes (owner 2026-07-01); a non-truncated build is
