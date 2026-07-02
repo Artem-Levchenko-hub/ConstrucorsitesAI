@@ -123,6 +123,11 @@ services:
       PROXYAPI_BASE_URL: ${PROXYAPI_BASE_URL:-https://api.proxyapi.ru/anthropic}
       ONEPROVIDER_API_KEY: ${ONEPROVIDER_API_KEY:-}
       ONEPROVIDER_BASE_URL: ${ONEPROVIDER_BASE_URL:-https://api.oneprovider.dev}
+      # Opus-4.8 routing kill switch. Default true = fast ~3s vsegpt path; set
+      # OPUS_VIA_VSEGPT=false in .env to pin Opus back to oneprovider (~71s, but
+      # works when the vsegpt balance is empty). Declared here so the container
+      # actually sees the .env value (compose passes only declared keys).
+      OPUS_VIA_VSEGPT: ${OPUS_VIA_VSEGPT:-true}
       # Skip LiteLLM's remote cost-map fetch (raw.githubusercontent.com is
       # unreachable on the prod VPS → a ~60s TLS-handshake timeout blocked the
       # FIRST completion after every gateway restart). The gateway bills via its

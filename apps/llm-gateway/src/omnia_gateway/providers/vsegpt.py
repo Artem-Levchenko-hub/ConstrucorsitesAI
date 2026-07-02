@@ -144,6 +144,14 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
 def is_vsegpt_model(model_id: str) -> bool:
+    # Opus 4.8 can be pinned back to oneprovider via OPUS_VIA_VSEGPT=false — the
+    # reversible failover for when the vsegpt balance runs dry (every call → HTTP
+    # 400 "out of budget", which aborts a build as «Сборка прервана»). Returning
+    # False routes Opus through the LiteLLM Router (oneprovider) on ALL three
+    # dispatch points that gate on this fn: litellm_router.acompletion,
+    # services/streaming.py, and routers/messages_native.py (native /v1/messages).
+    if model_id == "claude-opus-4-8" and not get_settings().opus_via_vsegpt:
+        return False
     return model_id in _VSEGPT_MODEL_SLUG
 
 

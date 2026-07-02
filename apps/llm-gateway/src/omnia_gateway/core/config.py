@@ -68,6 +68,15 @@ class Settings(BaseSettings):
     # reverts to the raw oneprovider passthrough (forced thinking, ~71s/call).
     native_via_vsegpt: bool = True
 
+    # Master kill switch for the Opus-4.8→vsegpt route (owner 2026-07-02). Default
+    # True = the fast ~3s vsegpt path (both /v1/chat/completions AND the native
+    # /v1/messages agent go through `is_vsegpt_model`). Set OPUS_VIA_VSEGPT=false to
+    # pin Opus back to oneprovider (~71s/call, forced thinking) WITHOUT a rebuild —
+    # the reversible failover for when the vsegpt balance runs dry (every call →
+    # HTTP 400 "out of budget", which aborts the build as «Сборка прервана»). Flip
+    # back to true once the balance is topped up; env-only, no code change.
+    opus_via_vsegpt: bool = True
+
     # Warmup keep-alive loop (services/warmup.py) exists ONLY to defeat
     # proxyapi.ru's ~5-min idle cold-start (Haiku/GPT-5-nano returning near-empty
     # on the first call after idle). proxyapi is retired — every role now routes

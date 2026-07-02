@@ -106,6 +106,24 @@ def test_is_vsegpt_model() -> None:
     assert vsegpt.is_vsegpt_model("gemini-3-flash-vision") is True
 
 
+def test_opus_via_vsegpt_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    # OPUS_VIA_VSEGPT=false pins ONLY Opus back to oneprovider (the reversible
+    # failover for an empty vsegpt balance). Every other vsegpt-fronted model is
+    # untouched, so non-Opus roles keep the fast path.
+    monkeypatch.setenv("OPUS_VIA_VSEGPT", "false")
+    config.reset_settings_cache()
+    try:
+        assert vsegpt.is_vsegpt_model("claude-opus-4-8") is False
+        assert vsegpt.is_vsegpt_model("deepseek-chat") is True
+        assert vsegpt.is_vsegpt_model("gemini-3.5-flash-high") is True
+        # Default (flag on / unset) keeps Opus on the fast vsegpt path.
+        monkeypatch.setenv("OPUS_VIA_VSEGPT", "true")
+        config.reset_settings_cache()
+        assert vsegpt.is_vsegpt_model("claude-opus-4-8") is True
+    finally:
+        config.reset_settings_cache()
+
+
 def test_vision_model_keeps_image_blocks() -> None:
     # `vis-` models PASS the OpenAI multimodal array (text + image_url) so the
     # screenshot reaches the judge; text-only models flatten it away.
