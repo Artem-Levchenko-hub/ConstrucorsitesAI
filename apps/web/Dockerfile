@@ -15,7 +15,13 @@ FROM node:20-alpine AS deps
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+# Throttle fetch concurrency + add retries: the default 16 parallel connections
+# to registry.npmjs.org intermittently trip TLS socket resets from the prod VPS
+# (the host reaches npm fine one-at-a-time), which aborted `--frozen-lockfile`.
+RUN pnpm config set network-concurrency 4 \
+ && pnpm config set fetch-retries 5 \
+ && pnpm config set fetch-retry-maxtimeout 120000 \
+ && pnpm install --frozen-lockfile
 
 
 FROM node:20-alpine AS builder
