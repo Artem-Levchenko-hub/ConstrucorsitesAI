@@ -348,6 +348,13 @@ class Settings(BaseSettings):
     use_sast_gate: bool = Field(default=True)
     sast_gate_blocking: bool = Field(default=False)
 
+    # Build attestation (fresh-plan Step 3) — after the runtime gates settle, emit
+    # a tamper-evident (sha256-digested) record of the FINAL gate verdicts to the
+    # durable log stream ("[ATTEST] {...}"). Additive + best-effort: it changes no
+    # gate behaviour and can never fail a build. The foundation for "deploy ↔
+    # proven"; DB-persist + deploy-gating land in a follow-up. Env: USE_BUILD_ATTESTATION.
+    use_build_attestation: bool = Field(default=True)
+
     # Skill injection (K1, knowledge-layer plan §2) — when on, the agent's system
     # prompt for a container build is composed with the stack's .omnia/skills
     # (security/a11y/perf canons aligned with the gates), raising the first

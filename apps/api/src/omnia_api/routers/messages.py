@@ -3276,10 +3276,12 @@ async def _process_prompt(
                         # ("галочка стоит, гейт мёртвый"); now live. Blocks only on
                         # product guarantees (nosniff present, CORS not wildcard-
                         # with-credentials) → never false-blocks a good build.
+                        _att_sec = None
                         if get_settings().use_security_gate:
                             from omnia_api.services import security_gate as _secg
 
                             _sv = await _secg.run_security_gate(_base)
+                            _att_sec = _sv
                             _fout.append(
                                 _agf2.outcome_from_checks(
                                     "security", _sv.passed, _sv.checks
@@ -3289,6 +3291,32 @@ async def _process_prompt(
                             _fout, _rg_attempt, _rg_max, stack=_orch_name
                         )
                         if _fix is None:
+                            # Signed, tamper-evident attestation of the FINAL gate
+                            # verdicts (best-effort, additive — never affects the
+                            # build). Fresh-plan Step 3 "saved attestation".
+                            if get_settings().use_build_attestation:
+                                try:
+                                    from omnia_api.services import (
+                                        attestation as _att,
+                                    )
+
+                                    _att_gates = [(_gate_kind, _fv)]
+                                    if _att_sec is not None:
+                                        _att_gates.append(("security", _att_sec))
+                                    _attn = _att.build_attestation(
+                                        gates=_att_gates,
+                                        stack=_orch_name,
+                                        project_id=str(project_id),
+                                        created_at=_att.now_iso(),
+                                    )
+                                    print(
+                                        f"[ATTEST] {_att.to_log_line(_attn)}",
+                                        flush=True,
+                                    )
+                                except Exception as _att_exc:  # never break a build
+                                    print(
+                                        f"[ATTEST] skipped: {_att_exc}", flush=True
+                                    )
                             if not _fv.passed:
                                 accumulated += (
                                     "\n\n⚠️ Проверка работоспособности/безопасности не "
