@@ -133,10 +133,6 @@ services:
       # FIRST completion after every gateway restart). The gateway bills via its
       # own PRICE_TABLE (services/pricing.py), so LiteLLM's cost map is unused.
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
-      # Warm claude-opus-4-8 (oneprovider) at startup so the ~70s LiteLLM
-      # first-anthropic-call cold-start is absorbed in the background, not paid by
-      # the first generation after a deploy. Default ON — all traffic is opus now.
-      ENABLE_WARMUP: ${ENABLE_WARMUP:-true}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # --- Gemini-only outbound HTTP proxy (geo-bypass) ---
       # When GEMINI_HTTPS_PROXY is empty these vars are also empty, so they
@@ -153,7 +149,6 @@ services:
       GIGACHAT_VERIFY_SSL: ${GIGACHAT_VERIFY_SSL:-false}
       DATABASE_URL: postgresql://${POSTGRES_USER:-omnia}:${POSTGRES_PASSWORD:-omnia}@postgres:5432/${POSTGRES_DB:-omnia}
       REDIS_URL: redis://redis:6379/1
-      DEFAULT_MODEL: ${DEFAULT_MODEL:-gigachat-2}
       SAFETY_FILTER_ENABLED: ${SAFETY_FILTER_ENABLED:-true}
       CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-3600}
       MIN_BALANCE_RUB: ${MIN_BALANCE_RUB:-5.0}
