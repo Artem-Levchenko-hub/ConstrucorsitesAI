@@ -10,7 +10,6 @@
 import type {
   Charge,
   Message,
-  Model,
   Project,
   ProjectTemplate,
   Snapshot,
@@ -49,45 +48,6 @@ export const MOCK_USER: User = {
   created_at: "2026-04-01T10:00:00Z",
   last_login_at: now(),
 };
-
-export const MOCK_MODELS: Model[] = [
-  {
-    id: "claude-sonnet-4-6",
-    display_name: "Claude Sonnet 4.6",
-    provider: "anthropic",
-    price_rub_per_1k_in: 0.3,
-    price_rub_per_1k_out: 1.5,
-    context_window: 200_000,
-    recommended_for: ["quality"],
-  },
-  {
-    id: "gpt-4.1",
-    display_name: "GPT-4.1",
-    provider: "openai",
-    price_rub_per_1k_in: 0.4,
-    price_rub_per_1k_out: 1.6,
-    context_window: 128_000,
-    recommended_for: ["fast", "quality"],
-  },
-  {
-    id: "yandexgpt-5",
-    display_name: "YandexGPT 5",
-    provider: "yandex",
-    price_rub_per_1k_in: 0.1,
-    price_rub_per_1k_out: 0.4,
-    context_window: 32_000,
-    recommended_for: ["budget"],
-  },
-  {
-    id: "qwen-3-coder",
-    display_name: "Qwen 3 Coder",
-    provider: "alibaba",
-    price_rub_per_1k_in: 0.08,
-    price_rub_per_1k_out: 0.32,
-    context_window: 128_000,
-    recommended_for: ["budget", "fast"],
-  },
-];
 
 const TEMPLATE_LABELS: Record<ProjectTemplate, string> = {
   blank: "Чистый холст",
@@ -219,11 +179,6 @@ export const mockApi = {
       (a, b) =>
         new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
     );
-  },
-
-  async getModels(): Promise<Model[]> {
-    await sleep(50);
-    return [...MOCK_MODELS];
   },
 
   async getWallet(): Promise<WalletState> {
