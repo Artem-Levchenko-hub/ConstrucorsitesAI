@@ -56,7 +56,6 @@ def test_unregistered_name_is_synthesized_identically() -> None:
     # never reject (fail-fast validation is a deliberate later slice, not this seam).
     spec = get_stack("some-future-stack")
     assert spec == StackSpec(
-        name="some-future-stack",
         template_dir="some-future-stack",
         image_tag="omnia-template-some-future-stack:dev",
         container_port=3000,

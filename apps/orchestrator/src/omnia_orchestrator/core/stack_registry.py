@@ -32,7 +32,6 @@ class StackSpec:
     stack can decouple them without touching call-sites.
     """
 
-    name: str  # registry key
     template_dir: str  # under apps/orchestrator/templates/
     image_tag: str  # "omnia-template-<name>:dev"
     container_port: int = 3000  # internal listen port (current cross-stack convention)
@@ -44,7 +43,6 @@ def _dev_image(name: str) -> str:
 
 def _stack(name: str, *, container_port: int = 3000) -> StackSpec:
     return StackSpec(
-        name=name,
         template_dir=name,
         image_tag=_dev_image(name),
         container_port=container_port,
