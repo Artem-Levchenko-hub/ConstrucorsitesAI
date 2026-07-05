@@ -56,54 +56,17 @@ _TRANSIENT = (
 # vsegpt is an OpenAI-compatible aggregator; the slug is sent verbatim as the
 # `model` field. Add a row here to expose another vsegpt-fronted model.
 _VSEGPT_MODEL_SLUG: dict[str, str] = {
-    # DeepSeek V3 (≈128K context) — the worker model for generation. Its big
-    # context fits the ~32K polish prompt PLUS the output; the V4-flash-thinking
-    # endpoint caps at 16384 TOTAL tokens, so a real page prompt 400s with
-    # context_length_exceeded (that's why DeepSeek "didn't run" in orchestration
-    # and the IR fell back to the director / Haiku).
-    "deepseek-chat": "deepseek/deepseek-chat",
-    "deepseek-v4-flash-thinking": "deepseek/deepseek-v4-flash-thinking",
-    # Opus 4.8 via vsegpt (owner 2026-07-01, key sk-or-vv-…). vsegpt sends NO
-    # `thinking` param → Opus runs with extended thinking OFF and answers in ~3s
-    # (MEASURED), versus ~71s on oneprovider.dev which forces thinking regardless
-    # of {type:disabled} → the 30s-POST-timeout root cause. is_vsegpt_model() now
-    # returns True, so Opus is dispatched by THIS direct provider (streaming.py +
-    # litellm_router.acompletion) BEFORE the Router; the oneprovider entry in
-    # litellm_router._PROXY_ROUTES stays as a fallback target. Note: no continuation
-    # wrapper on this native-stream path (the Router's 32k-cap auto-resume), and
-    # vsegpt doesn't honour Anthropic prompt caching — accepted for the latency win.
+    # Opus 4.8 via vsegpt (owner 2026-07-01, key sk-or-vv-…) — the ONLY model for
+    # every role. vsegpt sends NO `thinking` param → Opus runs with extended
+    # thinking OFF and answers in ~3s (MEASURED), versus ~71s on oneprovider.dev
+    # which forces thinking regardless of {type:disabled} → the 30s-POST-timeout
+    # root cause. is_vsegpt_model() returns True, so Opus is dispatched by THIS
+    # direct provider (streaming.py + litellm_router.acompletion) BEFORE the Router;
+    # the oneprovider entry in litellm_router._PROXY_ROUTES stays as the failover
+    # (OPUS_VIA_VSEGPT=false). Multimodal (see _NATIVE_MULTIMODAL) so the vision
+    # judge / `see` tool image blocks reach it. vsegpt doesn't honour Anthropic
+    # prompt caching — accepted for the latency win.
     "claude-opus-4-8": "anthropic/claude-opus-4.8",
-    # Orchestrator (art_director / design-brain) — owner pick 2026-06-02.
-    "gemini-3.5-flash-high": "google/gemini-3.5-flash-high",
-    # Developer (freeform_writer — writes the HTML) — owner pick 2026-06-02.
-    "minimax-m2.7": "minimax/minimax-m2.7",
-    # Owner pick 2026-06-02: ONE strong thinking model for BOTH orchestrator and
-    # coder. 1M context (no 16K-cap orchestration break like v4-flash-thinking);
-    # reasoning lands in a separate field, so `content` stays clean HTML/brief.
-    "deepseek-v4-pro-thinking": "deepseek/deepseek-v4-pro-thinking",
-    # Owner pick 2026-06-02: deepseek-v4-pro (NON-thinking) as the coder — same
-    # 1M-context family, no reasoning overhead → faster, clean HTML. "Deepseek
-    # everywhere" for reliability.
-    "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
-    # Vision judge for the acceptance gate (owner pick 2026-06-02: Gemini 3 Flash
-    # Preview). vsegpt `vis-` prefix = multimodal — the provider PASSES image_url
-    # blocks for these (see `_is_vision` + _to_vsegpt_messages) instead of
-    # flattening, so the screenshot actually reaches the model. DeepSeek has no
-    # vision model, so the judge is Gemini via vsegpt.
-    "gemini-3-flash-vision": "vis-google/gemini-3-flash-pre",
-    # Kimi K2.6 (thinking) — Moonshot 1T/32B MoE, NATIVE multimodal + strong
-    # design taste. The design-brain DeepSeek can't be: no vision, weaker
-    # aesthetics → generic/monotone output. art_director (brief author) model.
-    # Confirmed served by vsegpt on the SAME VSEGPT_API_KEY (2026-06-03 live
-    # test → real completion + separate `reasoning` field). Thinking ⇒ ~150-200s
-    # for the brief, inside _DEFAULT_TIMEOUT_S=240s. Reasoning is a separate
-    # field, so `content` stays clean (no inline <think> to strip).
-    "kimi-k2.6-thinking": "moonshotai/kimi-k2.6-thinking",
-    # Kimi K2.6 NON-thinking — same taste/vision, no long reasoning. The -thinking
-    # variant 502s as art_director (deep reasoning on the large brief prompt exceeds
-    # the 240s upstream timeout → empty brief → generic build). Non-thinking returns
-    # the brief fast; art_director default (2026-06-07).
-    "kimi-k2.6": "moonshotai/kimi-k2.6",
 }
 
 

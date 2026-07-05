@@ -20,9 +20,7 @@ import structlog
 from fastapi import Request
 
 from omnia_gateway.core.errors import GatewayError, UpstreamProviderError
-from omnia_gateway.providers import sber as sber_provider
 from omnia_gateway.providers import vsegpt as vsegpt_provider
-from omnia_gateway.providers import yandex as yandex_provider
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services import litellm_router as router_module
 from omnia_gateway.services.pricing import calculate_cost_rub
@@ -41,35 +39,6 @@ def _sse(payload: dict[str, Any] | str) -> str:
     if isinstance(payload, str):
         return payload
     return json.dumps(payload, ensure_ascii=False)
-
-
-async def _custom_provider_pseudo_stream(
-    provider_acompletion: Any,
-    model: str,
-    messages: list[dict[str, str]],
-    temperature: float | None,
-    max_tokens: int | None,
-    default_temperature: float,
-    default_max_tokens: int = 2000,
-) -> AsyncIterator[tuple[str, str]]:
-    """For providers without native streaming (Yandex, Sber, vsegpt): one blocking
-    call → word chunks. ``default_max_tokens`` lets a thinking model (vsegpt
-    DeepSeek) reserve enough budget that chain-of-thought can't truncate the
-    visible answer — 2000 is fine for the non-reasoning RU models.
-
-    sse_starlette sends `: ping` keep-alives (~15 s) on its own task while this
-    awaits, so the single long call won't trip nginx/httpx read timeouts.
-    """
-    full = await provider_acompletion(
-        model=model,
-        messages=messages,
-        temperature=default_temperature if temperature is None else temperature,
-        max_tokens=default_max_tokens if max_tokens is None else max_tokens,
-    )
-    text = full["choices"][0]["message"]["content"]
-    # Coarse word-boundary chunking — better UX than char-by-char on a slow link.
-    for token in text.split():
-        yield token + " ", model
 
 
 async def _litellm_stream(
@@ -213,15 +182,7 @@ async def stream_completion(
     upstream_error: GatewayError | None = None
 
     source: AsyncIterator[tuple[str, str]]
-    if yandex_provider.is_yandex_model(model):
-        source = _custom_provider_pseudo_stream(
-            yandex_provider.acompletion, model, messages, temperature, max_tokens, 0.6
-        )
-    elif sber_provider.is_sber_model(model):
-        source = _custom_provider_pseudo_stream(
-            sber_provider.acompletion, model, messages, temperature, max_tokens, 0.7
-        )
-    elif vsegpt_provider.is_vsegpt_model(model):
+    if vsegpt_provider.is_vsegpt_model(model):
         # Opus 4.8 via vsegpt (owner 2026-07-01): TRUE token streaming at ~3s/call
         # with thinking OFF (vsegpt sends no `thinking` param), vs ~71s on
         # oneprovider.dev (forced extended thinking). NOTE: this native path has no

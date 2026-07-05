@@ -22,8 +22,6 @@ class Settings(BaseSettings):
 
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
-    yandex_api_key: SecretStr | None = None
-    yandex_folder_id: str | None = None
     openrouter_api_key: SecretStr | None = None
     # Google Gemini API key from Google AI Studio (https://aistudio.google.com/apikey).
     # Free tier covers gemini-2.5-pro (low RPM/RPD) and gemini-2.5-flash (higher quota);
@@ -76,13 +74,6 @@ class Settings(BaseSettings):
     # HTTP 400 "out of budget", which aborts the build as «Сборка прервана»). Flip
     # back to true once the balance is topped up; env-only, no code change.
     opus_via_vsegpt: bool = True
-
-    # Sber GigaChat — auth key is base64(client_id:client_secret) from Sber developer cabinet.
-    # Sber's API uses the Russian Trusted Root CA, which most Python builds don't trust by
-    # default — set GIGACHAT_VERIFY_SSL=false locally if you don't have the cert installed.
-    gigachat_auth_key: SecretStr | None = None
-    gigachat_scope: str = "GIGACHAT_API_PERS"  # or GIGACHAT_API_CORP
-    gigachat_verify_ssl: bool = False
 
     database_url: str = "postgresql://omnia:omnia@localhost:5432/omnia"
     redis_url: str = "redis://localhost:6379/1"

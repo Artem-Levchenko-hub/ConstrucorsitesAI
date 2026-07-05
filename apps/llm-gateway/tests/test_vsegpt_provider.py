@@ -1,9 +1,9 @@
-"""Tests for the direct vsegpt.ru DeepSeek provider (providers/vsegpt.py).
+"""Tests for the direct vsegpt.ru provider (providers/vsegpt.py).
 
 The provider does a sync httpx.Client call on a worker thread (no proxy) — these
 tests stub httpx.Client so nothing hits the network, and assert the OpenAI-shape
 normalization, the Omnia-id remap, chain-of-thought stripping, and fail-fast
-error translation.
+error translation. claude-opus-4-8 is the only model on vsegpt now (every role).
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from omnia_gateway.core import config
 from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
 from omnia_gateway.providers import vsegpt
 
-_MODEL = "deepseek-v4-flash-thinking"
+_MODEL = "claude-opus-4-8"
+_SLUG = "anthropic/claude-opus-4.8"
 
 
 def _canned(content: str) -> dict[str, Any]:
@@ -94,29 +95,21 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, response: _FakeResponse) -> N
 
 
 def test_is_vsegpt_model() -> None:
-    assert vsegpt.is_vsegpt_model(_MODEL) is True
-    # The workers, the Opus art_director, the Gemini orchestrator and the MiniMax
-    # developer all ride vsegpt now.
-    assert vsegpt.is_vsegpt_model("deepseek-chat") is True
+    # Opus 4.8 is the ONLY model on vsegpt now (every role).
     assert vsegpt.is_vsegpt_model("claude-opus-4-8") is True
-    assert vsegpt.is_vsegpt_model("gemini-3.5-flash-high") is True
-    assert vsegpt.is_vsegpt_model("minimax-m2.7") is True
-    assert vsegpt.is_vsegpt_model("deepseek-v4-pro-thinking") is True
-    assert vsegpt.is_vsegpt_model("deepseek-v4-pro") is True
-    assert vsegpt.is_vsegpt_model("gemini-3-flash-vision") is True
+    # Retired provider-zoo models are no longer routed here.
+    assert vsegpt.is_vsegpt_model("deepseek-chat") is False
+    assert vsegpt.is_vsegpt_model("gemini-3-flash-vision") is False
+    assert vsegpt.is_vsegpt_model("kimi-k2.6") is False
 
 
 def test_opus_via_vsegpt_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    # OPUS_VIA_VSEGPT=false pins ONLY Opus back to oneprovider (the reversible
-    # failover for an empty vsegpt balance). Every other vsegpt-fronted model is
-    # untouched, so non-Opus roles keep the fast path.
+    # OPUS_VIA_VSEGPT=false pins Opus back to oneprovider (the reversible failover
+    # for an empty vsegpt balance); default/true keeps it on the fast vsegpt path.
     monkeypatch.setenv("OPUS_VIA_VSEGPT", "false")
     config.reset_settings_cache()
     try:
         assert vsegpt.is_vsegpt_model("claude-opus-4-8") is False
-        assert vsegpt.is_vsegpt_model("deepseek-chat") is True
-        assert vsegpt.is_vsegpt_model("gemini-3.5-flash-high") is True
-        # Default (flag on / unset) keeps Opus on the fast vsegpt path.
         monkeypatch.setenv("OPUS_VIA_VSEGPT", "true")
         config.reset_settings_cache()
         assert vsegpt.is_vsegpt_model("claude-opus-4-8") is True
@@ -125,13 +118,11 @@ def test_opus_via_vsegpt_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_vision_model_keeps_image_blocks() -> None:
-    # `vis-` models PASS the OpenAI multimodal array (text + image_url) so the
-    # screenshot reaches the judge; text-only models flatten it away.
-    assert vsegpt._is_vision("gemini-3-flash-vision") is True
-    # Owner 2026-06-29: Opus 4.8 is the vision judge — natively multimodal, kept as a
-    # vision model (no vis- prefix) so its screenshot image_url blocks are forwarded.
+    # Opus 4.8 is natively multimodal (the acceptance-gate vision judge + `see`
+    # tool) — kept as a vision model so its image_url blocks are forwarded, not
+    # flattened. An unknown/text-only model flattens images away.
     assert vsegpt._is_vision("claude-opus-4-8") is True
-    assert vsegpt._is_vision("deepseek-chat") is False
+    assert vsegpt._is_vision("some-text-only-model") is False
     msgs = [
         {
             "role": "user",
@@ -153,9 +144,7 @@ def test_opus_cache_control_survives_to_vsegpt_payload() -> None:
     # Owner 2026-06-29: Anthropic prompt caching on the stable system prefix must
     # reach the vsegpt payload for opus. apply_anthropic_cache wraps the system into
     # a cache_control block; opus is vision-mode so _to_vsegpt_messages keeps the
-    # array (incl. cache_control) instead of flattening it. (No-op on vsegpt today —
-    # it doesn't honour the cache — but the block must be forwarded for a caching
-    # upstream / future vsegpt support.)
+    # array (incl. cache_control) instead of flattening it.
     from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 
     msgs = [
@@ -170,7 +159,7 @@ def test_opus_cache_control_survives_to_vsegpt_payload() -> None:
     assert isinstance(sys_block, list)
     assert sys_block[0]["cache_control"] == {"type": "ephemeral"}
     assert "STABLE SYSTEM PREFIX" in sys_block[0]["text"]
-    # Opus 4.7 stays a proxyapi/Router model — not dispatched to vsegpt.
+    # Retired models are not dispatched to vsegpt.
     assert vsegpt.is_vsegpt_model("claude-opus-4-7") is False
     assert vsegpt.is_vsegpt_model("gpt-5") is False
 
@@ -210,7 +199,7 @@ async def test_happy_path_normalizes_and_remaps_model(
     assert out["usage"]["prompt_tokens"] == 11
     assert out["usage"]["completion_tokens"] == 22
     # The request carried the vsegpt slug + bearer key.
-    assert _FakeClient.captured["payload"]["model"] == "deepseek/deepseek-v4-flash-thinking"
+    assert _FakeClient.captured["payload"]["model"] == _SLUG
     assert _FakeClient.captured["headers"]["Authorization"] == "Bearer sk-or-vv-test"
     # Proxy env must be ignored (RU endpoint hit direct).
     assert _FakeClient.captured["client_kwargs"]["trust_env"] is False
@@ -231,17 +220,16 @@ async def test_strips_think_block(monkeypatch: pytest.MonkeyPatch, _with_key) ->
 async def test_default_max_tokens_sent(monkeypatch: pytest.MonkeyPatch, _with_key) -> None:
     _install_fake(monkeypatch, _FakeResponse(_canned("ok")))
     await vsegpt.acompletion(model=_MODEL, messages=[{"role": "user", "content": "x"}])
-    # Thinking model gets a wide budget by default so CoT can't truncate output
-    # (32768 leaves room for reasoning + a full landing page).
+    # Wide default budget so CoT can't truncate output (32768 leaves room for
+    # reasoning + a full landing page).
     assert _FakeClient.captured["payload"]["max_tokens"] == 32768
 
 
-@pytest.mark.asyncio
-async def test_flattens_multimodal_content(monkeypatch: pytest.MonkeyPatch, _with_key) -> None:
-    _install_fake(monkeypatch, _FakeResponse(_canned("ok")))
-    await vsegpt.acompletion(
-        model=_MODEL,
-        messages=[
+def test_flattens_multimodal_content() -> None:
+    # The text-only path (vision=False) drops image blocks, keeps text. Opus is
+    # multimodal, so this exercises the flatten helper directly.
+    out = vsegpt._to_vsegpt_messages(
+        [
             {
                 "role": "user",
                 "content": [
@@ -250,9 +238,9 @@ async def test_flattens_multimodal_content(monkeypatch: pytest.MonkeyPatch, _wit
                 ],
             }
         ],
+        vision=False,
     )
-    # Image block dropped, text kept — DeepSeek is text-only.
-    assert _FakeClient.captured["payload"]["messages"][0]["content"] == "describe"
+    assert out[0]["content"] == "describe"
 
 
 @pytest.mark.asyncio

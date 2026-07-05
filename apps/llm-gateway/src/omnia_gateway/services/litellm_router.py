@@ -1,10 +1,9 @@
 """Single entry point for chat completions.
 
-Dispatches by model ID:
-- Yandex / Sber / vsegpt(DeepSeek) → custom httpx wrappers in `providers.*`
-  (each fronts a RU endpoint LiteLLM can't route reliably from the prod VPS).
-- Everything else → LiteLLM Router (Anthropic via proxyapi, OpenAI, OpenRouter,
-  Gemini).
+Dispatches claude-opus-4-8 (the only model, every role) to the direct vsegpt
+httpx wrapper in `providers.vsegpt` (fronts a RU endpoint LiteLLM can't route
+reliably from the prod VPS), or to the LiteLLM Router → oneprovider.dev when
+OPUS_VIA_VSEGPT=false (the reversible failover).
 
 R-01 (deep module): callers see one async function (`acompletion`) regardless
 of provider. Routing, fallback config, and error translation are hidden here.
@@ -45,11 +44,9 @@ _EMPTY_RETRY_DELAY_S = 0.2
 # which never reaches this LiteLLM path. Kept as a seam for future thinking
 # models routed through the Router.
 _NO_EMPTY_RETRY_MODELS: frozenset[str] = frozenset()
-from omnia_gateway.providers import sber as sber_provider
 from omnia_gateway.providers import vsegpt as vsegpt_provider
-from omnia_gateway.providers import yandex as yandex_provider
-from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 from omnia_gateway.services.pricing import PRICE_TABLE
+from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 
 # Suppress LiteLLM's own debug printing — we use structlog for everything.
 litellm.suppress_debug_info = True
@@ -59,44 +56,10 @@ litellm.suppress_debug_info = True
 # substitutes per AGENT-C-LLM-GATEWAY.md (e.g. claude-sonnet-4-6 maps to
 # anthropic/claude-sonnet-4-5 until a 4.6 alias ships).
 _LITELLM_MODEL_SLUG: dict[str, str] = {
-    "claude-sonnet-4-6": "anthropic/claude-sonnet-4-5",
-    # Opus 4.7 via proxyapi.ru native-Anthropic endpoint (key/base in _PROXY_ROUTES
-    # below). Kept only as a fallback target — the LIVE art_director model is now
-    # claude-opus-4-8 via the vsegpt provider (providers/vsegpt.py), dispatched
-    # before this Router. The 2026-06-02 OpenRouter detour was reverted: the key
-    # on prod is a vsegpt key (sk-or-vv-), not an OpenRouter key (sk-or-v1-), and
-    # OpenRouter rejected it. This route needs proxyapi.ru topped up to work.
-    "claude-opus-4-7": "anthropic/claude-opus-4-5",
-    # Opus 4.8 — THE live model for every role — via oneprovider.dev (native
-    # Anthropic). Key/base in _PROXY_ROUTES below; dispatched here (LiteLLM) now
-    # that it's removed from the vsegpt map, with streaming.py applying cache_control.
+    # Opus 4.8 — THE live model for every role. Normally dispatched by the direct
+    # vsegpt provider BEFORE this Router; this Router entry is the oneprovider.dev
+    # failover target (OPUS_VIA_VSEGPT=false), with streaming.py applying cache_control.
     "claude-opus-4-8": "anthropic/claude-opus-4-8",
-    # Haiku 4.5 routed via proxyapi.ru native-Anthropic endpoint (the proxyapi
-    # /openai/v1 surface doesn't carry Claude models — they live under
-    # /anthropic/v1 in raw Anthropic Messages format). The proxy key flows in
-    # through _PROXY_ROUTES below, not the default anthropic_api_key channel.
-    "claude-haiku-4-5": "anthropic/claude-haiku-4-5",
-    "gpt-4.1": "openai/gpt-4o",
-    "gpt-5-mini": "openai/gpt-4o-mini",
-    # GPT-5 family via proxyapi.ru/openai/v1 (LiteLLM treats proxyapi as a
-    # regular OpenAI endpoint when we pass `api_base`). slugs MUST exactly
-    # match the model names proxyapi proxies through to OpenAI — they
-    # support the real `gpt-5` and `gpt-5-nano` names verbatim.
-    "gpt-5": "openai/gpt-5",
-    "gpt-5-nano": "openai/gpt-5-nano",
-    "qwen-3-coder": "openrouter/qwen/qwen3-coder",
-    # DeepSeek via proxyapi.ru OpenAI-compatible surface. LiteLLM treats it as a
-    # plain OpenAI endpoint once we pass `api_base` (declared in _PROXY_ROUTES).
-    # Slugs MUST match the model names proxyapi proxies through to DeepSeek.
-    "deepseek-chat": "openai/deepseek-chat",
-    "deepseek-reasoner": "openai/deepseek-reasoner",
-    # NOTE: deepseek-v4-flash-thinking is NOT here — it's served by the direct
-    # vsegpt provider (providers/vsegpt.py), dispatched before the Router path.
-    # Google Gemini via AI Studio (not Vertex AI). LiteLLM reads the key from
-    # GEMINI_API_KEY or whatever is passed explicitly in the model_list below.
-    # Same key works for both free and paid tier on AI Studio.
-    "gemini-2.5-pro": "gemini/gemini-2.5-pro",
-    "gemini-2.5-flash": "gemini/gemini-2.5-flash",
 }
 
 
@@ -108,79 +71,22 @@ class _ProxyRoute:
     api_base: Callable[[Settings], str]
 
 
-# Models that bypass slug-prefix routing — e.g. an Anthropic model served via a
-# Russian OpenAI-compatible proxy whose key lives under a different env var.
-# All three entries below share the same proxyapi.ru balance: one top-up
-# covers Claude Haiku, GPT-5, and GPT-5 Nano simultaneously.
+# Models that bypass slug-prefix routing — an Anthropic model served via a
+# 3rd-party endpoint whose key lives under a different env var. Only opus-4-8
+# (→ oneprovider.dev) remains.
 _PROXY_ROUTES: dict[str, _ProxyRoute] = {
     # Opus 4.8 (the live model for EVERY role) via oneprovider.dev native Anthropic
-    # endpoint — its own key/base, separate from the proxyapi.ru balance below.
+    # endpoint — its own key/base. This is the ACTIVE route when OPUS_VIA_VSEGPT=false
+    # (also feeds routers/messages_native.py via proxy_route_for).
     "claude-opus-4-8": _ProxyRoute(
         api_key=lambda s: s.oneprovider_api_key.get_secret_value() if s.oneprovider_api_key else None,
         api_base=lambda s: s.oneprovider_base_url,
     ),
-    "claude-haiku-4-5": _ProxyRoute(
-        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
-        api_base=lambda s: s.proxyapi_base_url,
-    ),
-    "claude-sonnet-4-6": _ProxyRoute(
-        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
-        api_base=lambda s: s.proxyapi_base_url,
-    ),
-    # Opus 4.7 via proxyapi.ru native-Anthropic endpoint — same balance as
-    # Haiku/Sonnet. Fallback target only; the live art_director Opus is 4.8 via
-    # the vsegpt provider. Needs proxyapi.ru balance to be non-zero.
-    "claude-opus-4-7": _ProxyRoute(
-        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
-        api_base=lambda s: s.proxyapi_base_url,
-    ),
-    # DeepSeek V3 / R1 via proxyapi.ru OpenAI-compatible surface. deepseek-chat
-    # is the Polish/content role's model (best ₽/quality on Russian copy).
-    "deepseek-chat": _ProxyRoute(
-        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
-        api_base=lambda s: s.proxyapi_deepseek_base_url,
-    ),
-    "deepseek-reasoner": _ProxyRoute(
-        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
-        api_base=lambda s: s.proxyapi_deepseek_base_url,
-    ),
-    # vsegpt.ru DeepSeek is handled by the direct provider, not this Router map.
-    "gpt-5": _ProxyRoute(
-        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
-        api_base=lambda s: s.proxyapi_openai_base_url,
-    ),
-    "gpt-5-nano": _ProxyRoute(
-        api_key=lambda s: s.proxyapi_api_key.get_secret_value() if s.proxyapi_api_key else None,
-        api_base=lambda s: s.proxyapi_openai_base_url,
-    ),
 }
 
-_FALLBACKS: list[dict[str, list[str]]] = [
-    # All fallback chains route through providers actually configured in prod
-    # (proxyapi.ru for Anthropic models, Google AI Studio for Gemini, Sber for
-    # GigaChat). gpt-* keys are not set on the Serverum VPS, so any chain that
-    # ends on OpenAI was producing "no healthy deployments" 503s the moment
-    # the primary 4xx'd. Anthropic Haiku via proxyapi.ru is the most reliable
-    # bottom-of-stack — every chain terminates there.
-    {"claude-opus-4-7": ["claude-sonnet-4-6", "claude-haiku-4-5"]},
-    {"claude-sonnet-4-6": ["claude-haiku-4-5"]},
-    {"claude-haiku-4-5": ["gpt-5-nano", "gigachat-2-pro"]},
-    # DeepSeek chains terminate on proxyapi-backed Anthropic models (reliable
-    # bottom-of-stack). deepseek-chat → Haiku; deepseek-reasoner → Opus → Sonnet.
-    {"deepseek-chat": ["claude-haiku-4-5"]},
-    {"deepseek-reasoner": ["claude-opus-4-7", "claude-sonnet-4-6"]},
-    # deepseek-v4-flash-thinking (vsegpt) bypasses the Router, so its fallback
-    # lives at the app layer (_EMPTY_RESPONSE_FALLBACKS in apps/api messages.py).
-    {"gpt-4.1": ["gpt-5", "claude-haiku-4-5"]},
-    {"gpt-5-mini": ["gpt-5-nano", "claude-haiku-4-5"]},
-    {"gpt-5": ["claude-haiku-4-5", "gpt-5-nano"]},
-    {"gpt-5-nano": ["gpt-5-mini", "claude-haiku-4-5"]},
-    # Gemini Pro free tier may be hard-capped to 0 on accounts without billing
-    # (the API reports `free_tier_input_token_count limit: 0`); fall back to
-    # Flash, which has a real free quota. If both fail, hop to claude-haiku-4-5.
-    {"gemini-2.5-pro": ["gemini-2.5-flash", "claude-haiku-4-5"]},
-    {"gemini-2.5-flash": ["claude-haiku-4-5"]},
-]
+# No Router fallback chains: the only routed model is claude-opus-4-8, which has
+# no fallback target (a vsegpt outage surfaces as a clean error the caller heals).
+_FALLBACKS: list[dict[str, list[str]]] = []
 
 # Reverse map for billing: when a fallback fires, response.model holds the
 # LiteLLM slug, possibly with a date suffix (e.g. "gpt-4o-2024-08-06"). We
@@ -323,22 +229,6 @@ async def acompletion(
     if not is_supported(model):
         raise ModelNotFoundError(f"Unknown model: {model}")
 
-    if yandex_provider.is_yandex_model(model):
-        return await yandex_provider.acompletion(
-            model=model,
-            messages=messages,
-            temperature=0.6 if temperature is None else temperature,
-            max_tokens=2000 if max_tokens is None else max_tokens,
-        )
-
-    if sber_provider.is_sber_model(model):
-        return await sber_provider.acompletion(
-            model=model,
-            messages=messages,
-            temperature=0.7 if temperature is None else temperature,
-            max_tokens=2000 if max_tokens is None else max_tokens,
-        )
-
     # Opus 4.8 via vsegpt (owner 2026-07-01) — the direct vsegpt provider (sync
     # httpx, no-proxy) at ~3s/call with thinking OFF, vs oneprovider's ~71s. Checked
     # BEFORE the Router; the Router's oneprovider route stays as a fallback target.
@@ -374,26 +264,7 @@ async def acompletion(
         kwargs["max_tokens"] = max_tokens
     kwargs.update(extra)
 
-    # Gemini 2.5 AND GPT-5 family are reasoning models. Without an explicit
-    # max_tokens AND minimal reasoning budget, ALL output tokens get spent
-    # on hidden reasoning_tokens and the visible text response is 0–2 tokens
-    # (we saw `tokens_out=1, content="От"` from Gemini, `content=""`,
-    # `reasoning_tokens=30/30` from gpt-5-nano).
-    #
-    # Two safeguards apply to both families:
-    #   1) max_tokens default 16k — leaves headroom for both reasoning and
-    #      the actual answer.
-    #   2) reasoning_effort: "disable" for Gemini (LiteLLM maps to
-    #      `thinkingConfig.thinkingBudget=0`), "minimal" for OpenAI (lowest
-    #      legal value on GPT-5 — "disable" isn't supported, "minimal"
-    #      reserves only the bare minimum reasoning tokens).
-    if model.startswith("gemini-"):
-        kwargs.setdefault("max_tokens", 16384)
-        kwargs.setdefault("reasoning_effort", "disable")
-    elif model in ("gpt-5", "gpt-5-nano"):
-        kwargs.setdefault("max_tokens", 16384)
-        kwargs.setdefault("reasoning_effort", "minimal")
-    elif model.startswith("claude-"):
+    if model.startswith("claude-"):
         # oneprovider's claude-opus-4-8 keeps EXTENDED THINKING on regardless of
         # {type: disabled} — but with a LIGHT default budget the agentic builder
         # tolerates. The canned-discovery-questions bug was NOT the thinking, it was
