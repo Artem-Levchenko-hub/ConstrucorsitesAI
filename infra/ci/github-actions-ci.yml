@@ -1,0 +1,50 @@
+name: CI
+
+# Minimal "does a push silently break the build" gate (fresh-plan Step 0). Runs
+# only the checks that are GREEN at baseline, so a red run means a real
+# regression — not pre-existing env noise (the api/orchestrator pytest suites
+# need Postgres/Chromium/docker + /opt/omnia-runtime and are intentionally NOT
+# gated here; the full prompt->built->isolation E2E needs runner secrets + the
+# stack and is a later addition).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: gateway pytest (routing/pricing/streaming)
+        run: cd apps/llm-gateway && uv run pytest -q -p no:warnings
+
+  web-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: corepack enable && corepack prepare pnpm@9.15.0 --activate
+      - name: install + tsc --noEmit
+        run: cd apps/web && pnpm install --frozen-lockfile && pnpm typecheck
+
+  py-syntax:
+    # Light, dependency-free guard: every Python source must at least compile.
+    # Catches the syntax/indent breaks a heavy pytest suite would also catch,
+    # without needing pygit2/playwright/docker on the runner.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: compileall api + orchestrator
+        run: python -m compileall -q apps/api/src apps/orchestrator/src
