@@ -316,6 +316,10 @@ services:
       # Runtime functional gate (realtime only): drive the live preview, verify
       # create/live-delivery/no-leak, feed red verdicts back so the agent self-heals.
       USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-false}
+      # Wallet self-top-up stub (POST /api/wallet/topup credits own wallet, no pay).
+      # Code default is CLOSED (secure); prod keeps closed-beta free credits with
+      # -true here and flips OFF via ALLOW_STUB_TOPUP=false in .env once YooKassa lands.
+      ALLOW_STUB_TOPUP: ${ALLOW_STUB_TOPUP:-true}
       # Host-resolver map so the gate browser (runs in api) reaches the app's
       # canonical public preview host from inside docker (e.g.
       # "MAP *.preview.lead-generator.ru 172.21.0.1" → host nginx bridge gateway).
