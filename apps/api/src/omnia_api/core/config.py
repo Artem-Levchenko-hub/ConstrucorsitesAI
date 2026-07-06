@@ -355,6 +355,14 @@ class Settings(BaseSettings):
     # proven"; DB-persist + deploy-gating land in a follow-up. Env: USE_BUILD_ATTESTATION.
     use_build_attestation: bool = Field(default=True)
 
+    # Wallet self-top-up (MVP stub) — POST /api/wallet/topup credits the caller's
+    # OWN wallet by a user-supplied amount with NO payment. Fine for closed beta
+    # (free credits), a self-credit hole in the open (free unlimited generation).
+    # SECURE BY DEFAULT (False -> 403); prod keeps the beta behaviour via explicit
+    # ALLOW_STUB_TOPUP=true and flips it OFF (env-only, no redeploy) once real
+    # YooKassa payment lands (fresh-plan Step 5) / beta ends. Env: ALLOW_STUB_TOPUP.
+    allow_stub_topup: bool = Field(default=False)
+
     # Skill injection (K1, knowledge-layer plan §2) — when on, the agent's system
     # prompt for a container build is composed with the stack's .omnia/skills
     # (security/a11y/perf canons aligned with the gates), raising the first

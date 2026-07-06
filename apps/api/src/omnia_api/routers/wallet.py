@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from fastapi import APIRouter
 
-from omnia_api.core.config import FREE_GENERATION_LIMIT
+from omnia_api.core.config import FREE_GENERATION_LIMIT, get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.redis import publish_event
@@ -46,6 +46,15 @@ async def get_wallet(session: SessionDep, current_user: CurrentUserDep) -> Walle
 async def topup_wallet(
     payload: TopupRequest, session: SessionDep, current_user: CurrentUserDep
 ) -> TopupResponse:
+    # Self-credit guard: the MVP stub credits the caller's OWN wallet with no
+    # payment. Closed by default; opened for closed beta via ALLOW_STUB_TOPUP,
+    # flipped OFF once real YooKassa payment lands (see core.config).
+    if not get_settings().allow_stub_topup:
+        raise ApiError(
+            "topup_disabled",
+            "Пополнение временно недоступно — идёт подключение оплаты.",
+            403,
+        )
     new_balance = await topup_svc(
         session, current_user.id, payload.amount_rub, "Top-up (MVP stub)"
     )
