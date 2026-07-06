@@ -86,7 +86,12 @@ class Settings(BaseSettings):
     safety_filter_enabled: bool = True
     cache_ttl_seconds: int = 3600
     min_balance_rub: float = 5.0
-    request_timeout_seconds: int = 60
+    # LiteLLM Router timeout for one completion. oneprovider.dev (the current Opus
+    # provider) forces extended thinking → up to ~67s/call, which blew the old 60s
+    # and killed the build planner ("Timeout on reading data from socket" → empty
+    # plan). 240s tolerates the spike while staying under the api llm_client's 300s
+    # read timeout so a genuine hang still surfaces cleanly. Env: REQUEST_TIMEOUT_SECONDS.
+    request_timeout_seconds: int = 240
 
     log_level: str = "INFO"
 
