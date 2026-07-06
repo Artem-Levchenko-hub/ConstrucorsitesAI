@@ -3237,6 +3237,9 @@ async def _process_prompt(
                 )
             else:
                 _gate_touched = False
+            # Gate verdicts captured at the gate-loop settle, for the DB attestation
+            # persisted with this build's snapshot below (best-effort; None if no gate ran).
+            _att_capture = None
             try:
                 if (
                     get_settings().use_runtime_gates
@@ -3313,6 +3316,7 @@ async def _process_prompt(
                                         f"[ATTEST] {_att.to_log_line(_attn)}",
                                         flush=True,
                                     )
+                                    _att_capture = _att_gates
                                 except Exception as _att_exc:  # never break a build
                                     print(
                                         f"[ATTEST] skipped: {_att_exc}", flush=True
@@ -3564,6 +3568,40 @@ async def _process_prompt(
                             ) + 1
                     await session.commit()
                     await session.refresh(snapshot)
+                # Persist the build attestation in its OWN transaction (best-effort;
+                # a failed insert can NEVER roll back the snapshot committed above).
+                if _att_capture and get_settings().use_build_attestation:
+                    try:
+                        from omnia_api.models.attestation import Attestation
+                        from omnia_api.services import attestation as _att
+
+                        _rec = _att.build_attestation(
+                            gates=_att_capture,
+                            stack=_orch_name,
+                            project_id=str(project_id),
+                            created_at=_att.now_iso(),
+                            commit_sha=new_sha,
+                        )
+                        async with factory() as _asess:
+                            _asess.add(
+                                Attestation(
+                                    project_id=project_id,
+                                    snapshot_id=_agent_snap_id,
+                                    commit_sha=new_sha,
+                                    stack=_orch_name,
+                                    overall_passed=bool(_rec["overall_passed"]),
+                                    digest=_rec["digest"],
+                                    gates=_rec["gates"],
+                                )
+                            )
+                            await _asess.commit()
+                        print(
+                            f"[ATTEST] persisted snapshot={_agent_snap_id} "
+                            f"passed={_rec['overall_passed']}",
+                            flush=True,
+                        )
+                    except Exception as _ae:  # never affect the build
+                        print(f"[ATTEST] persist skipped: {_ae}", flush=True)
                 await asyncio.to_thread(enqueue_preview, _agent_snap_id)
                 await publish_event(
                     project_id,
