@@ -320,6 +320,9 @@ services:
       # Code default is CLOSED (secure); prod keeps closed-beta free credits with
       # -true here and flips OFF via ALLOW_STUB_TOPUP=false in .env once YooKassa lands.
       ALLOW_STUB_TOPUP: ${ALLOW_STUB_TOPUP:-true}
+      # Deploy-attestation gate (Step 3). Advisory-logs the build's verdict at deploy;
+      # flip to true to REFUSE an unproven deploy (watch "[DEPLOY-GATE] proven=" first).
+      DEPLOY_ATTESTATION_BLOCKING: ${DEPLOY_ATTESTATION_BLOCKING:-false}
       # Host-resolver map so the gate browser (runs in api) reaches the app's
       # canonical public preview host from inside docker (e.g.
       # "MAP *.preview.lead-generator.ru 172.21.0.1" → host nginx bridge gateway).

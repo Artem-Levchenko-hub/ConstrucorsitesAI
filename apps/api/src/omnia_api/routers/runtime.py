@@ -22,9 +22,12 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, status
+from sqlalchemy import select
 
+from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.models.attestation import Attestation
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.project import orchestrator_template
@@ -223,6 +226,39 @@ async def trigger_deploy(
 ) -> DeployStatus:
     await _project_owned_by(session, project_id, current_user.id)
     sha = body.commit_sha if body is not None else None
+    # Deploy-attestation gate (Step 3, deploy ↔ proven): look up the build's saved
+    # attestation, log its verdict, and refuse an unproven deploy only when blocking
+    # is enabled. Advisory by default; lookup errors are advisory-safe (a DB hiccup
+    # must never break a deploy).
+    if get_settings().use_deploy_attestation_gate:
+        _proven: bool | None = None
+        _digest: str | None = None
+        try:
+            _stmt = select(Attestation).where(Attestation.project_id == project_id)
+            if sha:
+                _stmt = _stmt.where(Attestation.commit_sha == sha)
+            _att = (
+                await session.execute(
+                    _stmt.order_by(Attestation.created_at.desc()).limit(1)
+                )
+            ).scalars().first()
+            _proven = bool(_att and _att.overall_passed)
+            _digest = _att.digest if _att else None
+        except Exception as _ge:  # noqa: BLE001 — advisory must never break a deploy
+            print(f"[DEPLOY-GATE] lookup skipped: {_ge}", flush=True)
+        if _proven is not None:
+            print(
+                f"[DEPLOY-GATE] project={project_id} sha={sha} "
+                f"proven={_proven} digest={_digest}",
+                flush=True,
+            )
+            if get_settings().deploy_attestation_blocking and not _proven:
+                raise ApiError(
+                    "deploy_not_proven",
+                    "Деплой заблокирован: сборка не прошла проверку изоляции/"
+                    "безопасности. Уточни запрос и пересобери.",
+                    status.HTTP_409_CONFLICT,
+                )
     payload = await orchestrator_client.deploy(project_id, commit_sha=sha)
     return _to_deploy_status(payload)
 

@@ -355,6 +355,17 @@ class Settings(BaseSettings):
     # proven"; DB-persist + deploy-gating land in a follow-up. Env: USE_BUILD_ATTESTATION.
     use_build_attestation: bool = Field(default=True)
 
+    # Deploy-attestation gate (fresh-plan Step 3 — "deploy ↔ proven"). At deploy the
+    # api looks up the build's saved attestation and LOGS whether it's proven
+    # ("[DEPLOY-GATE] … proven=…") — ADVISORY by default so we measure the real
+    # pass-rate before blocking. `deploy_attestation_blocking` then makes an
+    # unproven build REFUSE to deploy (409). Safe rollout: keep blocking OFF, watch
+    # the log, flip DEPLOY_ATTESTATION_BLOCKING=true when ready. NB projects built
+    # before attestations have none → count as "not proven" once blocking is on.
+    # Env: USE_DEPLOY_ATTESTATION_GATE / DEPLOY_ATTESTATION_BLOCKING.
+    use_deploy_attestation_gate: bool = Field(default=True)
+    deploy_attestation_blocking: bool = Field(default=False)
+
     # Wallet self-top-up (MVP stub) — POST /api/wallet/topup credits the caller's
     # OWN wallet by a user-supplied amount with NO payment. Fine for closed beta
     # (free credits), a self-credit hole in the open (free unlimited generation).
