@@ -19,7 +19,7 @@ from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedErr
 from omnia_gateway.providers import vsegpt
 
 _MODEL = "claude-opus-4-8"
-_SLUG = "anthropic/claude-opus-4.8"
+_SLUG = "claude-opus-4-8"
 
 
 def _canned(content: str) -> dict[str, Any]:

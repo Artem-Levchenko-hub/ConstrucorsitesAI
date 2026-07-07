@@ -56,17 +56,17 @@ _TRANSIENT = (
 # vsegpt is an OpenAI-compatible aggregator; the slug is sent verbatim as the
 # `model` field. Add a row here to expose another vsegpt-fronted model.
 _VSEGPT_MODEL_SLUG: dict[str, str] = {
-    # Opus 4.8 via vsegpt (owner 2026-07-01, key sk-or-vv-…) — the ONLY model for
-    # every role. vsegpt sends NO `thinking` param → Opus runs with extended
-    # thinking OFF and answers in ~3s (MEASURED), versus ~71s on oneprovider.dev
-    # which forces thinking regardless of {type:disabled} → the 30s-POST-timeout
-    # root cause. is_vsegpt_model() returns True, so Opus is dispatched by THIS
-    # direct provider (streaming.py + litellm_router.acompletion) BEFORE the Router;
-    # the oneprovider entry in litellm_router._PROXY_ROUTES stays as the failover
-    # (OPUS_VIA_VSEGPT=false). Multimodal (see _NATIVE_MULTIMODAL) so the vision
-    # judge / `see` tool image blocks reach it. vsegpt doesn't honour Anthropic
-    # prompt caching — accepted for the latency win.
-    "claude-opus-4-8": "anthropic/claude-opus-4.8",
+    # Opus 4.8 — the ONLY model for every role. This "vsegpt" provider is a generic
+    # OpenAI-compatible client (POST {VSEGPT_BASE_URL}/chat/completions + Bearer, NO
+    # `thinking` param) and is REPOINTED at oneprovider.dev via env
+    # (VSEGPT_BASE_URL=https://api.oneprovider.dev/v1, VSEGPT_API_KEY=<oneprovider key>,
+    # OPUS_VIA_VSEGPT=true). oneprovider's Anthropic /v1/messages surface rejects the
+    # key + forces ~67s thinking; its OpenAI /v1/chat/completions surface with model
+    # id "claude-opus-4-8" (non-thinking; there's a separate *-thinking id) answers in
+    # ~4.6s (MEASURED 2026-07-07). The slug is the `model` field sent verbatim → it MUST
+    # match oneprovider's catalog id. Multimodal (see _NATIVE_MULTIMODAL) so the vision
+    # judge / `see` image blocks reach it.
+    "claude-opus-4-8": "claude-opus-4-8",
 }
 
 
