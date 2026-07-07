@@ -19,6 +19,7 @@ stays the prod default until this is verified on real builds and billing is wire
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -94,6 +95,33 @@ def _obs_to_tool_result(tool_use_id: str, obs: dict[str, Any]) -> dict[str, Any]
     return block
 
 
+# A `build` failure that references a non-existent internal module (TS2307) is a
+# specific, self-inflicted failure mode: the model hallucinates a data-access
+# "SDK"/"engine" layer (`@/lib/entities/engine`, `@/lib/sdk/*`) that belongs to a
+# DIFFERENT stack and doesn't exist here → the whole build stays red and the loop
+# burns steps re-reading. Detect it and hand the model the CORRECT recovery so it
+# fixes the build in its own loop instead of scaffolding the phantom module.
+_TS2307_RE = re.compile(r"Cannot find module '(@/[^']+)'")
+
+
+def _module_not_found_hint(build_output: str) -> str | None:
+    """If a build error is `TS2307: Cannot find module '@/...'`, return an inline
+    hint steering the model to delete the phantom import / use the real primitive
+    (never to scaffold the missing module). None if no such error present."""
+    mods = _TS2307_RE.findall(build_output or "")
+    if not mods:
+        return None
+    uniq = list(dict.fromkeys(mods))[:5]
+    return (
+        "\n\n[HINT] These imports point at modules that DO NOT EXIST in this "
+        f"project: {', '.join(uniq)}. Do NOT create them and do NOT build an "
+        "SDK/engine/repository wrapper to satisfy the import — that pattern is from "
+        "a different stack. Remove the phantom import and use the real primitive "
+        "your stack guide documents (query the DB directly), or inline the logic. "
+        "Verify a path with list_dir/grep before importing it."
+    )
+
+
 def _text_of(content: list[dict[str, Any]]) -> str:
     return "\n".join(
         str(b.get("text", "")) for b in content
@@ -109,7 +137,11 @@ _NATIVE_PREAMBLE = (
     "документации библиотек. Думай сколько нужно. Цикл: пиши код → build → чини "
     "РЕАЛЬНЫЕ ошибки до чистоты → проверь что работает → done. Делай что задумал, "
     "пиши полноценно, без заглушек и TODO. Когда приложение собрано и build чистый — "
-    "вызови done с кратким summary."
+    "вызови done с кратким summary. "
+    "ВАЖНО: если build пишет `Cannot find module '@/...'` — этого пути НЕТ в проекте. "
+    "НЕ создавай модуль под импорт и НЕ выдумывай SDK/engine/repository-обёртку; удали "
+    "фантомный импорт и используй реальный примитив стека (см. гайд) напрямую или напиши "
+    "логику прямо в хендлере. Сначала проверь путь через list_dir/grep, потом импортируй."
 )
 
 
@@ -182,7 +214,9 @@ async def run_native_build(
     last_build_ok: bool | None = None
     wrote_since_build = False
     done_rejections = 0
-    _DONE_REJECT_CAP = 3
+    # Room to bounce a premature done and actually heal (a hallucinated-module
+    # build usually needs a couple of correction turns) before we let it ship red.
+    _DONE_REJECT_CAP = 5
 
     async with httpx.AsyncClient() as client:
         for step in range(max_steps):
@@ -259,7 +293,12 @@ async def run_native_build(
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
                     wrote_since_build = False
-                results.append(_obs_to_tool_result(tu_id, obs))
+                _tr = _obs_to_tool_result(tu_id, obs)
+                if name == "build" and not obs.get("ok"):
+                    _hint = _module_not_found_hint(str(_tr.get("content") or ""))
+                    if _hint:
+                        _tr["content"] = str(_tr["content"]) + _hint
+                results.append(_tr)
 
             if done_summary is not None:
                 if emit:

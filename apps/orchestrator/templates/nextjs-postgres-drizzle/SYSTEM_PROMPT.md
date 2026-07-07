@@ -115,6 +115,24 @@ When adding user-owned tables, include a `userId` column FK to
 `users.id` with `onDelete: "cascade"` — then filter by `user.id` on
 every read. Without this filter ANY user reads ANY other user's data.
 
+**API route handler** (query `db` DIRECTLY — this IS the data layer; do
+NOT wrap it in an SDK / service / engine module):
+
+```ts
+// src/app/api/tasks/route.ts
+import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/session";
+import { db } from "@/lib/db";
+import { eq } from "drizzle-orm";
+import { tasks } from "@/lib/db/schema";
+
+export async function GET() {
+  const user = await requireUser();               // 401-redirects if not authed
+  const rows = await db.select().from(tasks).where(eq(tasks.userId, user.id));
+  return NextResponse.json(rows);                 // scoped to THIS user only
+}
+```
+
 ### Forbidden
 
 - Do NOT install `bcrypt`, `iron-session`, `lucia-auth`, or any other
@@ -124,6 +142,16 @@ every read. Without this filter ANY user reads ANY other user's data.
 - Do NOT store passwords. Calling `hashPassword()` in your own table
   is a sign you're recreating users — extend `users` instead.
 - Do NOT generate JWT manually. The session cookie is set by Auth.js.
+- Do NOT build a data-access "SDK", "engine", "repository" or "service"
+  layer (`src/lib/sdk/*`, `@/lib/entities/engine`, a `defineEntity`/
+  `createEngine` wrapper, …). Those belong to a DIFFERENT stack and DO
+  NOT exist here — importing one fails the build with `TS2307: Cannot
+  find module '@/lib/...'`. The data layer IS `db` from `@/lib/db`: query
+  it directly inside your route handlers / server components (see the
+  "Owner-scoped database query" and "API route handler" examples above).
+  If `build` reports `Cannot find module '@/lib/...'`, the module does not
+  exist — delete the phantom import and use `db` directly; never scaffold
+  the missing module to satisfy the import.
 
 ## Design quality (binding) — no "default-looking" output
 
