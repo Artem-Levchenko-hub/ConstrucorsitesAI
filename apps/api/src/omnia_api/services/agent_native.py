@@ -71,6 +71,18 @@ _TOOLS: list[dict[str, Any]] = [
     _tool("bash", "Run a shell command in the dev container.", {"cmd": _STR}, ["cmd"]),
     _tool("read_logs", "Tail the live dev-server logs (runtime errors build can't see).",
           {"tail": {"type": "integer"}}),
+    _tool("runtime_check", "Open a route in the RUNNING app and get the REAL HTTP "
+          "status — a typecheck-clean app can still 5xx on render.",
+          {"path": _STR}, ["path"]),
+    _tool("probe", "Make a REAL request AS A LOGGED-IN test user and get the exact "
+          "status+body — the only way to prove an interactive feature (create/"
+          "save/submit) works end-to-end, which a clean build + 200 page do NOT.",
+          {"method": _STR, "path": _STR, "body": {"type": "object"}}, ["path"]),
+    _tool("verify_isolation", "PROVE no cross-tenant leak: logs in TWO users, A "
+          "creates the resource, then asserts B is DENIED reading it AND it is "
+          "absent from B's list. Run for EVERY owned resource — a green build "
+          "never proves isolation.",
+          {"create": {"type": "object"}, "read": {"type": "object"}}, ["create"]),
     _tool("done", "Finish — the requested app is built AND the last build is clean.",
           {"summary": _STR}, ["summary"]),
 ]
@@ -131,17 +143,26 @@ def _text_of(content: list[dict[str, Any]]) -> str:
 
 _NATIVE_PREAMBLE = (
     "Ты — автономный инженер: строишь РАБОЧЕЕ приложение в этом проекте, как Claude "
-    "Code. У тебя есть инструменты — вызывай их напрямую: read_file/list_dir/grep "
-    "чтобы понять существующий код, write_file/edit_file чтобы писать, build чтобы "
-    "проверить компиляцию, bash/read_logs чтобы проверить рантайм, docs для свежей "
-    "документации библиотек. Думай сколько нужно. Цикл: пиши код → build → чини "
-    "РЕАЛЬНЫЕ ошибки до чистоты → проверь что работает → done. Делай что задумал, "
-    "пиши полноценно, без заглушек и TODO. Когда приложение собрано и build чистый — "
-    "вызови done с кратким summary. "
+    "Code. Инструменты вызывай напрямую: read_file/list_dir/grep — понять код, "
+    "write_file/edit_file — писать, build — компиляция, bash/read_logs — рантайм, "
+    "runtime_check — открыть роут в ЖИВОМ приложении, probe — реальный запрос ОТ "
+    "ИМЕНИ залогиненного юзера, verify_isolation — доказать отсутствие утечки данных "
+    "между юзерами, docs — свежая дока библиотек. Думай сколько нужно. Цикл: пиши "
+    "код → build → чини РЕАЛЬНЫЕ ошибки до чистоты → ДОКАЖИ что работает → done. Пиши "
+    "полноценно, без заглушек и TODO.\n\n"
+    "ДОКАЖИ перед done — чистый build это НЕ доказательство работы: "
+    "(1) runtime_check главные роуты (чистый typecheck всё равно может 5xx на рендере); "
+    "(2) для интерактива (создать/сохранить/отправить/удалить) — probe РЕАЛЬНЫМ запросом "
+    "от залогиненного юзера, требуй 2xx с ожидаемым телом (чистая страница НЕ доказывает, "
+    "что POST/DELETE юзера не отдаёт 4xx); (3) для данных юзера — verify_isolation на "
+    "КАЖДОМ владеемом ресурсе (green build не доказывает изоляцию). Чини до зелёного — "
+    "потом done.\n\n"
     "ВАЖНО: если build пишет `Cannot find module '@/...'` — этого пути НЕТ в проекте. "
     "НЕ создавай модуль под импорт и НЕ выдумывай SDK/engine/repository-обёртку; удали "
-    "фантомный импорт и используй реальный примитив стека (см. гайд) напрямую или напиши "
-    "логику прямо в хендлере. Сначала проверь путь через list_dir/grep, потом импортируй."
+    "фантомный импорт и используй реальный примитив стека (см. гайд) напрямую. "
+    "И НИКОГДА не делай fetch() к СВОЕМУ ЖЕ API из серверного кода (server component / "
+    "server action / route handler) — cookie сессии не передаётся (будет 401) и это "
+    "лишний круг; вызывай `db`/данные напрямую в самой функции."
 )
 
 

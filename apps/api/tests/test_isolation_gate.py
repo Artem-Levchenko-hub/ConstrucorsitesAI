@@ -27,6 +27,19 @@ def test_routes_parse_static_collection() -> None:
     assert api_routes_from_grep(dump) == ["/api/projects", "/api/tasks"]
 
 
+def test_routes_from_broad_export_grep() -> None:
+    # Discovery now greps the literal `export` (agent_grep can't do ERE), so one
+    # route file surfaces MULTIPLE lines incl. non-method exports — all must
+    # collapse to the single resource URL (file-keyed, method-agnostic).
+    dump = (
+        "src/app/api/tasks/route.ts:1:export const dynamic = 'force-dynamic';\n"
+        "src/app/api/tasks/route.ts:2:export type TaskDTO = { id: string };\n"
+        "src/app/api/tasks/route.ts:8:export async function GET() {}\n"
+        "src/app/api/tasks/route.ts:20:export async function POST(req: NextRequest) {}\n"
+    )
+    assert api_routes_from_grep(dump) == ["/api/tasks"]
+
+
 def test_routes_drop_dynamic_auth_and_groups() -> None:
     dump = (
         "src/app/api/tasks/[id]/route.ts:2:export async function GET() {}\n"  # dynamic
