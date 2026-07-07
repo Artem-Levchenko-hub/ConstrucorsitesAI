@@ -17,7 +17,7 @@ from omnia_gateway.providers.vsegpt_native import (
 )
 
 _MODEL = "claude-opus-4-8"
-_SLUG = "anthropic/claude-opus-4.8"
+_SLUG = "claude-opus-4-8"
 
 
 def _agent_request(**over: Any) -> dict[str, Any]:
