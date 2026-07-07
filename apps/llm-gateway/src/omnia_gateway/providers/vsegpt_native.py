@@ -213,6 +213,54 @@ def to_openai_payload(body: dict[str, Any]) -> dict[str, Any]:
 _STOP_REASON = {"tool_calls": "tool_use", "stop": "end_turn", "length": "max_tokens"}
 
 
+def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
+    """Parse an OpenAI ``tool_call.function.arguments`` value into an input dict.
+
+    Normally ``arguments`` is a single JSON-object string. But oneprovider's
+    Anthropic→OpenAI translation concatenates the streamed ``input_json_delta``
+    fragments verbatim, prepending the empty ``content_block_start`` input — so a
+    real call arrives as ``{}{"path": "src/app/page.tsx"}`` (two objects
+    back-to-back; verified live 2026-07-07 across single-arg, multi-arg AND
+    no-arg tools — the leading ``{}`` is ALWAYS present). A plain ``json.loads``
+    rejects that ("Extra data") and the old code degraded the WHOLE call to
+    ``{}`` → the native agent looped forever calling read-file with an empty path
+    (``403 unsafe path: ''``).
+
+    Robust strategy: ``raw_decode`` each top-level object in sequence and merge
+    them left-to-right (later keys win). ``{}{"path": …}`` collapses to
+    ``{"path": …}``; a compliant single object is unchanged; a lone ``{}`` stays
+    ``{}``. Also accepts an already-parsed dict (some relays pre-decode).
+    """
+    if isinstance(raw, dict):
+        return raw
+    s = str(raw or "").strip()
+    if not s:
+        return {}
+    # Fast path: one clean object (the compliant-provider case).
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else {}
+    except ValueError:
+        pass
+    # Concatenated objects (oneprovider): decode each, merge left-to-right.
+    decoder = json.JSONDecoder()
+    merged: dict[str, Any] = {}
+    idx, n, found = 0, len(s), False
+    while idx < n:
+        while idx < n and s[idx].isspace():
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            obj, idx = decoder.raw_decode(s, idx)
+        except ValueError:
+            break
+        found = True
+        if isinstance(obj, dict):
+            merged.update(obj)
+    return merged if found else {}
+
+
 def to_anthropic_response(data: dict[str, Any], model: str) -> dict[str, Any]:
     """Convert a vsegpt (OpenAI-shape) completion to the Anthropic Messages shape
     the native agent consumes: ``content`` blocks + ``stop_reason`` + ``usage``."""
@@ -227,16 +275,12 @@ def to_anthropic_response(data: dict[str, Any], model: str) -> dict[str, Any]:
             content.append({"type": "text", "text": text})
     for tc in msg.get("tool_calls") or []:
         fn = tc.get("function") or {}
-        raw_args = fn.get("arguments") or "{}"
-        try:
-            args = json.loads(raw_args)
-            if not isinstance(args, dict):
-                args = {}
-        except ValueError:
-            # Malformed arguments JSON: pass {} — the agent's tool executor
-            # surfaces the miss as a tool error and the loop self-corrects.
+        raw_args = fn.get("arguments")
+        args = _parse_tool_arguments(raw_args)
+        if not args and str(raw_args or "").strip() not in ("", "{}"):
+            # Truly unparseable (not just the empty-object cases): surface it —
+            # the agent's tool executor reports the miss and the loop self-corrects.
             log.warning("vsegpt_native.bad_tool_args", raw=str(raw_args)[:200])
-            args = {}
         content.append(
             {
                 "type": "tool_use",

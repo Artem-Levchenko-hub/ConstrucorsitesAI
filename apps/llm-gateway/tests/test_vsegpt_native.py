@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 from omnia_gateway.providers.vsegpt_native import (
+    _parse_tool_arguments,
     to_anthropic_response,
     to_openai_payload,
 )
@@ -259,6 +260,71 @@ def test_response_malformed_args_degrade_to_empty() -> None:
         _MODEL,
     )
     assert r["content"][0]["input"] == {}
+
+
+# ── oneprovider concatenated-args parsing (the read-file empty-path loop fix) ──
+
+
+def test_parse_tool_arguments_oneprovider_concatenation() -> None:
+    # oneprovider prepends the empty content_block_start input to the real object
+    # (verified live: single-arg, multi-arg, no-arg all carry the leading ``{}``).
+    assert _parse_tool_arguments('{}{"path": "src/app/page.tsx"}') == {
+        "path": "src/app/page.tsx"
+    }
+    assert _parse_tool_arguments(
+        '{}{"path": "a.tsx", "content": "export const A = 1;"}'
+    ) == {"path": "a.tsx", "content": "export const A = 1;"}
+    assert _parse_tool_arguments('{}{"_noargs": "unused"}') == {"_noargs": "unused"}
+
+
+def test_parse_tool_arguments_compliant_and_degenerate() -> None:
+    # compliant single object — unchanged (the fast path)
+    assert _parse_tool_arguments('{"city": "Paris"}') == {"city": "Paris"}
+    # already-parsed dict passthrough (some relays pre-decode)
+    assert _parse_tool_arguments({"path": "x"}) == {"path": "x"}
+    # lone empty / blank / None → {}
+    assert _parse_tool_arguments("{}") == {}
+    assert _parse_tool_arguments("") == {}
+    assert _parse_tool_arguments(None) == {}
+    # genuinely broken → {} (agent reports the miss, loop self-corrects)
+    assert _parse_tool_arguments("{broken") == {}
+    # non-object JSON → {}
+    assert _parse_tool_arguments("[1, 2, 3]") == {}
+
+
+def test_response_oneprovider_tool_call_recovers_path() -> None:
+    """The exact oneprovider tool_calls shape → tool_use with a NON-empty path
+    (regression guard for the read-file empty-path infinite loop)."""
+    r = to_anthropic_response(
+        _openai_response(
+            choices=[
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "tooluse_z7dkDcU5PgeMMUGi6PUyJC",
+                                "type": "function",
+                                "function": {
+                                    "name": "read-file",
+                                    "arguments": '{}{"path": "src/app/page.tsx"}',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        ),
+        _MODEL,
+    )
+    assert r["stop_reason"] == "tool_use"
+    (block,) = r["content"]
+    assert block["type"] == "tool_use"
+    assert block["id"] == "tooluse_z7dkDcU5PgeMMUGi6PUyJC"
+    assert block["name"] == "read-file"
+    assert block["input"] == {"path": "src/app/page.tsx"}  # NOT {} — the fix
 
 
 def test_response_think_block_stripped() -> None:
