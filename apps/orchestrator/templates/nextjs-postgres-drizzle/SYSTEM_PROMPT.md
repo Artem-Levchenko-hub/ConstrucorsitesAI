@@ -112,8 +112,45 @@ const myOrders = await db
 ```
 
 When adding user-owned tables, include a `userId` column FK to
-`users.id` with `onDelete: "cascade"` — then filter by `user.id` on
-every read. Without this filter ANY user reads ANY other user's data.
+`users.id` with `onDelete: "cascade"`.
+
+**Ownership on EVERY operation — reads AND writes (binding, security).**
+Derive the user INSIDE the function via `requireUser()` — NEVER accept
+`userId` as a caller-supplied argument (a client could pass someone else's
+id). And scope by BOTH the row id AND `user.id` on every read-one / update /
+delete: an id-only `where` lets any signed-in user read, edit or DELETE
+another user's row by guessing its id — a real IDOR leak and the #1 way
+generated apps fail. Use `and(...)`:
+
+```ts
+"use server";
+import { requireUser } from "@/lib/session";
+import { db } from "@/lib/db";
+import { and, eq, desc } from "drizzle-orm";
+import { tasks } from "@/lib/db/schema";
+
+export async function listTasks() {
+  const user = await requireUser();
+  return db.select().from(tasks)
+    .where(eq(tasks.userId, user.id)).orderBy(desc(tasks.createdAt));
+}
+
+export async function deleteTask(taskId: string) {
+  const user = await requireUser();                                   // session, not an arg
+  await db.delete(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.userId, user.id)));     // id AND owner
+}
+
+export async function toggleTask(taskId: string, completed: boolean) {
+  const user = await requireUser();
+  await db.update(tasks).set({ completed })
+    .where(and(eq(tasks.id, taskId), eq(tasks.userId, user.id)));     // id AND owner
+}
+```
+
+A bare `.where(eq(tasks.id, taskId))` on an owned table is a BUG — always
+`and(eq(id), eq(userId, user.id))`. Without this ANY user reads/edits/deletes
+ANY other user's data.
 
 **API route handler** (query `db` DIRECTLY — this IS the data layer; do
 NOT wrap it in an SDK / service / engine module):
