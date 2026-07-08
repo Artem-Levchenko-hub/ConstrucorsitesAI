@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -370,6 +371,9 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
                 message=f"container not found: {name}",
                 status_code=404,
             ) from exc
+        # Wake a hibernated container instead of failing the write (same
+        # mid-build rescue as exec_cmd; see _wake_if_stopped).
+        _wake_if_stopped(c, name)
         if c.status not in ("running", "paused"):
             raise OrchestratorError(
                 code="container_failure",
@@ -485,6 +489,49 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
     }
 
 
+def _wake_if_stopped(c: object, name: str) -> None:
+    """Wake a hibernated container in-line before an exec/write (sync, thread ctx).
+
+    The hibernate sweeper counts only PREVIEW traffic as activity, so it can
+    docker-stop a dev container while the build agent is mid-loop (2026-07-08
+    incident: a realtime build died this way — every subsequent agent op became
+    a generic 500 for 40 minutes while the agent ground on). An agent op IS
+    proof the project is active — wake the container exactly like the ingress
+    wake-on-request path instead of failing: paused → unpause, exited/created →
+    start, bounded wait until running. Raises a STRUCTURED 409
+    ``container_not_running`` if the wake doesn't take (callers translate it
+    into an in-band observation instead of the old unhandled-APIError 500).
+    """
+    c.reload()  # type: ignore[attr-defined]
+    status = c.status  # type: ignore[attr-defined]
+    if status == "running":
+        return
+    log.info("docker.wake_on_agent_op", name=name, was=status)
+    try:
+        if status == "paused":
+            c.unpause()  # type: ignore[attr-defined]
+        elif status in ("exited", "created"):
+            c.start()  # type: ignore[attr-defined]
+    except docker.errors.APIError as exc:
+        msg = str(exc).lower()
+        if not any(t in msg for t in ("not paused", "already", "304")):
+            raise OrchestratorError(
+                code="container_not_running",
+                message=f"container {name} is {status} and wake failed: {exc}",
+                status_code=409,
+            ) from exc
+    for _ in range(20):  # up to ~10s; exec needs only PID 1, not the dev server
+        c.reload()  # type: ignore[attr-defined]
+        if c.status == "running":  # type: ignore[attr-defined]
+            return
+        time.sleep(0.5)
+    raise OrchestratorError(
+        code="container_not_running",
+        message=f"container {name} did not reach running state (now {c.status})",  # type: ignore[attr-defined]
+        status_code=409,
+    )
+
+
 async def exec_cmd(
     name: str,
     cmd: list[str],
@@ -518,14 +565,28 @@ async def exec_cmd(
                 message=f"container not found: {name}",
                 status_code=404,
             ) from exc
+        # A hibernated container is WOKEN, not failed (2026-07-08 incident:
+        # the sweeper stopped a container mid-build → every agent op 500'd).
+        _wake_if_stopped(c, name)
         # demux=True splits stdout/stderr — the SDK signature is awkward but
         # gives us back two bytes-streams in a tuple.
-        result = c.exec_run(
-            cmd=cmd,
-            workdir=workdir or "/app",
-            user=user,
-            demux=True,
-        )
+        try:
+            result = c.exec_run(
+                cmd=cmd,
+                workdir=workdir or "/app",
+                user=user,
+                demux=True,
+            )
+        except docker.errors.APIError as exc:
+            # Stop race (hibernate fired between the wake and the exec) or any
+            # daemon-level refusal: structured, not the generic unhandled 500.
+            msg = str(exc).lower()
+            not_running = "is not running" in msg or "is paused" in msg
+            raise OrchestratorError(
+                code="container_not_running" if not_running else "container_failure",
+                message=f"exec on {name} failed: {exc}",
+                status_code=409 if not_running else 500,
+            ) from exc
         out_bytes, err_bytes = result.output if isinstance(result.output, tuple) else (result.output, b"")
         return {
             "exit_code": str(result.exit_code),

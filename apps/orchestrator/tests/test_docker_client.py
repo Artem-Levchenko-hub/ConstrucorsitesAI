@@ -307,3 +307,60 @@ async def test_start_container_creates_per_project_network_when_set(
 
     assert "omnia-proj-1" in client.networks.created
     assert client.containers.run_kwargs.get("network") == "omnia-proj-1"
+
+
+# ── _wake_if_stopped (wake-on-agent-op; 2026-07-08 hibernate-mid-build fix) ──
+
+
+class _WakeFakeContainer:
+    """Container double for the wake helper: status transitions on start/unpause."""
+
+    def __init__(self, status: str = "exited", *, fail_start: bool = False) -> None:
+        self.status = status
+        self._fail_start = fail_start
+        self.start_calls = 0
+        self.unpause_calls = 0
+
+    def reload(self) -> None:  # status is already current on the fake
+        pass
+
+    def start(self) -> None:
+        self.start_calls += 1
+        if self._fail_start:
+            raise docker.errors.APIError("boom")
+        self.status = "running"
+
+    def unpause(self) -> None:
+        self.unpause_calls += 1
+        self.status = "running"
+
+
+def test_wake_if_stopped_starts_exited_container() -> None:
+    c = _WakeFakeContainer(status="exited")
+    docker_client._wake_if_stopped(c, "omnia-dev-x")
+    assert c.start_calls == 1
+    assert c.status == "running"
+
+
+def test_wake_if_stopped_unpauses_paused_container() -> None:
+    c = _WakeFakeContainer(status="paused")
+    docker_client._wake_if_stopped(c, "omnia-dev-x")
+    assert c.unpause_calls == 1
+    assert c.status == "running"
+
+
+def test_wake_if_stopped_running_is_noop() -> None:
+    c = _WakeFakeContainer(status="running")
+    docker_client._wake_if_stopped(c, "omnia-dev-x")
+    assert c.start_calls == 0
+    assert c.unpause_calls == 0
+
+
+def test_wake_if_stopped_raises_structured_409_when_wake_fails() -> None:
+    from omnia_orchestrator.core.errors import OrchestratorError
+
+    c = _WakeFakeContainer(status="exited", fail_start=True)
+    with pytest.raises(OrchestratorError) as ei:
+        docker_client._wake_if_stopped(c, "omnia-dev-x")
+    assert ei.value.code == "container_not_running"
+    assert ei.value.status_code == 409

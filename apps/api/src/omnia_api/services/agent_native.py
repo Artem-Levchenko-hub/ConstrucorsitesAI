@@ -38,6 +38,22 @@ _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
 _CALL_RETRIES = 5  # oneprovider enforces a per-account concurrency cap (429)
 
+# EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
+# (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
+# text-protocol ACTIONS). Native counts assistant TURNS instead — one turn often
+# bundles several parallel tool calls, and the native flow legitimately spends
+# its first turns surveying the big template — so the nudge fires later (6 turns
+# ≈ 8-15 read calls) and the abort at 12 turns still saves 28 slow Opus steps.
+_NO_WRITE_NUDGE_AT = 6
+_NO_WRITE_ABORT_AT = 12
+
+# Infra circuit breaker: consecutive turns where EVERY executed tool op died on
+# infra (container/orchestrator unreachable — executor tags obs["infra_dead"]).
+# 3 turns tolerates a transient orchestrator restart; a truly dead container
+# aborts in ~3 turns instead of grinding the whole step budget (2026-07-08:
+# hibernate stopped a container mid-build → 40 min of doomed 500 bursts).
+_INFRA_DEAD_ABORT_AT = 3
+
 # Native tool schemas — mirror the action set of make_container_executor._execute.
 # `done` ends the loop. Kept intentionally minimal (fact tools only): the model
 # decides everything else itself, like Claude Code.
@@ -166,6 +182,20 @@ _NATIVE_PREAMBLE = (
 )
 
 
+_EXPLORE_STALL_NUDGE = (
+    "[LOOP GUARD] Several turns in a row without writing any file. Stop "
+    "exploring — you have enough context. Your NEXT turn MUST call write_file "
+    "or edit_file (or `build` and fix the errors it returns). Reading again "
+    "makes no progress."
+)
+_DONE_WHEN_GREEN_NUDGE = (
+    "[LOOP GUARD] The last build is CLEAN and you have written nothing for "
+    "several turns. Do NOT keep re-reading. Finish the proof you still owe "
+    "(runtime_check main routes, probe interactive actions, verify_isolation "
+    "owned resources) and call done NOW."
+)
+
+
 def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     """Native-tools system prompt: a short tool-loop preamble + the stack guide (+
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
@@ -238,6 +268,8 @@ async def run_native_build(
     # Room to bounce a premature done and actually heal (a hallucinated-module
     # build usually needs a couple of correction turns) before we let it ship red.
     _DONE_REJECT_CAP = 5
+    no_write_turns = 0  # consecutive assistant turns with no successful write
+    infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
 
     async with httpx.AsyncClient() as client:
         for step in range(max_steps):
@@ -281,6 +313,9 @@ async def run_native_build(
 
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
+            wrote_this_turn = False
+            ops_this_turn = 0  # executed (non-done) tool ops this turn
+            infra_this_turn = 0  # of those, how many died on infra
             for tu in tool_uses:
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
@@ -308,9 +343,19 @@ async def run_native_build(
                 except Exception as exc:  # a tool crash must not kill the build
                     obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
 
-                if name == "write_file" and obs.get("ok"):
-                    written[action.path] = action.args.get("content", "")
+                ops_this_turn += 1
+                if obs.get("infra_dead"):
+                    infra_this_turn += 1
+                if name in ("write_file", "edit_file") and obs.get("ok"):
+                    if name == "write_file":
+                        written[action.path] = action.args.get("content", "")
+                    elif isinstance(obs.get("content"), str):
+                        # executor returns the post-edit content (mirrors the
+                        # text loop's tracking at agent_builder.py) — closes the
+                        # gap where edit_file never dirtied the done fact-gate.
+                        written[action.path] = obs["content"]
                     wrote_since_build = True
+                    wrote_this_turn = True
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
                     wrote_since_build = False
@@ -328,7 +373,51 @@ async def run_native_build(
                     done=True, summary=done_summary, files=written,
                     steps=step + 1, transcript=convo, stop_reason="done",
                 )
+            # Infra circuit breaker: a turn where EVERY executed op died on
+            # infra means the container/orchestrator is gone — the model can't
+            # fix that. Abort after a few such turns instead of grinding the
+            # whole step budget against a corpse (2026-07-08 incident).
+            if ops_this_turn and infra_this_turn == ops_this_turn:
+                infra_dead_turns += 1
+            else:
+                infra_dead_turns = 0
+            # EXPLORE-STALL guard (parity with run_agent_build): too many turns
+            # with no successful write means the model is exploring, not
+            # building. The nudge rides in the SAME user message as the
+            # tool_results (roles must alternate; tool_result blocks must come
+            # first), then abort as "exploring" — messages.py's honest-result
+            # branches (looped-but-serves / edit-no-op) already consume it.
+            if wrote_this_turn:
+                no_write_turns = 0
+            else:
+                no_write_turns += 1
+                if _NO_WRITE_NUDGE_AT <= no_write_turns < _NO_WRITE_ABORT_AT:
+                    results.append({
+                        "type": "text",
+                        "text": (
+                            _DONE_WHEN_GREEN_NUDGE
+                            if last_build_ok is True and not wrote_since_build
+                            else _EXPLORE_STALL_NUDGE
+                        ),
+                    })
+                    if emit:
+                        await emit("agent.stalled", {"step": step})
             convo.append({"role": "user", "content": results})
+            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT:
+                log.warning("agent_native.infra_dead_abort", step=step)
+                return AgentResult(
+                    done=False,
+                    summary="container/orchestrator unreachable — build aborted",
+                    files=written, steps=step + 1, transcript=convo,
+                    stop_reason="error",
+                )
+            if no_write_turns >= _NO_WRITE_ABORT_AT:
+                return AgentResult(
+                    done=False,
+                    summary="stuck exploring (reading/verifying) without writing any file",
+                    files=written, steps=step + 1, transcript=convo,
+                    stop_reason="exploring",
+                )
 
     return AgentResult(
         done=False, summary="hit step budget without calling done",

@@ -2771,8 +2771,10 @@ async def _process_prompt(
                 # model end-to-end via native Anthropic tools + preserved thinking;
                 # fact-gate only (the `build` tool). Reuses the SAME executor; the
                 # native system prompt drops the text-action LOOP_PROTOCOL. Handles
-                # bare/from-scratch builds too (no forced template) — the native loop
-                # has no brittle stall-guards, so Opus can scaffold freely.
+                # bare/from-scratch builds too (no forced template). Guards are
+                # TURN-level (generous): no-write nudge@6/abort@12 turns + an
+                # infra circuit breaker (container dead → abort in ~3 turns) —
+                # see agent_native._NO_WRITE_*/_INFRA_DEAD_ABORT_AT.
                 from omnia_api.services import agent_native
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(_stack_guide, _skills),
