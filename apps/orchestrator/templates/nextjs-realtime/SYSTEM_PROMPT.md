@@ -150,24 +150,54 @@ set up access; one React hook renders it.
   publish. A client-side "is this user allowed" check is decoration; the server is
   the gate.
 
-## Design quality (binding) — build the app from the kit
+## Design quality (binding) — ship a DESIGNED app, not the raw scaffold
 
 These are functional **app** screens (a messenger, a live board, a notification
-inbox), not a landing.
+inbox), not a landing. The template already ships a **themed** dark UI — a full
+design-token system in `src/app/globals.css` (`:root` + `:root.dark`, mapped via
+`@theme` so `bg-background`/`bg-card`/`bg-primary`/`text-muted-foreground`/
+`border-border`/`bg-sidebar` all resolve), Plus Jakarta Sans wired in
+`layout.tsx`, an indigo `--primary` accent, elevation + entrance/typing motion,
+and a token-driven chat UI. **Your job is to PERSONALISE it to the brief, not to
+regress it to bare black.** A build that ships the untouched default is a FAIL —
+at minimum re-pin the accent + typography to the vertical and brand the shell.
 
-- Wrap every page in the shell; one route-group `src/app/(app)/layout.tsx` defines
-  nav once. Multi-page app (channel list + a room per channel + presence), not one
-  screen.
-- Use design tokens, never hardcoded colour: `bg-background`/`bg-card`,
-  `text-foreground`/`text-muted-foreground`, `bg-primary`, `border-border`. Never
-  `bg-zinc-900`/raw hex — the theme re-maps `--primary` per brand.
+**MUST do (a first build that skips these is not done):**
+- **Own the visual shell.** Re-pin `--primary`/`--accent` (and, if the vertical
+  wants it, the neutrals) in `globals.css` to a palette that fits the brief, and
+  set a fitting font pair via the `<link>` + `--font-sans` in `layout.tsx`. Never
+  leave the indigo default if the brief implies another mood.
+- **Tokens only, never raw colour.** Use `bg-background`/`bg-card`/`bg-muted`,
+  `text-foreground`/`text-muted-foreground`, `bg-primary text-primary-foreground`,
+  `border-border`, `bg-sidebar`. **Never** `bg-zinc-900`, `bg-neutral-*`, pure
+  `#000`/`#0a0a0a`, or raw hex in components — that's the bare-scaffold look and
+  it defeats the per-brand theme.
+- **Depth + polish, not flat panels.** Real surfaces (`bg-card` + `border-border`
+  + `elev-1`/`shadow-sm`), branded message bubbles (mine = `bg-primary`, theirs =
+  `bg-card` + avatar), rounded inputs with a focus ring, a coloured send button,
+  animated presence/typing dots, tasteful empty states (icon + line, never a bare
+  "no data"). Reuse the shipped `src/components/ui/*` kit (button, input, card…).
+
+**Accent + font by app type (starting points — adapt to the brief):**
+| App type | `--primary` (hue) | Font pair (`<link>` families) |
+|---|---|---|
+| Messenger / чат | indigo `oklch(0.62 0.19 269)` | Plus Jakarta Sans |
+| Team board / задачи | blue `oklch(0.6 0.17 250)` | Inter + Space Grotesk (headers) |
+| Support / inbox | teal `oklch(0.62 0.12 190)` | Figtree |
+| Community / соцсеть | violet `oklch(0.6 0.22 300)` | Sora |
+| Trading / live dash | emerald `oklch(0.65 0.16 155)` | IBM Plex Sans |
+
 - Real Russian content, **responsive** (375/768/1024/1440, mobile-first), accessible
-  (one `<h1>`, visible focus). Lucide icons, never emoji. Every list has a loading +
-  empty state. Tailwind v4 (`@import "tailwindcss"` in globals.css); `cn()` from
-  `@/lib/utils`.
+  (one `<h1>`, visible focus). Lucide icons or inline SVG, never emoji. Every list
+  has a loading (skeleton) + empty state. Tailwind v4; `cn()` from `@/lib/utils`.
 - A chat must show **who's online** (`presence`), a **typing** indicator (the
   ephemeral `typing` event), and the **connection status** — that's what makes it
   feel live instead of a refresh-to-see-new list.
+
+**Before `done`, walk every screen and ask:** is there a brand accent (not the
+default indigo unless it fits)? a real font? surface depth? Is there a single
+`bg-neutral-*`/`#000`/raw-hex left, or a flat "text on black" panel? If yes — it
+still looks like the scaffold; fix it, then `done`.
 
 ## Zero dead-ends
 

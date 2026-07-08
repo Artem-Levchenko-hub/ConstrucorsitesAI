@@ -2888,6 +2888,62 @@ async def _process_prompt(
 
             files = _all_files
 
+            # ZERO-FILE FIRST BUILD floor. A first build that wrote NOTHING is the
+            # worst case — the templates now ship a WORKING themed default, so the
+            # agent can look at it and call `done` having personalised nothing
+            # (2026-07-09 «мессенджер2»: files=0 → the app shipped as the raw
+            # scaffold on the default indigo, no brand, no feature work). Force ONE
+            # escalated retry with an imperative "you MUST write" prompt (mirrors
+            # edit_auto_repair, which is edit-only). Not a spin: single pass, strong
+            # model, then whatever it produced stands.
+            if (
+                not _is_edit
+                and not files
+                and get_settings().use_agentic_builder
+            ):
+                print("[PP] agentic_build files=0 → one escalated write-floor retry", flush=True)
+                try:
+                    await _agent_emit(
+                        "agent.step",
+                        {"action": "оформляю дизайн под задачу…", "kind": "step"},
+                    )
+                except Exception:
+                    pass
+                _floor_res = await agent_builder.run_agent_build(
+                    system_prompt=_stack_system,
+                    user_prompt=(
+                        "Ты НИЧЕГО не записал — это НЕ готовая сборка. Шаблон ставит "
+                        "рабочий, но ДЕФОЛТНЫЙ вид (индиго-акцент, демо-экраны). Твоя "
+                        "следующая команда ОБЯЗАНА быть write_file/edit_file. Сделай "
+                        "приложение своим под запрос пользователя:\n"
+                        "1) Дизайн: перепиши палитру (--primary/--accent) и шрифт в "
+                        "src/app/globals.css + src/app/layout.tsx под нишу/бренд из "
+                        "запроса; забрендируй экраны (шапка, сайдбар, бабблы, "
+                        "auth) — токенами, без neutral-*/#000.\n"
+                        "2) Функционал: допиши всё, чего требует запрос сверх демо "
+                        "(экраны, поля, действия).\n"
+                        f"Затем build, почини до чистоты, проверь и done.{_seed_block}"
+                    ),
+                    model=_escalate_model or _agent_model,
+                    escalate_model=_escalate_model,
+                    execute=_agent_executor,
+                    max_steps=max(int(_agent_steps), 24),
+                    emit=_agent_emit,
+                    user_id=str(user_id),
+                    project_id=str(project_id),
+                    require_green_before_done=get_settings().agent_require_green_before_done,
+                    ship_green_on_abort=get_settings().agent_ship_green_on_abort,
+                )
+                _total_steps += _floor_res.steps
+                if _floor_res.files:
+                    _all_files.update(_floor_res.files)
+                    files = _all_files
+                    _agent_res = _floor_res
+                print(
+                    f"[PP] write-floor retry done files={len(files)} stop={_floor_res.stop_reason}",
+                    flush=True,
+                )
+
             # Layer C — backend-guardrail self-heal. The ban on writing backend is
             # lifted (the agent may author custom server logic), so STATICALLY
             # verify the one unsafe thing it must never do — reach the DB raw

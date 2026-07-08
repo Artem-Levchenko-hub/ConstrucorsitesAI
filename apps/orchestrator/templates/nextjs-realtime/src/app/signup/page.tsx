@@ -43,18 +43,24 @@ export default function SignUpPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-6">
+    <div className="app-canvas flex min-h-screen items-center justify-center p-6">
       <form
         onSubmit={onSubmit}
-        className="w-full max-w-sm space-y-4 rounded-2xl border border-neutral-800 bg-neutral-900/50 p-6"
+        className="fade-up w-full max-w-sm space-y-4 rounded-2xl border border-border bg-card/80 p-7 elev-2 backdrop-blur-sm"
       >
-        <h1 className="text-lg font-semibold">Регистрация</h1>
+        <div className="mb-1 flex flex-col items-center gap-2 text-center">
+          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-primary-foreground text-lg font-bold shadow-md">
+            O
+          </span>
+          <h1 className="text-xl font-bold tracking-tight">Создать аккаунт</h1>
+          <p className="text-sm text-muted-foreground">Пара секунд — и вы в сети</p>
+        </div>
         <input
           type="text"
           placeholder="Имя"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30"
         />
         <input
           type="email"
@@ -62,7 +68,7 @@ export default function SignUpPage() {
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30"
         />
         <input
           type="password"
@@ -71,19 +77,19 @@ export default function SignUpPage() {
           placeholder="Пароль (минимум 8 символов)"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30"
         />
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-md bg-white px-3 py-2 text-sm font-medium text-neutral-900 transition hover:bg-neutral-200 disabled:opacity-60"
+          className="w-full rounded-lg bg-primary px-3 py-2.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90 active:scale-[.98] disabled:opacity-60"
         >
           {loading ? "Создаём…" : "Создать аккаунт"}
         </button>
-        <p className="text-center text-sm text-neutral-400">
+        <p className="text-center text-sm text-muted-foreground">
           Уже есть аккаунт?{" "}
-          <Link href="/signin" className="text-white underline">
+          <Link href="/signin" className="font-medium text-primary hover:underline">
             Вход
           </Link>
         </p>
