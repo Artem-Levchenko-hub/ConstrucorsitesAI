@@ -27,9 +27,10 @@ it into the dev container via `orchestrator_client.hot_reload` — best-effort
 
 These tests LOCK: (1) a container rollback calls hot_reload with the reverted
 tree; (2) a static rollback does NOT; (3) a hot_reload failure never blocks the
-rollback (best-effort). Strict-xfail: a full end-to-end deletion-aware sync (the
-reverted tree dropping a file the edit added) — hot_reload writes files but does
-not delete orphans, an accepted edge documented in the proposal.
+rollback (best-effort); (4) deletion-aware sync (was strict-xfail, SHIPPED
+2026-07-08): orphans — files in the pre-rollback tree but not the target tree —
+ride along as empty-content delete-intents, which write_files turns into `rm -f`
+in the container, so phantom files can't survive a rollback anymore.
 """
 from __future__ import annotations
 
@@ -40,10 +41,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_api.routers import rollback as rollback_mod
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.routers import rollback as rollback_mod
 from omnia_api.schemas.snapshot import RollbackRequest
-
 
 _OWNER = uuid.uuid4()
 _PROJECT_ID = uuid.uuid4()
@@ -190,28 +190,54 @@ def test_hot_reload_failure_never_blocks_rollback(monkeypatch):
     assert result is not None
 
 
-@pytest.mark.xfail(
-    reason="hot_reload writes files but does not delete orphans: a reverted tree "
-    "that DROPS a file the edit added leaves that file live in the container. "
-    "Deletion-aware container sync is the documented BS-42 follow-up.",
-    strict=True,
-)
+def test_with_rollback_deletions_pure() -> None:
+    """Orphans (old-tree-only paths) become delete-intents (""); target content
+    always wins over a same-path delete; no old tree → target unchanged."""
+    target = {"a.ts": "A", "b.ts": "B"}
+    old = {"a.ts": "old-A", "b.ts": "old-B", "phantom.ts": "junk"}
+    out = rollback_mod.with_rollback_deletions(target, old)
+    assert out == {"a.ts": "A", "b.ts": "B", "phantom.ts": ""}
+    assert rollback_mod.with_rollback_deletions(target, {}) == target
+
+
 def test_rollback_deletes_files_absent_from_reverted_tree(monkeypatch):
-    deleted: list = []
+    """BS-42 follow-up LOCKED (was strict-xfail): the rollback push now carries
+    delete-intents (empty content → write_files does `rm -f`) for files present
+    in the PRE-rollback tree but absent from the target tree. Without this, a
+    file created after the target snapshot survives the rollback inside the
+    container (2026-07-08 live: a failed build's phantom modules outlived a
+    rollback and re-poisoned the retry build exactly this way)."""
+    current_snap_id = uuid.uuid4()
+    project = SimpleNamespace(
+        id=_PROJECT_ID,
+        owner_id=_OWNER,
+        slug="dogfood-rollback-crm-2af92e",
+        template="nextjs_entities",
+        current_snapshot_id=current_snap_id,
+    )
+    current_snap = SimpleNamespace(commit_sha="oldsha1234")
+
+    class _Session(_FakeSession):
+        async def get(self, model, ident):
+            if model.__name__ == "Snapshot" and ident == current_snap_id:
+                return current_snap
+            return await super().get(model, ident)
+
+    def _read(pid, sha):
+        if sha == "rolledbacksha":
+            return dict(_REVERTED_FILES)  # target tree
+        # pre-rollback tree: same files + an orphan the failed edit created
+        return {**_REVERTED_FILES, "src/lib/items.ts": "broken phantom module"}
 
     monkeypatch.setattr(
         rollback_mod.repo_svc, "checkout", lambda pid, sha: "rolledbacksha"
     )
-    # Reverted tree lacks the edit-added file; current container still has it.
-    monkeypatch.setattr(
-        rollback_mod.repo_svc,
-        "read_files",
-        lambda pid, sha: {"src/app/page.tsx": "a"},
-    )
+    monkeypatch.setattr(rollback_mod.repo_svc, "read_files", _read)
+
+    captured: dict = {}
 
     async def _hot_reload(*, project_id, slug, files):
-        # A deletion-aware sync would signal removals; current hot_reload cannot.
-        deleted.extend(k for k in ("src/app/extra.tsx",) if k not in files)
+        captured.update(files)
         return {"written": len(files)}
 
     monkeypatch.setattr(rollback_mod.orchestrator_client, "hot_reload", _hot_reload)
@@ -223,6 +249,14 @@ def test_rollback_deletes_files_absent_from_reverted_tree(monkeypatch):
     monkeypatch.setattr(rollback_mod, "publish_event", _publish)
     monkeypatch.setattr(rollback_mod, "preview_public_url", lambda key: None)
 
-    _run_rollback(_make_project("nextjs_entities"))
-    # Strict-xfail: no orphan deletion path exists yet.
-    assert deleted == []
+    session = _Session(project, _make_target())
+    user = SimpleNamespace(id=_OWNER)
+    result = asyncio.run(
+        rollback_mod.post_rollback(
+            _PROJECT_ID, RollbackRequest(snapshot_id=_TARGET_SNAP), session, user
+        )
+    )
+    assert result is not None
+    assert captured["src/lib/items.ts"] == ""  # orphan → delete-intent
+    # target content always wins — never overwritten by a delete
+    assert captured["src/app/page.tsx"] == _REVERTED_FILES["src/app/page.tsx"]

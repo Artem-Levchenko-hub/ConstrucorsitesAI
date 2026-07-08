@@ -2784,6 +2784,34 @@ async def _process_prompt(
                     emit=_agent_emit,
                     max_steps=_agent_steps,
                 )
+                # ONE bounded retry on stop=error: an "error" here is a gateway
+                # flake that outlived _call_messages' retries (oneprovider 502/504
+                # bursts) or the infra breaker — either way retrying after a pause
+                # often just works: files already written persist in the container
+                # and a dead container is woken by the first agent op. Without
+                # this, a single provider burst = «Сборка прервана» to the user.
+                if not _agent_res.done and _agent_res.stop_reason == "error":
+                    print(
+                        "[PP] agentic_build stop=error → one retry after 30s pause",
+                        flush=True,
+                    )
+                    try:
+                        await _agent_emit(
+                            "agent.step",
+                            {"action": "сбой связи с моделью — повторяю сборку…",
+                             "kind": "step"},
+                        )
+                    except Exception:
+                        pass
+                    await asyncio.sleep(30)
+                    _agent_res = await agent_native.run_native_build(
+                        system=agent_native.native_system_prompt(_stack_guide, _skills),
+                        task=_agent_user,
+                        execute=_agent_executor,
+                        user_id=str(user_id),
+                        emit=_agent_emit,
+                        max_steps=_agent_steps,
+                    )
             else:
                 _agent_res = await agent_builder.run_agent_build(
                     system_prompt=_agent_system,

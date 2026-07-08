@@ -170,3 +170,27 @@ async def test_native_edit_file_counts_as_write_and_lands_in_files(
     )
     assert res.stop_reason == "max_steps"
     assert res.files == {"e.ts": "post-edit content"}
+
+
+@pytest.mark.asyncio
+async def test_native_proseless_done_gets_human_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """end_turn with NO text must not leak "(no tool call)" into the chat —
+    the summary becomes the user-visible assistant message (observed live)."""
+
+    async def fake_call(client: Any, url: str, convo: Any, system: str) -> dict[str, Any]:
+        return {"stop_reason": "end_turn", "content": []}  # prose-less finish
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:  # never reached
+        return {"ok": True}
+
+    res = await agent_native.run_native_build(
+        system="s", task="t", execute=execute, max_steps=5,
+    )
+    assert res.done is True
+    assert res.stop_reason == "no_tool"
+    assert "(no tool call)" not in res.summary
+    assert "Готово" in res.summary

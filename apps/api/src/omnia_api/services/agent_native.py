@@ -36,7 +36,7 @@ _MAX_TOKENS = 32000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
-_CALL_RETRIES = 5  # oneprovider enforces a per-account concurrency cap (429)
+_CALL_RETRIES = 8  # oneprovider: 429 concurrency cap + sustained 502/504 flake bursts
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
@@ -235,8 +235,12 @@ async def _call_messages(
             r.raise_for_status()
             return r.json()
         except httpx.HTTPError as exc:
+            # oneprovider flakes in SUSTAINED bursts (observed live: series of
+            # 502s + 504s over several minutes killed builds mid-run). Linear
+            # 3-15s backoff only covered ~30s; exponential-with-cap rides out a
+            # multi-minute flake window (~3.5 min total) before giving up.
             last = exc
-            await asyncio.sleep(3.0 * (attempt + 1))
+            await asyncio.sleep(min(45.0, 4.0 * (2 ** attempt)))
     raise last or RuntimeError("messages call failed")
 
 
@@ -304,9 +308,21 @@ async def run_native_build(
             ]
             if not tool_uses:
                 # Model ended its turn with prose and no tool — it's done talking.
+                # A prose-less finish must NOT leak "(no tool call)" to the chat
+                # (observed live: it became the user-visible assistant message on
+                # a template-already-covers-it build). Human fallback for done;
+                # the technical marker stays for the non-done diagnostics path.
+                _done = resp.get("stop_reason") == "end_turn"
+                _text = _text_of(content)
+                if not _text:
+                    _text = (
+                        "Готово — приложение собрано и проверено. Открой превью."
+                        if _done
+                        else "(no tool call)"
+                    )
                 return AgentResult(
-                    done=(resp.get("stop_reason") == "end_turn"),
-                    summary=_text_of(content) or "(no tool call)",
+                    done=_done,
+                    summary=_text,
                     files=written, steps=step + 1, transcript=convo,
                     stop_reason="no_tool",
                 )
