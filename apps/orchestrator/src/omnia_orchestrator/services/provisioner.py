@@ -31,7 +31,11 @@ import structlog
 
 from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
-from omnia_orchestrator.core.docker_client import ContainerSpec, start_container
+from omnia_orchestrator.core.docker_client import (
+    ContainerSpec,
+    ensure_template_image_fresh,
+    start_container,
+)
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.core.stack_registry import get_stack
@@ -170,6 +174,13 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
 
     container_name = f"omnia-dev-{req.slug}"
     image_tag = stack.image_tag
+
+    # Always serve the LATEST template: rebuild the baked image if its source was
+    # edited since the image was built (dev containers run from the image, not a
+    # mount — a template edit is invisible otherwise). Staleness-gated + fail-soft
+    # → normally a no-op; after a template edit the first provision rebuilds
+    # (layer cache → fast) and the client sees the change.
+    await ensure_template_image_fresh(src, image_tag)
 
     # Real per-project DSN — reuse persisted creds on re-provision, otherwise
     # create a fresh schema + role on `omnia-postgres-users`. Fail-soft: if

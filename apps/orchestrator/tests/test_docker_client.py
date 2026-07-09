@@ -364,3 +364,41 @@ def test_wake_if_stopped_raises_structured_409_when_wake_fails() -> None:
         docker_client._wake_if_stopped(c, "omnia-dev-x")
     assert ei.value.code == "container_not_running"
     assert ei.value.status_code == 409
+
+
+# ── template image freshness (2026-07-09: template edits must reach the build) ──
+
+
+def test_newest_source_mtime_ignores_vendored_and_artifacts(tmp_path) -> None:
+    import os
+
+    (tmp_path / "src" / "app").mkdir(parents=True)
+    real = tmp_path / "src" / "app" / "globals.css"
+    real.write_text("body{}")
+    os.utime(real, (1000, 1000))  # old real source file
+
+    # vendored + build artifacts with a MUCH newer mtime — must be ignored, else
+    # the staleness check would rebuild the image on every provision.
+    (tmp_path / "node_modules").mkdir()
+    nm = tmp_path / "node_modules" / "big.js"
+    nm.write_text("x")
+    os.utime(nm, (9_000_000, 9_000_000))
+    tsb = tmp_path / "tsconfig.tsbuildinfo"
+    tsb.write_text("{}")
+    os.utime(tsb, (9_000_000, 9_000_000))
+    nenv = tmp_path / "next-env.d.ts"
+    nenv.write_text("// gen")
+    os.utime(nenv, (9_000_000, 9_000_000))
+
+    newest = docker_client._newest_source_mtime(tmp_path)
+    assert newest == 1000.0  # only the real source file counted
+
+
+def test_newest_source_mtime_tracks_a_real_edit(tmp_path) -> None:
+    import os
+
+    f = tmp_path / "src" / "layout.tsx"
+    f.parent.mkdir(parents=True)
+    f.write_text("export default function L(){}")
+    os.utime(f, (5000, 5000))
+    assert docker_client._newest_source_mtime(tmp_path) == 5000.0

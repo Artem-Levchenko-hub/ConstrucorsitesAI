@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import time
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 import docker  # type: ignore[import-untyped]
 import requests  # docker SDK transport — its timeouts surface as requests errors
@@ -74,6 +77,104 @@ def _get_client() -> docker.DockerClient:
                 status_code=503,
             ) from exc
     return _client
+
+
+# ── Template image freshness ─────────────────────────────────────────────────
+# Dev containers run from the BAKED image `omnia-template-<dir>:dev`; the project
+# src is NOT bind-mounted, so a template EDIT never reaches a client's build until
+# the image is rebuilt (2026-07-09: a designed realtime template shipped as the
+# OLD bare baseline because the image was stale). This makes every provision
+# self-heal that: if the template source is newer than the baked image, rebuild
+# it first (Docker layer cache → a no-dep-change rebuild is ~COPY-only, fast).
+
+_TEMPLATE_BUILD_LOCKS: dict[str, asyncio.Lock] = {}
+_IMG_IGNORE_DIRS = {"node_modules", ".next", ".git", "__pycache__"}
+_IMG_IGNORE_FILE_SUFFIX = (".tsbuildinfo",)
+_IMG_IGNORE_FILE_NAMES = {"next-env.d.ts"}
+
+
+def _newest_source_mtime(template_dir: Path) -> float:
+    """Newest mtime under the template dir, skipping build artifacts / vendored
+    dirs (whose volatile mtimes would force a rebuild every provision)."""
+    newest = 0.0
+    for p in template_dir.rglob("*"):
+        if _IMG_IGNORE_DIRS & set(p.parts):
+            continue
+        name = p.name
+        if name in _IMG_IGNORE_FILE_NAMES or name.endswith(_IMG_IGNORE_FILE_SUFFIX):
+            continue
+        try:
+            if p.is_file():
+                newest = max(newest, p.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def _image_created_epoch(tag: str) -> float | None:
+    """Epoch seconds the image `tag` was built, or None if it doesn't exist."""
+    try:
+        img = _get_client().images.get(tag)
+    except docker.errors.ImageNotFound:
+        return None
+    except Exception:
+        return None
+    created = (img.attrs or {}).get("Created")
+    if not isinstance(created, str) or not created:
+        return None
+    try:
+        return datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+async def ensure_template_image_fresh(template_dir: Path | str, image_tag: str) -> bool:
+    """Rebuild the template dev image iff its source is newer than the baked image
+    (or the image is missing) — so a template edit ALWAYS reaches the next build.
+
+    Staleness-gated (skips when unchanged → zero overhead on the hot path),
+    fail-soft (a build failure falls back to the existing image, never blocks
+    provisioning), per-tag locked (concurrent provisions don't double-build).
+    Returns True if it rebuilt. The orchestrator runs on the host with the docker
+    CLI + socket, so a subprocess `docker build` (BuildKit, layer cache) is used.
+    """
+    template_dir = Path(template_dir)
+    dockerfile = template_dir / "Dockerfile.dev"
+    if not dockerfile.exists():
+        return False
+    created = _image_created_epoch(image_tag)
+    # +2s slack: a just-built image has created≈now ≥ src mtimes; avoid a loop.
+    if created is not None and _newest_source_mtime(template_dir) <= created + 2:
+        return False
+
+    lock = _TEMPLATE_BUILD_LOCKS.setdefault(image_tag, asyncio.Lock())
+    async with lock:
+        created = _image_created_epoch(image_tag)  # re-check under the lock
+        if created is not None and _newest_source_mtime(template_dir) <= created + 2:
+            return False
+        log.info("template.image_stale_rebuild", tag=image_tag, dir=str(template_dir))
+
+        def _build() -> tuple[int, str]:
+            # Fixed argv (no shell), host docker CLI — the orchestrator runs on
+            # the host with the docker socket + BuildKit layer cache.
+            proc = subprocess.run(
+                ["docker", "build", "-f", str(dockerfile), "-t", image_tag, str(template_dir)],
+                capture_output=True,
+                text=True,
+                timeout=900,
+            )
+            return proc.returncode, (proc.stderr or proc.stdout or "")[-500:]
+
+        try:
+            rc, tail = await asyncio.to_thread(_build)
+        except Exception as exc:  # timeout / docker missing — never block provision
+            log.warning("template.image_rebuild_error", tag=image_tag, err=str(exc))
+            return False
+        if rc == 0:
+            log.info("template.image_rebuilt", tag=image_tag)
+            return True
+        log.warning("template.image_rebuild_failed", tag=image_tag, rc=rc, tail=tail)
+        return False
 
 
 async def start_container(spec: ContainerSpec) -> str:
