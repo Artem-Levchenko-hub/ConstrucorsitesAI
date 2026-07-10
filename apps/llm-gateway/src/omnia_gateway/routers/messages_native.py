@@ -1,23 +1,21 @@
 """Native Anthropic Messages passthrough — ``POST /v1/messages``.
 
-The OpenAI-shape ``/v1/chat/completions`` (LiteLLM Router) normalizes the response
-and DROPS the Anthropic thinking-block ``signature`` — which the native tool-use
-agent (apps/api) MUST echo back verbatim across tool turns, or Anthropic 400s
-("thinking blocks ... cannot be modified"). This endpoint forwards a RAW Anthropic
-Messages request (``tools``, ``tool_choice``, ``thinking``, and ``thinking`` /
-``tool_use`` / ``tool_result`` content blocks) to the model's upstream
-(``claude-opus-4-8`` → oneprovider, key/base from ``_PROXY_ROUTES``) and returns the
-upstream JSON UNCHANGED — signatures intact, ``stop_reason`` intact.
+Forwards a RAW Anthropic Messages request (``tools``, ``tool_choice``,
+``thinking``, and ``thinking`` / ``tool_use`` / ``tool_result`` content blocks) to
+oneprovider's DOCUMENTED Anthropic-native surface
+(``https://api.oneprovider.dev/v1/messages``, ``x-api-key``) and returns the
+upstream JSON UNCHANGED — thinking-block ``signature`` and ``stop_reason`` intact.
+The native tool-use agent (apps/api) MUST echo those signatures back verbatim
+across tool turns, so nothing here may reshape the body.
 
-Transport mirrors ``providers/vsegpt.py`` / ``providers/sber.py``: a sync
-``httpx.Client`` on a worker thread with ``trust_env=False`` + a no-op mounts
-transport, so (1) the container's ``HTTPS_PROXY`` (UK egress for Gemini) never
-tunnels the reseller endpoint, and (2) the intermittent ``AsyncClient`` TLS stall in
-the long-lived uvicorn loop is avoided.
+Transport: a sync ``httpx.Client`` on a worker thread with ``trust_env=False`` + a
+no-op mounts transport, so the container's ``HTTPS_PROXY`` (a Gemini geo-bypass)
+never tunnels the reseller endpoint and the ``AsyncClient`` TLS stall in the
+long-lived uvicorn loop is avoided.
 
-Pure passthrough — billing is added by the native-agent caller (it parses ``usage``
-from the returned body). Internal-only endpoint (same network as the other gateway
-routes), so no auth here.
+Pure passthrough — billing is added by the native-agent caller (it parses
+``usage`` from the returned body). Internal-only endpoint (same network as the
+other gateway routes), so no auth here.
 """
 
 from __future__ import annotations
@@ -30,10 +28,7 @@ import httpx
 import structlog
 from fastapi import APIRouter, Request, Response
 
-from omnia_gateway.core.config import get_settings
-from omnia_gateway.providers.vsegpt import is_vsegpt_model
-from omnia_gateway.providers.vsegpt_native import anative_messages
-from omnia_gateway.services.litellm_router import proxy_route_for
+from omnia_gateway.services.model_router import native_messages_route
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -61,36 +56,12 @@ async def native_messages(request: Request) -> Response:
 
     model = body.get("model", "") if isinstance(body, dict) else ""
 
-    # Owner 2026-07-01: the native agent rides vsegpt too — same ~3s no-thinking
-    # Opus as /v1/chat/completions. vsegpt has no /v1/messages, so the adapter
-    # converts Anthropic⇄OpenAI shapes (providers/vsegpt_native.py). Upstream
-    # status codes pass through verbatim (the agent retries 429 itself).
-    # Kill switch NATIVE_VIA_VSEGPT=false → the oneprovider passthrough below.
-    settings = get_settings()
-    if (
-        settings.native_via_vsegpt
-        and settings.vsegpt_api_key
-        and is_vsegpt_model(model)
-    ):
-        try:
-            status, out = await anative_messages(body)
-        except httpx.HTTPError as exc:
-            log.warning(
-                "native_messages.vsegpt_transport_error", model=model, error=str(exc)
-            )
-            return _err(502, "api_error", f"vsegpt transport: {type(exc).__name__}")
-        return Response(
-            content=json.dumps(out, ensure_ascii=False),
-            status_code=status,
-            media_type="application/json",
-        )
-
-    route = proxy_route_for(model)
+    route = native_messages_route()
     if route is None:
         return _err(
             400,
             "invalid_request_error",
-            f"model {model!r} has no native /v1/messages upstream configured",
+            "ONEPROVIDER_API_KEY is not configured for the native /v1/messages upstream",
         )
     api_key, api_base = route
     url = f"{api_base.rstrip('/')}/v1/messages"

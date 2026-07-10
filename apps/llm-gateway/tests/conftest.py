@@ -15,7 +15,6 @@ from uuid import uuid4
 import pytest
 
 from omnia_gateway.core.config import reset_settings_cache
-from omnia_gateway.services.litellm_router import reset_router
 
 
 @pytest.fixture(autouse=True)
@@ -25,24 +24,16 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     # .env file from cwd, and delenv only clears os.environ, leaving the file
     # value in effect. An empty env var beats the file.
     for var in (
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-        "YANDEX_API_KEY",
-        "YANDEX_FOLDER_ID",
-        "OPENROUTER_API_KEY",
+        "ONEPROVIDER_API_KEY",
         "PROXYAPI_API_KEY",
-        "GIGACHAT_AUTH_KEY",
-        "GEMINI_API_KEY",
     ):
         monkeypatch.setenv(var, "")
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test_omnia")
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/15")
     monkeypatch.chdir(os.path.dirname(os.path.dirname(__file__)))
     reset_settings_cache()
-    reset_router()
     yield
     reset_settings_cache()
-    reset_router()
 
 
 @pytest.fixture

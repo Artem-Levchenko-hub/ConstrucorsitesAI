@@ -112,35 +112,16 @@ services:
       redis:
         condition: service_healthy
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      YANDEX_API_KEY: ${YANDEX_API_KEY:-}
-      YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      VSEGPT_API_KEY: ${VSEGPT_API_KEY:-}
-      VSEGPT_BASE_URL: ${VSEGPT_BASE_URL:-https://api.vsegpt.ru/v1}
-      PROXYAPI_API_KEY: ${PROXYAPI_API_KEY:-}
-      PROXYAPI_BASE_URL: ${PROXYAPI_BASE_URL:-https://api.proxyapi.ru/anthropic}
+      # --- oneprovider.dev — the single LLM upstream (Claude text + flux images) ---
+      # One key authenticates BOTH documented surfaces (Anthropic-native
+      # /v1/messages at the apex, OpenAI /v1/chat|images at /v1). Set in .env.
       ONEPROVIDER_API_KEY: ${ONEPROVIDER_API_KEY:-}
       ONEPROVIDER_BASE_URL: ${ONEPROVIDER_BASE_URL:-https://api.oneprovider.dev}
-      # Opus-4.8 routing kill switch. Default true = fast ~3s vsegpt path; set
-      # OPUS_VIA_VSEGPT=false in .env to pin Opus back to oneprovider (~71s, but
-      # works when the vsegpt balance is empty). Declared here so the container
-      # actually sees the .env value (compose passes only declared keys).
-      OPUS_VIA_VSEGPT: ${OPUS_VIA_VSEGPT:-true}
-      # Native tool-use agent transport. Default true = the native /v1/messages
-      # request is shape-converted to oneprovider's OpenAI surface (~3-6s, thinking
-      # DROPPED). Set NATIVE_VIA_VSEGPT=false in .env to use oneprovider's DOCUMENTED
-      # Anthropic-native /v1/messages endpoint verbatim (thinking + signatures
-      # preserved — what agent_native.py is built for; ~28s/round-trip, thinking ON).
-      # Declared here so the container sees the .env value (compose passes only
-      # declared keys).
-      NATIVE_VIA_VSEGPT: ${NATIVE_VIA_VSEGPT:-true}
-      # Skip LiteLLM's remote cost-map fetch (raw.githubusercontent.com is
-      # unreachable on the prod VPS → a ~60s TLS-handshake timeout blocked the
-      # FIRST completion after every gateway restart). The gateway bills via its
-      # own PRICE_TABLE (services/pricing.py), so LiteLLM's cost map is unused.
-      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      ONEPROVIDER_OPENAI_BASE_URL: ${ONEPROVIDER_OPENAI_BASE_URL:-https://api.oneprovider.dev/v1}
+      # --- proxyapi.ru — ONLY for what oneprovider does not serve:
+      # whisper speech-to-text + the optional gpt-image-1 model. ---
+      PROXYAPI_API_KEY: ${PROXYAPI_API_KEY:-}
+      PROXYAPI_OPENAI_BASE_URL: ${PROXYAPI_OPENAI_BASE_URL:-https://api.proxyapi.ru/openai/v1}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # --- Gemini-only outbound HTTP proxy (geo-bypass) ---
       # When GEMINI_HTTPS_PROXY is empty these vars are also empty, so they

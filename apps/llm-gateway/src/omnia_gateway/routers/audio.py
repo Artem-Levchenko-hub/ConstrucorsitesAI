@@ -2,13 +2,13 @@
 
 Routes audio to proxyapi.ru/openai/v1/audio/transcriptions (whisper-1 /
 gpt-4o-transcribe), the same proxy that fronts the GPT family — it's the only
-RU-reachable STT surface (vsegpt exposes none; OpenAI's own host is blocked from
+RU-reachable STT surface (oneprovider exposes none; OpenAI's own host is blocked from
 the prod box). Direct httpx, NOT LiteLLM — mirrors /v1/images/generations.
 
 The audio arrives as a RAW body (apps/api forwards the recorded blob, no
 python-multipart needed on the way in); we re-wrap it as multipart/form-data for
 the OpenAI-compatible upstream via httpx `files=`. proxyapi is whitelisted in
-NO_PROXY, so the shared async client is fine (no vsegpt sync-thread dance).
+NO_PROXY, so the shared async client is fine (no oneprovider sync-thread dance).
 
 Billing is charge-after + best-effort: voice is a cheap INPUT affordance, so an
 empty wallet must NEVER block dictation (unlike a paid generation). Abuse is

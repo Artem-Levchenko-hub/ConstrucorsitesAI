@@ -3,6 +3,9 @@
 Bills only for tokens actually delivered to the wire. If the client disconnects
 mid-stream, the loop short-circuits and the bill reflects the partial output —
 never the un-streamed tail (per AGENT-C-LLM-GATEWAY.md, M1 cancellation rule).
+
+There is exactly one chat model (`claude-opus-4-8`) and one upstream
+(oneprovider), so the stream source is always `providers/oneprovider.astream`.
 """
 
 from __future__ import annotations
@@ -15,16 +18,14 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-import litellm
 import structlog
 from fastapi import Request
 
-from omnia_gateway.core.errors import GatewayError, UpstreamProviderError
-from omnia_gateway.providers import vsegpt as vsegpt_provider
+from omnia_gateway.core.errors import GatewayError
+from omnia_gateway.providers import oneprovider
 from omnia_gateway.services import billing, file_logger
-from omnia_gateway.services import litellm_router as router_module
+from omnia_gateway.services import model_router as router_module
 from omnia_gateway.services.pricing import calculate_cost_rub
-from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 from omnia_gateway.services.token_counter import count_message_tokens, count_text_tokens
 
 log = structlog.get_logger(__name__)
@@ -39,120 +40,6 @@ def _sse(payload: dict[str, Any] | str) -> str:
     if isinstance(payload, str):
         return payload
     return json.dumps(payload, ensure_ascii=False)
-
-
-async def _litellm_stream(
-    model: str,
-    messages: list[dict[str, str]],
-    user_id: UUID | None,
-    temperature: float | None,
-    max_tokens: int | None,
-    _state: dict[str, Any] | None = None,
-) -> AsyncIterator[tuple[str, str]]:
-    # Wrap the system prompt in `cache_control: ephemeral` for Anthropic models.
-    # Saves 50-90% of input tokens on the 2nd+ request inside the 5-min TTL.
-    # No-op for non-Anthropic models.
-    cached_messages = apply_anthropic_cache(model, messages)  # type: ignore[arg-type]
-    kwargs: dict[str, Any] = {"model": model, "messages": cached_messages, "stream": True}
-    if user_id is not None:
-        kwargs["user"] = str(user_id)
-    if temperature is not None:
-        kwargs["temperature"] = temperature
-    if max_tokens is not None:
-        kwargs["max_tokens"] = max_tokens
-
-    # Gemini 2.5 AND GPT-5 family are reasoning models — without max_tokens
-    # and minimal reasoning budget, all output goes into reasoning_tokens
-    # and the visible response is 0–2 tokens. Mirrors the same guard in
-    # services.litellm_router.acompletion — keep both in sync. See that
-    # function's comment for the full justification.
-    if model.startswith("gemini-"):
-        kwargs.setdefault("max_tokens", 16384)
-        kwargs.setdefault("reasoning_effort", "disable")
-    elif model in ("gpt-5", "gpt-5-nano"):
-        kwargs.setdefault("max_tokens", 16384)
-        kwargs.setdefault("reasoning_effort", "minimal")
-    elif model.startswith("claude-"):
-        # Keep thinking at the light default ({type: disabled} — oneprovider thinks
-        # lightly regardless) and floor max_tokens so a long page isn't truncated
-        # (paired with the continuation wrapper). An explicit big thinking budget
-        # broke the agentic builder's action loop (see litellm_router.acompletion,
-        # 2026-07-01), so we DON'T force-enable it here either. Kept in sync.
-        kwargs.setdefault("thinking", {"type": "disabled"})
-        kwargs["allowed_openai_params"] = ["thinking"]
-        kwargs["max_tokens"] = max(int(kwargs.get("max_tokens") or 0), 32000)
-
-    router = router_module.get_router()
-    try:
-        stream = await router.acompletion(**kwargs)
-        async for chunk in stream:
-            slug = getattr(chunk, "model", "") or ""
-            choices = getattr(chunk, "choices", None) or []
-            delta_text = ""
-            if choices:
-                delta_obj = getattr(choices[0], "delta", None)
-                if delta_obj is not None:
-                    delta_text = getattr(delta_obj, "content", "") or ""
-                fr = getattr(choices[0], "finish_reason", None)
-                if fr and _state is not None:
-                    _state["finish_reason"] = fr
-            yield delta_text, slug
-    except litellm.AuthenticationError as exc:
-        raise UpstreamProviderError(f"stream auth failure: {exc}") from exc
-    except litellm.RateLimitError as exc:
-        raise UpstreamProviderError(f"stream rate-limited: {exc}") from exc
-    except (litellm.APIConnectionError, litellm.Timeout) as exc:
-        raise UpstreamProviderError(f"stream upstream error: {exc}") from exc
-    except litellm.APIError as exc:
-        raise UpstreamProviderError(f"stream provider error: {exc}") from exc
-
-
-# Owner directive (2026-07-01): a site / web-app must fully build even when one
-# pass hits the 32000-token OUTPUT cap — «начинает новый поток чтобы успело
-# создаться». When a claude stream ends with finish_reason == "length" (cut off at
-# the cap, mid-answer — NOT done), continue in a fresh call: feed the text so far
-# back as an assistant turn + a strict "continue verbatim from the cutoff"
-# instruction, and keep streaming. Bounded by _MAX_CONTINUATIONS so a runaway build
-# can't loop or burn unbounded tokens. A normal generation ends with
-# stop/end_turn → returns after round 0, byte-identical to before. Only the
-# LiteLLM/claude path uses this; the RU custom providers cap their own output.
-_MAX_CONTINUATIONS = 2
-_CONTINUE_TURN = (
-    "Продолжи вывод РОВНО с места обрыва. Выведи ТОЛЬКО продолжение — без повторов "
-    "уже выведенного, без преамбулы и без markdown-обёрток. Если это HTML/код — "
-    "продолжай прямо с оборванного символа, чтобы склейка была бесшовной."
-)
-
-
-async def _litellm_stream_with_continuation(
-    model: str,
-    messages: list[dict[str, str]],
-    user_id: UUID | None,
-    temperature: float | None,
-    max_tokens: int | None,
-) -> AsyncIterator[tuple[str, str]]:
-    produced_far: list[str] = []
-    convo: list[dict[str, str]] = list(messages)
-    for _round in range(_MAX_CONTINUATIONS + 1):
-        state: dict[str, Any] = {"finish_reason": None}
-        round_text: list[str] = []
-        async for delta, slug in _litellm_stream(
-            model, convo, user_id, temperature, max_tokens, _state=state
-        ):
-            if delta:
-                round_text.append(delta)
-            yield delta, slug
-        produced_far.extend(round_text)
-        # Continue ONLY on a real cap-truncation that produced text; any natural end
-        # (stop / end_turn / error) OR an empty round = done (avoid a continue-loop
-        # on nothing).
-        if state["finish_reason"] != "length" or not "".join(round_text).strip():
-            return
-        convo = [
-            *messages,
-            {"role": "assistant", "content": "".join(produced_far)},
-            {"role": "user", "content": _CONTINUE_TURN},
-        ]
 
 
 async def stream_completion(
@@ -181,29 +68,13 @@ async def stream_completion(
     cancelled = False
     upstream_error: GatewayError | None = None
 
-    source: AsyncIterator[tuple[str, str]]
-    if vsegpt_provider.is_vsegpt_model(model):
-        # Opus 4.8 via vsegpt (owner 2026-07-01): TRUE token streaming at ~3s/call
-        # with thinking OFF (vsegpt sends no `thinking` param), vs ~71s on
-        # oneprovider.dev (forced extended thinking). NOTE: this native path has no
-        # 32k-cap continuation wrapper (the Router's `_litellm_stream_with_continuation`)
-        # — a page whose output exceeds the cap truncates; accepted for the latency
-        # win, most builds fit. oneprovider stays the Router fallback for Opus.
-        source = vsegpt_provider.astream(
-            model,
-            messages,
-            temperature=0.5 if temperature is None else temperature,
-            **({"max_tokens": max_tokens} if max_tokens is not None else {}),
-        )
-    else:
-        # Every other model streams via the LiteLLM Router. cache_control is already
-        # applied above (apply_anthropic_cache) for the Anthropic path. The
-        # continuation wrapper auto-resumes a page that hits the 32k output cap so a
-        # full site/app finishes (owner 2026-07-01); a non-truncated build is
-        # unaffected (returns after round 0).
-        source = _litellm_stream_with_continuation(
-            model, messages, user_id, temperature, max_tokens
-        )
+    # TRUE token streaming from oneprovider — the page builds live in the preview.
+    source: AsyncIterator[tuple[str, str]] = oneprovider.astream(
+        model,
+        messages,
+        temperature=0.5 if temperature is None else temperature,
+        **({"max_tokens": max_tokens} if max_tokens is not None else {}),
+    )
 
     try:
         try:

@@ -23,9 +23,9 @@ class ModelPrice:
 
 
 PRICE_TABLE: Mapping[str, ModelPrice] = {
-    # Opus 4.8 — the ONLY chat model (every role). vsegpt's Anthropic pricing
-    # differs from the retired proxyapi; this internal RUB table drives
-    # billing/markup math. Image generation (routers/images.py) and whisper
+    # Opus 4.8 — the ONLY chat model (every role). This internal RUB table drives
+    # billing/markup math (oneprovider bills us in its own units; we mark up here).
+    # Image generation (routers/images.py) and whisper
     # transcription (routers/audio.py) bill via their own paths, not this table.
     "claude-opus-4-8": ModelPrice(Decimal("1.50"), Decimal("7.50")),
 }

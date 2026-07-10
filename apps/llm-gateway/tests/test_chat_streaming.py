@@ -13,35 +13,15 @@ from fastapi.testclient import TestClient
 
 from omnia_gateway.main import create_app
 
-
-class _FakeChunk:
-    """Mimics the LiteLLM stream chunk shape used by services.streaming."""
-
-    class _Choice:
-        def __init__(self, content: str | None) -> None:
-            self.delta = type("Delta", (), {"content": content})()
-
-    def __init__(self, content: str | None, model: str = "anthropic/claude-sonnet-4-5") -> None:
-        self.choices = [self._Choice(content)]
-        self.model = model
+_MODEL = "claude-opus-4-8"
 
 
-async def _fake_stream() -> AsyncIterator[_FakeChunk]:
+async def _fake_astream(
+    model: str, messages: list[dict], **kwargs: object
+) -> AsyncIterator[tuple[str, str]]:
+    """Mimic providers.oneprovider.astream — yields (delta, omnia_id) tuples."""
     for piece in ["Hel", "lo", " world"]:
-        yield _FakeChunk(piece)
-
-
-class _FakeRouter:
-    model_list: list[dict] = [
-        {
-            "model_name": "claude-sonnet-4-6",
-            "litellm_params": {"model": "anthropic/claude-sonnet-4-5"},
-        }
-    ]
-
-    async def acompletion(self, **kwargs):
-        assert kwargs["stream"] is True
-        return _fake_stream()
+        yield piece, model
 
 
 @pytest.fixture
@@ -73,11 +53,11 @@ def _parse_sse(body: str) -> list[dict | str]:
 
 def test_chat_streaming_yields_sse_chunks(client: TestClient) -> None:
     with patch(
-        "omnia_gateway.services.streaming.router_module.get_router",
-        return_value=_FakeRouter(),
+        "omnia_gateway.services.streaming.oneprovider.astream",
+        _fake_astream,
     ):
         body = {
-            "model": "claude-sonnet-4-6",
+            "model": _MODEL,
             "messages": [{"role": "user", "content": "hi"}],
             "stream": True,
             "user": str(uuid4()),
@@ -101,6 +81,6 @@ def test_chat_streaming_yields_sse_chunks(client: TestClient) -> None:
     assembled = "".join(c["choices"][0]["delta"]["content"] for c in delta_chunks)
     assert assembled == "Hello world"
     final = final_chunks[0]
-    assert final["model"] == "claude-sonnet-4-6"
-    assert final["metadata"]["actual_model_used"] == "claude-sonnet-4-6"
+    assert final["model"] == _MODEL
+    assert final["metadata"]["actual_model_used"] == _MODEL
     assert final["metadata"]["fallback_used"] is False

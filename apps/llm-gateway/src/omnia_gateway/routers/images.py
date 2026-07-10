@@ -1,17 +1,17 @@
-"""POST /v1/images/generations — image generation via OpenAI-compatible proxyapi.
+"""POST /v1/images/generations — image generation.
 
-Routes `gpt-image-1` through proxyapi.ru/openai/v1/images/generations (the same
-proxy that fronts the GPT-5 family). Unlike chat completions we don't go
-through LiteLLM Router — the Router treats images endpoints as out-of-scope
-and falls back to chat-completion semantics. A direct httpx call is simpler.
+Two providers, both OpenAI-compatible `/images/generations`:
+  * oneprovider — flux / nano-banana / imagen on the same key + surface as the
+    chat models (`https://api.oneprovider.dev/v1`). This is the live default.
+  * proxyapi   — OpenAI `gpt-image-1` via proxyapi.ru/openai (dead while balance dry).
+
+We don't go through the chat router — image endpoints are out of scope for it.
+A direct httpx call is simpler.
 
 Wallet billing follows the chat-completions contract: if `user` is provided,
 the caller is a real end-user and is debited; if `user` is null, the request
 is service-account (apps/api's image_resolver) and the cost comes out of
-Omnia's own proxyapi balance.
-
-Pricing: gpt-image-1 low-quality 1024x1024 ≈ $0.011 / image (OpenAI list).
-At ~100₽/USD + 20% markup we charge `_PRICE_PER_IMAGE_RUB` per call.
+Omnia's own balance.
 """
 
 from __future__ import annotations
@@ -42,25 +42,24 @@ router = APIRouter(prefix="/v1", tags=["images"])
 log = structlog.get_logger(__name__)
 
 # Image model registry: exposed id → (provider, upstream model id).
-#   proxyapi — OpenAI gpt-image via proxyapi.ru/openai (dead while balance dry).
-#   vsegpt   — flux / nano-banana / imagen via api.vsegpt.ru, OpenAI-compatible
-#              /images/generations on the SAME key as the chat models.
+#   oneprovider — flux / nano-banana / imagen via api.oneprovider.dev/v1,
+#                 OpenAI-compatible /images/generations on the SAME key as chat.
+#   proxyapi    — OpenAI gpt-image via proxyapi.ru/openai (dead while balance dry).
 _IMAGE_MODELS: dict[str, tuple[str, str]] = {
     "gpt-image-1": ("proxyapi", "gpt-image-1"),
-    "img-flux/flux-2-klein-4b": ("vsegpt", "img-flux/flux-2-klein-4b"),
-    "img-flux/flux-2-pro": ("vsegpt", "img-flux/flux-2-pro"),
-    "img-google/nano-banana-2": ("vsegpt", "img-google/nano-banana-2"),
-    "img-google/nano-banana-pro": ("vsegpt", "img-google/nano-banana-pro"),
-    "img-google/imagen4-preview": ("vsegpt", "img-google/imagen4-preview"),
+    "img-flux/flux-2-klein-4b": ("oneprovider", "img-flux/flux-2-klein-4b"),
+    "img-flux/flux-2-pro": ("oneprovider", "img-flux/flux-2-pro"),
+    "img-google/nano-banana-2": ("oneprovider", "img-google/nano-banana-2"),
+    "img-google/nano-banana-pro": ("oneprovider", "img-google/nano-banana-pro"),
+    "img-google/imagen4-preview": ("oneprovider", "img-google/imagen4-preview"),
 }
 
-# Per-image price (RUB), low quality 1024x1024. Conservative ceiling — actual
-# proxyapi list is ~₽1.3/image; we round up to absorb FX wiggle. The api side
+# Per-image price (RUB), low quality 1024x1024. Conservative ceiling — the api side
 # enforces a 30-image-per-prompt cap so the worst case is ~₽45 per generation.
 _PRICE_PER_IMAGE_RUB = Decimal("1.50")
 
-# Hard timeout for one image call. Direct vsegpt flux gens are ~4-6s warm;
-# leave headroom for an occasional cold model-load on the provider side.
+# Hard timeout for one image call. Direct flux gens are ~4-6s warm; leave headroom
+# for an occasional cold model-load on the provider side.
 _IMAGE_TIMEOUT_SECONDS = 90.0
 
 
@@ -95,13 +94,13 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
 
     settings = get_settings()
     provider, upstream_model = _IMAGE_MODELS[req.model]
-    if provider == "vsegpt":
-        if settings.vsegpt_api_key is None:
+    if provider == "oneprovider":
+        if settings.oneprovider_api_key is None:
             raise _gateway_error_to_http(
-                ModelUnavailableError("vsegpt_api_key not configured for image generation")
+                ModelUnavailableError("oneprovider_api_key not configured for image generation")
             )
-        api_key = settings.vsegpt_api_key.get_secret_value()
-        base_url = settings.vsegpt_base_url.rstrip("/")
+        api_key = settings.oneprovider_api_key.get_secret_value()
+        base_url = settings.oneprovider_openai_base_url.rstrip("/")
     else:  # proxyapi (OpenAI gpt-image)
         if settings.proxyapi_api_key is None:
             raise _gateway_error_to_http(
@@ -126,30 +125,27 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         "n": req.n,
         "size": req.size,
     }
-    # `quality` is an OpenAI gpt-image knob; vsegpt flux/nano reject unknown
-    # fields, so only send it on the proxyapi path.
+    # `quality` is an OpenAI gpt-image knob; flux/nano reject unknown fields, so
+    # only send it on the proxyapi path.
     if provider == "proxyapi" and req.quality != "auto":
         payload["quality"] = req.quality
-    # vsegpt flux/nano return base64 ONLY and require it be requested explicitly
-    # — otherwise "Only response_format = b64_json is supported" (400). The api
+    # flux/nano return base64 ONLY and require it be requested explicitly —
+    # otherwise "Only response_format = b64_json is supported" (400). The api
     # resolver already decodes b64_json.
-    if provider == "vsegpt":
+    if provider == "oneprovider":
         payload["response_format"] = "b64_json"
 
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    # vsegpt.ru needs a SYNC httpx.Client on a worker thread with trust_env=False
+    # oneprovider needs a SYNC httpx.Client on a worker thread with trust_env=False
     # + an explicit no-op mounts transport. Two failure modes otherwise (see
-    # providers/vsegpt.py docstring): (1) the container HTTPS_PROXY (Gemini
-    # geo-bypass) tunnels this RU endpoint, and (2) httpx.AsyncClient inside the
-    # uvicorn loop intermittently hangs the TLS handshake to api.vsegpt.ru. A
-    # sync client on a fresh thread connects in ~300ms; a direct gen is ~4-6s.
-    # proxyapi stays on the shared async client (it's whitelisted in NO_PROXY).
-    # vsegpt's TLS handshake to api.vsegpt.ru INTERMITTENTLY stalls inside a
-    # long-lived process (the standalone call connects in ~300ms, the in-loop one
-    # sometimes hangs — same flake providers/vsegpt.py documents). Retry transient
-    # transport faults with a fresh client, and use a tight connect timeout so a
-    # stalled handshake fails in ~15s and re-tries instead of burning the ceiling.
+    # providers/oneprovider.py docstring): (1) the container HTTPS_PROXY (Gemini
+    # geo-bypass) tunnels this endpoint, and (2) httpx.AsyncClient inside the uvicorn
+    # loop intermittently hangs the TLS handshake. A sync client on a fresh thread
+    # connects in ~300ms; a direct gen is ~4-6s. proxyapi stays on the shared async
+    # client (it's whitelisted in NO_PROXY). Retry transient transport faults with a
+    # fresh client, and use a tight connect timeout so a stalled handshake fails in
+    # ~15s and re-tries instead of burning the ceiling.
     _TRANSIENT = (
         httpx.ConnectError,
         httpx.ConnectTimeout,
@@ -157,7 +153,7 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         httpx.RemoteProtocolError,
     )
 
-    def _vsegpt_post() -> httpx.Response:
+    def _oneprovider_post() -> httpx.Response:
         last: Exception | None = None
         for attempt in range(3):
             try:
@@ -178,15 +174,15 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         raise last  # type: ignore[misc]  # unreachable — loop returns or raises
 
     async def _post() -> httpx.Response:
-        if provider == "vsegpt":
-            return await asyncio.to_thread(_vsegpt_post)
+        if provider == "oneprovider":
+            return await asyncio.to_thread(_oneprovider_post)
         return await get_http().post(
             url, json=payload, headers=headers, timeout=_IMAGE_TIMEOUT_SECONDS
         )
 
     try:
         resp = await _post()
-        # vsegpt rate-limits ~1 req/sec → 429. The api resolver serialises, but
+        # flux/nano rate-limit ~1 req/sec → 429. The api resolver serialises, but
         # retry once after a beat so a burst (or a co-tenant) doesn't lose a tile.
         if resp.status_code == 429:
             await asyncio.sleep(1.5)

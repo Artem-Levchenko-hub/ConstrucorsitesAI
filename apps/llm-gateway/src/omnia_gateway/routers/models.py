@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from omnia_gateway.core.config import get_settings
+from omnia_gateway.core.config import Settings, get_settings
 from omnia_gateway.services.pricing import list_models
 
 router = APIRouter(prefix="/v1", tags=["models"])
@@ -15,32 +15,23 @@ def _has(secret) -> bool:
     return secret is not None and bool(secret.get_secret_value())
 
 
-# Single dispatch — no scattered conditionals when a new provider lands.
-_PROVIDER_KEY_PRESENT = {
-    "anthropic": lambda s: _has(s.anthropic_api_key),
-    "openai": lambda s: _has(s.openai_api_key),
-    "alibaba": lambda s: _has(s.openrouter_api_key),  # via OpenRouter
-    "google": lambda s: _has(s.gemini_api_key),  # Gemini via Google AI Studio
-}
+def _is_available(model_id: str, provider: str, s: Settings) -> bool:
+    """A model is available iff the key for its upstream is present.
 
-# Models whose key lives outside the default per-provider mapping.
-# Mirrors _PROXY_ROUTES in services/litellm_router.py; keep these in sync.
-_MODEL_KEY_OVERRIDE = {
-    # Opus 4.8 (the only chat model) served via the vsegpt provider.
-    "claude-opus-4-8": lambda s: _has(s.vsegpt_api_key),
-}
-
-
-def _is_available(model_id: str, provider: str) -> bool:
-    check = _MODEL_KEY_OVERRIDE.get(model_id) or _PROVIDER_KEY_PRESENT.get(provider)
-    return bool(check and check(get_settings()))
+    Everything text + flux images runs on oneprovider; only gpt-image-1 (and the
+    whisper STT surface) run on proxyapi.
+    """
+    if model_id == "gpt-image-1":
+        return _has(s.proxyapi_api_key)
+    return _has(s.oneprovider_api_key)
 
 
 @router.get("/models")
 async def list_models_endpoint() -> dict:
+    settings = get_settings()
     data: list[dict] = []
     for m in list_models():
         entry = dict(m)
-        entry["available"] = _is_available(entry["id"], entry["provider"])
+        entry["available"] = _is_available(entry["id"], entry["provider"], settings)
         data.append(entry)
     return {"object": "list", "data": data}
