@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Omnia — живой отчёт: система гипотез</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --seq-100:#cde2fb; --seq-250:#86b6ef; --seq-350:#5598e7; --seq-450:#2a78d6; --seq-550:#1c5cab; --seq-650:#104281;
+  --accent: #2a78d6;
+  --st-good: #0ca30c; --st-warn: #fab219; --st-serious: #ec835a; --st-crit: #d03b3b;
+  --good-text: #006300;
+  --chip-good-bg: rgba(12,163,12,.12); --chip-crit-bg: rgba(208,59,59,.10);
+  --chip-warn-bg: rgba(250,178,25,.14); --chip-open-bg: rgba(42,120,214,.10);
+  --chip-aband-bg: rgba(137,135,129,.14);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --page: #0d0d0d;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --baseline: #383835;
+  --border: rgba(255,255,255,0.10);
+  --seq-100:#0d366b; --seq-250:#184f95; --seq-350:#256abf; --seq-450:#3987e5; --seq-550:#6da7ec; --seq-650:#9ec5f4;
+  --accent: #3987e5;
+  --good-text: #0ca30c;
+  --chip-good-bg: rgba(12,163,12,.18); --chip-crit-bg: rgba(208,59,59,.20);
+  --chip-warn-bg: rgba(250,178,25,.14); --chip-open-bg: rgba(57,135,229,.16);
+  --chip-aband-bg: rgba(137,135,129,.18);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --page: #0d0d0d; --ink: #ffffff; --ink-2: #c3c2b7;
+    --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+    --seq-100:#0d366b; --seq-250:#184f95; --seq-350:#256abf; --seq-450:#3987e5; --seq-550:#6da7ec; --seq-650:#9ec5f4;
+    --accent: #3987e5; --good-text: #0ca30c;
+    --chip-good-bg: rgba(12,163,12,.18); --chip-crit-bg: rgba(208,59,59,.20);
+    --chip-warn-bg: rgba(250,178,25,.14); --chip-open-bg: rgba(57,135,229,.16);
+    --chip-aband-bg: rgba(137,135,129,.18);
+  }
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--page); color: var(--ink);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px 80px; }
+header.hero { padding: 56px 0 8px; }
+.eyebrow { color: var(--muted); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; }
+h1 { font-size: clamp(28px, 4.5vw, 44px); line-height: 1.12; letter-spacing: -0.02em; margin: 10px 0 12px; }
+.sub { color: var(--ink-2); max-width: 720px; font-size: 17px; }
+.sub a { color: var(--accent); }
+.themebtn {
+  position: fixed; top: 14px; right: 14px; z-index: 50;
+  background: var(--surface-1); border: 1px solid var(--border); color: var(--ink-2);
+  border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+}
+section { margin-top: 56px; }
+h2 { font-size: 24px; letter-spacing: -0.01em; margin-bottom: 6px; }
+.lead { color: var(--ink-2); margin-bottom: 22px; max-width: 780px; }
+.card {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 14px; padding: 20px 22px;
+}
+/* KPI row */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 12px; margin-top: 28px; }
+.kpi { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; }
+.kpi .v { font-size: 25px; font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.kpi .l { color: var(--muted); font-size: 13px; margin-top: 2px; }
+/* essence */
+.essence p + p { margin-top: 12px; }
+.essence { color: var(--ink-2); font-size: 16.5px; }
+.essence strong { color: var(--ink); }
+/* eras */
+.eras { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.era { position: relative; overflow: hidden; }
+.era .num { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+.era h3 { font-size: 17px; margin: 6px 0 2px; }
+.era .period { color: var(--accent); font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.era p { color: var(--ink-2); font-size: 14.5px; }
+.era .verdict { margin-top: 10px; font-size: 13.5px; color: var(--ink); border-top: 1px solid var(--grid); padding-top: 8px; }
+.era .verdict::before { content: "Итог: "; color: var(--muted); font-weight: 600; }
+/* charts */
+.chartgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 800px) { .chartgrid { grid-template-columns: 1fr; } }
+.chart h3 { font-size: 15px; margin-bottom: 2px; }
+.chart .note { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+.cols { display: flex; align-items: flex-end; gap: 6px; height: 180px; border-bottom: 2px solid var(--baseline); position: relative; }
+.col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; position: relative; cursor: default; }
+.col .bar { background: var(--seq-450); border-radius: 4px 4px 0 0; min-height: 2px; transition: opacity .15s; }
+.col:hover .bar { background: var(--seq-550); }
+.col .tip {
+  display: none; position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: var(--page); font-size: 12px; padding: 5px 9px; border-radius: 7px; white-space: nowrap; z-index: 5;
+}
+.col:hover .tip { display: block; }
+.col .xl { color: var(--muted); font-size: 10.5px; text-align: center; margin-top: 6px; white-space: nowrap; }
+.hbars { display: grid; gap: 9px; }
+.hbar { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 10px; font-size: 13.5px; }
+.hbar .name { color: var(--ink-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar .track { height: 18px; border-radius: 4px; position: relative; }
+.hbar .fill { height: 100%; background: var(--seq-450); border-radius: 4px; min-width: 2px; }
+.hbar .val { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* timeline */
+.tl { position: relative; margin-top: 8px; }
+.tl::before { content: ""; position: absolute; left: 7px; top: 4px; bottom: 4px; width: 2px; background: var(--grid); }
+.tl-item { position: relative; padding: 0 0 22px 34px; }
+.tl-item::before {
+  content: ""; position: absolute; left: 0; top: 5px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--surface-1); border: 3px solid var(--accent);
+}
+.tl-item[data-kind="incident"]::before { border-color: var(--st-crit); }
+.tl-item[data-kind="pivot"]::before { border-color: var(--st-warn); }
+.tl-item[data-kind="launch"]::before { border-color: var(--st-good); }
+.tl-item[data-kind="experiment"]::before { border-color: var(--muted); }
+.tl-item .d { color: var(--muted); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tl-item .t { font-weight: 650; margin: 1px 0 2px; font-size: 15.5px; }
+.tl-item .x { color: var(--ink-2); font-size: 14px; max-width: 720px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 18px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+/* hypotheses */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.fbtn {
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-2);
+  border-radius: 999px; padding: 6px 14px; font-size: 13.5px; cursor: pointer;
+}
+.fbtn.active { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.hyps { display: grid; gap: 10px; }
+.hyp { display: grid; grid-template-columns: 110px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 640px) { .hyp { grid-template-columns: 1fr; gap: 6px; } }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650;
+  border-radius: 999px; padding: 4px 10px; white-space: nowrap;
+}
+.chip.worked { background: var(--chip-good-bg); color: var(--good-text); }
+.chip.failed { background: var(--chip-crit-bg); color: var(--st-crit); }
+.chip.partial { background: var(--chip-warn-bg); color: #8a6100; }
+:root[data-theme="dark"] .chip.partial { color: var(--st-warn); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .chip.partial { color: var(--st-warn); } }
+.chip.open { background: var(--chip-open-bg); color: var(--accent); }
+.chip.abandoned { background: var(--chip-aband-bg); color: var(--muted); }
+.hyp h4 { font-size: 15.5px; margin-bottom: 2px; }
+.hyp .cat { color: var(--accent); font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; }
+.hyp p { color: var(--ink-2); font-size: 14px; }
+.hyp .ev { margin-top: 5px; font-size: 13px; color: var(--muted); }
+.hyp .ev::before { content: "Факт: "; font-weight: 650; }
+/* prod status */
+.prod ul { list-style: none; display: grid; gap: 8px; margin-top: 8px; }
+.prod li { display: flex; gap: 10px; align-items: baseline; font-size: 14.5px; color: var(--ink-2); }
+.prod li::before { content: "●"; color: var(--st-good); font-size: 11px; }
+.prod ol { list-style: none; }
+.prod ol li::before { color: var(--st-warn); }
+footer { margin-top: 72px; padding-top: 18px; border-top: 1px solid var(--grid); color: var(--muted); font-size: 13px; }
+
+/* --- v2: hypothesis registry system --- */
+.hyp { grid-template-columns: 128px 1fr; }
+.hyp-side { display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
+.score { font-weight:700; font-size:13px; border-radius:8px; padding:3px 9px; border:1px solid var(--border); }
+.score.s-good { background: var(--chip-good-bg); color: var(--good-text); }
+.score.s-warn { background: var(--chip-warn-bg); color: #8a6100; }
+:root[data-theme="dark"] .score.s-warn { color: var(--st-warn); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .score.s-warn { color: var(--st-warn); } }
+.score.s-crit { background: var(--chip-crit-bg); color: var(--st-crit); }
+.score.s-none { color: var(--muted); }
+.hyp h4.dead { text-decoration: line-through; text-decoration-thickness: 2px; opacity: .62; }
+.hyp .imp { margin-top: 6px; font-size: 13.5px; color: var(--ink-2); }
+.hyp .imp::before { content: "Оценка: "; font-weight: 650; color: var(--ink); }
+.hyp .nv { margin-top: 5px; font-size: 13.5px; color: var(--accent); }
+.hyp .nv::before { content: "Вектор дальше → "; font-weight: 650; }
+.chip.testing { background: var(--chip-open-bg); color: var(--accent); outline: 1px dashed var(--accent); }
+.sumstrip { display:flex; flex-wrap:wrap; gap:10px; margin: 0 0 16px; }
+.sumchip { background: var(--surface-1); border:1px solid var(--border); border-radius:12px; padding:10px 14px; }
+.sumchip .n { font-size:20px; font-weight:700; }
+.sumchip .t { font-size:12.5px; color: var(--muted); }
+.catrow { margin-top: -8px; margin-bottom: 18px; }
+.fbtn.cat-active { background: var(--chip-open-bg); color: var(--accent); border-color: var(--accent); }
+.vecs { display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:14px; }
+.vec .vid { color: var(--muted); font-size:12px; font-weight:700; letter-spacing:.08em; }
+.vec h3 { font-size:17px; margin:4px 0 2px; }
+.vec .vstat { color: var(--accent); font-size:12.5px; font-weight:650; text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px; }
+.vec .vgoal { color: var(--ink-2); font-size:14px; margin-bottom:10px; }
+.vec ul { padding-left:18px; }
+.vec li { color: var(--ink-2); font-size:13.5px; margin:4px 0; }
+.vec .vh { margin-top:10px; font-size:12.5px; color: var(--muted); }
+.method { color: var(--ink-2); font-size:15px; }
+@media (max-width: 640px) { .hyp { grid-template-columns: 1fr; } .hyp-side { flex-direction:row; align-items:center; } }
+</style>
+</head>
+<body>
+
+<button class="themebtn" id="themebtn" aria-label="Переключить тему">◐ Тема</button>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Живой отчёт · система гипотез · обновлено <span id="upd"></span></div>
+  <h1>Omnia: AI-конструктор сайтов</h1>
+  <p class="sub" id="hero-sub"></p>
+  <div class="kpis" id="kpis"></div>
+</header>
+
+<section>
+  <h2>Что это за проект</h2>
+  <div class="card essence" id="essence"></div>
+</section>
+
+<section>
+  <h2>Эпохи проекта</h2>
+  <p class="lead">Два месяца разработки разбились на отчётливые фазы — от голого MVP до автономных ночных циклов и битвы за качество генерации.</p>
+  <div class="eras" id="eras"></div>
+</section>
+
+<section>
+  <h2>Динамика работы</h2>
+  <p class="lead" id="stats-lead"></p>
+  <div class="card chart" style="margin-bottom:14px">
+    <h3>Коммиты по неделям</h3>
+    <div class="note" id="weeks-note"></div>
+    <div class="cols" id="weeks-chart"></div>
+    <div style="display:flex;gap:6px" id="weeks-labels"></div>
+  </div>
+  <div class="chartgrid">
+    <div class="card chart">
+      <h3>Типы коммитов</h3>
+      <div class="note">по префиксу conventional commits</div>
+      <div class="hbars" id="types-chart"></div>
+    </div>
+    <div class="card chart">
+      <h3>Зоны работы (scope)</h3>
+      <div class="note">топ-10 областей кодовой базы по числу коммитов</div>
+      <div class="hbars" id="scopes-chart"></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Хроника ключевых событий</h2>
+  <div class="legend">
+    <span><i style="background:var(--accent)"></i> веха</span>
+    <span><i style="background:var(--st-warn)"></i> пивот</span>
+    <span><i style="background:var(--st-crit)"></i> инцидент</span>
+    <span><i style="background:var(--st-good)"></i> запуск</span>
+    <span><i style="background:var(--muted)"></i> эксперимент</span>
+  </div>
+  <div class="tl" id="timeline"></div>
+</section>
+
+<section>
+  <h2>Как работает система гипотез</h2>
+  <div class="card method" id="method"></div>
+</section>
+
+<section>
+  <h2>Реестр гипотез</h2>
+  <p class="lead">Всё, что пробовали, — с честными вердиктами и оценкой вклада. Провал зафиксирован так же аккуратно, как успех: он экономит время следующему заходу.</p>
+  <div class="sumstrip" id="hyp-summary"></div>
+  <div class="filters" id="hyp-filters"></div>
+  <div class="filters catrow" id="hyp-cats"></div>
+  <div class="hyps" id="hyps"></div>
+</section>
+
+<section>
+  <h2>Активные векторы — куда идём дальше</h2>
+  <p class="lead">Направления, выведенные из проверенных гипотез. Каждый вектор — это следующая пачка гипотез на проверку.</p>
+  <div class="vecs" id="vectors"></div>
+</section>
+
+<section class="prod">
+  <h2>Состояние продакшена</h2>
+  <div class="card" id="prodstate"></div>
+</section>
+
+<footer id="foot"></footer>
+</div>
+
+<script>
+const btn = document.getElementById('themebtn');
+btn.addEventListener('click', () => {
+  const cur = document.documentElement.dataset.theme ||
+    (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  document.documentElement.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+});
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const STATUS_RU = { worked: '✓ сработало', failed: '✕ не сработало', partial: '◐ частично',
+  open: '→ открыто', abandoned: '⊘ отложено', testing: '⏳ в проверке' };
+const scoreCls = s => s == null ? 's-none' : s >= 7 ? 's-good' : s >= 4 ? 's-warn' : 's-crit';
+
+function render(DATA) {
+  const STATS = DATA.stats;
+  document.getElementById('upd').textContent =
+    new Date(DATA.meta.updated + 'T00:00:00').toLocaleDateString('ru', { day: 'numeric', month: 'long', year: 'numeric' });
+  document.getElementById('hero-sub').innerHTML = DATA.hero_sub || '';
+  document.getElementById('kpis').innerHTML = DATA.key_numbers.map(k =>
+    `<div class="kpi"><div class="v">${esc(k.value)}</div><div class="l">${esc(k.label)}</div></div>`).join('');
+  document.getElementById('essence').innerHTML = DATA.project_essence.split(/\n\n+/).map(p => `<p>${p}</p>`).join('');
+  document.getElementById('eras').innerHTML = DATA.eras.map((e, i) =>
+    `<div class="card era"><div class="num">ЭПОХА ${i+1}</div><h3>${esc(e.name)}</h3>
+     <div class="period">${esc(e.period)}</div><p>${esc(e.description)}</p>
+     <div class="verdict">${esc(e.verdict)}</div></div>`).join('');
+  // weekly chart
+  const weeks = Object.entries(STATS.per_week);
+  const max = Math.max(...weeks.map(([,v]) => v));
+  document.getElementById('weeks-note').textContent =
+    `${STATS.total} коммитов за ${weeks.length} недель · пик — ${max} коммитов`;
+  document.getElementById('weeks-chart').innerHTML = weeks.map(([w, v]) => {
+    const d = new Date(w + 'T00:00:00');
+    const lbl = d.toLocaleDateString('ru', { day: 'numeric', month: 'short' });
+    return `<div class="col"><div class="tip">${lbl}: ${v} коммитов</div>
+      <div class="bar" style="height:${Math.max(2, v / max * 100)}%"></div></div>`;
+  }).join('');
+  document.getElementById('weeks-labels').innerHTML = weeks.map(([w]) => {
+    const d = new Date(w + 'T00:00:00');
+    return `<div class="xl" style="flex:1">${d.toLocaleDateString('ru', { day: 'numeric', month: 'short' })}</div>`;
+  }).join('');
+  const hbars = (obj, el, top) => {
+    const items = Object.entries(obj).slice(0, top);
+    const m = Math.max(...items.map(([,v]) => v));
+    document.getElementById(el).innerHTML = items.map(([k, v]) =>
+      `<div class="hbar"><div class="name" title="${esc(k)}">${esc(k)}</div>
+       <div class="track"><div class="fill" style="width:${v / m * 100}%"></div></div>
+       <div class="val">${v}</div></div>`).join('');
+  };
+  hbars(STATS.types, 'types-chart', 7);
+  hbars(STATS.scopes, 'scopes-chart', 10);
+  document.getElementById('stats-lead').textContent = DATA.stats_lead || '';
+  document.getElementById('timeline').innerHTML = DATA.timeline.map(t =>
+    `<div class="tl-item" data-kind="${esc(t.kind)}">
+      <div class="d">${esc(t.date)}</div><div class="t">${esc(t.title)}</div>
+      <div class="x">${esc(t.description)}</div></div>`).join('');
+  document.getElementById('method').innerHTML = DATA.methodology || '';
+
+  // ---- hypothesis registry
+  const H = DATA.hypotheses;
+  const scored = H.filter(h => h.score != null);
+  const avg = scored.length ? (scored.reduce((a, h) => a + h.score, 0) / scored.length).toFixed(1) : '—';
+  const cnt = s => H.filter(h => h.status === s).length;
+  document.getElementById('hyp-summary').innerHTML = [
+    [H.length, 'гипотез всего'], [cnt('worked'), 'сработали'], [cnt('partial'), 'частично'],
+    [cnt('failed'), 'не сработали'], [cnt('abandoned'), 'отложены'],
+    [cnt('testing') + cnt('open'), 'в работе / открыты'], [avg, 'средний вклад проверенных'],
+  ].map(([n, t]) => `<div class="sumchip"><div class="n">${n}</div><div class="t">${t}</div></div>`).join('');
+
+  const statuses = ['all', 'testing', 'open', 'worked', 'partial', 'failed', 'abandoned'];
+  const cats = ['all', ...new Set(H.map(h => h.category))];
+  let activeStatus = 'all', activeCat = 'all';
+  const fEl = document.getElementById('hyp-filters');
+  const cEl = document.getElementById('hyp-cats');
+  fEl.innerHTML = statuses.map(s =>
+    `<button class="fbtn${s === 'all' ? ' active' : ''}" data-s="${s}">${s === 'all' ? 'Все' : STATUS_RU[s]}</button>`).join('');
+  cEl.innerHTML = cats.map(c =>
+    `<button class="fbtn${c === 'all' ? ' cat-active' : ''}" data-c="${esc(c)}">${c === 'all' ? 'Все области' : esc(c)}</button>`).join('');
+
+  const drawHyps = () => {
+    const list = H.filter(h => (activeStatus === 'all' || h.status === activeStatus) &&
+                               (activeCat === 'all' || h.category === activeCat));
+    document.getElementById('hyps').innerHTML = list.map(h => {
+      const dead = h.status === 'failed' || h.status === 'abandoned';
+      return `<div class="card hyp">
+        <div class="hyp-side">
+          <span class="chip ${esc(h.status)}">${STATUS_RU[h.status] || esc(h.status)}</span>
+          <span class="score ${scoreCls(h.score)}" title="вклад результата, 0–10">${h.score == null ? '—' : h.score + ' / 10'}</span>
+        </div>
+        <div><div class="cat">${esc(h.id)} · ${esc(h.category)}${h.period ? ' · ' + esc(h.period) : ''}</div>
+        <h4 class="${dead ? 'dead' : ''}">${esc(h.title)}</h4><p>${esc(h.description)}</p>
+        <div class="ev">${esc(h.evidence)}</div>
+        ${h.impact ? `<div class="imp">${esc(h.impact)}</div>` : ''}
+        ${h.next_vector ? `<div class="nv">${esc(h.next_vector)}</div>` : ''}</div>
+      </div>`;
+    }).join('') || '<p style="color:var(--muted)">Ничего с такими фильтрами.</p>';
+  };
+  fEl.addEventListener('click', e => {
+    const b = e.target.closest('.fbtn'); if (!b) return;
+    activeStatus = b.dataset.s;
+    fEl.querySelectorAll('.fbtn').forEach(x => x.classList.toggle('active', x === b));
+    drawHyps();
+  });
+  cEl.addEventListener('click', e => {
+    const b = e.target.closest('.fbtn'); if (!b) return;
+    activeCat = b.dataset.c;
+    cEl.querySelectorAll('.fbtn').forEach(x => x.classList.toggle('cat-active', x === b));
+    drawHyps();
+  });
+  drawHyps();
+
+  // ---- vectors
+  document.getElementById('vectors').innerHTML = (DATA.vectors || []).map(v => `
+    <div class="card vec"><div class="vid">${esc(v.id)}</div><h3>${esc(v.name)}</h3>
+    <div class="vstat">${esc(v.status)}</div><div class="vgoal">${esc(v.goal)}</div>
+    <ul>${v.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ul>
+    <div class="vh">Связанные гипотезы: ${v.hyp_ids.join(', ')}</div></div>`).join('');
+
+  document.getElementById('prodstate').innerHTML = DATA.current_state_html ||
+    `<p style="color:var(--ink-2)">${esc(DATA.current_state)}</p>`;
+  document.getElementById('foot').innerHTML =
+    `Живой реестр гипотез Omnia · данные: <code>otchet/data.json</code> в репозитории, обновляется пачками по мере проверок ·
+     обновлено ${esc(DATA.meta.updated)} · <a href="https://constructor.lead-generator.ru" style="color:var(--accent)">constructor.lead-generator.ru</a>`;
+}
+
+fetch('data.json', { cache: 'no-store' })
+  .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+  .then(render)
+  .catch(err => {
+    document.querySelector('.wrap').insertAdjacentHTML('afterbegin',
+      `<p style="color:var(--st-crit);padding:20px 0">Не удалось загрузить data.json: ${esc(err.message)}</p>`);
+  });
+</script>
+</body>
+</html>
