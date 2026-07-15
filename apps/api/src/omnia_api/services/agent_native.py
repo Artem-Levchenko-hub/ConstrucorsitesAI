@@ -32,7 +32,13 @@ from omnia_api.services.agent_builder import Action, AgentResult
 log = structlog.get_logger(__name__)
 
 _MODEL = "claude-opus-4-8"
-_MAX_TOKENS = 32000
+# AITunnel PRE-RESERVES the full max_tokens × output price on every call and 402s
+# if the key balance is below that reserve — so an over-large ceiling caps how many
+# calls fit the balance (32000 reserved ~₽173/call → a low balance 402s mid-build,
+# which surfaced to the user as "соединение потеряно"). 20000 still leaves ~12000
+# tokens for tool args after the 8000 thinking budget — enough for a large file —
+# while cutting the reserve ~35%. Env override: NATIVE_MAX_TOKENS (future).
+_MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
@@ -274,6 +280,14 @@ async def _call_messages(
     for attempt in range(_CALL_RETRIES):
         try:
             r = await client.post(url, json=payload, timeout=_HTTP_TIMEOUT_S)
+            # 402 = provider key out of balance. Retrying can't fix it, so fail
+            # FAST with a human cause instead of grinding 8 backoff retries and
+            # surfacing an opaque "соединение потеряно" 3+ minutes later.
+            if r.status_code == 402:
+                raise RuntimeError(
+                    "PAYMENT_REQUIRED: баланс LLM-провайдера (AITunnel) исчерпан — "
+                    "пополни ключ и повтори промпт"
+                )
             if r.status_code == 429 or (
                 r.status_code >= 400 and "rate_limit" in r.text[:300]
             ):

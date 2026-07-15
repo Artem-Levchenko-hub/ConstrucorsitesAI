@@ -1252,6 +1252,65 @@ def _sanitize_nested_layout(path: str, content: str) -> str:
     return out
 
 
+# ── CSS @import sanitizer (harness-hardening, deterministic) ────────────────
+#
+# CSS requires every `@import` to precede all other rules (only `@charset` and
+# `@layer` may come before it). A weak model writes a Google-Fonts `@import`
+# mid-file — after `:root{}` or other rules — and Turbopack aborts the WHOLE
+# build with "@import rules must precede all rules aside from @charset and @layer"
+# (observed live 2026-07-15: globals.css:1931 killed a messenger build). A prompt
+# can't guarantee ordering; the engine can. On write, hoist every @import to the
+# top (after an optional @charset), preserving their order. A file whose imports
+# are already correctly placed is returned byte-identical.
+_CSS_IMPORT_RE = re.compile(r"(?im)^[ \t]*@import\b[^;{}]*;[ \t]*$\n?")
+_CSS_CHARSET_RE = re.compile(r"(?im)^[ \t]*@charset\b[^;]*;[ \t]*$\n?")
+
+
+def _is_css(path: str) -> bool:
+    return (path or "").replace("\\", "/").lower().endswith(".css")
+
+
+def _css_import_misplaced(content: str) -> bool:
+    """True if any @import appears AFTER a real CSS rule — the exact condition
+    Turbopack rejects. Comments, blank lines, @charset and @layer don't count as
+    rules."""
+    seen_rule = False
+    for line in content.splitlines():
+        s = line.strip()
+        if not s or s.startswith(("/*", "*", "//")):
+            continue
+        low = s.lower()
+        if low.startswith(("@charset", "@layer")):
+            continue
+        if low.startswith("@import"):
+            if seen_rule:
+                return True
+            continue
+        seen_rule = True
+    return False
+
+
+def _sanitize_css_imports(path: str, content: str) -> str:
+    """Hoist every @import to the top of a .css file (after @charset). No-op — and
+    byte-identical — unless an @import is actually misplaced, so a correct file is
+    never rewritten."""
+    if not _is_css(path) or "@import" not in content.lower():
+        return content
+    if not _css_import_misplaced(content):
+        return content
+    imports = [m.group(0).strip() for m in _CSS_IMPORT_RE.finditer(content)]
+    if not imports:
+        return content  # @import lives inside a rule/comment — leave it alone
+    rest = _CSS_IMPORT_RE.sub("", content)
+    charset = ""
+    cm = _CSS_CHARSET_RE.search(rest)
+    if cm:
+        charset = cm.group(0).strip() + "\n"
+        rest = _CSS_CHARSET_RE.sub("", rest, count=1)
+    block = "".join(i + "\n" for i in imports)
+    return charset + block + rest.lstrip("\n")
+
+
 def make_container_executor(
     *,
     project_id: Any,
@@ -1309,9 +1368,12 @@ def make_container_executor(
                 content = action.args.get("content")
                 if not isinstance(content, str) or not action.path:
                     return {"ok": False, "error": "write_file needs path + content"}
-                # Deterministic guard: a nested layout must never carry <html>/<body>
-                # (duplicate root tags break hydration → kill the realtime client).
+                # Deterministic guards: a nested layout must never carry
+                # <html>/<body> (duplicate root tags break hydration → kill the
+                # realtime client); a CSS @import must sit at the top or Turbopack
+                # aborts the whole build.
                 content = _sanitize_nested_layout(action.path, content)
+                content = _sanitize_css_imports(action.path, content)
                 await orchestrator_client.hot_reload(
                     project_id=project_id, slug=slug, files={action.path: content})
                 return {"ok": True, "content": content,
@@ -1334,6 +1396,7 @@ def make_container_executor(
                             "error": "search text is not unique; add surrounding lines"}
                 new_content = current.replace(search, str(replace), 1)
                 new_content = _sanitize_nested_layout(action.path, new_content)
+                new_content = _sanitize_css_imports(action.path, new_content)
                 await orchestrator_client.hot_reload(
                     project_id=project_id, slug=slug, files={action.path: new_content})
                 return {"ok": True, "content": new_content,
