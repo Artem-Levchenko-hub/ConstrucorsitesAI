@@ -215,6 +215,15 @@ details.methodbox { margin-top: 40px; background: var(--surface-1);
   border: 1px solid var(--border); border-radius: 14px; padding: 14px 20px; }
 details.methodbox summary { cursor: pointer; font-weight: 650; font-size: 15px; }
 details.methodbox .method { margin-top: 12px; }
+/* --- owner actions --- */
+.owner { display: grid; gap: 10px; }
+.owner-item { display: grid; grid-template-columns: 62px 1fr; gap: 16px; align-items: start;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 18px; }
+.owner-item .od { color: var(--accent); font-weight: 700; font-size: 13px; padding-top: 1px; }
+.owner-item .ow { color: var(--ink); font-size: 15px; font-weight: 600; }
+.owner-item .oi { color: var(--ink-2); font-size: 13.5px; margin-top: 4px; }
+.owner-item .oi::before { content: "→ "; color: var(--muted); }
+@media (max-width: 640px) { .owner-item { grid-template-columns: 1fr; gap: 4px; } }
 </style>
 </head>
 <body>
@@ -234,6 +243,12 @@ details.methodbox .method { margin-top: 12px; }
 </nav>
 
 <div class="tabpane" id="tab-board">
+  <section>
+    <h2>Решения владельца</h2>
+    <p class="lead">Что Артём поменял в проекте — по хронологии. Каждое решение с эффектом на продукт.</p>
+    <div class="owner" id="owner-actions"></div>
+  </section>
+
   <section>
     <h2>Реестр гипотез</h2>
     <p class="lead">Гипотеза → проверка живым прогоном → оценка вклада 0–10 → вектор дальше. Провал зафиксирован так же аккуратно, как успех: он экономит время следующему заходу.</p>
@@ -386,6 +401,12 @@ function render(DATA) {
       <div class="d">${esc(t.date)}</div><div class="t">${esc(t.title)}</div>
       <div class="x">${esc(t.description)}</div></div>`).join('');
   document.getElementById('method').innerHTML = DATA.methodology || '';
+
+  // ---- owner actions
+  const oa = document.getElementById('owner-actions');
+  if (oa) oa.innerHTML = (DATA.owner_actions || []).map(a =>
+    `<div class="owner-item"><div class="od">${esc(a.date)}</div>
+     <div><div class="ow">${esc(a.what)}</div><div class="oi">${esc(a.impact)}</div></div></div>`).join('');
 
   // ---- hypothesis registry
   const H = DATA.hypotheses;
