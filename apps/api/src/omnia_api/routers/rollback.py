@@ -29,6 +29,23 @@ router = APIRouter(prefix="/api/projects", tags=["rollback"])
 _CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime")
 
 
+def with_rollback_deletions(
+    target_files: dict[str, str], old_files: dict[str, str]
+) -> dict[str, str]:
+    """Extend the rolled-back tree with delete-intents for orphaned files.
+
+    ``old_files`` is the tree the container serves now; any path present there
+    but absent from ``target_files`` must be DELETED in the container, or the
+    rollback is a lie for created-after-target files (the container keeps them,
+    the build keeps failing on them). ``write_files`` treats empty content as
+    "rm -f", so the delete-intent is simply ``path: ""``. Target content always
+    wins over a same-path delete (dict update order). Pure — unit-tested.
+    """
+    out = {p: "" for p in old_files if p not in target_files}
+    out.update(target_files)
+    return out
+
+
 def _snapshot_dict(s: Snapshot) -> dict[str, object]:
     return {
         "id": s.id,
@@ -58,6 +75,13 @@ async def post_rollback(
     if target is None or target.project_id != project_id:
         raise ApiError("not_found", "snapshot not found", status.HTTP_404_NOT_FOUND)
 
+    # The tree the container is serving RIGHT NOW (pre-rollback HEAD) — needed
+    # to compute files the rollback must DELETE from the live container below.
+    old_sha: str | None = None
+    if project.current_snapshot_id is not None:
+        _cur = await session.get(Snapshot, project.current_snapshot_id)
+        old_sha = _cur.commit_sha if _cur is not None else None
+
     new_sha = await asyncio.to_thread(repo_svc.checkout, project_id, target.commit_sha)
 
     # Container apps: push the rolled-back tree into the live dev container so the
@@ -70,6 +94,18 @@ async def post_rollback(
         try:
             reverted_files = await asyncio.to_thread(
                 repo_svc.read_files, project_id, new_sha
+            )
+            # hot_reload can only add/overwrite — a file CREATED after the target
+            # snapshot would survive the rollback inside the container and keep
+            # breaking the build (2026-07-08: a failed build's phantom modules
+            # outlived a rollback exactly this way and re-poisoned the retry).
+            # write_files treats empty content as "delete this file", so send
+            # every old-tree path missing from the target tree as "".
+            reverted_files = with_rollback_deletions(
+                reverted_files,
+                await asyncio.to_thread(repo_svc.read_files, project_id, old_sha)
+                if old_sha and old_sha != new_sha
+                else {},
             )
             await orchestrator_client.hot_reload(
                 project_id=project_id,

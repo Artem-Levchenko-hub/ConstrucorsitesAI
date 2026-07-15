@@ -1,21 +1,206 @@
 @import "tailwindcss";
 
+/* Class-based dark mode: `.dark` on <html> flips the token set. layout.tsx sets
+ * it before paint (this template DEFAULTS to dark — a messenger reads premium
+ * dark). Every surface is token-driven, so a per-project brand (Design-DNA pins
+ * --primary/--accent per build) re-themes the whole app for free. */
+@custom-variant dark (&:is(.dark *));
+
+/* ── Design tokens ────────────────────────────────────────────────────────────
+ * The shadcn kit (src/components/ui/*) and the chat UI both read these, so the
+ * app is themed, not raw. Light is defined so a light-niche app works too; the
+ * template ships dark. --primary is a VIVID accent (message bubbles, send,
+ * links) — NOT a neutral — because a chat needs a brand colour, and Design-DNA
+ * overrides --primary/--accent per project. */
 :root {
-  color-scheme: dark;
+  --radius: 0.7rem;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --background: oklch(0.985 0.002 265);
+  --foreground: oklch(0.19 0.02 265);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.19 0.02 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.19 0.02 265);
+
+  /* Brand accent (indigo). Design-DNA re-pins this per project. */
+  --primary: oklch(0.55 0.19 269);
+  --primary-foreground: oklch(0.985 0 0);
+  --accent: oklch(0.55 0.19 269);
+  --accent-foreground: oklch(0.985 0 0);
+
+  --secondary: oklch(0.965 0.004 265);
+  --secondary-foreground: oklch(0.24 0.02 265);
+  --muted: oklch(0.965 0.004 265);
+  --muted-foreground: oklch(0.53 0.02 265);
+
+  --destructive: oklch(0.58 0.23 27);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.65 0.16 155);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.78 0.15 80);
+  --warning-foreground: oklch(0.24 0.02 265);
+
+  --border: oklch(0.91 0.006 265);
+  --input: oklch(0.91 0.006 265);
+  --ring: var(--primary);
+
+  --sidebar: oklch(0.975 0.003 265);
+  --sidebar-foreground: oklch(0.33 0.02 265);
+  --sidebar-border: oklch(0.91 0.006 265);
 }
 
-html,
-body {
-  height: 100%;
+/* Dark token set — the premium near-black messenger. Specificity (0,2,0) so a
+ * per-project `:root { --primary: … }` accent override still wins on hue while
+ * these neutrals hold. */
+:root.dark,
+.dark {
+  --background: oklch(0.17 0.012 265);
+  --foreground: oklch(0.97 0.004 265);
+
+  --card: oklch(0.215 0.015 265);
+  --card-foreground: oklch(0.97 0.004 265);
+  --popover: oklch(0.215 0.015 265);
+  --popover-foreground: oklch(0.97 0.004 265);
+
+  --primary: oklch(0.62 0.19 269);
+  --primary-foreground: oklch(0.99 0 0);
+  --accent: oklch(0.62 0.19 269);
+  --accent-foreground: oklch(0.99 0 0);
+
+  --secondary: oklch(0.27 0.015 265);
+  --secondary-foreground: oklch(0.97 0.004 265);
+  --muted: oklch(0.27 0.015 265);
+  --muted-foreground: oklch(0.72 0.015 265);
+
+  --destructive: oklch(0.7 0.19 22);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.72 0.16 155);
+  --success-foreground: oklch(0.17 0.012 265);
+  --warning: oklch(0.82 0.15 80);
+  --warning-foreground: oklch(0.17 0.012 265);
+
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: var(--primary);
+
+  --sidebar: oklch(0.2 0.014 265);
+  --sidebar-foreground: oklch(0.9 0.008 265);
+  --sidebar-border: oklch(1 0 0 / 9%);
 }
 
-body {
-  background: #0a0a0a;
-  color: #fafafa;
+/* Map tokens → Tailwind v4 utilities so bg-background / bg-card / bg-primary /
+ * text-muted-foreground / border-border / bg-sidebar / rounded-2xl resolve. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --font-sans: var(--font-sans);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 6px);
 }
 
-/* Thin scrollbars for the chat panes. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: #3f3f46 transparent;
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklch, var(--ring) 45%, transparent);
+  }
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    /* Brand-tinted top glow so the canvas is never dead-flat. */
+    background-image: radial-gradient(120% 60% at 50% -12%, color-mix(in oklch, var(--primary) 10%, transparent), transparent 60%);
+    background-attachment: fixed;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--muted-foreground) 40%, transparent) transparent;
+  }
+}
+
+/* ── Elevation — soft layered depth (Linear / Stripe panels). ─────────────── */
+:root {
+  --elevation-1: 0 1px 2px -1px oklch(0.2 0.02 265 / 0.08), 0 6px 16px -6px oklch(0.2 0.02 265 / 0.10);
+  --elevation-2: 0 2px 8px -2px oklch(0.2 0.02 265 / 0.12), 0 18px 40px -12px oklch(0.2 0.02 265 / 0.18);
+}
+:root.dark,
+.dark {
+  --elevation-1: 0 1px 2px -1px oklch(0 0 0 / 0.5), 0 6px 16px -6px oklch(0 0 0 / 0.45);
+  --elevation-2: 0 2px 8px -2px oklch(0 0 0 / 0.6), 0 18px 40px -12px oklch(0 0 0 / 0.55);
+}
+.elev-1 { box-shadow: var(--elevation-1); }
+.elev-2 { box-shadow: var(--elevation-2); }
+.hover-lift { transition: transform .18s ease, box-shadow .18s ease; }
+@media (hover: hover) {
+  .hover-lift:hover { transform: translateY(-2px); box-shadow: var(--elevation-2); }
+}
+
+/* Signed-in shell glow — faint brand aurora behind the whole app. */
+.app-canvas {
+  background-image: radial-gradient(120% 65% at 50% -14%, color-mix(in oklch, var(--primary) 12%, transparent), transparent 62%);
+  background-attachment: fixed;
+}
+
+/* ── Entrance + status motion (reduced-motion safe) ──────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes omnia-fade-up { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: none } }
+  @keyframes omnia-fade-in { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes omnia-pulse-dot { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .fade-up { animation: omnia-fade-up .4s cubic-bezier(.16,1,.3,1) both; }
+  .fade-in { animation: omnia-fade-in .4s ease-out both; }
+  .msg-in { animation: omnia-fade-up .28s cubic-bezier(.16,1,.3,1) both; }
+  .pulse-dot { animation: omnia-pulse-dot 1.6s ease-in-out infinite; }
+  @keyframes omnia-typing { 0%,60%,100% { transform: translateY(0); opacity: .5 } 30% { transform: translateY(-3px); opacity: 1 } }
+  .typing-dot { animation: omnia-typing 1.2s ease-in-out infinite; }
+  .typing-dot:nth-child(2) { animation-delay: .15s; }
+  .typing-dot:nth-child(3) { animation-delay: .3s; }
+}
+
+/* Skeleton shimmer for loading panes. */
+.omnia-skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: color-mix(in oklch, var(--primary) 8%, var(--muted));
+  border-radius: var(--radius);
+}
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes omnia-sheen { 100% { transform: translateX(100%) } }
+  .omnia-skeleton::after {
+    content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+    background-image: linear-gradient(90deg, transparent, color-mix(in oklch, var(--primary) 22%, transparent) 50%, transparent);
+    animation: omnia-sheen 1.5s cubic-bezier(.16,1,.3,1) infinite;
+  }
 }

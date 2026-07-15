@@ -101,46 +101,89 @@ def inject_into_globals(
     return css.rstrip() + "\n\n" + block + "\n"
 
 
-def design_mood_directive(project_id: str, industry_hint: str | None = None) -> str:
-    """A per-project DESIGN MOOD the agent must build the UI in — so every app is
-    visually UNIQUE instead of the baked dark zinc/indigo template look.
+# Explicit theme cues in the USER's brief override the random seed — a user who
+# asks for «тёмный / премиум / ночной» must NOT get a seeded light palette
+# (2026-07-09: «Премиум тёмный» produced a white brutalist app because the mood
+# was seeded from project_id and ignored the words).
+_DARK_CUES = ("тёмн", "темн", "dark", "ночн", "чёрн", "черн", "midnight", "неон", "премиум", "luxe")
+_LIGHT_CUES = ("светл", "light", "белый фон", "на белом", "минимал", "воздушн", "пастельн")
 
-    Reuses the curated, WCAG-vetted palette + font pairing (60+ palettes / 16
-    pairs already seeded per project) and adds seeded density + heading
-    personality. Unlike CSS-token injection (inert on the hardcoded realtime
-    template), this steers what the AGENT WRITES, so it works for EVERY container
-    stack. Seeded by project_id → stable across re-prompts, distinct across
-    projects. The curated colours are pre-checked for AA contrast, so honoring
-    them keeps text readable.
+
+def _theme_override_from_brief(brief: str | None) -> str | None:
+    """Return "dark"/"light" when the brief states a clear preference, else None
+    (keep the seeded palette's own nature). Dark wins ties (explicit > implicit)."""
+    b = (brief or "").lower()
+    if any(c in b for c in _DARK_CUES):
+        return "dark"
+    if any(c in b for c in _LIGHT_CUES):
+        return "light"
+    return None
+
+
+def design_mood_directive(project_id: str, industry_hint: str | None = None) -> str:
+    """A per-project DESIGN MOOD the agent PERSONALISES the token system to — so
+    every app is visually UNIQUE, WITHOUT abandoning the template's design tokens.
+
+    Reuses the curated, WCAG-vetted palette + font pairing (seeded per project for
+    uniqueness), but honours an explicit dark/light cue in the brief, and — key —
+    frames every colour as a TOKEN VALUE to set in globals.css `:root`, NOT hex to
+    hardcode in components. That keeps `@theme`/`bg-primary`/Design-DNA working
+    (the old version handed raw hex → the agent hardcoded `bg-[#fff]` + inline
+    styles, killing the per-brand accent). Steers what the AGENT WRITES, so it
+    works for every container stack.
     """
     t = tokens_for_project(project_id, industry_hint=industry_hint)
     p = t.palette
     density = _DENSITY[_seed(project_id, "density") % len(_DENSITY)]
     heading = _HEADINGS[_seed(project_id, "heading") % len(_HEADINGS)]
     radius = _RADII[_seed(project_id, "radius") % len(_RADII)]
+
+    override = _theme_override_from_brief(industry_hint)
+    if override == "dark":
+        bg, text, surface, muted, border = "#0f1115", "#f4f5f7", "#1a1d24", "#9aa1ac", "#2a2e37"
+        theme_line = (
+            "• Тема: ТЁМНАЯ — пользователь попросил тёмный/премиум вид. НЕ делай "
+            "светлый фон.\n"
+        )
+    elif override == "light":
+        bg, text, surface, muted, border = "#ffffff", "#141619", "#f6f7f9", "#6b7280", "#e5e7eb"
+        theme_line = (
+            "• Тема: СВЕТЛАЯ — пользователь попросил светлый/минималистичный вид.\n"
+        )
+    else:
+        bg, text, surface, muted, border = p.bg, p.text, p.surface, p.muted, p.border
+        theme_line = ""
+
     return (
-        "\n\nДИЗАЙН-НАСТРОЕНИЕ ЭТОГО ПРОЕКТА — собери весь интерфейс ИМЕННО в нём. "
-        "НЕ используй дефолтный тёмный zinc/indigo вид шаблона: каждое приложение "
-        "должно выглядеть уникально.\n"
-        f"• Вайб: {p.vibe}\n"
-        f"• Холст: фон {p.bg}, основной текст {p.text}, поверхности/карточки "
-        f"{p.surface}, приглушённый текст {p.muted}, границы {p.border}\n"
-        f"• Акцент (кнопки/ссылки/активные пузыри): {p.primary}; вторичный {p.accent}\n"
-        f"• Скругления: {radius}\n"
+        "\n\nДИЗАЙН-НАСТРОЕНИЕ ЭТОГО ПРОЕКТА — персонализируй под него, НЕ ломая "
+        "систему токенов шаблона. РЕДАКТИРУЙ ЗНАЧЕНИЯ переменных в "
+        "src/app/globals.css (`:root` и `:root.dark`) — НЕ переписывай файл "
+        "хардкодом и НЕ убирай `@theme`. В компонентах используй ТОЛЬКО токены "
+        "(bg-background / bg-card / bg-primary / text-foreground / "
+        "text-muted-foreground / border-border) — НИКОГДА не `bg-[#hex]`, не "
+        "inline `style={{color:…}}`, не `neutral-*`.\n"
+        + theme_line
+        + f"• Вайб: {p.vibe}\n"
+        f"• Токены холста → задай: --background: {bg}; --foreground: {text}; "
+        f"--card/--popover: {surface}; --muted-foreground: {muted}; "
+        f"--border/--input: {border}\n"
+        f"• Токены акцента → задай: --primary: {p.primary}; --accent: {p.accent} "
+        "(кнопки/ссылки/свои пузыри = bg-primary)\n"
+        f"• Скругления: задай --radius под {radius}\n"
         f"• Плотность: {density}\n"
         f"• Заголовки: {heading}\n"
-        f"• Шрифты: display «{t.display_font}», body «{t.body_font}» — подключи их "
+        f"• Шрифты: display «{t.display_font}», body «{t.body_font}» — подключи "
         f'через <link rel="stylesheet" href="{t.google_fonts_url}"> в layout и '
-        "примени font-family по интерфейсу.\n"
-        "Применяй эти цвета/отступы/типографику ко ВСЕМ экранам (шапка, сайдбар, "
-        "список бесед, карточки, инпуты, пузыри сообщений). Под запретом "
-        "training-дефолты indigo/violet/purple вне указанного акцента."
+        "задай --font-sans.\n"
+        "Применяй тему ко ВСЕМ экранам (шапка, сайдбар, список бесед, карточки, "
+        "инпуты, пузыри). Под запретом training-дефолты indigo/violet вне "
+        "заданного акцента."
     )
 
 
 __all__ = [
     "MARKER",
     "design_dna_css",
-    "inject_into_globals",
     "design_mood_directive",
+    "inject_into_globals",
 ]

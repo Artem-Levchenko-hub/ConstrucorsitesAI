@@ -169,12 +169,20 @@ async def run_public_access_gate(
     if not base_url:
         return summarize([Check("preview running", False, "no dev_url")])
 
-    # Discover generated route-handler files (export GET/POST/… under src/app/api).
+    # Discover generated route-handler files under src/app/api. CAUTION: the
+    # orchestrator's `agent_grep` is a FIXED-STRING / basic grep — it does NOT
+    # support extended-regex. The old ERE pattern
+    # `export (async )?(function|const) (GET|POST|…)` therefore silently returned
+    # "(no matches)" for EVERY app, so this gate passed VACUOUSLY since it shipped
+    # (verified live 2026-07-07: fixed strings match, `(GET|POST)` → no matches).
+    # Grep the literal `export` instead — `api_routes_from_grep` keys off the
+    # `/route.ts` FILE path (method-agnostic), so any exported line in a route
+    # file is enough to surface that route's URL.
     try:
         dump = await orchestrator_client.agent_grep(
             UUID(str(project_id)),
             slug,
-            pattern=r"export (async )?(function|const) (GET|POST|PUT|PATCH|DELETE)",
+            pattern="export",
             path="src/app/api",
         )
     except Exception as exc:

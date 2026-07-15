@@ -243,6 +243,7 @@ async def run_agent_build(
     last_sig = ""
     repeat_count = 0
     no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
+    infra_dead_streak = 0  # consecutive tool ops that died on infra (container gone)
     sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
     last_build_ok: bool | None = None  # result of the most recent `build` action
     red_build_streak = 0  # consecutive failed builds → escalate to the strong model
@@ -629,6 +630,26 @@ async def run_agent_build(
                 continue  # don't execute another read — force write/done next
 
         obs = await execute(action)
+        # Circuit breaker: the executor tags orchestrator/container-unreachable
+        # failures as infra_dead (2026-07-08: hibernate stopped a container
+        # mid-build and the loop kept feeding 500s to the model for 6 minutes).
+        # A couple of consecutive infra deaths means the WORLD is gone, not the
+        # app — abort honestly instead of burning LLM turns on a corpse.
+        if obs.get("infra_dead"):
+            infra_dead_streak += 1
+            if infra_dead_streak >= _INFRA_DEAD_ABORT_AT:
+                print(
+                    f"[AGENT] step={step} INFRA-DEAD x{infra_dead_streak} → abort",
+                    flush=True,
+                )
+                return AgentResult(
+                    done=False,
+                    summary="container/orchestrator unreachable — build aborted",
+                    files=written, steps=step + 1, transcript=convo,
+                    stop_reason="error",
+                )
+        else:
+            infra_dead_streak = 0
         if action.name == "build":
             last_build_ok = bool(obs.get("ok"))
             # Building clears the build-pressure / rotation window: the agent got
@@ -673,6 +694,13 @@ async def run_agent_build(
         max_steps - 1, "budget",
     )
 
+
+# Infra circuit breaker: consecutive tool ops whose failure was the CONTAINER /
+# orchestrator being unreachable (executor tags them infra_dead) → abort with
+# stop_reason="error". 3 = tolerates a transient orchestrator restart (one bad
+# op, next succeeds) while a truly dead container aborts within ~3 LLM turns
+# instead of grinding the full step budget (2026-07-08 incident).
+_INFRA_DEAD_ABORT_AT = 3
 
 # Cycle breaker thresholds (no-WRITE streak): after this many consecutive actions
 # that write nothing (read_file/grep/list_dir/build), nudge HARD to write; after the
@@ -1421,6 +1449,24 @@ def make_container_executor(
                 }
 
             return {"ok": False, "error": f"unknown action {action.name}"}
+        except orchestrator_client.OrchestratorUnavailable as exc:
+            # Container/orchestrator unreachable — the WORLD died, not the app.
+            # Tag it so the loops' circuit breaker can abort instead of feeding
+            # an endless stream of 500s to the model (2026-07-08 incident).
+            return {
+                "ok": False,
+                "error": f"infra: {exc.message}",
+                "infra_dead": True,
+            }
+        except orchestrator_client.OrchestratorBadRequest as exc:
+            # The orchestrator's structured 409 "container_not_running" (a dead
+            # container that in-line wake could not revive) is infra death too.
+            _infra = "container_not_running" in str(exc.details or "")
+            return {
+                "ok": False,
+                "error": f"{'infra: ' if _infra else ''}{exc.message}",
+                **({"infra_dead": True} if _infra else {}),
+            }
         except Exception as exc:  # never let an executor crash kill the loop
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 

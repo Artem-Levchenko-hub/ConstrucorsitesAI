@@ -19,6 +19,7 @@ stays the prod default until this is verified on real builds and billing is wire
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -35,7 +36,23 @@ _MAX_TOKENS = 32000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
-_CALL_RETRIES = 5  # oneprovider enforces a per-account concurrency cap (429)
+_CALL_RETRIES = 8  # oneprovider: 429 concurrency cap + sustained 502/504 flake bursts
+
+# EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
+# (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
+# text-protocol ACTIONS). Native counts assistant TURNS instead — one turn often
+# bundles several parallel tool calls, and the native flow legitimately spends
+# its first turns surveying the big template — so the nudge fires later (6 turns
+# ≈ 8-15 read calls) and the abort at 12 turns still saves 28 slow Opus steps.
+_NO_WRITE_NUDGE_AT = 6
+_NO_WRITE_ABORT_AT = 12
+
+# Infra circuit breaker: consecutive turns where EVERY executed tool op died on
+# infra (container/orchestrator unreachable — executor tags obs["infra_dead"]).
+# 3 turns tolerates a transient orchestrator restart; a truly dead container
+# aborts in ~3 turns instead of grinding the whole step budget (2026-07-08:
+# hibernate stopped a container mid-build → 40 min of doomed 500 bursts).
+_INFRA_DEAD_ABORT_AT = 3
 
 # Native tool schemas — mirror the action set of make_container_executor._execute.
 # `done` ends the loop. Kept intentionally minimal (fact tools only): the model
@@ -70,6 +87,18 @@ _TOOLS: list[dict[str, Any]] = [
     _tool("bash", "Run a shell command in the dev container.", {"cmd": _STR}, ["cmd"]),
     _tool("read_logs", "Tail the live dev-server logs (runtime errors build can't see).",
           {"tail": {"type": "integer"}}),
+    _tool("runtime_check", "Open a route in the RUNNING app and get the REAL HTTP "
+          "status — a typecheck-clean app can still 5xx on render.",
+          {"path": _STR}, ["path"]),
+    _tool("probe", "Make a REAL request AS A LOGGED-IN test user and get the exact "
+          "status+body — the only way to prove an interactive feature (create/"
+          "save/submit) works end-to-end, which a clean build + 200 page do NOT.",
+          {"method": _STR, "path": _STR, "body": {"type": "object"}}, ["path"]),
+    _tool("verify_isolation", "PROVE no cross-tenant leak: logs in TWO users, A "
+          "creates the resource, then asserts B is DENIED reading it AND it is "
+          "absent from B's list. Run for EVERY owned resource — a green build "
+          "never proves isolation.",
+          {"create": {"type": "object"}, "read": {"type": "object"}}, ["create"]),
     _tool("done", "Finish — the requested app is built AND the last build is clean.",
           {"summary": _STR}, ["summary"]),
 ]
@@ -94,6 +123,33 @@ def _obs_to_tool_result(tool_use_id: str, obs: dict[str, Any]) -> dict[str, Any]
     return block
 
 
+# A `build` failure that references a non-existent internal module (TS2307) is a
+# specific, self-inflicted failure mode: the model hallucinates a data-access
+# "SDK"/"engine" layer (`@/lib/entities/engine`, `@/lib/sdk/*`) that belongs to a
+# DIFFERENT stack and doesn't exist here → the whole build stays red and the loop
+# burns steps re-reading. Detect it and hand the model the CORRECT recovery so it
+# fixes the build in its own loop instead of scaffolding the phantom module.
+_TS2307_RE = re.compile(r"Cannot find module '(@/[^']+)'")
+
+
+def _module_not_found_hint(build_output: str) -> str | None:
+    """If a build error is `TS2307: Cannot find module '@/...'`, return an inline
+    hint steering the model to delete the phantom import / use the real primitive
+    (never to scaffold the missing module). None if no such error present."""
+    mods = _TS2307_RE.findall(build_output or "")
+    if not mods:
+        return None
+    uniq = list(dict.fromkeys(mods))[:5]
+    return (
+        "\n\n[HINT] These imports point at modules that DO NOT EXIST in this "
+        f"project: {', '.join(uniq)}. Do NOT create them and do NOT build an "
+        "SDK/engine/repository wrapper to satisfy the import — that pattern is from "
+        "a different stack. Remove the phantom import and use the real primitive "
+        "your stack guide documents (query the DB directly), or inline the logic. "
+        "Verify a path with list_dir/grep before importing it."
+    )
+
+
 def _text_of(content: list[dict[str, Any]]) -> str:
     return "\n".join(
         str(b.get("text", "")) for b in content
@@ -103,13 +159,40 @@ def _text_of(content: list[dict[str, Any]]) -> str:
 
 _NATIVE_PREAMBLE = (
     "Ты — автономный инженер: строишь РАБОЧЕЕ приложение в этом проекте, как Claude "
-    "Code. У тебя есть инструменты — вызывай их напрямую: read_file/list_dir/grep "
-    "чтобы понять существующий код, write_file/edit_file чтобы писать, build чтобы "
-    "проверить компиляцию, bash/read_logs чтобы проверить рантайм, docs для свежей "
-    "документации библиотек. Думай сколько нужно. Цикл: пиши код → build → чини "
-    "РЕАЛЬНЫЕ ошибки до чистоты → проверь что работает → done. Делай что задумал, "
-    "пиши полноценно, без заглушек и TODO. Когда приложение собрано и build чистый — "
-    "вызови done с кратким summary."
+    "Code. Инструменты вызывай напрямую: read_file/list_dir/grep — понять код, "
+    "write_file/edit_file — писать, build — компиляция, bash/read_logs — рантайм, "
+    "runtime_check — открыть роут в ЖИВОМ приложении, probe — реальный запрос ОТ "
+    "ИМЕНИ залогиненного юзера, verify_isolation — доказать отсутствие утечки данных "
+    "между юзерами, docs — свежая дока библиотек. Думай сколько нужно. Цикл: пиши "
+    "код → build → чини РЕАЛЬНЫЕ ошибки до чистоты → ДОКАЖИ что работает → done. Пиши "
+    "полноценно, без заглушек и TODO.\n\n"
+    "ДОКАЖИ перед done — чистый build это НЕ доказательство работы: "
+    "(1) runtime_check главные роуты (чистый typecheck всё равно может 5xx на рендере); "
+    "(2) для интерактива (создать/сохранить/отправить/удалить) — probe РЕАЛЬНЫМ запросом "
+    "от залогиненного юзера, требуй 2xx с ожидаемым телом (чистая страница НЕ доказывает, "
+    "что POST/DELETE юзера не отдаёт 4xx); (3) для данных юзера — verify_isolation на "
+    "КАЖДОМ владеемом ресурсе (green build не доказывает изоляцию). Чини до зелёного — "
+    "потом done.\n\n"
+    "ВАЖНО: если build пишет `Cannot find module '@/...'` — этого пути НЕТ в проекте. "
+    "НЕ создавай модуль под импорт и НЕ выдумывай SDK/engine/repository-обёртку; удали "
+    "фантомный импорт и используй реальный примитив стека (см. гайд) напрямую. "
+    "И НИКОГДА не делай fetch() к СВОЕМУ ЖЕ API из серверного кода (server component / "
+    "server action / route handler) — cookie сессии не передаётся (будет 401) и это "
+    "лишний круг; вызывай `db`/данные напрямую в самой функции."
+)
+
+
+_EXPLORE_STALL_NUDGE = (
+    "[LOOP GUARD] Several turns in a row without writing any file. Stop "
+    "exploring — you have enough context. Your NEXT turn MUST call write_file "
+    "or edit_file (or `build` and fix the errors it returns). Reading again "
+    "makes no progress."
+)
+_DONE_WHEN_GREEN_NUDGE = (
+    "[LOOP GUARD] The last build is CLEAN and you have written nothing for "
+    "several turns. Do NOT keep re-reading. Finish the proof you still owe "
+    "(runtime_check main routes, probe interactive actions, verify_isolation "
+    "owned resources) and call done NOW."
 )
 
 
@@ -152,8 +235,12 @@ async def _call_messages(
             r.raise_for_status()
             return r.json()
         except httpx.HTTPError as exc:
+            # oneprovider flakes in SUSTAINED bursts (observed live: series of
+            # 502s + 504s over several minutes killed builds mid-run). Linear
+            # 3-15s backoff only covered ~30s; exponential-with-cap rides out a
+            # multi-minute flake window (~3.5 min total) before giving up.
             last = exc
-            await asyncio.sleep(3.0 * (attempt + 1))
+            await asyncio.sleep(min(45.0, 4.0 * (2 ** attempt)))
     raise last or RuntimeError("messages call failed")
 
 
@@ -182,7 +269,11 @@ async def run_native_build(
     last_build_ok: bool | None = None
     wrote_since_build = False
     done_rejections = 0
-    _DONE_REJECT_CAP = 3
+    # Room to bounce a premature done and actually heal (a hallucinated-module
+    # build usually needs a couple of correction turns) before we let it ship red.
+    _DONE_REJECT_CAP = 5
+    no_write_turns = 0  # consecutive assistant turns with no successful write
+    infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
 
     async with httpx.AsyncClient() as client:
         for step in range(max_steps):
@@ -217,15 +308,30 @@ async def run_native_build(
             ]
             if not tool_uses:
                 # Model ended its turn with prose and no tool — it's done talking.
+                # A prose-less finish must NOT leak "(no tool call)" to the chat
+                # (observed live: it became the user-visible assistant message on
+                # a template-already-covers-it build). Human fallback for done;
+                # the technical marker stays for the non-done diagnostics path.
+                _done = resp.get("stop_reason") == "end_turn"
+                _text = _text_of(content)
+                if not _text:
+                    _text = (
+                        "Готово — приложение собрано и проверено. Открой превью."
+                        if _done
+                        else "(no tool call)"
+                    )
                 return AgentResult(
-                    done=(resp.get("stop_reason") == "end_turn"),
-                    summary=_text_of(content) or "(no tool call)",
+                    done=_done,
+                    summary=_text,
                     files=written, steps=step + 1, transcript=convo,
                     stop_reason="no_tool",
                 )
 
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
+            wrote_this_turn = False
+            ops_this_turn = 0  # executed (non-done) tool ops this turn
+            infra_this_turn = 0  # of those, how many died on infra
             for tu in tool_uses:
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
@@ -253,13 +359,28 @@ async def run_native_build(
                 except Exception as exc:  # a tool crash must not kill the build
                     obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
 
-                if name == "write_file" and obs.get("ok"):
-                    written[action.path] = action.args.get("content", "")
+                ops_this_turn += 1
+                if obs.get("infra_dead"):
+                    infra_this_turn += 1
+                if name in ("write_file", "edit_file") and obs.get("ok"):
+                    if name == "write_file":
+                        written[action.path] = action.args.get("content", "")
+                    elif isinstance(obs.get("content"), str):
+                        # executor returns the post-edit content (mirrors the
+                        # text loop's tracking at agent_builder.py) — closes the
+                        # gap where edit_file never dirtied the done fact-gate.
+                        written[action.path] = obs["content"]
                     wrote_since_build = True
+                    wrote_this_turn = True
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
                     wrote_since_build = False
-                results.append(_obs_to_tool_result(tu_id, obs))
+                _tr = _obs_to_tool_result(tu_id, obs)
+                if name == "build" and not obs.get("ok"):
+                    _hint = _module_not_found_hint(str(_tr.get("content") or ""))
+                    if _hint:
+                        _tr["content"] = str(_tr["content"]) + _hint
+                results.append(_tr)
 
             if done_summary is not None:
                 if emit:
@@ -268,7 +389,51 @@ async def run_native_build(
                     done=True, summary=done_summary, files=written,
                     steps=step + 1, transcript=convo, stop_reason="done",
                 )
+            # Infra circuit breaker: a turn where EVERY executed op died on
+            # infra means the container/orchestrator is gone — the model can't
+            # fix that. Abort after a few such turns instead of grinding the
+            # whole step budget against a corpse (2026-07-08 incident).
+            if ops_this_turn and infra_this_turn == ops_this_turn:
+                infra_dead_turns += 1
+            else:
+                infra_dead_turns = 0
+            # EXPLORE-STALL guard (parity with run_agent_build): too many turns
+            # with no successful write means the model is exploring, not
+            # building. The nudge rides in the SAME user message as the
+            # tool_results (roles must alternate; tool_result blocks must come
+            # first), then abort as "exploring" — messages.py's honest-result
+            # branches (looped-but-serves / edit-no-op) already consume it.
+            if wrote_this_turn:
+                no_write_turns = 0
+            else:
+                no_write_turns += 1
+                if _NO_WRITE_NUDGE_AT <= no_write_turns < _NO_WRITE_ABORT_AT:
+                    results.append({
+                        "type": "text",
+                        "text": (
+                            _DONE_WHEN_GREEN_NUDGE
+                            if last_build_ok is True and not wrote_since_build
+                            else _EXPLORE_STALL_NUDGE
+                        ),
+                    })
+                    if emit:
+                        await emit("agent.stalled", {"step": step})
             convo.append({"role": "user", "content": results})
+            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT:
+                log.warning("agent_native.infra_dead_abort", step=step)
+                return AgentResult(
+                    done=False,
+                    summary="container/orchestrator unreachable — build aborted",
+                    files=written, steps=step + 1, transcript=convo,
+                    stop_reason="error",
+                )
+            if no_write_turns >= _NO_WRITE_ABORT_AT:
+                return AgentResult(
+                    done=False,
+                    summary="stuck exploring (reading/verifying) without writing any file",
+                    files=written, steps=step + 1, transcript=convo,
+                    stop_reason="exploring",
+                )
 
     return AgentResult(
         done=False, summary="hit step budget without calling done",

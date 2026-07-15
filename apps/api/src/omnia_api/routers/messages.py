@@ -2771,8 +2771,10 @@ async def _process_prompt(
                 # model end-to-end via native Anthropic tools + preserved thinking;
                 # fact-gate only (the `build` tool). Reuses the SAME executor; the
                 # native system prompt drops the text-action LOOP_PROTOCOL. Handles
-                # bare/from-scratch builds too (no forced template) — the native loop
-                # has no brittle stall-guards, so Opus can scaffold freely.
+                # bare/from-scratch builds too (no forced template). Guards are
+                # TURN-level (generous): no-write nudge@6/abort@12 turns + an
+                # infra circuit breaker (container dead → abort in ~3 turns) —
+                # see agent_native._NO_WRITE_*/_INFRA_DEAD_ABORT_AT.
                 from omnia_api.services import agent_native
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(_stack_guide, _skills),
@@ -2782,6 +2784,34 @@ async def _process_prompt(
                     emit=_agent_emit,
                     max_steps=_agent_steps,
                 )
+                # ONE bounded retry on stop=error: an "error" here is a gateway
+                # flake that outlived _call_messages' retries (oneprovider 502/504
+                # bursts) or the infra breaker — either way retrying after a pause
+                # often just works: files already written persist in the container
+                # and a dead container is woken by the first agent op. Without
+                # this, a single provider burst = «Сборка прервана» to the user.
+                if not _agent_res.done and _agent_res.stop_reason == "error":
+                    print(
+                        "[PP] agentic_build stop=error → one retry after 30s pause",
+                        flush=True,
+                    )
+                    try:
+                        await _agent_emit(
+                            "agent.step",
+                            {"action": "сбой связи с моделью — повторяю сборку…",
+                             "kind": "step"},
+                        )
+                    except Exception:
+                        pass
+                    await asyncio.sleep(30)
+                    _agent_res = await agent_native.run_native_build(
+                        system=agent_native.native_system_prompt(_stack_guide, _skills),
+                        task=_agent_user,
+                        execute=_agent_executor,
+                        user_id=str(user_id),
+                        emit=_agent_emit,
+                        max_steps=_agent_steps,
+                    )
             else:
                 _agent_res = await agent_builder.run_agent_build(
                     system_prompt=_agent_system,
@@ -2857,6 +2887,62 @@ async def _process_prompt(
                     break
 
             files = _all_files
+
+            # ZERO-FILE FIRST BUILD floor. A first build that wrote NOTHING is the
+            # worst case — the templates now ship a WORKING themed default, so the
+            # agent can look at it and call `done` having personalised nothing
+            # (2026-07-09 «мессенджер2»: files=0 → the app shipped as the raw
+            # scaffold on the default indigo, no brand, no feature work). Force ONE
+            # escalated retry with an imperative "you MUST write" prompt (mirrors
+            # edit_auto_repair, which is edit-only). Not a spin: single pass, strong
+            # model, then whatever it produced stands.
+            if (
+                not _is_edit
+                and not files
+                and get_settings().use_agentic_builder
+            ):
+                print("[PP] agentic_build files=0 → one escalated write-floor retry", flush=True)
+                try:
+                    await _agent_emit(
+                        "agent.step",
+                        {"action": "оформляю дизайн под задачу…", "kind": "step"},
+                    )
+                except Exception:
+                    pass
+                _floor_res = await agent_builder.run_agent_build(
+                    system_prompt=_stack_system,
+                    user_prompt=(
+                        "Ты НИЧЕГО не записал — это НЕ готовая сборка. Шаблон ставит "
+                        "рабочий, но ДЕФОЛТНЫЙ вид (индиго-акцент, демо-экраны). Твоя "
+                        "следующая команда ОБЯЗАНА быть write_file/edit_file. Сделай "
+                        "приложение своим под запрос пользователя:\n"
+                        "1) Дизайн: перепиши палитру (--primary/--accent) и шрифт в "
+                        "src/app/globals.css + src/app/layout.tsx под нишу/бренд из "
+                        "запроса; забрендируй экраны (шапка, сайдбар, бабблы, "
+                        "auth) — токенами, без neutral-*/#000.\n"
+                        "2) Функционал: допиши всё, чего требует запрос сверх демо "
+                        "(экраны, поля, действия).\n"
+                        f"Затем build, почини до чистоты, проверь и done.{_seed_block}"
+                    ),
+                    model=_escalate_model or _agent_model,
+                    escalate_model=_escalate_model,
+                    execute=_agent_executor,
+                    max_steps=max(int(_agent_steps), 24),
+                    emit=_agent_emit,
+                    user_id=str(user_id),
+                    project_id=str(project_id),
+                    require_green_before_done=get_settings().agent_require_green_before_done,
+                    ship_green_on_abort=get_settings().agent_ship_green_on_abort,
+                )
+                _total_steps += _floor_res.steps
+                if _floor_res.files:
+                    _all_files.update(_floor_res.files)
+                    files = _all_files
+                    _agent_res = _floor_res
+                print(
+                    f"[PP] write-floor retry done files={len(files)} stop={_floor_res.stop_reason}",
+                    flush=True,
+                )
 
             # Layer C — backend-guardrail self-heal. The ban on writing backend is
             # lifted (the agent may author custom server logic), so STATICALLY

@@ -289,6 +289,8 @@ async def hot_reload(
         useful inside the dev preview than as a 5xx to the user).
     """
     _verify_token(x_internal_token)
+    # A build writing files is activity too — keep hibernate off its back.
+    await record_activity(str(payload.project_id))
     container_name = f"omnia-dev-{slug}"
 
     write_result = await write_files(container_name, payload.files)
@@ -391,6 +393,10 @@ async def agent_read_file(
 ) -> dict[str, object]:
     """Read ANY file under /app from the running dev container (agent loop)."""
     _verify_token(x_internal_token)
+    # An agent op IS activity: without this the hibernate sweeper sees a purely
+    # reading build agent as idle and docker-stops the container MID-BUILD
+    # (2026-07-08 incident). Same for every agent/* handler below.
+    await record_activity(project_id)
     rel = _safe_app_path(path)
     container_name = f"omnia-dev-{slug}"
     try:
@@ -398,7 +404,9 @@ async def agent_read_file(
             container_name, cmd=["cat", "--", rel],
             workdir="/app", max_output=_AGENT_MAX_READ,
         )
-    except OrchestratorError:
+    except OrchestratorError as exc:
+        if exc.code == "container_not_running":
+            raise  # structured 409 → apps/api circuit breaker aborts the build
         return {"found": False, "content": ""}
     found = result["exit_code"] == "0"
     return {
@@ -417,6 +425,7 @@ async def agent_list_dir(
 ) -> dict[str, object]:
     """List a directory under /app (agent loop)."""
     _verify_token(x_internal_token)
+    await record_activity(project_id)
     rel = _safe_app_path(path)
     container_name = f"omnia-dev-{slug}"
     try:
@@ -424,7 +433,9 @@ async def agent_list_dir(
             container_name, cmd=["ls", "-la", "--", rel],
             workdir="/app", max_output=_AGENT_MAX_LIST,
         )
-    except OrchestratorError:
+    except OrchestratorError as exc:
+        if exc.code == "container_not_running":
+            raise
         return {"ok": False, "detail": "container not running"}
     ok = result["exit_code"] == "0"
     return {"ok": ok, "detail": result["stdout"] if ok else result["stderr"]}
@@ -440,6 +451,7 @@ async def agent_grep(
 ) -> dict[str, object]:
     """Recursive text search under /app (agent loop). grep exit 1 = no match."""
     _verify_token(x_internal_token)
+    await record_activity(project_id)
     rel = _safe_app_path(path)
     if not pattern:
         raise OrchestratorError(
@@ -453,7 +465,9 @@ async def agent_grep(
             container_name, cmd=["grep", "-rnI", "--", pattern, rel],
             workdir="/app", max_output=_AGENT_MAX_GREP,
         )
-    except OrchestratorError:
+    except OrchestratorError as exc:
+        if exc.code == "container_not_running":
+            raise
         return {"ok": False, "detail": "container not running"}
     out = result["stdout"]
     return {"ok": True, "detail": out if out else "(no matches)"}
@@ -512,6 +526,7 @@ async def agent_build(
     actual compiler errors so the agent can fix them. A dep-doctor pass first
     installs any missing allowlisted package (see ``_run_dep_doctor``)."""
     _verify_token(x_internal_token)
+    await record_activity(project_id)
     container_name = f"omnia-dev-{slug}"
     dep_note = await _run_dep_doctor(container_name)
     try:
@@ -523,6 +538,8 @@ async def agent_build(
             max_output=_AGENT_MAX_BUILD,
         )
     except OrchestratorError as exc:
+        if exc.code == "container_not_running":
+            raise
         return {"ok": False, "error": exc.message}
     ok = result["exit_code"] == "0"
     detail = (result["stdout"] + "\n" + result["stderr"]).strip()
@@ -553,6 +570,7 @@ async def agent_exec(
 ) -> dict[str, object]:
     """Run a shell command in the project's dev container (agent `bash` tool)."""
     _verify_token(x_internal_token)
+    await record_activity(project_id)
     low = (cmd or "").strip()
     if not low:
         raise OrchestratorError(
@@ -567,6 +585,8 @@ async def agent_exec(
             workdir="/app", timeout_sec=180, max_output=_AGENT_MAX_BUILD,
         )
     except OrchestratorError as exc:
+        if exc.code == "container_not_running":
+            raise
         return {"ok": False, "detail": exc.message}
     ok = result["exit_code"] == "0"
     out = (result["stdout"] + "\n" + result["stderr"]).strip()
