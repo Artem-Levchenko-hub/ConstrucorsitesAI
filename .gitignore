@@ -66,3 +66,4 @@ docker-compose.yml.bak.*
 # docs/plans/2026-06-16-dogfood-eval-routine.md. Distilled findings live in that
 # committed doc; raw run artifacts stay local.
 _routine/
+.omc/
