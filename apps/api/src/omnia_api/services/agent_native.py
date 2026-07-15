@@ -103,6 +103,52 @@ _TOOLS: list[dict[str, Any]] = [
           {"summary": _STR}, ["summary"]),
 ]
 
+# --- Anthropic prompt caching (AITunnel honours it on the native surface —
+# live-verified 15.07: cache_read ≈ 90% cheaper than a fresh write) ------------
+# The native loop resends the WHOLE growing transcript every turn, so caching is
+# the single biggest token lever here. We set three ephemeral breakpoints
+# (Anthropic allows 4): (1) the tool schemas — stable for the whole build;
+# (2) the system prompt — stable for the whole build; (3) the last block of the
+# last user turn — a MOVING breakpoint that caches the entire conversation
+# prefix up to "now", so each next turn reads almost everything from cache. The
+# 5-min TTL refreshes on every hit, so back-to-back turns keep it warm.
+_CACHE: dict[str, str] = {"type": "ephemeral"}
+
+# Tool schemas are constant → cache the whole block by marking the LAST tool.
+_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_TOOLS[:-1],
+    {**_TOOLS[-1], "cache_control": _CACHE},
+]
+
+
+def _system_blocks(system: str) -> list[dict[str, Any]]:
+    """System prompt as a single cache-marked text block (Anthropic's `system`
+    accepts a block list; cache_control can't ride a plain string)."""
+    return [{"type": "text", "text": system, "cache_control": _CACHE}]
+
+
+def _with_incremental_cache(convo: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return ``convo`` with a moving cache breakpoint on the last block of the
+    last user turn — caches the whole prefix so the next turn reads it back
+    instead of re-billing it. The original list is NOT mutated (assistant turns,
+    incl. thinking-block signatures, must be echoed verbatim); only the tail
+    message is shallow-copied. No-op unless the last turn is a user turn (always
+    true at call time: task, then tool_result batches)."""
+    if not convo or convo[-1].get("role") != "user":
+        return convo
+    last = convo[-1]
+    content = last.get("content")
+    if isinstance(content, str) and content:
+        new_content: list[dict[str, Any]] = [
+            {"type": "text", "text": content, "cache_control": _CACHE}
+        ]
+    elif isinstance(content, list) and content:
+        new_content = list(content)
+        new_content[-1] = {**new_content[-1], "cache_control": _CACHE}
+    else:
+        return convo
+    return [*convo[:-1], {**last, "content": new_content}]
+
 
 def _tool_use_to_action(block: dict[str, Any]) -> Action:
     inp = block.get("input") or {}
@@ -217,10 +263,12 @@ async def _call_messages(
         "model": _MODEL,
         "max_tokens": _MAX_TOKENS,
         "thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGET},
-        "system": system,
-        "tools": _TOOLS,
+        # Prompt caching: cache the stable system prompt + tool schemas, and a
+        # moving breakpoint on the transcript tail (see _with_incremental_cache).
+        "system": _system_blocks(system),
+        "tools": _TOOLS_CACHED,
         "tool_choice": {"type": "auto"},
-        "messages": convo,
+        "messages": _with_incremental_cache(convo),
     }
     last: Exception | None = None
     for attempt in range(_CALL_RETRIES):
@@ -258,8 +306,9 @@ async def run_native_build(
 
     ``system`` is the stack/system prompt (reuse ``agent_builder.build_system_prompt``);
     ``task`` is the user's request. One model, full transcript (thinking preserved),
-    fact-gate = the ``build`` tool. No lossy window (opus bills tokens; prompt-cache on
-    the passthrough path is a later optimization).
+    fact-gate = the ``build`` tool. No lossy window — instead the full prefix
+    (system + tools + transcript) rides Anthropic prompt caching every turn, so
+    resending it is ~90% cheaper than a fresh write (see _call_messages).
     """
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
