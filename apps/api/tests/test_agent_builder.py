@@ -499,6 +499,39 @@ def test_green_explore_stall_nudges_done_not_write():
     assert any(m == ab._DONE_WHEN_GREEN_NUDGE for m in user_msgs)
 
 
+_FONTS_IMPORT = (
+    '@import url("https://fonts.googleapis.com/css2?'
+    'family=Libre+Franklin:wght@400;500;600;700&family=Lora:wght@400;500;600&display=swap");'
+)
+
+
+def test_css_import_hoist_fonts_with_semicolons() -> None:
+    """The live breakage: a Google-Fonts @import (inner `;` in `wght@400;500`)
+    placed AFTER :root must be hoisted to the top — the regex must NOT stop at the
+    first inner semicolon (that made the sanitizer silently no-op, 2026-07-16)."""
+    bad = ".x{a:1}\n}\n" + _FONTS_IMPORT + "\n:root {\n  --radius: 0.625rem;\n}"
+    out = ab._sanitize_css_imports("src/app/globals.css", bad)
+    assert out.lstrip().startswith(_FONTS_IMPORT), out[:120]
+    assert not ab._css_import_misplaced(out)
+    assert "--radius" in out and ".x{a:1}" in out  # rules survive
+
+
+def test_css_import_correct_file_untouched() -> None:
+    good = _FONTS_IMPORT + "\n:root{--a:1}"
+    assert ab._sanitize_css_imports("src/app/globals.css", good) == good
+
+
+def test_css_import_charset_stays_first() -> None:
+    cs = '@charset "utf-8";\n.a{x:1}\n' + _FONTS_IMPORT
+    out = ab._sanitize_css_imports("g.css", cs)
+    assert out.startswith('@charset "utf-8";\n' + _FONTS_IMPORT)
+
+
+def test_css_import_non_css_untouched() -> None:
+    src = ".x{a:1}\n" + _FONTS_IMPORT
+    assert ab._sanitize_css_imports("src/app/page.tsx", src) == src
+
+
 if __name__ == "__main__":
     # Allow `python tests/test_agent_builder.py` without pytest.
     import sys

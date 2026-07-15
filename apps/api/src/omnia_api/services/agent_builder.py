@@ -1262,8 +1262,13 @@ def _sanitize_nested_layout(path: str, content: str) -> str:
 # can't guarantee ordering; the engine can. On write, hoist every @import to the
 # top (after an optional @charset), preserving their order. A file whose imports
 # are already correctly placed is returned byte-identical.
-_CSS_IMPORT_RE = re.compile(r"(?im)^[ \t]*@import\b[^;{}]*;[ \t]*$\n?")
-_CSS_CHARSET_RE = re.compile(r"(?im)^[ \t]*@charset\b[^;]*;[ \t]*$\n?")
+# NB: match to the `;` at END OF LINE, not the first `;` — a Google-Fonts
+# @import URL carries inner semicolons (`wght@400;500;600;700`), and a `[^;{}]*`
+# stop-at-first-`;` regex matched NOTHING, so the sanitizer silently no-op'd and
+# the broken build shipped (live 2026-07-16, globals.css:1760). `[^\n]*;` is
+# greedy and backtracks to the last `;` on the line, capturing the whole import.
+_CSS_IMPORT_RE = re.compile(r"(?im)^[ \t]*@import[^\n]*;[ \t]*$\n?")
+_CSS_CHARSET_RE = re.compile(r"(?im)^[ \t]*@charset[^\n]*;[ \t]*$\n?")
 
 
 def _is_css(path: str) -> bool:
