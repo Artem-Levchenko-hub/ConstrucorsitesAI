@@ -1,0 +1,7 @@
+{
+  "tool_name": "PowerShell",
+  "tool_input_preview": "{\"command\":\"$b64 = Get-Content \\\"C:\\\\Users\\\\12C2~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--------------omnia-mvp\\\\cbbd7198-27c1-4c24-b200-cf6e4ffd98f3\\\\scratchpad\\\\otchet-deploy.b64\\\" -Raw; $ok=$false; fore...",
+  "error": "Exit code 1\nattempt 1\r\nbase64: invalid input\nattempt 2\r\nbase64: invalid input\nattempt 3\r\nbase64: invalid input\nattempt 4\r\nbase64: invalid input\nattempt 5\r\nbase64: invalid input\nALL_ATTEMPTS_FAILED",
+  "timestamp": "2026-07-15T19:37:17.104Z",
+  "retry_count": 1
+}

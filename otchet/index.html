@@ -200,6 +200,21 @@ footer { margin-top: 72px; padding-top: 18px; border-top: 1px solid var(--grid);
 .vec .vh { margin-top:10px; font-size:12.5px; color: var(--muted); }
 .method { color: var(--ink-2); font-size:15px; }
 @media (max-width: 640px) { .hyp { grid-template-columns: 1fr; } .hyp-side { flex-direction:row; align-items:center; } }
+/* --- v3: tabs, hypotheses-first working board --- */
+header.hero { padding: 32px 0 4px; }
+h1 { font-size: clamp(24px, 3.5vw, 34px); }
+.tabs { position: sticky; top: 0; z-index: 40; display: flex; gap: 6px;
+  background: var(--page); padding: 12px 0 10px; margin-top: 18px;
+  border-bottom: 1px solid var(--border); }
+.tabbtn { background: var(--surface-1); border: 1px solid var(--border); color: var(--ink-2);
+  border-radius: 999px; padding: 8px 18px; font-size: 14.5px; font-weight: 600; cursor: pointer; }
+.tabbtn.active { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.tabpane[hidden] { display: none; }
+.tabpane > section:first-child { margin-top: 28px; }
+details.methodbox { margin-top: 40px; background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 14px; padding: 14px 20px; }
+details.methodbox summary { cursor: pointer; font-weight: 650; font-size: 15px; }
+details.methodbox .method { margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -208,82 +223,94 @@ footer { margin-top: 72px; padding-top: 18px; border-top: 1px solid var(--grid);
 <div class="wrap">
 
 <header class="hero">
-  <div class="eyebrow">Живой отчёт · система гипотез · обновлено <span id="upd"></span></div>
+  <div class="eyebrow">Рабочая доска гипотез · обновлено <span id="upd"></span></div>
   <h1>Omnia: AI-конструктор сайтов</h1>
-  <p class="sub" id="hero-sub"></p>
-  <div class="kpis" id="kpis"></div>
 </header>
 
-<section>
-  <h2>Что это за проект</h2>
-  <div class="card essence" id="essence"></div>
-</section>
+<nav class="tabs" id="tabs">
+  <button class="tabbtn active" data-tab="board">Доска гипотез</button>
+  <button class="tabbtn" data-tab="history">История проекта</button>
+  <button class="tabbtn" data-tab="prod">Продакшен</button>
+</nav>
 
-<section>
-  <h2>Эпохи проекта</h2>
-  <p class="lead">Два месяца разработки разбились на отчётливые фазы — от голого MVP до автономных ночных циклов и битвы за качество генерации.</p>
-  <div class="eras" id="eras"></div>
-</section>
+<div class="tabpane" id="tab-board">
+  <section>
+    <h2>Реестр гипотез</h2>
+    <p class="lead">Гипотеза → проверка живым прогоном → оценка вклада 0–10 → вектор дальше. Провал зафиксирован так же аккуратно, как успех: он экономит время следующему заходу.</p>
+    <div class="sumstrip" id="hyp-summary"></div>
+    <div class="filters" id="hyp-filters"></div>
+    <div class="filters catrow" id="hyp-cats"></div>
+    <div class="hyps" id="hyps"></div>
+  </section>
 
-<section>
-  <h2>Динамика работы</h2>
-  <p class="lead" id="stats-lead"></p>
-  <div class="card chart" style="margin-bottom:14px">
-    <h3>Коммиты по неделям</h3>
-    <div class="note" id="weeks-note"></div>
-    <div class="cols" id="weeks-chart"></div>
-    <div style="display:flex;gap:6px" id="weeks-labels"></div>
-  </div>
-  <div class="chartgrid">
-    <div class="card chart">
-      <h3>Типы коммитов</h3>
-      <div class="note">по префиксу conventional commits</div>
-      <div class="hbars" id="types-chart"></div>
+  <section>
+    <h2>Активные векторы — куда идём дальше</h2>
+    <p class="lead">Направления, выведенные из проверенных гипотез. Каждый вектор — это следующая пачка гипотез на проверку.</p>
+    <div class="vecs" id="vectors"></div>
+  </section>
+
+  <details class="methodbox">
+    <summary>Как работает система гипотез — цикл и шкала оценки</summary>
+    <div class="method" id="method"></div>
+  </details>
+</div>
+
+<div class="tabpane" id="tab-history" hidden>
+  <section>
+    <h2>Что это за проект</h2>
+    <p class="sub" id="hero-sub" style="margin-bottom:16px"></p>
+    <div class="kpis" id="kpis" style="margin-bottom:22px"></div>
+    <div class="card essence" id="essence"></div>
+  </section>
+
+  <section>
+    <h2>Эпохи проекта</h2>
+    <p class="lead">Два месяца разработки разбились на отчётливые фазы — от голого MVP до автономных ночных циклов и битвы за качество генерации.</p>
+    <div class="eras" id="eras"></div>
+  </section>
+
+  <section>
+    <h2>Динамика работы</h2>
+    <p class="lead" id="stats-lead"></p>
+    <div class="card chart" style="margin-bottom:14px">
+      <h3>Коммиты по неделям</h3>
+      <div class="note" id="weeks-note"></div>
+      <div class="cols" id="weeks-chart"></div>
+      <div style="display:flex;gap:6px" id="weeks-labels"></div>
     </div>
-    <div class="card chart">
-      <h3>Зоны работы (scope)</h3>
-      <div class="note">топ-10 областей кодовой базы по числу коммитов</div>
-      <div class="hbars" id="scopes-chart"></div>
+    <div class="chartgrid">
+      <div class="card chart">
+        <h3>Типы коммитов</h3>
+        <div class="note">по префиксу conventional commits</div>
+        <div class="hbars" id="types-chart"></div>
+      </div>
+      <div class="card chart">
+        <h3>Зоны работы (scope)</h3>
+        <div class="note">топ-10 областей кодовой базы по числу коммитов</div>
+        <div class="hbars" id="scopes-chart"></div>
+      </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section>
-  <h2>Хроника ключевых событий</h2>
-  <div class="legend">
-    <span><i style="background:var(--accent)"></i> веха</span>
-    <span><i style="background:var(--st-warn)"></i> пивот</span>
-    <span><i style="background:var(--st-crit)"></i> инцидент</span>
-    <span><i style="background:var(--st-good)"></i> запуск</span>
-    <span><i style="background:var(--muted)"></i> эксперимент</span>
-  </div>
-  <div class="tl" id="timeline"></div>
-</section>
+  <section>
+    <h2>Хроника ключевых событий</h2>
+    <div class="legend">
+      <span><i style="background:var(--accent)"></i> веха</span>
+      <span><i style="background:var(--st-warn)"></i> пивот</span>
+      <span><i style="background:var(--st-crit)"></i> инцидент</span>
+      <span><i style="background:var(--st-good)"></i> запуск</span>
+      <span><i style="background:var(--muted)"></i> эксперимент</span>
+    </div>
+    <div class="tl" id="timeline"></div>
+  </section>
+</div>
 
-<section>
-  <h2>Как работает система гипотез</h2>
-  <div class="card method" id="method"></div>
-</section>
-
-<section>
-  <h2>Реестр гипотез</h2>
-  <p class="lead">Всё, что пробовали, — с честными вердиктами и оценкой вклада. Провал зафиксирован так же аккуратно, как успех: он экономит время следующему заходу.</p>
-  <div class="sumstrip" id="hyp-summary"></div>
-  <div class="filters" id="hyp-filters"></div>
-  <div class="filters catrow" id="hyp-cats"></div>
-  <div class="hyps" id="hyps"></div>
-</section>
-
-<section>
-  <h2>Активные векторы — куда идём дальше</h2>
-  <p class="lead">Направления, выведенные из проверенных гипотез. Каждый вектор — это следующая пачка гипотез на проверку.</p>
-  <div class="vecs" id="vectors"></div>
-</section>
-
-<section class="prod">
-  <h2>Состояние продакшена</h2>
-  <div class="card" id="prodstate"></div>
-</section>
+<div class="tabpane" id="tab-prod" hidden>
+  <section class="prod">
+    <h2>Состояние продакшена</h2>
+    <div class="card" id="prodstate"></div>
+  </section>
+</div>
 
 <footer id="foot"></footer>
 </div>
@@ -295,6 +322,21 @@ btn.addEventListener('click', () => {
     (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   document.documentElement.dataset.theme = cur === 'dark' ? 'light' : 'dark';
 });
+
+// Tabs: hypotheses board first; history/prod behind their own tabs (#hash deep-links).
+const tabsEl = document.getElementById('tabs');
+function showTab(name) {
+  document.querySelectorAll('.tabpane').forEach(p => p.hidden = p.id !== 'tab-' + name);
+  tabsEl.querySelectorAll('.tabbtn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === name));
+}
+tabsEl.addEventListener('click', e => {
+  const b = e.target.closest('.tabbtn'); if (!b) return;
+  history.replaceState(null, '', '#' + b.dataset.tab);
+  showTab(b.dataset.tab);
+});
+const initTab = location.hash.slice(1);
+if (['history', 'prod'].includes(initTab)) showTab(initTab);
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const STATUS_RU = { worked: '✓ сработало', failed: '✕ не сработало', partial: '◐ частично',
