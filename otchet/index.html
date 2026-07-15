@@ -224,6 +224,20 @@ details.methodbox .method { margin-top: 12px; }
 .owner-item .oi { color: var(--ink-2); font-size: 13.5px; margin-top: 4px; }
 .owner-item .oi::before { content: "→ "; color: var(--muted); }
 @media (max-width: 640px) { .owner-item { grid-template-columns: 1fr; gap: 4px; } }
+/* --- progress bars --- */
+.pbar { flex:1; height:8px; background: var(--grid); border-radius:999px; overflow:hidden; }
+.pfill { height:100%; background: var(--st-good); border-radius:999px; }
+.ovbox { margin-bottom:14px; }
+.ovhead { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; font-weight:650; }
+.ovhead .ovnum { color: var(--good-text); font-weight:700; font-size:14px; }
+:root[data-theme="dark"] .ovhead .ovnum { color: var(--st-good); }
+.ovbox .pbar { height:12px; }
+.vprog { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.vprog .pnum { color: var(--muted); font-size:12.5px; font-weight:700; }
+.vsteps { list-style:none; padding-left:0; }
+.vsteps li { color: var(--ink-2); font-size:13.5px; margin:5px 0; }
+.vsteps li.sdone { color: var(--good-text); }
+:root[data-theme="dark"] .vsteps li.sdone { color: var(--st-good); }
 </style>
 </head>
 <body>
@@ -260,7 +274,8 @@ details.methodbox .method { margin-top: 12px; }
 
   <section>
     <h2>Активные векторы — куда идём дальше</h2>
-    <p class="lead">Направления, выведенные из проверенных гипотез. Каждый вектор — это следующая пачка гипотез на проверку.</p>
+    <p class="lead">Направления, выведенные из проверенных гипотез. Прогресс-бар показывает «сделано из осталось» по каждому вектору.</p>
+    <div class="card ovbox" id="overall-progress"></div>
     <div class="vecs" id="vectors"></div>
   </section>
 
@@ -461,12 +476,30 @@ function render(DATA) {
   });
   drawHyps();
 
-  // ---- vectors
-  document.getElementById('vectors').innerHTML = (DATA.vectors || []).map(v => `
-    <div class="card vec"><div class="vid">${esc(v.id)}</div><h3>${esc(v.name)}</h3>
+  // ---- vectors with progress bars
+  const vpad = v => {
+    const done = v.steps.filter(s => s[1]).length, tot = v.steps.length;
+    return { done, tot, pct: tot ? Math.round(done / tot * 100) : 0 };
+  };
+  // overall progress across all vectors
+  const allSteps = (DATA.vectors || []).flatMap(v => v.steps);
+  const allDone = allSteps.filter(s => s[1]).length;
+  const allPct = allSteps.length ? Math.round(allDone / allSteps.length * 100) : 0;
+  const ov = document.getElementById('overall-progress');
+  if (ov) ov.innerHTML =
+    `<div class="ovhead"><span>Общий прогресс по векторам</span><span class="ovnum">${allDone} из ${allSteps.length} шагов · ${allPct}%</span></div>
+     <div class="pbar"><div class="pfill" style="width:${allPct}%"></div></div>`;
+
+  document.getElementById('vectors').innerHTML = (DATA.vectors || []).map(v => {
+    const p = vpad(v);
+    return `<div class="card vec"><div class="vid">${esc(v.id)}</div><h3>${esc(v.name)}</h3>
     <div class="vstat">${esc(v.status)}</div><div class="vgoal">${esc(v.goal)}</div>
-    <ul>${v.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ul>
-    <div class="vh">Связанные гипотезы: ${v.hyp_ids.join(', ')}</div></div>`).join('');
+    <div class="vprog"><div class="pbar"><div class="pfill" style="width:${p.pct}%"></div></div>
+      <span class="pnum">${p.done}/${p.tot}</span></div>
+    <ul class="vsteps">${v.steps.map(s =>
+      `<li class="${s[1] ? 'sdone' : ''}">${s[1] ? '✓' : '○'} ${esc(s[0])}</li>`).join('')}</ul>
+    <div class="vh">Связанные гипотезы: ${v.hyp_ids.join(', ')}</div></div>`;
+  }).join('');
 
   document.getElementById('prodstate').innerHTML = DATA.current_state_html ||
     `<p style="color:var(--ink-2)">${esc(DATA.current_state)}</p>`;
