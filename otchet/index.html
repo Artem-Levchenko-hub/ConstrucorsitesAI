@@ -238,6 +238,23 @@ details.methodbox .method { margin-top: 12px; }
 .vsteps li { color: var(--ink-2); font-size:13.5px; margin:5px 0; }
 .vsteps li.sdone { color: var(--good-text); }
 :root[data-theme="dark"] .vsteps li.sdone { color: var(--st-good); }
+/* --- latest-session highlight --- */
+.latest { border:1.5px solid var(--accent); background: var(--surface-1); padding:20px 22px; }
+.lhead { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.lchip { background: var(--accent); color:#fff; font-size:12px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.06em; border-radius:999px; padding:3px 11px; }
+.lhead h3 { font-size:19px; margin:0; }
+.lsub { color: var(--ink-2); font-size:15px; margin:10px 0 14px; }
+.litems { display:grid; gap:10px; }
+.litem { display:grid; grid-template-columns:104px 1fr; gap:12px; align-items:start; font-size:14px; color:var(--ink-2); }
+.litem b { color: var(--ink); }
+.lbadge { font-size:12px; font-weight:700; border-radius:8px; padding:2px 8px; white-space:nowrap; text-align:center; }
+.lb-ok { background: var(--chip-good-bg); color: var(--good-text); }
+:root[data-theme="dark"] .lb-ok { color: var(--st-good); }
+.lb-warn { background: var(--chip-warn-bg); color:#8a6100; }
+.lb-open { background: var(--chip-open-bg); color: var(--accent); }
+.lnote { margin-top:14px; padding-top:12px; border-top:1px solid var(--border); color: var(--ink); font-weight:600; font-size:14px; }
+@media (max-width: 640px) { .litem { grid-template-columns:1fr; gap:3px; } }
 </style>
 </head>
 <body>
@@ -257,6 +274,10 @@ details.methodbox .method { margin-top: 12px; }
 </nav>
 
 <div class="tabpane" id="tab-board">
+  <section>
+    <div class="latest card" id="latest"></div>
+  </section>
+
   <section>
     <h2>Решения владельца</h2>
     <p class="lead">Что Артём поменял в проекте — по хронологии. Каждое решение с эффектом на продукт.</p>
@@ -416,6 +437,20 @@ function render(DATA) {
       <div class="d">${esc(t.date)}</div><div class="t">${esc(t.title)}</div>
       <div class="x">${esc(t.description)}</div></div>`).join('');
   document.getElementById('method').innerHTML = DATA.methodology || '';
+
+  // ---- latest-session highlight (top of board)
+  const lt = DATA.latest, le = document.getElementById('latest');
+  if (lt && le) {
+    const badge = s => s === 'worked' ? '<span class="lbadge lb-ok">✓ сработало</span>'
+      : s === 'partial' ? '<span class="lbadge lb-warn">◐ частично</span>'
+      : '<span class="lbadge lb-open">→ в работе</span>';
+    le.innerHTML =
+      `<div class="lhead"><span class="lchip">Новое</span><h3>${esc(lt.title)}</h3></div>
+       <p class="lsub">${esc(lt.subtitle)}</p>
+       <div class="litems">${lt.items.map(it =>
+         `<div class="litem">${badge(it.s)}<div><b>${esc(it.t)}</b> — ${esc(it.d)}</div></div>`).join('')}</div>
+       ${lt.progress_note ? `<p class="lnote">${esc(lt.progress_note)}</p>` : ''}`;
+  }
 
   // ---- owner actions
   const oa = document.getElementById('owner-actions');
