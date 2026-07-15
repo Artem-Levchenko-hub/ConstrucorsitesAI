@@ -5,7 +5,7 @@ mid-stream, the loop short-circuits and the bill reflects the partial output —
 never the un-streamed tail (per AGENT-C-LLM-GATEWAY.md, M1 cancellation rule).
 
 There is exactly one chat model (`claude-opus-4-8`) and one upstream
-(oneprovider), so the stream source is always `providers/oneprovider.astream`.
+(aitunnel), so the stream source is always `providers/aitunnel.astream`.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import structlog
 from fastapi import Request
 
 from omnia_gateway.core.errors import GatewayError
-from omnia_gateway.providers import oneprovider
+from omnia_gateway.providers import aitunnel
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services import model_router as router_module
 from omnia_gateway.services.pricing import calculate_cost_rub
@@ -68,8 +68,8 @@ async def stream_completion(
     cancelled = False
     upstream_error: GatewayError | None = None
 
-    # TRUE token streaming from oneprovider — the page builds live in the preview.
-    source: AsyncIterator[tuple[str, str]] = oneprovider.astream(
+    # TRUE token streaming from aitunnel — the page builds live in the preview.
+    source: AsyncIterator[tuple[str, str]] = aitunnel.astream(
         model,
         messages,
         temperature=0.5 if temperature is None else temperature,

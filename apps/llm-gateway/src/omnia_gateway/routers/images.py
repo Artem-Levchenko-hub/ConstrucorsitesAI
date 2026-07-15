@@ -1,9 +1,8 @@
 """POST /v1/images/generations — image generation.
 
-Two providers, both OpenAI-compatible `/images/generations`:
-  * oneprovider — flux / nano-banana / imagen on the same key + surface as the
-    chat models (`https://api.oneprovider.dev/v1`). This is the live default.
-  * proxyapi   — OpenAI `gpt-image-1` via proxyapi.ru/openai (dead while balance dry).
+ONE provider — aitunnel.ru, OpenAI-compatible `/images/generations` on the same
+key + surface as the chat models (`https://api.aitunnel.ru/v1`). Serves both the
+flux family (the live default) and OpenAI `gpt-image-1`.
 
 We don't go through the chat router — image endpoints are out of scope for it.
 A direct httpx call is simpler.
@@ -35,23 +34,20 @@ from omnia_gateway.core.errors import (
     UpstreamProviderError,
     WalletEmptyError,
 )
-from omnia_gateway.core.http import get_http
 from omnia_gateway.services import billing, file_logger
 
 router = APIRouter(prefix="/v1", tags=["images"])
 log = structlog.get_logger(__name__)
 
-# Image model registry: exposed id → (provider, upstream model id).
-#   oneprovider — flux / nano-banana / imagen via api.oneprovider.dev/v1,
-#                 OpenAI-compatible /images/generations on the SAME key as chat.
-#   proxyapi    — OpenAI gpt-image via proxyapi.ru/openai (dead while balance dry).
-_IMAGE_MODELS: dict[str, tuple[str, str]] = {
-    "gpt-image-1": ("proxyapi", "gpt-image-1"),
-    "img-flux/flux-2-klein-4b": ("oneprovider", "img-flux/flux-2-klein-4b"),
-    "img-flux/flux-2-pro": ("oneprovider", "img-flux/flux-2-pro"),
-    "img-google/nano-banana-2": ("oneprovider", "img-google/nano-banana-2"),
-    "img-google/nano-banana-pro": ("oneprovider", "img-google/nano-banana-pro"),
-    "img-google/imagen4-preview": ("oneprovider", "img-google/imagen4-preview"),
+# Image model registry: exposed id → upstream aitunnel catalog id. Exposed ids
+# stay stable (apps/api's image_resolver + IMAGE_GEN_MODEL env reference them);
+# the upstream slugs use aitunnel's dotted naming (`flux.2-*`). The retired
+# img-google/* entries (nano-banana, imagen) are gone — aitunnel does not carry
+# them and they had zero call sites.
+_IMAGE_MODELS: dict[str, str] = {
+    "gpt-image-1": "gpt-image-1",
+    "img-flux/flux-2-klein-4b": "flux.2-klein-4b",
+    "img-flux/flux-2-pro": "flux.2-pro",
 }
 
 # Per-image price (RUB), low quality 1024x1024. Conservative ceiling — the api side
@@ -93,21 +89,13 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         )
 
     settings = get_settings()
-    provider, upstream_model = _IMAGE_MODELS[req.model]
-    if provider == "oneprovider":
-        if settings.oneprovider_api_key is None:
-            raise _gateway_error_to_http(
-                ModelUnavailableError("oneprovider_api_key not configured for image generation")
-            )
-        api_key = settings.oneprovider_api_key.get_secret_value()
-        base_url = settings.oneprovider_openai_base_url.rstrip("/")
-    else:  # proxyapi (OpenAI gpt-image)
-        if settings.proxyapi_api_key is None:
-            raise _gateway_error_to_http(
-                ModelUnavailableError("proxyapi_api_key not configured for image generation")
-            )
-        api_key = settings.proxyapi_api_key.get_secret_value()
-        base_url = settings.proxyapi_openai_base_url.rstrip("/")
+    upstream_model = _IMAGE_MODELS[req.model]
+    if settings.aitunnel_api_key is None:
+        raise _gateway_error_to_http(
+            ModelUnavailableError("aitunnel_api_key not configured for image generation")
+        )
+    api_key = settings.aitunnel_api_key.get_secret_value()
+    base_url = settings.aitunnel_base_url.rstrip("/")
 
     estimated_cost = _PRICE_PER_IMAGE_RUB * req.n
     if req.user is not None:
@@ -125,27 +113,27 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         "n": req.n,
         "size": req.size,
     }
-    # `quality` is an OpenAI gpt-image knob; flux/nano reject unknown fields, so
-    # only send it on the proxyapi path.
-    if provider == "proxyapi" and req.quality != "auto":
-        payload["quality"] = req.quality
-    # flux/nano return base64 ONLY and require it be requested explicitly —
-    # otherwise "Only response_format = b64_json is supported" (400). The api
-    # resolver already decodes b64_json.
-    if provider == "oneprovider":
+    # `quality` is an OpenAI gpt-image knob; flux rejects unknown fields, so only
+    # send it on the gpt-image path. gpt-image always answers b64 and rejects
+    # `response_format`; flux needs b64_json requested explicitly (live-verified
+    # on aitunnel 15.07: data[0].b64_json, ~4s). The api resolver decodes b64_json.
+    if req.model == "gpt-image-1":
+        if req.quality != "auto":
+            payload["quality"] = req.quality
+    else:
         payload["response_format"] = "b64_json"
 
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    # oneprovider needs a SYNC httpx.Client on a worker thread with trust_env=False
-    # + an explicit no-op mounts transport. Two failure modes otherwise (see
-    # providers/oneprovider.py docstring): (1) the container HTTPS_PROXY (Gemini
-    # geo-bypass) tunnels this endpoint, and (2) httpx.AsyncClient inside the uvicorn
-    # loop intermittently hangs the TLS handshake. A sync client on a fresh thread
-    # connects in ~300ms; a direct gen is ~4-6s. proxyapi stays on the shared async
-    # client (it's whitelisted in NO_PROXY). Retry transient transport faults with a
-    # fresh client, and use a tight connect timeout so a stalled handshake fails in
-    # ~15s and re-tries instead of burning the ceiling.
+    # aitunnel is hit through a SYNC httpx.Client on a worker thread with
+    # trust_env=False + an explicit no-op mounts transport. Two failure modes
+    # otherwise (see providers/aitunnel.py docstring): (1) the container
+    # HTTPS_PROXY (Gemini geo-bypass) tunnels this endpoint, and (2)
+    # httpx.AsyncClient inside the uvicorn loop intermittently hangs the TLS
+    # handshake. A sync client on a fresh thread connects fast; a direct gen is
+    # ~4-6s. Retry transient transport faults with a fresh client, and use a tight
+    # connect timeout so a stalled handshake fails in ~15s and re-tries instead of
+    # burning the ceiling.
     _TRANSIENT = (
         httpx.ConnectError,
         httpx.ConnectTimeout,
@@ -153,7 +141,7 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         httpx.RemoteProtocolError,
     )
 
-    def _oneprovider_post() -> httpx.Response:
+    def _aitunnel_post() -> httpx.Response:
         last: Exception | None = None
         for attempt in range(3):
             try:
@@ -174,11 +162,7 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         raise last  # type: ignore[misc]  # unreachable — loop returns or raises
 
     async def _post() -> httpx.Response:
-        if provider == "oneprovider":
-            return await asyncio.to_thread(_oneprovider_post)
-        return await get_http().post(
-            url, json=payload, headers=headers, timeout=_IMAGE_TIMEOUT_SECONDS
-        )
+        return await asyncio.to_thread(_aitunnel_post)
 
     try:
         resp = await _post()

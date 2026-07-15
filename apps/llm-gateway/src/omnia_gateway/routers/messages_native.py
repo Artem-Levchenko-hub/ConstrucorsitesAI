@@ -2,11 +2,13 @@
 
 Forwards a RAW Anthropic Messages request (``tools``, ``tool_choice``,
 ``thinking``, and ``thinking`` / ``tool_use`` / ``tool_result`` content blocks) to
-oneprovider's DOCUMENTED Anthropic-native surface
-(``https://api.oneprovider.dev/v1/messages``, ``x-api-key``) and returns the
-upstream JSON UNCHANGED — thinking-block ``signature`` and ``stop_reason`` intact.
-The native tool-use agent (apps/api) MUST echo those signatures back verbatim
-across tool turns, so nothing here may reshape the body.
+AITunnel's DOCUMENTED Anthropic-native surface
+(``https://api.aitunnel.ru/v1/messages``, ``Authorization: Bearer`` — it rejects
+``x-api-key`` with 401) and returns the upstream JSON UNCHANGED — thinking-block
+``signature`` and ``stop_reason`` intact. The native tool-use agent (apps/api)
+MUST echo those signatures back verbatim across tool turns, so the ONLY field we
+touch is ``model``: the Omnia id (``claude-opus-4-8``) is rewritten to AITunnel's
+dotted catalog slug (``claude-opus-4.8``) before forwarding.
 
 Transport: a sync ``httpx.Client`` on a worker thread with ``trust_env=False`` + a
 no-op mounts transport, so the container's ``HTTPS_PROXY`` (a Gemini geo-bypass)
@@ -28,6 +30,7 @@ import httpx
 import structlog
 from fastapi import APIRouter, Request, Response
 
+from omnia_gateway.providers import aitunnel
 from omnia_gateway.services.model_router import native_messages_route
 
 log = structlog.get_logger(__name__)
@@ -61,13 +64,18 @@ async def native_messages(request: Request) -> Response:
         return _err(
             400,
             "invalid_request_error",
-            "ONEPROVIDER_API_KEY is not configured for the native /v1/messages upstream",
+            "AITUNNEL_API_KEY is not configured for the native /v1/messages upstream",
         )
     api_key, api_base = route
-    url = f"{api_base.rstrip('/')}/v1/messages"
+    # aitunnel_base_url already carries `/v1`; the native surface is `/messages`.
+    url = f"{api_base.rstrip('/')}/messages"
+
+    # The ONLY body mutation: Omnia model id → AITunnel dotted catalog slug.
+    if model:
+        body["model"] = aitunnel.native_slug(model)
 
     headers = {
-        "x-api-key": api_key,
+        "Authorization": f"Bearer {api_key}",
         "anthropic-version": request.headers.get(
             "anthropic-version", _ANTHROPIC_VERSION
         ),

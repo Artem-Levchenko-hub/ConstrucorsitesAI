@@ -1,19 +1,26 @@
-"""oneprovider.dev provider — chat completions over its OpenAI-compatible surface.
+"""aitunnel.ru provider — chat completions over its OpenAI-compatible surface.
 
-Per the oneprovider docs (https://oneprovider.dev/llms.txt) the OpenAI-shape
-surface lives at ``https://api.oneprovider.dev/v1`` and answers
-``POST /v1/chat/completions`` with ``Authorization: Bearer <ONEPROVIDER_API_KEY>``.
-This module drives the gateway's ``/v1/chat/completions`` route (chat.py) and the
-SSE stream (services/streaming.py) — both non-streaming and true token streaming.
+Per the AITunnel docs (https://docs.aitunnel.ru/) the whole API lives under
+``https://api.aitunnel.ru/v1``:
+
+  * ``POST /v1/chat/completions`` — OpenAI-compatible chat (this module),
+  * ``POST /v1/messages``         — Anthropic-native surface (routers/messages_native.py),
+  * ``POST /v1/images/generations`` — image generation (routers/images.py).
+
+ONE key authenticates everything, and BOTH surfaces use
+``Authorization: Bearer <AITUNNEL_API_KEY>`` — the native surface rejects the
+Anthropic-classic ``x-api-key`` header with 401 (live-verified 15.07). Model
+slugs use dots: the catalog id for Opus 4.8 is ``claude-opus-4.8``, while the
+Omnia-facing id stays ``claude-opus-4-8``.
 
 Why a sync ``httpx.Client`` on a worker thread instead of ``AsyncClient``: the
 gateway container may carry an ``HTTPS_PROXY`` (a UK egress used only to
 geo-bypass Google), and an ``AsyncClient`` inside the long-lived uvicorn loop
 intermittently stalls the TLS handshake. ``trust_env=False`` + an explicit no-op
 ``mounts`` transport ignores the proxy unconditionally, and a fresh sync client
-on ``asyncio.to_thread`` connects in ~300 ms.
+on ``asyncio.to_thread`` connects fast.
 
-R-01 (deep module): callers see ``is_oneprovider_model()`` + ``acompletion()`` +
+R-01 (deep module): callers see ``is_aitunnel_model()`` + ``acompletion()`` +
 ``astream()``. Transport quirks, chain-of-thought stripping, and error
 translation live entirely inside.
 """
@@ -35,8 +42,8 @@ from omnia_gateway.core.config import get_settings
 from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
 from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 
-# Transient transport faults worth one retry (the TLS handshake to the reseller
-# edge intermittently stalls inside a long-lived process).
+# Transient transport faults worth one retry (a TLS handshake to a reseller edge
+# can intermittently stall inside a long-lived process).
 _TRANSIENT = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -45,10 +52,18 @@ _TRANSIENT = (
 )
 
 # Omnia model ID → the exact catalog id sent as the OpenAI `model` field. The slug
-# is forwarded verbatim, so it MUST match oneprovider's catalog. Add a row here to
-# expose another oneprovider-served chat model.
+# is forwarded verbatim, so it MUST match AITunnel's catalog (dots, not dashes:
+# `claude-opus-4.8`). Add a row here to expose another AITunnel-served chat model.
 _MODEL_SLUG: dict[str, str] = {
-    "claude-opus-4-8": "claude-opus-4-8",
+    "claude-opus-4-8": "claude-opus-4.8",
+}
+
+# Upstream response `model` values mapped back to the Omnia id. AITunnel answers
+# with the bare slug on the OpenAI surface and a vendor-prefixed one on the
+# native surface.
+_SLUG_TO_OMNIA: dict[str, str] = {
+    "claude-opus-4.8": "claude-opus-4-8",
+    "anthropic/claude-opus-4.8": "claude-opus-4-8",
 }
 
 # Natively multimodal models — keep OpenAI image_url blocks instead of flattening
@@ -66,9 +81,19 @@ _DEFAULT_TIMEOUT_S = 240.0
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
-def is_oneprovider_model(model_id: str) -> bool:
-    """True if this model is served by oneprovider's chat surface."""
+def is_aitunnel_model(model_id: str) -> bool:
+    """True if this model is served by AITunnel's chat surface."""
     return model_id in _MODEL_SLUG
+
+
+def native_slug(model_id: str) -> str:
+    """Catalog slug for the native `/v1/messages` surface (identity if unknown)."""
+    return _MODEL_SLUG.get(model_id, model_id)
+
+
+def slug_to_omnia(slug: str) -> str | None:
+    """Map an upstream response `model` back to the Omnia id; None if unknown."""
+    return _SLUG_TO_OMNIA.get(slug)
 
 
 def _is_vision(model_id: str) -> bool:
@@ -118,12 +143,24 @@ def _approx_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def _cached_tokens(usage: dict[str, Any]) -> int:
+    """Prompt tokens served from the provider's context cache.
+
+    AITunnel reports them as `prompt_tokens_details.cached_tokens` (OpenAI shape);
+    `prompt_cache_hit_tokens` is kept as a fallback for DeepSeek-style upstreams.
+    """
+    details = usage.get("prompt_tokens_details") or {}
+    return int(
+        details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or 0
+    )
+
+
 def _key_and_url() -> tuple[str, str]:
     settings = get_settings()
-    if not settings.oneprovider_api_key:
-        raise UpstreamProviderError("ONEPROVIDER_API_KEY not configured")
-    key = settings.oneprovider_api_key.get_secret_value()
-    url = f"{settings.oneprovider_openai_base_url.rstrip('/')}/chat/completions"
+    if not settings.aitunnel_api_key:
+        raise UpstreamProviderError("AITUNNEL_API_KEY not configured")
+    key = settings.aitunnel_api_key.get_secret_value()
+    url = f"{settings.aitunnel_base_url.rstrip('/')}/chat/completions"
     return key, url
 
 
@@ -135,7 +172,7 @@ async def astream(
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
 ) -> AsyncIterator[tuple[str, str]]:
-    """TRUE token streaming from oneprovider — the page builds live in the preview.
+    """TRUE token streaming from AITunnel — the page builds live in the preview.
 
     A sync ``httpx.Client`` on a worker thread reads the SSE incrementally and
     bridges each delta to the async caller through an ``asyncio.Queue``. Yields
@@ -144,7 +181,7 @@ async def astream(
     """
     slug = _MODEL_SLUG.get(model)
     if slug is None:
-        raise ValidationFailedError(f"unsupported oneprovider model: {model}")
+        raise ValidationFailedError(f"unsupported aitunnel model: {model}")
     key, url = _key_and_url()
 
     # Anthropic prompt caching: wrap the stable system prefix in `cache_control:
@@ -183,7 +220,7 @@ async def astream(
                         body = r.read().decode("utf-8", "replace")[:300]
                         loop.call_soon_threadsafe(
                             queue.put_nowait,
-                            ("err", f"oneprovider HTTP {r.status_code}: {body}"),
+                            ("err", f"aitunnel HTTP {r.status_code}: {body}"),
                         )
                         loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                         return
@@ -201,10 +238,10 @@ async def astream(
                         usage = obj.get("usage")
                         if usage:
                             print(
-                                f"[ONEPROVIDER] stream usage model={model} "
+                                f"[AITUNNEL] stream usage model={model} "
                                 f"prompt={usage.get('prompt_tokens')} "
                                 f"completion={usage.get('completion_tokens')} "
-                                f"cache_hit={usage.get('prompt_cache_hit_tokens')}",
+                                f"cache_hit={_cached_tokens(usage)}",
                                 flush=True,
                             )
                         try:
@@ -224,14 +261,14 @@ async def astream(
                     continue
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
-                    ("err", f"oneprovider stream transport: {type(exc).__name__}: {exc}"),
+                    ("err", f"aitunnel stream transport: {type(exc).__name__}: {exc}"),
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                 return
             except Exception as exc:  # noqa: BLE001 — surface as a clean error event
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
-                    ("err", f"oneprovider stream error: {type(exc).__name__}: {exc}"),
+                    ("err", f"aitunnel stream error: {type(exc).__name__}: {exc}"),
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                 return
@@ -256,7 +293,7 @@ async def acompletion(
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
 ) -> dict[str, Any]:
-    """Call oneprovider's chat surface and return an OpenAI-shaped completion dict.
+    """Call AITunnel's chat surface and return an OpenAI-shaped completion dict.
 
     Raises:
         ValidationFailedError on bad input (unknown model / role).
@@ -264,7 +301,7 @@ async def acompletion(
     """
     slug = _MODEL_SLUG.get(model)
     if slug is None:
-        raise ValidationFailedError(f"unsupported oneprovider model: {model}")
+        raise ValidationFailedError(f"unsupported aitunnel model: {model}")
     key, url = _key_and_url()
 
     messages = apply_anthropic_cache(model, messages)
@@ -283,7 +320,7 @@ async def acompletion(
 
     def _completion_sync() -> dict[str, Any]:
         # trust_env=False + no-op mounts: ignore the container's HTTPS_PROXY so the
-        # reseller endpoint is hit DIRECT. Retry a transient transport fault once.
+        # provider endpoint is hit DIRECT. Retry a transient transport fault once.
         last: Exception | None = None
         for attempt in range(2):
             try:
@@ -307,16 +344,16 @@ async def acompletion(
         data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
         print(
-            f"[ONEPROVIDER] HTTP {exc.response.status_code}: {exc.response.text[:300]!r}",
+            f"[AITUNNEL] HTTP {exc.response.status_code}: {exc.response.text[:300]!r}",
             flush=True,
         )
         raise UpstreamProviderError(
-            f"oneprovider HTTP {exc.response.status_code}",
+            f"aitunnel HTTP {exc.response.status_code}",
             details={"body": exc.response.text[:500]},
         ) from exc
     except httpx.HTTPError as exc:
         raise UpstreamProviderError(
-            f"oneprovider transport error: {type(exc).__name__}: {exc}"
+            f"aitunnel transport error: {type(exc).__name__}: {exc}"
         ) from exc
 
     try:
@@ -324,7 +361,7 @@ async def acompletion(
         content = (choice.get("message") or {}).get("content") or ""
     except (IndexError, AttributeError, KeyError) as exc:
         raise UpstreamProviderError(
-            "oneprovider: malformed response", details={"body": str(data)[:500]}
+            "aitunnel: malformed response", details={"body": str(data)[:500]}
         ) from exc
     content = _strip_reasoning(content)
 
@@ -334,12 +371,12 @@ async def acompletion(
         or _approx_tokens("".join(_flatten_content(m.get("content", "")) for m in messages))
     )
     tokens_out = int(usage.get("completion_tokens") or _approx_tokens(content))
-    cache_hit_tokens = int(usage.get("prompt_cache_hit_tokens") or 0)
+    cache_hit_tokens = _cached_tokens(usage)
 
     # Normalize to OpenAI shape with `model` = the Omnia id so chat.py bills against
-    # PRICE_TABLE (slug_to_omnia is identity for oneprovider models).
+    # PRICE_TABLE (the upstream slug maps back via _SLUG_TO_OMNIA).
     return {
-        "id": data.get("id") or f"oneprovider-{uuid4()}",
+        "id": data.get("id") or f"aitunnel-{uuid4()}",
         "object": "chat.completion",
         "created": int(data.get("created") or time.time()),
         "model": model,

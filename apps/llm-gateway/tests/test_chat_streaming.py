@@ -19,7 +19,7 @@ _MODEL = "claude-opus-4-8"
 async def _fake_astream(
     model: str, messages: list[dict], **kwargs: object
 ) -> AsyncIterator[tuple[str, str]]:
-    """Mimic providers.oneprovider.astream — yields (delta, omnia_id) tuples."""
+    """Mimic providers.aitunnel.astream — yields (delta, omnia_id) tuples."""
     for piece in ["Hel", "lo", " world"]:
         yield piece, model
 
@@ -53,7 +53,7 @@ def _parse_sse(body: str) -> list[dict | str]:
 
 def test_chat_streaming_yields_sse_chunks(client: TestClient) -> None:
     with patch(
-        "omnia_gateway.services.streaming.oneprovider.astream",
+        "omnia_gateway.services.streaming.aitunnel.astream",
         _fake_astream,
     ):
         body = {

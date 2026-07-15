@@ -94,8 +94,8 @@ def test_chat_unknown_model_returns_404(client: TestClient) -> None:
 
 
 def test_chat_no_provider_key_returns_upstream_error(client: TestClient) -> None:
-    # claude-opus-4-8 dispatches to the oneprovider provider; with no
-    # ONEPROVIDER_API_KEY it raises UpstreamProviderError → 502 (code
+    # claude-opus-4-8 dispatches to the aitunnel provider; with no
+    # AITUNNEL_API_KEY it raises UpstreamProviderError → 502 (code
     # model_unavailable), the graceful "provider not configured" surface.
     body = {
         "model": "claude-opus-4-8",

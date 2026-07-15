@@ -18,12 +18,12 @@ def _has(secret) -> bool:
 def _is_available(model_id: str, provider: str, s: Settings) -> bool:
     """A model is available iff the key for its upstream is present.
 
-    Everything text + flux images runs on oneprovider; only gpt-image-1 (and the
+    Everything text + flux images runs on aitunnel; only gpt-image-1 (and the
     whisper STT surface) run on proxyapi.
     """
     if model_id == "gpt-image-1":
         return _has(s.proxyapi_api_key)
-    return _has(s.oneprovider_api_key)
+    return _has(s.aitunnel_api_key)
 
 
 @router.get("/models")

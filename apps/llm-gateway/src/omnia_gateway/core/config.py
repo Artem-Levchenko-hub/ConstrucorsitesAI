@@ -3,17 +3,18 @@
 R-02 (hide what changes): all env access goes through `get_settings()`. If we
 later swap pydantic-settings for vault / SSM, only this module changes.
 
-Provider model: ONE upstream — **oneprovider.dev** — serves the whole product,
-exactly as its docs describe (https://oneprovider.dev/llms.txt):
+Provider model: ONE upstream — **aitunnel.ru** — serves the whole product,
+exactly as its docs describe (https://docs.aitunnel.ru/). Everything lives under
+`https://api.aitunnel.ru/v1`:
 
-  * Anthropic-native surface  `https://api.oneprovider.dev`      → `/v1/messages`
-    (the native tool-use agent, `x-api-key`, thinking + signatures preserved).
-  * OpenAI-compatible surface `https://api.oneprovider.dev/v1`   → `/v1/chat/completions`
-    (chat + streaming + image generation, `Authorization: Bearer`).
+  * `/v1/chat/completions` — OpenAI-compatible chat + streaming,
+  * `/v1/messages`         — Anthropic-native surface (the native tool-use agent,
+    thinking + signatures preserved),
+  * `/v1/images/generations` — image generation (flux).
 
-The same `ONEPROVIDER_API_KEY` authenticates both surfaces. `proxyapi.ru` remains
-ONLY for the two capabilities oneprovider does not serve: speech-to-text
-(whisper) and the optional `gpt-image-1` image model.
+The same `AITUNNEL_API_KEY` authenticates every endpoint, and BOTH surfaces use
+`Authorization: Bearer` (the native one rejects `x-api-key`). `proxyapi.ru`
+remains ONLY for speech-to-text (whisper) and the optional `gpt-image-1` model.
 """
 
 from __future__ import annotations
@@ -32,19 +33,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- oneprovider.dev — the single LLM upstream (Claude models + flux images) ---
-    # Key authenticates BOTH documented surfaces below. Flows in via env
-    # ONEPROVIDER_API_KEY, never committed.
-    oneprovider_api_key: SecretStr | None = None
-    # Anthropic-native surface — the native tool-use agent posts RAW `/v1/messages`
-    # here (routers/messages_native.py). The `anthropic` contract appends
-    # `/v1/messages`, so this base carries NO `/v1`.
-    oneprovider_base_url: str = "https://api.oneprovider.dev"
-    # OpenAI-compatible surface — chat completions, streaming, and image generation
-    # (providers/oneprovider.py, routers/images.py). The base carries `/v1`.
-    oneprovider_openai_base_url: str = "https://api.oneprovider.dev/v1"
+    # --- aitunnel.ru — the single LLM upstream (Claude models + flux images) ---
+    # ONE key + ONE base for every endpoint: chat (`/chat/completions`), native
+    # Anthropic (`/messages`), images (`/images/generations`). Flows in via env
+    # AITUNNEL_API_KEY, never committed.
+    aitunnel_api_key: SecretStr | None = None
+    aitunnel_base_url: str = "https://api.aitunnel.ru/v1"
 
-    # --- proxyapi.ru — ONLY for what oneprovider does not serve ---
+    # --- proxyapi.ru — ONLY for whisper speech-to-text (+ legacy gpt-image) ---
     # Speech-to-text (whisper) + the optional gpt-image-1 image model. Same key +
     # balance for both. The openai contract expects the `/v1` already on the base.
     proxyapi_api_key: SecretStr | None = None
@@ -62,9 +58,9 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 3600
     min_balance_rub: float = 5.0
 
-    # Read timeout for one completion. oneprovider's Anthropic surface can spend up
-    # to ~30-70s when it thinks; 240s tolerates the spike while staying under the api
-    # llm_client's 300s read timeout so a genuine hang still surfaces cleanly.
+    # Read timeout for one completion. A thinking-heavy Opus pass can spend tens of
+    # seconds; 240s tolerates the spike while staying under the api llm_client's
+    # 300s read timeout so a genuine hang still surfaces cleanly.
     # Env: REQUEST_TIMEOUT_SECONDS.
     request_timeout_seconds: int = 240
 

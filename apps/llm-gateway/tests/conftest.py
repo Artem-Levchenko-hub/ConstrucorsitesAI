@@ -24,7 +24,7 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     # .env file from cwd, and delenv only clears os.environ, leaving the file
     # value in effect. An empty env var beats the file.
     for var in (
-        "ONEPROVIDER_API_KEY",
+        "AITUNNEL_API_KEY",
         "PROXYAPI_API_KEY",
     ):
         monkeypatch.setenv(var, "")
