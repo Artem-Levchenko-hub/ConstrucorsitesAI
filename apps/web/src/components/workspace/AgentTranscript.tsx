@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -60,6 +60,14 @@ function stepIcon(s: AgentStep): typeof FileCode2 {
   return ACTION_ICON[s.tool ?? s.action] ?? Sparkles;
 }
 
+/** "5с" under a minute, "1м 05с" above — compact live-timer format. */
+function formatElapsed(sec: number): string {
+  if (sec < 60) return `${sec}с`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}м ${String(s).padStart(2, "0")}с`;
+}
+
 function stepLabel(s: AgentStep): string {
   // Backend now sends a ready human phrase in `action` («Пишу главную страницу»).
   // ACTION_LABEL still resolves an older raw tool name; otherwise show as-is.
@@ -87,6 +95,23 @@ export function AgentTranscript({
   const [open, setOpen] = useState(true);
   // Which step rows are drilled-open (by index) — click a step to see inside it.
   const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
+  // Live elapsed timer: a real "работает Nс" counter beats a fake ETA (ETA raises
+  // frustration when it slips — CHI-2026). Starts on the first streaming frame,
+  // ticks each second, and freezes on its last value once the build finishes.
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!streaming) {
+      startRef.current = null;
+      return;
+    }
+    if (startRef.current === null) startRef.current = Date.now();
+    const tick = () =>
+      setElapsed(Math.floor((Date.now() - (startRef.current ?? Date.now())) / 1000));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [streaming]);
   const { data: steps } = useQuery<AgentStep[]>({
     queryKey: ["agent-steps", projectId, messageId],
     // Data is pushed via setQueryData from usePromptStream's `agent.step`
@@ -121,8 +146,14 @@ export function AgentTranscript({
         <span className="text-xs font-medium text-fg-primary">
           {streaming ? "Агент работает" : "Агент построил"}
         </span>
-        <span className="ml-auto font-mono text-[11px] tabular-nums text-fg-tertiary">
-          {steps.length} шаг.
+        <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
+          {(streaming || elapsed > 0) && (
+            <span className={cn(streaming && "text-accent")}>
+              {streaming ? "" : "за "}
+              {formatElapsed(elapsed)} ·
+            </span>
+          )}
+          <span>{steps.length} шаг.</span>
         </span>
       </button>
 

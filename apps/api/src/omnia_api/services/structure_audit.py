@@ -35,6 +35,12 @@ _HARDCODED_COLOR = re.compile(
 _FIXED_WIDTH = re.compile(r"\bw-\[\d{3,}px\]")
 _RAW_TABLE = re.compile(r"<table\b")
 _RAW_SIDEBAR = re.compile(r"<aside\b")
+# A 3+ column grid with NO responsive variant anywhere in the file is a
+# non-adaptive layout — it stays 3/4 columns on a 360px phone and overflows.
+# Adaptive code is mobile-first: a `grid-cols-1` base + `sm:/md:/lg:grid-cols-N`.
+_MULTICOL_GRID = re.compile(r"\bgrid-cols-[3-9]\b")
+_RESPONSIVE_GRID = re.compile(r"\b(?:sm|md|lg|xl):grid-cols-\d")
+_MOBILE_GRID_BASE = re.compile(r"\bgrid-cols-1\b")
 
 
 def audit_entity_app(files: dict[str, str]) -> list[str]:
@@ -86,6 +92,15 @@ def audit_entity_app(files: dict[str, str]) -> list[str]:
             )
         if _FIXED_WIDTH.search(code):
             warnings.append(f"{path}: fixed-px width container — breaks mobile, use max-w-*/grid")
+        if (
+            _MULTICOL_GRID.search(code)
+            and not _RESPONSIVE_GRID.search(code)
+            and not _MOBILE_GRID_BASE.search(code)
+        ):
+            warnings.append(
+                f"{path}: non-adaptive grid (grid-cols-3/4 without grid-cols-1 sm:/lg:) — "
+                "stays multi-column on a 360px phone; make it mobile-first"
+            )
         if _RAW_TABLE.search(code):
             warnings.append(f"{path}: raw <table> — use <DataTable>/<CrudResource>")
         if _RAW_SIDEBAR.search(code) and "AppShell" not in code:
