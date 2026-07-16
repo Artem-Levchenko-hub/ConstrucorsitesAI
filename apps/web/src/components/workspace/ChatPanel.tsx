@@ -60,6 +60,19 @@ export function ChatPanel({
     queryFn: () => listMessages(projectId),
   });
 
+  // Re-hydrate the agentic transcript from history: the backend persists each
+  // assistant reply's steps on `message.agent_steps`, so after a reload we seed
+  // the ["agent-steps",…] cache AgentTranscript reads from. Only seed when the
+  // cache is empty for that message — never clobber a live in-session stream.
+  useEffect(() => {
+    if (!messages) return;
+    for (const m of messages) {
+      if (!m.agent_steps || m.agent_steps.length === 0) continue;
+      const key = ["agent-steps", projectId, m.id];
+      if (!qc.getQueryData(key)) qc.setQueryData(key, m.agent_steps);
+    }
+  }, [messages, projectId, qc]);
+
   // Zero-friction onboarding (P1): no blocking quiz modal. The very first prompt
   // submits straight through — the server runs a progressive in-chat discovery
   // (one short question at a time) before the first build. Every later prompt

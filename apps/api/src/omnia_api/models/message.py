@@ -35,6 +35,11 @@ class Message(Base):
     # каждому. Хранится на user-сообщении, чтобы история чата перерисовывала чипы
     # после перезагрузки. NULL у старых строк и у сообщений без выделений.
     selected_elements: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    # Agentic transcript: the accumulated `agent.step` events for this assistant
+    # reply, persisted so the chat history re-renders "what the agent did" (with
+    # drill-in detail) after a reload. NULL for non-agent replies (edits, text
+    # turns) and rows that predate the column.
+    agent_steps: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

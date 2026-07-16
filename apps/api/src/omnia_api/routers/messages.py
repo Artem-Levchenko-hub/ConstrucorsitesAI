@@ -2443,6 +2443,10 @@ async def _process_prompt(
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     accumulated = ""
+    # Persisted agentic transcript: every `agent.step` payload published this turn
+    # is appended here so it can be saved on the assistant message at finalize —
+    # the chat re-renders the step list (with drill-in detail) after a reload.
+    _agent_step_log: list[dict[str, Any]] = []
     # Resumable-stream accumulator. `_run_stream` resets its per-pass
     # `state["accumulated"]` on every fallback re-run, but the CLIENT's content
     # is the concatenation of every delta ever published for this message — so
@@ -2622,21 +2626,25 @@ async def _process_prompt(
                     action = f"повторяю запрос (#{data.get('attempt', 0)})"
                 else:
                     action = _humanize_step(raw_tool, path)
+                step_row = {
+                    "step": data.get("step"),
+                    "kind": kind,
+                    "action": action,
+                    "tool": raw_tool,
+                    "path": path,
+                    # `detail` = what the step did inside (content/output) so the
+                    # UI can drill into a step; `ok` colours success/failure.
+                    "detail": str(data.get("detail", "") or ""),
+                    "ok": bool(data.get("ok", True)),
+                }
+                # Persist for the reload transcript (bounded so a runaway loop can't
+                # bloat the row; the live WS stream is unaffected by the cap).
+                if len(_agent_step_log) < 200:
+                    _agent_step_log.append(step_row)
                 await publish_event(
                     project_id,
                     "agent.step",
-                    {
-                        "message_id": str(assistant_message_id),
-                        "step": data.get("step"),
-                        "kind": kind,
-                        "action": action,
-                        "tool": raw_tool,
-                        "path": path,
-                        # `detail` = what the step did inside (content/output) so the
-                        # UI can drill into a step; `ok` colours success/failure.
-                        "detail": str(data.get("detail", "") or ""),
-                        "ok": bool(data.get("ok", True)),
-                    },
+                    {"message_id": str(assistant_message_id), **step_row},
                 )
 
             _agent_executor = agent_builder.make_container_executor(
@@ -3754,6 +3762,7 @@ async def _process_prompt(
                         msg.content = accumulated
                         msg.snapshot_id = snapshot.id
                         msg.tokens_out = msg.tokens_out or 0
+                        msg.agent_steps = _agent_step_log or None
                     if is_free:
                         user_row = await session.get(User, user_id)
                         if user_row is not None:
@@ -3809,6 +3818,7 @@ async def _process_prompt(
                     if msg is not None:
                         msg.content = accumulated
                         msg.tokens_out = msg.tokens_out or 0
+                        msg.agent_steps = _agent_step_log or None
                     await session.commit()
 
             # Resumable partial build: the agent ran out of step budget without

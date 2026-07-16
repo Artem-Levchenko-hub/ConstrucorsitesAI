@@ -124,6 +124,9 @@ export type Message = {
   cost_rub?: number | null;
   /** Select-mode context attached to a user message (for chat-history chips). */
   selected_elements?: SelectedElement[] | null;
+  /** Persisted agentic transcript — hydrated into the ["agent-steps",…] cache on
+   *  history load so AgentTranscript re-renders after a reload. */
+  agent_steps?: AgentStep[] | null;
   created_at: IsoDateTime;
 };
 

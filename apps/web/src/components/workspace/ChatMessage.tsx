@@ -36,6 +36,7 @@ import { SelectedChips } from "./SelectedChips";
 import { PassProgressBar } from "./PassProgressBar";
 import { AgentTranscript } from "./AgentTranscript";
 import { RemixRecapCard } from "./RemixRecapCard";
+import { Markdown } from "./Markdown";
 
 // The onboarding quiz folds its answers into the user prompt after this marker
 // (see OnboardingQuiz.compile). We split on it to render the answers as chips
@@ -319,11 +320,7 @@ function AssistantText({
   const text = cleanChatProse(rawText);
   if (!text) return null;
   if (!STATUS_RE.test(text)) {
-    return (
-      <div className="whitespace-pre-wrap break-words text-fg-secondary">
-        {text}
-      </div>
-    );
+    return <Markdown text={text} className="break-words text-fg-secondary" />;
   }
   // Split into prose / status segments, preserving order.
   const blocks: { kind: "p" | "s"; text: string }[] = [];
@@ -348,12 +345,11 @@ function AssistantText({
         b.kind === "s" ? (
           <StatusCard key={i} raw={b.text} streaming={streaming} />
         ) : (
-          <div
+          <Markdown
             key={i}
-            className="whitespace-pre-wrap break-words text-fg-secondary"
-          >
-            {b.text.trim()}
-          </div>
+            text={b.text.trim()}
+            className="break-words text-fg-secondary"
+          />
         ),
       )}
     </div>

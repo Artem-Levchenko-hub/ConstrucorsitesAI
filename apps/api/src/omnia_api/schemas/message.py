@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +34,10 @@ class MessagePublic(BaseModel):
     tokens_in: int | None = None
     tokens_out: int | None = None
     selected_elements: list[SelectedElement] | None = None
+    # Persisted agentic transcript (agent.step events) so the chat re-renders the
+    # step list after a reload. NULL for non-agent replies. Loose dicts — the
+    # frontend AgentStep type validates the shape.
+    agent_steps: list[dict[str, Any]] | None = None
     created_at: datetime
 
 
