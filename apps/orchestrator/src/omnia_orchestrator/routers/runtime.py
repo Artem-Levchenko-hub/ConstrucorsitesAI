@@ -62,6 +62,7 @@ from omnia_orchestrator.services.port_allocator import (
 )
 from omnia_orchestrator.services.provisioner import provision as provision_svc
 from omnia_orchestrator.services.runtime_probe import probe_runtime_error
+from omnia_orchestrator.services.warm import warm_routes
 
 router = APIRouter(prefix="/internal/projects", tags=["runtime"])
 
@@ -748,6 +749,30 @@ async def logs(
         tail=tail,
         logs=result["logs"],
     )
+
+
+@router.post("/{project_id}/warm")
+async def warm(
+    project_id: str,
+    slug: str | None = None,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, int | str]:
+    """Pre-warm the dev app's static routes so a demo hits WARM pages.
+
+    `next dev` compiles each route lazily on first request (~30-90 s cold), so a
+    reviewer eats that per page. apps/api calls this fire-and-forget right after a
+    successful build to force those first requests itself. Best-effort: a missing
+    container or any warm failure returns a benign summary, never an error — the
+    app just falls back to the normal cold-first-hit behaviour.
+    """
+    _verify_token(x_internal_token)
+
+    name = await find_project_container(project_id, kind="dev")
+    if name is None and slug:
+        name = f"omnia-dev-{slug}"
+    if name is None:
+        return {"warmed": 0, "note": "no container"}
+    return await warm_routes(name)
 
 
 @router.get("/{project_id}/compile-status", response_model=CompileStatusResponse)

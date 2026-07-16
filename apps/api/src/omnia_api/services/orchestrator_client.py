@@ -324,6 +324,17 @@ async def agent_exec(project_id: UUID, slug: str, cmd: str) -> dict[str, Any]:
     )
 
 
+async def warm_routes(project_id: UUID, slug: str) -> dict[str, Any]:
+    """POST /internal/projects/{id}/warm — force-compile the dev app's static
+    routes so a demo opens WARM pages instead of eating a cold Turbopack compile
+    per click. Best-effort: called fire-and-forget after a successful build."""
+    return await _request(
+        "POST",
+        f"/internal/projects/{project_id}/warm",
+        params={"slug": slug},
+    )
+
+
 async def hot_reload(
     project_id: UUID, slug: str, files: dict[str, str]
 ) -> dict[str, Any]:
