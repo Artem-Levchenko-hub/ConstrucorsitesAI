@@ -38,6 +38,7 @@ from omnia_api.schemas.runtime import (
     RuntimeStatus,
     RuntimeStopRequest,
 )
+from omnia_api.services import autoheal as autoheal_svc
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 
@@ -136,6 +137,22 @@ async def start_runtime(
     # hit "Запустить" again.
     if project.template in _CONTAINER_NEXT and project.current_snapshot_id:
         await _resync_latest_snapshot(session, project)
+
+    # Auto-heal on open (owner 2026-07-16): if the just-opened app has a RED build,
+    # repair it in the background — same fix as «Починить», no click. Fire-and-
+    # forget + fail-soft + flag-gated + Redis-debounced (see services.autoheal), so
+    # it never delays the start response and never fires unprompted when disabled.
+    if project.template in _CONTAINER_NEXT:
+        async def _autoheal_bg() -> None:
+            try:
+                _h = await autoheal_svc.maybe_autoheal_on_open(
+                    project_id, project.slug)
+                print(f"[AUTOHEAL] {project.slug}: {_h}", flush=True)
+            except Exception as _ah_exc:  # noqa: BLE001
+                print(f"[AUTOHEAL] skipped: {_ah_exc!r}", flush=True)
+
+        _ah_task = asyncio.create_task(_autoheal_bg())
+        _ah_task.add_done_callback(lambda _t: None)
 
     return _to_runtime_status(payload)
 

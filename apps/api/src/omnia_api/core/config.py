@@ -941,6 +941,16 @@ class Settings(BaseSettings):
     use_edit_auto_repair: bool = Field(default=True)
     edit_auto_repair_attempts: int = Field(default=4)
 
+    # Auto-heal ON OPEN (owner 2026-07-16 — "зашёл → ошибки чинятся сами").
+    # When a project is opened/started and its dev build is RED, kick off the same
+    # edit-repair the «Починить» button runs — automatically, in the background, no
+    # click. OFF by default: an unprompted agent run spends tokens, so it ships
+    # behind a flag to enable + observe deliberately. Guarded by a per-project
+    # Redis debounce (autoheal_debounce_seconds) so a refresh storm can't re-fire
+    # it. Env: USE_AUTOHEAL_ON_OPEN=true.
+    use_autoheal_on_open: bool = Field(default=False)
+    autoheal_debounce_seconds: int = Field(default=600)
+
     # Gate-feedback self-heal (unleash-the-model layer C). The agent now MAY write
     # custom server logic (the backend ban is lifted) — so after it says done we
     # statically verify the one unsafe thing (raw-DB escape via the backend
