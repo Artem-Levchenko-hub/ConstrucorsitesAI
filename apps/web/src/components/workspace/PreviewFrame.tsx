@@ -35,6 +35,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { shortSha, cn, formatRelativeTime } from "@/lib/utils";
 import { StreamingPreviewFrame } from "./StreamingPreviewFrame";
 import { StreamingCodeView } from "./StreamingCodeView";
+import { StreamingAgentCodeView } from "./StreamingAgentCodeView";
 import { StylePanel } from "./StylePanel";
 import { CodeView } from "./CodeView";
 
@@ -716,7 +717,18 @@ export function PreviewFrame({ project }: { project: Project }) {
         <div className="h-full w-full rounded-lg border border-border-default bg-surface-raised overflow-hidden flex flex-col">
           {viewMode === "code" ? (
             isStreaming ? (
-              <StreamingCodeView content={last?.content ?? ""} />
+              // Fullstack/agentic builds write files via tools (no <file> blocks
+              // in the chat stream) — drive the live view off the agent-step
+              // stream so «Код» shows files appearing as they're written. Static
+              // freeform builds still stream <file> blocks out of the content.
+              isFullstack && last?.id ? (
+                <StreamingAgentCodeView
+                  projectId={project.id}
+                  messageId={last?.id ?? ""}
+                />
+              ) : (
+                <StreamingCodeView content={last?.content ?? ""} />
+              )
             ) : visible ? (
               <CodeView projectId={project.id} snapshotId={visible.id} />
             ) : (
@@ -828,7 +840,12 @@ export function PreviewFrame({ project }: { project: Project }) {
                       transition={{ duration: 0.2 }}
                     >
                       <div className="flex-1 min-h-0">
-                        <StreamingCodeView content={last?.content ?? ""} />
+                        {/* showStreamingCode ⟹ fullstack, so files come from the
+                            agent-step stream, not <file> blocks in content. */}
+                        <StreamingAgentCodeView
+                          projectId={project.id}
+                          messageId={last?.id ?? ""}
+                        />
                       </div>
                       {/* Phase 3.3 — fullstack/container builds are single-shot:
                           the orchestrator emits no per-stage `llm.pass`, so the
