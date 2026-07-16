@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileCode2, Folder } from "lucide-react";
+import { Folder } from "lucide-react";
 import { collectStreamingFilesPartial, formatBytes } from "@/lib/parse-assistant";
 import { cn } from "@/lib/utils";
+import { fileIcon } from "@/lib/file-icons";
 
 /**
  * Live "building before your eyes" code view for ANY stack — used while the
@@ -76,6 +77,7 @@ export function StreamingCodeView({ content }: { content: string }) {
             const size = new Blob([files[path] ?? ""]).size;
             const isActive = path === active;
             const isWriting = path === writingPath;
+            const { Icon, color } = fileIcon(path.split("/").pop() ?? path);
             return (
               <button
                 key={path}
@@ -88,7 +90,7 @@ export function StreamingCodeView({ content }: { content: string }) {
                     : "text-fg-secondary hover:bg-surface-raised hover:text-fg-primary",
                 )}
               >
-                <FileCode2 className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+                <Icon className={cn("h-3.5 w-3.5 shrink-0", color)} />
                 <span className="font-mono text-xs truncate flex-1 min-w-0">
                   {path}
                 </span>
@@ -115,7 +117,10 @@ export function StreamingCodeView({ content }: { content: string }) {
           )}
         />
         <div className="h-9 px-3 flex items-center gap-2 shrink-0">
-          <FileCode2 className="h-3.5 w-3.5 text-fg-tertiary" />
+          {(() => {
+            const { Icon, color } = fileIcon(active?.split("/").pop() ?? "");
+            return <Icon className={cn("h-3.5 w-3.5", color)} />;
+          })()}
           <span className="font-mono text-xs text-fg-primary truncate">
             {active}
           </span>
