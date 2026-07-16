@@ -414,6 +414,12 @@ export type AgentStep = {
   kind: "step" | "escalate" | "stalled" | "retry";
   action: string;
   path: string;
+  /** Raw tool name (write_file/build/…) for icon selection. */
+  tool?: string;
+  /** What the step did inside — content/output preview, shown on drill-in. */
+  detail?: string;
+  /** false = the step failed (drill-in shows the error). */
+  ok?: boolean;
 };
 
 export type PassProgress = {
@@ -555,6 +561,9 @@ export type WsEvent =
         kind: "step" | "escalate" | "stalled" | "retry";
         action: string;
         path: string;
+        tool?: string;
+        detail?: string;
+        ok?: boolean;
       };
     };
 

@@ -55,11 +55,14 @@ const ACTION_LABEL: Record<string, string> = {
 function stepIcon(s: AgentStep): typeof FileCode2 {
   if (s.kind === "escalate") return Zap;
   if (s.kind === "retry" || s.kind === "stalled") return RefreshCw;
-  return ACTION_ICON[s.action] ?? Sparkles;
+  // `action` is now a human phrase from the backend, so key the icon off the raw
+  // `tool` name; `s.action` covers messages cached before the humanize change.
+  return ACTION_ICON[s.tool ?? s.action] ?? Sparkles;
 }
 
 function stepLabel(s: AgentStep): string {
-  // escalate/stalled/retry already carry a ready human label from the backend.
+  // Backend now sends a ready human phrase in `action` («Пишу главную страницу»).
+  // ACTION_LABEL still resolves an older raw tool name; otherwise show as-is.
   if (s.kind !== "step") return s.action;
   return ACTION_LABEL[s.action] ?? s.action;
 }
@@ -82,6 +85,8 @@ export function AgentTranscript({
 }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(true);
+  // Which step rows are drilled-open (by index) — click a step to see inside it.
+  const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
   const { data: steps } = useQuery<AgentStep[]>({
     queryKey: ["agent-steps", projectId, messageId],
     // Data is pushed via setQueryData from usePromptStream's `agent.step`
@@ -136,35 +141,87 @@ export function AgentTranscript({
                 const last = i === steps.length - 1;
                 const live =
                   streaming && last && s.kind === "step" && s.action !== "done";
+                const failed = s.ok === false;
+                const detail = (s.detail ?? "").trim();
+                const canDrill = detail.length > 0;
+                const isOpen = !!openSteps[i];
                 return (
                   <motion.li
                     key={i}
                     initial={{ opacity: 0, x: -4 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.18, ease: EASE_OUT }}
-                    className="flex items-center gap-2 rounded-md px-2 py-1"
                   >
-                    <Icon
+                    <button
+                      type="button"
+                      disabled={!canDrill}
+                      onClick={() =>
+                        setOpenSteps((m) => ({ ...m, [i]: !m[i] }))
+                      }
                       className={cn(
-                        "h-3.5 w-3.5 shrink-0",
-                        s.kind !== "step"
-                          ? "text-amber-400"
-                          : s.action === "done"
-                            ? "text-accent"
-                            : "text-fg-secondary",
+                        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors",
+                        canDrill && "cursor-pointer hover:bg-surface-overlay/60",
                       )}
-                    />
-                    <span className="shrink-0 text-[12px] text-fg-secondary">
-                      {stepLabel(s)}
-                    </span>
-                    {s.path && (
-                      <span className="truncate font-mono text-[11px] text-fg-tertiary">
-                        {s.path}
+                    >
+                      {canDrill ? (
+                        <ChevronRight
+                          className={cn(
+                            "h-3 w-3 shrink-0 text-fg-tertiary transition-transform",
+                            isOpen && "rotate-90",
+                          )}
+                        />
+                      ) : (
+                        <span className="w-3 shrink-0" />
+                      )}
+                      <Icon
+                        className={cn(
+                          "h-3.5 w-3.5 shrink-0",
+                          failed
+                            ? "text-red-400"
+                            : s.kind !== "step"
+                              ? "text-amber-400"
+                              : s.action === "done"
+                                ? "text-accent"
+                                : "text-fg-secondary",
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          "shrink-0 text-[12px]",
+                          failed ? "text-red-400" : "text-fg-secondary",
+                        )}
+                      >
+                        {stepLabel(s)}
                       </span>
-                    )}
-                    {live && (
-                      <Loader2 className="ml-auto h-3 w-3 shrink-0 animate-spin text-accent" />
-                    )}
+                      {s.path && (
+                        <span className="truncate font-mono text-[11px] text-fg-tertiary">
+                          {s.path}
+                        </span>
+                      )}
+                      {live && (
+                        <Loader2 className="ml-auto h-3 w-3 shrink-0 animate-spin text-accent" />
+                      )}
+                    </button>
+                    <AnimatePresence initial={false}>
+                      {isOpen && canDrill && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.18, ease: EASE_OUT }}
+                          className="overflow-hidden"
+                        >
+                          <pre
+                            className={cn(
+                              "scrollbar-elegant mx-2 my-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-surface-base/70 p-2 font-mono text-[11px] leading-relaxed",
+                              failed ? "text-red-300" : "text-fg-tertiary",
+                            )}
+                          >
+                            {detail}
+                          </pre>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </motion.li>
                 );
               })}

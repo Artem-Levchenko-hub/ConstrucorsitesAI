@@ -318,13 +318,17 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               kind: event.data.kind ?? "step",
               action: event.data.action ?? "",
               path: event.data.path ?? "",
+              tool: event.data.tool ?? undefined,
+              detail: event.data.detail ?? undefined,
+              ok: event.data.ok ?? undefined,
             };
             const last = list[list.length - 1];
             if (
               last &&
               last.kind === next.kind &&
               last.action === next.action &&
-              last.path === next.path
+              last.path === next.path &&
+              last.detail === next.detail
             ) {
               return list;
             }

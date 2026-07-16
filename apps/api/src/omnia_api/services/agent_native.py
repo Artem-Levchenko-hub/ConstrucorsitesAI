@@ -253,6 +253,35 @@ def _text_of(content: list[dict[str, Any]]) -> str:
     ).strip()
 
 
+# Cap the per-step detail so drilling into a step stays cheap on the WS + UI.
+_STEP_DETAIL_CAP = 1400
+
+
+def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
+    """A short, human-inspectable preview of what a tool step DID — shown when the
+    user drills into the step. Empty string when there's nothing useful to show."""
+    def _cap(s: Any) -> str:
+        t = str(s or "")
+        return t if len(t) <= _STEP_DETAIL_CAP else t[:_STEP_DETAIL_CAP] + "\n… (обрезано)"
+
+    if not obs.get("ok", True):
+        return _cap(obs.get("error") or obs.get("detail") or "ошибка")
+    if name == "write_file":
+        content = str(action.args.get("content", "") or "")
+        return _cap(f"{len(content)} символов записано:\n\n{content}")
+    if name == "edit_file":
+        return _cap(obs.get("content") or obs.get("detail") or "правка применена")
+    if name == "read_file":
+        return _cap(obs.get("content") or "")
+    if name == "build":
+        return _cap(obs.get("detail") or obs.get("content") or "сборка чистая")
+    if name in ("grep", "list_dir", "bash", "read_logs", "docs"):
+        return _cap(obs.get("detail") or obs.get("content") or "")
+    if name in ("runtime_check", "probe", "verify_isolation"):
+        return _cap(obs.get("detail") or obs.get("content") or "проверка пройдена")
+    return _cap(obs.get("detail") or obs.get("content") or "")
+
+
 _NATIVE_PREAMBLE = (
     "Ты — автономный инженер: строишь РАБОЧЕЕ приложение в этом проекте, как Claude "
     "Code. Инструменты вызывай напрямую: read_file/list_dir/grep — понять код, "
@@ -459,12 +488,19 @@ async def run_native_build(
                     continue
 
                 action = _tool_use_to_action(tu)
-                if emit:
-                    await emit("agent.step", {"step": step, "action": name, "path": action.path})
                 try:
                     obs = await execute(action)
                 except Exception as exc:  # a tool crash must not kill the build
                     obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
+                # Emit AFTER execute so the step carries a `detail` — what the tool
+                # actually did (written content preview, build output, read result)
+                # — so the UI can let the user drill INTO a step and see inside it.
+                if emit:
+                    await emit("agent.step", {
+                        "step": step, "action": name, "path": action.path,
+                        "detail": _step_detail(name, action, obs),
+                        "ok": bool(obs.get("ok", True)),
+                    })
 
                 ops_this_turn += 1
                 if obs.get("infra_dead"):

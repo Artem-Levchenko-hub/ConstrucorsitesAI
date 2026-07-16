@@ -2632,6 +2632,10 @@ async def _process_prompt(
                         "action": action,
                         "tool": raw_tool,
                         "path": path,
+                        # `detail` = what the step did inside (content/output) so the
+                        # UI can drill into a step; `ok` colours success/failure.
+                        "detail": str(data.get("detail", "") or ""),
+                        "ok": bool(data.get("ok", True)),
                     },
                 )
 
