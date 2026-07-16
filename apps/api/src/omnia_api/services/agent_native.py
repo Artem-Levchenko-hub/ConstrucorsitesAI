@@ -202,6 +202,50 @@ def _module_not_found_hint(build_output: str) -> str | None:
     )
 
 
+# Next.js App Router: a route group `(name)` does NOT affect the URL, so
+# `app/(app)/login/page.tsx` and `app/login/page.tsx` BOTH resolve to `/login`
+# and the build dies with "two parallel pages that resolve to the same path".
+# A weak model hits this on a restyle/translate turn by creating a second
+# `page.tsx` instead of editing the existing one (observed live 2026-07-16 on the
+# «переведи на русский» edit — auto-repair fixed it but burned 15 steps cycling
+# on write_file because it didn't know to remove the duplicate). Hand the model
+# the exact recovery so it fixes in ~2 steps.
+_PARALLEL_PAGES_RE = re.compile(
+    r"two parallel pages that resolve to the same path.*?check\s+(\S+)\s+and\s+(\S+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _parallel_pages_hint(build_output: str) -> str | None:
+    """If the build error is Next.js's "two parallel pages" conflict, return an
+    inline hint steering the model to remove the duplicate route (keep one), not
+    to create more files. None if no such error present."""
+    m = _PARALLEL_PAGES_RE.search(build_output or "")
+    if not m:
+        return None
+    a, b = m.group(1), m.group(2)
+    return (
+        f"\n\n[HINT] {a} and {b} both resolve to the SAME URL — a route group "
+        "`(name)` does not change the path, so two page.tsx at that path collide. "
+        "Do NOT create another file and do NOT keep rewriting the same page. Keep "
+        "ONE canonical route and neutralize the duplicate: overwrite the extra "
+        "page.tsx to re-export the survivor (`export { default } from '<path>'`) "
+        "or replace it with a redirect, and repoint links. Use list_dir to see "
+        "both before acting."
+    )
+
+
+def _build_error_hint(build_output: str) -> str:
+    """Concatenate every deterministic recovery hint that applies to this build
+    error (empty string if none). Keeps the fact-loop steering in one place."""
+    return "".join(
+        h for h in (
+            _module_not_found_hint(build_output),
+            _parallel_pages_hint(build_output),
+        ) if h
+    )
+
+
 def _text_of(content: list[dict[str, Any]]) -> str:
     return "\n".join(
         str(b.get("text", "")) for b in content
@@ -440,7 +484,7 @@ async def run_native_build(
                     wrote_since_build = False
                 _tr = _obs_to_tool_result(tu_id, obs)
                 if name == "build" and not obs.get("ok"):
-                    _hint = _module_not_found_hint(str(_tr.get("content") or ""))
+                    _hint = _build_error_hint(str(_tr.get("content") or ""))
                     if _hint:
                         _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
