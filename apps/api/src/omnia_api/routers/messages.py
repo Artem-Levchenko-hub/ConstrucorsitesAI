@@ -381,6 +381,84 @@ async def _run_app_self_repair(
     return changed, (last_status or status), (last_category or category)
 
 
+# Raw tool name + file path → a human-readable step phrase for the live progress
+# list. Deep-research (16.07): raw tool names ("write_file src/app/page.tsx") read
+# as "непонятно что делает агент"; a plain-language phrase makes the flow legible.
+_STEP_VERB: dict[str, str] = {
+    "write_file": "Пишу",
+    "edit_file": "Правлю",
+    "read_file": "Читаю",
+    "list_dir": "Смотрю структуру",
+    "grep": "Ищу в коде",
+    "build": "Проверяю сборку",
+    "bash": "Выполняю команду",
+    "docs": "Читаю документацию",
+    "runtime_check": "Открываю страницу",
+    "probe": "Проверяю действие",
+    "verify_isolation": "Проверяю безопасность данных",
+    "done": "Готово",
+}
+
+
+# Common route slugs → a Russian noun, so «dashboard» reads as «панель».
+_ROUTE_RU: dict[str, str] = {
+    "dashboard": "панель", "chats": "чаты", "chat": "чат", "messages": "сообщения",
+    "settings": "настройки", "profile": "профиль", "login": "вход",
+    "signin": "вход", "signup": "регистрацию", "register": "регистрацию",
+    "contacts": "контакты", "clients": "клиентов", "orders": "заказы",
+    "products": "товары", "cart": "корзину", "checkout": "оформление",
+    "admin": "админку", "users": "пользователей", "about": "«О нас»",
+    "pricing": "цены", "blog": "блог", "new-group": "создание группы",
+}
+
+
+def _humanize_file(path: str) -> str:
+    """A short Russian noun for a file path shown in a progress step."""
+    p = (path or "").replace("\\", "/").lower()
+    base = p.rsplit("/", 1)[-1]
+    if not p:
+        return ""
+    if base == "page.tsx" or base == "page.jsx":
+        if p.rstrip("/").endswith("app/page.tsx") or "/app/page." in p:
+            return "главную страницу"
+        # Last meaningful segment = the route name (skip src/app + route groups).
+        seg = [s for s in p.split("/") if s and not s.startswith("(") and s not in
+               ("src", "app", "page.tsx", "page.jsx")]
+        if not seg:
+            return "страницу"
+        name = seg[-1]
+        return f"страницу «{_ROUTE_RU.get(name, name)}»"
+    if base in ("layout.tsx", "layout.jsx"):
+        return "макет"
+    if base == "globals.css" or base.endswith(".css"):
+        return "стили"
+    if base == "route.ts" or base == "route.js":
+        return "API-обработчик"
+    if "schema" in base:
+        return "структуру данных"
+    if base.endswith((".tsx", ".jsx")):
+        return f"компонент {base.rsplit('.', 1)[0]}"
+    return base
+
+
+def _humanize_step(tool: str, path: str) -> str:
+    """Turn a raw (tool, path) into a plain-language step, e.g.
+    ('write_file', 'src/app/page.tsx') → 'Пишу главную страницу'."""
+    tool = (tool or "").strip()
+    verb = _STEP_VERB.get(tool)
+    if verb is None:
+        return tool or "Работаю"
+    if tool in ("write_file", "edit_file"):
+        what = _humanize_file(path)
+        return f"{verb} {what}" if what else verb
+    if tool == "read_file":
+        what = _humanize_file(path)
+        return f"{verb} {what}" if what else "Читаю код"
+    if tool == "runtime_check" and path:
+        return f"{verb} {path}"
+    return verb
+
+
 def _agent_result_message(res: Any, *, is_edit: bool) -> str:
     """User-facing chat text for an agentic-build run — NEVER leaks the raw summary.
 
@@ -2524,17 +2602,26 @@ async def _process_prompt(
 
             async def _agent_emit(event: str, data: dict[str, Any]) -> None:
                 # Surface each agent step as a STRUCTURED transcript event so the
-                # frontend renders a live Claude-Code-style step list (tool + path)
-                # instead of gray "[агент] …" text. One WS event type `agent.step`
-                # carries every loop signal via `kind` (step/escalate/stalled/retry).
+                # frontend renders a live Claude-Code-style step list instead of
+                # gray "[агент] …" text. One WS event type `agent.step` carries
+                # every loop signal via `kind` (step/escalate/stalled/retry).
+                #
+                # `action` is now a HUMAN-READABLE phrase («Пишу главную страницу»)
+                # — deep-research (16.07): raw tool names read as "непонятно что
+                # делает агент". The raw tool goes in `tool` so the UI can still
+                # pick an icon. Frontend shows `action` as-is → instant win, no
+                # frontend change needed.
                 kind = (event.rsplit(".", 1)[-1] or "step").lower()
-                action = str(data.get("action", "") or "")
+                raw_tool = str(data.get("action", "") or "")
+                path = str(data.get("path", "") or "")
                 if kind == "escalate":
-                    action = action or f"усиливаю модель → {data.get('to', '')}"
+                    action = f"усиливаю модель → {data.get('to', '')}"
                 elif kind == "stalled":
-                    action = action or "застрял — меняю подход"
+                    action = "думаю, как лучше — меняю подход"
                 elif kind == "retry":
-                    action = action or f"повтор запроса (#{data.get('attempt', 0)})"
+                    action = f"повторяю запрос (#{data.get('attempt', 0)})"
+                else:
+                    action = _humanize_step(raw_tool, path)
                 await publish_event(
                     project_id,
                     "agent.step",
@@ -2543,7 +2630,8 @@ async def _process_prompt(
                         "step": data.get("step"),
                         "kind": kind,
                         "action": action,
-                        "path": str(data.get("path", "") or ""),
+                        "tool": raw_tool,
+                        "path": path,
                     },
                 )
 
