@@ -47,6 +47,14 @@ Same bar as the static landing generator: enterprise-grade output, NOT a scaffol
 - Mobile-first responsive (375/768/1024/1440). One `<h1>`. Visible focus states.
 - SVG icons only (Lucide). NEVER emoji.
 
+## Performance (binding — 60fps, fast first paint)
+
+- **Split routes**: lazy-load every non-home page with `React.lazy(() => import("@/pages/…"))` wrapped in `<Suspense fallback={…}>` in `App.tsx`. The initial bundle then carries only the landing route — the rest streams on navigation.
+- **Images**: every `<img>` gets `loading="lazy"` `decoding="async"` (except the ONE above-the-fold hero, which stays eager) AND explicit `width`/`height` (or an aspect-ratio box) so nothing reflows as they load (CLS = 0). Never drop a full-res image into a small slot — size it to the container.
+- **Media weight**: one heavy asset (video / large hero) per view, reused — not one per card. Video backgrounds `preload="metadata"` + `poster`.
+- **Animation**: animate only `transform`/`opacity` (compositor), add `will-change` sparingly; reveal sections with `IntersectionObserver`, never a scroll handler that reads layout each frame. Honor `prefers-reduced-motion`.
+- **No heavy deps**: no moment.js, lodash-whole, chart mega-libs unless asked — a few KB of hand-rolled code beats a 200 KB import.
+
 ## When to recommend a different template
 
 - "Хочу принимать заказы / хранить пользователей / админку" → `nextjs-postgres-drizzle` (has DB + auth + admin).

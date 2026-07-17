@@ -331,9 +331,50 @@ def _ensure_bucket(client, bucket: str) -> bool:
         return False
 
 
+# Generated stills come back as multi-MB PNGs (Flux ~2 MB each); a page with a
+# hero + section backgrounds shipped ~14 MB of images (measured 2026-07-18) — the
+# dominant load weight. WebP at q82 cuts that ~90% with no visible loss, and a
+# 1600px width cap covers full-bleed heroes. `<img>` renders by content-type, not
+# extension, so we keep the `.png` cache key (content-addressed lineage intact)
+# and only swap the bytes + content-type. Kill switch: IMAGE_OPTIMIZE=false.
+_IMAGE_MAX_WIDTH = 1600
+_IMAGE_WEBP_QUALITY = 82
+
+
+def _optimize_image_bytes(data: bytes) -> tuple[bytes, str]:
+    """Return ``(webp_bytes, "image/webp")`` — a ≤1600px-wide, q82 WebP re-encode
+    of ``data``. Fail-soft (R-10): if Pillow is absent, the decode fails, or WebP
+    ends up LARGER (already-tiny source), returns the ORIGINAL ``(data, "image/png")``
+    — a size optimization must never lose or corrupt a paid image."""
+    if not get_settings().image_optimize:
+        return data, "image/png"
+    try:
+        from PIL import Image  # lazy: keep Pillow off the module-load path
+    except Exception:  # noqa: BLE001 — no Pillow → ship the PNG unchanged
+        return data, "image/png"
+    try:
+        im = Image.open(BytesIO(data))
+        im.load()
+        w, h = im.size
+        if w > _IMAGE_MAX_WIDTH:
+            im = im.resize((_IMAGE_MAX_WIDTH, round(h * _IMAGE_MAX_WIDTH / w)),
+                           Image.LANCZOS)
+        if im.mode in ("RGBA", "P", "LA"):
+            im = im.convert("RGB")
+        buf = BytesIO()
+        im.save(buf, "WEBP", quality=_IMAGE_WEBP_QUALITY, method=6)
+        webp = buf.getvalue()
+        if not webp or len(webp) >= len(data):
+            return data, "image/png"  # no win → keep original
+        return webp, "image/webp"
+    except Exception as exc:  # noqa: BLE001 — never lose an image over the optimizer
+        log.warning("image_resolver: webp optimize failed err=%r — using original", exc)
+        return data, "image/png"
+
+
 def _upload_image(image_bytes: bytes, project_id: str, prompt: str) -> str | None:
-    """Upload PNG to MinIO. Key is content-addressed by (project_id, prompt)
-    so identical prompts within one project share one object."""
+    """Upload the image to MinIO, WebP-optimized. Key is content-addressed by
+    (project_id, prompt) so identical prompts within one project share one object."""
     settings = get_settings()
     client = get_minio_client()
     bucket = settings.minio_bucket_images
@@ -342,14 +383,15 @@ def _upload_image(image_bytes: bytes, project_id: str, prompt: str) -> str | Non
     sha = hashlib.sha256(
         f"{project_id}|{prompt}".encode("utf-8")
     ).hexdigest()[:32]
-    key = f"{project_id}/{sha}.png"
+    key = f"{project_id}/{sha}.png"  # `.png` kept for cache-key lineage; bytes=WebP
+    data, content_type = _optimize_image_bytes(image_bytes)
     try:
         client.put_object(
             bucket,
             key,
-            BytesIO(image_bytes),
-            length=len(image_bytes),
-            content_type="image/png",
+            BytesIO(data),
+            length=len(data),
+            content_type=content_type,
         )
     except S3Error as exc:
         log.warning("image_resolver: upload failed key=%s err=%r", key, exc)

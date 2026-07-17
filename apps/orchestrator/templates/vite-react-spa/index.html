@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Open the TLS connection to the media origin (generated images/video live
+         on the Omnia MinIO host) before the JS bundle even asks for them, so the
+         hero image/video start downloading ~1 RTT sooner. -->
+    <link rel="preconnect" href="https://constructor.lead-generator.ru" crossorigin />
+    <link rel="dns-prefetch" href="https://constructor.lead-generator.ru" />
     <title>Omnia.AI Project</title>
   </head>
   <body>

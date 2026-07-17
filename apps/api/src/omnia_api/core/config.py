@@ -196,6 +196,10 @@ class Settings(BaseSettings):
     # (2026-07-17). Needs ffmpeg in the image; fail-soft to the original bytes.
     # Kill switch: VIDEO_OPTIMIZE_SCRUB=false.
     video_optimize_scrub: bool = Field(default=True)
+    # Re-encode generated stills to ≤1600px WebP before storing (Flux PNGs are
+    # ~2 MB each; WebP q82 cuts ~90% — a page's image weight went 14 MB→1.2 MB,
+    # 2026-07-18). Needs Pillow; fail-soft to the original PNG. Kill: IMAGE_OPTIMIZE=false.
+    image_optimize: bool = Field(default=True)
     minio_bucket_videos: str = Field(default="omnia-videos")
     # Hard cap on distinct video generations per build. Video is ~₽60/clip on
     # Omnia's own balance (no per-user wallet gate on the agent path), so unlike
