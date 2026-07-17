@@ -56,42 +56,107 @@
   // collapses both into one — same look (parity).
   var styleMode = false;
   var hoverLabel = null;
+  var hoverLabelText = null;
   var overrideModel = { tokens: {}, elements: {}, fonts: {} };
   var overrideStyleEl = null;
 
+  // One-time CSS for the targeting-reticle hover box: a soft corner-bracket pulse
+  // (camera-focus vibe), reduced-motion-safe. Injected into the previewed page.
+  function injectReticleCSS() {
+    if (document.getElementById("omnia-reticle-css")) return;
+    var st = document.createElement("style");
+    st.id = "omnia-reticle-css";
+    st.setAttribute("data-omnia-inspector", "css");
+    st.textContent =
+      "@keyframes omnia-reticle-pulse{0%,100%{opacity:1}50%{opacity:.5}}" +
+      "[data-omnia-corner]{animation:omnia-reticle-pulse 1.4s ease-in-out infinite}" +
+      "@media (prefers-reduced-motion:reduce){[data-omnia-corner]{animation:none}}";
+    (document.head || document.documentElement).appendChild(st);
+  }
+
+  // An L-shaped bracket pinned to one corner of the hover box.
+  function makeCorner(pos) {
+    var c = document.createElement("div");
+    c.setAttribute("data-omnia-inspector", "corner");
+    c.setAttribute("data-omnia-corner", pos);
+    var s = c.style;
+    s.position = "absolute";
+    s.width = "11px";
+    s.height = "11px";
+    s.pointerEvents = "none";
+    var b = "2.5px solid " + HL_COLOR;
+    if (pos === "tl") { s.top = "-1px"; s.left = "-1px"; s.borderTop = b; s.borderLeft = b; s.borderTopLeftRadius = "5px"; }
+    else if (pos === "tr") { s.top = "-1px"; s.right = "-1px"; s.borderTop = b; s.borderRight = b; s.borderTopRightRadius = "5px"; }
+    else if (pos === "bl") { s.bottom = "-1px"; s.left = "-1px"; s.borderBottom = b; s.borderLeft = b; s.borderBottomLeftRadius = "5px"; }
+    else { s.bottom = "-1px"; s.right = "-1px"; s.borderBottom = b; s.borderRight = b; s.borderBottomRightRadius = "5px"; }
+    return c;
+  }
+
   function ensureHoverBox() {
     if (hoverBox) return hoverBox;
+    injectReticleCSS();
     hoverBox = document.createElement("div");
     hoverBox.setAttribute("data-omnia-inspector", "hover");
     var s = hoverBox.style;
     s.position = "fixed";
     s.pointerEvents = "none"; // never becomes the event target itself
     s.zIndex = String(Z + 1);
-    s.border = "2px solid " + HL_COLOR;
-    s.background = "rgba(99,102,241,0.12)";
-    s.borderRadius = "3px";
-    s.transition = "all 60ms ease-out";
+    // Thin outline + soft brand glow + a faint diagonal wash — a "targeting"
+    // frame rather than a flat box. The 4 corner brackets below sell the look.
+    s.border = "1px solid rgba(99,102,241,0.55)";
+    s.background =
+      "linear-gradient(135deg, rgba(99,102,241,0.10), rgba(139,92,246,0.05))";
+    s.borderRadius = "6px";
+    s.boxShadow =
+      "0 0 0 1px rgba(99,102,241,0.15), 0 6px 22px -4px rgba(99,102,241,0.5)";
+    // Smooth "snap" from element to element instead of a jumpy jump.
+    s.transition =
+      "transform 130ms cubic-bezier(.22,1,.36,1)," +
+      "width 130ms cubic-bezier(.22,1,.36,1)," +
+      "height 130ms cubic-bezier(.22,1,.36,1)";
     s.display = "none";
     s.top = "0";
     s.left = "0";
-    // A small badge that rides the top-left of the box — used to surface an
-    // affordance hint (e.g. "Заменить фото" when hovering an image) so the
-    // feature is discoverable instead of hidden behind the mode.
+    hoverBox.appendChild(makeCorner("tl"));
+    hoverBox.appendChild(makeCorner("tr"));
+    hoverBox.appendChild(makeCorner("bl"));
+    hoverBox.appendChild(makeCorner("br"));
+    // A badge riding the top-left: a pulsing dot + the element tag (or an
+    // affordance hint like "Заменить фото") — so you always know what you're on.
     hoverLabel = document.createElement("div");
     hoverLabel.setAttribute("data-omnia-inspector", "hover-label");
     var ls = hoverLabel.style;
     ls.position = "absolute";
-    ls.top = "0";
-    ls.left = "0";
+    ls.top = "-3px";
+    ls.left = "-1px";
     ls.transform = "translateY(-100%)";
-    ls.background = HL_COLOR;
+    ls.display = "none";
+    ls.alignItems = "center";
+    ls.gap = "5px";
+    ls.background = "rgba(30,27,66,0.94)";
+    ls.backdropFilter = "blur(4px)";
+    ls.webkitBackdropFilter = "blur(4px)";
     ls.color = "#fff";
     ls.font = "600 11px system-ui, -apple-system, sans-serif";
-    ls.padding = "2px 6px";
-    ls.borderRadius = "4px";
+    ls.padding = "3px 8px";
+    ls.borderRadius = "7px";
     ls.whiteSpace = "nowrap";
     ls.pointerEvents = "none";
-    ls.display = "none";
+    ls.boxShadow = "0 3px 12px -2px rgba(0,0,0,0.55)";
+    var dot = document.createElement("span");
+    dot.setAttribute("data-omnia-inspector", "dot");
+    dot.setAttribute("data-omnia-corner", "dot");
+    var dstyle = dot.style;
+    dstyle.width = "6px";
+    dstyle.height = "6px";
+    dstyle.borderRadius = "50%";
+    dstyle.background = HL_COLOR;
+    dstyle.flex = "none";
+    dstyle.boxShadow = "0 0 6px " + HL_COLOR;
+    hoverLabelText = document.createElement("span");
+    hoverLabelText.setAttribute("data-omnia-inspector", "hover-label-text");
+    hoverLabel.appendChild(dot);
+    hoverLabel.appendChild(hoverLabelText);
     hoverBox.appendChild(hoverLabel);
     (document.body || document.documentElement).appendChild(hoverBox);
     return hoverBox;
@@ -107,10 +172,10 @@
     box.style.width = rect.width + "px";
     box.style.height = rect.height + "px";
     box.style.transform = "translate(" + rect.left + "px," + rect.top + "px)";
-    if (hoverLabel) {
+    if (hoverLabel && hoverLabelText) {
       if (labelText) {
-        hoverLabel.textContent = labelText;
-        hoverLabel.style.display = "block";
+        hoverLabelText.textContent = labelText;
+        hoverLabel.style.display = "inline-flex";
       } else {
         hoverLabel.style.display = "none";
       }
@@ -133,7 +198,10 @@
         if (pickedImg(el, e2.clientX, e2.clientY)) hint = "Заменить фото";
         else if (isPlainTextEl(el)) hint = "Изменить текст";
       }
-      positionHoverBox(el.getBoundingClientRect(), hint);
+      // Always label what you're hovering — the affordance hint when there is
+      // one, otherwise just the element tag. Makes every pick legible.
+      var label = hint || "<" + el.nodeName.toLowerCase() + ">";
+      positionHoverBox(el.getBoundingClientRect(), label);
     });
   }
 
