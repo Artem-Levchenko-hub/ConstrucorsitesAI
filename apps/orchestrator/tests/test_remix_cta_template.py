@@ -17,18 +17,20 @@ from pathlib import Path
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 _ENTITIES = _TEMPLATES / "nextjs-entities"
 _DRIZZLE = _TEMPLATES / "nextjs-postgres-drizzle"
+# nextjs-realtime (messengers) originally shipped without any omnia public
+# scripts → select-mode / manual editor / remix CTA were dead. Pinned here too.
+_REALTIME = _TEMPLATES / "nextjs-realtime"
 _CTA_REL = "public/omnia-remix-cta.js"
 
 
 def test_remix_cta_copies_stay_in_sync() -> None:
-    """Both Next.js container templates ship a byte-identical CTA (R-04 DRY)."""
+    """Every Next.js container template ships a byte-identical CTA (R-04 DRY)."""
     canonical = (_ENTITIES / _CTA_REL).read_bytes()
-    copy = (_DRIZZLE / _CTA_REL).read_bytes()
-    assert copy == canonical, (
-        "omnia-remix-cta.js drifted between nextjs-entities and "
-        "nextjs-postgres-drizzle — keep the copies byte-identical "
-        "(copy the nextjs-entities one over the drizzle one)."
-    )
+    for tpl in (_DRIZZLE, _REALTIME):
+        assert (tpl / _CTA_REL).read_bytes() == canonical, (
+            f"omnia-remix-cta.js drifted between nextjs-entities and {tpl.name} — "
+            "keep the copies byte-identical (copy the nextjs-entities one over it)."
+        )
 
 
 def test_remix_cta_contract() -> None:
@@ -63,10 +65,14 @@ def test_remix_cta_contract() -> None:
 
 def test_remix_cta_wired_into_both_layouts() -> None:
     """Each flagship layout loads the CTA script (else the file ships dead)."""
-    for tpl in (_ENTITIES, _DRIZZLE):
+    for tpl in (_ENTITIES, _DRIZZLE, _REALTIME):
         layout = (tpl / "src/app/layout.tsx").read_text(encoding="utf-8")
         assert 'src="/omnia-remix-cta.js"' in layout, (
             f"{tpl.name}/src/app/layout.tsx must <Script src> the remix CTA."
+        )
+        assert 'src="/omnia-inspector.js"' in layout, (
+            f"{tpl.name}/src/app/layout.tsx must <Script src> the select-mode "
+            "inspector (powers «Править с ИИ» + the manual style editor)."
         )
 
 
@@ -100,7 +106,7 @@ def test_narration_exposes_replay_hook() -> None:
     """Both container narration copies expose the replay hook the watermark calls
     (keeps the badge's "посмотреть, как он родился" button alive)."""
     rel = "public/omnia-brief-narration.js"
-    for tpl in (_ENTITIES, _DRIZZLE):
+    for tpl in (_ENTITIES, _DRIZZLE, _REALTIME):
         src = (tpl / rel).read_text(encoding="utf-8")
         assert "window.__omniaReplayBrief = function" in src, (
             f"{tpl.name}/{rel} must expose window.__omniaReplayBrief."

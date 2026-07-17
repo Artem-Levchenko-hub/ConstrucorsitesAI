@@ -119,6 +119,10 @@ def test_inspector_copies_stay_in_sync() -> None:
     copies = [
         repo / "apps/orchestrator/templates/nextjs-postgres-drizzle/public/omnia-inspector.js",
         repo / "apps/orchestrator/templates/nextjs-entities/public/omnia-inspector.js",
+        # nextjs-realtime (messengers) shipped WITHOUT the inspector — select-mode
+        # + the manual style editor were dead on every messenger until it was added.
+        # Pin it here so a new template can't silently drop it again.
+        repo / "apps/orchestrator/templates/nextjs-realtime/public/omnia-inspector.js",
     ]
     want = canonical.read_bytes()
     for copy in copies:

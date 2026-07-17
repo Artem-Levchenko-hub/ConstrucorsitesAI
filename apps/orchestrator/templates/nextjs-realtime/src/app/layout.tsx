@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 
 import "./globals.css";
 
@@ -39,6 +40,17 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen bg-background text-foreground antialiased">
         {children}
+        {/* Omnia select-mode inspector — canonical copy of apps/api
+            static/omnia-inspector.js (drift-guarded). Powers «Править с ИИ»
+            (click-to-pick) + the manual style editor over postMessage. Dormant
+            until the workspace enables it, so it costs nothing in normal use. */}
+        <Script src="/omnia-inspector.js" strategy="afterInteractive" />
+        {/* Omnia viral "Remix this" CTA — top-level public viewer only (hidden
+            inside the owner-workspace iframe). Drift-synced. */}
+        <Script src="/omnia-remix-cta.js" strategy="afterInteractive" />
+        {/* Omnia brief-narration — "AI is designing" reveal. Inert without a
+            baked window.__omniaBrief; exposes the watermark replay hook. */}
+        <Script src="/omnia-brief-narration.js" strategy="afterInteractive" />
       </body>
     </html>
   );
