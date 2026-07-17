@@ -135,9 +135,19 @@ export function PreviewFrame({ project }: { project: Project }) {
     initialData: project,
   });
   const template = liveProject?.template ?? project.template;
+  // Container-backed WEB stacks — mirror the backend `is_fullstack`
+  // (schemas/project.py `_ORCHESTRATOR_TEMPLATE_BY_API`) for every stack that
+  // renders in a browser: their build runs through the native agent (tools, not
+  // `<file>` blocks), so «Код» must use the agent-step live tree AND the preview
+  // uses the live dev container. `spa` (Vite+React) was missing here — its build
+  // fell to the freeform `StreamingCodeView`, which waits for `<file>` blocks the
+  // agent never emits, so «Код» sat on "AI собирает приложение…" the whole build
+  // (owner report 2026-07-17). `tgbot`/`api` are container-backed too but have no
+  // browser UI, so they stay out of the web-preview path (handled like `code`).
   const isFullstack =
     template === "fullstack" ||
     template === "nextjs_entities" ||
+    template === "spa" ||
     template === "realtime";
   // `code` projects (owner 2026-06-18) are language-agnostic source, not a
   // website — there's nothing to render in an iframe. Land the user on the «Код»

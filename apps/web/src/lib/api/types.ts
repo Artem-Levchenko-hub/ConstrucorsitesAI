@@ -33,7 +33,17 @@ export type ProjectTemplate =
   // Real-time app (messenger / chat / live feed / collab). Container-backed
   // Next.js on the `nextjs-realtime` substrate (SSE+Redis hub + membership ACL
   // + presence). Preview points at the live container, same as fullstack.
-  | "realtime";
+  | "realtime"
+  // Vite + React SPA, no backend (the interactive escape hatch). Container-backed
+  // WEB stack → preview points at the live dev container and «Код» uses the
+  // agent-step live tree, same as fullstack. Kept in sync with the backend
+  // `Template` literal (schemas/project.py).
+  | "spa"
+  // Container-backed but NOT browser UIs — a Telegram bot (aiogram) and a FastAPI
+  // service. Listed so `project.template` typechecks; the workspace treats them
+  // like `code` (no web preview iframe).
+  | "tgbot"
+  | "api";
 
 export type Project = {
   id: Uuid;

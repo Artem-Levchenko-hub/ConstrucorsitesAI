@@ -58,6 +58,9 @@ const TEMPLATE_LABELS: Record<ProjectTemplate, string> = {
   nextjs_entities: "SaaS на сущностях",
   code: "Код (любой язык)",
   realtime: "Мессенджер / realtime",
+  spa: "Интерактивный сайт (SPA)",
+  tgbot: "Телеграм-бот",
+  api: "API-сервис",
 };
 
 type Store = {
