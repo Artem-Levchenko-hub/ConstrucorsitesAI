@@ -166,7 +166,7 @@ export function AgentTranscript({
             transition={{ duration: 0.2, ease: EASE_OUT }}
             className="overflow-hidden border-t border-border-subtle"
           >
-            <ol className="scrollbar-elegant max-h-72 space-y-0.5 overflow-y-auto p-1.5">
+            <ol className="space-y-0.5 p-1.5">
               {steps.map((s, i) => {
                 const Icon = stepIcon(s);
                 const last = i === steps.length - 1;
@@ -182,6 +182,10 @@ export function AgentTranscript({
                     initial={{ opacity: 0, x: -4 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.18, ease: EASE_OUT }}
+                    // Full action + path on hover — the path is truncated in the
+                    // row, so the native tooltip surfaces the whole thing (works
+                    // for every step, incl. non-drillable ones with a disabled btn).
+                    title={stepLabel(s) + (s.path ? " " + s.path : "")}
                   >
                     <button
                       type="button"
