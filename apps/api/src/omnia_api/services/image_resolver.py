@@ -380,6 +380,25 @@ def _cached_image_url(project_id: str, prompt: str) -> str | None:
     return f"{base}/{bucket}/{key}"
 
 
+async def generate_and_store_image(project_id: str, prompt: str) -> str | None:
+    """Generate ONE image for ``prompt`` and store it in MinIO, returning its
+    public URL (or None on any failure). The SINGLE-SHOT path for the native
+    agent's ``generate_media`` tool (services/agent_media.py) — distinct from the
+    batch tag-scanner ``resolve_images``, but sharing the SAME content-addressed
+    cache/fetch/upload, so an identical ``(project, prompt)`` never pays twice and
+    a tool-made image is reusable by a later tag (and vice-versa)."""
+    settings = get_settings()
+    if not settings.use_image_gen:
+        return None
+    cached = await asyncio.to_thread(_cached_image_url, project_id, prompt)
+    if cached:
+        return cached
+    img = await _fetch_one(prompt)
+    if img is None:
+        return None
+    return await asyncio.to_thread(_upload_image, img, project_id, prompt)
+
+
 def _extract_photo_tags(files: dict[str, str]) -> list[ImgTag]:
     """Find every ``data-omnia-photo`` tag (capped like the gen path)."""
     out: list[ImgTag] = []

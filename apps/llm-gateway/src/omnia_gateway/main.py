@@ -18,7 +18,7 @@ from omnia_gateway.core.db import close_pool, init_pool
 from omnia_gateway.core.http import close_http, init_http
 from omnia_gateway.core.logging import configure_logging
 from omnia_gateway.core.redis import close_redis, init_redis
-from omnia_gateway.routers import audio, chat, health, images, messages_native, models
+from omnia_gateway.routers import audio, chat, health, images, messages_native, models, videos
 
 
 @asynccontextmanager
@@ -60,6 +60,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(messages_native.router)  # native Anthropic /v1/messages (tool-use agent)
     app.include_router(images.router)
+    app.include_router(videos.router)  # async text/image-to-video (Kling)
     app.include_router(audio.router)
     return app
 

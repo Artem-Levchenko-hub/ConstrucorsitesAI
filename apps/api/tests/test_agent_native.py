@@ -194,3 +194,83 @@ async def test_native_proseless_done_gets_human_summary(
     assert res.stop_reason == "no_tool"
     assert "(no tool call)" not in res.summary
     assert "Готово" in res.summary
+
+
+def test_native_agent_has_eyes_and_taste() -> None:
+    """Smart-agent contract (deep-research 2026-07-17): the native builder must
+    ADVERTISE the `see` vision tool (screenshot → design self-critique) AND carry
+    design-system + think-first rules in its system prompt — the two levers that
+    lift TASTE and cut bugs. A dropped `see` or a stripped taste block silently
+    reverts the agent to «компилируется, но уродливо»."""
+    from omnia_api.services import agent_builder as B
+
+    names = [t["name"] for t in agent_native._TOOLS]
+    assert "see" in names, "native agent must offer the `see` vision-critique tool"
+    # Dead schema is worse than none — the executor must actually route `see`.
+    assert "see" in B._KNOWN_ACTIONS, "executor must route the `see` action"
+
+    sysp = agent_native.native_system_prompt("STACK GUIDE", None)
+    assert "ВКУС В ДИЗАЙНЕ" in sysp, "design-taste + see-loop rules must be present"
+    assert "root-cause" in sysp, "think-before-fix (fewer-bugs) rule must be present"
+    assert "`see` главный" in agent_native._NATIVE_PREAMBLE  # visual-critique cycle
+
+
+def test_native_agent_can_generate_media() -> None:
+    """generate_media (flux image + Kling video, same key) must be ADVERTISED as a
+    native tool AND routed by the executor, and the preamble must teach WHEN/HOW to
+    use video (scroll-driven hero / 3D fly-through). A dropped tool or missing route
+    means the agent can never build the cinematic-video sites the owner asked for."""
+    from omnia_api.services import agent_builder as B
+
+    names = [t["name"] for t in agent_native._TOOLS]
+    assert "generate_media" in names, "native agent must offer the generate_media tool"
+    assert "generate_media" in B._KNOWN_ACTIONS, "executor must route generate_media"
+
+    # The tool schema must expose kind + prompt (required) so the model can pick
+    # image vs video — a schema that dropped `kind` would silently force images.
+    media = next(t for t in agent_native._TOOLS if t["name"] == "generate_media")
+    props = media["input_schema"]["properties"]
+    assert "kind" in props and "prompt" in props
+    assert media["input_schema"]["required"] == ["kind", "prompt"]
+    # Keyframe interpolation (Flux first+last → Kling) is the signature move — the
+    # schema MUST offer first_frame/last_frame or the model can't request it.
+    assert "first_frame" in props and "last_frame" in props
+
+    # The preamble must carry the video design pattern (scroll-scrub / bg loop) +
+    # the keyframe recipe + hover microinteractions, else the model has the tool
+    # but no idea when/how to reach for a clip or to make the UI feel alive.
+    assert "МЕДИА" in agent_native._NATIVE_PREAMBLE
+    assert "video" in agent_native._NATIVE_PREAMBLE.lower()
+    assert "КЕЙФРЕЙМ" in agent_native._NATIVE_PREAMBLE  # first+last frame recipe
+    assert "МИКРО-ВЗАИМОДЕЙСТВИЯ" in agent_native._NATIVE_PREAMBLE  # hover rules
+
+
+def test_generate_media_returns_url_in_model_visible_field() -> None:
+    """The whole feature dies if the agent can't SEE the generated URL: the native
+    loop feeds a tool result back via `content`/`detail`/`error` (never the bare
+    `url` key), so generate_media MUST echo the URL inside `content`. This guards
+    the review-2026-07-17 critical: url-only → model gets "ok" → no <img>/<video>."""
+    import asyncio
+
+    from omnia_api.services import agent_media
+
+    async def _fake_gen(project_id: str, prompt: str) -> str:
+        return "http://minio.local/omnia-images/p/deadbeef.png"
+
+    # Stub the flux call so this stays a pure unit test (no gateway/MinIO).
+    orig = agent_media.image_resolver.generate_and_store_image
+    agent_media.image_resolver.generate_and_store_image = _fake_gen  # type: ignore[assignment]
+    try:
+        res = asyncio.run(
+            agent_media.generate_media("p", kind="image", prompt="cinematic hero")
+        )
+    finally:
+        agent_media.image_resolver.generate_and_store_image = orig  # type: ignore[assignment]
+
+    assert res["ok"] is True
+    assert res["url"] == "http://minio.local/omnia-images/p/deadbeef.png"
+    # The URL must live in a field the model actually reads back (content), not
+    # only in `url` which _obs_to_tool_result ignores.
+    assert res["url"] in str(res["content"])
+    body = agent_native._obs_to_tool_result("tu_1", res)["content"]
+    assert res["url"] in body  # end-to-end: model truly receives the URL

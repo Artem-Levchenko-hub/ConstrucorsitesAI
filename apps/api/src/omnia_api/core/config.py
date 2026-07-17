@@ -176,6 +176,21 @@ class Settings(BaseSettings):
     # spend less. Env: IMAGE_GEN_MAX_UNIQUE.
     image_gen_max_unique: int = Field(default=8)
 
+    # ── Video generation (2026-07-17) — the native agent's generate_media tool ──
+    # Kling (async task on aitunnel, SAME key as chat/images) for short cinematic
+    # clips: scroll-driven hero video, 3D fly-through, animated backgrounds. The
+    # agent calls it DIRECTLY (services/agent_media.py → gateway
+    # /v1/videos/generations), stores the mp4 in MinIO and embeds a <video>. std
+    # is the live default (faster/cheaper than pro). Kill switch USE_VIDEO_GEN.
+    use_video_gen: bool = Field(default=True)
+    video_gen_model: str = Field(default="kling-v3.0-std")
+    minio_bucket_videos: str = Field(default="omnia-videos")
+    # Hard cap on distinct video generations per build. Video is ~₽60/clip on
+    # Omnia's own balance (no per-user wallet gate on the agent path), so unlike
+    # cheap images this MUST be bounded or a "video on every section" prompt could
+    # burn thousands per build (review 2026-07-17). Env: VIDEO_GEN_MAX_UNIQUE.
+    video_gen_max_unique: int = Field(default=3)
+
     # Live image drop-in (2026-06-06) — emit a per-image `image.resolved` WS
     # event as each generated picture finishes, so the streaming preview can
     # swap it into its frame in real time (the "фотки въезжают в рамки" effect)

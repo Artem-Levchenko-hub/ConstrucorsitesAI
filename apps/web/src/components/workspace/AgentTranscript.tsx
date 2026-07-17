@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Loader2,
   Sparkles,
+  Film,
 } from "lucide-react";
 import type { AgentStep } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
@@ -35,6 +36,7 @@ const ACTION_ICON: Record<string, typeof FileCode2> = {
   bash: Terminal,
   read_logs: ScrollText,
   runtime_check: Globe,
+  generate_media: Film,
   done: CheckCircle2,
 };
 
@@ -49,6 +51,7 @@ const ACTION_LABEL: Record<string, string> = {
   bash: "Команда",
   read_logs: "Читаю логи",
   runtime_check: "Проверяю запуск",
+  generate_media: "Генерирую медиа",
   done: "Готово",
 };
 

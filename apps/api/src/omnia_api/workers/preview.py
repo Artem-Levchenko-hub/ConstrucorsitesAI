@@ -97,6 +97,36 @@ async def _await_paint(page) -> None:
     await page.wait_for_timeout(_RENDER_SETTLE_MS)
 
 
+# Max wait for the app to actually PAINT REAL CONTENT (not a loading skeleton)
+# before the shot. networkidle can fire while `loading.tsx` still shows its
+# skeleton (the fetch finished but React hasn't swapped, or the skeleton itself
+# makes no request) — so the vision judge critiques a "загрузка…" page and calls
+# a fine app ugly/empty. Bounded so a genuinely-blank page never hangs.
+_CONTENT_READY_MS = 6000
+
+
+async def _await_content(page) -> None:
+    """Best-effort: hold the shot until the loading skeleton is GONE and real
+    content painted, so the vision judge never grades a not-yet-loaded page.
+
+    Signals: our own `loading.tsx` marks itself `data-omnia-skeleton` /
+    `aria-busy="true"`; "real content" = meaningful body text OR a structural
+    visual (main/img/svg/table/form/article/section). On timeout we fall through
+    to the shot anyway (R-10) — a late read still beats hanging the audit."""
+    try:
+        await page.wait_for_function(
+            "() => {"
+            "  if (document.querySelector('[data-omnia-skeleton],[aria-busy=\"true\"]')) return false;"
+            "  var t = ((document.body && document.body.innerText) || '').trim().length;"
+            "  var visual = !!document.querySelector('main,[role=\"main\"],img,svg,table,form,article,section');"
+            "  return t > 40 || visual;"
+            "}",
+            timeout=_CONTENT_READY_MS,
+        )
+    except Exception:
+        pass
+
+
 def _rewrite_minio_to_internal(content: str) -> str:
     """Repoint resolved ``<img src>`` from the PUBLIC MinIO URL to the INTERNAL
     endpoint for the duration of a render.
@@ -257,6 +287,8 @@ async def capture_live_url(
                     if settle_container:
                         await _await_container_ready(page)
                     await _await_paint(page)
+                    # Never grade a loading skeleton: hold until real content painted.
+                    await _await_content(page)
                     out[int(w)] = await page.screenshot(full_page=full_page)
                 except Exception:
                     # One bad viewport must never blind the whole audit (or raise

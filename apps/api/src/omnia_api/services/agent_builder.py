@@ -67,7 +67,8 @@ _ACTION_RE = re.compile(
 
 _KNOWN_ACTIONS = frozenset(
     {"list_dir", "read_file", "grep", "docs", "write_file", "edit_file", "build",
-     "bash", "read_logs", "runtime_check", "see", "probe", "verify_isolation", "done"}
+     "bash", "read_logs", "runtime_check", "see", "generate_media", "probe",
+     "verify_isolation", "done"}
 )
 
 # Idempotent "observe the world after acting" actions. Re-running them across a
@@ -1320,13 +1321,25 @@ def make_container_executor(
     *,
     project_id: Any,
     slug: str,
+    emit: Any = None,
 ) -> Executor:
     """Bind the abstract actions to the live dev container via orchestrator_client.
 
     Imported lazily so the pure engine + its tests carry no orchestrator/httpx
     dependency. Each branch returns the observation dict the loop feeds back.
+
+    ``emit`` (optional, same callback the loop uses) lets a multi-stage tool —
+    ``generate_media`` — surface its INTERNAL steps (first frame → last frame →
+    Kling stitch) as live transcript sub-steps. Absent → those stages run silent.
     """
+    from omnia_api.core.config import get_settings
     from omnia_api.services import orchestrator_client
+
+    # Per-BUILD video budget (this executor is created once per build). Video is
+    # ~₽60/clip on Omnia's own balance — far pricier than a ₽1.50 image and with
+    # no wallet gate on the service-account path — so cap distinct clips per build
+    # (review 2026-07-17). Mutable box so the closure can bump it.
+    _video_used = [0]
 
     async def _execute(action: Action) -> dict[str, Any]:
         try:
@@ -1479,6 +1492,38 @@ def make_container_executor(
 
                 return await agent_vision.see_page(
                     project_id, path=action.path or "/")
+
+            if action.name == "generate_media":
+                # Real ASSET: generate a photoreal image (flux) or a short cinematic
+                # video (Kling: Flux first+last frame → interpolate) on the same
+                # key, store it in MinIO, and hand the agent a public URL to embed.
+                # Lazily imported (MinIO + gateway).
+                from omnia_api.services import agent_media
+
+                _kind = str(action.args.get("kind") or "image").strip().lower()
+                if _kind == "video":
+                    _cap = max(1, int(get_settings().video_gen_max_unique))
+                    if _video_used[0] >= _cap:
+                        return {
+                            "ok": False,
+                            "error": f"video budget reached ({_cap} clip(s) this build) — "
+                                     "reuse an existing clip or use a Flux image instead.",
+                        }
+                    _video_used[0] += 1
+                _dur = action.args.get("duration")
+                return await agent_media.generate_media(
+                    project_id,
+                    kind=_kind,
+                    prompt=str(action.args.get("prompt") or ""),
+                    duration=int(_dur) if isinstance(_dur, (int, float)) else None,
+                    aspect=action.args.get("aspect"),
+                    first_frame=action.args.get("first_frame"),
+                    last_frame=action.args.get("last_frame"),
+                    first_frame_url=action.args.get("first_frame_url"),
+                    last_frame_url=action.args.get("last_frame_url"),
+                    image_url=action.args.get("image_url"),
+                    emit=emit,
+                )
 
             if action.name == "probe":
                 # Real END-TO-END eye: make an authenticated request as a logged-in

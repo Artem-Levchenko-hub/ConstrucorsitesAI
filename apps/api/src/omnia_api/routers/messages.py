@@ -396,6 +396,7 @@ _STEP_VERB: dict[str, str] = {
     "runtime_check": "Открываю страницу",
     "probe": "Проверяю действие",
     "verify_isolation": "Проверяю безопасность данных",
+    "generate_media": "Генерирую медиа",
     "done": "Готово",
 }
 
@@ -2618,12 +2619,20 @@ async def _process_prompt(
                 kind = (event.rsplit(".", 1)[-1] or "step").lower()
                 raw_tool = str(data.get("action", "") or "")
                 path = str(data.get("path", "") or "")
+                # A tool can hand over a ready human phrase for a SUB-step it emits
+                # itself (generate_media: «Рисую первый кадр», «Kling соединяет
+                # кадры») — honour it verbatim instead of re-deriving from (tool,
+                # path), which a multi-stage tool can't express.
+                human = str(data.get("human", "") or "")
                 if kind == "escalate":
                     action = f"усиливаю модель → {data.get('to', '')}"
                 elif kind == "stalled":
                     action = "думаю, как лучше — меняю подход"
                 elif kind == "retry":
                     action = f"повторяю запрос (#{data.get('attempt', 0)})"
+                elif human:
+                    action = human
+                    raw_tool = str(data.get("tool", "") or raw_tool)
                 else:
                     action = _humanize_step(raw_tool, path)
                 step_row = {
@@ -2648,7 +2657,7 @@ async def _process_prompt(
                 )
 
             _agent_executor = agent_builder.make_container_executor(
-                project_id=project_id, slug=project_slug
+                project_id=project_id, slug=project_slug, emit=_agent_emit
             )
             # Seed the agent with the project layout + the CrudResource component
             # up-front so it does NOT burn steps re-discovering the fixed template

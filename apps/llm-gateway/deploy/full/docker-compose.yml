@@ -92,9 +92,11 @@ services:
         mc mb --ignore-existing "m/$$MINIO_BUCKET_PREVIEWS"
         mc mb --ignore-existing "m/$$MINIO_BUCKET_PHOTOS"
         mc mb --ignore-existing "m/omnia-images"
+        mc mb --ignore-existing "m/omnia-videos"
         mc anonymous set download "m/$$MINIO_BUCKET_PREVIEWS"
         mc anonymous set download "m/$$MINIO_BUCKET_PHOTOS"
         mc anonymous set download "m/omnia-images"
+        mc anonymous set download "m/omnia-videos"
         echo "MinIO buckets ready"
     restart: "no"
     networks:
