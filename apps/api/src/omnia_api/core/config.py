@@ -183,7 +183,12 @@ class Settings(BaseSettings):
     # /v1/videos/generations), stores the mp4 in MinIO and embeds a <video>. std
     # is the live default (faster/cheaper than pro). Kill switch USE_VIDEO_GEN.
     use_video_gen: bool = Field(default=True)
-    video_gen_model: str = Field(default="kling-v3.0-std")
+    # seedance-2.0-fast: live-verified 17.07 (aitunnel returns 202 + supports the
+    # first/last frame_images keyframe interpolation — its OWN docs example uses
+    # it). Kling (kling-v3.0-std) 500s on aitunnel right now (provider-side, not
+    # ours) — kept in the gateway registry to switch back the moment it's fixed.
+    # Env VIDEO_GEN_MODEL to change without a redeploy.
+    video_gen_model: str = Field(default="seedance-2.0-fast")
     minio_bucket_videos: str = Field(default="omnia-videos")
     # Hard cap on distinct video generations per build. Video is ~₽60/clip on
     # Omnia's own balance (no per-user wallet gate on the agent path), so unlike

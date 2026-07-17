@@ -179,7 +179,7 @@ async def _generate_video(
                 "content": f"Готовое видео уже есть. Вставь его: <video src=\"{cached}\" autoPlay muted loop playsInline />. URL: {cached}",
                 "detail": f"переиспользую готовый клип · {cached}"}
 
-    await _emit_sub(emit, step, "Kling соединяет кадры в видео", f"{model} · {duration}с")
+    await _emit_sub(emit, step, "Собираю видео из кадров (ИИ-видео)", f"{model} · {duration}с")
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/videos/generations"
     payload: dict[str, object] = {
         "model": model,

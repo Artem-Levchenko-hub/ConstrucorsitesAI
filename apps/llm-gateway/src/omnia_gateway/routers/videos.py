@@ -48,10 +48,18 @@ from omnia_gateway.services import billing, file_logger
 router = APIRouter(prefix="/v1", tags=["videos"])
 log = structlog.get_logger(__name__)
 
-# Exposed id → upstream aitunnel catalog slug. aitunnel serves these verbatim
-# (live-verified in /v1/models 17.07). Kept small on purpose — std is the live
-# default (faster/cheaper), pro is the quality tier. Add a row to expose another.
+# Exposed id → upstream aitunnel catalog slug (forwarded verbatim). Which ones
+# aitunnel /v1/videos actually ACCEPTS was probed live 17.07:
+#   * seedance-2.0-fast → 202 ✅ (the default; supports first/last frame keyframes)
+#   * veo-3.1-fast / sora-2-pro → work, but reject duration=5 (veo: 4/6/8; sora:
+#     4/8/12/16/20) — exposed for later, the api clamps duration to seedance's
+#     window by default.
+#   * kling-v3.0-std / kling-v3.0-pro → 500 on aitunnel right now (provider-side).
+#     Kept so we flip back via VIDEO_GEN_MODEL the moment the provider fixes them.
 _VIDEO_MODELS: dict[str, str] = {
+    "seedance-2.0-fast": "seedance-2.0-fast",
+    "veo-3.1-fast": "veo-3.1-fast",
+    "sora-2-pro": "sora-2-pro",
     "kling-v3.0-std": "kling-v3.0-std",
     "kling-v3.0-pro": "kling-v3.0-pro",
 }
