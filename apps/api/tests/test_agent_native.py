@@ -247,6 +247,9 @@ def test_native_agent_can_generate_media() -> None:
     # (Flux frames → Kling motion → scroll embed) — not require the user to name
     # models. Drop this and a normal request never triggers the cinematic combo.
     assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" in agent_native._NATIVE_PREAMBLE
+    # Scroll-scrub jank is a real defect (measured 2026-07-17) — the preamble must
+    # carry the 60fps smoothness contract (rAF-only currentTime, GPU compositing).
+    assert "ПЛАВНОСТЬ" in agent_native._NATIVE_PREAMBLE
 
 
 def test_generate_media_returns_url_in_model_visible_field() -> None:

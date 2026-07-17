@@ -31,8 +31,12 @@ import base64
 import hashlib
 import json
 import logging
+import shutil
+import subprocess
+import tempfile
 from collections.abc import Awaitable, Callable
 from io import BytesIO
+from pathlib import Path
 
 import httpx
 from minio.error import S3Error
@@ -109,6 +113,70 @@ def _cached_video_url(project_id: str, cache_key: str) -> str | None:
         return None
     base = settings.minio_public_url.rstrip("/")
     return f"{base}/{bucket}/{project_id}/{sha}.mp4"
+
+
+# Scrub-optimize budget: a 5-10s clip re-encodes in a few seconds on the VPS;
+# 90s is a generous ceiling that still aborts a wedged ffmpeg instead of hanging
+# the build. All-I-frame + faststart is what makes `currentTime` seeks instant.
+_FFMPEG_TIMEOUT_S = 90
+
+
+def _optimize_scrub_mp4(data: bytes) -> bytes:
+    """Re-encode an mp4 to an ALL-KEYFRAME (all-I-frame), faststart, ≤720p,
+    audio-stripped clip so scroll-scrub seeks land on a keyframe INSTANTLY.
+
+    The cinematic hero drives ``video.currentTime`` from scroll progress; a normal
+    provider mp4 has sparse keyframes (a keyframe every 1-2s), so each seek decodes
+    a whole GOP on the main thread → visible jank (measured 2026-07-17: scrubbing
+    the raw clip wedged the renderer). ``-g 1 -keyint_min 1 -bf 0`` makes every
+    frame independently seekable; ``+faststart`` puts the moov atom up front so the
+    browser can seek before the full download.
+
+    Fail-soft (R-10): if ffmpeg is absent, errors, times out, or yields an empty
+    file, the ORIGINAL bytes are returned — a perf optimization must never lose a
+    paid clip. Returns the optimized bytes on success, else ``data`` unchanged."""
+    settings = get_settings()
+    if not settings.video_optimize_scrub:
+        return data
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        log.info("agent_media: ffmpeg absent — skipping scrub-optimize")
+        return data
+    try:
+        with tempfile.TemporaryDirectory(prefix="omnia-vid-") as tmp:
+            src = Path(tmp) / "in.mp4"
+            dst = Path(tmp) / "out.mp4"
+            src.write_bytes(data)
+            cmd = [
+                ffmpeg, "-y", "-loglevel", "error", "-i", str(src),
+                "-an",  # scrub/ambiance clips are muted — drop the audio track
+                "-vf", "scale='min(1280,iw)':-2:flags=bicubic",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+                "-g", "1", "-keyint_min", "1", "-bf", "0",  # every frame = keyframe
+                "-pix_fmt", "yuv420p",  # universal browser decode
+                "-movflags", "+faststart",
+                str(dst),
+            ]
+            proc = subprocess.run(
+                cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_S, check=False
+            )
+            if proc.returncode != 0 or not dst.exists():
+                log.warning("agent_media: scrub-optimize rc=%s err=%s",
+                            proc.returncode, proc.stderr[-300:].decode("utf-8", "replace"))
+                return data
+            out = dst.read_bytes()
+            if not out:
+                return data
+            log.info("agent_media: scrub-optimized %d→%d bytes (all-I-frame)",
+                     len(data), len(out))
+            return out
+    except subprocess.TimeoutExpired:
+        log.warning("agent_media: scrub-optimize timed out (>%ss) — using original",
+                    _FFMPEG_TIMEOUT_S)
+        return data
+    except Exception as exc:  # noqa: BLE001 — never lose a clip over an optimizer
+        log.warning("agent_media: scrub-optimize failed err=%r — using original", exc)
+        return data
 
 
 def _upload_video(data: bytes, project_id: str, cache_key: str) -> str | None:
@@ -211,6 +279,10 @@ async def _generate_video(
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"video b64 decode failed: {exc}"}
 
+    # Re-encode to all-keyframe/faststart so scroll-scrub is smooth (fail-soft).
+    await _emit_sub(emit, step, "Оптимизирую видео для плавного скролла", "all-keyframe · faststart")
+    data = await asyncio.to_thread(_optimize_scrub_mp4, data)
+
     stored = await asyncio.to_thread(_upload_video, data, project_id, cache_key)
     if not stored:
         return {"ok": False, "error": "video MinIO upload failed"}
@@ -219,8 +291,15 @@ async def _generate_video(
         "url": stored,
         "kind": "video",
         # content is what the MODEL reads back (url alone is invisible to it):
-        "content": f"Видео готово. Вставь его: <video src=\"{stored}\" autoPlay muted loop playsInline /> (или скролл-скраб через currentTime). URL: {stored}",
-        "detail": f"{model} {duration}с · {stored}",
+        "content": (
+            f"Видео готово и уже оптимизировано для ПЛАВНОГО скролла (all-keyframe + "
+            f"faststart) — скролл-скраб через currentTime не лагает. Вставь его. "
+            f"Для чистого фона: <video src=\"{stored}\" autoPlay muted loop playsInline "
+            f"preload=\"metadata\" style={{{{willChange:'transform'}}}} />. "
+            f"Для эффекта «летишь при скролле»: тот же тег + привязка currentTime к "
+            f"прогрессу скролла через requestAnimationFrame. URL: {stored}"
+        ),
+        "detail": f"{model} {duration}с · оптимизирован · {stored}",
     }
 
 

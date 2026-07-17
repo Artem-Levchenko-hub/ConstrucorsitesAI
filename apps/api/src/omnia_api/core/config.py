@@ -189,6 +189,13 @@ class Settings(BaseSettings):
     # ours) — kept in the gateway registry to switch back the moment it's fixed.
     # Env VIDEO_GEN_MODEL to change without a redeploy.
     video_gen_model: str = Field(default="seedance-2.0-fast")
+    # Re-encode every generated clip to an ALL-KEYFRAME (all-I-frame) faststart
+    # mp4 before storing, so scroll-scrub (`video.currentTime = f(scrollProgress)`)
+    # seeks land on a keyframe instantly instead of decoding a whole GOP — that
+    # sparse-keyframe seek is exactly what made the cinematic hero jank on scroll
+    # (2026-07-17). Needs ffmpeg in the image; fail-soft to the original bytes.
+    # Kill switch: VIDEO_OPTIMIZE_SCRUB=false.
+    video_optimize_scrub: bool = Field(default=True)
     minio_bucket_videos: str = Field(default="omnia-videos")
     # Hard cap on distinct video generations per build. Video is ~₽60/clip on
     # Omnia's own balance (no per-user wallet gate on the agent path), so unlike
