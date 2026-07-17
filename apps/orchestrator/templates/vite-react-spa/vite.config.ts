@@ -22,11 +22,20 @@ export default defineConfig({
     port: 3000,
     strictPort: true,
     hmr: { clientPort: 443 },
-    allowedHosts: [".lead-generator.ru", ".sslip.io", ".localhost"],
+    // `true` = accept ANY Host header. Required because Omnia's preview-render
+    // worker screenshots the app container-to-container at `http://omnia-dev-
+    // <slug>:3000` (the only address reachable without public egress — see
+    // services/dev_container). A restrictive allowedHosts list rejects that
+    // internal hostname with Vite's "Blocked request" page, so every snapshot
+    // thumbnail came out BLANK WHITE (owner report 2026-07-18). Safe here: the
+    // container binds 127.0.0.1 only and is reachable solely via Omnia's nginx
+    // (which sets the real *-dev.preview host) or the internal docker network —
+    // no public IP, so the DNS-rebinding class this guards against can't occur.
+    allowedHosts: true,
   },
   preview: {
     host: "0.0.0.0",
     port: 3000,
-    allowedHosts: [".lead-generator.ru", ".sslip.io", ".localhost"],
+    allowedHosts: true,
   },
 });

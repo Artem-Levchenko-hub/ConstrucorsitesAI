@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -182,6 +183,34 @@ async def _await_container_ready(page: Page) -> None:
         pass
 
 
+# External web-font requests the worker can NEVER reach — no public egress, so a
+# `<link>`/`@font-face` to Google Fonts just hangs. `page.screenshot()` blocks on
+# `document.fonts.ready`, which never resolves while a font is stuck 'loading' →
+# the shot times out at 30s and the thumbnail lands BLANK WHITE even though the
+# app rendered fine (owner report 2026-07-18: every spa live-container thumbnail
+# was white; React WAS mounted — `document.fonts.status` stayed 'loading').
+_FONT_ABORT_RE = re.compile(
+    r"fonts\.g(oogleapis|static)\.com|\.(woff2?|ttf|otf|eot)(\?|$)", re.IGNORECASE
+)
+
+
+async def _block_external_fonts(page: Page) -> None:
+    """Abort unreachable web-font requests so ``document.fonts.ready`` resolves
+    fast (fonts error → system fallback) instead of hanging the screenshot. The
+    page still renders its real content — just in fallback fonts, which for a
+    thumbnail is invisible next to a blank-white miss. Best-effort (R-10)."""
+    async def _abort(route: object) -> None:
+        try:
+            await route.abort()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    try:
+        await page.route(_FONT_ABORT_RE, _abort)
+    except Exception:
+        pass
+
+
 async def capture(
     files: dict[str, str],
     widths: Sequence[int] = DEFAULT_CAPTURE_WIDTHS,
@@ -282,6 +311,7 @@ async def capture_live_url(
                     reduced_motion="reduce",
                 )
                 try:
+                    await _block_external_fonts(page)
                     await page.goto(
                         url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS
                     )
@@ -412,6 +442,9 @@ async def _render_async(snapshot_id: str) -> None:
                     page = await browser.new_page(
                         viewport=VIEWPORT, reduced_motion="reduce"
                     )
+                    # Abort unreachable web fonts so the screenshot's font-wait
+                    # can't hang → blank white thumbnail (2026-07-18).
+                    await _block_external_fonts(page)
                     await page.goto(
                         target_url,
                         wait_until="domcontentloaded",
