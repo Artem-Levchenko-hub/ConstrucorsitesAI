@@ -16,6 +16,7 @@ from playwright.async_api import Page, async_playwright
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from omnia_api.core import minio as minio_core
 from omnia_api.core.config import get_settings
 from omnia_api.core.redis import project_channel
 from omnia_api.models.project import Project
@@ -435,6 +436,15 @@ async def _render_async(snapshot_id: str) -> None:
                 access_key=settings.minio_access_key,
                 secret_key=settings.minio_secret_key.get_secret_value(),
                 secure=settings.minio_secure,
+            )
+            # Self-heal the previews bucket's public-read policy on every render
+            # so a private/mis-provisioned bucket never leaves thumbnails 403 in
+            # the browser (owner report 2026-07-18 — the project-card photos and
+            # snapshot preview all 403'd because `previews` was never made public).
+            await asyncio.to_thread(
+                minio_core.ensure_public_bucket,
+                client,
+                settings.minio_bucket_previews,
             )
             await asyncio.to_thread(
                 client.fput_object,
