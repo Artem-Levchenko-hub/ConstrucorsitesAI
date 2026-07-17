@@ -18,78 +18,20 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/parse-assistant";
 import { fileIcon } from "@/lib/file-icons";
+import { buildFileTree, type TreeNode } from "@/lib/file-tree";
 
 /**
  * Просмотр исходного кода снапшота: слева — ДЕРЕВО файлов (папки + типовые
  * иконки), справа — содержимое выбранного файла. Файлы тянутся одним запросом
  * `GET /api/projects/:pid/snapshots/:sid` (см. apps/api/.../snapshots.py:55).
  *
+ * Дерево строит общий `buildFileTree` (тот же, что live-вью при сборке).
  * Подсветка синтаксиса — не делаем в v1 (Prism/Shiki = ~50KB). Простой
  * <pre> с моноширинным шрифтом читается и так. Можно добавить позже.
  */
 
-/* ─────────────────────── tree model ───────────────────────────────────── */
-type FileLeaf = { kind: "file"; name: string; path: string; size: number };
-type DirNode = { kind: "dir"; name: string; path: string; children: TreeNode[] };
-type TreeNode = FileLeaf | DirNode;
-
-function sortNodes(nodes: TreeNode[]): TreeNode[] {
-  return [...nodes].sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1; // dirs first
-    return a.name.localeCompare(b.name);
-  });
-}
-
-/** Build a nested folder tree from flat `path → body`, then collapse
- *  single-child directory chains (`src › app › (app)` → one `src/app/(app)`
- *  row) so deep Next.js routes stay readable. */
-function buildTree(files: Record<string, string>): TreeNode[] {
-  const root: DirNode = { kind: "dir", name: "", path: "", children: [] };
-
-  for (const path of Object.keys(files)) {
-    const parts = path.split("/").filter(Boolean);
-    let cur = root;
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const isLeaf = i === parts.length - 1;
-      if (isLeaf) {
-        cur.children.push({
-          kind: "file",
-          name: part,
-          path,
-          size: new Blob([files[path] ?? ""]).size,
-        });
-      } else {
-        const dirPath = parts.slice(0, i + 1).join("/");
-        let next = cur.children.find(
-          (c): c is DirNode => c.kind === "dir" && c.path === dirPath,
-        );
-        if (!next) {
-          next = { kind: "dir", name: part, path: dirPath, children: [] };
-          cur.children.push(next);
-        }
-        cur = next;
-      }
-    }
-  }
-
-  const collapseChain = (node: DirNode): DirNode => {
-    let n = node;
-    // Merge a dir that holds exactly one sub-dir (and no files) into its child.
-    while (n.children.length === 1 && n.children[0].kind === "dir") {
-      const only = n.children[0] as DirNode;
-      n = { kind: "dir", name: `${n.name}/${only.name}`, path: only.path, children: only.children };
-    }
-    n.children = sortNodes(
-      n.children.map((c) => (c.kind === "dir" ? collapseChain(c) : c)),
-    );
-    return n;
-  };
-
-  return sortNodes(
-    root.children.map((c) => (c.kind === "dir" ? collapseChain(c) : c)),
-  );
-}
+// Each file leaf carries its byte size for the sidebar badge.
+type FileData = { size: number };
 
 export function CodeView({
   projectId,
@@ -111,7 +53,15 @@ export function CodeView({
     [data?.files],
   );
   const tree = useMemo(
-    () => (data?.files ? buildTree(data.files) : []),
+    () =>
+      data?.files
+        ? buildFileTree<FileData>(
+            Object.entries(data.files).map(([path, body]) => ({
+              path,
+              data: { size: new Blob([body ?? ""]).size },
+            })),
+          )
+        : [],
     [data?.files],
   );
 
@@ -192,7 +142,7 @@ export function CodeView({
 
   /* Recursive tree row. `depth` drives indentation; folders toggle, files
    * select. Kept inline so it closes over active/collapsed/toggle. */
-  const renderNode = (node: TreeNode, depth: number): ReactNode => {
+  const renderNode = (node: TreeNode<FileData>, depth: number): ReactNode => {
     const pad = { paddingLeft: `${depth * 12 + 10}px` };
     if (node.kind === "dir") {
       const isOpen = !collapsed[node.path];
@@ -243,7 +193,7 @@ export function CodeView({
           {node.name}
         </span>
         <span className="text-[10px] font-mono text-fg-tertiary shrink-0">
-          {formatBytes(node.size)}
+          {formatBytes(node.data.size)}
         </span>
       </button>
     );
