@@ -25,6 +25,9 @@ const TEMPLATE_LABEL: Record<Project["template"], string> = {
   nextjs_entities: "SaaS на сущностях",
   code: "Код",
   realtime: "Realtime-чат",
+  spa: "Интерактивный сайт",
+  tgbot: "Телеграм-бот",
+  api: "API-сервис",
 };
 
 export function ProjectCard({ project }: { project: Project }) {
