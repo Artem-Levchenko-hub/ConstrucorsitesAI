@@ -243,6 +243,10 @@ def test_native_agent_can_generate_media() -> None:
     assert "video" in agent_native._NATIVE_PREAMBLE.lower()
     assert "КЕЙФРЕЙМ" in agent_native._NATIVE_PREAMBLE  # first+last frame recipe
     assert "МИКРО-ВЗАИМОДЕЙСТВИЯ" in agent_native._NATIVE_PREAMBLE  # hover rules
+    # From a PLAIN prompt the agent must reason about the MODEL CHAIN itself
+    # (Flux frames → Kling motion → scroll embed) — not require the user to name
+    # models. Drop this and a normal request never triggers the cinematic combo.
+    assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" in agent_native._NATIVE_PREAMBLE
 
 
 def test_generate_media_returns_url_in_model_visible_field() -> None:
