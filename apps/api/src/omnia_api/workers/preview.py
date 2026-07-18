@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import tempfile
@@ -465,7 +466,6 @@ async def _render_async(snapshot_id: str) -> None:
             if live_url is None:
                 return  # container not running / unreachable — no thumbnail now
 
-        preview_key = f"{snapshot_id}.png"
         with tempfile.TemporaryDirectory(prefix=f"omnia-preview-{sid}-") as tmp:
             workdir = Path(tmp)
             png_path = workdir / "preview.png"
@@ -514,6 +514,15 @@ async def _render_async(snapshot_id: str) -> None:
                     await page.screenshot(path=str(png_path), full_page=False)
                 finally:
                     await browser.close()
+
+            # Content-hash the PNG into the key so a RE-render (bug-fix / repair)
+            # produces a NEW url the browser has never cached. `<sid>.png` was
+            # served `immutable`, so a fixed re-render stayed BLANK/stale in the
+            # browser even after Ctrl+Shift+R (owner 2026-07-18). Content-addressed
+            # → the key changes ONLY when the screenshot changes, so `immutable`
+            # is now correct AND the cache always busts on a real re-render.
+            digest = hashlib.sha256(png_path.read_bytes()).hexdigest()[:12]
+            preview_key = f"{snapshot_id}-{digest}.png"
 
             client = Minio(
                 settings.minio_endpoint,
