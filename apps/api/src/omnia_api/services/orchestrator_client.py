@@ -152,11 +152,22 @@ async def stop(project_id: UUID, *, pause: bool = True) -> dict[str, Any]:
     )
 
 
-async def deploy(project_id: UUID, *, commit_sha: str | None = None) -> dict[str, Any]:
-    """POST /internal/projects/deploy — build prod image + swap traffic."""
+async def deploy(
+    project_id: UUID,
+    *,
+    commit_sha: str | None = None,
+    target: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """POST /internal/projects/deploy — build prod image + swap traffic.
+
+    `target` (BYO-VPS) несёт расшифрованные SSH-креды чужого VPS: когда задан,
+    оркестратор разворачивает образ на машине пользователя, а не у нас.
+    """
     payload: dict[str, Any] = {"project_id": str(project_id)}
     if commit_sha:
         payload["commit_sha"] = commit_sha
+    if target:
+        payload["target"] = target
     return await _request("POST", "/internal/projects/deploy", json=payload)
 
 

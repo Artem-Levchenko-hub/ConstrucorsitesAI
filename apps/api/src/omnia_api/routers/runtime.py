@@ -27,7 +27,9 @@ from sqlalchemy import select
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.core.crypto import decrypt_strong
 from omnia_api.models.attestation import Attestation
+from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.project import orchestrator_template
@@ -241,8 +243,22 @@ async def trigger_deploy(
     session: SessionDep,
     current_user: CurrentUserDep,
 ) -> DeployStatus:
-    await _project_owned_by(session, project_id, current_user.id)
+    project = await _project_owned_by(session, project_id, current_user.id)
     sha = body.commit_sha if body is not None else None
+    # BYO-VPS: если у проекта выбран свой сервер — грузим цель, расшифровываем
+    # креды и передаём оркестратору, чтобы он развернул образ на машине юзера.
+    # None = наш хостинг (текущее поведение).
+    target: dict[str, Any] | None = None
+    if project.deploy_target_id is not None:
+        dt = await session.get(DeployTarget, project.deploy_target_id)
+        if dt is not None:
+            target = {
+                "host": dt.ssh_host,
+                "port": dt.ssh_port,
+                "user": dt.ssh_user,
+                "auth_type": dt.ssh_auth_type,
+                "secret": decrypt_strong(dt.ssh_secret_enc),
+            }
     # Deploy-attestation gate (Step 3, deploy ↔ proven): look up the build's saved
     # attestation, log its verdict, and refuse an unproven deploy only when blocking
     # is enabled. Advisory by default; lookup errors are advisory-safe (a DB hiccup
@@ -276,7 +292,7 @@ async def trigger_deploy(
                     "безопасности. Уточни запрос и пересобери.",
                     status.HTTP_409_CONFLICT,
                 )
-    payload = await orchestrator_client.deploy(project_id, commit_sha=sha)
+    payload = await orchestrator_client.deploy(project_id, commit_sha=sha, target=target)
     return _to_deploy_status(payload)
 
 

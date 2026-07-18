@@ -625,7 +625,8 @@ async def deploy(
     optional — the dev container is resolved by the `omnia.project_id` label.
     """
     _verify_token(x_internal_token)
-    rec = await builder.start_deploy(str(payload.project_id), slug)
+    target = payload.target.model_dump() if payload.target else None
+    rec = await builder.start_deploy(str(payload.project_id), slug, target)
     return _deploy_record_to_response(rec)
 
 

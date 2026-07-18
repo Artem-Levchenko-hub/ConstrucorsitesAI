@@ -1,20 +1,20 @@
-"""Проверка чужого VPS по SSH — через СИСТЕМНЫЙ ssh, без Python-зависимости.
+"""SSH к чужому VPS (BYO-VPS) — через СИСТЕМНЫЙ ssh, без Python-зависимости.
 
 Оркестратор работает на хосте как systemd-сервис, поэтому `ssh`, `ssh-keyscan`
 и (для пароля) `sshpass` доступны напрямую. Секреты НЕ попадают в argv (а значит
 и в логи shell.run): приватный ключ пишется во временный файл с правами 0600,
 пароль передаётся в переменной окружения `SSHPASS` для `sshpass -e`.
 
-Это фундамент BYO-VPS: сейчас используется для проверки, что мы можем зайти на
-сервер пользователя и что там есть Docker. Реальный перенос образа на чужую
-машину (docker save|ssh docker load + запуск + edge) — следующий шаг, он
-опирается на этот же способ подключения.
+Здесь: (1) проверка VPS (verify_target — зайти + проверить Docker), (2) сборка
+префикса ssh-команды для повторного использования (_ssh_prefix) — на нём же
+строится реальный удалённый деплой (services/remote_deploy.py).
 """
 
 from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Callable
 
 from omnia_orchestrator.core.shell import run
 
@@ -29,13 +29,56 @@ _SSH_OPTS = [
 ]
 
 
-async def _host_key(host: str, port: int) -> str | None:
+async def host_key(host: str, port: int) -> str | None:
     """Снять host-key сервера (для пиннинга от MITM). Best-effort."""
     scan = await run(
         ["ssh-keyscan", "-p", str(port), "-t", "ed25519,rsa,ecdsa", host], timeout=15
     )
     line = (scan.stdout or "").strip().splitlines()
     return line[0] if line else None
+
+
+def ssh_prefix(
+    *, host: str, port: int, user: str, auth_type: str, secret: str
+) -> tuple[list[str], dict[str, str] | None, Callable[[], None]]:
+    """Собрать префикс ssh-команды до `user@host` включительно + env + cleanup.
+
+    Возвращает (argv, env, cleanup): `argv` готов к добавлению удалённой команды
+    последним аргументом; `env` — окружение для процесса (для пароля несёт
+    SSHPASS); `cleanup()` удаляет временный файл ключа (вызвать после запуска).
+    Секрет никогда не попадает в argv.
+    """
+    target = f"{user}@{host}"
+    if auth_type == "key":
+        fd, keypath = tempfile.mkstemp(prefix="omnia-ssh-key-")
+        os.write(fd, secret.encode("utf-8"))
+        if not secret.endswith("\n"):
+            os.write(fd, b"\n")
+        os.close(fd)
+        os.chmod(keypath, 0o600)
+
+        def _cleanup() -> None:
+            try:
+                os.unlink(keypath)
+            except OSError:
+                pass
+
+        argv = [
+            "ssh", "-i", keypath,
+            "-o", "IdentitiesOnly=yes",
+            "-o", "BatchMode=yes",
+            "-p", str(port), *_SSH_OPTS, target,
+        ]
+        return argv, None, _cleanup
+
+    # Пароль: sshpass -e берёт его из env SSHPASS (не из argv → не в логах).
+    argv = [
+        "sshpass", "-e", "ssh",
+        "-o", "PubkeyAuthentication=no",
+        "-p", str(port), *_SSH_OPTS, target,
+    ]
+    env = {**os.environ, "SSHPASS": secret}
+    return argv, env, (lambda: None)
 
 
 def _interpret(rc: int, stdout: str, stderr: str) -> dict[str, object]:
@@ -55,7 +98,6 @@ def _interpret(rc: int, stdout: str, stderr: str) -> dict[str, object]:
             "docker_ok": False,
             "docker_version": None,
         }
-    # rc != 0 — разбираем типовые причины для человекочитаемой подсказки.
     low = err.lower()
     if "permission denied" in low:
         reason = "Отказ в доступе — проверьте пользователя, ключ или пароль."
@@ -78,49 +120,25 @@ async def verify_target(
     Возвращает {ok, detail, docker_ok, docker_version, host_key}. Никогда не
     бросает из-за неверных кредов — только описывает результат.
     """
-    host_key = await _host_key(host, port)
-    base = ["-p", str(port), *_SSH_OPTS]
-    target = f"{user}@{host}"
-
-    if auth_type == "key":
-        fd, keypath = tempfile.mkstemp(prefix="omnia-ssh-key-")
-        try:
-            os.write(fd, secret.encode("utf-8"))
-            if not secret.endswith("\n"):
-                os.write(fd, b"\n")
-            os.close(fd)
-            os.chmod(keypath, 0o600)
-            cmd = [
-                "ssh", "-i", keypath,
-                "-o", "IdentitiesOnly=yes",
-                "-o", "BatchMode=yes",
-                *base, target, _REMOTE_PROBE,
-            ]
-            res = await run(cmd, timeout=35)
-        finally:
-            try:
-                os.unlink(keypath)
-            except OSError:
-                pass
-        result = _interpret(res.rc, res.stdout, res.stderr)
-    else:
-        # Пароль: sshpass -e берёт его из env SSHPASS (не из argv → не в логах).
-        cmd = [
-            "sshpass", "-e", "ssh",
-            "-o", "PubkeyAuthentication=no",
-            *base, target, _REMOTE_PROBE,
-        ]
-        try:
-            res = await run(cmd, timeout=35, env={**os.environ, "SSHPASS": secret})
-        except FileNotFoundError:
-            result = {
-                "ok": False,
-                "detail": "На сервере Omnia не установлен sshpass — используйте вход по SSH-ключу.",
-                "docker_ok": False,
-                "docker_version": None,
-            }
-        else:
-            result = _interpret(res.rc, res.stdout, res.stderr)
-
-    result["host_key"] = host_key
+    hk = await host_key(host, port)
+    try:
+        prefix, env, cleanup = ssh_prefix(
+            host=host, port=port, user=user, auth_type=auth_type, secret=secret
+        )
+    except OSError as exc:
+        return {"ok": False, "detail": f"Ошибка подготовки ключа: {exc}",
+                "docker_ok": False, "docker_version": None, "host_key": hk}
+    try:
+        res = await run([*prefix, _REMOTE_PROBE], timeout=35, env=env)
+    except FileNotFoundError:
+        cleanup()
+        return {
+            "ok": False,
+            "detail": "На сервере Omnia не установлен sshpass — используйте вход по SSH-ключу.",
+            "docker_ok": False, "docker_version": None, "host_key": hk,
+        }
+    finally:
+        cleanup()
+    result = _interpret(res.rc, res.stdout, res.stderr)
+    result["host_key"] = hk
     return result

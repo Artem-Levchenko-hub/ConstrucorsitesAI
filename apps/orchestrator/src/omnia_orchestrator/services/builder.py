@@ -108,11 +108,17 @@ export default nextConfig;
 _bg_tasks: set[asyncio.Task[None]] = set()
 
 
-async def start_deploy(project_id: str, slug: str | None = None) -> deploy_state.DeployRecord:
+async def start_deploy(
+    project_id: str,
+    slug: str | None = None,
+    target: dict[str, object] | None = None,
+) -> deploy_state.DeployRecord:
     """Resolve the project's dev container and launch a background deploy.
 
     Idempotent while a deploy is active: returns the in-flight record instead of
-    starting a second build.
+    starting a second build. `target` (BYO-VPS) = {host, port, user, auth_type,
+    secret}: when set, the built image is deployed to the user's own VPS over
+    SSH instead of run locally on our host. None = наш хостинг (текущий путь).
     """
     dev_name = await docker_client.find_project_container(project_id, kind="dev")
     if dev_name is None and slug:
@@ -131,15 +137,79 @@ async def start_deploy(project_id: str, slug: str | None = None) -> deploy_state
 
     rec = deploy_state.start(project_id)
     # Optimistic public URL — deterministic, shown before the build completes.
-    rec.prod_url = nginx_writer.prod_url(resolved_slug)
+    # For a remote target we don't know the URL until the container is up.
+    rec.prod_url = None if target else nginx_writer.prod_url(resolved_slug)
 
-    task = asyncio.create_task(_run(project_id, resolved_slug, dev_name))
+    task = asyncio.create_task(_run(project_id, resolved_slug, dev_name, target))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
     return rec
 
 
-async def _run(project_id: str, slug: str, dev_name: str) -> None:
+def _remote_port(slug: str) -> int:
+    """Детерминированный host-порт на чужой машине из slug (30000–49999).
+
+    Без Date/random (они недоступны и ломают воспроизводимость): стабильный
+    хеш slug. Достаточно, чтобы разные проекты не толкались на одном порту.
+    """
+    h = 0
+    for ch in slug:
+        h = (h * 131 + ord(ch)) & 0xFFFFFFFF
+    return 30000 + (h % 20000)
+
+
+async def _deploy_remote(
+    project_id: str, slug: str, tag: str, target: dict[str, object]
+) -> None:
+    """Развернуть уже собранный образ `tag` на чужом VPS (BYO-VPS)."""
+    from omnia_orchestrator.services import remote_deploy
+
+    host_port = _remote_port(slug)
+    auth_secret = _load_or_create_auth_secret_safe(project_id)
+    app_url = f"http://{target['host']}:{host_port}"
+    env = {
+        "NODE_ENV": "production",
+        "PORT": "3000",
+        "HOSTNAME": "0.0.0.0",
+        "AUTH_SECRET": auth_secret,
+        "AUTH_URL": app_url,
+        "AUTH_TRUST_HOST": "true",
+    }
+    result = await remote_deploy.deploy_to_target(
+        creds=target, image_tag=tag, slug=slug,
+        host_port=host_port, container_port=3000, env=env,
+    )
+    if result.get("ok"):
+        deploy_state.update(
+            project_id, phase="done", prod_url=result.get("url"),
+            finished_at=deploy_state.now_iso(),
+        )
+        log.info("deploy.remote_done", project_id=project_id, url=result.get("url"))
+        await publish_project_event(
+            project_id, "deploy.done",
+            {"phase": "done", "slug": slug, "prod_url": result.get("url"),
+             "image_tag": tag, "detail": result.get("detail")},
+        )
+    else:
+        deploy_state.update(
+            project_id, phase="failed", error=str(result.get("detail")),
+            finished_at=deploy_state.now_iso(),
+        )
+        await publish_project_event(
+            project_id, "deploy.failed",
+            {"phase": "failed", "slug": slug, "error": result.get("detail")},
+        )
+
+
+def _load_or_create_auth_secret_safe(project_id: str) -> str:
+    from omnia_orchestrator.services.provisioner import _load_or_create_auth_secret
+
+    return _load_or_create_auth_secret(project_id)
+
+
+async def _run(
+    project_id: str, slug: str, dev_name: str, target: dict[str, object] | None = None
+) -> None:
     build_dir = Path(tempfile.mkdtemp(prefix=f"omnia-build-{slug}-"))
     try:
         log.info("deploy.start", project_id=project_id, slug=slug, dev=dev_name)
@@ -209,6 +279,14 @@ async def _run(project_id: str, slug: str, dev_name: str) -> None:
             "deploy.progress",
             {"phase": "swapping", "slug": slug, "image_tag": tag},
         )
+
+        # BYO-VPS: если у проекта выбран свой сервер — переносим готовый образ
+        # туда и запускаем на его машине (не на нашем хосте). Локальный путь
+        # (шаги 4–7) при этом не выполняется — поведение нашего хостинга не
+        # меняется, ветка живёт только когда target задан явно.
+        if target is not None:
+            await _deploy_remote(project_id, slug, tag, target)
+            return
 
         # 4. Run the new prod container, replacing any previous one.
         prod_name = f"omnia-app-{slug}"

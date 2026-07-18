@@ -72,12 +72,25 @@ class StatusResponse(BaseModel):
     gate_seed: dict | None = None
 
 
+class DeployTargetCreds(BaseModel):
+    """BYO-VPS: расшифрованные SSH-креды чужого сервера (от apps/api)."""
+
+    host: str
+    port: int = 22
+    user: str
+    auth_type: str
+    secret: str
+
+
 class DeployRequest(BaseModel):
     project_id: UUID
     # Optional: we deploy the live container state, not a git commit (runtime
     # has no git history — hot-reload writes files straight into the container).
     # Kept for forward-compat (future rollback-by-sha).
     commit_sha: str | None = None
+    # BYO-VPS: если задан — деплоим собранный образ на этот чужой VPS по SSH,
+    # а не на наш хост. None = наш хостинг.
+    target: DeployTargetCreds | None = None
 
 
 # Phases match apps/api DeployStatus so the api forwards them unchanged.
