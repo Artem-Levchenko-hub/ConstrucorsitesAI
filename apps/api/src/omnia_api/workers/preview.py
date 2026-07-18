@@ -211,6 +211,44 @@ async def _block_external_fonts(page: Page) -> None:
         pass
 
 
+async def _route_media_internal(page: Page) -> None:
+    """Serve the live app's PUBLIC MinIO assets (generated images + video) from
+    the INTERNAL endpoint during a screenshot.
+
+    The dev container's HTML carries absolute public URLs
+    (``{minio_public_url}/<bucket>/<key>``), but the worker has no public egress
+    and can't hairpin-NAT back to the host — so a video-hero / image-rich page
+    screenshots with a black/empty hero. We can't ``continue_(url=)`` across the
+    https→http protocol change, so we fetch the reachable internal URL and fulfill
+    the request with those bytes. This is what makes a CINEMATIC (scroll-scrub
+    video) site's thumbnail show its real hero instead of a blank frame (owner:
+    "всегда всё прогружалось, даже если кинематографичный эффект"). Best-effort:
+    any failure aborts the one asset, never the whole shot."""
+    settings = get_settings()
+    public = settings.minio_public_url.rstrip("/") + "/"
+    scheme = "https" if settings.minio_secure else "http"
+    internal = f"{scheme}://{settings.minio_endpoint}/"
+    if public == internal:  # already internal (local dev) — nothing to reroute
+        return
+
+    async def _reroute(route: object) -> None:
+        try:
+            req_url = route.request.url  # type: ignore[attr-defined]
+            internal_url = req_url.replace(public, internal)
+            resp = await page.request.get(internal_url, timeout=8000)
+            await route.fulfill(response=resp)  # type: ignore[attr-defined]
+        except Exception:
+            try:
+                await route.abort()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+    try:
+        await page.route(f"{public}**", _reroute)
+    except Exception:
+        pass
+
+
 async def capture(
     files: dict[str, str],
     widths: Sequence[int] = DEFAULT_CAPTURE_WIDTHS,
@@ -312,6 +350,7 @@ async def capture_live_url(
                 )
                 try:
                     await _block_external_fonts(page)
+                    await _route_media_internal(page)
                     await page.goto(
                         url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS
                     )
@@ -407,15 +446,21 @@ async def _render_async(snapshot_id: str) -> None:
         files = await asyncio.to_thread(repo_svc.read_files, project_id, commit_sha)
 
         # Two render sources: a static template screenshots its repo `index.html`
-        # off disk; a container template (no index.html in the repo) screenshots
-        # the live dev container over the runtime network instead.
+        # off disk; a container template screenshots the LIVE dev container over
+        # the runtime network. The source is decided by the TEMPLATE, not by
+        # whether an index.html happens to be in the repo: a Vite `spa` DOES ship
+        # an index.html in its repo, but that file is a bare `<div id=root>` +
+        # `<script src="/src/main.tsx">` shell — screenshotting it off-disk via
+        # file:// can't run the dev server, so /src/main.tsx never loads and the
+        # thumbnail comes out BLANK WHITE (owner report 2026-07-18). Container
+        # templates therefore ALWAYS render from the live container.
         is_container = template in CONTAINER_NEXT
         has_index = "index.html" in files
         if not has_index and not is_container:
             return
 
         live_url: str | None = None
-        if not has_index:
+        if is_container:
             live_url = await _resolve_live_url(project_id)
             if live_url is None:
                 return  # container not running / unreachable — no thumbnail now
@@ -445,6 +490,12 @@ async def _render_async(snapshot_id: str) -> None:
                     # Abort unreachable web fonts so the screenshot's font-wait
                     # can't hang → blank white thumbnail (2026-07-18).
                     await _block_external_fonts(page)
+                    # Reroute public MinIO assets to the internal endpoint so a
+                    # live container app's images + video actually paint (worker
+                    # has no public egress) — "always load everything, even the
+                    # cinematic video effect".
+                    if live_url is not None:
+                        await _route_media_internal(page)
                     await page.goto(
                         target_url,
                         wait_until="domcontentloaded",
