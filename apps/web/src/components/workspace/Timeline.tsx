@@ -21,6 +21,17 @@ export function Timeline({ project }: { project: Project }) {
     queryFn: () => listSnapshots(project.id),
   });
 
+  // Hide the empty STARTER scaffolds from the history: the snapshot committed at
+  // project creation (and the one `switch_to_stack` commits when the stack is
+  // re-scaffolded static→spa/entities) carry NO prompt and NO parent, render as
+  // blank cards, and clutter the timeline. The history should begin at the FIRST
+  // REAL generation — the snapshot produced after the onboarding survey + first
+  // prompt finish generating (owner 2026-07-18). Version numbers renumber over
+  // the visible list so that first generation is v1.
+  const visible = (data ?? []).filter(
+    (s) => !(s.prompt_text === null && s.parent_id === null),
+  );
+
   const rollbackMutation = useMutation({
     mutationFn: (snapshotId: string) => rollback(project.id, snapshotId),
     onSuccess: () => {
@@ -44,9 +55,9 @@ export function Timeline({ project }: { project: Project }) {
           История
         </span>
         <div className="flex items-center gap-1.5">
-          {data && (
+          {visible.length > 0 && (
             <span className="text-[10px] font-mono text-fg-tertiary tabular-nums">
-              {data.length}
+              {visible.length}
             </span>
           )}
           <button
@@ -76,7 +87,7 @@ export function Timeline({ project }: { project: Project }) {
             </>
           )}
 
-          {!isPending && data && data.length === 0 && (
+          {!isPending && visible.length === 0 && (
             <div className="text-center text-xs text-fg-tertiary leading-5 py-6">
               Здесь будет лента версий.
               <br />
@@ -84,11 +95,11 @@ export function Timeline({ project }: { project: Project }) {
             </div>
           )}
 
-          {data?.map((snap, i) => (
+          {visible.map((snap, i) => (
             <SnapshotCard
               key={snap.id}
               snapshot={snap}
-              versionNumber={data.length - i}
+              versionNumber={visible.length - i}
               isCurrent={project.current_snapshot_id === snap.id}
               isSelected={selectedSnapshotId === snap.id}
               onSelect={() => selectSnapshot(snap.id)}
