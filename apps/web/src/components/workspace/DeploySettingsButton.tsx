@@ -16,7 +16,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Globe, Loader2, Server, ShieldCheck, Trash2 } from "lucide-react";
+import { Check, Copy, Globe, Loader2, Server, ShieldCheck, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -372,12 +372,22 @@ function DomainSection({ projectId }: { projectId: string }) {
     onError: (e) => toast.error("Не удалось подключить", { description: errMsg(e) }),
   });
 
+  const hasDomains = (domains.data?.length ?? 0) > 0;
+
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2">
         <Globe className="h-4 w-4 text-fg-secondary" />
         <h3 className="text-sm font-semibold">Свой домен</h3>
       </div>
+
+      {!hasDomains && (
+        <p className="text-[12px] text-fg-secondary leading-relaxed">
+          Подключите домен, который у вас уже есть. От вас — одна настройка у
+          регистратора (покажем точные значения ниже). Всё остальное — SSL-сертификат
+          и настройку веб-сервера — мы сделаем автоматически при публикации.
+        </p>
+      )}
 
       <div className="flex gap-2">
         <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="shop.example.ru" className="h-8" />
@@ -397,6 +407,35 @@ function DomainSection({ projectId }: { projectId: string }) {
         разработке. Пока подключите домен, который у вас уже есть.
       </p>
     </section>
+  );
+}
+
+/** Копируемое значение (тип/имя/адрес A-записи) — клик копирует в буфер. */
+function CopyValue({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md bg-surface-overlay px-2 py-1.5">
+      <span className="min-w-0">
+        <span className="block text-[10px] uppercase tracking-wide text-fg-tertiary">{label}</span>
+        <code className="block truncate text-xs text-fg-primary">{value}</code>
+      </span>
+      <button
+        type="button"
+        title="Скопировать"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(value);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          } catch {
+            toast.error("Не удалось скопировать");
+          }
+        }}
+        className="shrink-0 text-fg-tertiary hover:text-fg-primary"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-[#7c5cff]" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+    </div>
   );
 }
 
@@ -421,10 +460,14 @@ function DomainRow({ domain, projectId }: { domain: CustomDomain; projectId: str
   });
 
   const dnsOk = domain.dns_status === "ok";
+  const dnsMismatch = domain.dns_status === "mismatch";
   const certActive = domain.cert_status === "active";
+  // «Имя» A-записи — метка поддомена (shop.example.ru → shop); для корня — @.
+  const parts = domain.host.split(".");
+  const recordName = parts.length > 2 ? parts.slice(0, parts.length - 2).join(".") : "@";
 
   return (
-    <div className="rounded-lg border border-border-subtle p-2.5 space-y-2">
+    <div className="rounded-lg border border-border-subtle p-3 space-y-2.5">
       <div className="flex items-center gap-2">
         <span className="flex-1 min-w-0">
           <span className="block text-sm font-medium truncate">{domain.host}</span>
@@ -434,8 +477,8 @@ function DomainRow({ domain, projectId }: { domain: CustomDomain; projectId: str
             <ShieldCheck className="h-3.5 w-3.5" /> открыть
           </a>
         ) : (
-          <Badge variant={dnsOk ? "success" : "default"} className="text-[10px]">
-            {dnsOk ? "DNS ок" : "ждём DNS"}
+          <Badge variant={dnsOk ? "success" : dnsMismatch ? "danger" : "default"} className="text-[10px]">
+            {dnsOk ? "DNS настроен" : dnsMismatch ? "запись не туда" : "ждём DNS"}
           </Badge>
         )}
         <button type="button" onClick={() => deleteMut.mutate()} className="text-fg-tertiary hover:text-red-400" title="Убрать домен">
@@ -443,22 +486,61 @@ function DomainRow({ domain, projectId }: { domain: CustomDomain; projectId: str
         </button>
       </div>
 
-      {!certActive && domain.dns_instructions && (
-        <p className="text-[11px] text-fg-tertiary leading-relaxed">{domain.dns_instructions}</p>
-      )}
-      {domain.last_detail && !certActive && (
-        <p className="text-[11px] text-fg-secondary">{domain.last_detail}</p>
-      )}
+      {certActive ? (
+        <p className="text-[11px] text-success">Домен подключён и работает по HTTPS.</p>
+      ) : (
+        <>
+          {/* Шаг 1 — то, что делает пользователь у регистратора (до публикации). */}
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold text-fg-secondary">
+              Шаг 1 · Это нужно сделать вам — один раз у регистратора домена:
+            </p>
+            <p className="text-[11px] text-fg-tertiary leading-relaxed">
+              Зайдите туда, где куплен домен (REG.ru, Timeweb, GoDaddy…), откройте
+              настройки DNS и создайте одну A-запись:
+            </p>
+            <div className="grid grid-cols-3 gap-1.5">
+              <CopyValue label="Тип" value="A" />
+              <CopyValue label="Имя" value={recordName} />
+              <CopyValue label="Адрес (значение)" value={domain.expected_ip} />
+            </div>
+            <p className="text-[10px] text-fg-tertiary leading-relaxed">
+              «Имя» у некоторых регистраторов вводится как полный адрес{" "}
+              <code>{domain.host}</code>, а для корневого домена — как <code>@</code>.
+              Запись обновляется обычно за 5–30 минут.
+            </p>
+          </div>
 
-      {!certActive && (
-        <div className="flex gap-2">
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => checkMut.mutate()} disabled={checkMut.isPending}>
-            {checkMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Проверить DNS"}
-          </Button>
-          <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => issueMut.mutate()} disabled={!dnsOk || issueMut.isPending}>
-            {issueMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Выпустить SSL"}
-          </Button>
-        </div>
+          {/* Шаг 2 — проверка, что запись видна. */}
+          <div className="space-y-1">
+            <p className="text-[11px] font-semibold text-fg-secondary">
+              Шаг 2 · Проверьте, что запись подхватилась:
+            </p>
+            {domain.last_detail && (
+              <p className={`text-[11px] ${dnsMismatch ? "text-danger" : "text-fg-secondary"}`}>
+                {domain.last_detail}
+              </p>
+            )}
+            <Button size="sm" variant="secondary" className="h-7 px-3 text-[11px]" onClick={() => checkMut.mutate()} disabled={checkMut.isPending}>
+              {checkMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Проверить DNS"}
+            </Button>
+          </div>
+
+          {/* Шаг 3 — остальное автоматически. */}
+          <div className="rounded-md bg-[rgba(124,92,255,0.08)] border border-[#7c5cff]/30 p-2">
+            <p className="text-[11px] text-fg-secondary leading-relaxed">
+              <span className="font-semibold text-fg-primary">Шаг 3 · Дальше — за нас.</span>{" "}
+              {dnsOk
+                ? "DNS настроен. Нажмите «Опубликовать» — наш агент выпустит SSL-сертификат и настроит веб-сервер на вашем сервере автоматически."
+                : "Как только DNS настроится, опубликуйте проект — SSL и веб-сервер настроим сами, вручную ничего делать не нужно."}
+            </p>
+            {dnsOk && (
+              <Button size="sm" variant="ghost" className="mt-1 h-6 px-2 text-[11px]" onClick={() => issueMut.mutate()} disabled={issueMut.isPending}>
+                {issueMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Или выпустить SSL сейчас"}
+              </Button>
+            )}
+          </div>
+        </>
       )}
     </div>
   );

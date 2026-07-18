@@ -91,6 +91,47 @@ async def test_deploy_container_warming_still_ok(monkeypatch) -> None:
     assert "прогревается" in res["detail"]
 
 
+@pytest.mark.asyncio
+async def test_deploy_with_domain_sets_up_edge(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    async def fake_save_load(image_tag, prefix, env):
+        return True, "Loaded image: img:1"
+
+    async def fake_run(cmd, *, timeout=30.0, env=None):
+        calls.append(cmd)
+        if "curl" in cmd[-1]:
+            return CmdResult(rc=0, stdout="200", stderr="")
+        return CmdResult(rc=0, stdout="", stderr="")
+
+    monkeypatch.setattr(remote_deploy.ssh, "ssh_prefix", _fake_prefix)
+    monkeypatch.setattr(remote_deploy, "_save_load", fake_save_load)
+    monkeypatch.setattr(remote_deploy, "run", fake_run)
+
+    res = await remote_deploy.deploy_to_target(
+        creds={"host": "203.0.113.9", "port": 22, "user": "root",
+               "auth_type": "key", "secret": "k"},
+        image_tag="img:1", slug="shop", host_port=34567,
+        domains=["shop.example.ru"],
+    )
+    assert res["ok"] is True
+    # С доменом URL — https по домену, а не http:port.
+    assert res["url"] == "https://shop.example.ru"
+    # Приложение слушает только 127.0.0.1 (наружу — edge).
+    runcmd = next(c[-1] for c in calls if c[-1].startswith("docker run --name") or "--name omnia-app-shop" in c[-1])
+    assert "-p 127.0.0.1:34567:3000" in runcmd
+    # Edge поднимается контейнером Caddy на host-сети.
+    edgecmd = next(c[-1] for c in calls if "omnia-edge" in c[-1] and "docker run" in c[-1])
+    assert "--network host" in edgecmd
+    assert "caddy:2" in edgecmd
+
+
+def test_caddyfile_shape() -> None:
+    conf = remote_deploy._caddyfile(["a.example.ru", "b.example.ru"], 34567)
+    assert "a.example.ru, b.example.ru {" in conf
+    assert "reverse_proxy 127.0.0.1:34567" in conf
+
+
 def test_remote_port_deterministic_and_in_range() -> None:
     p1 = builder._remote_port("my-shop")
     p2 = builder._remote_port("my-shop")

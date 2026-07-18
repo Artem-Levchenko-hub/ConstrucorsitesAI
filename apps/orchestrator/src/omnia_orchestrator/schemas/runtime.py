@@ -91,6 +91,9 @@ class DeployRequest(BaseModel):
     # BYO-VPS: если задан — деплоим собранный образ на этот чужой VPS по SSH,
     # а не на наш хост. None = наш хостинг.
     target: DeployTargetCreds | None = None
+    # Подключённые к проекту домены — при деплое на свой VPS агент сам поднимает
+    # edge (Caddy, авто-HTTPS) для них на машине пользователя.
+    domains: list[str] | None = None
 
 
 # Phases match apps/api DeployStatus so the api forwards them unchanged.

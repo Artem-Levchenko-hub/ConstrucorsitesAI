@@ -29,6 +29,7 @@ from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.crypto import decrypt_strong
 from omnia_api.models.attestation import Attestation
+from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
@@ -249,6 +250,7 @@ async def trigger_deploy(
     # креды и передаём оркестратору, чтобы он развернул образ на машине юзера.
     # None = наш хостинг (текущее поведение).
     target: dict[str, Any] | None = None
+    domains: list[str] | None = None
     if project.deploy_target_id is not None:
         dt = await session.get(DeployTarget, project.deploy_target_id)
         if dt is not None:
@@ -259,6 +261,15 @@ async def trigger_deploy(
                 "auth_type": dt.ssh_auth_type,
                 "secret": decrypt_strong(dt.ssh_secret_enc),
             }
+            # Домены проекта — агент настроит их на VPS юзера (edge + авто-SSL).
+            rows = (
+                await session.execute(
+                    select(CustomDomain.host).where(
+                        CustomDomain.project_id == project_id
+                    )
+                )
+            ).scalars().all()
+            domains = list(rows) or None
     # Deploy-attestation gate (Step 3, deploy ↔ proven): look up the build's saved
     # attestation, log its verdict, and refuse an unproven deploy only when blocking
     # is enabled. Advisory by default; lookup errors are advisory-safe (a DB hiccup
@@ -292,7 +303,9 @@ async def trigger_deploy(
                     "безопасности. Уточни запрос и пересобери.",
                     status.HTTP_409_CONFLICT,
                 )
-    payload = await orchestrator_client.deploy(project_id, commit_sha=sha, target=target)
+    payload = await orchestrator_client.deploy(
+        project_id, commit_sha=sha, target=target, domains=domains
+    )
     return _to_deploy_status(payload)
 
 

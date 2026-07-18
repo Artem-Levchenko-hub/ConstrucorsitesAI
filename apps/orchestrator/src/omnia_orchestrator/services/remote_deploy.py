@@ -18,6 +18,7 @@ edge/nginx + TLS на удалённой машине и Postgres для fullsta
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 
 import structlog
@@ -26,6 +27,46 @@ from omnia_orchestrator.core import ssh
 from omnia_orchestrator.core.shell import run
 
 log = structlog.get_logger("omnia_orchestrator.remote_deploy")
+
+# Edge-прокси на чужой машине: один контейнер Caddy на host-сети. Caddy сам
+# выпускает и продлевает Let's Encrypt для домена, как только DNS указывает на
+# машину и порт 80 доступен — пользователю на VPS ничего настраивать не надо.
+_EDGE_NAME = "omnia-edge"
+_EDGE_DIR = "/opt/omnia-edge"
+
+
+def _caddyfile(domains: list[str], app_port: int) -> str:
+    """Caddyfile: каждый домен → reverse_proxy на порт приложения (авто-HTTPS)."""
+    site = ", ".join(domains)
+    return f"{site} {{\n\treverse_proxy 127.0.0.1:{app_port}\n}}\n"
+
+
+async def _setup_edge(
+    prefix: list[str], env: dict[str, str] | None, domains: list[str], app_port: int
+) -> tuple[bool, str]:
+    """Поднять/обновить Caddy на удалённой машине для доменов. (ok, detail).
+
+    Caddyfile передаётся через base64 (никаких спецсимволов в argv), кладётся в
+    /opt/omnia-edge, контейнер Caddy запускается на host-сети (порты 80/443) с
+    томом для сертификатов. Идемпотентно: повторный вызов пересоздаёт контейнер.
+    """
+    conf_b64 = base64.b64encode(_caddyfile(domains, app_port).encode("utf-8")).decode("ascii")
+    write = await run(
+        [*prefix, f"mkdir -p {_EDGE_DIR} && echo {conf_b64} | base64 -d > {_EDGE_DIR}/Caddyfile"],
+        timeout=25, env=env,
+    )
+    if write.rc != 0:
+        return False, f"не записать Caddyfile: {write.stderr.strip()[-160:]}"
+    run_edge = await run(
+        [*prefix,
+         f"docker rm -f {_EDGE_NAME} 2>/dev/null; "
+         f"docker run -d --name {_EDGE_NAME} --restart unless-stopped --network host "
+         f"-v {_EDGE_DIR}/Caddyfile:/etc/caddy/Caddyfile -v omnia-caddy-data:/data caddy:2"],
+        timeout=90, env=env,
+    )
+    if run_edge.rc != 0:
+        return False, f"не запустить Caddy: {run_edge.stderr.strip()[-160:]}"
+    return True, "edge поднят"
 
 
 async def _save_load(
@@ -81,12 +122,16 @@ async def deploy_to_target(
     host_port: int,
     container_port: int = 3000,
     env: dict[str, str] | None = None,
+    domains: list[str] | None = None,
 ) -> dict[str, object]:
     """Развернуть образ `image_tag` на чужом VPS. Возвращает {ok, url, detail}.
 
     `creds` = {host, port, user, auth_type, secret}. `env` — переменные
-    окружения контейнера (для static-проекта минимальные; DATABASE_URL для
-    fullstack пока ожидает БД на той же машине — вне этого шага).
+    окружения контейнера. `domains` — если заданы, поднимаем на машине Caddy
+    (авто-HTTPS) для них → приложение, и приложение слушаем только на 127.0.0.1
+    (наружу торчит edge на 80/443). Без доменов приложение доступно напрямую по
+    http://host:port. DATABASE_URL для fullstack пока ожидает БД на той же
+    машине — вне этого шага.
     """
     host = str(creds["host"])
     try:
@@ -119,9 +164,12 @@ async def deploy_to_target(
             # Значения окружения — наши (не пользовательский ввод); экранируем кавычку.
             safe = str(v).replace("'", "'\\''")
             env_args += f" -e {k}='{safe}'"
+        # С доменом приложение слушаем только на 127.0.0.1 — наружу его отдаёт
+        # edge (Caddy) на 80/443. Без домена — напрямую (0.0.0.0:port).
+        bind = "127.0.0.1:" if domains else ""
         runcmd = (
             f"docker run -d --name {name} --restart unless-stopped "
-            f"-p {host_port}:{container_port}{env_args} {image_tag}"
+            f"-p {bind}{host_port}:{container_port}{env_args} {image_tag}"
         )
         rr = await run([*prefix, runcmd], timeout=60, env=ssh_env)
         if rr.rc != 0:
@@ -136,27 +184,42 @@ async def deploy_to_target(
             timeout=20, env=ssh_env,
         )
         code = (health.stdout or "").strip()
-        url = f"http://{host}:{host_port}"
-        if code and code[0] in "23":
-            return {
-                "ok": True, "url": url,
-                "detail": f"Развёрнуто на вашем сервере (HTTP {code}). {detail}",
-            }
-        # Контейнер запущен, но ещё не отвечает — не считаем фаталом.
-        status = await run(
-            [*prefix, f"docker ps --filter name={name} --format {{{{.Status}}}}"],
-            timeout=20, env=ssh_env,
-        )
         code_txt = code or "нет ответа"
-        if status.stdout.strip().startswith("Up"):
+        app_up = bool(code and code[0] in "23")
+        if not app_up:
+            status = await run(
+                [*prefix, f"docker ps --filter name={name} --format {{{{.Status}}}}"],
+                timeout=20, env=ssh_env,
+            )
+            if not status.stdout.strip().startswith("Up"):
+                return {"ok": False, "url": f"http://{host}:{host_port}",
+                        "detail": f"Контейнер не поднялся (HTTP {code_txt})."}
+
+        # 4. Домен: агент сам настраивает edge (Caddy, авто-HTTPS) на машине юзера.
+        if domains:
+            edge_ok, edge_detail = await _setup_edge(prefix, ssh_env, domains, host_port)
+            if edge_ok:
+                warm = "" if app_up else " Приложение прогревается."
+                return {
+                    "ok": True, "url": f"https://{domains[0]}",
+                    "detail": f"Развёрнуто на вашем сервере, домен {domains[0]} "
+                              f"настроен — SSL выпустится автоматически, как только "
+                              f"DNS укажет на сервер.{warm}",
+                }
             return {
-                "ok": True, "url": url,
-                "detail": f"Контейнер запущён на вашем сервере, приложение "
-                          f"прогревается (HTTP {code_txt}).",
+                "ok": False, "url": f"http://{host}:{host_port}",
+                "detail": f"Приложение запущено, но настройка домена не удалась: {edge_detail}.",
             }
+
+        # Без домена — прямой доступ по http://host:port.
+        url = f"http://{host}:{host_port}"
+        if app_up:
+            return {"ok": True, "url": url,
+                    "detail": f"Развёрнуто на вашем сервере (HTTP {code}). {detail}"}
         return {
-            "ok": False, "url": url,
-            "detail": f"Контейнер не поднялся (HTTP {code_txt}).",
+            "ok": True, "url": url,
+            "detail": f"Контейнер запущён на вашем сервере, приложение "
+                      f"прогревается (HTTP {code_txt}).",
         }
     finally:
         cleanup()

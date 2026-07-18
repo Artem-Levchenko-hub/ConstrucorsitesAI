@@ -626,7 +626,9 @@ async def deploy(
     """
     _verify_token(x_internal_token)
     target = payload.target.model_dump() if payload.target else None
-    rec = await builder.start_deploy(str(payload.project_id), slug, target)
+    rec = await builder.start_deploy(
+        str(payload.project_id), slug, target, payload.domains
+    )
     return _deploy_record_to_response(rec)
 
 

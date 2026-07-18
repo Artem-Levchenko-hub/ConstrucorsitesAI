@@ -112,6 +112,7 @@ async def start_deploy(
     project_id: str,
     slug: str | None = None,
     target: dict[str, object] | None = None,
+    domains: list[str] | None = None,
 ) -> deploy_state.DeployRecord:
     """Resolve the project's dev container and launch a background deploy.
 
@@ -140,7 +141,7 @@ async def start_deploy(
     # For a remote target we don't know the URL until the container is up.
     rec.prod_url = None if target else nginx_writer.prod_url(resolved_slug)
 
-    task = asyncio.create_task(_run(project_id, resolved_slug, dev_name, target))
+    task = asyncio.create_task(_run(project_id, resolved_slug, dev_name, target, domains))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
     return rec
@@ -159,14 +160,19 @@ def _remote_port(slug: str) -> int:
 
 
 async def _deploy_remote(
-    project_id: str, slug: str, tag: str, target: dict[str, object]
+    project_id: str, slug: str, tag: str, target: dict[str, object],
+    domains: list[str] | None = None,
 ) -> None:
-    """Развернуть уже собранный образ `tag` на чужом VPS (BYO-VPS)."""
+    """Развернуть уже собранный образ `tag` на чужом VPS (BYO-VPS).
+
+    Если у проекта подключён домен — приложение открывается по https://<домен>
+    (edge/Caddy на машине юзера выпускает SSL сам); иначе — по http://host:port.
+    """
     from omnia_orchestrator.services import remote_deploy
 
     host_port = _remote_port(slug)
     auth_secret = _load_or_create_auth_secret_safe(project_id)
-    app_url = f"http://{target['host']}:{host_port}"
+    app_url = f"https://{domains[0]}" if domains else f"http://{target['host']}:{host_port}"
     env = {
         "NODE_ENV": "production",
         "PORT": "3000",
@@ -177,7 +183,7 @@ async def _deploy_remote(
     }
     result = await remote_deploy.deploy_to_target(
         creds=target, image_tag=tag, slug=slug,
-        host_port=host_port, container_port=3000, env=env,
+        host_port=host_port, container_port=3000, env=env, domains=domains,
     )
     if result.get("ok"):
         deploy_state.update(
@@ -208,7 +214,9 @@ def _load_or_create_auth_secret_safe(project_id: str) -> str:
 
 
 async def _run(
-    project_id: str, slug: str, dev_name: str, target: dict[str, object] | None = None
+    project_id: str, slug: str, dev_name: str,
+    target: dict[str, object] | None = None,
+    domains: list[str] | None = None,
 ) -> None:
     build_dir = Path(tempfile.mkdtemp(prefix=f"omnia-build-{slug}-"))
     try:
@@ -285,7 +293,7 @@ async def _run(
         # (шаги 4–7) при этом не выполняется — поведение нашего хостинга не
         # меняется, ветка живёт только когда target задан явно.
         if target is not None:
-            await _deploy_remote(project_id, slug, tag, target)
+            await _deploy_remote(project_id, slug, tag, target, domains)
             return
 
         # 4. Run the new prod container, replacing any previous one.
