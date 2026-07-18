@@ -38,6 +38,15 @@ ErrorCode = Literal[
     "invalid_font",
     "no_snapshot",
     "no_index",
+    # BYO-VPS (deploy_targets) + свой домен (custom_domains) — routers/deploy_targets.py, routers/domains.py.
+    "deploy_target_not_found",
+    "deploy_target_verify_failed",
+    "deploy_target_in_use",
+    "domain_not_found",
+    "domain_taken",
+    "domain_invalid",
+    "domain_dns_mismatch",
+    "domain_cert_failed",
 ]
 
 

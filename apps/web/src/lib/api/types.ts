@@ -51,6 +51,8 @@ export type Project = {
   name: string;
   slug: string;
   template: ProjectTemplate;
+  /** BYO-VPS: цель деплоя проекта. null = наш хостинг (по умолчанию). */
+  deploy_target_id?: Uuid | null;
   current_snapshot_id: Uuid | null;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;

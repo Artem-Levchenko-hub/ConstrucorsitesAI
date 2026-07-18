@@ -72,6 +72,15 @@ class Project(Base):
         ForeignKey("snapshots.id", ondelete="SET NULL", use_alter=True),
         nullable=True,
     )
+    # BYO-VPS: куда деплоить этот проект. NULL = наш хостинг (текущее поведение,
+    # обратная совместимость). Задан → оркестратор запускает prod-образ на VPS
+    # пользователя по SSH. ON DELETE SET NULL: удалили цель — проект просто
+    # вернётся на наш хостинг, не сломается.
+    deploy_target_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("deploy_targets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

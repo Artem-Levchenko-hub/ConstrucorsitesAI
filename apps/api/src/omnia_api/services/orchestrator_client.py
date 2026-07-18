@@ -160,6 +160,30 @@ async def deploy(project_id: UUID, *, commit_sha: str | None = None) -> dict[str
     return await _request("POST", "/internal/projects/deploy", json=payload)
 
 
+async def verify_deploy_target(target: dict[str, Any]) -> dict[str, Any]:
+    """POST /internal/deploy-targets/verify — SSH-коннект к чужому VPS + проверка docker.
+
+    `target` несёт РАСШИФРОВАННЫЕ креды (host/port/user/auth_type/secret) — канал
+    за X-Internal-Token, на одной машине это localhost. Возвращает
+    `{ok, detail, docker_ok, docker_version, host_key}`.
+    """
+    return await _request(
+        "POST", "/internal/deploy-targets/verify", json=target, timeout=45.0
+    )
+
+
+async def publish_custom_domain(payload: dict[str, Any]) -> dict[str, Any]:
+    """POST /internal/domains/publish — nginx-vhost для чужого host + выпуск SSL.
+
+    payload: {host, project_id, slug}. Оркестратор пишет vhost host → контейнер
+    проекта и выпускает Let's Encrypt (HTTP-01). Возвращает
+    `{ok, cert_status, detail}`. Таймаут высокий — acme может идти долго.
+    """
+    return await _request(
+        "POST", "/internal/domains/publish", json=payload, timeout=120.0
+    )
+
+
 async def get_deploy(project_id: UUID) -> dict[str, Any]:
     """GET /internal/projects/<uuid>/deploy — last-known deploy record.
 

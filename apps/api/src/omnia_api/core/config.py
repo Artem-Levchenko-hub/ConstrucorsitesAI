@@ -91,6 +91,19 @@ class Settings(BaseSettings):
     github_oauth_scope: str = Field(default="repo")
     web_base_url: str = Field(default="http://localhost:3000")
 
+    # Отдельный ключ шифрования для «тяжёлых» секретов, которые НЕЛЬЗЯ терять
+    # при ротации jwt_secret: SSH-креды чужих VPS (deploy_targets) и паспортные
+    # данные для регистрации доменов (merchant_profiles, 152-ФЗ). GitHub-токены
+    # шифруются ключом из jwt_secret (их не жаль — юзер переподключит), а вот
+    # доступ к чужой машине и ПДн переживать логаут обязаны. Если ключ не задан
+    # (dev), crypto.py откатывается на jwt-производный ключ — код работает из
+    # коробки, но в проде ОБЯЗАТЕЛЬНО задать свой `SECRETS_ENCRYPTION_KEY`
+    # (Fernet.generate_key()) в /opt/omnia-runtime/.env, чтобы креды переживали
+    # ротацию jwt. Наш публичный IP нужен доменам: A-запись чужого домена должна
+    # указывать на него, чтобы выпустился Let's Encrypt (HTTP-01).
+    secrets_encryption_key: SecretStr | None = Field(default=None)
+    our_public_ip: str = Field(default="170.168.72.200")
+
     cors_origins: str = Field(default="http://localhost:3000")
 
     initial_wallet_balance_rub: float = Field(default=100.0)

@@ -24,6 +24,7 @@ from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import get_exe_object, preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.core.security import create_access_token
+from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.lead import Lead
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
@@ -623,6 +624,19 @@ async def update_project(
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     if payload.image_gen_enabled is not None:
         project.image_gen_enabled = payload.image_gen_enabled
+    # BYO-VPS: назначить/снять цель деплоя. Отличаем «прислали null» (снять,
+    # вернуть на наш хостинг) от «поле не прислали» (не трогать) через
+    # model_fields_set. Чужую цель назначить нельзя — проверяем владение.
+    if "deploy_target_id" in payload.model_fields_set:
+        if payload.deploy_target_id is None:
+            project.deploy_target_id = None
+        else:
+            target = await session.get(DeployTarget, payload.deploy_target_id)
+            if target is None or target.owner_id != current_user.id:
+                raise ApiError(
+                    "deploy_target_not_found", "VPS не найден", status.HTTP_404_NOT_FOUND
+                )
+            project.deploy_target_id = target.id
     await session.commit()
     await session.refresh(project)
     return project
