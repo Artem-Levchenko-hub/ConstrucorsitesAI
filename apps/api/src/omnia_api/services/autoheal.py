@@ -31,8 +31,8 @@ from omnia_api.services import agent_builder, orchestrator_client
 
 log = structlog.get_logger(__name__)
 
-# Keep repair runs on the same coding model as the main agent.
-_HEAL_MODEL = "deepseek-v4-pro"
+# Keep repair runs on the same model as the cinematic build agent.
+_HEAL_MODEL = "claude-opus-4-8"
 _HEAL_MAX_STEPS = 24
 
 

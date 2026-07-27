@@ -1236,37 +1236,37 @@ def generation_mode(
 # ──────────────────────────────────────────────────────────────────────────
 
 ROLE_MODEL_MAP: dict[str, str] = {
-    # Owner directive (2026-07-27): use DeepSeek V4 Pro through llmgw for site
-    # generation, coding, editing, planning and repair. Keep only screenshot audit
-    # on multimodal Opus because those requests contain image blocks.
-    "classify":        "deepseek-v4-pro",  # pick 1 of N presets
-    "director":        "deepseek-v4-pro",  # catalog orchestrator — structure
-    "polish":          "deepseek-v4-pro",  # writes the real PageIR content (RU copy)
-    # VISION judge (screenshots) stays on Opus 4.8.
+    # Owner directive (2026-07-27): restore the proven cinematic orchestration
+    # from b8f4db5/e2747c6. One multimodal Opus 4.8 drives the whole chain:
+    # classify → art direction → implementation → visual audit → repair. Flux
+    # image generation and Seedance video generation remain separate media tools.
+    "classify":        "claude-opus-4-8",  # pick 1 of N presets
+    "director":        "claude-opus-4-8",  # catalog orchestrator — structure
+    "polish":          "claude-opus-4-8",  # writes the real PageIR content (RU copy)
     "audit":           "claude-opus-4-8",  # acceptance-gate screenshot judge
     "audit_retry":     "claude-opus-4-8",  # escalation re-roll judge
-    "skeleton":        "deepseek-v4-pro",  # multipass fallback — structure
-    "content":         "deepseek-v4-pro",  # multipass fallback — copy
-    "visual":          "deepseek-v4-pro",  # multipass fallback — style tokens
-    "link_repair":     "deepseek-v4-pro",  # rewrite dead hrefs
-    "image_prompt":    "deepseek-v4-pro",  # writes TEXT prompt for image-gen
-    "single_shot":     "deepseek-v4-pro",  # non-catalog freeform fallback path
-    "art_director":    "deepseek-v4-pro",
-    "freeform_writer": "deepseek-v4-pro",
-    "edit":            "deepseek-v4-pro",  # targeted edit
-    "edit_escalation": "deepseek-v4-pro",  # edit retry escalation
-    "agent":           "deepseek-v4-pro",
-    "agent_escalation":"deepseek-v4-pro",  # one-shot escalation on a stuck loop
-    "discovery_plan":  "deepseek-v4-pro",
-    "result_type":     "deepseek-v4-pro",
-    "planner":         "deepseek-v4-pro",
-    "exe_doctor":      "deepseek-v4-pro",  # self-heal failed executable builds
-    "app_doctor":      "deepseek-v4-pro",  # app self-repair (verify->fix)
+    "skeleton":        "claude-opus-4-8",  # multipass fallback — structure
+    "content":         "claude-opus-4-8",  # multipass fallback — copy
+    "visual":          "claude-opus-4-8",  # multipass fallback — style tokens
+    "link_repair":     "claude-opus-4-8",  # rewrite dead hrefs
+    "image_prompt":    "claude-opus-4-8",  # writes TEXT prompt for Flux
+    "single_shot":     "claude-opus-4-8",  # non-catalog freeform fallback path
+    "art_director":    "claude-opus-4-8",
+    "freeform_writer": "claude-opus-4-8",
+    "edit":            "claude-opus-4-8",  # targeted edit
+    "edit_escalation": "claude-opus-4-8",  # edit retry escalation
+    "agent":           "claude-opus-4-8",
+    "agent_escalation":"claude-opus-4-8",  # one-shot escalation on a stuck loop
+    "discovery_plan":  "claude-opus-4-8",
+    "result_type":     "claude-opus-4-8",
+    "planner":         "claude-opus-4-8",
+    "exe_doctor":      "claude-opus-4-8",  # self-heal failed executable builds
+    "app_doctor":      "claude-opus-4-8",  # app self-repair (verify->fix)
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.
-# DeepSeek V4 Pro is the 2026-07-27 default through llmgw.
-DEFAULT_ROLE_MODEL = "deepseek-v4-pro"
+# The safe bottom follows the same one-model orchestration.
+DEFAULT_ROLE_MODEL = "claude-opus-4-8"
 
 # First-N free "wow-effect" generations per user before wallet billing starts.
 # Counter lives on User.free_generations_used; the gate is in routers/messages.py

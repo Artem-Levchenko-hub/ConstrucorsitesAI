@@ -3,18 +3,17 @@
 R-02 (hide what changes): all env access goes through `get_settings()`. If we
 later swap pydantic-settings for vault / SSM, only this module changes.
 
-Provider model: ONE upstream — **llmgw.ru** — serves the whole product through
-its OpenAI-compatible API. Everything lives under `https://api.llmgw.ru/v1`:
+Provider model: ONE upstream — **aitunnel.ru** — serves the whole product through
+its OpenAI-compatible API. Everything lives under `https://api.aitunnel.ru/v1`:
 
   * `/v1/chat/completions` — OpenAI-compatible chat + streaming,
   * `/v1/messages`         — Anthropic-native surface (the native tool-use agent,
     thinking + signatures preserved),
   * `/v1/images/generations` — image generation (flux).
 
-The legacy-named `AITUNNEL_API_KEY` setting carries the llmgw key so the
-deployment can migrate without a second secret variable. Both text surfaces use
-`Authorization: Bearer`. `proxyapi.ru` remains ONLY for speech-to-text (whisper)
-and the optional `gpt-image-1` model.
+The same `AITUNNEL_API_KEY` authenticates chat, native tools, images, and video.
+All surfaces use `Authorization: Bearer`. `proxyapi.ru` remains ONLY for
+speech-to-text (whisper) and the optional `gpt-image-1` model.
 """
 
 from __future__ import annotations
@@ -33,12 +32,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- llmgw.ru — the single LLM upstream (legacy AITUNNEL_* env names) ---
+    # --- aitunnel.ru — the single LLM + media upstream ---
     # ONE key + ONE base for every endpoint: chat (`/chat/completions`), native
     # Anthropic (`/messages`), images (`/images/generations`). Flows in via env
     # AITUNNEL_API_KEY, never committed.
     aitunnel_api_key: SecretStr | None = None
-    aitunnel_base_url: str = "https://api.llmgw.ru/v1"
+    aitunnel_base_url: str = "https://api.aitunnel.ru/v1"
 
     # --- proxyapi.ru — ONLY for whisper speech-to-text (+ legacy gpt-image) ---
     # Speech-to-text (whisper) + the optional gpt-image-1 image model. Same key +

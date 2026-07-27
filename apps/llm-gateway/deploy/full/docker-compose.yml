@@ -114,10 +114,9 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # --- llmgw.ru — LLM upstream; AITUNNEL_* names kept for compatibility ---
-      # ONE key + ONE base for /chat/completions and /messages. Set in .env.
+      # --- aitunnel.ru — one upstream for chat, native tools, images, and video ---
       AITUNNEL_API_KEY: ${AITUNNEL_API_KEY:-}
-      AITUNNEL_BASE_URL: ${AITUNNEL_BASE_URL:-https://api.llmgw.ru/v1}
+      AITUNNEL_BASE_URL: ${AITUNNEL_BASE_URL:-https://api.aitunnel.ru/v1}
       # --- proxyapi.ru — ONLY for whisper speech-to-text. ---
       PROXYAPI_API_KEY: ${PROXYAPI_API_KEY:-}
       PROXYAPI_OPENAI_BASE_URL: ${PROXYAPI_OPENAI_BASE_URL:-https://api.proxyapi.ru/openai/v1}

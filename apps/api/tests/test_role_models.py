@@ -16,22 +16,21 @@ from omnia_api.core.config import (  # noqa: E402
 )
 
 
-def test_role_map_deepseek_generation_with_opus_vision() -> None:
-    assert model_for_role("director") == "deepseek-v4-pro"
-    assert model_for_role("polish") == "deepseek-v4-pro"
-    assert model_for_role("classify") == "deepseek-v4-pro"
-    assert model_for_role("edit") == "deepseek-v4-pro"
-    assert model_for_role("single_shot") == "deepseek-v4-pro"
-    assert model_for_role("agent") == "deepseek-v4-pro"
-    assert model_for_role("agent_escalation") == "deepseek-v4-pro"
+def test_role_map_full_opus_cinematic_orchestration() -> None:
+    assert model_for_role("director") == "claude-opus-4-8"
+    assert model_for_role("polish") == "claude-opus-4-8"
+    assert model_for_role("classify") == "claude-opus-4-8"
+    assert model_for_role("edit") == "claude-opus-4-8"
+    assert model_for_role("single_shot") == "claude-opus-4-8"
+    assert model_for_role("agent") == "claude-opus-4-8"
+    assert model_for_role("agent_escalation") == "claude-opus-4-8"
     assert model_for_role("audit") == "claude-opus-4-8"
     assert model_for_role("audit_retry") == "claude-opus-4-8"
     for role, model in ROLE_MODEL_MAP.items():
-        expected = "claude-opus-4-8" if role in {"audit", "audit_retry"} else "deepseek-v4-pro"
-        assert model == expected, f"{role} -> {model}"
-    assert DEFAULT_ROLE_MODEL == "deepseek-v4-pro"
+        assert model == "claude-opus-4-8", f"{role} -> {model}"
+    assert DEFAULT_ROLE_MODEL == "claude-opus-4-8"
     banned = {
-        "deepseek-chat", "deepseek-v4-pro-thinking",
+        "deepseek-chat", "deepseek-v4-pro", "deepseek-v4-pro-thinking",
         "kimi-k2.6", "kimi-k2.6-thinking", "gemini-3-flash-vision",
         "gemini-3.5-flash-high", "claude-sonnet-4-6", "claude-haiku-4-5",
         "claude-opus-4-7",
@@ -40,9 +39,9 @@ def test_role_map_deepseek_generation_with_opus_vision() -> None:
         assert m not in banned
 
 
-def test_art_director_writer_both_deepseek() -> None:
-    assert model_for_role("art_director") == "deepseek-v4-pro"
-    assert model_for_role("freeform_writer") == "deepseek-v4-pro"
+def test_art_director_writer_both_opus() -> None:
+    assert model_for_role("art_director") == "claude-opus-4-8"
+    assert model_for_role("freeform_writer") == "claude-opus-4-8"
 
 
 def test_no_role_uses_flaky_gemini() -> None:

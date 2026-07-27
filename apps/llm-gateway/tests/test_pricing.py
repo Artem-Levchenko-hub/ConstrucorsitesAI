@@ -73,6 +73,7 @@ def test_cached_tokens_capped_at_prompt() -> None:
 
 def test_list_models_covers_price_table() -> None:
     catalog = list_models()
+    assert set(PRICE_TABLE) == {"claude-opus-4-8"}
     assert {m["id"] for m in catalog} == set(PRICE_TABLE.keys())
     for m in catalog:
         assert m["price_rub_per_1k_in"] > 0

@@ -3083,12 +3083,11 @@ async def _process_prompt(
                 )
                 _agent_system = _stack_system
                 _agent_steps = int(get_settings().agent_builder_max_steps)
-            # Cost-safe: dedicated `agent` role = deepseek-v4-pro (cheap, not the
-            # opus 1-req/sec bottleneck). Swap via ROLE_MODELS env.
+            # The historical cinematic pipeline uses one strong Opus model for
+            # planning, implementation, visual review, and recovery. Operators
+            # can still retune a role through ROLE_MODELS without a code deploy.
             _agent_model = model_for_role("agent", override=force_model)
-            # Cheap default; the loop upgrades to this stronger model the first
-            # time a stall-guard nudges (cycle / repeat / no-write) — smart only
-            # when stuck, so cost stays bounded (no full strong-model run).
+            # Stall recovery resolves through the same role registry.
             _escalate_model = model_for_role("agent_escalation", override=force_model)
             if get_settings().use_native_agent:
                 # Native tool-use path (owner «как Claude Code, только на сервере»): ONE

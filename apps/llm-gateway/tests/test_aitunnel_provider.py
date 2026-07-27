@@ -18,22 +18,20 @@ _MODEL = "claude-opus-4-8"
 
 def test_is_aitunnel_model() -> None:
     assert aitunnel.is_aitunnel_model(_MODEL) is True
-    assert aitunnel.is_aitunnel_model("deepseek-v4-pro") is True
     # Retired / other-provider slugs are not served here.
+    assert aitunnel.is_aitunnel_model("deepseek-v4-pro") is False
     assert aitunnel.is_aitunnel_model("claude-opus-4-7") is False
     assert aitunnel.is_aitunnel_model("gpt-5") is False
     assert aitunnel.is_aitunnel_model("deepseek-chat") is False
 
 
 def test_slug_mapping_round_trip() -> None:
-    # Omnia id → canonical llmgw catalog slug (the native passthrough uses this).
-    assert aitunnel.native_slug(_MODEL) == "anthropic/claude-opus-4.8"
-    assert aitunnel.native_slug("deepseek-v4-pro") == "deepseek/deepseek-v4-pro"
+    # Omnia id → canonical AITunnel catalog slug.
+    assert aitunnel.native_slug(_MODEL) == "claude-opus-4.8"
     assert aitunnel.native_slug("unknown-model") == "unknown-model"
     # Upstream response `model` → Omnia id (both surfaces' spellings).
     assert aitunnel.slug_to_omnia("claude-opus-4.8") == _MODEL
     assert aitunnel.slug_to_omnia("anthropic/claude-opus-4.8") == _MODEL
-    assert aitunnel.slug_to_omnia("deepseek/deepseek-v4-pro") == "deepseek-v4-pro"
     assert aitunnel.slug_to_omnia("gpt-5") is None
 
 
