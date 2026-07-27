@@ -15,12 +15,10 @@ FROM node:20-alpine AS deps
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-# Install on the HOST network (--network=host, needs the syntax:1.6 header above).
-# The prod VPS's docker bridge drops large npm tarball fetches (ETIMEDOUT on
-# @radix-ui/* .tgz) while the host reaches registry.npmjs.org fine — a bridge
-# MTU/large-packet issue. Host-net + throttled concurrency + retries make the
-# `--frozen-lockfile` install reliable in buildkit.
-RUN --network=host pnpm config set network-concurrency 4 \
+# Keep downloads conservative and retry transient registry failures. Using
+# Dockerfile-level `--network=host` here makes the build require an insecure
+# BuildKit entitlement and causes production builds to fail before this step.
+RUN pnpm config set network-concurrency 4 \
  && pnpm config set fetch-retries 5 \
  && pnpm config set fetch-retry-maxtimeout 120000 \
  && pnpm install --frozen-lockfile
