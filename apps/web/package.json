@@ -53,6 +53,12 @@
     "typescript-eslint": "^8.59.2",
     "vitest": "^4.1.8"
   },
+  "pnpm": {
+    "overrides": {
+      "postcss": "8.5.18",
+      "sharp": "0.35.0"
+    }
+  },
   "engines": {
     "node": ">=20"
   }
