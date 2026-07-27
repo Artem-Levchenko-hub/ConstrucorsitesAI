@@ -69,7 +69,7 @@ class StatusResponse(BaseModel):
     # Area C (DARK): {email, auth_secret} for the gate's seed operator account,
     # populated ONLY when the orchestrator runs with OMNIA_GATE_SEED=1. Null on
     # every normal deployment, so the public contract is unchanged.
-    gate_seed: dict | None = None
+    gate_seed: dict[str, str] | None = None
 
 
 class DeployTargetCreds(BaseModel):

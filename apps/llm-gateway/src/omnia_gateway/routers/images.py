@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import time
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID
 
 import httpx
@@ -198,7 +198,7 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
         )
 
     try:
-        body = resp.json()
+        body = cast(dict[str, Any], resp.json())
     except Exception as exc:
         raise _gateway_error_to_http(
             UpstreamProviderError(f"Image provider returned non-JSON: {exc}")

@@ -91,9 +91,9 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
 }
 
 
-def list_models() -> list[dict]:
+def list_models() -> list[dict[str, object]]:
     """Return public model catalog matching the contract Model type."""
-    out: list[dict] = []
+    out: list[dict[str, object]] = []
     for model_id, price in PRICE_TABLE.items():
         meta = _MODEL_META[model_id]
         out.append(

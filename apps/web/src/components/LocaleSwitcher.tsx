@@ -4,12 +4,16 @@ import { useRouter } from "next/navigation";
 import { useLocale } from "next-intl";
 import { LOCALES } from "@/i18n/config";
 
+function persistLocale(locale: string) {
+  document.cookie = `NEXT_LOCALE=${locale}; path=/; max-age=31536000; samesite=lax`;
+}
+
 export function LocaleSwitcher() {
   const locale = useLocale();
   const router = useRouter();
 
   const set = (l: string) => {
-    document.cookie = `NEXT_LOCALE=${l}; path=/; max-age=31536000; samesite=lax`;
+    persistLocale(l);
     router.refresh();
   };
 

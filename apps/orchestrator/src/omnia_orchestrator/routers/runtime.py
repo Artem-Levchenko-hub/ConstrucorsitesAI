@@ -317,7 +317,14 @@ async def hot_reload(
                 # "Yes/No, abort" on any change it deems risky and the exec
                 # stalls/aborts, so the model's new tables never get created
                 # and its DB-backed pages 500 at runtime.
-                cmd=["npx", "--yes", "drizzle-kit", "push", "--force", "--config=drizzle.config.ts"],
+                cmd=[
+                    "npx",
+                    "--yes",
+                    "drizzle-kit",
+                    "push",
+                    "--force",
+                    "--config=drizzle.config.ts",
+                ],
                 workdir="/app",
                 timeout_sec=90,
             )
@@ -603,7 +610,7 @@ def _deploy_record_to_response(rec: deploy_state.DeployRecord) -> DeployResponse
 
     return DeployResponse(
         project_id=UUID(rec.project_id),
-        phase=rec.phase,  # type: ignore[arg-type]  # validated by DeployPhase
+        phase=rec.phase,
         prod_url=rec.prod_url,
         image_tag=rec.image_tag,
         error=rec.error,

@@ -73,7 +73,9 @@ def test_access_policy_includes_submit_for_public_intake() -> None:
     only admin reads/edits. Per-role visibility beyond these is layered via
     readRoles/writeRoles (the RBAC tests below)."""
     src = _REGISTRY.read_text(encoding="utf-8")
-    assert 'export type AccessPolicy = "owner" | "public" | "admin" | "submit";' in src
+    declaration = re.search(r"export type AccessPolicy\s*=\s*([^;]+);", src)
+    assert declaration is not None
+    assert '"submit"' in declaration.group(1)
 
 
 def test_unknown_access_is_coerced_to_owner() -> None:

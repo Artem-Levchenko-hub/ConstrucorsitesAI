@@ -33,7 +33,7 @@ import re
 import threading
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import httpx
@@ -333,7 +333,7 @@ async def acompletion(
                 ) as client:
                     r = client.post(url, json=payload, headers=headers)
                     r.raise_for_status()
-                    return r.json()
+                    return cast(dict[str, Any], r.json())
             except _TRANSIENT as exc:
                 last = exc
                 if attempt == 0:

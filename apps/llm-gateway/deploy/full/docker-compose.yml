@@ -142,7 +142,9 @@ services:
       MIN_BALANCE_RUB: ${MIN_BALANCE_RUB:-5.0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
-      - "${GATEWAY_HOST_PORT:-8101}:8001"
+      # Internal-only gateway.  The API talks to it over the Compose network;
+      # host access is kept on loopback for health checks and nginx only.
+      - "127.0.0.1:${GATEWAY_HOST_PORT:-8101}:8001"
     restart: unless-stopped
     networks:
       - omnia-prod
@@ -161,9 +163,15 @@ services:
     # entities" bug. Read-only.
     volumes:
       - ../../../orchestrator/templates:/orchestrator/templates:ro
+    # Apply schema changes before accepting traffic.  This is deliberately part
+    # of the API readiness barrier: the worker must never start against an older
+    # schema (generation_runs is required by the single-flight generation path).
     # Bypass `uv run` — avoids on-start network calls to pypi.org.
     # Everything is already installed in /app/.venv inside the image.
-    command: ["/app/.venv/bin/uvicorn", "omnia_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command:
+      - /bin/sh
+      - -c
+      - /app/.venv/bin/alembic upgrade head && exec /app/.venv/bin/uvicorn omnia_api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       postgres:
         condition: service_healthy
@@ -321,7 +329,13 @@ services:
       REFERENCE_CEILING_ENFORCED: ${REFERENCE_CEILING_ENFORCED:-false}
       REFERENCE_CEILING_TOLERANCE: ${REFERENCE_CEILING_TOLERANCE:-1}
     ports:
-      - "${API_HOST_PORT:-8200}:8000"
+      - "127.0.0.1:${API_HOST_PORT:-8200}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
     restart: unless-stopped
     networks:
       - omnia-prod
@@ -339,7 +353,7 @@ services:
     command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.run"]
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -490,7 +504,7 @@ services:
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in .env}
       NODE_ENV: production
     ports:
-      - "${WEB_HOST_PORT:-3100}:3000"
+      - "127.0.0.1:${WEB_HOST_PORT:-3100}:3000"
     restart: unless-stopped
     networks:
       - omnia-prod

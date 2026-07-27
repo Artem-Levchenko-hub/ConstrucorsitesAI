@@ -49,13 +49,15 @@ def _stack(name: str, *, container_port: int = 3000) -> StackSpec:
     )
 
 
-# The five template dirs shipped today (apps/orchestrator/templates/). New stacks plug
+# The template dirs shipped today (apps/orchestrator/templates/). New stacks plug
 # in by adding an entry here once their richer fields (readiness/env/migrate) are wired.
 STACKS: dict[str, StackSpec] = {
     name: _stack(name)
     for name in (
+        "bare-nextjs",
         "nextjs-entities",
         "nextjs-postgres-drizzle",
+        "nextjs-realtime",
         "vite-react-spa",
         "fastapi-postgres",
         "telegram-bot-aiogram",

@@ -10,15 +10,17 @@ LIVE PROOF (run #15, throwaway container from the deployed base image
 `omnia-template-nextjs-entities:dev`, project dogfood-listcap-probe-cd7c7c,
 starter `Task` entity, owner-auth via Auth.js credentials — no LLM, no gen):
   - Created 55 `Task` records (#1..#55).
-  - GET /api/entities/Task            (no limit — what useEntity/CrudResource sends) → 50 rows: #6..#55
-  - GET /api/entities/Task?limit=200  (engine MAX_LIMIT)                              → 55 rows: #1..#55
-  - GET /api/entities/Task?page=2                                                     → 5 rows:  #1..#5
+  - GET /api/entities/Task (no limit — what useEntity/CrudResource sends)
+        → 50 rows: #6..#55
+  - GET /api/entities/Task?limit=200 (below the engine MAX_LIMIT)
+        → 55 rows: #1..#55
+  - GET /api/entities/Task?page=2 → 5 rows: #1..#5
 The 5 OLDEST records (#1..#5) are absent from the default list (default sort is
 created_at DESC). The engine CAN page (page=2 returns the rest) — the managed UI
 just never asks. So the gap is purely a wiring gap, not a server limitation.
 
 Root cause (code-proven):
-  - engine.ts: DEFAULT_LIMIT = 50, MAX_LIMIT = 200; listRecords clamps to
+  - engine.ts: DEFAULT_LIMIT = 50, MAX_LIMIT = 500; listRecords clamps to
     `Number(limit) || DEFAULT_LIMIT` → 50 when the caller sends no `limit`.
   - use-entity.ts: loads the collection with ONE `entities[name].list(params)`
     call (params passed verbatim), reloads after each mutation, and never sets
@@ -38,10 +40,10 @@ BS-14 (unreachable feed cards) and BS-16 (invisible reference column): the
 generator surfaces only part of the data while looking complete.
 
 Why this is a PROPOSAL, not a blind ship (→ P-PAGINATE):
-  - The minimal band-aid (default the managed fetch to `limit: 200` = MAX_LIMIT)
+  - The minimal band-aid (default the managed fetch to `limit: 500` = MAX_LIMIT)
     is a TEMPLATE change → base-image rebuild on prod + regen-verify, and it
-    only MOVES the cliff (>200 still vanishes) while making every managed
-    screen fetch 200 rows + their ref-expansions on every load.
+    only MOVES the cliff (>500 still vanishes) while making every managed
+    screen fetch 500 rows + their ref-expansions on every load.
   - The correct fix is real server pagination: the engine returns a total/has-
     more, useEntity exposes page state and refetches, and the DataTable pager
     drives it — multi-surface, changes the list data-flow contract. Larger/risky.
@@ -66,10 +68,10 @@ _SYSTEM_PROMPT = _ENTITIES / "SYSTEM_PROMPT.md"
 
 def test_engine_caps_list_at_fifty_by_default_today() -> None:
     """EVIDENCE (green today): with no `limit` query param the engine returns at
-    most DEFAULT_LIMIT (50) rows. MAX_LIMIT (200) is the hard ceiling. So the
+    most DEFAULT_LIMIT (50) rows. MAX_LIMIT (500) is the hard ceiling. So the
     server hands back 50 unless the caller explicitly asks for more."""
     src = _ENGINE.read_text(encoding="utf-8")
-    assert "const MAX_LIMIT = 200;" in src
+    assert "const MAX_LIMIT = 500;" in src
     assert "const DEFAULT_LIMIT = 50;" in src
     # the clamp: Number(limit) || DEFAULT_LIMIT, capped at MAX_LIMIT
     assert 'Number(params.get("limit")) || DEFAULT_LIMIT' in src
@@ -124,7 +126,7 @@ def test_system_prompt_does_not_require_wiring_pagination_today() -> None:
 )
 def test_managed_list_should_reach_records_beyond_the_default_cap() -> None:
     """DESIRED: a generated managed list must surface records past the 50 default
-    — either by defaulting the fetch to MAX_LIMIT (200), or by wiring true
+    — either by defaulting the fetch to MAX_LIMIT (500), or by wiring true
     server-side pagination so the user can page beyond the first 50. Until then,
     the 51st record onward is invisible with no error and no control to reach it.
     """

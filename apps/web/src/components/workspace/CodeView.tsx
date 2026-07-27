@@ -48,28 +48,31 @@ export function CodeView({
     staleTime: 5 * 60_000,
   });
 
+  const files = data?.files;
   const paths = useMemo(
-    () => (data?.files ? Object.keys(data.files).sort() : []),
-    [data?.files],
+    () => (files ? Object.keys(files).sort() : []),
+    [files],
   );
   const tree = useMemo(
     () =>
-      data?.files
+      files
         ? buildFileTree<FileData>(
-            Object.entries(data.files).map(([path, body]) => ({
+            Object.entries(files).map(([path, body]) => ({
               path,
               data: { size: new Blob([body ?? ""]).size },
             })),
           )
         : [],
-    [data?.files],
+    [files],
   );
 
-  const [active, setActive] = useState<string | null>(initialFile ?? null);
-  useEffect(() => {
-    if (paths.length === 0) return;
-    if (!active || !paths.includes(active)) setActive(paths[0]);
-  }, [paths, active]);
+  const [selectedPath, setSelectedPath] = useState<string | null>(
+    initialFile ?? null,
+  );
+  const active =
+    selectedPath && paths.includes(selectedPath)
+      ? selectedPath
+      : (paths[0] ?? null);
 
   // Collapsed folders by path (default: everything expanded).
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -178,7 +181,7 @@ export function CodeView({
       <button
         key={node.path}
         type="button"
-        onClick={() => setActive(node.path)}
+        onClick={() => setSelectedPath(node.path)}
         style={pad}
         className={cn(
           "w-full text-left pr-2 py-1 flex items-center gap-1.5 transition-colors",

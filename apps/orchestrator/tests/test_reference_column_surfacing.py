@@ -92,7 +92,7 @@ def test_crud_resource_never_auto_renders_a_reference_column_today() -> None:
     writer forgets the reference column, the expanded data is fetched and thrown
     away — the relation is invisible in the list (crm-verify bookings & notes)."""
     src = _CRUD.read_text(encoding="utf-8")
-    assert "columns.map((c) => ({ ...c, sortable: c.sortable ?? true }))" in src
+    assert "base.map((c) => ({ ...c, sortable: c.sortable ?? true }))" in src
     # "reference" lives only in the expand path, not in any column injection.
     ref_lines = [
         ln.strip()

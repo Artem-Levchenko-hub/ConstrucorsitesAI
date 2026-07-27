@@ -19,8 +19,10 @@ _TEMPLATES_DIR = (
 )
 
 _SHIPPED = (
+    "bare-nextjs",
     "nextjs-entities",
     "nextjs-postgres-drizzle",
+    "nextjs-realtime",
     "vite-react-spa",
     "fastapi-postgres",
     "telegram-bot-aiogram",

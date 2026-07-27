@@ -21,16 +21,20 @@ LIVE PROOF (run #18, throwaway container from the deployed base image
 `omnia-template-nextjs-entities:dev`, project dogfood-sortcap-probe-1bb521,
 container omnia-dev-dogfood-sortcap-probe-1bb521 port 3302, starter `Task` entity,
 owner-auth via Auth.js credentials — no LLM, no gen):
-  - Seeded 55 `Task`; the OLDEST-created is "AAA-EARLIEST-DUE-MARK" with due 2018-01-01
+  - Seeded 55 `Task`; the OLDEST-created is "AAA-EARLIEST-DUE-MARK" with
+    due 2018-01-01
     (the global earliest); the 54 filler tasks all have 2026-* dues.
-  - GET /api/entities/Task          (no params — exactly what useEntity sends) → 50 rows, MARK ABSENT;
+  - GET /api/entities/Task (no params — exactly what useEntity sends)
+        → 50 rows, MARK ABSENT;
         the earliest `due` present in that loaded window is 2026-01-15
         → the BEST a client-side "sort by due ↑" can show as TOP is 2026-01-15.
-  - GET ?sort=due&order=asc&limit=200 (engine server-sort, full set)           → TOP = MARK, due 2018-01-01
-  - GET ?sort=due&order=asc            (engine server-sort, DEFAULT 50-cap)    → TOP = MARK, due 2018-01-01,
+  - GET ?sort=due&order=asc&limit=200 (engine server-sort, full set)
+        → TOP = MARK, due 2018-01-01
+  - GET ?sort=due&order=asc (engine server-sort, DEFAULT 50-cap)
+        → TOP = MARK, due 2018-01-01,
         MARK PRESENT — i.e. the server sorts the WHOLE table THEN takes the top 50,
         so pushing sort to the server surfaces the true extremum even at the cap.
-  - GET ?limit=200                     (control)                                → 55 rows, MARK present.
+  - GET ?limit=200 (control) → 55 rows, MARK present.
 
 So the engine returns the right answer (2018-01-01) when ASKED to sort; the managed
 UI never asks, and a user clicking "Срок ↑" to find the most overdue task sees
@@ -114,7 +118,7 @@ def test_crud_resource_makes_every_column_sortable_but_never_pushes_sort_today()
     static `listParams` to useEntity — the chosen sort key/direction is never added
     to the server query."""
     src = _CRUD.read_text(encoding="utf-8")
-    assert "columns.map((c) => ({ ...c, sortable: c.sortable ?? true }))" in src
+    assert "base.map((c) => ({ ...c, sortable: c.sortable ?? true }))" in src
     # the only params handed to useEntity are the caller's static listParams plus an
     # auto-`expand` — the chosen sort key/direction is never merged into the query.
     assert "useEntity(entity, expand.length ? mergedParams : listParams)" in src

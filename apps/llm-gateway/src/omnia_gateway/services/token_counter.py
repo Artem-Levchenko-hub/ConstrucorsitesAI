@@ -6,16 +6,36 @@ approximation. For Yandex / Qwen we fall back to character-count heuristic.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
+import structlog
 import tiktoken
 
-# Lazy-init to avoid loading the BPE merges file at import time.
+log = structlog.get_logger(__name__)
+
+# Lazy-init to avoid loading the BPE merges file at import time.  On a fresh
+# host tiktoken may need to download that file.  Token accounting must never
+# turn an otherwise successful LLM response into a failed/stuck generation, so
+# remember a failed load and use the existing character heuristic instead.
 _ENCODER: tiktoken.Encoding | None = None
+_ENCODER_UNAVAILABLE = False
 
 
-def _encoder() -> tiktoken.Encoding:
-    global _ENCODER
-    if _ENCODER is None:
-        _ENCODER = tiktoken.get_encoding("cl100k_base")
+def _encoder() -> tiktoken.Encoding | None:
+    global _ENCODER, _ENCODER_UNAVAILABLE
+    if _ENCODER is None and not _ENCODER_UNAVAILABLE:
+        try:
+            _ENCODER = tiktoken.get_encoding("cl100k_base")
+        except Exception as exc:
+            # Billing uses an estimate here, not a security boundary.  Fail soft
+            # when the tokenizer asset/CDN is unavailable and avoid retrying the
+            # same slow network request for every streamed completion.
+            _ENCODER_UNAVAILABLE = True
+            log.warning(
+                "tokenizer.asset_unavailable",
+                error_type=type(exc).__name__,
+                fallback="character_estimate",
+            )
     return _ENCODER
 
 
@@ -27,7 +47,9 @@ def count_text_tokens(model_id: str, text: str) -> int:
     if not text:
         return 0
     if _uses_tiktoken(model_id):
-        return len(_encoder().encode(text))
+        encoder = _encoder()
+        if encoder is not None:
+            return len(encoder.encode(text))
     # Yandex / unknown — coarse fallback
     return max(1, len(text) // 4)
 
@@ -52,7 +74,9 @@ def _content_text(content: object) -> str:
     return str(content)
 
 
-def count_message_tokens(model_id: str, messages: list[dict[str, object]]) -> int:
+def count_message_tokens(
+    model_id: str, messages: Sequence[Mapping[str, object]]
+) -> int:
     """Approx total input tokens for a chat completion request.
 
     Adds a small per-message overhead (4 tokens) consistent with OpenAI's

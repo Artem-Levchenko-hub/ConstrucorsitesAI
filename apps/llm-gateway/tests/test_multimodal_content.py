@@ -50,6 +50,23 @@ def test_token_counter_handles_list_content():
     assert toks > 0
 
 
+def test_token_counter_falls_back_when_tokenizer_asset_is_unavailable(monkeypatch):
+    calls = 0
+
+    def _offline(_name: str):
+        nonlocal calls
+        calls += 1
+        raise OSError("tokenizer CDN unavailable")
+
+    monkeypatch.setattr(token_counter, "_ENCODER", None)
+    monkeypatch.setattr(token_counter, "_ENCODER_UNAVAILABLE", False)
+    monkeypatch.setattr(token_counter.tiktoken, "get_encoding", _offline)
+
+    assert token_counter.count_text_tokens("claude-sonnet-4-6", "abcdefgh") == 2
+    assert token_counter.count_text_tokens("claude-sonnet-4-6", "abcdefgh") == 2
+    assert calls == 1
+
+
 def test_content_text_flattens_blocks():
     text = token_counter._content_text(
         [

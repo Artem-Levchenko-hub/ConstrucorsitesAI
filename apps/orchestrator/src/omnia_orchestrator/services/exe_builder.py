@@ -5,7 +5,10 @@ non-root (image USER builder), --rm, mem/cpu-capped, timed out. Harden to a stri
 two-phase (deps → no-net build) split in a follow-up if abuse appears.
 """
 from __future__ import annotations
-import base64, json, pathlib
+
+import base64
+import json
+import pathlib
 
 import docker.errors  # type: ignore[import-untyped]
 import requests.exceptions
@@ -30,8 +33,10 @@ def _run_container(workdir: pathlib.Path, *, egress: bool) -> int:
             network_disabled=not egress,
             mem_limit=MEM_LIMIT,
             nano_cpus=NANO_CPUS,
-            pids_limit=PIDS_LIMIT,       # cap forks — the build runs untrusted user code
-            cap_drop=["ALL"],            # no Linux capabilities; same bar as user dev-containers
+            # Cap forks — the build runs untrusted user code.
+            pids_limit=PIDS_LIMIT,
+            # No Linux capabilities; same bar as user dev-containers.
+            cap_drop=["ALL"],
             volumes={str(workdir): {"bind": "/work", "mode": "rw"}},
         )
     except docker.errors.ImageNotFound as exc:
@@ -58,8 +63,10 @@ def _run_container(workdir: pathlib.Path, *, egress: bool) -> int:
 
 
 def run_exe_build(req: BuildExeRequest, *, work_root: pathlib.Path) -> BuildExeResult:
-    src = work_root / "src"; out = work_root / "out"
-    src.mkdir(parents=True, exist_ok=True); out.mkdir(parents=True, exist_ok=True)
+    src = work_root / "src"
+    out = work_root / "out"
+    src.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     src_resolved = src.resolve()
     for path, content in req.files.items():
         f = src / path
@@ -75,16 +82,26 @@ def run_exe_build(req: BuildExeRequest, *, work_root: pathlib.Path) -> BuildExeR
             ) from exc
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content, encoding="utf-8")
-    (work_root / "build_spec.json").write_text(json.dumps({
-        "name": req.name, "requirements": req.requirements,
-        "pyinstaller_args": req.pyinstaller_args, "installer_nsi": req.installer_nsi,
-    }), encoding="utf-8")
+    (work_root / "build_spec.json").write_text(
+        json.dumps(
+            {
+                "name": req.name,
+                "requirements": req.requirements,
+                "pyinstaller_args": req.pyinstaller_args,
+                "installer_nsi": req.installer_nsi,
+            }
+        ),
+        encoding="utf-8",
+    )
     code = _run_container(work_root, egress=bool(req.requirements))
-    log = (out / "build.log").read_text(encoding="utf-8") if (out / "build.log").exists() else ""
-    setup = out / f"{req.name}-Setup.exe"; exe = out / f"{req.name}.exe"
+    log_path = out / "build.log"
+    log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    setup = out / f"{req.name}-Setup.exe"
+    exe = out / f"{req.name}.exe"
     ok = code == 0 and setup.exists()
     return BuildExeResult(
-        ok=ok, log=log,
+        ok=ok,
+        log=log,
         setup_b64=base64.b64encode(setup.read_bytes()).decode() if setup.exists() else None,
         exe_b64=base64.b64encode(exe.read_bytes()).decode() if exe.exists() else None,
     )

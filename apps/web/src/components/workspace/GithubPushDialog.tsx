@@ -60,6 +60,9 @@ export function GithubPushDialog({
   // успех предыдущего пуша.
   useEffect(() => {
     if (open) {
+      // Resetting a controlled dialog on its closed→open transition is an
+      // intentional synchronization with the parent-owned `open` state.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRepoName(projectSlug);
       setPrivate(true);
       setDescription("");
