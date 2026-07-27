@@ -51,19 +51,21 @@ _TRANSIENT = (
     httpx.RemoteProtocolError,
 )
 
-# Omnia model ID → the exact catalog id sent as the OpenAI `model` field. The slug
-# is forwarded verbatim, so it MUST match AITunnel's catalog (dots, not dashes:
-# `claude-opus-4.8`). Add a row here to expose another AITunnel-served chat model.
+# Omnia model ID → the exact catalog id sent as the OpenAI `model` field. The
+# production upstream is llmgw.ru, whose catalog requires a provider prefix.
+# Keep the Omnia-facing ID stable while forwarding the canonical upstream ID.
 _MODEL_SLUG: dict[str, str] = {
-    "claude-opus-4-8": "claude-opus-4.8",
+    "claude-opus-4-8": "anthropic/claude-opus-4.8",
+    "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
 }
 
-# Upstream response `model` values mapped back to the Omnia id. AITunnel answers
-# with the bare slug on the OpenAI surface and a vendor-prefixed one on the
-# native surface.
+# Upstream response `model` values mapped back to the Omnia id. Retain the bare
+# AITunnel spelling for compatibility with historical responses and cached data.
 _SLUG_TO_OMNIA: dict[str, str] = {
     "claude-opus-4.8": "claude-opus-4-8",
     "anthropic/claude-opus-4.8": "claude-opus-4-8",
+    "deepseek/deepseek-v4-pro": "deepseek-v4-pro",
+    "deepseek-v4-pro": "deepseek-v4-pro",
 }
 
 # Natively multimodal models — keep OpenAI image_url blocks instead of flattening

@@ -31,8 +31,8 @@ from omnia_api.services import agent_builder, orchestrator_client
 
 log = structlog.get_logger(__name__)
 
-# The chat model — one model for every role in this project (claude-opus-4-8).
-_HEAL_MODEL = "claude-opus-4-8"
+# Keep repair runs on the same coding model as the main agent.
+_HEAL_MODEL = "deepseek-v4-pro"
 _HEAL_MAX_STEPS = 24
 
 

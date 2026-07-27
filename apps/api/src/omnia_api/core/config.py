@@ -1233,65 +1233,37 @@ def generation_mode(
 # ──────────────────────────────────────────────────────────────────────────
 
 ROLE_MODEL_MAP: dict[str, str] = {
-    # Owner directive (2026-06-29): FULL SWITCH to Claude Opus 4.8 for EVERY LLM
-    # role — DeepSeek / Kimi / Gemini dropped entirely. ONE model now runs the
-    # whole orchestrator: classify → design (art_director + writer) → multipass →
-    # agent loop → edit → self-heal → meta-calls (discovery / result_type). Served
-    # by the vsegpt provider ("anthropic/claude-opus-4.8", same VSEGPT_API_KEY as
-    # the old workers) and already a `premium` tier model (full single-shot prompt,
-    # MODEL_TIER_MAP). Retune any single role at runtime via the ROLE_MODELS env
-    # (e.g. agent=deepseek-v4-pro) with no code change; FORCE_MODEL pins one model
-    # over the whole map.
-    #
-    # EXCEPTION — «кроме изображений» (owner): ONLY image GENERATION stays off Opus —
-    # Settings.image_gen_model (flux) + the gpt-image path are untouched (not part of
-    # this map). EVERYTHING else, including the screenshot/VISION judge, is Opus 4.8:
-    # Opus is natively multimodal and the vsegpt provider now forwards image_url blocks
-    # to it (`_is_vision` treats claude-opus-4-8 as multimodal), so the screenshot
-    # actually reaches the judge.
-    "classify":        "claude-opus-4-8",  # pick 1 of N presets
-    "director":        "claude-opus-4-8",  # catalog orchestrator — structure
-    "polish":          "claude-opus-4-8",  # writes the real PageIR content (RU copy)
-    # VISION judge (screenshots) — Opus 4.8 (multimodal); also the `see`-tool judge.
+    # Owner directive (2026-07-27): use DeepSeek V4 Pro through llmgw for site
+    # generation, coding, editing, planning and repair. Keep only screenshot audit
+    # on multimodal Opus because those requests contain image blocks.
+    "classify":        "deepseek-v4-pro",  # pick 1 of N presets
+    "director":        "deepseek-v4-pro",  # catalog orchestrator — structure
+    "polish":          "deepseek-v4-pro",  # writes the real PageIR content (RU copy)
+    # VISION judge (screenshots) stays on Opus 4.8.
     "audit":           "claude-opus-4-8",  # acceptance-gate screenshot judge
     "audit_retry":     "claude-opus-4-8",  # escalation re-roll judge
-    "skeleton":        "claude-opus-4-8",  # multipass fallback — structure
-    "content":         "claude-opus-4-8",  # multipass fallback — copy
-    "visual":          "claude-opus-4-8",  # multipass fallback — style tokens
-    "link_repair":     "claude-opus-4-8",  # rewrite dead hrefs
-    "image_prompt":    "claude-opus-4-8",  # writes TEXT prompt for image-gen (gen stays flux)
-    "single_shot":     "claude-opus-4-8",  # non-catalog freeform fallback path
-    # Art-Director -> Writer 2-pass: design-brain writes the brief, writer/developer
-    # writes the HTML. Both on Opus 4.8 now (was Kimi brief + DeepSeek writer).
-    "art_director":    "claude-opus-4-8",
-    "freeform_writer": "claude-opus-4-8",
-    "edit":            "claude-opus-4-8",  # targeted edit
-    "edit_escalation": "claude-opus-4-8",  # edit retry escalation (byte-exact SEARCH)
-    # Agentic builder loop (plan->act->observe->verify, strict <omnia:action>
-    # protocol, writes real code over many steps). Opus 4.8 follows the action
-    # protocol and reasons over real build/runtime errors. NOTE: vsegpt bills by
-    # characters and rate-limits ~1 req/sec, so a long Opus loop is heavier than
-    # the old DeepSeek base; accepted per the owner's full-switch directive,
-    # retunable via ROLE_MODELS.
-    "agent":           "claude-opus-4-8",
-    "agent_escalation":"claude-opus-4-8",  # one-shot escalation on a stuck loop
-    # Meta-calls (onboarding question planner / result-type classifier) — tiny
-    # structured JSON calls inside the POST /prompt budget. On Opus 4.8 now.
-    "discovery_plan":  "claude-opus-4-8",
-    "result_type":     "claude-opus-4-8",
-    # Build-plan author (2026-06-30 «эскиз перед стройкой») — one structured-JSON
-    # pass that emits the feature spec (screens/entities/capabilities) the agent
-    # builds against and the coverage gate verifies. Opus: it must reason about a
-    # product's real screens + endpoints, not just paraphrase. Retune via ROLE_MODELS.
-    "planner":         "claude-opus-4-8",
-    "exe_doctor":      "claude-opus-4-8",  # self-heal failed PyInstaller/NSIS builds
-    "app_doctor":      "claude-opus-4-8",  # app self-repair (verify->fix)
+    "skeleton":        "deepseek-v4-pro",  # multipass fallback — structure
+    "content":         "deepseek-v4-pro",  # multipass fallback — copy
+    "visual":          "deepseek-v4-pro",  # multipass fallback — style tokens
+    "link_repair":     "deepseek-v4-pro",  # rewrite dead hrefs
+    "image_prompt":    "deepseek-v4-pro",  # writes TEXT prompt for image-gen
+    "single_shot":     "deepseek-v4-pro",  # non-catalog freeform fallback path
+    "art_director":    "deepseek-v4-pro",
+    "freeform_writer": "deepseek-v4-pro",
+    "edit":            "deepseek-v4-pro",  # targeted edit
+    "edit_escalation": "deepseek-v4-pro",  # edit retry escalation
+    "agent":           "deepseek-v4-pro",
+    "agent_escalation":"deepseek-v4-pro",  # one-shot escalation on a stuck loop
+    "discovery_plan":  "deepseek-v4-pro",
+    "result_type":     "deepseek-v4-pro",
+    "planner":         "deepseek-v4-pro",
+    "exe_doctor":      "deepseek-v4-pro",  # self-heal failed executable builds
+    "app_doctor":      "deepseek-v4-pro",  # app self-repair (verify->fix)
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.
-# Owner 2026-06-29 full switch: the safe bottom is Opus 4.8 too (was deepseek-chat),
-# served by vsegpt ("anthropic/claude-opus-4.8").
-DEFAULT_ROLE_MODEL = "claude-opus-4-8"
+# DeepSeek V4 Pro is the 2026-07-27 default through llmgw.
+DEFAULT_ROLE_MODEL = "deepseek-v4-pro"
 
 # First-N free "wow-effect" generations per user before wallet billing starts.
 # Counter lives on User.free_generations_used; the gate is in routers/messages.py

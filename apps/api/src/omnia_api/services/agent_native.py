@@ -1,7 +1,7 @@
-"""Native Anthropic tool-use build loop — the Claude-Code-grade agent (DARK).
+"""Native tool-use build loop — the Claude-Code-grade agent (DARK).
 
 Supersedes the text-``<omnia:action>`` protocol (``agent_builder.run_agent_build``)
-with **native Anthropic tool-use**: ONE strong model (opus-4-8) drives the whole build
+with **native Anthropic-shaped tool-use**: ONE strong model drives the whole build
 end-to-end via real tool calls, with extended thinking PRESERVED across tool turns
 (thinking blocks are echoed back verbatim — Anthropic 400s otherwise, and stripping
 them is exactly what derailed the text loop). The only "gate" is FACT-based: the
@@ -31,10 +31,10 @@ from omnia_api.services.agent_builder import Action, AgentResult
 
 log = structlog.get_logger(__name__)
 
-_MODEL = "claude-opus-4-8"
-# AITunnel PRE-RESERVES the full max_tokens × output price on every call and 402s
+_MODEL = "deepseek-v4-pro"
+# The upstream can pre-reserve the full max_tokens × output price on every call and 402
 # if the key balance is below that reserve — so an over-large ceiling caps how many
-# calls fit the balance (32000 reserved ~₽173/call → a low balance 402s mid-build,
+# calls fit the balance (an oversized reserve can 402 mid-build,
 # which surfaced to the user as "соединение потеряно"). 20000 still leaves ~12000
 # tokens for tool args after the 8000 thinking budget — enough for a large file —
 # while cutting the reserve ~35%. Env override: NATIVE_MAX_TOKENS (future).

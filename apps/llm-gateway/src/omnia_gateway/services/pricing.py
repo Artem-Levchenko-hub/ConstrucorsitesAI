@@ -23,8 +23,9 @@ class ModelPrice:
 
 
 PRICE_TABLE: Mapping[str, ModelPrice] = {
-    # Opus 4.8 — the ONLY chat model (every role). This internal RUB table drives
-    # billing/markup math (aitunnel bills us in RUB upstream; we mark up here).
+    # Internal RUB prices drive wallet billing. llmgw bills upstream in RUB; the
+    # public Omnia price includes our operating margin.
+    "deepseek-v4-pro": ModelPrice(Decimal("0.13"), Decimal("0.27")),
     # Image generation (routers/images.py) and whisper
     # transcription (routers/audio.py) bill via their own paths, not this table.
     "claude-opus-4-8": ModelPrice(Decimal("1.50"), Decimal("7.50")),
@@ -83,6 +84,9 @@ class _ModelMeta:
 
 
 _MODEL_META: Mapping[str, _ModelMeta] = {
+    "deepseek-v4-pro": _ModelMeta(
+        "DeepSeek V4 Pro", "deepseek", 163_840, ("code", "quality")
+    ),
     "claude-opus-4-8": _ModelMeta("Claude Opus 4.8", "anthropic", 200_000, ("quality",)),
 }
 
