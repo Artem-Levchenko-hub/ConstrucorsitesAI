@@ -26,3 +26,9 @@ def test_worker_waits_for_api_health() -> None:
     source = _source()
     worker = source.split("\n  worker:", maxsplit=1)[1]
     assert "api:\n        condition: service_healthy" in worker
+
+
+def test_cost_abuse_guards_are_secure_by_default() -> None:
+    source = _source()
+    assert "PROMPT_IP_RATE_LIMIT: ${PROMPT_IP_RATE_LIMIT:-60/hour}" in source
+    assert "ALLOW_STUB_TOPUP: ${ALLOW_STUB_TOPUP:-false}" in source

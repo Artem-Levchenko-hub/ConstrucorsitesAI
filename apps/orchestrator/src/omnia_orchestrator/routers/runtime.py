@@ -33,6 +33,9 @@ from omnia_orchestrator.core.docker_client import (
 )
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
+from omnia_orchestrator.core.internal_auth import (
+    verify_internal_token as _verify_token,
+)
 from omnia_orchestrator.schemas.runtime import (
     CompileStatusResponse,
     DeployRequest,
@@ -101,16 +104,6 @@ def _safe_app_path(path: str) -> str:
             status_code=403,
         )
     return p
-
-
-def _verify_token(token: str | None) -> None:
-    expected = get_settings().internal_token.get_secret_value()
-    if not token or token != expected:
-        raise OrchestratorError(
-            code="unauthorized",
-            message="missing or invalid X-Internal-Token",
-            status_code=401,
-        )
 
 
 @router.post("/provision", response_model=ProvisionResponse)

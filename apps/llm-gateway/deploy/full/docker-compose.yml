@@ -197,6 +197,9 @@ services:
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       PEXELS_PROXY: ${PEXELS_PROXY:-}
       UNLIMITED_GENERATIONS: ${UNLIMITED_GENERATIONS:-false}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      PROMPT_RATE_LIMIT: ${PROMPT_RATE_LIMIT:-20/minute}
+      PROMPT_IP_RATE_LIMIT: ${PROMPT_IP_RATE_LIMIT:-60/hour}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       JWT_COOKIE_SECURE: "true"
       LLM_GATEWAY_URL: http://gateway:8001
@@ -313,9 +316,9 @@ services:
       # create/live-delivery/no-leak, feed red verdicts back so the agent self-heals.
       USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-false}
       # Wallet self-top-up stub (POST /api/wallet/topup credits own wallet, no pay).
-      # Code default is CLOSED (secure); prod keeps closed-beta free credits with
-      # -true here and flips OFF via ALLOW_STUB_TOPUP=false in .env once YooKassa lands.
-      ALLOW_STUB_TOPUP: ${ALLOW_STUB_TOPUP:-true}
+      # CLOSED by default on every public deployment. Enable only in an isolated,
+      # access-controlled test environment.
+      ALLOW_STUB_TOPUP: ${ALLOW_STUB_TOPUP:-false}
       # Deploy-attestation gate (Step 3). Advisory-logs the build's verdict at deploy;
       # flip to true to REFUSE an unproven deploy (watch "[DEPLOY-GATE] proven=" first).
       DEPLOY_ATTESTATION_BLOCKING: ${DEPLOY_ATTESTATION_BLOCKING:-false}

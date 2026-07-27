@@ -4,16 +4,18 @@ version = "0.1.0"
 description = "Omnia LLM Gateway — OpenAI-compatible proxy to Anthropic / OpenAI / YandexGPT / OpenRouter"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115",
+    "fastapi>=0.136,<0.137",
     "uvicorn[standard]>=0.32",
-    "litellm>=1.52",
+    # 1.84.x contains the security fix without the native Rust build
+    # introduced by newer LiteLLM releases.
+    "litellm>=1.84,<1.85",
     "httpx>=0.27",
     "redis>=5.2",
     "asyncpg>=0.30",
     "tiktoken>=0.8",
     "sse-starlette>=2.1",
     "pydantic>=2.9",
-    "pydantic-settings>=2.6",
+    "pydantic-settings>=2.14.2,<3",
     "structlog>=24.4",
     "python-dotenv>=1.0",
 ]

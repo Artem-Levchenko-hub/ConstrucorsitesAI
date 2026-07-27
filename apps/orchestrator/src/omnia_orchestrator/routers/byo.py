@@ -15,24 +15,16 @@ from fastapi import APIRouter, Header
 from pydantic import BaseModel
 
 from omnia_orchestrator.core import ssh
-from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import container_status
 from omnia_orchestrator.core.errors import OrchestratorError
+from omnia_orchestrator.core.internal_auth import (
+    verify_internal_token as _verify_token,
+)
 from omnia_orchestrator.services import nginx_writer
 
 log = structlog.get_logger("omnia_orchestrator.byo")
 
 router = APIRouter(prefix="/internal", tags=["byo"])
-
-
-def _verify_token(token: str | None) -> None:
-    expected = get_settings().internal_token.get_secret_value()
-    if not token or token != expected:
-        raise OrchestratorError(
-            code="unauthorized",
-            message="missing or invalid X-Internal-Token",
-            status_code=401,
-        )
 
 
 class VerifyTargetRequest(BaseModel):

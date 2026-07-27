@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     # box. Tunable without a code change; set rate_limit_enabled=false to disable.
     rate_limit_enabled: bool = Field(default=True)
     prompt_rate_limit: str = Field(default="20/minute")
+    # Independent IP-wide ceiling. It cannot be bypassed by registering another
+    # account or minting a fresh anonymous session.
+    prompt_ip_rate_limit: str = Field(default="60/hour")
 
     # Phase B — multipass design generation for budget models.
     # Env override for the multipass router. By DEFAULT (empty value) every

@@ -3,7 +3,8 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from uuid import UUID
 
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError
 from passlib.context import CryptContext
 
 from omnia_api.core.config import get_settings
@@ -53,7 +54,7 @@ def decode_access_token(token: str) -> UUID | None:
             settings.jwt_secret.get_secret_value(),
             algorithms=[settings.jwt_algorithm],
         )
-    except JWTError:
+    except InvalidTokenError:
         return None
     sub = payload.get("sub")
     if not isinstance(sub, str):

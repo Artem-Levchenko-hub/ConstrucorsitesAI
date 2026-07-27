@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 import pathlib
 import shutil
 import tempfile
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 
+from ..core.internal_auth import verify_internal_token
 from ..schemas.build_exe import BuildExeRequest, BuildExeResult
 from ..services.exe_builder import run_exe_build
 
@@ -19,7 +22,11 @@ _WORK_BASE = pathlib.Path("/opt/omnia-runtime/exe-builds")
 
 
 @router.post("/build-exe", response_model=BuildExeResult)
-def build_exe(req: BuildExeRequest) -> BuildExeResult:
+def build_exe(
+    req: BuildExeRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> BuildExeResult:
+    verify_internal_token(x_internal_token)
     _WORK_BASE.mkdir(parents=True, exist_ok=True)
     workdir = pathlib.Path(tempfile.mkdtemp(prefix="b-", dir=str(_WORK_BASE)))
     try:

@@ -17,7 +17,11 @@ from omnia_api.core.errors import ApiError
 
 
 def _request(ip: str, *, xff: bool = True) -> Request:
-    headers = [(b"x-forwarded-for", ip.encode())] if xff else []
+    headers = (
+        [(b"x-real-ip", ip.encode()), (b"x-forwarded-for", ip.encode())]
+        if xff
+        else []
+    )
     return Request(
         {"type": "http", "headers": headers, "client": (ip, 5000), "scheme": "http"}
     )
@@ -27,6 +31,7 @@ def _settings(limit: str = "2/minute", enabled: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
         rate_limit_enabled=enabled,
         prompt_rate_limit=limit,
+        prompt_ip_rate_limit="1000/minute",
         jwt_cookie_name="omnia_session",
     )
 
@@ -49,10 +54,22 @@ async def test_rate_limit_disabled_is_noop(monkeypatch) -> None:
         await ratelimit.rate_limit_prompt(req)  # never raises while disabled
 
 
-def test_client_ip_prefers_first_forwarded_hop() -> None:
+def test_client_ip_prefers_nginx_overwritten_real_ip() -> None:
     scope = {
         "type": "http",
-        "headers": [(b"x-forwarded-for", b"203.0.113.7, 10.0.0.1")],
+        "headers": [
+            (b"x-real-ip", b"203.0.113.7"),
+            (b"x-forwarded-for", b"198.51.100.99, 203.0.113.7"),
+        ],
+        "client": ("127.0.0.1", 12345),
+    }
+    assert ratelimit._client_ip(Request(scope)) == "203.0.113.7"
+
+
+def test_client_ip_uses_last_forwarded_hop_without_real_ip() -> None:
+    scope = {
+        "type": "http",
+        "headers": [(b"x-forwarded-for", b"198.51.100.99, 203.0.113.7")],
         "client": ("127.0.0.1", 12345),
     }
     assert ratelimit._client_ip(Request(scope)) == "203.0.113.7"
@@ -61,3 +78,19 @@ def test_client_ip_prefers_first_forwarded_hop() -> None:
 def test_client_ip_falls_back_to_socket_peer() -> None:
     scope = {"type": "http", "headers": [], "client": ("198.51.100.4", 5000)}
     assert ratelimit._client_ip(Request(scope)) == "198.51.100.4"
+
+
+async def test_ip_ceiling_survives_actor_bucket_changes(monkeypatch) -> None:
+    settings = _settings("1000/minute")
+    settings.prompt_ip_rate_limit = "2/minute"
+    monkeypatch.setattr(ratelimit, "get_settings", lambda: settings)
+    req = _request("203.0.113.88")
+
+    monkeypatch.setattr(ratelimit, "_rate_key", lambda _request: "user:first")
+    await ratelimit.rate_limit_prompt(req)
+    monkeypatch.setattr(ratelimit, "_rate_key", lambda _request: "user:second")
+    await ratelimit.rate_limit_prompt(req)
+
+    with pytest.raises(ApiError) as exc_info:
+        await ratelimit.rate_limit_prompt(req)
+    assert exc_info.value.status_code == 429

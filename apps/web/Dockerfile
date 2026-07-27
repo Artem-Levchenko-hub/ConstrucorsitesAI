@@ -14,7 +14,7 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # Install on the HOST network (--network=host, needs the syntax:1.6 header above).
 # The prod VPS's docker bridge drops large npm tarball fetches (ETIMEDOUT on
 # @radix-ui/* .tgz) while the host reaches registry.npmjs.org fine — a bridge

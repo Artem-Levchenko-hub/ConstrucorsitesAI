@@ -32,11 +32,20 @@ _limiter = MovingWindowRateLimiter(_storage)
 
 
 def _client_ip(request: Request) -> str:
-    """Real client IP. Behind nginx the socket peer is the proxy, so prefer the
-    first hop in ``X-Forwarded-For`` and fall back to the socket address."""
+    """Return the client IP supplied by the trusted same-host reverse proxy.
+
+    Production nginx overwrites ``X-Real-IP`` with ``$remote_addr``.  A client
+    may prepend arbitrary values to ``X-Forwarded-For``, so trusting its first
+    entry would let an attacker choose a fresh rate-limit bucket per request.
+    Direct host ports are loopback-only; the last forwarded hop is therefore a
+    safe compatibility fallback when ``X-Real-IP`` is unavailable.
+    """
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     client = request.client
     return client.host if client else "unknown"
 
@@ -68,8 +77,15 @@ async def rate_limit_prompt(request: Request) -> None:
     settings = get_settings()
     if not settings.rate_limit_enabled:
         return
-    item = parse(settings.prompt_rate_limit)
-    if not _limiter.hit(item, _rate_key(request)):
+    ip_item = parse(settings.prompt_ip_rate_limit)
+    if not _limiter.hit(ip_item, f"prompt-ip:{_client_ip(request)}"):
+        raise ApiError(
+            "rate_limited",
+            "слишком часто — подождите немного",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    actor_item = parse(settings.prompt_rate_limit)
+    if not _limiter.hit(actor_item, f"prompt-actor:{_rate_key(request)}"):
         raise ApiError(
             "rate_limited",
             "слишком часто — подождите немного",
