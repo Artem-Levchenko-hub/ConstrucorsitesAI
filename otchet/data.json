@@ -4,7 +4,7 @@
   "version": 3,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
- "latest": "LLM-генератор переводится с AITunnel на llmgw и DeepSeek V4 Pro. Ключ, обычный chat и нативный tool-use проверены живыми запросами; идёт production smoke после деплоя.",
+ "latest": "LLM-генератор переведён с AITunnel на llmgw и DeepSeek V4 Pro. Production-контейнеры здоровы; обычный chat и нативный tool-use проверены живыми запросами через внутренний gateway.",
  "owner_actions": [
   {
    "date": "18.07",
@@ -1369,12 +1369,12 @@
   {
    "id": "H75",
    "title": "Переход генератора на llmgw + DeepSeek V4 Pro",
-   "status": "testing",
-   "score": null,
+   "status": "worked",
+   "score": 8,
    "category": "LLM-провайдеры",
    "period": "27.07",
    "description": "Заменить AITunnel-ключ на ключ llmgw и временно перевести генерацию сайтов, агентный кодинг, правки и авто-починку на DeepSeek V4 Pro без потери нативных tool-вызовов.",
-   "evidence": "Живые проверки 27.07: ключ принят https://api.llmgw.ru/v1 и вернул каталог из 313 моделей; deepseek/deepseek-v4-pro дал HTTP 200 на /v1/chat/completions; Anthropic-совместимый /v1/messages вернул блоки thinking + tool_use и stop_reason=tool_use. Локально llm-gateway: 46 тестов зелёные, ruff зелёный; API role-map: 7 тестов зелёные. Остался production smoke через внутренний gateway после сборки контейнеров.",
+   "evidence": "Живые проверки 27.07: ключ принят https://api.llmgw.ru/v1 и вернул каталог из 313 моделей; deepseek/deepseek-v4-pro дал HTTP 200 на /v1/chat/completions; Anthropic-совместимый /v1/messages вернул блоки thinking + tool_use и stop_reason=tool_use. Локально llm-gateway: 46 тестов зелёные, ruff зелёный; API role-map: 7 тестов зелёные. Production: коммит 331eaaa развёрнут на VPS; gateway, API и worker подняты, health gateway/API — HTTP 200; обычная генерация через внутренний gateway — HTTP 200 и READY; нативный tool-use — HTTP 200, thinking + tool_use, stop_reason=tool_use; runtime role-map: default/agent=deepseek-v4-pro, audit=claude-opus-4-8; публичный сайт — HTTP 200.",
    "impact": "Основной генератор получает рабочий российский LLM-шлюз и сильную кодовую модель. Визуальные audit-роли пока остаются на Claude, чтобы не потерять анализ скриншотов.",
    "next_vector": "V4"
   }
