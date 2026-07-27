@@ -1,7 +1,8 @@
-from omnia_api.models.base import Base
 from omnia_api.models.attestation import Attestation
+from omnia_api.models.base import Base
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.lead import Lead
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
@@ -16,6 +17,7 @@ __all__ = [
     "Base",
     "CustomDomain",
     "DeployTarget",
+    "GenerationRun",
     "Lead",
     "Message",
     "Project",

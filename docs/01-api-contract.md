@@ -39,11 +39,23 @@
 
 | Метод | Path | Тело | Ответ |
 |---|---|---|---|
-| `POST` | `/api/projects/:id/prompt` | `{prompt: string, model_id: string, selected_elements?: SelectedElement[]}` | `{message_id, snapshot_id?}` (snapshot_id появится позже через WS) |
+| `POST` | `/api/projects/:id/prompt` | `{prompt: string, idempotency_key?: string, model_id?: string, selected_elements?: SelectedElement[]}` | `{run_id, message_id, snapshot_id?, mode, ...}` (snapshot_id появится позже через WS) |
+| `POST` | `/api/projects/:id/generation/cancel` | — | `GenerationRun` со статусом `cancel_requested` (202) |
 | `GET` | `/api/projects/:id/snapshots` | — | `Snapshot[]` (DESC по `created_at`) |
 | `GET` | `/api/projects/:id/snapshots/:sid` | — | `Snapshot & { files: { [path]: string } }` |
 | `POST` | `/api/projects/:id/rollback` | `{snapshot_id}` | `Snapshot` (новый — результат отката) |
 | `GET` | `/api/projects/:id/messages` | `?limit=50&before=<msg_id>` | `Message[]` |
+
+`idempotency_key` — стабильный UUID одного пользовательского submit. Повтор
+`POST /prompt` с тем же ключом и тем же текстом возвращает исходный ответ и не
+создаёт вторую пару сообщений/генерацию. Переиспользование ключа с другим текстом
+даёт `409 conflict`. На проект допускается ровно один активный `GenerationRun`;
+параллельный запрос с другим ключом также получает `409 conflict`.
+
+Stop — серверная операция: `/generation/cancel` записывает durable-статус,
+передаёт сигнал через Redis и отменяет реальную coroutine генерации, а не только
+закрывает WebSocket в браузере. После рестарта API незавершённые process-local
+запуски переводятся в `failed`, чтобы проект не оставался навечно заблокирован.
 
 ### Wallet (MVP — без реальной оплаты)
 
@@ -186,6 +198,8 @@ apps/api тут — тонкий прокси на orchestrator. Слой авт
 { "type": "llm.chunk",       "data": { "message_id": "uuid", "delta": "...текст" } }
 { "type": "llm.done",        "data": { "message_id": "uuid", "tokens_in": 1200, "tokens_out": 4500, "cost_rub": 3.75 } }
 { "type": "llm.error",       "data": { "message_id": "uuid", "error": "string" } }
+{ "type": "generation.cancel_requested", "data": { "run_id": "uuid", "message_id": "uuid" } }
+{ "type": "generation.cancelled", "data": { "run_id": "uuid", "message_id": "uuid" } }
 { "type": "wallet.updated",  "data": { "balance_rub": 1234.56 } }
 ```
 

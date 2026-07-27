@@ -30,9 +30,7 @@ def project_channel(project_id: UUID | str) -> str:
     return f"omnia:project:{project_id}"
 
 
-async def publish_event(
-    project_id: UUID | str, event_type: str, data: dict[str, Any]
-) -> None:
+async def publish_event(project_id: UUID | str, event_type: str, data: dict[str, Any]) -> None:
     payload = json.dumps({"type": event_type, "data": data}, default=str)
     await get_redis().publish(project_channel(project_id), payload)
 
@@ -46,6 +44,7 @@ async def publish_event(
 # не долговечные данные.
 
 _STREAM_TTL_S = 600
+_GENERATION_CANCEL_TTL_S = 3600
 
 
 def _stream_buffer_key(message_id: UUID | str) -> str:
@@ -54,6 +53,10 @@ def _stream_buffer_key(message_id: UUID | str) -> str:
 
 def _active_stream_key(project_id: UUID | str) -> str:
     return f"omnia:active:{project_id}"
+
+
+def _generation_cancel_key(run_id: UUID | str) -> str:
+    return f"omnia:generation:cancel:{run_id}"
 
 
 async def set_stream_state(
@@ -65,13 +68,9 @@ async def set_stream_state(
     reconnect — клиент не получит дыру в HTML. Обе записи под общим TTL.
     """
     client = get_redis()
-    payload = json.dumps(
-        {"message_id": str(message_id), "content": content, "seq": seq}
-    )
+    payload = json.dumps({"message_id": str(message_id), "content": content, "seq": seq})
     await client.set(_stream_buffer_key(message_id), payload, ex=_STREAM_TTL_S)
-    await client.set(
-        _active_stream_key(project_id), str(message_id), ex=_STREAM_TTL_S
-    )
+    await client.set(_active_stream_key(project_id), str(message_id), ex=_STREAM_TTL_S)
 
 
 async def get_active_stream(project_id: UUID | str) -> str | None:
@@ -90,9 +89,7 @@ async def get_stream_state(message_id: UUID | str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-async def clear_stream_state(
-    project_id: UUID | str, message_id: UUID | str
-) -> None:
+async def clear_stream_state(project_id: UUID | str, message_id: UUID | str) -> None:
     """Снять состояние стрима по завершении (done/error/cancel/crash).
 
     Активный указатель проекта чистим ТОЛЬКО если он всё ещё наш — новый
@@ -103,3 +100,15 @@ async def clear_stream_state(
     current = await client.get(_active_stream_key(project_id))
     if current == str(message_id):
         await client.delete(_active_stream_key(project_id))
+
+
+async def request_generation_cancel(run_id: UUID | str) -> None:
+    await get_redis().set(_generation_cancel_key(run_id), "1", ex=_GENERATION_CANCEL_TTL_S)
+
+
+async def generation_cancel_requested(run_id: UUID | str) -> bool:
+    return bool(await get_redis().exists(_generation_cancel_key(run_id)))
+
+
+async def clear_generation_cancel(run_id: UUID | str) -> None:
+    await get_redis().delete(_generation_cancel_key(run_id))

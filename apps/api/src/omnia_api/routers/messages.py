@@ -3,15 +3,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.core.config import (
@@ -26,11 +27,15 @@ from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
 from omnia_api.core.ratelimit import rate_limit_prompt
 from omnia_api.core.redis import (
+    clear_generation_cancel,
     clear_stream_state,
+    generation_cancel_requested,
     get_redis,
     publish_event,
+    request_generation_cancel,
     set_stream_state,
 )
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
@@ -38,6 +43,7 @@ from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.message import (
     ClientErrorReport,
+    GenerationRunPublic,
     MessagePublic,
     PromptRequest,
     PromptResponse,
@@ -100,6 +106,11 @@ from omnia_api.services.file_extractor import (
     extract_edits,
     extract_files,
 )
+from omnia_api.services.generation_runs import (
+    ACTIVE_GENERATION_STATUSES,
+    reserve_generation_run,
+    set_generation_run_status,
+)
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.intent_triage import ORCHESTRATE, decide_intent
 from omnia_api.services.link_validator import (
@@ -142,6 +153,144 @@ router = APIRouter(prefix="/api/projects", tags=["messages"])
 # the prompt-processing coroutine and leaving the assistant message empty
 # in the DB. https://docs.python.org/3/library/asyncio-task.html#creating-tasks
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+# Addressable prompt tasks. The durable source of truth is generation_runs;
+# this map only gives the local process a strong reference. Cancellation travels
+# through Redis, so it still reaches a task started by another API process.
+_PROMPT_TASKS: dict[UUID, asyncio.Task[None]] = {}
+
+
+async def _wait_for_generation_cancel(run_id: UUID) -> None:
+    while True:
+        try:
+            if await generation_cancel_requested(run_id):
+                return
+        except Exception:
+            # Redis cancellation is best-effort per poll; a transient miss must
+            # not abort an otherwise healthy generation.
+            pass
+        await asyncio.sleep(0.25)
+
+
+async def _finalize_cancelled_generation(
+    project_id: UUID,
+    assistant_message_id: UUID,
+    run_id: UUID,
+) -> None:
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        msg = await session.get(Message, assistant_message_id)
+        if msg is not None and msg.tokens_out is None:
+            marker = "[Отменено пользователем]"
+            if marker not in (msg.content or ""):
+                msg.content = f"{msg.content.rstrip()}\n\n{marker}".strip()
+            msg.tokens_in = msg.tokens_in or 0
+            msg.tokens_out = 0
+        run = await session.get(GenerationRun, run_id)
+        if run is not None:
+            run.status = "cancelled"
+            run.finished_at = datetime.now(UTC)
+        await session.commit()
+    await publish_event(
+        project_id,
+        "generation.cancelled",
+        {
+            "run_id": str(run_id),
+            "message_id": str(assistant_message_id),
+        },
+    )
+
+
+async def _run_tracked_prompt(
+    work: Coroutine[Any, Any, None],
+    *,
+    run_id: UUID,
+    project_id: UUID,
+    assistant_message_id: UUID,
+    label: str,
+) -> None:
+    """Run one prompt task while a Redis watcher makes Stop process-safe."""
+
+    await set_generation_run_status(run_id, "running")
+    work_task = asyncio.create_task(work)
+    cancel_task = asyncio.create_task(_wait_for_generation_cancel(run_id))
+    try:
+        done, _ = await asyncio.wait(
+            {work_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if cancel_task in done:
+            work_task.cancel()
+            try:
+                await work_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "%s cleanup failed during cancellation",
+                    label,
+                    exc_info=exc,
+                )
+            await _finalize_cancelled_generation(
+                project_id, assistant_message_id, run_id
+            )
+            return
+
+        cancel_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cancel_task
+        await work_task
+        await set_generation_run_status(run_id, "completed")
+    except asyncio.CancelledError:
+        work_task.cancel()
+        cancel_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await work_task
+        await _finalize_cancelled_generation(
+            project_id, assistant_message_id, run_id
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).error("%s failed", label, exc_info=exc)
+        await set_generation_run_status(
+            run_id,
+            "failed",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        await _emergency_error(
+            project_id,
+            assistant_message_id,
+            f"{type(exc).__name__}: {exc}",
+        )
+    finally:
+        cancel_task.cancel()
+        with suppress(Exception):
+            await clear_generation_cancel(run_id)
+
+
+def _spawn_tracked_prompt(
+    work: Coroutine[Any, Any, None],
+    *,
+    run_id: UUID,
+    project_id: UUID,
+    assistant_message_id: UUID,
+    label: str,
+) -> None:
+    task = asyncio.create_task(
+        _run_tracked_prompt(
+            work,
+            run_id=run_id,
+            project_id=project_id,
+            assistant_message_id=assistant_message_id,
+            label=label,
+        )
+    )
+    _BACKGROUND_TASKS.add(task)
+    _PROMPT_TASKS[run_id] = task
+
+    def _cleanup(done: asyncio.Task[None]) -> None:
+        _BACKGROUND_TASKS.discard(done)
+        if _PROMPT_TASKS.get(run_id) is done:
+            _PROMPT_TASKS.pop(run_id, None)
+
+    task.add_done_callback(_cleanup)
 
 
 async def _emergency_error(
@@ -515,7 +664,7 @@ def _is_continue_request(prompt: str) -> bool:
     return any(k in t for k in _CONTINUE_KEYWORDS)
 
 
-def _spawn_process_prompt(**kwargs: object) -> None:
+def _spawn_process_prompt(*, run_id: UUID, **kwargs: object) -> None:
     """Fire-and-forget _process_prompt with a guaranteed strong reference.
 
     Any exception that escapes the coroutine is BOTH logged via structlog
@@ -523,38 +672,15 @@ def _spawn_process_prompt(**kwargs: object) -> None:
     so the user never sees a stuck "AI читает контекст" spinner — the
     chat row gets an explicit error body and ``streamingRef`` unlocks.
     """
-    import logging
-
-    log = logging.getLogger(__name__)
     project_id: UUID = kwargs["project_id"]  # type: ignore[assignment]
     assistant_message_id: UUID = kwargs["assistant_message_id"]  # type: ignore[assignment]
-    task = asyncio.create_task(_process_prompt(**kwargs))  # type: ignore[arg-type]
-    _BACKGROUND_TASKS.add(task)
-
-    def _on_done(t: asyncio.Task[None]) -> None:
-        _BACKGROUND_TASKS.discard(t)
-        if t.cancelled():
-            log.warning("_process_prompt task cancelled")
-            # Cancellation = caller no longer cares; still tell the UI
-            # so the spinner clears instead of hanging.
-            _emerg = asyncio.create_task(_emergency_error(
-                project_id, assistant_message_id, "task cancelled",
-            ))
-            _BACKGROUND_TASKS.add(_emerg)
-            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
-            return
-        exc = t.exception()
-        if exc is not None:
-            log.error("_process_prompt failed", exc_info=exc)
-            _emerg = asyncio.create_task(_emergency_error(
-                project_id,
-                assistant_message_id,
-                f"{type(exc).__name__}: {exc}",
-            ))
-            _BACKGROUND_TASKS.add(_emerg)
-            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
-
-    task.add_done_callback(_on_done)
+    _spawn_tracked_prompt(
+        _process_prompt(**kwargs),  # type: ignore[arg-type]
+        run_id=run_id,
+        project_id=project_id,
+        assistant_message_id=assistant_message_id,
+        label="_process_prompt",
+    )
 
 
 async def _run_clarify(
@@ -585,34 +711,22 @@ async def _run_clarify(
 
 
 def _spawn_clarify(
-    project_id: UUID, assistant_message_id: UUID, prompt: str, language: str = "ru"
+    project_id: UUID,
+    assistant_message_id: UUID,
+    prompt: str,
+    *,
+    run_id: UUID,
+    language: str = "ru",
 ) -> None:
     """Fire-and-forget _run_clarify with a strong ref + error finalize (mirrors
     _spawn_process_prompt, so a clarify failure never hangs the UI spinner)."""
-    import logging
-
-    log = logging.getLogger(__name__)
-    task = asyncio.create_task(
-        _run_clarify(project_id, assistant_message_id, prompt, language=language)
+    _spawn_tracked_prompt(
+        _run_clarify(project_id, assistant_message_id, prompt, language=language),
+        run_id=run_id,
+        project_id=project_id,
+        assistant_message_id=assistant_message_id,
+        label="_run_clarify",
     )
-    _BACKGROUND_TASKS.add(task)
-
-    def _on_done(t: asyncio.Task[None]) -> None:
-        _BACKGROUND_TASKS.discard(t)
-        exc = None if t.cancelled() else t.exception()
-        if exc is not None:
-            log.error("_run_clarify failed", exc_info=exc)
-            _emerg = asyncio.create_task(
-                _emergency_error(
-                    project_id,
-                    assistant_message_id,
-                    f"{type(exc).__name__}: {exc}",
-                )
-            )
-            _BACKGROUND_TASKS.add(_emerg)
-            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
-
-    task.add_done_callback(_on_done)
 
 
 async def _run_text_turn(
@@ -668,34 +782,21 @@ _RUN_DECLINE_REPLY = (
 
 
 def _spawn_text_turn(
-    project_id: UUID, assistant_message_id: UUID, text: str
+    project_id: UUID,
+    assistant_message_id: UUID,
+    text: str,
+    *,
+    run_id: UUID,
 ) -> None:
     """Fire-and-forget _run_text_turn with a strong ref + error finalize (so a
     publish hiccup never hangs the UI spinner; mirrors _spawn_clarify)."""
-    import logging
-
-    log = logging.getLogger(__name__)
-    task = asyncio.create_task(
-        _run_text_turn(project_id, assistant_message_id, text)
+    _spawn_tracked_prompt(
+        _run_text_turn(project_id, assistant_message_id, text),
+        run_id=run_id,
+        project_id=project_id,
+        assistant_message_id=assistant_message_id,
+        label="_run_text_turn",
     )
-    _BACKGROUND_TASKS.add(task)
-
-    def _on_done(t: asyncio.Task[None]) -> None:
-        _BACKGROUND_TASKS.discard(t)
-        exc = None if t.cancelled() else t.exception()
-        if exc is not None:
-            log.error("_run_text_turn failed", exc_info=exc)
-            _emerg = asyncio.create_task(
-                _emergency_error(
-                    project_id,
-                    assistant_message_id,
-                    f"{type(exc).__name__}: {exc}",
-                )
-            )
-            _BACKGROUND_TASKS.add(_emerg)
-            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
-
-    task.add_done_callback(_on_done)
 
 
 # Async onboarding (2026-07-01, owner). Opus via oneprovider answers a plan call
@@ -795,34 +896,22 @@ async def _run_async_onboarding(
 
 
 def _spawn_async_onboarding(
-    project_id: UUID, assistant_message_id: UUID, prompt: str, language: str
+    project_id: UUID,
+    assistant_message_id: UUID,
+    prompt: str,
+    language: str,
+    *,
+    run_id: UUID,
 ) -> None:
     """Fire-and-forget _run_async_onboarding with a strong ref + error finalize (so
     a plan/publish hiccup never hangs the UI spinner; mirrors _spawn_text_turn)."""
-    import logging
-
-    log = logging.getLogger(__name__)
-    task = asyncio.create_task(
-        _run_async_onboarding(project_id, assistant_message_id, prompt, language)
+    _spawn_tracked_prompt(
+        _run_async_onboarding(project_id, assistant_message_id, prompt, language),
+        run_id=run_id,
+        project_id=project_id,
+        assistant_message_id=assistant_message_id,
+        label="_run_async_onboarding",
     )
-    _BACKGROUND_TASKS.add(task)
-
-    def _on_done(t: asyncio.Task[None]) -> None:
-        _BACKGROUND_TASKS.discard(t)
-        exc = None if t.cancelled() else t.exception()
-        if exc is not None:
-            log.error("_run_async_onboarding failed", exc_info=exc)
-            _emerg = asyncio.create_task(
-                _emergency_error(
-                    project_id,
-                    assistant_message_id,
-                    f"{type(exc).__name__}: {exc}",
-                )
-            )
-            _BACKGROUND_TASKS.add(_emerg)
-            _emerg.add_done_callback(_BACKGROUND_TASKS.discard)
-
-    task.add_done_callback(_on_done)
 
 
 def _snapshot_payload(s: Snapshot) -> dict[str, object]:
@@ -1118,6 +1207,32 @@ async def post_prompt(
     current_user: CurrentUserDep,
 ) -> PromptResponse:
     project = await _ensure_owner(session, project_id, current_user.id)
+    idempotency_key = payload.idempotency_key or str(uuid4())
+    generation_run, replayed = await reserve_generation_run(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+        idempotency_key=idempotency_key,
+        prompt=payload.prompt,
+    )
+    if replayed:
+        if generation_run.response_payload is not None:
+            return PromptResponse.model_validate(generation_run.response_payload)
+        if generation_run.assistant_message_id is not None:
+            return PromptResponse(
+                run_id=generation_run.id,
+                message_id=generation_run.assistant_message_id,
+                snapshot_id=None,
+                mode=generation_run.response_mode or "build",
+            )
+        # The per-project advisory lock means a replay cannot observe the run
+        # before its first transaction commits the assistant id and response.
+        raise ApiError(
+            "conflict",
+            "generation request is still being accepted",
+            status.HTTP_409_CONFLICT,
+            details={"active_run_id": str(generation_run.id)},
+        )
 
     # Free-tier gate: the first FREE_GENERATION_LIMIT generations per user are
     # free (wow-effect onboarding) and skip the wallet floor check; the gateway
@@ -1599,6 +1714,24 @@ async def post_prompt(
                 "language detection failed (keeping default): %r", _ld_exc
             )
 
+    # Persist the durable run identity in the same transaction as the two chat
+    # rows. A retry can now replay this exact assistant id, while a different
+    # request sees the active-run guard and cannot start in parallel.
+    turn_mode = (
+        "clarify"
+        if (
+            discovery_ask
+            or async_onboarding
+            or do_clarify
+            or run_intent
+            or run_ask
+            or run_decline
+        )
+        else ("build" if orchestrate else "edit")
+    )
+    await session.flush()
+    generation_run.assistant_message_id = assistant_msg.id
+    generation_run.response_mode = turn_mode
     await session.commit()
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
@@ -1608,33 +1741,64 @@ async def post_prompt(
         # question batch out of band (Opus ~60-70s) and deliver the survey over WS
         # so POST already returned inside the client's 30s budget.
         _spawn_async_onboarding(
-            project_id, assistant_msg.id, payload.prompt, project.language
+            project_id,
+            assistant_msg.id,
+            payload.prompt,
+            project.language,
+            run_id=generation_run.id,
         )
     elif discovery_ask:
         # Progressive discovery: stream the next short question, no build this
         # turn. The user's reply (next message) continues the discovery; the
         # generator only runs once discovery decides it has enough.
         assert discovery_result is not None  # discovery_ask ⇒ result exists
-        _spawn_text_turn(project_id, assistant_msg.id, discovery_result.message)
+        _spawn_text_turn(
+            project_id,
+            assistant_msg.id,
+            discovery_result.message,
+            run_id=generation_run.id,
+        )
     elif do_clarify:
         # Ask first — no generation this turn. The user's answers (next message)
         # flow into the real build via chat history.
-        _spawn_clarify(project_id, assistant_msg.id, payload.prompt, language=project.language)
+        _spawn_clarify(
+            project_id,
+            assistant_msg.id,
+            payload.prompt,
+            run_id=generation_run.id,
+            language=project.language,
+        )
     elif run_intent:
         # Run/install intent (owner 2026-06-19): no build — stream a one-click
         # installer-download card. The user clicks «Скачать установщик», gets the
         # .zip (with run.bat), double-clicks → installed + running.
-        _spawn_text_turn(project_id, assistant_msg.id, _INSTALL_CARD_TEXT)
+        _spawn_text_turn(
+            project_id,
+            assistant_msg.id,
+            _INSTALL_CARD_TEXT,
+            run_id=generation_run.id,
+        )
     elif run_decline:
         # Declined the installer offer → don't build from a bare "нет"; ask what
         # to change so the next turn is a real edit.
-        _spawn_text_turn(project_id, assistant_msg.id, _RUN_DECLINE_REPLY)
+        _spawn_text_turn(
+            project_id,
+            assistant_msg.id,
+            _RUN_DECLINE_REPLY,
+            run_id=generation_run.id,
+        )
     elif run_ask:
         # Uncertain run intent → ASK "собрать установщик?" (yes/no chips set on the
         # response below); no build this turn.
-        _spawn_text_turn(project_id, assistant_msg.id, _RUN_ASK_TEXT)
+        _spawn_text_turn(
+            project_id,
+            assistant_msg.id,
+            _RUN_ASK_TEXT,
+            run_id=generation_run.id,
+        )
     else:
         _spawn_process_prompt(
+            run_id=generation_run.id,
             project_id=project_id,
             user_id=current_user.id,
             user_message_id=user_msg.id,
@@ -1660,21 +1824,6 @@ async def post_prompt(
     except Exception:
         pass
 
-    # Tell the workspace how this turn will be handled so it can set the right
-    # expectation instantly: a surgical edit keeps the current preview and shows
-    # "точечная правка" copy; a build shows the full-generation experience.
-    turn_mode = (
-        "clarify"
-        if (
-            discovery_ask
-            or async_onboarding
-            or do_clarify
-            or run_intent
-            or run_ask
-            or run_decline
-        )
-        else ("build" if orchestrate else "edit")
-    )
     # Quick-reply chips ride on the ASK turn only — the workspace renders them
     # under the streamed question so the user can tap an answer instead of typing.
     if discovery_ask:
@@ -1715,7 +1864,8 @@ async def post_prompt(
         recap = []
         design_preview = None
         survey = None
-    return PromptResponse(
+    response = PromptResponse(
+        run_id=generation_run.id,
         message_id=assistant_msg.id,
         snapshot_id=None,
         mode=turn_mode,
@@ -1730,6 +1880,71 @@ async def post_prompt(
         survey=survey,
         survey_pending=async_onboarding,
     )
+    generation_run.response_payload = response.model_dump(mode="json")
+    await session.commit()
+    return response
+
+
+@router.post(
+    "/{project_id}/generation/cancel",
+    response_model=GenerationRunPublic,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def cancel_active_generation(
+    project_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> GenerationRun:
+    """Request cancellation of the project's one durable active run."""
+
+    await _ensure_owner(session, project_id, current_user.id)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    run = (
+        await session.execute(
+            select(GenerationRun)
+            .where(
+                GenerationRun.project_id == project_id,
+                GenerationRun.user_id == current_user.id,
+                GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
+            )
+            .order_by(GenerationRun.created_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        raise ApiError(
+            "conflict",
+            "no active generation",
+            status.HTTP_409_CONFLICT,
+        )
+    if run.status != "cancel_requested":
+        # Publish the process-independent signal before committing the status:
+        # if Redis is unavailable, the request fails and the DB does not get
+        # stuck forever in an unfulfillable cancel_requested state.
+        await request_generation_cancel(run.id)
+        run.status = "cancel_requested"
+        await session.commit()
+        await session.refresh(run)
+    try:
+        await publish_event(
+            project_id,
+            "generation.cancel_requested",
+            {
+                "run_id": str(run.id),
+                "message_id": (
+                    str(run.assistant_message_id)
+                    if run.assistant_message_id
+                    else None
+                ),
+            },
+        )
+    except Exception:
+        pass
+    return run
 
 
 @router.get("/{project_id}/messages", response_model=list[MessagePublic])

@@ -1,6 +1,11 @@
 import { apiFetch } from "./client";
 import { mockApi, USE_MOCKS } from "./mocks";
-import type { Message, PromptResponse, SelectedElement } from "./types";
+import type {
+  GenerationRun,
+  Message,
+  PromptResponse,
+  SelectedElement,
+} from "./types";
 
 export async function listMessages(projectId: string): Promise<Message[]> {
   if (USE_MOCKS) return mockApi.listMessages(projectId);
@@ -45,8 +50,13 @@ export async function sendPrompt(
       prompt,
       modelId,
     );
-    return { message_id: assistantMessageId, snapshot_id: null };
+    return {
+      run_id: crypto.randomUUID(),
+      message_id: assistantMessageId,
+      snapshot_id: null,
+    };
   }
+  const idempotencyKey = crypto.randomUUID();
   return apiFetch<PromptResponse>(`/api/projects/${projectId}/prompt`, {
     method: "POST",
     // 30s wall-clock cap on the POST itself. The backend should respond
@@ -63,6 +73,7 @@ export async function sendPrompt(
     // behaviour byte-identical and the backend field optional.
     json: {
       prompt,
+      idempotency_key: idempotencyKey,
       ...(selectedElements && selectedElements.length
         ? { selected_elements: selectedElements }
         : {}),
@@ -74,4 +85,16 @@ export async function sendPrompt(
       ...(opts?.designPresetId ? { design_preset_id: opts.designPresetId } : {}),
     },
   });
+}
+
+export async function cancelGeneration(
+  projectId: string,
+): Promise<GenerationRun> {
+  return apiFetch<GenerationRun>(
+    `/api/projects/${projectId}/generation/cancel`,
+    {
+      method: "POST",
+      timeoutMs: 10_000,
+    },
+  );
 }

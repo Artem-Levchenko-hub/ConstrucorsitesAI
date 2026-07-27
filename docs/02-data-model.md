@@ -67,6 +67,35 @@
 
 **Индексы:** `(project_id, created_at ASC)` для чата.
 
+### `generation_runs` (миграция `0025`)
+
+Durable-идентичность и жизненный цикл одного принятого `POST /prompt`.
+
+| Поле | Тип | Constraints |
+|---|---|---|
+| `id` | uuid | PK |
+| `project_id` | uuid | FK → `projects(id)` ON DELETE CASCADE, NOT NULL |
+| `user_id` | uuid | FK → `users(id)` ON DELETE CASCADE, NOT NULL |
+| `assistant_message_id` | uuid | FK → `messages(id)` ON DELETE SET NULL, NULL до создания пары сообщений |
+| `idempotency_key` | text | NOT NULL; UNIQUE вместе с `project_id` |
+| `prompt_hash` | text | NOT NULL; защищает от переиспользования ключа с другим payload |
+| `status` | text | NOT NULL; CHECK IN (`pending`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed`) |
+| `response_mode` | text | NULL (`build`, `edit`, `clarify`) |
+| `response_payload` | jsonb | NULL; точный ответ для идемпотентного replay |
+| `error` | text | NULL |
+| `created_at` | timestamptz | NOT NULL DEFAULT now() |
+| `started_at` | timestamptz | NULL |
+| `finished_at` | timestamptz | NULL |
+
+**Инварианты и индексы:**
+
+- `UNIQUE (project_id, idempotency_key)` — один submit не создаёт две генерации.
+- Partial `UNIQUE (project_id) WHERE status IN ('pending','running','cancel_requested')`
+  — не более одной активной генерации проекта, включая разные вкладки/API-процессы.
+- `(project_id, created_at)` — история запусков.
+- При старте единственного API-процесса оставшиеся активными строки завершаются
+  как `failed`: process-local coroutine не может пережить рестарт.
+
 ### `wallets`
 | Поле | Тип | Constraints |
 |---|---|---|
@@ -246,6 +275,7 @@ COMMENT ON COLUMN usage.purpose IS
 | `0001` | extensions (citext, uuid-ossp), `users`, `wallets` | агент B (M0) |
 | `0002` | `projects`, `snapshots`, `messages` | агент B (M1) |
 | `0003` | `wallet_charges`, `usage` + индексы | агент B (M2) |
+| `0025` | `generation_runs`: idempotency + single-flight + cancellation lifecycle | Codex |
 
 ## Trigger для `updated_at`
 
@@ -275,6 +305,7 @@ CREATE TRIGGER projects_updated_at BEFORE UPDATE ON projects
 users ─┬─< projects ─< snapshots ─┐ (parent_id, само-FK)
        │                          │
        ├─< messages ──────────────┘
+       ├─< generation_runs ───────┘ (assistant_message_id)
        │
        ├─ wallets (1:1)
        └─< wallet_charges, usage

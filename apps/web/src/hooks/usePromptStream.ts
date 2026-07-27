@@ -14,7 +14,8 @@ import type {
   WalletState,
   WsEvent,
 } from "@/lib/api/types";
-import { sendPrompt } from "@/lib/api/messages";
+import { cancelGeneration, sendPrompt } from "@/lib/api/messages";
+import { ApiError } from "@/lib/api/client";
 import { USE_MOCKS } from "@/lib/api/mocks";
 import { buildJoyTrigger } from "@/lib/joy-moment";
 import { useWorkspaceStore } from "@/store/workspace";
@@ -99,6 +100,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   const qc = useQueryClient();
   const cancelRef = useRef<(() => void) | null>(null);
   const streamingRef = useRef(false);
+  // Identity of the submit currently being processed. The input-level latch
+  // blocks one browser event from bubbling twice; this second guard prevents
+  // the same payload from being mistaken for an intentional queued follow-up.
+  const activeSubmitSignatureRef = useRef<string | null>(null);
   // Resumable-stream bookkeeping. `sendRef` lets `apply` ask the server to
   // replay the buffer (resync) when it spots a seq-gap. `streamMetaRef` holds
   // per-message {lastSeq, resyncing} so we dedup buffered deltas and drop live
@@ -259,6 +264,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         }
         delete streamMetaRef.current[event.data.message_id];
         streamingRef.current = false;
+        activeSubmitSignatureRef.current = null;
         fireQueued();
         return;
       }
@@ -436,6 +442,38 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         return;
       }
 
+      if (event.type === "generation.cancel_requested") {
+        return;
+      }
+
+      if (event.type === "generation.cancelled") {
+        qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+          (prev ?? []).map((m) =>
+            m.id === event.data.message_id
+              ? {
+                  ...m,
+                  content: m.content.includes("[Отменено пользователем]")
+                    ? m.content
+                    : `${m.content.trimEnd()}\n\n[Отменено пользователем]`.trim(),
+                  tokens_out: m.tokens_out ?? 0,
+                  tokens_in: m.tokens_in ?? 0,
+                }
+              : m,
+          ),
+        );
+        qc.removeQueries({
+          queryKey: ["passes", projectId, event.data.message_id],
+        });
+        delete streamMetaRef.current[event.data.message_id];
+        streamingRef.current = false;
+        activeSubmitSignatureRef.current = null;
+        pendingRef.current = null;
+        setPendingPrompt(null);
+        cancelRef.current?.();
+        cancelRef.current = null;
+        return;
+      }
+
       if (event.type === "app.error") {
         // The card block is already persisted into the assistant message
         // (services/app_errors.py appended it). Refetch so it renders now —
@@ -477,6 +515,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         });
         delete streamMetaRef.current[event.data.message_id];
         streamingRef.current = false;
+        activeSubmitSignatureRef.current = null;
         fireQueued();
       }
     },
@@ -575,14 +614,24 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       selections?: SelectedElement[],
       opts?: { skipClarify?: boolean; designPresetId?: string | null },
     ) => {
+      const submitSignature = JSON.stringify({
+        promptText,
+        modelId,
+        selections: selections ?? [],
+        opts: opts ?? {},
+      });
       // Стрим в процессе — кладём в очередь (один слот, новый замещает старый).
       // Выделения переносим вместе с текстом, чтобы отложенный промпт сохранил контекст.
       if (streamingRef.current) {
+        if (activeSubmitSignatureRef.current === submitSignature) {
+          return;
+        }
         pendingRef.current = { text: promptText, modelId, selections, opts };
         setPendingPrompt(promptText);
         return;
       }
       streamingRef.current = true;
+      activeSubmitSignatureRef.current = submitSignature;
 
       // OPTIMISTIC INSERT — show user's prompt and an empty assistant placeholder
       // in the chat INSTANTLY, before the HTTP POST round-trip completes. Without
@@ -647,6 +696,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           queryKey: ["passes", projectId, tempAssistantId],
         });
         streamingRef.current = false;
+        activeSubmitSignatureRef.current = null;
         cancelRef.current?.();
         cancelRef.current = null;
         toast.error("Генерация не запустилась", {
@@ -702,6 +752,22 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
+        if (e instanceof ApiError && e.code === "conflict") {
+          // Another tab/remount already submitted this project. Drop only this
+          // optimistic duplicate and keep the project WS attached to the
+          // canonical active run instead of turning it into an error bubble.
+          qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+            (prev ?? []).filter(
+              (m) => m.id !== tempUserId && m.id !== tempAssistantId,
+            ),
+          );
+          qc.invalidateQueries({ queryKey: ["messages", projectId] });
+          streamingRef.current = true;
+          toast.info("Генерация уже запущена", {
+            description: "Показываю текущую сборку — повтор не отправлен.",
+          });
+          return;
+        }
         // sendPrompt failed BEFORE the backend even spawned _process_prompt
         // — network error, 4xx (wallet_empty, not_found), 5xx, timeout.
         // Surface to user; placeholder turns into an explicit error row.
@@ -764,7 +830,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
   // Сохраняем актуальный submit в ref, чтобы fireQueued мог его вызвать,
   // не замыкаясь на устаревшую версию (useCallback пересоздаётся каждый рендер).
-  submitRef.current = submit;
+  useEffect(() => {
+    submitRef.current = submit;
+  }, [submit]);
 
   // Reconnect to an in-flight generation we did NOT start in this mount — i.e.
   // the page was refreshed mid-build. THE fix for "F5 → realtime freezes": the
@@ -790,6 +858,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         ),
       );
       streamingRef.current = false;
+      activeSubmitSignatureRef.current = null;
       cancelRef.current?.();
       cancelRef.current = null;
       toast.error("Соединение со стримом потеряно", {
@@ -827,17 +896,32 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     return unsub;
   }, [projectId, qc, connect, watchMessage]);
 
-  const cancel = useCallback(() => {
-    // 1) Рвём WS — фронт перестаёт получать чанки.
+  const cancel = useCallback(async () => {
+    // 1) Сначала просим backend остановить durable run. WS закрываем только
+    // после подтверждения, иначе старая кнопка «Стоп» снова станет визуальной.
+    try {
+      await cancelGeneration(projectId);
+    } catch (e) {
+      // A terminal run can win the race between the click and the endpoint.
+      // In that case there is nothing left to cancel and local cleanup is safe.
+      if (!(e instanceof ApiError && e.code === "conflict")) {
+        toast.error("Не удалось остановить генерацию", {
+          description: e instanceof Error ? e.message : undefined,
+        });
+        return;
+      }
+    }
+
+    // 2) Рвём WS — backend уже получил cancellation signal.
     cancelRef.current?.();
     cancelRef.current = null;
     sendRef.current = null;
     streamingRef.current = false;
+    activeSubmitSignatureRef.current = null;
 
-    // 2) Помечаем последнее ассистентское сообщение завершённым, чтобы
+    // 3) Помечаем последнее ассистентское сообщение завершённым, чтобы
     //    ChatPanel.isStreaming (читает tokens_out из кэша) сразу разблокировался.
-    //    Бэкенд может ещё какое-то время дописывать в БД — это TODO для
-    //    отдельного /messages/:id/cancel-эндпоинта; пока best-effort на фронте.
+    //    Сервер отдельно подтвердит generation.cancelled и сохранит тот же marker.
     let cancelledMessageId: string | null = null;
     qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
       (prev ?? []).map((m, i, arr) => {
@@ -865,7 +949,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       });
     }
 
-    // 3) Сбрасываем очередь — Стоп = «всё, прекратить».
+    // 4) Сбрасываем очередь — Стоп = «всё, прекратить».
     pendingRef.current = null;
     setPendingPrompt(null);
   }, [qc, projectId]);

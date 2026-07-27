@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Clock, Loader2, Mic, Send, Square, StopCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,10 @@ export function PromptInput({
   const [value, setValue] = useState("");
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? internalRef;
+  // Synchronous per-gesture latch. React state updates after the event, so
+  // without this a duplicated key/click event can call onSubmit twice with the
+  // same still-captured textarea value.
+  const sendLockRef = useRef(false);
 
   // Voice dictation → drop the transcript into the box (review-first), append to
   // anything already typed, then focus so the user can edit and send.
@@ -53,26 +57,10 @@ export function PromptInput({
     if (!el) return;
     el.style.height = "0px";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [value]);
+  }, [value, ref]);
 
-  // Cmd/Ctrl+Enter from anywhere submits — даже во время стрима (отправка
-  // в этом случае ставится в очередь хуком).
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.key === "Enter" &&
-        (value.trim() || useInspectorStore.getState().selections.length)
-      ) {
-        send();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
-
-  const send = () => {
+  const send = useCallback(() => {
+    if (sendLockRef.current) return;
     const text = value.trim();
     // Fresh from the store — the global Ctrl+Enter handler can be a stale closure.
     const picks = useInspectorStore.getState().selections;
@@ -85,14 +73,50 @@ export function PromptInput({
         ? "Внеси правки по выделенным элементам — что сделать, написано в комментарии к каждому."
         : "");
     if (!finalText) return;
-    onSubmit(finalText, wire);
-    setValue("");
-    clearSelections();
-  };
+    sendLockRef.current = true;
+    try {
+      onSubmit(finalText, wire);
+      setValue("");
+      clearSelections();
+    } finally {
+      // Keep the latch through the current browser event turn. A legitimate
+      // later submit uses the freshly-rendered value and is not blocked.
+      queueMicrotask(() => {
+        sendLockRef.current = false;
+      });
+    }
+  }, [clearSelections, onSubmit, value]);
+
+  // Cmd/Ctrl+Enter from anywhere submits — даже во время стрима (отправка
+  // в этом случае ставится в очередь хуком).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target;
+      // The textarea owns Enter/Ctrl+Enter itself. Letting this window listener
+      // handle the same bubbling event used to create a second identical submit.
+      if (
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLInputElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key === "Enter" &&
+        (value.trim() || useInspectorStore.getState().selections.length)
+      ) {
+        send();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [send, value]);
 
   const onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      e.stopPropagation();
       send();
     }
   };

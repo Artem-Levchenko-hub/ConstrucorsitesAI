@@ -43,6 +43,10 @@ class MessagePublic(BaseModel):
 
 class PromptRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=10_000)
+    # Stable identity of one UI submit. Retrying the same HTTP request with the
+    # same key replays the original response and never starts another generation.
+    # Optional for backward compatibility; new clients always send it.
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
     # Deprecated / ignored: the server orchestrates per-role models (no user
     # model picker). Kept optional so a stale frontend that still sends it
     # doesn't 422. Honoured only as an admin override via env OMNIA_FORCE_MODEL.
@@ -98,6 +102,7 @@ class ClientErrorReport(BaseModel):
 
 
 class PromptResponse(BaseModel):
+    run_id: UUID
     message_id: UUID
     snapshot_id: UUID | None = None
     # How the server will handle this turn, so the workspace can set the right
@@ -149,3 +154,23 @@ class PromptResponse(BaseModel):
     # client shows the "готовлю вопросы" state instead of expecting a survey in
     # this HTTP response. Absent/False on every other turn → older API type-checks.
     survey_pending: bool = False
+
+
+class GenerationRunPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    assistant_message_id: UUID | None = None
+    status: Literal[
+        "pending",
+        "running",
+        "cancel_requested",
+        "cancelled",
+        "completed",
+        "failed",
+    ]
+    response_mode: Literal["build", "edit", "clarify"] | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None

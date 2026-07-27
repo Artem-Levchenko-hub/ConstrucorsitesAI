@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -32,12 +33,21 @@ from omnia_api.routers import transcribe as transcribe_router
 from omnia_api.routers import uploads as uploads_router
 from omnia_api.routers import wallet as wallet_router
 from omnia_api.routers import ws as ws_router
+from omnia_api.services.generation_runs import recover_interrupted_generation_runs
 from omnia_api.services.ws_hub import hub
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     get_engine()
+    recovered = await recover_interrupted_generation_runs()
+    if recovered:
+        logger.warning(
+            "finalised interrupted generation runs after API restart",
+            extra={"generation_run_count": recovered},
+        )
     await hub.start_listener()
     try:
         yield

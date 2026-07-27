@@ -232,6 +232,7 @@ export type WalletState = {
 export type TurnMode = "build" | "edit" | "clarify";
 
 export type PromptResponse = {
+  run_id: Uuid;
   message_id: Uuid;
   snapshot_id: Uuid | null;
   // Optional so a stale frontend reading an older API still type-checks; the
@@ -277,6 +278,25 @@ export type PromptResponse = {
   // over the WebSocket (`onboarding.survey`) when ready. Absent/false on every
   // other turn → older API still type-checks.
   survey_pending?: boolean;
+};
+
+export type GenerationRunStatus =
+  | "pending"
+  | "running"
+  | "cancel_requested"
+  | "cancelled"
+  | "completed"
+  | "failed";
+
+export type GenerationRun = {
+  id: Uuid;
+  project_id: Uuid;
+  assistant_message_id: Uuid | null;
+  status: GenerationRunStatus;
+  response_mode: TurnMode | null;
+  created_at: IsoDateTime;
+  started_at: IsoDateTime | null;
+  finished_at: IsoDateTime | null;
 };
 
 // One question in the upfront onboarding survey popup (owner 2026-06-19).
@@ -501,6 +521,14 @@ export type WsEvent =
       };
     }
   | { type: "llm.error"; data: { message_id: Uuid; error: string } }
+  | {
+      type: "generation.cancel_requested";
+      data: { run_id: Uuid; message_id: Uuid | null };
+    }
+  | {
+      type: "generation.cancelled";
+      data: { run_id: Uuid; message_id: Uuid };
+    }
   | {
       // App build/runtime failure surfaced as a chat card (messages.py +
       // services/app_errors.py). The card content itself is persisted into the
