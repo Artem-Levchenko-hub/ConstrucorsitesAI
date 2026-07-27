@@ -4,8 +4,34 @@
   "version": 3,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
- "latest": "Идёт полный аудит свежего main и production: закрыта публичная поверхность внутреннего LLM-gateway, добавлены fail-soft подсчёт токенов и безопасный миграционный барьер; финальный generation-canary ещё выполняется.",
+ "latest": {
+  "title": "Незавершённый production-build закрыт: clean build и live canary прошли",
+  "subtitle": "После прошлого коммита web-образ всё ещё нельзя было собрать штатным production BuildKit: Dockerfile запрашивал запрещённый network.host. Блокер устранён минимальным изменением без правок интерфейса.",
+  "items": [
+   {
+    "s": "worked",
+    "t": "Блокер прошлого коммита",
+    "d": "RUN --network=host удалён из apps/web/Dockerfile в 617765e; чистая проверка и production-сборка gateway, API и web завершились успешно."
+   },
+   {
+    "s": "worked",
+    "t": "Безопасный rollout",
+    "d": "API, worker, gateway и web пересозданы; orchestrator обновлён отдельно через uv sync и systemd. Alembic — 0025_generation_runs (head), внутренние health — 200, внешний /llm/ — 403."
+   },
+   {
+    "s": "worked",
+    "t": "Сквозной generation-canary",
+    "d": "Run d73f7448-ea35-49cf-8d79-a6998a3024fe получил llm.done и completed; в БД ровно один запуск, snapshot активен, публичное превью — 200 и показывает контрольный маркер."
+   }
+  ],
+  "progress_note": "H78 закрыта с оценкой 9/10: доказаны воспроизводимая сборка, безопасный rollout и реальная генерация без воздействия на пользовательские проекты."
+ },
  "owner_actions": [
+  {
+   "date": "27.07",
+   "what": "Попросил проверить, что прошлый агент не доделал в последнем коммите, завершить работу и честно отразить результат во вкладке «Отчёты».",
+   "impact": "Найден скрытый production-блокер network.host в web Dockerfile, исправлен в 617765e и проверен чистой сборкой. Сервисы и отдельный systemd-orchestrator обновлены, live generation-canary завершён; заодно восстановлена объектная структура latest, из-за которой верхний блок отчёта не рендерился."
+  },
   {
    "date": "27.07",
    "what": "Показал проект, где один запрос породил две одинаковые генерации: первая продолжала работать после перезахода, а Stop управлял только второй. Поручил исправить причины, а не симптом.",
@@ -388,6 +414,12 @@
    "title": "Двойной submit превращался в скрытую вторую генерацию",
    "description": "Один Enter обрабатывали textarea и глобальный window-handler. Первый вызов сразу включал streaming, второй попадал в однослотовую очередь и автоматически уходил после llm.done — поэтому запросы были одинаковыми, но разделены по времени. На сервере не было idempotency/single-flight, а Stop закрывал только WebSocket. Трёхслойный фикс развернут на production: миграция 0025, новые API/worker/web и health-smoke прошли.",
    "kind": "incident"
+  },
+  {
+   "date": "2026-07-27",
+   "title": "Незавершённая Docker-сборка закрыта live-canary",
+   "description": "Аудит последнего коммита обнаружил, что web Dockerfile всё ещё требовал запрещённый BuildKit entitlement network.host. В 617765e требование удалено; gateway/API/web собраны и развернуты, orchestrator обновлён отдельно. Canary d73f7448 дошёл до llm.done и completed, создал единственный run и рабочее публичное превью с контрольным маркером.",
+   "kind": "fix"
   }
  ],
  "key_numbers": [
@@ -1426,13 +1458,13 @@
   {
    "id": "H78",
    "title": "Безопасный полный аудит и генерация без инфраструктурных обрывов",
-   "status": "testing",
-   "score": null,
+   "status": "worked",
+   "score": 9,
    "category": "надёжность / безопасность / инфра",
    "period": "27.07",
    "description": "Проверить свежий main и реальный production, устранить найденные причины зависания генерации и опасные экспозиции, затем доказать результат сквозным canary без риска для пользовательских данных.",
-   "evidence": "Изолированная чистая копия совпала с origin/main d1702da; production-репозиторий не перетирался (216 чужих dirty-paths сохранены). До изменений API/gateway/orchestrator отвечали 200, Alembic был на 0025_generation_runs, активных generation_runs не было. Найдено: первый tiktoken-вызов зависел от внешней загрузки cl100k и мог оборвать успешный stream до DONE; compose не запускал alembic перед API/worker; gateway без пользовательской авторизации был доступен напрямую и через nginx /llm/. Исправлено локально: токенизация fail-soft с одноразовым fallback, миграционный/readiness-барьер, loopback-bind портов, regression-тесты. На production с резервной копией и nginx -t внешний /llm/ закрыт (403), сервисные порты перепривязаны к 127.0.0.1; главная страница и внутренние health — 200. Локально: gateway 50/50, web 72/72, orchestrator 418 passed + 15 expected xfail; ruff/mypy/typecheck/eslint на изменённых областях зелёные. Финальный clean-build и generation-canary ещё не завершены.",
-   "impact": "Промежуточно закрыт канал несанкционированного расхода провайдерских ключей и устранены два инфраструктурных класса обрыва генерации. Итоговую оценку нельзя ставить до чистой сборки и живого canary.",
+   "evidence": "Исходный аудит выявил зависимость первого tiktoken-вызова от внешней загрузки cl100k, отсутствие обязательного Alembic-барьера перед API/worker и публичную поверхность внутреннего gateway; реализованы fail-soft токенизация, миграционный/readiness-барьер, loopback-bind портов и regression-тесты. Повторная проверка последнего коммита 0d28e11 нашла оставшийся production-блокер: apps/web/Dockerfile использовал RUN --network=host, а штатный BuildKit завершал сборку ошибкой «network.host is not allowed». В 617765e запрещённый entitlement удалён без изменения UI; web 72/72, typecheck и eslint зелёные, чистая Linux-сборка и production docker compose build gateway api web успешны. Production fast-forward выполнен без перезаписи пяти чужих dirty-файлов SecondBrain; API/worker/gateway/web пересозданы, orchestrator обновлён через uv sync и systemd. Alembic — 0025_generation_runs (head), API/gateway/web/orchestrator health — 200/ok, публичная главная — 200, внешний /llm/ — 403, свежие логи сервисов без ошибок. Безопасный анонимный canary run d73f7448-ea35-49cf-8d79-a6998a3024fe: submit и replay с одним idempotency key вернули тот же run, WebSocket получил snapshot.created, 9 agent.step и llm.done без llm.error; БД зафиксировала completed, ровно одну запись и активный snapshot eb19abf9-6ef2-4109-b9ab-f21e438cd133. Публичное превью qa-canary-617765e-2026-07-27-db3743 отвечает 200 и визуально показывает OMNIA_CANARY_617765E_20260727.",
+   "impact": "Закрыты канал несанкционированного расхода провайдерских ключей, два инфраструктурных класса обрыва генерации и последний блокер воспроизводимой web-сборки. Новый rollout ждёт миграций, сервисные поверхности закрыты loopback/403, а реальная генерация подтверждена от submit до видимого превью.",
    "next_vector": "V4"
   }
  ],
@@ -1523,7 +1555,7 @@
   {
    "id": "V4",
    "name": "Деплой-гигиена и наблюдаемость",
-   "status": "техдолг, мешает всем остальным",
+   "status": "частично закрыт — базовый безопасный rollout доказан",
    "goal": "Деплой без сюрпризов и прод под мониторингом — сейчас любое обновление рискует потерять висящие на проде правки.",
    "steps": [
     [
@@ -1548,6 +1580,10 @@
     ],
     [
      "Idempotency + single-flight + реальный Stop для генерации (сделано 27.07, production-smoke пройден)",
+     true
+    ],
+    [
+     "Чистая Docker-сборка, миграции перед запуском и generation-canary на production (сделано 27.07)",
      true
     ]
    ],
