@@ -5,28 +5,33 @@
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Незавершённый production-build закрыт: clean build и live canary прошли",
-  "subtitle": "После прошлого коммита web-образ всё ещё нельзя было собрать штатным production BuildKit: Dockerfile запрашивал запрещённый network.host. Блокер устранён минимальным изменением без правок интерфейса.",
+  "title": "Кинематографичная оркестрация возвращена: Opus + Flux + Seedance снова в production",
+  "subtitle": "История Git показала: поздний переход на llmgw/DeepSeek перезаписал только слой провайдера и моделей, а сам кино-конвейер остался в коде. Восстановление выполнено точечно, без отката более новых исправлений безопасности и надёжности.",
   "items": [
    {
     "s": "worked",
-    "t": "Блокер прошлого коммита",
-    "d": "RUN --network=host удалён из apps/web/Dockerfile в 617765e; чистая проверка и production-сборка gateway, API и web завершились успешно."
+    "t": "Исторический контур восстановлен",
+    "d": "Коммит eae29da вернул AITunnel и Claude Opus 4.8 для всех ролей — от режиссуры и кода до визуального аудита и ремонта. Flux и Seedance остались отдельными медиатулзами; защиты из более новых коммитов сохранены."
    },
    {
     "s": "worked",
-    "t": "Безопасный rollout",
-    "d": "API, worker, gateway и web пересозданы; orchestrator обновлён отдельно через uv sync и systemd. Alembic — 0025_generation_runs (head), внутренние health — 200, внешний /llm/ — 403."
+    "t": "Реальный AITunnel на production",
+    "d": "Секрет заменён атомарно, с резервной копией и правами 0600; gateway, API и worker пересозданы. Каталог показывает только Opus 4.8, а обычный chat и нативный Messages дали HTTP 200 через api.aitunnel.ru."
    },
    {
     "s": "worked",
-    "t": "Сквозной generation-canary",
-    "d": "Run d73f7448-ea35-49cf-8d79-a6998a3024fe получил llm.done и completed; в БД ровно один запуск, snapshot активен, публичное превью — 200 и показывает контрольный маркер."
+    "t": "Живой кино-canary одним промптом",
+    "d": "Run d45f8713-2a54-484e-930b-5ed8ed2abed7 завершён: два Flux-кадра, Seedance-видео 6,04 с (1280×720), 56 сохранённых шагов, активный snapshot. В браузере работают scroll-scrub, day/night, accordion, параллакс, localStorage-форма и mobile без горизонтального overflow."
    }
   ],
-  "progress_note": "H78 закрыта с оценкой 9/10: доказаны воспроизводимая сборка, безопасный rollout и реальная генерация без воздействия на пользовательские проекты."
+  "progress_note": "H79 закрыта с оценкой 9/10: уникальная кино-цепочка снова доказана end-to-end на production. Осталось перевыпустить ключ, который был передан через чат."
  },
  "owner_actions": [
+  {
+   "date": "27.07",
+   "what": "Передал новый ключ AITunnel, попросил вернуть прежнюю сильную оркестрацию для интерактивных кинематографичных сайтов и отдельно проверить ранние коммиты.",
+   "impact": "Git-форензика показала, что 331eaaa заменил лишь провайдера/модели на llmgw+DeepSeek, но не удалил кино-механику. В eae29da восстановлены AITunnel+Opus для всей агентной цепочки; Flux→Seedance, scroll-scrub и интерактивы подтверждены отдельным live-canary, а поздние security/reliability-фиксы сохранены."
+  },
   {
    "date": "27.07",
    "what": "Попросил проверить, что прошлый агент не доделал в последнем коммите, завершить работу и честно отразить результат во вкладке «Отчёты».",
@@ -420,6 +425,12 @@
    "title": "Незавершённая Docker-сборка закрыта live-canary",
    "description": "Аудит последнего коммита обнаружил, что web Dockerfile всё ещё требовал запрещённый BuildKit entitlement network.host. В 617765e требование удалено; gateway/API/web собраны и развернуты, orchestrator обновлён отдельно. Canary d73f7448 дошёл до llm.done и completed, создал единственный run и рабочее публичное превью с контрольным маркером.",
    "kind": "fix"
+  },
+  {
+   "date": "2026-07-27",
+   "title": "Историческая кино-оркестрация возвращена на AITunnel",
+   "description": "Проверены ранние коммиты b8f4db5, e2747c6, 67d2ceb, 2f46fd0, 5f2d75a, a9d4690, 2d8db12 и 498a03c: кино-контур не исчез, а был перекрыт переходом 331eaaa на llmgw+DeepSeek. Коммит eae29da точечно вернул AITunnel+Opus, сохранив поздние защиты. Canary d45f8713 одним промптом создал два Flux-кадра, Seedance-ролик и интерактивный адаптивный лендинг; БД и браузер подтвердили completed, один run и рабочий snapshot.",
+   "kind": "milestone"
   }
  ],
  "key_numbers": [
@@ -1466,6 +1477,18 @@
    "evidence": "Исходный аудит выявил зависимость первого tiktoken-вызова от внешней загрузки cl100k, отсутствие обязательного Alembic-барьера перед API/worker и публичную поверхность внутреннего gateway; реализованы fail-soft токенизация, миграционный/readiness-барьер, loopback-bind портов и regression-тесты. Повторная проверка последнего коммита 0d28e11 нашла оставшийся production-блокер: apps/web/Dockerfile использовал RUN --network=host, а штатный BuildKit завершал сборку ошибкой «network.host is not allowed». В 617765e запрещённый entitlement удалён без изменения UI; web 72/72, typecheck и eslint зелёные, чистая Linux-сборка и production docker compose build gateway api web успешны. Production fast-forward выполнен без перезаписи пяти чужих dirty-файлов SecondBrain; API/worker/gateway/web пересозданы, orchestrator обновлён через uv sync и systemd. Alembic — 0025_generation_runs (head), API/gateway/web/orchestrator health — 200/ok, публичная главная — 200, внешний /llm/ — 403, свежие логи сервисов без ошибок. Безопасный анонимный canary run d73f7448-ea35-49cf-8d79-a6998a3024fe: submit и replay с одним idempotency key вернули тот же run, WebSocket получил snapshot.created, 9 agent.step и llm.done без llm.error; БД зафиксировала completed, ровно одну запись и активный snapshot eb19abf9-6ef2-4109-b9ab-f21e438cd133. Публичное превью qa-canary-617765e-2026-07-27-db3743 отвечает 200 и визуально показывает OMNIA_CANARY_617765E_20260727.",
    "impact": "Закрыты канал несанкционированного расхода провайдерских ключей, два инфраструктурных класса обрыва генерации и последний блокер воспроизводимой web-сборки. Новый rollout ждёт миграций, сервисные поверхности закрыты loopback/403, а реальная генерация подтверждена от submit до видимого превью.",
    "next_vector": "V4"
+  },
+  {
+   "id": "H79",
+   "title": "Кино-оркестрация AITunnel восстановлена без отката защит",
+   "status": "worked",
+   "score": 9,
+   "category": "генерация / LLM-провайдеры / дизайн",
+   "period": "27.07",
+   "description": "Вернуть доказанный исторический контур, где один сильный мультимодальный агент сам режиссирует, пишет код, смотрит результат и чинит его, а Flux создаёт ключевые кадры и Seedance связывает их в скролл-управляемую сцену. При этом не потерять более новые исправления single-flight, отмены, миграционного барьера, loopback-доступа и rate-limit.",
+   "evidence": "Git-форензика: b8f4db5 перевёл все роли на Opus 4.8; e2747c6 и 67d2ceb закрепили AITunnel и нативный prompt caching; 2f46fd0/5f2d75a/a9d4690/2d8db12/498a03c собрали Flux→Seedance→scroll-scrub, автоматическое решение агента, all-keyframe-оптимизацию и WebP. Коммит 331eaaa позже заменил только provider/model layer на llmgw+DeepSeek, поэтому сделан не revert, а точечный eae29da: все роли/default/native-agent/autoheal снова claude-opus-4-8; upstream https://api.aitunnel.ru/v1; Omnia-id отображается в живой slug claude-opus-4.8. Сохранены поздние фиксы 0e9b180 и e6a0fa3. Локально: API 18 целевых тестов; gateway 51/51; gateway ruff+mypy; API ruff изменённых config/tests; py_compile; compose config — зелёные. Production: секрет заменён атомарно с backup и mode 0600; gateway/API/worker healthy; Alembic 0025_generation_runs (head); /v1/models показывает доступный claude-opus-4-8; chat и native Messages через AITunnel — HTTP 200. Runtime-флаги: agentic/native/runtime gates включены, max_steps=120, Flux max=8, Seedance max=3, video scrub optimization=true. Анонимный canary project 00518062-ef5f-4296-81ba-00b52993da78, run d45f8713-2a54-484e-930b-5ed8ed2abed7: один generation_run, completed, 56 сохранённых шагов, snapshot 3e042ad1-9eb6-46a7-b5f1-687203f9192a активен. AITunnel вернул два Flux-кадра и Seedance MP4 6,04 с, 1280×720, 4 433 707 байт; публичный poster отдаётся как WebP 145 274 байта. Playwright доказал video readyState=4 без ошибки, scroll 0→1100 меняет currentTime 0→4,52 с, day/night меняет DOM и фон, accordion раскрывает ровно один этап, пять parallax-слоёв меняют transform, форма сохраняет три этапа в localStorage и переживает reload; 390×844 и 1440×900 без горизонтального overflow. Публичный результат: https://constructor.lead-generator.ru/p/cinematic-canary-eae29da-2e70c7-4627b3.",
+   "impact": "Главная «вау»-возможность снова работает как продуктовый конвейер, а не как набор выключенных заготовок: обычный русский промпт дошёл до уникального видео, кода, самопроверки и интерактивного сайта. Единственный оставшийся операционный риск — переданный через чат ключ нужно перевыпустить после проверки и заменить в production без изменения кода.",
+   "next_vector": "V1"
   }
  ],
  "vectors": [
@@ -1486,13 +1509,19 @@
     [
      "Mobbin-корпус референсов → правила генератора (ждёт логина владельца)",
      false
+    ],
+    [
+     "Возвращён и live-доказан «вау»-контур: Opus сам собирает Flux→Seedance→scroll-scrub, параллакс и интерактивы (27.07)",
+     true
     ]
    ],
    "hyp_ids": [
     "H12",
     "H15",
     "H35",
-    "H47"
+    "H47",
+    "H68",
+    "H79"
    ]
   },
   {
@@ -1588,10 +1617,11 @@
     ]
    ],
    "hyp_ids": [
-   "H41",
-   "H43",
+    "H41",
+    "H43",
     "H77",
-    "H78"
+    "H78",
+    "H79"
    ]
   },
   {
@@ -1687,11 +1717,11 @@
      true
     ],
     [
-     "Кино-видео + Flux keyframe-интерполяция нативно: Flux 2 кадра → видео-модель пролёт → скролл-скраб (17.07)",
+     "Кино-видео + Flux keyframe-интерполяция нативно: Flux 2 кадра → Seedance-пролёт → скролл-скраб (17.07; повторно доказано live на AITunnel 27.07)",
      true
     ],
     [
-     "Агент-дирижёр: из обычного промпта сам строит цепочку моделей + живые hover-микровзаимодействия (17.07)",
+     "Агент-дирижёр: из обычного промпта сам строит цепочку моделей + живые hover-микровзаимодействия (17.07; Opus-контур восстановлен 27.07)",
      true
     ],
     [
@@ -1730,7 +1760,8 @@
     "H70",
     "H71",
     "H72",
-    "H73"
+    "H73",
+    "H79"
    ]
   },
   {
