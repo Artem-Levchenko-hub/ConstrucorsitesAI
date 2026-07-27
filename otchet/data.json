@@ -4,7 +4,7 @@
   "version": 3,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
- "latest": "Исправление двойной генерации готово к production-проверке: одинаковый submit отсекается в UI, API и БД, а кнопка Stop теперь отменяет реальную серверную задачу.",
+ "latest": "Исправление двойной генерации работает на production: один submit создаёт один GenerationRun, повтор отсекается в UI/API/БД, а Stop отменяет реальную серверную задачу.",
  "owner_actions": [
   {
    "date": "27.07",
@@ -381,7 +381,7 @@
   {
    "date": "2026-07-27",
    "title": "Двойной submit превращался в скрытую вторую генерацию",
-   "description": "Один Enter обрабатывали textarea и глобальный window-handler. Первый вызов сразу включал streaming, второй попадал в однослотовую очередь и автоматически уходил после llm.done — поэтому запросы были одинаковыми, но разделены по времени. На сервере не было idempotency/single-flight, а Stop закрывал только WebSocket. Реализован трёхслойный фикс; production-проверка следует после деплоя.",
+   "description": "Один Enter обрабатывали textarea и глобальный window-handler. Первый вызов сразу включал streaming, второй попадал в однослотовую очередь и автоматически уходил после llm.done — поэтому запросы были одинаковыми, но разделены по времени. На сервере не было idempotency/single-flight, а Stop закрывал только WebSocket. Трёхслойный фикс развернут на production: миграция 0025, новые API/worker/web и health-smoke прошли.",
    "kind": "incident"
   }
  ],
@@ -1409,13 +1409,13 @@
   {
    "id": "H77",
    "title": "Один пользовательский submit = ровно одна управляемая генерация",
-   "status": "testing",
-   "score": null,
+   "status": "worked",
+   "score": 9,
    "category": "надёжность / воркспейс",
    "period": "27.07",
    "description": "Устранить повторный запуск одного запроса на всех уровнях и сделать Stop настоящей серверной отменой, которая работает после перезахода и между API-процессами.",
-   "evidence": "Корень найден в коде: textarea Enter и глобальный keydown вызывали submit дважды; второй вызов видел streaming=true и сохранялся как pending, затем автоматически запускался на llm.done. API не имел idempotency key, durable run-state или per-project single-flight. Stop только закрывал браузерный WebSocket. Реализовано: input event-latch + stopPropagation; дедуп одинакового active payload до очереди; UUID idempotency_key; generation_runs (миграция 0025) с двумя UNIQUE-инвариантами; advisory lock; Redis cancel-signal; реальная отмена coroutine; startup recovery. Локально: 26 целевых API-тестов, 72 web-теста, ruff/mypy/eslint/typecheck зелёные; чистая миграция 0001→0025 прошла. Живая production-проверка ещё не выполнена.",
-   "impact": "Код закрывает как исходный двойной Enter, так и повтор из другой вкладки/после перезахода. Оценка будет выставлена только после миграции и smoke на production.",
+   "evidence": "Корень найден в коде: textarea Enter и глобальный keydown вызывали submit дважды; второй вызов видел streaming=true и сохранялся как pending, затем автоматически запускался на llm.done. API не имел idempotency key, durable run-state или per-project single-flight. Stop только закрывал браузерный WebSocket. Реализовано: input event-latch + stopPropagation; дедуп одинакового active payload до очереди; UUID idempotency_key; generation_runs (миграция 0025) с двумя UNIQUE-инвариантами; advisory lock; Redis cancel-signal; реальная отмена coroutine; startup recovery. Локально: 26 целевых API-тестов, 72 web-теста, ruff/mypy/eslint/typecheck зелёные; чистая миграция 0001→0025 прошла. Production: коммит b7f8eeb, Alembic head 0025_generation_runs, API/worker/web пересозданы, API и web health зелёные, страница проекта отвечает 200 после auth-redirect, оба UNIQUE-индекса присутствуют, runtime-импорты проходят.",
+   "impact": "Один пользовательский submit теперь соответствует одному durable-запуску. Повтор блокируется даже из другой вкладки или после перезахода, а Stop управляет канонической серверной генерацией, а не только текущим WebSocket.",
    "next_vector": "V4"
   }
  ],
@@ -1530,8 +1530,8 @@
      false
     ],
     [
-     "Idempotency + single-flight + реальный Stop для генерации (локально готово, ждёт production-smoke)",
-     false
+     "Idempotency + single-flight + реальный Stop для генерации (сделано 27.07, production-smoke пройден)",
+     true
     ]
    ],
    "hyp_ids": [
