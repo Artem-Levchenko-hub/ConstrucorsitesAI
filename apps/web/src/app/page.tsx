@@ -31,6 +31,7 @@ export default async function LandingPage() {
       <Nav tNav={tNav} tHero={tHero} />
       <main>
         <Hero tHero={tHero} />
+        <TodayUpdate />
         <LiveDemoStrip />
         <StackCarousel />
         <WorkspaceShowcase />
@@ -171,6 +172,64 @@ function Hero({ tHero }: { tHero: HeroTranslations }) {
           <WorkspaceMockCard />
         </Reveal>
       </div>
+    </section>
+  );
+}
+
+function TodayUpdate() {
+  const highlights = [
+    "Конструктор сам рекомендует: фото, лёгкое движение или видео — по задаче сайта.",
+    "Можно загрузить свои фото, подтвердить план и увидеть готовый первый экран.",
+    "Видео уже проверено вживую, а на телефоне сайт остаётся быстрым и лёгким.",
+  ];
+
+  return (
+    <section
+      aria-labelledby="today-update-title"
+      className="max-w-7xl mx-auto px-6 lg:px-12 pb-20 lg:pb-24"
+    >
+      <Reveal>
+        <div className="relative overflow-hidden rounded-2xl border border-separator bg-bg-elevated-1 p-5 sm:p-7">
+          <div
+            className="absolute inset-y-0 left-0 w-1 bg-accent"
+            aria-hidden
+          />
+          <div className="grid gap-6 lg:grid-cols-[0.72fr_1.55fr_auto] lg:items-center">
+            <div>
+              <div className="mb-2 text-[11px] font-mono uppercase tracking-[0.16em] text-accent">
+                29 июля 2026
+              </div>
+              <h2
+                id="today-update-title"
+                className="text-[24px] font-semibold tracking-[-0.02em]"
+              >
+                Что сделано сегодня
+              </h2>
+            </div>
+
+            <ul className="grid gap-2.5 text-[14px] leading-[1.5] text-label-2">
+              {highlights.map((highlight) => (
+                <li key={highlight} className="flex items-start gap-2.5">
+                  <Check
+                    className="mt-0.5 h-4 w-4 shrink-0 text-system-green"
+                    strokeWidth={2.25}
+                    aria-hidden
+                  />
+                  <span>{highlight}</span>
+                </li>
+              ))}
+            </ul>
+
+            <a
+              href="/otchet/"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-separator-solid px-5 text-[14px] font-medium text-label-1 transition-[border-color,transform] hover:border-label-3 active:scale-[0.98]"
+            >
+              Полный отчёт
+              <ArrowRight className="h-4 w-4" strokeWidth={2} aria-hidden />
+            </a>
+          </div>
+        </div>
+      </Reveal>
     </section>
   );
 }
