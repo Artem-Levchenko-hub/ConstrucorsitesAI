@@ -107,9 +107,9 @@ def _cached_video_url(project_id: str, cache_key: str) -> str | None:
     try:
         client = get_minio_client()
         bucket = settings.minio_bucket_videos
-        sha = hashlib.sha256(f"{project_id}|{cache_key}".encode("utf-8")).hexdigest()[:32]
+        sha = hashlib.sha256(f"{project_id}|{cache_key}".encode()).hexdigest()[:32]
         client.stat_object(bucket, f"{project_id}/{sha}.mp4")
-    except Exception:  # noqa: BLE001 — absent/transport → regenerate
+    except Exception:
         return None
     base = settings.minio_public_url.rstrip("/")
     return f"{base}/{bucket}/{project_id}/{sha}.mp4"
@@ -174,7 +174,7 @@ def _optimize_scrub_mp4(data: bytes) -> bytes:
         log.warning("agent_media: scrub-optimize timed out (>%ss) — using original",
                     _FFMPEG_TIMEOUT_S)
         return data
-    except Exception as exc:  # noqa: BLE001 — never lose a clip over an optimizer
+    except Exception as exc:
         log.warning("agent_media: scrub-optimize failed err=%r — using original", exc)
         return data
 
@@ -188,7 +188,7 @@ def _upload_video(data: bytes, project_id: str, cache_key: str) -> str | None:
     bucket = settings.minio_bucket_videos
     if not _ensure_video_bucket(client, bucket):
         return None
-    sha = hashlib.sha256(f"{project_id}|{cache_key}".encode("utf-8")).hexdigest()[:32]
+    sha = hashlib.sha256(f"{project_id}|{cache_key}".encode()).hexdigest()[:32]
     key = f"{project_id}/{sha}.mp4"
     try:
         client.put_object(
@@ -212,7 +212,7 @@ async def _emit_sub(emit: Emit | None, step: int | None, human: str, detail: str
             {"step": step, "human": human, "tool": "generate_media", "path": "",
              "detail": detail, "ok": True},
         )
-    except Exception:  # noqa: BLE001 — a progress event must never break a gen
+    except Exception:
         pass
 
 
@@ -240,12 +240,22 @@ async def _generate_video(
         return {"ok": False, "error": "video generation disabled (USE_VIDEO_GEN=false)"}
 
     model = settings.video_gen_model
-    cache_key = f"{model}|{duration}|{aspect}|{first_frame_url or ''}|{last_frame_url or ''}|{prompt}"
+    cache_key = (
+        f"{model}|{duration}|{aspect}|{first_frame_url or ''}|"
+        f"{last_frame_url or ''}|{prompt}"
+    )
     cached = await asyncio.to_thread(_cached_video_url, project_id, cache_key)
     if cached:
-        return {"ok": True, "url": cached, "kind": "video",
-                "content": f"Готовое видео уже есть. Вставь его: <video src=\"{cached}\" autoPlay muted loop playsInline />. URL: {cached}",
-                "detail": f"переиспользую готовый клип · {cached}"}
+        return {
+            "ok": True,
+            "url": cached,
+            "kind": "video",
+            "content": (
+                "Готовое видео уже есть. Вставь его: "
+                f'<video src="{cached}" autoPlay muted loop playsInline />. URL: {cached}'
+            ),
+            "detail": f"переиспользую готовый клип · {cached}",
+        }
 
     await _emit_sub(emit, step, "Собираю видео из кадров (ИИ-видео)", f"{model} · {duration}с")
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/videos/generations"
@@ -254,6 +264,9 @@ async def _generate_video(
         "prompt": prompt,
         "duration": duration,
         "aspect": aspect,
+        # Hero clips are always muted. Explicitly disable native audio because
+        # AITunnel enables it by default on capable models.
+        "generate_audio": False,
     }
     if first_frame_url:
         payload["first_frame_url"] = first_frame_url
@@ -263,7 +276,7 @@ async def _generate_video(
     try:
         async with httpx.AsyncClient(timeout=_VIDEO_CLIENT_TIMEOUT) as client:
             resp = await client.post(url, json=payload)
-    except Exception as exc:  # noqa: BLE001 — never crash the build over a clip
+    except Exception as exc:
         return {"ok": False, "error": f"video gateway transport: {type(exc).__name__}: {exc}"}
     if resp.status_code >= 400:
         return {"ok": False, "error": f"video gateway {resp.status_code}: {resp.text[:300]}"}
@@ -276,11 +289,16 @@ async def _generate_video(
         return {"ok": False, "error": "video gateway returned no clip data"}
     try:
         data = base64.b64decode(b64)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"ok": False, "error": f"video b64 decode failed: {exc}"}
 
     # Re-encode to all-keyframe/faststart so scroll-scrub is smooth (fail-soft).
-    await _emit_sub(emit, step, "Оптимизирую видео для плавного скролла", "all-keyframe · faststart")
+    await _emit_sub(
+        emit,
+        step,
+        "Оптимизирую видео для плавного скролла",
+        "all-keyframe · faststart",
+    )
     data = await asyncio.to_thread(_optimize_scrub_mp4, data)
 
     stored = await asyncio.to_thread(_upload_video, data, project_id, cache_key)

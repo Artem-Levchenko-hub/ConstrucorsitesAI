@@ -103,6 +103,9 @@ class VideoGenerationRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     duration: int = Field(default=5, ge=3, le=10)
     aspect: Literal["16:9", "9:16", "1:1"] = "16:9"
+    # AITunnel defaults this to true for models with native audio. Omnia's hero
+    # clips are muted, so silent output avoids unnecessary policy failures.
+    generate_audio: bool = False
     # Keyframe interpolation (the signature move): Flux paints a START and an END
     # still, Kling generates the UNIQUE motion BETWEEN them — a real fly-through,
     # not a generic text-to-video loop. Both are optional public URLs:
@@ -121,6 +124,40 @@ def _gateway_error_to_http(exc: GatewayError) -> HTTPException:
         status_code=exc.http_status,
         detail={"error": {"code": exc.code, "message": exc.message, "details": exc.details}},
     )
+
+
+def _create_upstream_payload(
+    req: VideoGenerationRequest,
+    upstream_model: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": upstream_model,
+        "prompt": req.prompt,
+        "size": _ASPECT_TO_SIZE.get(req.aspect, "1280x720"),
+        "duration": req.duration,
+        "generate_audio": req.generate_audio,
+    }
+    first_url = req.first_frame_url or req.image_url
+    frames: list[dict[str, Any]] = []
+    if first_url:
+        frames.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": first_url},
+                "frame_type": "first_frame",
+            }
+        )
+    if req.last_frame_url:
+        frames.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": req.last_frame_url},
+                "frame_type": "last_frame",
+            }
+        )
+    if frames:
+        payload["frame_images"] = frames
+    return payload
 
 
 def _client() -> httpx.Client:
@@ -196,30 +233,7 @@ async def videos_generations(req: VideoGenerationRequest) -> dict[str, Any]:
             log.exception("videos.precheck_failed", user=str(req.user))
 
     # ── 1) Create the task ────────────────────────────────────────────────
-    create_payload: dict[str, Any] = {
-        "model": upstream_model,
-        "prompt": req.prompt,
-        "size": _ASPECT_TO_SIZE.get(req.aspect, "1280x720"),
-        "duration": req.duration,
-    }
-    # Keyframe images: Flux-made START and END stills → Kling interpolates the
-    # motion between them. first_frame_url falls back to the legacy image_url.
-    first_url = req.first_frame_url or req.image_url
-    frames: list[dict[str, Any]] = []
-    if first_url:
-        frames.append({
-            "type": "image_url",
-            "image_url": {"url": first_url},
-            "frame_type": "first_frame",
-        })
-    if req.last_frame_url:
-        frames.append({
-            "type": "image_url",
-            "image_url": {"url": req.last_frame_url},
-            "frame_type": "last_frame",
-        })
-    if frames:
-        create_payload["frame_images"] = frames
+    create_payload = _create_upstream_payload(req, upstream_model)
 
     try:
         # retry=False: /v1/videos is non-idempotent (spawns a paid task) — never
