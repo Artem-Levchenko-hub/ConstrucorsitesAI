@@ -29,6 +29,11 @@
  "owner_actions": [
   {
    "date": "28.07",
+   "what": "Поручил сделать отдельный продуктовый путь: человек описывает нужный первый экран и загружает свои фото, а конструктор сам решает, нужна ли статика, product demo, motion или настоящее видео.",
+   "impact": "Собран и проверяется hero-media MVP внутри пользовательского workspace, а не визуальный эффект на лендинге самого конструктора. Реальный planner верно отказался от видео для B2B-мессенджера, выбрал cinematic для физического товара и тонкий motion для экспертной услуги; один Seedance-клип уже создан, сохранён и применён в static-сайт."
+  },
+  {
+   "date": "28.07",
    "what": "Передал отдельную публичную тестовую VPS и поручил проверять и переделывать удалённый деплой до полного результата.",
    "impact": "Живой canary нашёл три production-дефекта: нестабильный выбор SSH host-key, несовместимый pg_dump 15 против PostgreSQL 16 и отсутствие production-рецептов у SPA/Python-шаблонов. Все три причины исправлены и повторно доказаны на внешней машине: full-stack с данными, SPA, два HTTPS-маршрута, rollback нездоровой версии, изолированное удаление и полная очистка прошли."
   },
@@ -1511,6 +1516,18 @@
    "evidence": "Реализованы AsyncSSH без sshpass; подтверждение SHA256-отпечатка до передачи реквизитов; pinning host-key и resolved public IP; запрет внутренних/loopback адресов; preflight Docker/прав/OS/архитектуры/RAM/диска/утилит/портов; отдельный постоянный ключ шифрования в production. Remote runtime переведён на blue/green с health-check до Caddy reload, rollback конфигурации, per-project route/network/Postgres volume, перенос центральной схемы через pg_dump, миграции в prod-образах, сжатую передачу, очистку временных секретов и GC образов. Deploy-state атомарно хранится на диске: run_id, idempotency, фазы, журнал, история, recovery и cancel. API запрещает непроверенную цель, поддерживает ротацию реквизитов, remote logs, отложенную очистку старой цели только после успешной новой публикации и lifecycle teardown. Web показывает fingerprint/preflight, прогресс, ошибку, ссылку и Stop. Внешний canary 28.07 на отдельной VPS 170.168.72.152: Docker установлен через preflight, ED25519 fingerprint подтверждён и затем стабильно pinned; повтор одной idempotency-key вернул тот же run и не создал дубль. Full-stack проект перенёс PostgreSQL 16 schema/data, включая sentinel persist-412b2b5e; HTTPS-домен byo-412b2b5e.170-168-72-152.sslip.io получил валидный Let's Encrypt и отвечал 200. Намеренно сломанная production-версия вернула 500, не получила трафик, была удалена, а старая всё время отвечала 200 и сохранила данные; следующий recovery-деплой успешно переключил трафик. Второй SPA-проект одновременно работал по отдельному HTTPS-домену, включая client-side route fallback. Удаление первого проекта убрало только его app, DB, network, volume, env и Caddy-route, второй остался 200; после удаления второго осталось 0 управляемых контейнеров, 0 project networks, 0 DB volumes и 0 canary images. Canary обнаружил и исправил три дефекта в коммитах 60276e4, 9685da0 и e72797c: детерминированный ED25519 host-key и запрет перезаписи pin после mismatch; pg_dump 16 через контейнер; production-рецепты SPA/FastAPI/Telegram, корректные overlay-файлы и декларативный признак БД. Все три новых образа собраны на production; полный orchestrator suite — 432 passed/15 xfailed, ruff зелёный; production HEAD e72797c, orchestrator health ok.",
    "impact": "Публикация на чужой VPS доказана как законченный продуктовый путь, а не лабораторная заготовка: сайт, данные, HTTPS, повтор запроса, неудачное обновление, соседний проект и удаление ведут себя предсказуемо. Найденные живым прогоном дефекты исправлены в общем механизме, поэтому стандартные Next.js, Vite, FastAPI и Telegram-стеки больше не зависят от случайного SSH-ключа, версии локального pg_dump или отсутствующего production-образа.",
    "next_vector": "V7"
+  },
+  {
+   "id": "H81",
+   "title": "Hero-media из обычного брифа и собственных фотографий",
+   "status": "testing",
+   "score": null,
+   "category": "продукт / генерация / дизайн",
+   "period": "28.07",
+   "description": "Дать человеку без технических навыков простой путь: загрузить свои изображения, объяснить задачу обычными словами, получить осмысленную рекомендацию формата, подтвердить её и собрать один сильный первый экран с безопасным mobile/reduced-motion fallback.",
+   "evidence": "Backend-first vertical slice: persisted assets/brief/render, миграция 0027, очередь, retry/progress, deterministic bundle, preview/apply и workspace panel. Stub-E2E доказал plumbing до нового snapshot. Реальный Opus planner на трёх кейсах выбрал product-demo для B2B-мессенджера, cinematic для физического товара и motion для экспертной услуги с confidence 0,82; решения и объяснения сохранены в БД. Worker network defect исправлен в 93d7e20; официальный AITunnel generate_audio=false — в ebdefde. Реальный Seedance 2.0 Fast создал 5,04-секундный MP4 и asset f5ac1a39-a96f-4d24-bb8d-957f12a3590c. Аудит apply-path нашёл глобальную CSS-коллизию; afe92bc перенёс bundle первым ребёнком body, полностью изолировал стили, убрал служебный rationale из hero, добавил pointer/scroll depth и не загружает MP4 на mobile/reduced-motion. Live snapshot 9162ed71-31a9-4d4a-84f3-94872905ef28: 1440px/390px без overflow, desktop video, mobile poster, публичный slug hero-media-e2e-d10be1-7eba65.",
+   "impact": "Конструктор впервые имеет отдельный управляемый media-сценарий вместо обещания «модель сама как-нибудь сделает кино». Решение о видео зависит от продукта и подтверждения человека, реальный клип проходит через очередь и хранилище, а применённый hero больше не ломает CSS существующего сайта; workspace UX и финальная повторная дизайн-оценка ещё в работе.",
+   "next_vector": "V1"
   }
  ],
  "vectors": [
@@ -1535,6 +1552,10 @@
     [
      "Возвращён и live-доказан «вау»-контур: Opus сам собирает Flux→Seedance→scroll-scrub, параллакс и интерактивы (27.07)",
      true
+    ],
+    [
+     "Hero-media MVP: фото → media decision → подтверждение → очередь/Retry → реальный клип → preview/apply с mobile fallback (28.07)",
+     true
     ]
    ],
    "hyp_ids": [
@@ -1543,7 +1564,8 @@
     "H35",
     "H47",
     "H68",
-    "H79"
+    "H79",
+    "H81"
    ]
   },
   {
