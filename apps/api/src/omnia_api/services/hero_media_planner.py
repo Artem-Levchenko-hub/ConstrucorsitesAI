@@ -5,6 +5,8 @@ import re
 from typing import Any
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from omnia_api.core.config import get_settings, model_for_role
 from omnia_api.schemas.hero_media import (
     HeroMediaDecision,
@@ -74,7 +76,8 @@ cinematic.
 motion_prompt. Если video/cinematic не нужен, не пытайся насильно впихнуть
 motion/video. Пиши лаконично и структурно."""
 
-_PLANNER_REPAIR_SYSTEM = """Ты превращаешь ответ другой модели в СТРОГИЙ JSON для hero-media planner.
+_PLANNER_REPAIR_SYSTEM = """Ты превращаешь ответ другой модели в СТРОГИЙ JSON
+для hero-media planner.
 
 На входе будет сырое текстовое описание рекомендации. Нужно вернуть только один
 валидный JSON-объект по схеме planner'a. Никакого markdown, никаких пояснений
@@ -119,6 +122,10 @@ async def _repair_planner_output(
 ) -> dict[str, Any]:
     repair_messages = [
         {
+            "role": "system",
+            "content": f"{_PLANNER_SYSTEM}\n\n{_PLANNER_REPAIR_SYSTEM}",
+        },
+        {
             "role": "user",
             "content": (
                 f"User brief: {prompt}\n"
@@ -152,13 +159,29 @@ def _stub_plan(
     asset_urls: list[str],
 ) -> HeroMediaDecision:
     joined = " ".join(
-        filter(None, [prompt.lower(), (business_type or "").lower(), (style_preference or "").lower()])
+        filter(
+            None,
+            [prompt.lower(), (business_type or "").lower(), (style_preference or "").lower()],
+        )
     )
     static_keywords = ("saas", "dashboard", "кабинет", "b2b", "messenger", "crm", "интерфейс")
-    cinematic_keywords = ("fashion", "travel", "brand", "food", "еда", "отель", "event", "real estate")
-    if focus_preference == "interface" or any(keyword in joined for keyword in static_keywords):
+    cinematic_keywords = (
+        "fashion",
+        "travel",
+        "brand",
+        "food",
+        "еда",
+        "отель",
+        "event",
+        "real estate",
+    )
+    if focus_preference == "interface" or any(
+        keyword in joined for keyword in static_keywords
+    ):
         plan_kind = "product-demo"
-    elif motion_preference == "cinematic" or any(keyword in joined for keyword in cinematic_keywords):
+    elif motion_preference == "cinematic" or any(
+        keyword in joined for keyword in cinematic_keywords
+    ):
         plan_kind = "motion" if not asset_urls else "cinematic"
     elif focus_preference in {"product", "result"}:
         plan_kind = "motion" if asset_urls else "static"
@@ -172,10 +195,18 @@ def _stub_plan(
             "видео не включается по умолчанию, а product/interface-first сценарии "
             "тяготеют к static/product-demo/motion."
         ),
-        recommended_focus=focus_preference if focus_preference != "auto" else "главный объект страницы",
+        recommended_focus=(
+            focus_preference if focus_preference != "auto" else "главный объект страницы"
+        ),
         recommended_tone=motion_preference if motion_preference != "auto" else "живой",
-        brand_fit_note="Это симулированный планировщик для локального E2E, не финальный creative judgment.",
-        performance_note="Stub-mode всегда предпочитает более безопасную по скорости подачу, чем video-by-default.",
+        brand_fit_note=(
+            "Это симулированный планировщик для локального E2E, "
+            "не финальный creative judgment."
+        ),
+        performance_note=(
+            "Stub-mode всегда предпочитает более безопасную по скорости "
+            "подачу, чем video-by-default."
+        ),
         accessibility_note="В preview и apply сохраняются still/mobile/reduced-motion fallback.",
         requires_confirmation=True,
         hero_headline="Hero, который показывает главное без перегруза эффектами.",
@@ -244,7 +275,10 @@ async def plan_hero_media(
     for asset_url in asset_urls[: settings.hero_media_max_assets]:
         content.append({"type": "image_url", "image_url": {"url": asset_url}})
 
-    messages: list[dict[str, Any]] = [{"role": "user", "content": content}]
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": _PLANNER_SYSTEM},
+        {"role": "user", "content": content},
+    ]
     raw = await complete_chat(
         messages,
         model_for_role("director"),
@@ -257,7 +291,8 @@ async def plan_hero_media(
         raise LLMError("hero-media planner returned empty output")
     try:
         data = _extract_json_object(raw)
-    except json.JSONDecodeError:
+        decision = HeroMediaDecision.model_validate(data)
+    except (json.JSONDecodeError, ValidationError):
         data = await _repair_planner_output(
             owner_id=owner_id,
             project_id=project_id,
@@ -266,7 +301,7 @@ async def plan_hero_media(
             business_type=business_type,
             style_preference=style_preference,
         )
-    decision = HeroMediaDecision.model_validate(data)
+        decision = HeroMediaDecision.model_validate(data)
     if not settings.use_video_gen and decision.plan_kind in {"video", "cinematic"}:
         decision = decision.model_copy(
             update={
