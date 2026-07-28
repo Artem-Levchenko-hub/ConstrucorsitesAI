@@ -89,6 +89,8 @@ async def run_ui_flow(
     override_plan: str,
     scenario_label: str,
     stub_mode: bool,
+    retry_render: bool,
+    render_timeout_s: float,
 ) -> dict[str, Any]:
     email = f"hero-media-e2e-{int(time.time())}-{uuid4().hex[:6]}@example.com"
     password = "HeroMedia123"
@@ -110,8 +112,28 @@ async def run_ui_flow(
         slug = project["slug"]
 
         await page.goto(f"{web_url}/projects/{project_id}", wait_until="domcontentloaded")
+        await page.get_by_test_id("hero-media-toggle").wait_for(state="visible")
+        await page.wait_for_timeout(1500)
         await page.get_by_test_id("hero-media-toggle").click()
-        await page.get_by_test_id("hero-media-panel").wait_for(state="visible")
+        try:
+            await page.get_by_test_id("hero-media-panel").wait_for(state="visible", timeout=5000)
+        except Exception:
+            # Hydration race on the first workspace paint: the toolbar button can
+            # be in the DOM before React wires its onClick. One retry after a
+            # short beat proves whether it's a real UI bug or just early input.
+            await page.wait_for_timeout(1200)
+            await page.get_by_test_id("hero-media-toggle").click()
+            try:
+                await page.get_by_test_id("hero-media-panel").wait_for(state="visible", timeout=5000)
+            except Exception:
+                await page.screenshot(
+                    path=str(artifacts_dir / f"{scenario_label}-panel-open-failed.png")
+                )
+                (artifacts_dir / f"{scenario_label}-panel-open-failed.html").write_text(
+                    await page.content(),
+                    encoding="utf-8",
+                )
+                raise
         await page.get_by_test_id("hero-media-consent").check()
 
         with tempfile.TemporaryDirectory(prefix="hero-media-e2e-") as tmp:
@@ -142,19 +164,34 @@ async def run_ui_flow(
         try:
             first_render = await _wait_until(
                 lambda: _poll_render(client, project_id),
-                timeout_s=60,
+                timeout_s=render_timeout_s,
                 label="first render completion",
             )
             snapshots_before = await _snapshots(client, project_id)
+            second_render = None
+            if retry_render:
+                await page.get_by_test_id("hero-media-retry-render").click()
+                second_render = await _wait_until(
+                    lambda: _poll_render(
+                        client,
+                        project_id,
+                        at_least=len(first_render["progress_log"]) + 1,
+                    ),
+                    timeout_s=render_timeout_s,
+                    label="retry render completion",
+                )
 
-            await page.get_by_test_id("hero-media-retry-render").click()
-            second_render = await _wait_until(
-                lambda: _poll_render(client, project_id, at_least=len(first_render["progress_log"]) + 1),
-                timeout_s=60,
-                label="retry render completion",
-            )
-
-            await page.get_by_test_id("hero-media-apply").click()
+            try:
+                await page.get_by_test_id("hero-media-apply").click()
+            except Exception:
+                await page.screenshot(
+                    path=str(artifacts_dir / f"{scenario_label}-apply-failed.png")
+                )
+                (artifacts_dir / f"{scenario_label}-apply-failed.html").write_text(
+                    await page.content(),
+                    encoding="utf-8",
+                )
+                raise
             new_snapshot = await _wait_until(
                 lambda: _poll_new_snapshot(client, project_id, len(snapshots_before)),
                 timeout_s=90,
@@ -172,12 +209,13 @@ async def run_ui_flow(
         "project_id": project_id,
         "slug": slug,
         "first_render_id": first_render["id"],
-        "second_render_id": second_render["id"],
+        "second_render_id": second_render["id"] if second_render else None,
         "applied_snapshot_id": new_snapshot["id"],
         "recommended_plan": first_render["media_plan"],
         "provider_summary": first_render.get("provider_summary"),
         "public_preview_contains_marker": "OMNIA_HERO_MEDIA_START" in public_preview.text,
         "stub_mode": stub_mode,
+        "retried": retry_render,
     }
 
 
@@ -233,6 +271,8 @@ def main() -> None:
     parser.add_argument("--motion-preference", default="cinematic")
     parser.add_argument("--override-plan", default="motion")
     parser.add_argument("--stub-mode", action="store_true")
+    parser.add_argument("--skip-retry", action="store_true")
+    parser.add_argument("--render-timeout-s", type=float, default=60.0)
     parser.add_argument(
         "--artifacts-dir",
         default=str(Path("artifacts") / "hero-media-e2e"),
@@ -251,6 +291,8 @@ def main() -> None:
             override_plan=args.override_plan,
             scenario_label=args.scenario_label,
             stub_mode=args.stub_mode,
+            retry_render=not args.skip_retry,
+            render_timeout_s=args.render_timeout_s,
         )
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))

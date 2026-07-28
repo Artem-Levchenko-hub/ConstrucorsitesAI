@@ -286,7 +286,7 @@ export function HeroMediaPanel({
   });
 
   const planApproved = latestPlan?.status === "approved";
-  const canApply = !!activeRender?.bundle && isStaticTemplate(project.template);
+  const canApply = !!activeRender?.bundle;
 
   if (!open) return null;
 
