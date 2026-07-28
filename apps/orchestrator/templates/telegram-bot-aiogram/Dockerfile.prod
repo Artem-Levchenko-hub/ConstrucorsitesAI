@@ -1,0 +1,18 @@
+# Production image for the aiogram bot + its HTTP health endpoint.
+
+FROM python:3.12-slim
+WORKDIR /app
+
+RUN pip install --no-cache-dir uv==0.5.13 \
+    && useradd -m -u 1000 botuser \
+    && chown -R botuser:botuser /app
+USER botuser
+
+COPY --chown=botuser:botuser pyproject.toml uv.lock* ./
+RUN uv sync --no-dev
+
+COPY --chown=botuser:botuser src ./src
+
+ENV PATH="/app/.venv/bin:$PATH"
+EXPOSE 3000
+CMD ["python", "-m", "bot.main"]

@@ -14,9 +14,7 @@ import pytest
 
 from omnia_orchestrator.core.stack_registry import STACKS, StackSpec, get_stack
 
-_TEMPLATES_DIR = (
-    Path(__file__).resolve().parents[1] / "templates"
-)
+_TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates"
 
 _SHIPPED = (
     "bare-nextjs",
@@ -51,6 +49,38 @@ def test_all_shipped_template_dirs_are_registered() -> None:
         "every template dir must have a registry entry (and vice versa); "
         f"on_disk={sorted(on_disk)} registered={sorted(STACKS)}"
     )
+
+
+def test_every_production_stack_has_its_dockerfile() -> None:
+    for name, spec in STACKS.items():
+        if spec.production_dockerfile is None:
+            continue
+        assert (_TEMPLATES_DIR / spec.template_dir / spec.production_dockerfile).is_file(), (
+            f"{name} is marked production-deployable but {spec.production_dockerfile} is missing"
+        )
+
+
+def test_bare_stack_is_the_only_stack_without_a_production_recipe() -> None:
+    unsupported = {name for name, spec in STACKS.items() if spec.production_dockerfile is None}
+    assert unsupported == {"bare-nextjs"}
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "nextjs-entities",
+        "nextjs-postgres-drizzle",
+        "nextjs-realtime",
+        "fastapi-postgres",
+        "telegram-bot-aiogram",
+    ),
+)
+def test_database_stacks_are_declared_in_the_registry(name: str) -> None:
+    assert get_stack(name).needs_database is True
+
+
+def test_spa_does_not_provision_an_unused_database() -> None:
+    assert get_stack("vite-react-spa").needs_database is False
 
 
 def test_unregistered_name_is_synthesized_identically() -> None:

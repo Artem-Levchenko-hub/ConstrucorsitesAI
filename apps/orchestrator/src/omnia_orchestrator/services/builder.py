@@ -33,6 +33,7 @@ from omnia_orchestrator.core import docker_client, postgres_admin
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
+from omnia_orchestrator.core.stack_registry import get_stack
 from omnia_orchestrator.services import deploy_state, nginx_writer
 from omnia_orchestrator.services.port_allocator import get_prod_port_allocator
 from omnia_orchestrator.services.provisioner import _template_source_dir
@@ -50,8 +51,16 @@ _OVERLAY_PATHS = [
     "entities",
     "public",
     "package.json",
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "index.html",
+    "vite.config.ts",
     "next.config.ts",
     "tsconfig.json",
+    "pyproject.toml",
+    "uv.lock",
+    "requirements.txt",
     "drizzle.config.ts",
     "drizzle",
     "components.json",
@@ -216,7 +225,7 @@ async def _deploy_remote(
     from omnia_orchestrator.services import remote_deploy
 
     host_port = _remote_port(slug)
-    needs_database = template in {"nextjs-postgres-drizzle", "nextjs-entities", "nextjs-realtime"}
+    needs_database = get_stack(template).needs_database
     db_dump: str | None = None
     db_schema: str | None = None
     if needs_database:
@@ -368,6 +377,16 @@ async def _run(
         # entities project on the entities template's Dockerfile.prod/configs.
         template = await docker_client.container_image_template(dev_name) or _DEFAULT_TEMPLATE
         log.info("deploy.template", project_id=project_id, template=template)
+        stack = get_stack(template)
+        if stack.production_dockerfile is None:
+            raise OrchestratorError(
+                code="unsupported_stack",
+                message=(
+                    f"template {template!r} has no production deployment recipe; "
+                    "choose a supported stack or add Dockerfile.prod"
+                ),
+                status_code=422,
+            )
         template_dir = _template_source_dir(template)
         shutil.copytree(
             template_dir,
@@ -383,39 +402,43 @@ async def _run(
 
         # 2b. Force a prod-safe next.config (tolerate AI type/lint errors +
         # standalone output). Overwrites any config the overlay brought in.
-        for stale in ("next.config.js", "next.config.mjs"):
-            (build_dir / stale).unlink(missing_ok=True)
-        (build_dir / "next.config.ts").write_text(_PROD_NEXT_CONFIG, encoding="utf-8")
+        if template.startswith("nextjs-"):
+            for stale in ("next.config.js", "next.config.mjs"):
+                (build_dir / stale).unlink(missing_ok=True)
+            (build_dir / "next.config.ts").write_text(_PROD_NEXT_CONFIG, encoding="utf-8")
 
         # 2c. Build-time DATABASE_URL. The template's db module throws at import
         # if it's unset, and `next build` imports every route module during
         # page-data collection. `next build` reads .env.production; the
         # standalone runtime does NOT read .env files (it uses the container env
         # we inject), so this placeholder never reaches production.
-        (build_dir / ".env.production").write_text(
-            f"DATABASE_URL={_DB_PLACEHOLDER}\n", encoding="utf-8"
-        )
+        if template.startswith("nextjs-"):
+            (build_dir / ".env.production").write_text(
+                f"DATABASE_URL={_DB_PLACEHOLDER}\n", encoding="utf-8"
+            )
 
         # 2d. Dockerfile.prod has `COPY /app/public ./public`; the template
         # ships no public/ and a generated project may lack one too — ensure it
         # exists so the image build doesn't fail on a missing COPY source.
-        public_dir = build_dir / "public"
-        public_dir.mkdir(exist_ok=True)
-        (public_dir / ".gitkeep").touch()
-        # Some projects have no generated SQL yet. The prod Dockerfile still
-        # copies this directory so the migration runner has a stable contract.
-        (build_dir / "drizzle").mkdir(exist_ok=True)
+        if template.startswith("nextjs-"):
+            public_dir = build_dir / "public"
+            public_dir.mkdir(exist_ok=True)
+            (public_dir / ".gitkeep").touch()
+            # Some projects have no generated SQL yet. The prod Dockerfile still
+            # copies this directory so the migration runner has a stable contract.
+            (build_dir / "drizzle").mkdir(exist_ok=True)
 
-        if not (build_dir / "Dockerfile.prod").exists():
+        dockerfile = stack.production_dockerfile
+        if not (build_dir / dockerfile).exists():
             raise OrchestratorError(
                 code="container_failure",
-                message="build context missing Dockerfile.prod",
+                message=f"build context missing {dockerfile}",
                 status_code=500,
             )
 
         # 3. Build the prod image.
         tag = f"omnia-app-{slug}:{int(time.time())}"
-        await docker_client.build_image(str(build_dir), "Dockerfile.prod", tag)
+        await docker_client.build_image(str(build_dir), dockerfile, tag)
         deploy_state.update(project_id, image_tag=tag, phase="swapping")
         await publish_project_event(
             project_id,

@@ -35,33 +35,66 @@ class StackSpec:
     template_dir: str  # under apps/orchestrator/templates/
     image_tag: str  # "omnia-template-<name>:dev"
     container_port: int = 3000  # internal listen port (current cross-stack convention)
+    production_dockerfile: str | None = None
+    needs_database: bool = False
 
 
 def _dev_image(name: str) -> str:
     return f"{_IMAGE_PREFIX}{name}:{_DEV_TAG}"
 
 
-def _stack(name: str, *, container_port: int = 3000) -> StackSpec:
+def _stack(
+    name: str,
+    *,
+    container_port: int = 3000,
+    production_dockerfile: str | None = None,
+    needs_database: bool = False,
+) -> StackSpec:
     return StackSpec(
         template_dir=name,
         image_tag=_dev_image(name),
         container_port=container_port,
+        production_dockerfile=production_dockerfile,
+        needs_database=needs_database,
     )
 
 
 # The template dirs shipped today (apps/orchestrator/templates/). New stacks plug
 # in by adding an entry here once their richer fields (readiness/env/migrate) are wired.
 STACKS: dict[str, StackSpec] = {
-    name: _stack(name)
-    for name in (
-        "bare-nextjs",
+    # The bare experiment deliberately has no fixed framework or build contract.
+    # It remains provisionable, but remote production deploy is rejected early
+    # until the generated project supplies an explicit production recipe.
+    "bare-nextjs": _stack("bare-nextjs"),
+    "nextjs-entities": _stack(
         "nextjs-entities",
+        production_dockerfile="Dockerfile.prod",
+        needs_database=True,
+    ),
+    "nextjs-postgres-drizzle": _stack(
         "nextjs-postgres-drizzle",
+        production_dockerfile="Dockerfile.prod",
+        needs_database=True,
+    ),
+    "nextjs-realtime": _stack(
         "nextjs-realtime",
+        production_dockerfile="Dockerfile.prod",
+        needs_database=True,
+    ),
+    "vite-react-spa": _stack(
         "vite-react-spa",
+        production_dockerfile="Dockerfile.prod",
+    ),
+    "fastapi-postgres": _stack(
         "fastapi-postgres",
+        production_dockerfile="Dockerfile.prod",
+        needs_database=True,
+    ),
+    "telegram-bot-aiogram": _stack(
         "telegram-bot-aiogram",
-    )
+        production_dockerfile="Dockerfile.prod",
+        needs_database=True,
+    ),
 }
 
 
