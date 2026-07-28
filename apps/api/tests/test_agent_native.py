@@ -16,6 +16,13 @@ from omnia_api.services import agent_native
 from omnia_api.services.agent_native import _module_not_found_hint
 
 
+def test_native_agent_and_autoheal_use_opus_model() -> None:
+    from omnia_api.services import autoheal
+
+    assert agent_native._MODEL == "claude-opus-4-8"
+    assert autoheal._HEAL_MODEL == "claude-opus-4-8"
+
+
 def test_hint_none_on_clean_or_unrelated_error() -> None:
     assert _module_not_found_hint("") is None
     assert _module_not_found_hint("Build succeeded, 0 errors") is None
@@ -170,6 +177,44 @@ async def test_native_edit_file_counts_as_write_and_lands_in_files(
     )
     assert res.stop_reason == "max_steps"
     assert res.files == {"e.ts": "post-edit content"}
+
+
+@pytest.mark.asyncio
+async def test_native_tool_call_emits_chat_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every executed native tool remains visible through the agent.step WS path."""
+    calls = {"n": 0}
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str
+    ) -> dict[str, Any]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _turn(("write_file", {"path": "src/app.ts", "content": "ok"}))
+        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Готово"}]}
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": action.args["content"], "detail": "written"}
+
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(event_type: str, data: dict[str, Any]) -> None:
+        events.append((event_type, data))
+
+    await agent_native.run_native_build(
+        system="s", task="t", execute=execute, emit=emit, max_steps=5,
+    )
+
+    progress = [data for event_type, data in events if event_type == "agent.step"]
+    assert len(progress) == 1
+    assert progress[0]["step"] == 0
+    assert progress[0]["action"] == "write_file"
+    assert progress[0]["path"] == "src/app.ts"
+    assert "ok" in progress[0]["detail"]
+    assert progress[0]["ok"] is True
 
 
 @pytest.mark.asyncio
