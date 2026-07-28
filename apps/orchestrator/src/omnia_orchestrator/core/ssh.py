@@ -121,7 +121,26 @@ async def host_key(host: str, port: int) -> str | None:
         for line in (scan.stdout or "").splitlines()
         if line.strip() and not line.startswith("#")
     ]
-    return lines[0] if lines else None
+    if not lines:
+        return None
+
+    # ssh-keyscan probes the requested algorithms concurrently, so its output
+    # order is not stable. Persisting the first line made the confirmation step
+    # randomly compare (for example) an ECDSA key with an ED25519 key from the
+    # same server and report a false host-key change. Select one algorithm by a
+    # fixed preference order instead.
+    priority = {
+        "ssh-ed25519": 0,
+        "ecdsa-sha2-nistp256": 1,
+        "ssh-rsa": 2,
+    }
+
+    def sort_key(line: str) -> tuple[int, str]:
+        parts = line.split()
+        algorithm = parts[1] if len(parts) >= 3 else ""
+        return priority.get(algorithm, 99), line
+
+    return min(lines, key=sort_key)
 
 
 def host_fingerprint(known_host_line: str) -> str:

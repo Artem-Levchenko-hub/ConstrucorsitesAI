@@ -10,6 +10,27 @@ from omnia_orchestrator.core.shell import CmdResult
 HOST_KEY = "203.0.113.9 ssh-ed25519 QUJDREVGR0g="
 
 
+@pytest.mark.asyncio
+async def test_host_key_selection_is_stable_across_scan_order(monkeypatch) -> None:
+    ed25519 = "203.0.113.9 ssh-ed25519 RUQyNTUxOQ=="
+    ecdsa = "203.0.113.9 ecdsa-sha2-nistp256 RUNEU0E="
+    rsa = "203.0.113.9 ssh-rsa UlNB"
+    scans = iter(
+        [
+            "\n".join((ecdsa, ed25519, rsa)),
+            "\n".join((rsa, ecdsa, ed25519)),
+        ]
+    )
+
+    async def fake_run(*_args, **_kwargs) -> CmdResult:
+        return CmdResult(0, next(scans), "")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+
+    assert await ssh.host_key("203.0.113.9", 22) == ed25519
+    assert await ssh.host_key("203.0.113.9", 22) == ed25519
+
+
 def test_preflight_ready() -> None:
     result = ssh._preflight(
         "\n".join(

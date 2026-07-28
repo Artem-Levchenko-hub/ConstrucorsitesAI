@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.routers import projects as projects_router
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
@@ -111,3 +112,63 @@ async def test_target_requires_fingerprint_confirmation_and_preflight(
     # Secret rotation requires re-authentication, but keeps the confirmed host
     # identity so an existing remote runtime can still be cleaned up safely.
     assert rotated.json()["resolved_ip"] == "203.0.113.9"
+
+
+async def test_changed_host_key_is_not_adopted_after_failed_confirmation(
+    client: httpx.AsyncClient, db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await client.post(
+        "/api/auth/register",
+        json={"email": "byo-key-change@example.com", "password": "secret123"},
+    )
+    created = await client.post(
+        "/api/deploy-targets",
+        json={
+            "label": "Pinned VPS",
+            "ssh_host": "vps.example.com",
+            "ssh_port": 22,
+            "ssh_user": "deploy",
+            "auth_type": "password",
+            "secret": "ssh-password",
+        },
+    )
+    target_id = created.json()["id"]
+    trusted_key = "203.0.113.9 ssh-ed25519 VFJVU1RFRA=="
+    changed_key = "203.0.113.9 ssh-ed25519 Q0hBTkdFRA=="
+
+    async def fake_verify(payload):
+        if not payload.get("known_host_key"):
+            return {
+                "ok": False,
+                "detail": "Подтвердите ключ",
+                "docker_ok": False,
+                "host_key": trusted_key,
+                "host_fingerprint": "SHA256:trusted",
+                "resolved_ip": "203.0.113.9",
+                "requires_confirmation": True,
+            }
+        return {
+            "ok": False,
+            "detail": "Ключ сервера изменился",
+            "docker_ok": False,
+            "host_key": changed_key,
+            "host_fingerprint": "SHA256:changed",
+            "resolved_ip": "203.0.113.10",
+            "requires_confirmation": False,
+        }
+
+    monkeypatch.setattr(orchestrator_client, "verify_deploy_target", fake_verify)
+    discovered = await client.post(f"/api/deploy-targets/{target_id}/verify")
+    assert discovered.json()["requires_confirmation"] is True
+
+    rejected = await client.post(
+        f"/api/deploy-targets/{target_id}/verify?confirm_host_key=true"
+    )
+    assert rejected.json()["ok"] is False
+
+    db_session.expire_all()
+    stored = await db_session.get(DeployTarget, target_id)
+    assert stored is not None
+    assert stored.known_host_key == trusted_key
+    assert stored.host_fingerprint == "SHA256:trusted"
+    assert stored.resolved_ip == "203.0.113.9"

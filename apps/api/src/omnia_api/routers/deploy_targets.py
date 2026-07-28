@@ -181,11 +181,17 @@ async def verify_target(
         "ok" if ok else "pending_confirmation" if requires_confirmation else "failed"
     )
     target.verify_detail = result.get("detail") or None
-    if result.get("host_key"):
+    # A failed confirmed check may include the newly observed (mismatching)
+    # host key for diagnostics. Never replace the trusted identity with that
+    # value: doing so would let a second confirmation attempt authenticate to
+    # the changed host. Only discovery (which still requires an explicit user
+    # confirmation) or a successful pinned check may persist host identity.
+    identity_may_be_persisted = requires_confirmation or ok
+    if result.get("host_key") and identity_may_be_persisted:
         target.known_host_key = result["host_key"]
-    if result.get("host_fingerprint"):
+    if result.get("host_fingerprint") and identity_may_be_persisted:
         target.host_fingerprint = result["host_fingerprint"]
-    if result.get("resolved_ip"):
+    if result.get("resolved_ip") and identity_may_be_persisted:
         target.resolved_ip = result["resolved_ip"]
     if result.get("capabilities"):
         target.capabilities = result["capabilities"]
