@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 ErrorCode = Literal[
+    "feature_disabled",
     "validation_failed",
     "unauthorized",
     "forbidden",
@@ -51,6 +52,10 @@ ErrorCode = Literal[
     "domain_invalid",
     "domain_dns_mismatch",
     "domain_cert_failed",
+    "hero_media_asset_not_found",
+    "hero_media_plan_not_found",
+    "hero_media_render_not_found",
+    "hero_media_invalid_state",
 ]
 
 

@@ -12,6 +12,7 @@ No LLM, no gateway, no wallet — uploading your own image is free.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 from io import BytesIO
 
@@ -30,6 +31,16 @@ class UploadRejected(Exception):
     """The bytes are not a safe, supported raster image (→ 400)."""
 
 
+@dataclass(frozen=True)
+class UploadedAsset:
+    url: str
+    storage_key: str
+    mime_type: str
+    width: int
+    height: int
+    bytes_size: int
+
+
 def _ensure_bucket(client, bucket: str) -> None:
     """Create the bucket if missing. On prod ``omnia-images`` already exists and
     is public-read; this just covers a fresh environment."""
@@ -41,7 +52,15 @@ def _ensure_bucket(client, bucket: str) -> None:
 
 
 def sanitize_and_upload(raw: bytes, project_id: str) -> str:
-    """Validate → re-encode → store. Returns the public URL.
+    """Validate → re-encode → store. Returns only the public URL.
+
+    Backward-compatible wrapper for the original manual image upload flow.
+    """
+    return sanitize_and_upload_record(raw, project_id).url
+
+
+def sanitize_and_upload_record(raw: bytes, project_id: str) -> UploadedAsset:
+    """Validate → re-encode → store, returning full asset metadata.
 
     Raises ``UploadRejected`` for anything that isn't a supported raster image
     (Pillow can't open it, unsupported format, empty, or over the size cap).
@@ -89,7 +108,19 @@ def sanitize_and_upload(raw: bytes, project_id: str) -> str:
         bucket, key, BytesIO(data), length=len(data), content_type=content_type
     )
     base = settings.minio_public_url.rstrip("/")
-    return f"{base}/{bucket}/{key}"
+    return UploadedAsset(
+        url=f"{base}/{bucket}/{key}",
+        storage_key=key,
+        mime_type=content_type,
+        width=int(img.width),
+        height=int(img.height),
+        bytes_size=len(data),
+    )
 
 
-__all__ = ["sanitize_and_upload", "UploadRejected"]
+__all__ = [
+    "UploadedAsset",
+    "sanitize_and_upload",
+    "sanitize_and_upload_record",
+    "UploadRejected",
+]

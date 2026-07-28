@@ -222,6 +222,19 @@ class Settings(BaseSettings):
     # cheap images this MUST be bounded or a "video on every section" prompt could
     # burn thousands per build (review 2026-07-17). Env: VIDEO_GEN_MAX_UNIQUE.
     video_gen_max_unique: int = Field(default=3)
+    # Hero-media MVP (2026-07-28): a dedicated flow for one generated first
+    # screen that decides between static/product-demo/motion/video/cinematic
+    # instead of treating video as the default. Off by default so the feature
+    # can land additive and stay dark in production until the planner + queue +
+    # asset pipeline are proven.
+    use_hero_media_mvp: bool = Field(default=False)
+    hero_media_max_assets: int = Field(default=6)
+    # Local/live E2E harness: replaces multimodal planning + vendor media calls
+    # with a deterministic in-process stub, while still exercising the real API,
+    # DB rows, worker queue, WS invalidation, preview and snapshot-apply path.
+    # Keep false outside explicit local tests so product behaviour never silently
+    # drifts from real providers.
+    hero_media_stub_mode: bool = Field(default=False)
 
     # Live image drop-in (2026-06-06) — emit a per-image `image.resolved` WS
     # event as each generated picture finishes, so the streaming preview can

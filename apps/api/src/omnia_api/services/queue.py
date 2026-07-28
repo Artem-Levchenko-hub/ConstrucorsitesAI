@@ -17,6 +17,8 @@ ENTITY_GATE_JOB = "omnia_api.workers.quality.gate_entity_app"
 # Exe-build: package a Python project into a Windows .exe + NSIS Setup installer.
 # job_timeout covers PyInstaller (~120s) + NSIS (~30s) + upload headroom.
 BUILD_EXE_JOB = "omnia_api.workers.build_exe.build_exe_job"
+# Hero-media MVP: one asynchronous hero render (planner already completed).
+HERO_MEDIA_JOB = "omnia_api.workers.hero_media.hero_media_job"
 
 
 def _connection() -> sync_redis.Redis:
@@ -59,4 +61,17 @@ def enqueue_build_exe(
         slug,
         files,
         job_timeout=420,
+    )
+
+
+def enqueue_hero_media_render(render_id: UUID) -> None:
+    """Queue one hero-media render pipeline.
+
+    Video generation may legitimately run for minutes, so this path must never
+    sit inside the ordinary request/response loop.
+    """
+    get_preview_queue().enqueue(
+        HERO_MEDIA_JOB,
+        str(render_id),
+        job_timeout=900,
     )

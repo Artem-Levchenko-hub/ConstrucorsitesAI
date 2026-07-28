@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Clapperboard,
   ExternalLink,
   RotateCw,
   Smartphone,
@@ -36,6 +37,7 @@ import { shortSha, cn, formatRelativeTime } from "@/lib/utils";
 import { StreamingPreviewFrame } from "./StreamingPreviewFrame";
 import { StreamingCodeView } from "./StreamingCodeView";
 import { StreamingAgentCodeView } from "./StreamingAgentCodeView";
+import { HeroMediaPanel } from "./HeroMediaPanel";
 import { StylePanel } from "./StylePanel";
 import { CodeView } from "./CodeView";
 
@@ -64,6 +66,7 @@ export function PreviewFrame({ project }: { project: Project }) {
   const setInspectMode = useInspectorStore((s) => s.setInspectMode);
   const addSelection = useInspectorStore((s) => s.addSelection);
   const selections = useInspectorStore((s) => s.selections);
+  const [heroMediaOpen, setHeroMediaOpen] = useState(false);
   const prevPickIds = useRef<string[]>([]);
   // Client-side dedup + cap for preview runtime errors forwarded by the inspector.
   // The inspector already dedups per page load; this guards across reloads so a
@@ -76,13 +79,20 @@ export function PreviewFrame({ project }: { project: Project }) {
   const setStyleMode = useStyleEditStore((s) => s.setStyleMode);
   const styleSelected = useStyleEditStore((s) => s.selected);
   const onToggleInspect = useCallback(() => {
+    setHeroMediaOpen(false);
     setStyleMode(false);
     toggleInspect();
   }, [setStyleMode, toggleInspect]);
   const onToggleStyle = useCallback(() => {
+    setHeroMediaOpen(false);
     if (!styleMode) setInspectMode(false);
     setStyleMode(!styleMode);
   }, [styleMode, setStyleMode, setInspectMode]);
+  const onToggleHeroMedia = useCallback(() => {
+    setInspectMode(false);
+    setStyleMode(false);
+    setHeroMediaOpen((prev) => !prev);
+  }, [setInspectMode, setStyleMode]);
   // Tracks which iframe key has emitted `omnia:inspect:ready` — used by the
   // race-fallback timer to know whether to warn the user.
   const inspectorReadyKeyRef = useRef<number | null>(null);
@@ -675,6 +685,28 @@ export function PreviewFrame({ project }: { project: Project }) {
               <Button
                 size="sm"
                 variant="ghost"
+                data-testid="hero-media-toggle"
+                onClick={onToggleHeroMedia}
+                disabled={viewingOld}
+                title={
+                  viewingOld
+                    ? "Недоступно при просмотре старой версии"
+                    : heroMediaOpen
+                      ? "Закрыть hero media"
+                      : "Собрать и применить сильный первый экран из фото"
+                }
+                className={cn(
+                  "gap-1.5",
+                  heroMediaOpen && "text-accent bg-accent-subtle",
+                )}
+              >
+                <Clapperboard className="h-3.5 w-3.5" />
+                Hero
+              </Button>
+
+              <Button
+                size="sm"
+                variant="ghost"
                 onClick={() => setIframeKey((k) => k + 1)}
                 title="Перезагрузить превью"
               >
@@ -976,6 +1008,17 @@ export function PreviewFrame({ project }: { project: Project }) {
 
                 {styleMode && styleSelected && (
                   <StylePanel projectId={project.id} post={postToPreview} />
+                )}
+                {heroMediaOpen && (
+                  <HeroMediaPanel
+                    open={heroMediaOpen}
+                    project={liveProject ?? project}
+                    onClose={() => setHeroMediaOpen(false)}
+                    onApplied={() => {
+                      setHeroMediaOpen(false);
+                      selectSnapshot(null);
+                    }}
+                  />
                 )}
               </div>
             </>

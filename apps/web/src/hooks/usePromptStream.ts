@@ -430,6 +430,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         return;
       }
 
+      if (event.type === "hero-media.updated") {
+        qc.invalidateQueries({ queryKey: ["hero-media-assets", projectId] });
+        qc.invalidateQueries({ queryKey: ["hero-media-plans", projectId] });
+        qc.invalidateQueries({ queryKey: ["hero-media-renders", projectId] });
+        return;
+      }
+
       if (event.type === "onboarding.survey") {
         // Async onboarding: the first-turn question batch was planned out of band
         // (Opus ~60-70s > the 30s POST budget) and arrives here. Stash it under the

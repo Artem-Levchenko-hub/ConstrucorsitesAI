@@ -171,6 +171,135 @@ export type Charge = {
   created_at: IsoDateTime;
 };
 
+export type HeroMediaPlanKind =
+  | "static"
+  | "product-demo"
+  | "motion"
+  | "video"
+  | "cinematic";
+
+export type HeroMediaFocusPreference =
+  | "auto"
+  | "product"
+  | "interface"
+  | "atmosphere"
+  | "result";
+
+export type HeroMediaMotionPreference =
+  | "auto"
+  | "calm"
+  | "lively"
+  | "cinematic";
+
+export type HeroMediaAssetRole = "source" | "poster" | "clip";
+export type HeroMediaAssetKind = "image" | "video";
+
+export type HeroMediaAsset = {
+  id: Uuid;
+  project_id: Uuid;
+  owner_id: Uuid;
+  asset_role: HeroMediaAssetRole;
+  media_kind: HeroMediaAssetKind;
+  storage_url: string;
+  storage_key: string | null;
+  mime_type: string;
+  original_filename: string | null;
+  width: number | null;
+  height: number | null;
+  duration_ms: number | null;
+  bytes_size: number | null;
+  consent_confirmed: boolean;
+  moderation_status: string;
+  details: Record<string, unknown> | null;
+  created_at: IsoDateTime;
+};
+
+export type HeroMediaShot = {
+  label: string;
+  purpose: string;
+  primary_asset_index: number | null;
+  secondary_asset_index: number | null;
+  use_source_as_poster: boolean;
+  still_prompt: string | null;
+  motion_prompt: string | null;
+  first_frame_prompt: string | null;
+  last_frame_prompt: string | null;
+};
+
+export type HeroMediaDecision = {
+  plan_kind: HeroMediaPlanKind;
+  confidence: number;
+  explanation: string;
+  recommended_focus: string;
+  recommended_tone: string;
+  brand_fit_note: string;
+  performance_note: string;
+  accessibility_note: string;
+  requires_confirmation: boolean;
+  hero_headline: string;
+  hero_subheadline: string;
+  primary_cta_label: string;
+  visual_style: string;
+  storyboard: HeroMediaShot[];
+};
+
+export type HeroMediaPlan = {
+  id: Uuid;
+  project_id: Uuid;
+  owner_id: Uuid;
+  status: "draft" | "approved" | "rejected";
+  input_prompt: string;
+  business_type: string | null;
+  style_preference: string | null;
+  focus_preference: string | null;
+  motion_preference: string | null;
+  asset_ids: Uuid[];
+  recommended_plan_kind: HeroMediaPlanKind;
+  selected_plan_kind: HeroMediaPlanKind | null;
+  plan: HeroMediaDecision;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+};
+
+export type HeroMediaBundle = {
+  mode: HeroMediaPlanKind;
+  poster_url: string;
+  video_url: string | null;
+  headline: string;
+  subheadline: string;
+  primary_cta_label: string;
+  explanation: string;
+  html: string;
+  css: string;
+  js: string;
+};
+
+export type HeroMediaRender = {
+  id: Uuid;
+  project_id: Uuid;
+  owner_id: Uuid;
+  brief_id: Uuid;
+  status: "queued" | "rendering" | "assembling" | "completed" | "failed";
+  media_plan: HeroMediaPlanKind;
+  status_detail: string | null;
+  provider_summary: string | null;
+  poster_asset_id: Uuid | null;
+  video_asset_id: Uuid | null;
+  applied_snapshot_id: Uuid | null;
+  bundle: HeroMediaBundle | null;
+  progress_log: {
+    at: IsoDateTime;
+    status: string;
+    detail: string;
+  }[];
+  error: string | null;
+  retry_count: number;
+  created_at: IsoDateTime;
+  started_at: IsoDateTime | null;
+  finished_at: IsoDateTime | null;
+  applied_at: IsoDateTime | null;
+};
+
 /** A font the in-preview picker can apply, from `GET /api/fonts`. */
 export type FontOption = {
   family: string;
@@ -600,6 +729,21 @@ export type WsEvent =
   | { type: "deploy.progress"; data: { deploy: DeployStatus } }
   | { type: "deploy.done"; data: { deploy: DeployStatus } }
   | { type: "deploy.failed"; data: { error: string } }
+  | {
+      type: "hero-media.updated";
+      data: {
+        render_id: Uuid;
+        status: "queued" | "rendering" | "assembling" | "completed" | "failed";
+        status_detail?: string | null;
+        retry_count?: number;
+        progress_log?: {
+          at: IsoDateTime;
+          status: string;
+          detail: string;
+        }[];
+        error?: string | null;
+      };
+    }
   | {
       // Agentic builder transcript (messages.py `_agent_emit`). One event per
       // loop step so the chat renders a live Claude-Code-style step list (tool +

@@ -3,6 +3,9 @@ from omnia_api.models.base import Base
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.generation_run import GenerationRun
+from omnia_api.models.hero_media_asset import HeroMediaAsset
+from omnia_api.models.hero_media_brief import HeroMediaBrief
+from omnia_api.models.hero_media_render import HeroMediaRender
 from omnia_api.models.lead import Lead
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
@@ -18,6 +21,9 @@ __all__ = [
     "CustomDomain",
     "DeployTarget",
     "GenerationRun",
+    "HeroMediaAsset",
+    "HeroMediaBrief",
+    "HeroMediaRender",
     "Lead",
     "Message",
     "Project",
