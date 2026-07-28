@@ -94,7 +94,7 @@ async def run_ui_flow(
 ) -> dict[str, Any]:
     email = f"hero-media-e2e-{int(time.time())}-{uuid4().hex[:6]}@example.com"
     password = "HeroMedia123"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(artifacts_dir.mkdir, parents=True, exist_ok=True)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -124,7 +124,10 @@ async def run_ui_flow(
             await page.wait_for_timeout(1200)
             await page.get_by_test_id("hero-media-toggle").click()
             try:
-                await page.get_by_test_id("hero-media-panel").wait_for(state="visible", timeout=5000)
+                await page.get_by_test_id("hero-media-panel").wait_for(
+                    state="visible",
+                    timeout=5000,
+                )
             except Exception:
                 await page.screenshot(
                     path=str(artifacts_dir / f"{scenario_label}-panel-open-failed.png")
@@ -152,12 +155,24 @@ async def run_ui_flow(
         await page.get_by_test_id(f"hero-media-motion-{motion_preference}").click()
         await page.get_by_test_id("hero-media-build-plan").click()
 
-        await page.get_by_test_id("hero-media-approve-plan").wait_for(timeout=45_000)
+        try:
+            await page.get_by_test_id("hero-media-approve-plan").wait_for(timeout=120_000)
+        except Exception:
+            await page.screenshot(
+                path=str(artifacts_dir / f"{scenario_label}-plan-failed.png")
+            )
+            (artifacts_dir / f"{scenario_label}-plan-failed.html").write_text(
+                await page.content(),
+                encoding="utf-8",
+            )
+            raise
         await page.get_by_test_id(f"hero-media-plan-option-{override_plan}").click()
         await page.get_by_test_id("hero-media-approve-plan").click()
 
         await page.get_by_test_id("hero-media-render").click()
-        await page.get_by_test_id("hero-media-preview-frame").wait_for(timeout=60_000)
+        await page.get_by_test_id("hero-media-preview-frame").wait_for(
+            timeout=max(60_000, int(render_timeout_s * 1000))
+        )
         await page.screenshot(path=str(artifacts_dir / f"{scenario_label}-panel.png"))
 
         client = await _http_client_from_context(context, api_url)
@@ -231,6 +246,10 @@ async def _poll_render(
     if not renders:
         return None
     render = renders[0]
+    if render["status"] == "failed":
+        raise RuntimeError(
+            f"hero-media render failed: {render.get('error') or render.get('status_detail')}"
+        )
     if at_least is not None and len(render.get("progress_log") or []) < at_least:
         return None
     return render if render["status"] == "completed" else None
