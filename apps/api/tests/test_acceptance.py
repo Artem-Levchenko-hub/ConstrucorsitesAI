@@ -9,8 +9,9 @@ from omnia_api.services.acceptance import _structural_issues
 # floor reads as flat, not "enterprise with one generation", and is meant to fail.
 _GOOD = (
     "<!doctype html><html lang='ru'><head><title>T</title>"
+    "<script src='assets/omnia-depth.js' defer></script>"
     "<style>h1{font-size:3rem}h2{font-size:1.5rem}</style></head><body>"
-    "<header><h1>Заголовок</h1>"
+    "<header data-omnia-depth='product'><h1>Заголовок</h1>"
     "<a href='#contacts'>Связаться</a></header>"
     "<section id='features'><h2>Возможности</h2><p>Описание</p></section>"
     "<section id='contacts'>x</section>"

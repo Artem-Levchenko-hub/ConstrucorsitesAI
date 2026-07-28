@@ -8,6 +8,7 @@ from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
 
@@ -2505,6 +2506,14 @@ _KIT_LINK = '<link rel="stylesheet" href="assets/omnia-kit.css">'
 # output + re-injected here), so the order is guaranteed regardless of the model.
 _ANIME_SCRIPT = '<script src="assets/anime.min.js" defer></script>'
 _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
+_DEPTH_SCRIPT = '<script src="assets/omnia-depth.js" defer></script>'
+_DEPTH_ASSET = (
+    Path(__file__).resolve().parents[1]
+    / "templates"
+    / "blank"
+    / "assets"
+    / "omnia-depth.js"
+)
 
 # Container-backed React templates that hot-reload `<file path=…>` blocks into a
 # dev container. They render React (not static index.html), so they skip the
@@ -2837,7 +2846,8 @@ def _ensure_kit_linked(files: dict[str, str]) -> dict[str, str]:
         has_css = "assets/omnia-kit.css" in content
         has_anime = "assets/anime.min.js" in content
         has_js = "assets/omnia-kit.js" in content
-        if has_css and has_anime and has_js:
+        has_depth = "assets/omnia-depth.js" in content
+        if has_css and has_anime and has_js and has_depth:
             continue
         inject = ""
         if not has_css:
@@ -2846,11 +2856,22 @@ def _ensure_kit_linked(files: dict[str, str]) -> dict[str, str]:
             inject += "  " + _ANIME_SCRIPT + "\n"
         if not has_js:
             inject += "  " + _KIT_SCRIPT + "\n"
+        if not has_depth:
+            inject += "  " + _DEPTH_SCRIPT + "\n"
         if "</head>" in content:
             content = content.replace("</head>", inject + "</head>", 1)
         else:
             content = inject + content
         out[path] = content
+    # Unlike the older static kit copies already present in project repos, this
+    # depth runtime must reach existing projects too. Re-commit the canonical
+    # managed asset on every full static build; model output for this path was
+    # stripped via KIT_FILES above, so users cannot overwrite it.
+    if any(p.lower().endswith((".html", ".htm")) for p in files):
+        try:
+            out["assets/omnia-depth.js"] = _DEPTH_ASSET.read_text(encoding="utf-8")
+        except OSError:
+            pass  # generation remains fail-soft; the depth gate will request repair
     return out
 
 
@@ -4468,6 +4489,12 @@ async def _process_prompt(
                 from omnia_api.services.backend_guardrail import (
                     check_backend as _check_backend,
                 )
+                from omnia_api.services.depth_experience_gate import (
+                    feedback as _depth_feedback,
+                )
+                from omnia_api.services.depth_experience_gate import (
+                    scan as _scan_depth,
+                )
 
                 def _guard_view() -> dict[str, str]:
                     if project_template != "max_miniapp":
@@ -4495,6 +4522,13 @@ async def _process_prompt(
                             failures=[f"{v.path}: {v.rule}" for v in _gv.violations],
                         )
                     ]
+                    _depth = _scan_depth(files)
+                    if _depth.judged:
+                        _outcomes.append(_agf.GateOutcome(
+                            name="interactive_depth",
+                            passed=_depth.passed,
+                            failures=[_depth_feedback(_depth)] if not _depth.passed else [],
+                        ))
                     # SAST gate (K3a) — static injection/secret scan; blocking only
                     # when sast_gate_blocking is on (else advisory-logged below).
                     if get_settings().use_sast_gate:
@@ -4535,6 +4569,12 @@ async def _process_prompt(
                 if not _final_guard.safe:
                     print(
                         f"[PP] backend_guardrail VIOLATIONS: {_final_guard.summary}",
+                        flush=True,
+                    )
+                _final_depth = _scan_depth(files)
+                if _final_depth.judged and not _final_depth.passed:
+                    print(
+                        f"[PP] depth_gate FINDINGS: {_final_depth.summary}",
                         flush=True,
                     )
                 # SAST advisory log — operators SEE injection/secret findings even

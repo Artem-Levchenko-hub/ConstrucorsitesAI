@@ -851,6 +851,19 @@ _NO_ACTION_NUDGE = (
     '<omnia:action name="done">{"summary": "..."}</omnia:action>.'
 )
 
+DEPTH_EXPERIENCE_CONTRACT = """VISUAL DEPTH STANDARD (required on a fresh web build):
+Create one contextual interactive depth moment on the public/overview surface.
+Use the managed marker `data-omnia-depth="sculpture|orbital|product|media"` when
+the template provides it, or implement real WebGL/Three/animated canvas, or a
+media-backed 2-4 layer perspective scene reacting to pointer/scroll. A flat SVG,
+gradient/blob, or ordinary parallax does NOT count as 3D. Keep dense dashboards,
+tables, and forms restrained: the depth belongs in a marketing hero, overview,
+onboarding, product demo, or empty state and must explain the actual business.
+Use project-specific imagery/data/colors — never force generic mountains or the
+same demo scene. Provide a complete static fallback, honour
+prefers-reduced-motion, pause offscreen work, cap device pixel ratio, keep canvas
+aria-hidden, and ensure content/CTA works without WebGL or hover."""
+
 
 SYSTEM_PROMPT = """You are an autonomous full-stack engineer building a real \
 Next.js app inside a live container, working like a developer: make changes, \
@@ -923,6 +936,8 @@ weak contrast) — apply them so the page is not just working but genuinely good
 `done` ONLY after the build is clean, the route renders, AND `see` has no blocking issues.
 - Never repeat an identical read OR an identical write. Never ask the user questions — \
 decide and act. One action per reply."""
+
+SYSTEM_PROMPT = SYSTEM_PROMPT + "\n\n" + DEPTH_EXPERIENCE_CONTRACT
 
 
 EDIT_SYSTEM_PROMPT = """You are editing an EXISTING, working Next.js app inside a \
@@ -1040,7 +1055,7 @@ def build_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     first draft already carries the security/a11y/perf canons the gates enforce —
     knowledge ALIGNED with enforcement. None/empty → unchanged (current behaviour).
     """
-    parts = [LOOP_PROTOCOL, stack_guide.strip()]
+    parts = [LOOP_PROTOCOL, stack_guide.strip(), DEPTH_EXPERIENCE_CONTRACT]
     if skills and skills.strip():
         parts.append(skills.strip())
     return "\n\n".join(parts)

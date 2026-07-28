@@ -2408,6 +2408,51 @@ CTA-СЕКЦИЯ (волны inline SVG):
 (градиент + блобы + SVG-паттерн). Голые `bg-white` или `bg-slate-50` без
 декора = плоский AI-сайт. ИЗБЕГАЙ."""
 
+_DEPTH_EXPERIENCE = """\
+ИНТЕРАКТИВНАЯ ГЛУБИНА — ОБЯЗАТЕЛЬНЫЙ СТАНДАРТ, НЕ «3D-ИШ» ИМИТАЦИЯ.
+На каждом визуальном сайте спроектируй ОДИН сильный, уместный depth-момент.
+Он обязан давать настоящую пространственную реакцию на pointer/scroll, а не
+плоский SVG, который просто ездит вверх-вниз.
+
+ВЫБЕРИ ОДИН режим под задачу (не навязывай всем одинаковый арт):
+
+1. WEBGL-СЦЕНА (tech, creative, premium, product): используй управляемый Omnia
+   primitive — он уже подключён, внешние зависимости не нужны:
+   <div class="omnia-depth min-h-[520px]" data-omnia-depth="sculpture"
+        data-depth-colors="#0b1020,#155e75,#f59e0b,#030712">
+     <div data-depth-content>…читаемый hero-контент…</div>
+   </div>
+   Варианты: sculpture (органичная скульптура), orbital (несколько тел), product
+   (строже, геометричнее). Цвета — 4 HEX из палитры проекта. Это настоящий
+   ray-marched WebGL с освещением, перспективой и pointer-orbit, не градиент.
+
+2. MEDIA-DEPTH (услуги, недвижимость, ресторан, travel, retail): реальное
+   содержательное фото/видео — главный слой, не декор. Оберни 2–4 осмысленных
+   слоя в `data-omnia-depth="media"` и пометь глубину:
+   <div data-omnia-depth="media" class="relative min-h-[70vh]">
+     <img data-depth-layer="1" …реальный/generated бренд-кадр…>
+     <div data-depth-layer="2">…локальный свет/продукт/подпись…</div>
+     <div data-depth-layer="3" data-depth-content>…CTA/смысл…</div>
+   </div>
+   Для видео: muted autoplay loop playsinline + poster; контент не зависит от
+   autoplay. Слои связаны с предметом бизнеса, не случайные «горы».
+
+3. RESTRAINED PRODUCT DEPTH (корпоративный сайт/приложение): одна продуктовая
+   демонстрация, bento-макет или обзорный экран с perspective/translateZ,
+   реальными скриншотами/данными и pointer response. Не превращай рабочий
+   dashboard, форму или таблицу в аттракцион; глубина живёт в hero/overview/
+   onboarding/empty state, а плотный UI остаётся спокойным.
+
+НЕ ЗАСЧИТЫВАЕТСЯ: SVG-горы/волны + parallax; один CSS-градиент; blob; tilt одной
+пустой карточки; слово «3D» без canvas/WebGL/media layers; автоплей-видео без
+poster/fallback. Для своего кода допустимы Three.js/@react-three/fiber/WebGL/canvas,
+но только если стек уже поддерживает зависимость и сборка проверена.
+
+ПРОИЗВОДИТЕЛЬНОСТЬ И A11Y: один тяжёлый момент на страницу; canvas декоративный
+aria-hidden; DPR ≤ 1.6; анимация паузится вне viewport; pointer не обязателен для
+управления; `prefers-reduced-motion` показывает полностью читаемый статичный
+fallback; на mobile никакого overflow. Содержание/CTA доступны без WebGL/JS."""
+
 _IMAGE_GEN_ON = """\
 ФОТО НА САЙТЕ — ГЕНЕРАЦИЯ (data-omnia-gen). Для КАЖДОГО реального фото (hero-фон,
 блюда/продукты, услуга в процессе, интерьер, оборудование, галерея, атмосфера,
@@ -2491,7 +2536,12 @@ STATIC_TEMPLATES = frozenset({"blank", "landing", "portfolio", "blog"})
 # подключаются генерацией, но управляются Omnia — модель их не переписывает, а
 # messages.py фильтрует их из контекста и из возвращённых файлов (защита).
 KIT_FILES = frozenset(
-    {"assets/omnia-kit.css", "assets/omnia-kit.js", "assets/anime.min.js"}
+    {
+        "assets/omnia-kit.css",
+        "assets/omnia-kit.js",
+        "assets/anime.min.js",
+        "assets/omnia-depth.js",
+    }
 )
 
 # How many prior chat turns the writer sees on a build. Bumped 6→12 (owner
@@ -3656,6 +3706,7 @@ def build_system_prompt(
             *((_DESIGN_KIT,) if include_design_kit else ()),
             *((preset_block,) if preset_block else ()),
             _VISUAL_RICH_KIT,
+            _DEPTH_EXPERIENCE,
             image_block,
             _FUNCTIONAL_CONTRACT,
             _FULLSTACK_STACK,
@@ -3683,6 +3734,7 @@ def build_system_prompt(
             *((_DESIGN_KIT,) if include_design_kit else ()),
             *((preset_block,) if preset_block else ()),
             image_block,
+            _DEPTH_EXPERIENCE,
             _FUNCTIONAL_CONTRACT,
             _ENTITIES_STACK,
             _ENTITIES_UI,
@@ -3707,6 +3759,7 @@ def build_system_prompt(
             *((_DESIGN_KIT,) if include_design_kit else ()),
             *((preset_block,) if preset_block else ()),
             _VISUAL_RICH_KIT,
+            _DEPTH_EXPERIENCE,
             image_block,
             _FUNCTIONAL_CONTRACT,
             _SPA_STACK,
@@ -3788,6 +3841,7 @@ def build_system_prompt(
             _DETAILS_KIT,
             _SIGNATURE_MOVES,
             _VISUAL_RICH_KIT,
+            _DEPTH_EXPERIENCE,
             image_block,
             _FUNCTIONAL_CONTRACT,
             _STATIC_STACK,

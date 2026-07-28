@@ -132,7 +132,12 @@ def test_fullstack_prompt_excludes_static_kit() -> None:
 
 def test_kit_files_constant() -> None:
     assert KIT_FILES == frozenset(
-        {"assets/omnia-kit.css", "assets/omnia-kit.js", "assets/anime.min.js"}
+        {
+            "assets/omnia-kit.css",
+            "assets/omnia-kit.js",
+            "assets/anime.min.js",
+            "assets/omnia-depth.js",
+        }
     )
 
 
@@ -142,6 +147,7 @@ def test_ensure_kit_linked_injects_when_missing() -> None:
     assert "assets/omnia-kit.css" in out
     assert "assets/anime.min.js" in out
     assert "assets/omnia-kit.js" in out
+    assert "assets/omnia-depth.js" in out
     assert out.index("omnia-kit.css") < out.index("</head>")  # injected before </head>
     # anime.min.js must precede omnia-kit.js (kit reads window.anime on load).
     assert out.index("anime.min.js") < out.index("omnia-kit.js")
@@ -151,9 +157,12 @@ def test_ensure_kit_linked_idempotent_when_present() -> None:
     html = (
         '<html><head><link rel="stylesheet" href="assets/omnia-kit.css">'
         '<script src="assets/anime.min.js" defer></script>'
-        '<script src="assets/omnia-kit.js" defer></script></head><body></body></html>'
+        '<script src="assets/omnia-kit.js" defer></script>'
+        '<script src="assets/omnia-depth.js" defer></script></head><body></body></html>'
     )
-    assert _ensure_kit_linked({"index.html": html})["index.html"] == html
+    out = _ensure_kit_linked({"index.html": html})
+    assert out["index.html"] == html
+    assert "assets/omnia-depth.js" in out
 
 
 def test_ensure_kit_linked_ignores_non_html() -> None:
