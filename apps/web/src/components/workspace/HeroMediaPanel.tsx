@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   Clapperboard,
+  ExternalLink,
   ImagePlus,
   Loader2,
   RefreshCw,
@@ -107,12 +108,24 @@ function planBadgeVariant(plan: HeroMediaPlanKind) {
   return "success" as const;
 }
 
+function planLabel(plan: HeroMediaPlanKind) {
+  return PLAN_OPTIONS.find((option) => option.value === plan)?.label ?? plan;
+}
+
 function renderBadgeVariant(status: string) {
   if (status === "completed") return "success" as const;
   if (status === "failed") return "danger" as const;
   if (status === "queued") return "default" as const;
   return "accent" as const;
 }
+
+const RENDER_STATUS_LABELS: Record<string, string> = {
+  queued: "В очереди",
+  rendering: "Генерация",
+  assembling: "Сборка",
+  completed: "Готово",
+  failed: "Нужен повтор",
+};
 
 export function HeroMediaPanel({
   open,
@@ -129,16 +142,21 @@ export function HeroMediaPanel({
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [consentConfirmed, setConsentConfirmed] = useState(false);
-  const [prompt, setPrompt] = useState("");
-  const [businessType, setBusinessType] = useState("");
-  const [stylePreference, setStylePreference] = useState("");
-  const [focusPreference, setFocusPreference] =
-    useState<HeroMediaFocusPreference>("auto");
-  const [motionPreference, setMotionPreference] =
-    useState<HeroMediaMotionPreference>("auto");
-  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [promptDraft, setPrompt] = useState<string | null>(null);
+  const [businessTypeDraft, setBusinessType] = useState<string | null>(null);
+  const [stylePreferenceDraft, setStylePreference] = useState<string | null>(
+    null,
+  );
+  const [focusPreferenceDraft, setFocusPreference] =
+    useState<HeroMediaFocusPreference | null>(null);
+  const [motionPreferenceDraft, setMotionPreference] =
+    useState<HeroMediaMotionPreference | null>(null);
+  const [selectedAssetIdsDraft, setSelectedAssetIds] = useState<
+    string[] | null
+  >(null);
   const [selectedPlanKind, setSelectedPlanKind] =
     useState<HeroMediaPlanKind | null>(null);
+  const [showSetup, setShowSetup] = useState(false);
 
   const { data: assets = [] } = useQuery({
     queryKey: ["hero-media-assets", project.id],
@@ -159,6 +177,25 @@ export function HeroMediaPanel({
   const latestPlan = plans[0] ?? null;
   const latestRenderStub = renders[0] ?? null;
   const latestRenderId = latestRenderStub?.id ?? null;
+  const prompt = promptDraft ?? latestPlan?.input_prompt ?? "";
+  const businessType =
+    businessTypeDraft ?? latestPlan?.business_type ?? "";
+  const stylePreference =
+    stylePreferenceDraft ?? latestPlan?.style_preference ?? "";
+  const focusPreference =
+    focusPreferenceDraft ??
+    FOCUS_OPTIONS.find(
+      (option) => option.value === latestPlan?.focus_preference,
+    )?.value ??
+    "auto";
+  const motionPreference =
+    motionPreferenceDraft ??
+    MOTION_OPTIONS.find(
+      (option) => option.value === latestPlan?.motion_preference,
+    )?.value ??
+    "auto";
+  const selectedAssetIds =
+    selectedAssetIdsDraft ?? latestPlan?.asset_ids ?? [];
 
   const { data: activeRender } = useQuery({
     queryKey: ["hero-media-render", project.id, latestRenderId],
@@ -196,9 +233,12 @@ export function HeroMediaPanel({
     },
     onSuccess: (uploaded) => {
       qc.invalidateQueries({ queryKey: ["hero-media-assets", project.id] });
-      setSelectedAssetIds((prev) => [
-        ...new Set([...prev, ...uploaded.map((asset) => asset.id)]),
-      ]);
+      setSelectedAssetIds((prev) => {
+        const current = prev ?? latestPlan?.asset_ids ?? [];
+        return [
+          ...new Set([...current, ...uploaded.map((asset) => asset.id)]),
+        ];
+      });
       toast.success("Фотографии загружены");
     },
     onError: (error) => {
@@ -286,7 +326,13 @@ export function HeroMediaPanel({
   });
 
   const planApproved = latestPlan?.status === "approved";
-  const canApply = !!activeRender?.bundle;
+  const hasCompletedResult =
+    activeRender?.status === "completed" && !!activeRender.bundle;
+  const canApply =
+    !!activeRender?.bundle && !activeRender.applied_snapshot_id;
+  const previewUrl = activeRender
+    ? heroMediaPreviewUrl(project.id, activeRender.id)
+    : null;
 
   if (!open) return null;
 
@@ -303,30 +349,66 @@ export function HeroMediaPanel({
         <div className="flex h-full flex-col">
           <div className="flex items-start justify-between gap-3 border-b border-border-subtle px-4 py-4">
             <div className="space-y-1">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="accent">Hero media</Badge>
-                <span className="text-[11px] text-fg-tertiary">
-                  один сильный экран
-                </span>
+                {activeRender ? (
+                  <Badge variant={renderBadgeVariant(activeRender.status)}>
+                    {activeRender.applied_snapshot_id
+                      ? "Применено"
+                      : (RENDER_STATUS_LABELS[activeRender.status] ??
+                        activeRender.status)}
+                  </Badge>
+                ) : (
+                  <span className="text-[11px] text-fg-secondary">
+                    один сильный экран
+                  </span>
+                )}
               </div>
               <div className="text-sm font-medium text-fg-primary">
                 Hero из фото и обычного брифа
               </div>
-              <div className="text-xs leading-5 text-fg-secondary">
-                Видео не включается автоматически: сначала система рекомендует
-                формат подачи, потом вы подтверждаете или меняете его.
-              </div>
+              {hasCompletedResult && !showSetup ? (
+                <button
+                  type="button"
+                  onClick={() => setShowSetup(true)}
+                  className="text-xs font-medium text-accent hover:text-accent-hover"
+                >
+                  Изменить исходные фото или бриф
+                </button>
+              ) : (
+                <div className="text-xs leading-5 text-fg-secondary">
+                  Видео не включается автоматически: сначала система рекомендует
+                  формат подачи, потом вы подтверждаете или меняете его.
+                </div>
+              )}
             </div>
-            <Button size="icon" variant="ghost" onClick={onClose}>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Закрыть Hero media"
+              onClick={onClose}
+            >
               <X className="h-4 w-4" />
             </Button>
           </div>
 
           <div className="flex-1 space-y-5 overflow-y-auto p-4 scrollbar-elegant">
-            <section className="space-y-3">
-              <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-tertiary">
-                1. Исходные фото
-              </div>
+            {hasCompletedResult && showSetup && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="w-full"
+                onClick={() => setShowSetup(false)}
+              >
+                Вернуться к готовому hero
+              </Button>
+            )}
+            {(!hasCompletedResult || showSetup) && (
+              <>
+                <section className="space-y-3">
+                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
+                    1. Исходные фото
+                  </div>
               <label className="flex items-start gap-2 rounded-lg border border-border-default bg-surface-base/60 px-3 py-3 text-xs leading-5 text-fg-secondary">
                 <input
                   type="checkbox"
@@ -396,11 +478,13 @@ export function HeroMediaPanel({
                         key={asset.id}
                         type="button"
                         onClick={() =>
-                          setSelectedAssetIds((prev) =>
-                            prev.includes(asset.id)
-                              ? prev.filter((id) => id !== asset.id)
-                              : [...prev, asset.id],
-                          )
+                          setSelectedAssetIds((prev) => {
+                            const current =
+                              prev ?? latestPlan?.asset_ids ?? [];
+                            return current.includes(asset.id)
+                              ? current.filter((id) => id !== asset.id)
+                              : [...current, asset.id];
+                          })
                         }
                         className={cn(
                           "relative overflow-hidden rounded-lg border bg-surface-base",
@@ -423,14 +507,15 @@ export function HeroMediaPanel({
                   })}
                 </div>
               )}
-            </section>
+                </section>
 
-            <section className="space-y-3">
-              <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-tertiary">
-                2. Что важно показать
-              </div>
+                <section className="space-y-3">
+                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
+                    2. Что важно показать
+                  </div>
               <Textarea
                 data-testid="hero-media-prompt"
+                aria-label="Что важно показать в первом экране"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="Например: хочу показать фактуру бутылки, цвет жидкости и ощущение дорогого вечернего света."
@@ -438,6 +523,7 @@ export function HeroMediaPanel({
               />
               <input
                 data-testid="hero-media-business-type"
+                aria-label="Тип продукта или бизнеса"
                 value={businessType}
                 onChange={(e) => setBusinessType(e.target.value)}
                 placeholder="Тип продукта или бизнеса"
@@ -445,6 +531,7 @@ export function HeroMediaPanel({
               />
               <input
                 data-testid="hero-media-style"
+                aria-label="Стиль бренда или настроение"
                 value={stylePreference}
                 onChange={(e) => setStylePreference(e.target.value)}
                 placeholder="Стиль бренда или mood"
@@ -452,7 +539,7 @@ export function HeroMediaPanel({
               />
 
               <div className="space-y-2">
-                <div className="text-xs text-fg-tertiary">
+                <div className="text-xs text-fg-secondary">
                   Что показать главным?
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -475,7 +562,7 @@ export function HeroMediaPanel({
               </div>
 
               <div className="space-y-2">
-                <div className="text-xs text-fg-tertiary">
+                <div className="text-xs text-fg-secondary">
                   Какой характер нужен?
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -511,16 +598,18 @@ export function HeroMediaPanel({
                 )}
                 Собрать рекомендацию
               </Button>
-            </section>
+                </section>
+              </>
+            )}
 
             {latestPlan && (
               <section className="space-y-3 border-t border-border-subtle pt-4">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-tertiary">
+                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
                     3. Рекомендация
                   </div>
                   <Badge variant={planBadgeVariant(latestPlan.recommended_plan_kind)}>
-                    {latestPlan.recommended_plan_kind}
+                    {planLabel(latestPlan.recommended_plan_kind)}
                   </Badge>
                 </div>
                 <div className="rounded-xl border border-border-default bg-surface-base/50 p-3 space-y-2">
@@ -538,75 +627,79 @@ export function HeroMediaPanel({
                   </div>
                 </div>
 
-                <div className="grid gap-2">
-                  {PLAN_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      data-testid={`hero-media-plan-option-${option.value}`}
-                      onClick={() => setSelectedPlanKind(option.value)}
-                      className={cn(
-                          "rounded-xl border px-3 py-3 text-left transition-colors",
-                          effectivePlanKind === option.value
-                            ? "border-accent bg-accent-subtle/25"
-                            : "border-border-default bg-surface-base/25 hover:border-border-strong",
-                        )}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-medium text-fg-primary">
-                            {option.label}
+                {(!hasCompletedResult || showSetup) && (
+                  <>
+                    <div className="grid gap-2">
+                      {PLAN_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          data-testid={`hero-media-plan-option-${option.value}`}
+                          onClick={() => setSelectedPlanKind(option.value)}
+                          className={cn(
+                            "rounded-xl border px-3 py-3 text-left transition-colors",
+                            effectivePlanKind === option.value
+                              ? "border-accent bg-accent-subtle/25"
+                              : "border-border-default bg-surface-base/25 hover:border-border-strong",
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-medium text-fg-primary">
+                                {option.label}
+                              </div>
+                              <div className="mt-1 text-xs leading-5 text-fg-secondary">
+                                {option.hint}
+                              </div>
+                            </div>
+                            {effectivePlanKind === option.value && (
+                              <Check className="h-4 w-4 shrink-0 text-accent" />
+                            )}
                           </div>
-                          <div className="mt-1 text-xs leading-5 text-fg-secondary">
-                            {option.hint}
-                          </div>
-                        </div>
-                        {effectivePlanKind === option.value && (
-                          <Check className="h-4 w-4 text-accent shrink-0" />
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-
-                {latestPlan.plan.storyboard.length > 0 && (
-                  <div className="rounded-xl border border-border-default bg-surface-base/35 p-3 space-y-2">
-                    <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-tertiary">
-                      Shot list
+                        </button>
+                      ))}
                     </div>
-                    {latestPlan.plan.storyboard.map((shot) => (
-                      <div key={shot.label} className="space-y-1">
-                        <div className="text-sm font-medium text-fg-primary">
-                          {shot.label}
-                        </div>
-                        <div className="text-xs leading-5 text-fg-secondary">
-                          {shot.purpose}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
 
-                <Button
-                  data-testid="hero-media-approve-plan"
-                  variant="primary"
-                  className="w-full"
-                  disabled={approveMut.isPending}
-                  onClick={() => approveMut.mutate()}
-                >
-                  {approveMut.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Check className="h-4 w-4" />
-                  )}
-                  Подтвердить этот план
-                </Button>
+                    {latestPlan.plan.storyboard.length > 0 && (
+                      <div className="space-y-2 rounded-xl border border-border-default bg-surface-base/35 p-3">
+                        <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
+                          Раскадровка
+                        </div>
+                        {latestPlan.plan.storyboard.map((shot) => (
+                          <div key={shot.label} className="space-y-1">
+                            <div className="text-sm font-medium text-fg-primary">
+                              {shot.label}
+                            </div>
+                            <div className="text-xs leading-5 text-fg-secondary">
+                              {shot.purpose}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <Button
+                      data-testid="hero-media-approve-plan"
+                      variant="primary"
+                      className="w-full"
+                      disabled={approveMut.isPending}
+                      onClick={() => approveMut.mutate()}
+                    >
+                      {approveMut.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Check className="h-4 w-4" />
+                      )}
+                      Подтвердить этот план
+                    </Button>
+                  </>
+                )}
               </section>
             )}
 
             {planApproved && (
               <section className="space-y-3 border-t border-border-subtle pt-4">
-                <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-tertiary">
+                <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
                   4. Сборка и preview
                 </div>
 
@@ -631,10 +724,13 @@ export function HeroMediaPanel({
                   <div className="space-y-3">
                     <div className="flex items-center justify-between gap-3">
                       <Badge variant={renderBadgeVariant(activeRender.status)}>
-                        {activeRender.status}
+                        {activeRender.applied_snapshot_id
+                          ? "Применено"
+                          : (RENDER_STATUS_LABELS[activeRender.status] ??
+                            activeRender.status)}
                       </Badge>
-                      <div className="text-[11px] text-fg-tertiary">
-                        ретраи: {activeRender.retry_count}
+                      <div className="text-[11px] text-fg-secondary">
+                        Попытки: {activeRender.retry_count + 1}
                       </div>
                     </div>
 
@@ -653,9 +749,11 @@ export function HeroMediaPanel({
                           >
                             <div>
                               <div className="text-fg-primary">{entry.detail}</div>
-                              <div className="text-fg-tertiary">{entry.status}</div>
+                              <div className="text-fg-secondary">
+                                {RENDER_STATUS_LABELS[entry.status] ?? entry.status}
+                              </div>
                             </div>
-                            <div className="whitespace-nowrap text-fg-tertiary">
+                            <div className="whitespace-nowrap text-fg-secondary">
                               {formatRelativeTime(entry.at)}
                             </div>
                           </div>
@@ -685,12 +783,33 @@ export function HeroMediaPanel({
 
                     {activeRender.bundle && (
                       <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-medium text-fg-primary">
+                              Быстрый preview
+                            </div>
+                            <div className="text-[11px] text-fg-secondary">
+                              Узкая версия проверяет mobile fallback
+                            </div>
+                          </div>
+                          <Button size="sm" variant="ghost" asChild>
+                            <a
+                              href={previewUrl ?? undefined}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label="Открыть Hero media preview в новой вкладке"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                              Открыть крупно
+                            </a>
+                          </Button>
+                        </div>
                         <div className="overflow-hidden rounded-xl border border-border-default bg-surface-base">
                           <iframe
                             data-testid="hero-media-preview-frame"
                             title="Hero media preview"
-                            src={heroMediaPreviewUrl(project.id, activeRender.id)}
-                            className="h-[280px] w-full border-0 bg-black"
+                            src={previewUrl ?? undefined}
+                            className="h-[320px] w-full border-0 bg-black"
                           />
                         </div>
 
@@ -701,20 +820,27 @@ export function HeroMediaPanel({
                           </div>
                         )}
 
-                        <Button
-                          data-testid="hero-media-apply"
-                          variant="primary"
-                          className="w-full"
-                          disabled={!canApply || applyMut.isPending}
-                          onClick={() => applyMut.mutate()}
-                        >
-                          {applyMut.isPending ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <ImagePlus className="h-4 w-4" />
-                          )}
-                          Применить hero в сайт
-                        </Button>
+                        {activeRender.applied_snapshot_id ? (
+                          <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs leading-5 text-success">
+                            <Check className="h-4 w-4" />
+                            Hero уже применён в текущую версию сайта.
+                          </div>
+                        ) : (
+                          <Button
+                            data-testid="hero-media-apply"
+                            variant="primary"
+                            className="w-full"
+                            disabled={!canApply || applyMut.isPending}
+                            onClick={() => applyMut.mutate()}
+                          >
+                            {applyMut.isPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <ImagePlus className="h-4 w-4" />
+                            )}
+                            Применить hero в сайт
+                          </Button>
+                        )}
                       </div>
                     )}
                   </div>
