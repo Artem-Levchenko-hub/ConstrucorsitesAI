@@ -74,6 +74,14 @@ cinematic.
 motion_prompt. Если video/cinematic не нужен, не пытайся насильно впихнуть
 motion/video. Пиши лаконично и структурно."""
 
+_PLANNER_REPAIR_SYSTEM = """Ты превращаешь ответ другой модели в СТРОГИЙ JSON для hero-media planner.
+
+На входе будет сырое текстовое описание рекомендации. Нужно вернуть только один
+валидный JSON-объект по схеме planner'a. Никакого markdown, никаких пояснений
+вне JSON. Если каких-то полей явно нет в тексте, восстанови их максимально
+консервативно из контекста задачи, но не меняй главный выбор plan_kind без
+основания."""
+
 
 def _strip_json_fence(raw: str) -> str:
     return _JSON_FENCE_RE.sub("", raw.strip()).strip()
@@ -98,6 +106,40 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise json.JSONDecodeError("planner output is not a JSON object", cleaned, 0)
     return data
+
+
+async def _repair_planner_output(
+    *,
+    owner_id: UUID,
+    project_id: UUID,
+    raw: str,
+    prompt: str,
+    business_type: str | None,
+    style_preference: str | None,
+) -> dict[str, Any]:
+    repair_messages = [
+        {
+            "role": "user",
+            "content": (
+                f"User brief: {prompt}\n"
+                f"Business type: {business_type or 'not specified'}\n"
+                f"Style preference: {style_preference or 'not specified'}\n\n"
+                "Raw planner output:\n"
+                f"{raw}"
+            ),
+        }
+    ]
+    repaired = await complete_chat(
+        repair_messages,
+        model_for_role("director"),
+        user_id=str(owner_id),
+        project_id=str(project_id),
+        max_tokens=1400,
+        temperature=0.0,
+    )
+    if not repaired.strip():
+        raise LLMError("hero-media planner repair returned empty output")
+    return _extract_json_object(repaired)
 
 
 def _stub_plan(
@@ -213,7 +255,17 @@ async def plan_hero_media(
     )
     if not raw.strip():
         raise LLMError("hero-media planner returned empty output")
-    data = _extract_json_object(raw)
+    try:
+        data = _extract_json_object(raw)
+    except json.JSONDecodeError:
+        data = await _repair_planner_output(
+            owner_id=owner_id,
+            project_id=project_id,
+            raw=raw,
+            prompt=prompt,
+            business_type=business_type,
+            style_preference=style_preference,
+        )
     decision = HeroMediaDecision.model_validate(data)
     if not settings.use_video_gen and decision.plan_kind in {"video", "cinematic"}:
         decision = decision.model_copy(
