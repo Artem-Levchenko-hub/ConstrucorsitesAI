@@ -74,7 +74,11 @@ cinematic.
 
 Если plan_kind не video/cinematic, storyboard может содержать один shot без
 motion_prompt. Если video/cinematic не нужен, не пытайся насильно впихнуть
-motion/video. Пиши лаконично и структурно."""
+motion/video. Пиши лаконично и структурно.
+
+Строго соблюдай длины: recommended_focus/recommended_tone/primary_cta_label
+до 80 символов; explanation до 600; hero_headline до 180;
+hero_subheadline до 300; остальные заметки и visual_style до 240."""
 
 _PLANNER_REPAIR_SYSTEM = """Ты превращаешь ответ другой модели в СТРОГИЙ JSON
 для hero-media planner.
@@ -109,6 +113,63 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise json.JSONDecodeError("planner output is not a JSON object", cleaned, 0)
     return data
+
+
+_DECISION_STRING_LIMITS = {
+    "explanation": 600,
+    "recommended_focus": 80,
+    "recommended_tone": 80,
+    "brand_fit_note": 240,
+    "performance_note": 240,
+    "accessibility_note": 240,
+    "hero_headline": 180,
+    "hero_subheadline": 300,
+    "primary_cta_label": 80,
+    "visual_style": 240,
+}
+_SHOT_STRING_LIMITS = {
+    "label": 100,
+    "purpose": 240,
+    "still_prompt": 1200,
+    "motion_prompt": 1200,
+    "first_frame_prompt": 1200,
+    "last_frame_prompt": 1200,
+}
+
+
+def _truncate_at_word(value: Any, limit: int) -> Any:
+    if not isinstance(value, str):
+        return value
+    cleaned = value.strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    clipped = cleaned[:limit]
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0]
+    return clipped.rstrip(" ,.;:—-") or cleaned[:limit]
+
+
+def _normalize_planner_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """Keep semantically valid model output inside the public schema limits."""
+    normalized = dict(data)
+    for field, limit in _DECISION_STRING_LIMITS.items():
+        if field in normalized:
+            normalized[field] = _truncate_at_word(normalized[field], limit)
+
+    storyboard = normalized.get("storyboard")
+    if isinstance(storyboard, list):
+        normalized_storyboard: list[Any] = []
+        for item in storyboard[:3]:
+            if not isinstance(item, dict):
+                normalized_storyboard.append(item)
+                continue
+            shot = dict(item)
+            for field, limit in _SHOT_STRING_LIMITS.items():
+                if field in shot:
+                    shot[field] = _truncate_at_word(shot[field], limit)
+            normalized_storyboard.append(shot)
+        normalized["storyboard"] = normalized_storyboard
+    return normalized
 
 
 async def _repair_planner_output(
@@ -290,16 +351,18 @@ async def plan_hero_media(
     if not raw.strip():
         raise LLMError("hero-media planner returned empty output")
     try:
-        data = _extract_json_object(raw)
+        data = _normalize_planner_payload(_extract_json_object(raw))
         decision = HeroMediaDecision.model_validate(data)
     except (json.JSONDecodeError, ValidationError):
-        data = await _repair_planner_output(
-            owner_id=owner_id,
-            project_id=project_id,
-            raw=raw,
-            prompt=prompt,
-            business_type=business_type,
-            style_preference=style_preference,
+        data = _normalize_planner_payload(
+            await _repair_planner_output(
+                owner_id=owner_id,
+                project_id=project_id,
+                raw=raw,
+                prompt=prompt,
+                business_type=business_type,
+                style_preference=style_preference,
+            )
         )
         decision = HeroMediaDecision.model_validate(data)
     if not settings.use_video_gen and decision.plan_kind in {"video", "cinematic"}:
