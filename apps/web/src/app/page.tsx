@@ -1,7 +1,6 @@
 import Link from "next/link";
 import {
   ArrowRight,
-  Play,
   Check,
   Globe,
   Database,
@@ -10,8 +9,8 @@ import {
 } from "lucide-react";
 import { getTranslations } from "next-intl/server";
 
+import { CinematicHero } from "@/components/marketing/CinematicHero";
 import { Reveal } from "@/components/marketing/Reveal";
-import { WordReveal } from "@/components/marketing/WordReveal";
 import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 
 export async function generateMetadata() {
@@ -28,9 +27,17 @@ export default async function LandingPage() {
 
   return (
     <div className="min-h-svh bg-bg-base text-label-1 font-sans antialiased">
-      <Nav tNav={tNav} tHero={tHero} />
+      <Nav tNav={tNav} />
       <main>
-        <Hero tHero={tHero} />
+        <CinematicHero
+          badge={tHero("badge")}
+          line1={tHero("line1")}
+          line2={tHero("line2")}
+          line3={tHero("line3")}
+          subtitle={tHero("subtitle")}
+          ctaPrimary={tHero("ctaPrimary")}
+          ctaDemo={tHero("ctaDemo")}
+        />
         <LiveDemoStrip />
         <StackCarousel />
         <WorkspaceShowcase />
@@ -44,17 +51,8 @@ export default async function LandingPage() {
 }
 
 type NavTranslations = Awaited<ReturnType<typeof getTranslations<"landing.nav">>>;
-type HeroTranslations = Awaited<ReturnType<typeof getTranslations<"landing.hero">>>;
 
-function Nav({
-  tNav,
-  tHero,
-}: {
-  tNav: NavTranslations;
-  tHero: HeroTranslations;
-}) {
-  void tHero; // passed from parent, only tNav used here
-
+function Nav({ tNav }: { tNav: NavTranslations }) {
   return (
     <header className="sticky top-0 z-50 material-thin border-b border-separator">
       <div className="max-w-7xl mx-auto px-6 lg:px-12 h-16 flex items-center justify-between">
@@ -107,69 +105,46 @@ function Nav({
   );
 }
 
-function Hero({ tHero }: { tHero: HeroTranslations }) {
+function LiveDemoStrip() {
   return (
-    <section className="relative max-w-7xl mx-auto px-6 lg:px-12 pt-20 lg:pt-28 pb-20 lg:pb-24 overflow-hidden">
-      <div className="hero-glow left-[-10%] top-[6%] h-[460px] w-[460px]" aria-hidden />
-      <div className="hero-glow right-[-8%] top-[26%] h-[400px] w-[400px] [animation-delay:-7s]" aria-hidden />
-      <div className="relative z-10 grid lg:grid-cols-12 gap-12 lg:gap-16 items-center">
-        <div className="lg:col-span-7 space-y-7">
-          <Reveal>
-            <div className="inline-flex items-center gap-2 px-3 h-7 rounded-full border border-separator text-[12px] font-mono text-label-2 tabular-nums">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-system-green" />
-              {tHero("badge")}
-            </div>
-          </Reveal>
-
-          <h1 className="text-[clamp(40px,5.8vw,76px)] leading-[0.98] tracking-[-0.035em] font-semibold text-balance">
-            <WordReveal text={tHero("line1")} className="block" />
-            <WordReveal
-              text={tHero("line2")}
-              className="block"
-              baseDelay={0.18}
-            />
-            <WordReveal
-              text={tHero("line3")}
-              className="block text-accent"
-              baseDelay={0.36}
-            />
-          </h1>
-
-          <Reveal delay={0.12}>
-            <p className="text-[17px] leading-[1.55] text-label-2 max-w-xl">
-              {tHero("subtitle")}
-            </p>
-          </Reveal>
-
-          <Reveal delay={0.2}>
-            <div className="flex flex-wrap gap-3 pt-2">
-              <Link
-                href="/register"
-                className="inline-flex items-center gap-2 h-12 px-6 rounded-full bg-accent text-accent-fg font-medium hover:bg-accent-hover active:scale-[0.98] transition-transform"
-              >
-                {tHero("ctaPrimary")}
-                <ArrowRight className="h-4 w-4" strokeWidth={2} />
-              </Link>
-              <a
-                href="#demo"
-                className="inline-flex items-center gap-2 h-12 px-6 rounded-full border border-separator-solid text-label-1 hover:border-label-3 active:scale-[0.98] transition-transform"
-              >
-                <Play className="h-4 w-4" strokeWidth={1.75} />
-                {tHero("ctaDemo")}
-              </a>
-            </div>
-          </Reveal>
-
-          <Reveal delay={0.28}>
-            <div className="pt-6 text-[11px] font-mono uppercase tracking-[0.15em] text-label-3 tabular-nums">
-              beeline · яндекс edu · skyeng · tinkoff · x5
-            </div>
-          </Reveal>
+    <section id="demo" className="border-y border-separator bg-bg-elevated-1">
+      <div className="max-w-3xl mx-auto px-6 py-20">
+        <div className="rounded-xl border border-separator bg-bg-base p-6 font-mono text-[13px] leading-[1.75]">
+          <div className="text-label-2">
+            <span className="text-label-3">$</span> omnia &gt;{" "}
+            <span className="text-accent">Юзер</span>: лендинг для крафтовой
+            кофейни в Питере
+          </div>
+          <div className="text-label-2 mt-1">
+            <span className="text-label-3">$</span> omnia &gt; создаю
+            apps/cafe-spb…{" "}
+            <span className="text-label-3 tabular-nums">[██████░░] 78%</span>
+          </div>
+          <div className="text-label-2">
+            <span className="text-label-3">$</span> omnia &gt;{" "}
+            <span className="text-system-green">✓</span> 7 файлов · 686 строк
+          </div>
+          <div className="text-label-2">
+            <span className="text-label-3">$</span> omnia &gt;{" "}
+            <span className="text-system-green">✓</span> deploy готов →{" "}
+            <span className="text-accent">cafe-spb.omnia.app</span>
+            <span className="inline-block w-1.5 h-3.5 bg-label-1 ml-1 align-middle animate-pulse" />
+          </div>
         </div>
-
-        <Reveal delay={0.18} className="lg:col-span-5">
-          <WorkspaceMockCard />
-        </Reveal>
+        <div className="mt-8 flex flex-wrap justify-center gap-2 text-[12px] font-mono tabular-nums text-label-2">
+          {[
+            "~45 секунд до live preview",
+            "формат под идею",
+            "1 клик до prod",
+          ].map((c) => (
+            <span
+              key={c}
+              className="px-3 h-7 inline-flex items-center rounded-full border border-separator"
+            >
+              {c}
+            </span>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -215,9 +190,9 @@ function WorkspaceMockCard() {
         <div className="bg-bg-base p-2">
           <div className="rounded-md bg-bg-elevated-1 border border-separator h-full flex flex-col overflow-hidden">
             <div className="material-ultrathin flex items-center gap-1.5 px-2.5 h-6 border-b border-separator">
-              <span className="inline-block h-2 w-2 rounded-full bg-[#FF5F57]" />
-              <span className="inline-block h-2 w-2 rounded-full bg-[#FEBC2E]" />
-              <span className="inline-block h-2 w-2 rounded-full bg-[#28C840]" />
+              <span className="inline-block h-2 w-2 rounded-full bg-system-red" />
+              <span className="inline-block h-2 w-2 rounded-full bg-system-orange" />
+              <span className="inline-block h-2 w-2 rounded-full bg-system-green" />
               <div className="flex-1 mx-2 h-4 rounded-sm bg-bg-base/60 text-[9px] font-mono text-label-3 flex items-center justify-center">
                 cafe-polet.omnia.app
               </div>
@@ -273,51 +248,6 @@ function WorkspaceMockCard() {
         <span className="text-label-3 ml-auto">next.js · postgres</span>
       </div>
     </div>
-  );
-}
-
-function LiveDemoStrip() {
-  return (
-    <section id="demo" className="border-y border-separator bg-bg-elevated-1">
-      <div className="max-w-3xl mx-auto px-6 py-20">
-        <div className="rounded-xl border border-separator bg-bg-base p-6 font-mono text-[13px] leading-[1.75]">
-          <div className="text-label-2">
-            <span className="text-label-3">$</span> omnia &gt;{" "}
-            <span className="text-accent">Юзер</span>: лендинг для крафтовой
-            кофейни в Питере
-          </div>
-          <div className="text-label-2 mt-1">
-            <span className="text-label-3">$</span> omnia &gt; создаю
-            apps/cafe-spb…{" "}
-            <span className="text-label-3 tabular-nums">[██████░░] 78%</span>
-          </div>
-          <div className="text-label-2">
-            <span className="text-label-3">$</span> omnia &gt;{" "}
-            <span className="text-system-green">✓</span> 7 файлов · 686 строк
-          </div>
-          <div className="text-label-2">
-            <span className="text-label-3">$</span> omnia &gt;{" "}
-            <span className="text-system-green">✓</span> deploy готов →{" "}
-            <span className="text-accent">cafe-spb.omnia.app</span>
-            <span className="inline-block w-1.5 h-3.5 bg-label-1 ml-1 align-middle animate-pulse" />
-          </div>
-        </div>
-        <div className="mt-8 flex flex-wrap justify-center gap-2 text-[12px] font-mono tabular-nums text-label-2">
-          {[
-            "~45 секунд до live preview",
-            "формат под идею",
-            "1 клик до prod",
-          ].map((c) => (
-            <span
-              key={c}
-              className="px-3 h-7 inline-flex items-center rounded-full border border-separator"
-            >
-              {c}
-            </span>
-          ))}
-        </div>
-      </div>
-    </section>
   );
 }
 
