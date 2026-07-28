@@ -12,19 +12,21 @@ No LLM, no gateway, no wallet — uploading your own image is free.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
+from dataclasses import dataclass
 from io import BytesIO
 
-from PIL import Image
+from minio import Minio
+from PIL import Image, ImageOps
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.minio import get_minio_client
 
-# Browser-renderable raster formats we can safely re-encode. SVG excluded (XSS).
-_FMT_TO_EXT = {"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}
+# Browser-renderable raster formats we can safely decode. SVG excluded (XSS).
+_SUPPORTED_FORMATS = {"PNG", "JPEG", "WEBP"}
 _MAX_DIM = 2560  # longest side — downscale bigger uploads (bounds storage/bw)
 _MAX_BYTES = 6 * 1024 * 1024  # 6 MB raw ceiling
+_WEBP_QUALITY = 88
 
 
 class UploadRejected(Exception):
@@ -41,13 +43,13 @@ class UploadedAsset:
     bytes_size: int
 
 
-def _ensure_bucket(client, bucket: str) -> None:
+def _ensure_bucket(client: Minio, bucket: str) -> None:
     """Create the bucket if missing. On prod ``omnia-images`` already exists and
     is public-read; this just covers a fresh environment."""
     try:
         if not client.bucket_exists(bucket):
             client.make_bucket(bucket)
-    except Exception:  # noqa: BLE001 — best-effort; put_object surfaces real errors
+    except Exception:  # Best-effort; put_object surfaces real errors.
         pass
 
 
@@ -65,38 +67,9 @@ def sanitize_and_upload_record(raw: bytes, project_id: str) -> UploadedAsset:
     Raises ``UploadRejected`` for anything that isn't a supported raster image
     (Pillow can't open it, unsupported format, empty, or over the size cap).
     """
-    if not raw:
-        raise UploadRejected("пустой файл")
-    if len(raw) > _MAX_BYTES:
-        raise UploadRejected("файл слишком большой (макс. 6 МБ)")
-
-    try:
-        img = Image.open(BytesIO(raw))
-        img.load()
-    except Exception as exc:  # noqa: BLE001 — any decode failure → reject
-        raise UploadRejected("не похоже на изображение") from exc
-
-    fmt = (img.format or "").upper()
-    ext = _FMT_TO_EXT.get(fmt)
-    if ext is None:
-        raise UploadRejected(f"неподдерживаемый формат: {fmt or 'неизвестно'}")
-
-    # Downscale oversized images (longest side).
-    if max(img.size) > _MAX_DIM:
-        img.thumbnail((_MAX_DIM, _MAX_DIM))
-
-    # Re-encode from decoded pixels — strips metadata / embedded payloads.
-    buf = BytesIO()
-    if fmt == "JPEG":
-        img.convert("RGB").save(buf, format="JPEG", quality=88, optimize=True)
-        content_type = "image/jpeg"
-    elif fmt == "WEBP":
-        img.save(buf, format="WEBP", quality=90)
-        content_type = "image/webp"
-    else:  # PNG
-        img.save(buf, format="PNG", optimize=True)
-        content_type = "image/png"
-    data = buf.getvalue()
+    data, width, height = _sanitize_image(raw)
+    ext = "webp"
+    content_type = "image/webp"
 
     settings = get_settings()
     client = get_minio_client()
@@ -112,15 +85,51 @@ def sanitize_and_upload_record(raw: bytes, project_id: str) -> UploadedAsset:
         url=f"{base}/{bucket}/{key}",
         storage_key=key,
         mime_type=content_type,
-        width=int(img.width),
-        height=int(img.height),
+        width=width,
+        height=height,
         bytes_size=len(data),
     )
 
 
+def _sanitize_image(raw: bytes) -> tuple[bytes, int, int]:
+    """Decode untrusted raster bytes and return a metadata-free WebP."""
+    if not raw:
+        raise UploadRejected("пустой файл")
+    if len(raw) > _MAX_BYTES:
+        raise UploadRejected("файл слишком большой (макс. 6 МБ)")
+
+    try:
+        img = Image.open(BytesIO(raw))
+        img.load()
+    except Exception as exc:  # Any decode failure is rejected.
+        raise UploadRejected("не похоже на изображение") from exc
+
+    fmt = (img.format or "").upper()
+    if fmt not in _SUPPORTED_FORMATS:
+        raise UploadRejected(f"неподдерживаемый формат: {fmt or 'неизвестно'}")
+
+    normalized = ImageOps.exif_transpose(img)
+    if max(normalized.size) > _MAX_DIM:
+        normalized.thumbnail((_MAX_DIM, _MAX_DIM), Image.Resampling.LANCZOS)
+
+    has_alpha = normalized.mode in {"RGBA", "LA"} or (
+        normalized.mode == "P" and "transparency" in normalized.info
+    )
+    clean = normalized.convert("RGBA" if has_alpha else "RGB")
+    buf = BytesIO()
+    clean.save(
+        buf,
+        format="WEBP",
+        quality=_WEBP_QUALITY,
+        method=6,
+        exact=has_alpha,
+    )
+    return buf.getvalue(), int(clean.width), int(clean.height)
+
+
 __all__ = [
+    "UploadRejected",
     "UploadedAsset",
     "sanitize_and_upload",
     "sanitize_and_upload_record",
-    "UploadRejected",
 ]
