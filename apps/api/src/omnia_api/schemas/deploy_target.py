@@ -31,6 +31,22 @@ class DeployTargetCreate(BaseModel):
         return v
 
 
+class DeployTargetUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=120)
+    ssh_host: str | None = Field(default=None, min_length=1, max_length=255)
+    ssh_port: int | None = Field(default=None, ge=1, le=65535)
+    ssh_user: str | None = Field(default=None, min_length=1, max_length=64)
+    auth_type: str | None = None
+    secret: str | None = Field(default=None, max_length=20000)
+
+    @field_validator("auth_type")
+    @classmethod
+    def _optional_auth_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("key", "password"):
+            raise ValueError("auth_type must be 'key' or 'password'")
+        return v
+
+
 class DeployTargetPublic(BaseModel):
     id: UUID
     label: str
@@ -44,6 +60,9 @@ class DeployTargetPublic(BaseModel):
     ssh_public_key: str | None = None
     verify_status: str
     verify_detail: str | None = None
+    host_fingerprint: str | None = None
+    resolved_ip: str | None = None
+    capabilities: dict[str, object] | None = None
     verified_at: datetime | None = None
     created_at: datetime
 
@@ -55,3 +74,7 @@ class DeployTargetVerifyResult(BaseModel):
     # Что нашли на сервере при проверке (docker, версия) — для UI-подсказок.
     docker_ok: bool = False
     docker_version: str | None = None
+    requires_confirmation: bool = False
+    host_fingerprint: str | None = None
+    resolved_ip: str | None = None
+    capabilities: dict[str, object] | None = None

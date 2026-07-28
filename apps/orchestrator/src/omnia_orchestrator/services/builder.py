@@ -19,15 +19,18 @@ than crashing the orchestrator.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 from uuid import UUID
 
 import structlog
 
 from omnia_orchestrator.core import docker_client, postgres_admin
+from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.services import deploy_state, nginx_writer
@@ -54,6 +57,7 @@ _OVERLAY_PATHS = [
     "components.json",
     "postcss.config.mjs",
     "tailwind.config.ts",
+    "scripts",
 ]
 
 # Build-time placeholder. `next build` collects route data and imports the db
@@ -74,6 +78,7 @@ def _resolve_runtime_dsn(project_id: str) -> str:
     dsn = postgres_admin.load_existing_dsn(UUID(project_id))
     return dsn or _DB_PLACEHOLDER
 
+
 # Default/fallback template. The actual template per deploy is recovered from
 # the dev container's image (omnia-template-<t>:dev) in `_run`, so an entities
 # project seeds its prod build context from the entities template, not this one.
@@ -85,7 +90,7 @@ _DEFAULT_TEMPLATE = "nextjs-postgres-drizzle"
 # fails the whole deploy. We mirror dev's tolerance and guarantee the
 # standalone output that Dockerfile.prod copies. Written AFTER the container
 # overlay so it always wins.
-_PROD_NEXT_CONFIG = '''\
+_PROD_NEXT_CONFIG = """\
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
@@ -102,10 +107,11 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
-'''
+"""
 
 # Keep background task references alive until completion.
 _bg_tasks: set[asyncio.Task[None]] = set()
+_project_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 async def start_deploy(
@@ -113,6 +119,7 @@ async def start_deploy(
     slug: str | None = None,
     target: dict[str, object] | None = None,
     domains: list[str] | None = None,
+    idempotency_key: str | None = None,
 ) -> deploy_state.DeployRecord:
     """Resolve the project's dev container and launch a background deploy.
 
@@ -136,15 +143,48 @@ async def start_deploy(
     if active is not None and deploy_state.is_active(project_id):
         return active
 
-    rec = deploy_state.start(project_id)
+    rec = deploy_state.start(
+        project_id,
+        idempotency_key=idempotency_key,
+        target_label=str(target.get("label")) if target and target.get("label") else None,
+        target_id=str(target.get("id")) if target and target.get("id") else None,
+    )
+    if rec.phase not in ("building", "queued"):
+        return rec
     # Optimistic public URL — deterministic, shown before the build completes.
     # For a remote target we don't know the URL until the container is up.
     rec.prod_url = None if target else nginx_writer.prod_url(resolved_slug)
 
-    task = asyncio.create_task(_run(project_id, resolved_slug, dev_name, target, domains))
+    task = asyncio.create_task(
+        _run(project_id, resolved_slug, dev_name, target, domains, rec.run_id)
+    )
     _bg_tasks.add(task)
+    _project_tasks[project_id] = task
     task.add_done_callback(_bg_tasks.discard)
+    task.add_done_callback(lambda _: _project_tasks.pop(project_id, None))
     return rec
+
+
+async def cancel_deploy(project_id: str) -> deploy_state.DeployRecord | None:
+    """Cancel one active deployment; cleanup is handled by its pipeline."""
+    rec = deploy_state.get(project_id)
+    task = _project_tasks.get(project_id)
+    if rec is None or task is None or task.done():
+        return rec
+    deploy_state.update(project_id, phase="cancelling", detail="Останавливаем деплой…")
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    deploy_state.update(
+        project_id,
+        phase="cancelled",
+        detail="Деплой остановлен пользователем.",
+        error=None,
+        finished_at=deploy_state.now_iso(),
+    )
+    return deploy_state.get(project_id)
 
 
 def _remote_port(slug: str) -> int:
@@ -160,8 +200,13 @@ def _remote_port(slug: str) -> int:
 
 
 async def _deploy_remote(
-    project_id: str, slug: str, tag: str, target: dict[str, object],
+    project_id: str,
+    slug: str,
+    tag: str,
+    target: dict[str, object],
     domains: list[str] | None = None,
+    run_id: str = "",
+    template: str = _DEFAULT_TEMPLATE,
 ) -> None:
     """Развернуть уже собранный образ `tag` на чужом VPS (BYO-VPS).
 
@@ -171,6 +216,12 @@ async def _deploy_remote(
     from omnia_orchestrator.services import remote_deploy
 
     host_port = _remote_port(slug)
+    needs_database = template in {"nextjs-postgres-drizzle", "nextjs-entities", "nextjs-realtime"}
+    db_dump: str | None = None
+    db_schema: str | None = None
+    if needs_database:
+        db_dump, db_schema = await _export_project_database(project_id)
+        deploy_state.append_log(project_id, "Подготовлена миграция данных проекта")
     auth_secret = _load_or_create_auth_secret_safe(project_id)
     app_url = f"https://{domains[0]}" if domains else f"http://{target['host']}:{host_port}"
     env = {
@@ -182,27 +233,50 @@ async def _deploy_remote(
         "AUTH_TRUST_HOST": "true",
     }
     result = await remote_deploy.deploy_to_target(
-        creds=target, image_tag=tag, slug=slug,
-        host_port=host_port, container_port=3000, env=env, domains=domains,
+        creds=target,
+        image_tag=tag,
+        project_id=project_id,
+        run_id=run_id,
+        slug=slug,
+        host_port=host_port,
+        container_port=3000,
+        env=env,
+        domains=domains,
+        needs_database=needs_database,
+        db_dump=db_dump,
+        db_schema=db_schema,
+        progress=lambda message: deploy_state.append_log(project_id, message),
     )
     if result.get("ok"):
         deploy_state.update(
-            project_id, phase="done", prod_url=result.get("url"),
+            project_id,
+            phase="done",
+            prod_url=result.get("url"),
+            detail=str(result.get("detail") or ""),
             finished_at=deploy_state.now_iso(),
         )
         log.info("deploy.remote_done", project_id=project_id, url=result.get("url"))
         await publish_project_event(
-            project_id, "deploy.done",
-            {"phase": "done", "slug": slug, "prod_url": result.get("url"),
-             "image_tag": tag, "detail": result.get("detail")},
+            project_id,
+            "deploy.done",
+            {
+                "phase": "done",
+                "slug": slug,
+                "prod_url": result.get("url"),
+                "image_tag": tag,
+                "detail": result.get("detail"),
+            },
         )
     else:
         deploy_state.update(
-            project_id, phase="failed", error=str(result.get("detail")),
+            project_id,
+            phase="failed",
+            error=str(result.get("detail")),
             finished_at=deploy_state.now_iso(),
         )
         await publish_project_event(
-            project_id, "deploy.failed",
+            project_id,
+            "deploy.failed",
             {"phase": "failed", "slug": slug, "error": result.get("detail")},
         )
 
@@ -213,15 +287,60 @@ def _load_or_create_auth_secret_safe(project_id: str) -> str:
     return _load_or_create_auth_secret(project_id)
 
 
+async def _export_project_database(project_id: str) -> tuple[str, str]:
+    """Create a schema-only/data SQL snapshot without exposing its password in argv."""
+    dsn = _resolve_runtime_dsn(project_id)
+    if dsn == _DB_PLACEHOLDER:
+        raise RuntimeError("У проекта нет доступной базы данных для переноса.")
+    project_url = urlparse(dsn)
+    admin_url = urlparse(
+        get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    )
+    options = parse_qs(project_url.query).get("options", [""])[0]
+    marker = "search_path="
+    schema = unquote(options).split(marker, 1)[-1].split(",", 1)[0].strip()
+    if not schema or not schema.replace("_", "").isalnum():
+        raise RuntimeError("Не удалось определить схему базы проекта.")
+    process = await asyncio.create_subprocess_exec(
+        "pg_dump",
+        "--no-owner",
+        "--no-acl",
+        "--schema",
+        schema,
+        "--format",
+        "plain",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "PGHOST": admin_url.hostname or "127.0.0.1",
+            "PGPORT": str(admin_url.port or 5432),
+            "PGUSER": project_url.username or "",
+            "PGPASSWORD": unquote(project_url.password or ""),
+            "PGDATABASE": project_url.path.lstrip("/"),
+        },
+    )
+    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180)
+    if process.returncode != 0:
+        raise RuntimeError(
+            "Не удалось перенести данные проекта: " + stderr.decode("utf-8", "replace")[-300:]
+        )
+    return stdout.decode("utf-8", "replace"), schema
+
+
 async def _run(
-    project_id: str, slug: str, dev_name: str,
+    project_id: str,
+    slug: str,
+    dev_name: str,
     target: dict[str, object] | None = None,
     domains: list[str] | None = None,
+    run_id: str = "",
 ) -> None:
     build_dir = Path(tempfile.mkdtemp(prefix=f"omnia-build-{slug}-"))
     try:
         log.info("deploy.start", project_id=project_id, slug=slug, dev=dev_name)
         deploy_state.update(project_id, phase="building")
+        deploy_state.append_log(project_id, "Собираем production-образ")
         await publish_project_event(
             project_id, "deploy.progress", {"phase": "building", "slug": slug}
         )
@@ -229,10 +348,7 @@ async def _run(
         # 1. Seed the build context from the PROJECT's template (recovered from
         # the dev container's image), falling back to the default. This keeps an
         # entities project on the entities template's Dockerfile.prod/configs.
-        template = (
-            await docker_client.container_image_template(dev_name)
-            or _DEFAULT_TEMPLATE
-        )
+        template = await docker_client.container_image_template(dev_name) or _DEFAULT_TEMPLATE
         log.info("deploy.template", project_id=project_id, template=template)
         template_dir = _template_source_dir(template)
         shutil.copytree(
@@ -245,9 +361,7 @@ async def _run(
         # 2. Overlay the live app files from the dev container.
         await docker_client.unpause_container(dev_name)
         for rel in _OVERLAY_PATHS:
-            await docker_client.copy_path_from_container(
-                dev_name, f"/app/{rel}", str(build_dir)
-            )
+            await docker_client.copy_path_from_container(dev_name, f"/app/{rel}", str(build_dir))
 
         # 2b. Force a prod-safe next.config (tolerate AI type/lint errors +
         # standalone output). Overwrites any config the overlay brought in.
@@ -270,6 +384,9 @@ async def _run(
         public_dir = build_dir / "public"
         public_dir.mkdir(exist_ok=True)
         (public_dir / ".gitkeep").touch()
+        # Some projects have no generated SQL yet. The prod Dockerfile still
+        # copies this directory so the migration runner has a stable contract.
+        (build_dir / "drizzle").mkdir(exist_ok=True)
 
         if not (build_dir / "Dockerfile.prod").exists():
             raise OrchestratorError(
@@ -293,7 +410,12 @@ async def _run(
         # (шаги 4–7) при этом не выполняется — поведение нашего хостинга не
         # меняется, ветка живёт только когда target задан явно.
         if target is not None:
-            await _deploy_remote(project_id, slug, tag, target, domains)
+            deploy_state.update(project_id, phase="pushing")
+            deploy_state.append_log(project_id, "Передаём образ на выбранный VPS")
+            await publish_project_event(
+                project_id, "deploy.progress", {"phase": "pushing", "slug": slug}
+            )
+            await _deploy_remote(project_id, slug, tag, target, domains, run_id, template)
             return
 
         # 4. Run the new prod container, replacing any previous one.
@@ -363,6 +485,20 @@ async def _run(
         except Exception as exc:
             # Best-effort: a failed prune is cosmetic, never invalidates a deploy.
             log.warning("deploy.prune_failed", project_id=project_id, err=str(exc))
+    except asyncio.CancelledError:
+        deploy_state.update(
+            project_id,
+            phase="cancelled",
+            detail="Деплой остановлен пользователем.",
+            error=None,
+            finished_at=deploy_state.now_iso(),
+        )
+        await publish_project_event(
+            project_id,
+            "deploy.failed",
+            {"phase": "cancelled", "slug": slug, "error": None},
+        )
+        raise
     except Exception as exc:
         msg = exc.message if isinstance(exc, OrchestratorError) else str(exc)
         log.warning("deploy.failed", project_id=project_id, err=msg)
@@ -375,6 +511,8 @@ async def _run(
             {"phase": "failed", "slug": slug, "error": msg},
         )
     finally:
+        if target is not None:
+            target.clear()
         shutil.rmtree(build_dir, ignore_errors=True)
 
 

@@ -50,13 +50,26 @@ export async function stopRuntime(
 export async function deployProject(
   projectId: Uuid,
   commitSha?: string,
+  idempotencyKey: string = crypto.randomUUID(),
 ): Promise<DeployStatus> {
   return apiFetch<DeployStatus>(`/api/projects/${projectId}/deploy`, {
     method: "POST",
-    json: commitSha ? { commit_sha: commitSha } : {},
+    json: { commit_sha: commitSha, idempotency_key: idempotencyKey },
   });
 }
 
 export async function getLastDeploy(projectId: Uuid): Promise<DeployStatus> {
   return apiFetch<DeployStatus>(`/api/projects/${projectId}/deploy`);
+}
+
+export async function cancelDeploy(projectId: Uuid): Promise<DeployStatus> {
+  return apiFetch<DeployStatus>(`/api/projects/${projectId}/deploy/cancel`, {
+    method: "POST",
+  });
+}
+
+export async function getDeployHistory(projectId: Uuid): Promise<DeployStatus[]> {
+  return apiFetch<DeployStatus[]>(
+    `/api/projects/${projectId}/deploy/history`,
+  );
 }

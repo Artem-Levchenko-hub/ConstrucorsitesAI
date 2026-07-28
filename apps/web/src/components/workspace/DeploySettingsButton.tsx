@@ -16,7 +16,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Globe, Loader2, Server, ShieldCheck, Trash2 } from "lucide-react";
+import { Check, Copy, Globe, KeyRound, Loader2, Server, ShieldCheck, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -38,6 +38,7 @@ import {
   deleteDeployTarget,
   listDeployTargets,
   setProjectDeployTarget,
+  updateDeployTarget,
   verifyDeployTarget,
   type DeployTarget,
 } from "@/lib/api/deploy-targets";
@@ -124,13 +125,35 @@ function DeployTargetSection({ projectId }: { projectId: string }) {
   });
 
   const verifyMut = useMutation({
-    mutationFn: (targetId: string) => verifyDeployTarget(targetId),
+    mutationFn: ({
+      targetId,
+      confirm,
+    }: {
+      targetId: string;
+      confirm: boolean;
+    }) => verifyDeployTarget(targetId, confirm),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["deploy-targets"] });
-      if (res.ok) toast.success("Сервер доступен", { description: res.detail ?? undefined });
+      if (res.requires_confirmation)
+        toast.message("Подтвердите отпечаток сервера", {
+          description: res.host_fingerprint ?? res.detail ?? undefined,
+        });
+      else if (res.ok) toast.success("Сервер доступен", { description: res.detail ?? undefined });
       else toast.error("Проверка не прошла", { description: res.detail ?? undefined });
     },
     onError: (e) => toast.error("Ошибка проверки", { description: errMsg(e) }),
+  });
+  const rotateMut = useMutation({
+    mutationFn: ({ targetId, secret }: { targetId: string; secret: string }) =>
+      updateDeployTarget(targetId, { secret }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["deploy-targets"] });
+      toast.success("Доступ обновлён", {
+        description: "Для безопасности проверьте сервер заново.",
+      });
+    },
+    onError: (e) =>
+      toast.error("Не удалось обновить доступ", { description: errMsg(e) }),
   });
 
   const deleteMut = useMutation({
@@ -171,10 +194,32 @@ function DeployTargetSection({ projectId }: { projectId: string }) {
             onSelect={() => selectMut.mutate(t.id)}
             busy={selectMut.isPending}
             status={t.verify_status}
-            onVerify={() => verifyMut.mutate(t.id)}
-            verifying={verifyMut.isPending && verifyMut.variables === t.id}
-            onDelete={() => deleteMut.mutate(t.id)}
+            onVerify={() =>
+              verifyMut.mutate({
+                targetId: t.id,
+                confirm: t.verify_status === "pending_confirmation",
+              })
+            }
+            verifying={
+              verifyMut.isPending && verifyMut.variables?.targetId === t.id
+            }
+            onDelete={() => {
+              if (
+                window.confirm(
+                  "Удалить сервер и все размещённые на нём runtime-данные проектов?",
+                )
+              )
+                deleteMut.mutate(t.id);
+            }}
+            onRotate={(secret) => rotateMut.mutate({ targetId: t.id, secret })}
+            rotating={
+              rotateMut.isPending && rotateMut.variables?.targetId === t.id
+            }
             publicKey={t.ssh_public_key}
+            fingerprint={t.host_fingerprint}
+            resolvedIp={t.resolved_ip}
+            capabilities={t.capabilities}
+            authType={t.auth_type}
           />
         ))}
       </div>
@@ -203,6 +248,12 @@ function TargetRow({
   verifying,
   onDelete,
   publicKey,
+  fingerprint,
+  resolvedIp,
+  capabilities,
+  authType,
+  onRotate,
+  rotating,
 }: {
   label: string;
   sub: string;
@@ -214,7 +265,16 @@ function TargetRow({
   verifying?: boolean;
   onDelete?: () => void;
   publicKey?: string | null;
+  fingerprint?: string | null;
+  resolvedIp?: string | null;
+  capabilities?: DeployTarget["capabilities"];
+  authType?: DeployTarget["auth_type"];
+  onRotate?: (secret: string) => void;
+  rotating?: boolean;
 }) {
+  const [showRotate, setShowRotate] = useState(false);
+  const [newSecret, setNewSecret] = useState("");
+  const selectable = !status || status === "ok";
   return (
     <div
       className={`rounded-lg border p-2.5 ${selected ? "border-[#7c5cff] bg-[rgba(124,92,255,0.08)]" : "border-border-subtle"}`}
@@ -223,7 +283,7 @@ function TargetRow({
         <button
           type="button"
           onClick={onSelect}
-          disabled={busy || selected}
+          disabled={busy || selected || !selectable}
           className="flex flex-1 items-center gap-2 text-left"
         >
           <span
@@ -237,14 +297,24 @@ function TargetRow({
           </span>
         </button>
         {status && (
-          <Badge variant={status === "ok" ? "success" : status === "failed" ? "danger" : "default"} className="text-[10px]">
-            {status === "ok" ? "проверен" : status === "failed" ? "ошибка" : "не проверен"}
+          <Badge variant={status === "ok" ? "success" : status === "failed" ? "danger" : status === "pending_confirmation" ? "warning" : "default"} className="text-[10px]">
+            {status === "ok" ? "проверен" : status === "failed" ? "ошибка" : status === "pending_confirmation" ? "подтвердите ключ" : "не проверен"}
           </Badge>
         )}
         {onVerify && (
           <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={onVerify} disabled={verifying}>
-            {verifying ? <Loader2 className="h-3 w-3 animate-spin" /> : "Проверить"}
+            {verifying ? <Loader2 className="h-3 w-3 animate-spin" /> : status === "pending_confirmation" ? "Доверять" : "Проверить"}
           </Button>
+        )}
+        {onRotate && (
+          <button
+            type="button"
+            onClick={() => setShowRotate((value) => !value)}
+            className="text-fg-tertiary hover:text-fg-primary"
+            title="Обновить пароль или приватный ключ"
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+          </button>
         )}
         {onDelete && (
           <button type="button" onClick={onDelete} className="text-fg-tertiary hover:text-red-400" title="Удалить сервер">
@@ -259,6 +329,58 @@ function TargetRow({
             <code className="text-fg-secondary">~/.ssh/authorized_keys</code>
           </p>
           <code className="block break-all text-[10px] text-fg-secondary">{publicKey}</code>
+        </div>
+      )}
+      {fingerprint && (
+        <div className="mt-2 rounded-md border border-warning/30 bg-warning/[0.06] p-2">
+          <p className="text-[11px] text-fg-secondary">
+            Отпечаток SSH: <code>{fingerprint}</code>
+          </p>
+          {status === "pending_confirmation" && (
+            <p className="mt-1 text-[10px] text-fg-tertiary">
+              Сверьте его в панели VPS или командой ssh-keygen, затем нажмите
+              «Доверять». До подтверждения сервер нельзя выбрать.
+            </p>
+          )}
+        </div>
+      )}
+      {status === "ok" && capabilities && (
+        <p className="mt-2 text-[10px] text-fg-tertiary">
+          {capabilities.os} · {capabilities.arch} · RAM{" "}
+          {capabilities.memory_mb ?? "—"} МБ · свободно{" "}
+          {capabilities.disk_free_mb ?? "—"} МБ · IP {resolvedIp}
+        </p>
+      )}
+      {showRotate && onRotate && (
+        <div className="mt-2 flex items-end gap-2">
+          {authType === "password" ? (
+            <Input
+              type="password"
+              value={newSecret}
+              onChange={(event) => setNewSecret(event.target.value)}
+              placeholder="Новый пароль SSH"
+              className="h-8 text-xs"
+            />
+          ) : (
+            <textarea
+              value={newSecret}
+              onChange={(event) => setNewSecret(event.target.value)}
+              placeholder="Новый приватный ключ OpenSSH"
+              className="h-20 flex-1 resize-y rounded-md border border-border-subtle bg-surface-overlay px-2 py-1.5 font-mono text-xs"
+            />
+          )}
+          <Button
+            size="sm"
+            className="h-8 text-xs"
+            disabled={!newSecret.trim() || rotating}
+            onClick={() => {
+              onRotate(newSecret);
+              setNewSecret("");
+              setShowRotate(false);
+            }}
+          >
+            {rotating ? <Loader2 className="h-3 w-3 animate-spin" /> : "Сохранить"}
+          </Button>
         </div>
       )}
     </div>

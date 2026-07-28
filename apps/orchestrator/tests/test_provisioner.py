@@ -24,12 +24,13 @@ from omnia_orchestrator.services import provisioner
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(
         "DATABASE_URL",
         "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
     )
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
+    monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path / "projects"))
     from omnia_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
@@ -49,9 +50,7 @@ async def _provision_capturing_spec(
     # Template copy + source resolution → no filesystem touch.
     monkeypatch.setattr(provisioner, "_template_source_dir", lambda _t: Path("."))
     monkeypatch.setattr(provisioner, "_copy_template", lambda _s, _d: None)
-    monkeypatch.setattr(
-        provisioner, "_load_or_create_auth_secret", lambda _p: "auth-secret"
-    )
+    monkeypatch.setattr(provisioner, "_load_or_create_auth_secret", lambda _p: "auth-secret")
 
     # Port allocator → fixed port.
     allocator = type("A", (), {"acquire": AsyncMock(return_value=3210)})()
@@ -68,9 +67,7 @@ async def _provision_capturing_spec(
     monkeypatch.setattr(provisioner.nginx_writer, "dev_host", lambda s: f"{s}-dev.test")
     monkeypatch.setattr(provisioner.nginx_writer, "dev_url", lambda s: f"https://{s}-dev.test")
     monkeypatch.setattr(provisioner.nginx_writer, "publish_http", AsyncMock())
-    monkeypatch.setattr(
-        provisioner.nginx_writer, "publish_tls_in_background", lambda *_a: None
-    )
+    monkeypatch.setattr(provisioner.nginx_writer, "publish_tls_in_background", lambda *_a: None)
 
     monkeypatch.setattr(provisioner, "start_container", fake_start)
     monkeypatch.setattr(provisioner, "publish_project_event", AsyncMock())

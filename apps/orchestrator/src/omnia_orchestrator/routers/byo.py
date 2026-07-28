@@ -20,7 +20,7 @@ from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.internal_auth import (
     verify_internal_token as _verify_token,
 )
-from omnia_orchestrator.services import nginx_writer
+from omnia_orchestrator.services import nginx_writer, remote_deploy
 
 log = structlog.get_logger("omnia_orchestrator.byo")
 
@@ -33,6 +33,8 @@ class VerifyTargetRequest(BaseModel):
     user: str
     auth_type: str
     secret: str
+    known_host_key: str | None = None
+    resolved_ip: str | None = None
 
 
 class VerifyTargetResponse(BaseModel):
@@ -41,6 +43,26 @@ class VerifyTargetResponse(BaseModel):
     docker_ok: bool = False
     docker_version: str | None = None
     host_key: str | None = None
+    host_fingerprint: str | None = None
+    resolved_ip: str | None = None
+    requires_confirmation: bool = False
+    capabilities: dict[str, object] | None = None
+
+
+class RemoteProjectRequest(BaseModel):
+    project_id: str
+    host: str
+    port: int = 22
+    user: str
+    auth_type: str
+    secret: str
+    known_host_key: str
+    resolved_ip: str
+
+
+class RemoteRoutesRequest(RemoteProjectRequest):
+    slug: str
+    domains: list[str]
 
 
 @router.post("/deploy-targets/verify", response_model=VerifyTargetResponse)
@@ -55,6 +77,8 @@ async def verify_target(
         user=payload.user,
         auth_type=payload.auth_type,
         secret=payload.secret,
+        known_host_key=payload.known_host_key,
+        resolved_ip=payload.resolved_ip,
     )
     log.info(
         "byo.verify_target",
@@ -68,6 +92,53 @@ async def verify_target(
         docker_ok=bool(result.get("docker_ok")),
         docker_version=result.get("docker_version"),
         host_key=result.get("host_key"),
+        host_fingerprint=result.get("host_fingerprint"),
+        resolved_ip=result.get("resolved_ip"),
+        requires_confirmation=bool(result.get("requires_confirmation")),
+        capabilities=result.get("capabilities"),
+    )
+
+
+@router.post("/deploy-targets/teardown")
+async def teardown_remote_project(
+    payload: RemoteProjectRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    _verify_token(x_internal_token)
+    data = payload.model_dump()
+    project_id = str(data.pop("project_id"))
+    return await remote_deploy.teardown_target(creds=data, project_id=project_id)
+
+
+@router.post("/deploy-targets/logs")
+async def remote_project_logs(
+    payload: RemoteProjectRequest,
+    tail: int = 200,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    _verify_token(x_internal_token)
+    data = payload.model_dump()
+    project_id = str(data.pop("project_id"))
+    return await remote_deploy.target_logs(creds=data, project_id=project_id, tail=tail)
+
+
+@router.post("/deploy-targets/routes")
+async def sync_remote_routes(
+    payload: RemoteRoutesRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    _verify_token(x_internal_token)
+    from omnia_orchestrator.services.builder import _remote_port
+
+    data = payload.model_dump()
+    project_id = str(data.pop("project_id"))
+    slug = str(data.pop("slug"))
+    domains = list(data.pop("domains"))
+    return await remote_deploy.sync_routes(
+        creds=data,
+        project_id=project_id,
+        domains=domains,
+        host_port=_remote_port(slug),
     )
 
 

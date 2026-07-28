@@ -19,6 +19,7 @@ dependencies = [
     "python-slugify>=8.0,<9.0",
     "sentry-sdk[fastapi]>=2.18,<3.0",
     "redis>=5.0,<6.0",
+    "asyncssh>=2.21,<3.0",
 ]
 
 [dependency-groups]

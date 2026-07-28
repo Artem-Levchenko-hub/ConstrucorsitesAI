@@ -54,6 +54,10 @@ def _fernet_strong() -> Fernet:
         except (ValueError, TypeError):
             derived = base64.urlsafe_b64encode(hashlib.sha256(key).digest())
             return Fernet(derived)
+    if get_settings().env.lower() in {"prod", "production"}:
+        raise RuntimeError(
+            "SECRETS_ENCRYPTION_KEY is required in production for stored VPS credentials"
+        )
     return _fernet()
 
 

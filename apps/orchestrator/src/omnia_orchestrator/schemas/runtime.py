@@ -80,6 +80,10 @@ class DeployTargetCreds(BaseModel):
     user: str
     auth_type: str
     secret: str
+    known_host_key: str
+    resolved_ip: str
+    label: str | None = None
+    id: str | None = None
 
 
 class DeployRequest(BaseModel):
@@ -94,18 +98,34 @@ class DeployRequest(BaseModel):
     # Подключённые к проекту домены — при деплое на свой VPS агент сам поднимает
     # edge (Caddy, авто-HTTPS) для них на машине пользователя.
     domains: list[str] | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 # Phases match apps/api DeployStatus so the api forwards them unchanged.
-DeployPhase = Literal["queued", "building", "swapping", "done", "failed"]
+DeployPhase = Literal[
+    "queued",
+    "building",
+    "pushing",
+    "swapping",
+    "cancelling",
+    "cancelled",
+    "done",
+    "failed",
+]
 
 
 class DeployResponse(BaseModel):
     project_id: UUID
+    run_id: str | None = None
     phase: DeployPhase
     prod_url: str | None = None
     image_tag: str | None = None
     error: str | None = None
+    detail: str | None = None
+    target_label: str | None = None
+    target_id: str | None = None
+    can_cancel: bool = False
+    logs: list[str] = Field(default_factory=list)
     started_at: str | None = None
     finished_at: str | None = None
 

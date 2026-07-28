@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from omnia_api.models.base import Base
@@ -45,7 +45,10 @@ class DeployTarget(Base):
     # Пиннинг host-key: сохраняем при первой верификации, сверяем при деплое —
     # защита от MITM/подмены сервера. Формат known_hosts-строки.
     known_host_key: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Результат последней проверки: 'unverified' | 'ok' | 'failed'.
+    host_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+    capabilities: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    # Результат: unverified → pending_confirmation → ok/failed.
     verify_status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="unverified", default="unverified"
     )
@@ -61,7 +64,7 @@ class DeployTarget(Base):
             name="ck_deploy_targets_auth_type_allowed",
         ),
         CheckConstraint(
-            "verify_status IN ('unverified', 'ok', 'failed')",
+            "verify_status IN ('unverified', 'pending_confirmation', 'ok', 'failed')",
             name="ck_deploy_targets_verify_status_allowed",
         ),
         Index("ix_deploy_targets_owner_id", "owner_id"),

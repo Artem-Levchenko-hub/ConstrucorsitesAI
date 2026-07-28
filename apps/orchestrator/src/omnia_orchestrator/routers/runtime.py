@@ -91,13 +91,7 @@ def _safe_app_path(path: str) -> str:
     tool call can never escape the project tree.
     """
     p = (path or "").strip()
-    if (
-        not p
-        or p.startswith("/")
-        or p.startswith("~")
-        or "\x00" in p
-        or ".." in p.split("/")
-    ):
+    if not p or p.startswith("/") or p.startswith("~") or "\x00" in p or ".." in p.split("/"):
         raise OrchestratorError(
             code="validation_failed",
             message=f"unsafe path: {path!r}",
@@ -179,9 +173,7 @@ async def wake(
                 "project_id": str(payload.project_id),
                 "state": "running",
                 "container_name": name,
-                "dev_url": (
-                    nginx_writer.dev_url(derived_slug) if derived_slug else None
-                ),
+                "dev_url": (nginx_writer.dev_url(derived_slug) if derived_slug else None),
             },
         },
     )
@@ -230,9 +222,7 @@ async def stop(
         name = f"omnia-dev-{slug}"
     if name is None:
         # Nothing to stop — already gone. Idempotent.
-        return WakeResponse(
-            project_id=payload.project_id, state="stopped", ready_in_seconds=0
-        )
+        return WakeResponse(project_id=payload.project_id, state="stopped", ready_in_seconds=0)
     await stop_container(name, pause=payload.pause)
     new_state = "paused" if payload.pause else "stopped"
 
@@ -292,14 +282,11 @@ async def hot_reload(
     # Seed PUBLIC entity catalogs with demo rows so the first browse screen
     # isn't an empty-state (NORTH STAR pillars 1 & 4). Idempotent (only fills
     # empty catalogs) and fail-soft (never raises) — see demo_seed_writer.
-    seeded = await demo_seed_writer.seed_demo_data(
-        payload.project_id, payload.files, niche=slug
-    )
+    seeded = await demo_seed_writer.seed_demo_data(payload.project_id, payload.files, niche=slug)
 
     # If the AI touched the DB schema or migrations, push it to Postgres now.
     schema_touched = any(
-        p == "src/lib/db/schema.ts" or p.startswith("src/lib/db/migrations/")
-        for p in payload.files
+        p == "src/lib/db/schema.ts" or p.startswith("src/lib/db/migrations/") for p in payload.files
     )
     drizzle_result: dict[str, str] | None = None
     if schema_touched:
@@ -402,8 +389,10 @@ async def agent_read_file(
     container_name = f"omnia-dev-{slug}"
     try:
         result = await exec_cmd(
-            container_name, cmd=["cat", "--", rel],
-            workdir="/app", max_output=_AGENT_MAX_READ,
+            container_name,
+            cmd=["cat", "--", rel],
+            workdir="/app",
+            max_output=_AGENT_MAX_READ,
         )
     except OrchestratorError as exc:
         if exc.code == "container_not_running":
@@ -431,8 +420,10 @@ async def agent_list_dir(
     container_name = f"omnia-dev-{slug}"
     try:
         result = await exec_cmd(
-            container_name, cmd=["ls", "-la", "--", rel],
-            workdir="/app", max_output=_AGENT_MAX_LIST,
+            container_name,
+            cmd=["ls", "-la", "--", rel],
+            workdir="/app",
+            max_output=_AGENT_MAX_LIST,
         )
     except OrchestratorError as exc:
         if exc.code == "container_not_running":
@@ -456,15 +447,19 @@ async def agent_grep(
     rel = _safe_app_path(path)
     if not pattern:
         raise OrchestratorError(
-            code="validation_failed", message="empty pattern", status_code=400,
+            code="validation_failed",
+            message="empty pattern",
+            status_code=400,
         )
     container_name = f"omnia-dev-{slug}"
     try:
         # argv (no shell) → no injection; `--` ends options so a pattern that
         # starts with `-` can't become a flag.
         result = await exec_cmd(
-            container_name, cmd=["grep", "-rnI", "--", pattern, rel],
-            workdir="/app", max_output=_AGENT_MAX_GREP,
+            container_name,
+            cmd=["grep", "-rnI", "--", pattern, rel],
+            workdir="/app",
+            max_output=_AGENT_MAX_GREP,
         )
     except OrchestratorError as exc:
         if exc.code == "container_not_running":
@@ -485,8 +480,10 @@ async def _run_dep_doctor(container_name: str) -> str:
         return ""
     try:
         pj = await exec_cmd(
-            container_name, cmd=["cat", "--", "package.json"],
-            workdir="/app", max_output=_AGENT_MAX_READ,
+            container_name,
+            cmd=["cat", "--", "package.json"],
+            workdir="/app",
+            max_output=_AGENT_MAX_READ,
         )
         if pj["exit_code"] != "0":
             return ""
@@ -496,7 +493,8 @@ async def _run_dep_doctor(container_name: str) -> str:
             # Generous cap: import lines across a whole src/ tree already exceed the
             # 16 KB grep cap on the default nextjs-entities template (~28 KB), which
             # would silently drop packages past the cut and leave them uninstalled.
-            workdir="/app", max_output=_AGENT_MAX_READ,
+            workdir="/app",
+            max_output=_AGENT_MAX_READ,
         )
         missing = dep_doctor.plan_installs(pj["stdout"], imports["stdout"])
         if not missing:
@@ -506,7 +504,9 @@ async def _run_dep_doctor(container_name: str) -> str:
         res = await exec_cmd(
             container_name,
             cmd=["sh", "-lc", f"cd /app && pnpm add {' '.join(missing)}"],
-            workdir="/app", timeout_sec=120, max_output=_AGENT_MAX_BUILD,
+            workdir="/app",
+            timeout_sec=120,
+            max_output=_AGENT_MAX_BUILD,
         )
         verb = "installed" if res["exit_code"] == "0" else "FAILED to install"
         note = f"[dep-doctor] {verb}: {' '.join(missing)}"
@@ -575,15 +575,20 @@ async def agent_exec(
     low = (cmd or "").strip()
     if not low:
         raise OrchestratorError(
-            code="validation_failed", message="empty cmd", status_code=400,
+            code="validation_failed",
+            message="empty cmd",
+            status_code=400,
         )
     if any(bad in low for bad in _EXEC_DENY):
         return {"ok": False, "detail": "command blocked by safety denylist"}
     container_name = f"omnia-dev-{slug}"
     try:
         result = await exec_cmd(
-            container_name, cmd=["sh", "-lc", cmd],
-            workdir="/app", timeout_sec=180, max_output=_AGENT_MAX_BUILD,
+            container_name,
+            cmd=["sh", "-lc", cmd],
+            workdir="/app",
+            timeout_sec=180,
+            max_output=_AGENT_MAX_BUILD,
         )
     except OrchestratorError as exc:
         if exc.code == "container_not_running":
@@ -603,10 +608,16 @@ def _deploy_record_to_response(rec: deploy_state.DeployRecord) -> DeployResponse
 
     return DeployResponse(
         project_id=UUID(rec.project_id),
+        run_id=rec.run_id,
         phase=rec.phase,
         prod_url=rec.prod_url,
         image_tag=rec.image_tag,
         error=rec.error,
+        detail=rec.detail,
+        target_label=rec.target_label,
+        target_id=rec.target_id,
+        can_cancel=rec.can_cancel,
+        logs=rec.logs,
         started_at=rec.started_at,
         finished_at=rec.finished_at,
     )
@@ -627,8 +638,27 @@ async def deploy(
     _verify_token(x_internal_token)
     target = payload.target.model_dump() if payload.target else None
     rec = await builder.start_deploy(
-        str(payload.project_id), slug, target, payload.domains
+        str(payload.project_id),
+        slug,
+        target,
+        payload.domains,
+        payload.idempotency_key,
     )
+    return _deploy_record_to_response(rec)
+
+
+@router.post("/{project_id}/deploy/cancel", response_model=DeployResponse)
+async def cancel_deploy(
+    project_id: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> DeployResponse:
+    """Cancel the active build/transfer and keep the previous version live."""
+    _verify_token(x_internal_token)
+    from uuid import UUID
+
+    rec = await builder.cancel_deploy(project_id)
+    if rec is None:
+        return DeployResponse(project_id=UUID(project_id), phase="cancelled")
     return _deploy_record_to_response(rec)
 
 
@@ -645,6 +675,17 @@ async def get_deploy(
     if rec is None:
         return DeployResponse(project_id=UUID(project_id), phase="queued")
     return _deploy_record_to_response(rec)
+
+
+@router.get("/{project_id}/deploy/history", response_model=list[DeployResponse])
+async def get_deploy_history(
+    project_id: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> list[DeployResponse]:
+    _verify_token(x_internal_token)
+    return [
+        _deploy_record_to_response(record) for record in reversed(deploy_state.history(project_id))
+    ]
 
 
 @router.get("/{project_id}/status", response_model=StatusResponse)
@@ -805,9 +846,7 @@ async def compile_status(
 
     result = await container_logs(name, tail=250, kind="dev")
     ok, error, file = parse_next_compile_error(result["logs"])
-    return CompileStatusResponse(
-        project_id=UUID(project_id), ok=ok, error=error, file=file
-    )
+    return CompileStatusResponse(project_id=UUID(project_id), ok=ok, error=error, file=file)
 
 
 @router.get("/{project_id}/runtime-status", response_model=RuntimeStatusResponse)

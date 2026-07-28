@@ -1,6 +1,4 @@
-"""Юнит-тесты удалённого деплоя (BYO-VPS) с замоканным ssh/переносом — без
-реального сервера. Проверяют конструирование docker-команд, что секрет не в
-argv, ветки результата и детерминизм порта."""
+"""Blue/green BYO deployment tests with an in-memory SSH facade."""
 
 from __future__ import annotations
 
@@ -10,133 +8,144 @@ from omnia_orchestrator.core.shell import CmdResult
 from omnia_orchestrator.services import builder, remote_deploy
 
 
-def _fake_prefix(**kw):
-    # Имитируем ssh.ssh_prefix: префикс без секрета, без temp-файла.
-    argv = ["ssh", "-i", "/tmp/k", f"{kw['user']}@{kw['host']}"]
-    return argv, None, (lambda: None)
+class FakeSession:
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+        self.inputs: list[bytes | str | None] = []
+        self.closed = False
+
+    async def run(
+        self,
+        command: str,
+        *,
+        timeout: float = 30,  # noqa: ASYNC109 - mirrors production facade
+        input_data=None,
+    ) -> CmdResult:
+        self.commands.append(command)
+        self.inputs.append(input_data)
+        if "image inspect" in command:
+            return CmdResult(0, "amd64\n", "")
+        if command == "uname -m":
+            return CmdResult(0, "x86_64\n", "")
+        if "docker run -d --name omnia-app-" in command:
+            return CmdResult(0, "candidate-id\n", "")
+        if "docker port" in command:
+            return CmdResult(0, "34568\n", "")
+        if "docker inspect" in command and "omnia-edge" in command:
+            return CmdResult(0, "true\n", "")
+        if "docker ps -aq" in command:
+            return CmdResult(0, "old-id\ncandidate-id\n", "")
+        return CmdResult(0, "", "")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _creds() -> dict[str, object]:
+    return {
+        "host": "vps.example",
+        "resolved_ip": "203.0.113.9",
+        "port": 22,
+        "user": "root",
+        "auth_type": "key",
+        "secret": "PRIVATE-KEY",
+        "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    }
 
 
 @pytest.mark.asyncio
-async def test_deploy_builds_correct_docker_run(monkeypatch) -> None:
-    calls: list[list[str]] = []
+async def test_blue_green_swaps_after_health_and_keeps_secrets_out_of_commands(
+    monkeypatch,
+) -> None:
+    session = FakeSession()
+    connected: dict[str, object] = {}
 
-    async def fake_save_load(image_tag, prefix, env):
-        return True, "Loaded image: omnia-app-shop:1"
+    async def fake_connect(**kwargs):
+        connected.update(kwargs)
+        return session
 
-    async def fake_run(cmd, *, timeout=30.0, env=None):
-        calls.append(cmd)
-        if "curl" in cmd[-1]:
-            return CmdResult(rc=0, stdout="200", stderr="")
-        return CmdResult(rc=0, stdout="", stderr="")
+    async def fake_save_load(_tag, _session, _progress=None):
+        return True, "loaded"
 
-    monkeypatch.setattr(remote_deploy.ssh, "ssh_prefix", _fake_prefix)
+    async def healthy(_session, _port):
+        return True
+
+    monkeypatch.setattr(remote_deploy.ssh, "connect", fake_connect)
     monkeypatch.setattr(remote_deploy, "_save_load", fake_save_load)
-    monkeypatch.setattr(remote_deploy, "run", fake_run)
+    monkeypatch.setattr(remote_deploy, "_health", healthy)
 
-    res = await remote_deploy.deploy_to_target(
-        creds={"host": "203.0.113.9", "port": 22, "user": "root",
-               "auth_type": "key", "secret": "PRIVKEYBODY"},
-        image_tag="omnia-app-shop:1", slug="shop", host_port=34567,
-        env={"NODE_ENV": "production", "PORT": "3000"},
+    result = await remote_deploy.deploy_to_target(
+        creds=_creds(),
+        image_tag="omnia-app-shop:1",
+        project_id="11111111-2222-3333-4444-555555555555",
+        run_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        slug="shop",
+        host_port=34567,
+        env={"AUTH_SECRET": "APP-SUPER-SECRET"},
+        needs_database=False,
     )
-    assert res["ok"] is True
-    assert res["url"] == "http://203.0.113.9:34567"
-    runcmd = next(c[-1] for c in calls if c[-1].startswith("docker run"))
-    assert "--name omnia-app-shop" in runcmd
-    assert "-p 34567:3000" in runcmd
-    assert "-e NODE_ENV='production'" in runcmd
-    assert "omnia-app-shop:1" in runcmd
-    # Секрет не должен фигурировать ни в одной команде.
-    assert all("PRIVKEYBODY" not in " ".join(c) for c in calls)
+    assert result["ok"] is True
+    assert result["url"] == "http://203.0.113.9:34567"
+    commands = "\n".join(session.commands)
+    assert "APP-SUPER-SECRET" not in commands
+    assert "PRIVATE-KEY" not in commands
+    candidate_index = next(
+        index
+        for index, value in enumerate(session.commands)
+        if "docker run -d --name omnia-app-" in value
+    )
+    reload_index = next(
+        index for index, value in enumerate(session.commands) if "caddy reload" in value
+    )
+    old_remove_index = next(
+        index for index, value in enumerate(session.commands) if value == "docker rm -f old-id"
+    )
+    assert candidate_index < reload_index < old_remove_index
+    assert connected["known_host_key"] == _creds()["known_host_key"]
+    assert session.closed is True
 
 
 @pytest.mark.asyncio
-async def test_deploy_transfer_failure_returns_error(monkeypatch) -> None:
-    async def fake_save_load(image_tag, prefix, env):
-        return False, "docker load на сервере упал: no space left"
+async def test_failed_candidate_is_removed_without_touching_old(monkeypatch) -> None:
+    session = FakeSession()
 
-    monkeypatch.setattr(remote_deploy.ssh, "ssh_prefix", _fake_prefix)
+    async def fake_connect(**_kwargs):
+        return session
+
+    async def fake_save_load(_tag, _session, _progress=None):
+        return True, "loaded"
+
+    async def unhealthy(_session, _port):
+        return False
+
+    monkeypatch.setattr(remote_deploy.ssh, "connect", fake_connect)
     monkeypatch.setattr(remote_deploy, "_save_load", fake_save_load)
-
-    res = await remote_deploy.deploy_to_target(
-        creds={"host": "h", "port": 22, "user": "u", "auth_type": "key", "secret": "k"},
-        image_tag="img:1", slug="x", host_port=30000,
+    monkeypatch.setattr(remote_deploy, "_health", unhealthy)
+    result = await remote_deploy.deploy_to_target(
+        creds=_creds(),
+        image_tag="img:1",
+        project_id="11111111-2222-3333-4444-555555555555",
+        run_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        slug="shop",
+        host_port=34567,
+        needs_database=False,
     )
-    assert res["ok"] is False
-    assert "Перенос образа не удался" in res["detail"]
+    assert result["ok"] is False
+    commands = "\n".join(session.commands)
+    assert "docker rm -f omnia-app-" in commands
+    assert "docker rm -f old-id" not in commands
+    assert "caddy reload" not in commands
 
 
-@pytest.mark.asyncio
-async def test_deploy_container_warming_still_ok(monkeypatch) -> None:
-    async def fake_save_load(image_tag, prefix, env):
-        return True, "Loaded image: img:1"
-
-    async def fake_run(cmd, *, timeout=30.0, env=None):
-        last = cmd[-1]
-        if "curl" in last:
-            return CmdResult(rc=0, stdout="000", stderr="")  # ещё не отвечает
-        if "docker ps" in last:
-            return CmdResult(rc=0, stdout="Up 2 seconds", stderr="")
-        return CmdResult(rc=0, stdout="", stderr="")
-
-    monkeypatch.setattr(remote_deploy.ssh, "ssh_prefix", _fake_prefix)
-    monkeypatch.setattr(remote_deploy, "_save_load", fake_save_load)
-    monkeypatch.setattr(remote_deploy, "run", fake_run)
-
-    res = await remote_deploy.deploy_to_target(
-        creds={"host": "h", "port": 22, "user": "u", "auth_type": "key", "secret": "k"},
-        image_tag="img:1", slug="x", host_port=30000,
-    )
-    assert res["ok"] is True
-    assert "прогревается" in res["detail"]
-
-
-@pytest.mark.asyncio
-async def test_deploy_with_domain_sets_up_edge(monkeypatch) -> None:
-    calls: list[list[str]] = []
-
-    async def fake_save_load(image_tag, prefix, env):
-        return True, "Loaded image: img:1"
-
-    async def fake_run(cmd, *, timeout=30.0, env=None):
-        calls.append(cmd)
-        if "curl" in cmd[-1]:
-            return CmdResult(rc=0, stdout="200", stderr="")
-        return CmdResult(rc=0, stdout="", stderr="")
-
-    monkeypatch.setattr(remote_deploy.ssh, "ssh_prefix", _fake_prefix)
-    monkeypatch.setattr(remote_deploy, "_save_load", fake_save_load)
-    monkeypatch.setattr(remote_deploy, "run", fake_run)
-
-    res = await remote_deploy.deploy_to_target(
-        creds={"host": "203.0.113.9", "port": 22, "user": "root",
-               "auth_type": "key", "secret": "k"},
-        image_tag="img:1", slug="shop", host_port=34567,
-        domains=["shop.example.ru"],
-    )
-    assert res["ok"] is True
-    # С доменом URL — https по домену, а не http:port.
-    assert res["url"] == "https://shop.example.ru"
-    # Приложение слушает только 127.0.0.1 (наружу — edge).
-    runcmd = next(c[-1] for c in calls if c[-1].startswith("docker run --name") or "--name omnia-app-shop" in c[-1])
-    assert "-p 127.0.0.1:34567:3000" in runcmd
-    # Edge поднимается контейнером Caddy на host-сети.
-    edgecmd = next(c[-1] for c in calls if "omnia-edge" in c[-1] and "docker run" in c[-1])
-    assert "--network host" in edgecmd
-    assert "caddy:2" in edgecmd
-
-
-def test_caddyfile_shape() -> None:
-    conf = remote_deploy._caddyfile(["a.example.ru", "b.example.ru"], 34567)
-    assert "a.example.ru, b.example.ru {" in conf
-    assert "reverse_proxy 127.0.0.1:34567" in conf
+def test_caddy_routes_are_project_scoped() -> None:
+    domain = remote_deploy._caddyfile(["a.example.ru", "b.example.ru"], 34568)
+    direct = remote_deploy._caddyfile([], 34568, 34567)
+    assert "a.example.ru, b.example.ru {" in domain
+    assert "reverse_proxy 127.0.0.1:34568" in domain
+    assert "http://:34567 {" in direct
 
 
 def test_remote_port_deterministic_and_in_range() -> None:
-    p1 = builder._remote_port("my-shop")
-    p2 = builder._remote_port("my-shop")
-    p3 = builder._remote_port("other-site")
-    assert p1 == p2  # детерминизм
-    assert p1 != p3  # разные проекты — разные порты (обычно)
-    assert 30000 <= p1 < 50000
-    assert 30000 <= p3 < 50000
+    assert builder._remote_port("my-shop") == builder._remote_port("my-shop")
+    assert builder._remote_port("my-shop") != builder._remote_port("other-site")
+    assert 30000 <= builder._remote_port("my-shop") < 50000

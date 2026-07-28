@@ -1,225 +1,511 @@
-"""Удалённый деплой собранного образа на чужой VPS (BYO-VPS).
-
-Механика (проверена вживую на реальном SSH-пути):
-  1. `docker save <tag>` ЛОКАЛЬНО → пайп в `ssh <target> docker load` — переносим
-     готовый prod-образ на машину пользователя (без приватного реестра).
-  2. `ssh <target> docker run -d ...` — запускаем контейнер на его машине.
-  3. `ssh <target> curl ...` — проверяем, что приложение отвечает.
-
-Секреты идут через core.ssh.ssh_prefix (ключ во временном файле / пароль в env),
-в argv/логи не попадают. Локальный деплой (services/builder.py) этим модулем НЕ
-затрагивается — он только для проектов с выбранной чужой целью.
-
-НЕ входит сюда (следующий шаг, нужен reachable foreign VPS для доводки):
-edge/nginx + TLS на удалённой машине и Postgres для fullstack — пока возвращаем
-прямой `http://<host>:<port>`; домен/SSL подключаются отдельно.
-"""
+"""Transactional blue/green deployment to an owner-managed VPS."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import os
+import re
+import secrets
+import zlib
+from collections.abc import Callable
 
 import structlog
 
 from omnia_orchestrator.core import ssh
-from omnia_orchestrator.core.shell import run
 
 log = structlog.get_logger("omnia_orchestrator.remote_deploy")
 
-# Edge-прокси на чужой машине: один контейнер Caddy на host-сети. Caddy сам
-# выпускает и продлевает Let's Encrypt для домена, как только DNS указывает на
-# машину и порт 80 доступен — пользователю на VPS ничего настраивать не надо.
 _EDGE_NAME = "omnia-edge"
-_EDGE_DIR = "/opt/omnia-edge"
+_ROOT = "$HOME/.omnia"
+_IDENT = re.compile(r"[^a-zA-Z0-9_.-]")
 
 
-def _caddyfile(domains: list[str], app_port: int) -> str:
-    """Caddyfile: каждый домен → reverse_proxy на порт приложения (авто-HTTPS)."""
-    site = ", ".join(domains)
-    return f"{site} {{\n\treverse_proxy 127.0.0.1:{app_port}\n}}\n"
+def _ident(value: str, *, limit: int = 48) -> str:
+    return _IDENT.sub("-", value).strip("-")[:limit] or "project"
 
 
-async def _setup_edge(
-    prefix: list[str], env: dict[str, str] | None, domains: list[str], app_port: int
-) -> tuple[bool, str]:
-    """Поднять/обновить Caddy на удалённой машине для доменов. (ok, detail).
+def _caddyfile(domains: list[str], app_port: int, public_port: int | None = None) -> str:
+    """Per-project route; the global Caddyfile imports all of these files."""
+    address = ", ".join(domains) if domains else f"http://:{public_port}"
+    return f"{address} {{\n\treverse_proxy 127.0.0.1:{app_port}\n}}\n"
 
-    Caddyfile передаётся через base64 (никаких спецсимволов в argv), кладётся в
-    /opt/omnia-edge, контейнер Caddy запускается на host-сети (порты 80/443) с
-    томом для сертификатов. Идемпотентно: повторный вызов пересоздаёт контейнер.
-    """
-    conf_b64 = base64.b64encode(_caddyfile(domains, app_port).encode("utf-8")).decode("ascii")
-    write = await run(
-        [*prefix, f"mkdir -p {_EDGE_DIR} && echo {conf_b64} | base64 -d > {_EDGE_DIR}/Caddyfile"],
-        timeout=25, env=env,
+
+async def _write_file(
+    session: ssh.SSHSession, path: str, content: str, *, mode: str = "600"
+) -> None:
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    result = await session.run(
+        f"umask 077; mkdir -p {_ROOT}/env {_ROOT}/caddy/routes; "
+        f"base64 -d > {path}; chmod {mode} {path}",
+        input_data=encoded,
+        timeout=30,
     )
-    if write.rc != 0:
-        return False, f"не записать Caddyfile: {write.stderr.strip()[-160:]}"
-    run_edge = await run(
-        [*prefix,
-         f"docker rm -f {_EDGE_NAME} 2>/dev/null; "
-         f"docker run -d --name {_EDGE_NAME} --restart unless-stopped --network host "
-         f"-v {_EDGE_DIR}/Caddyfile:/etc/caddy/Caddyfile -v omnia-caddy-data:/data caddy:2"],
-        timeout=90, env=env,
-    )
-    if run_edge.rc != 0:
-        return False, f"не запустить Caddy: {run_edge.stderr.strip()[-160:]}"
-    return True, "edge поднят"
+    if not result.ok:
+        raise RuntimeError(f"Не удалось записать runtime-файл: {result.stderr[-180:]}")
 
 
 async def _save_load(
-    image_tag: str, prefix: list[str], env: dict[str, str] | None
+    image_tag: str,
+    session: ssh.SSHSession,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
-    """`docker save <tag>` | `ssh … docker load` без shell (два процесса, пайп).
-
-    Процессы соединяются НАСТОЯЩИМ OS-пайпом (os.pipe), а не через shell — так
-    нет инъекции из host/user, а секрет остаётся в env/файле ключа, не в argv.
-    Возвращает (ok, detail).
-    """
-    read_fd, write_fd = os.pipe()
+    """Compress docker-save locally and stream it through the pinned SSH channel."""
+    save = await asyncio.create_subprocess_exec(
+        "docker",
+        "save",
+        image_tag,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert save.stdout is not None
+    remote = await session.connection.create_process("gzip -d | docker load", encoding=None)
+    transferred = 0
+    compressor = zlib.compressobj(level=1, wbits=31)
     try:
-        save = await asyncio.create_subprocess_exec(
-            "docker", "save", image_tag,
-            stdout=write_fd, stderr=asyncio.subprocess.PIPE,
-        )
-        os.close(write_fd)  # родитель отдал write-конец процессу save
-        write_fd = -1
-        loader = await asyncio.create_subprocess_exec(
-            *prefix, "docker load",
-            stdin=read_fd, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, env=env,
-        )
-        os.close(read_fd)  # родитель отдал read-конец процессу loader
-        read_fd = -1
-        try:
-            out_b, err_b = await asyncio.wait_for(loader.communicate(), timeout=600)
-        except TimeoutError:
-            loader.kill()
-            save.kill()
-            return False, "Таймаут переноса образа (>600с)."
+        while chunk := await save.stdout.read(1024 * 1024):
+            compressed = compressor.compress(chunk)
+            if compressed:
+                remote.stdin.write(compressed)
+                await remote.stdin.drain()
+                transferred += len(compressed)
+            if progress and transferred % (20 * 1024 * 1024) < len(compressed):
+                progress(f"Передано {transferred // (1024 * 1024)} МБ образа")
+        final_chunk = compressor.flush()
+        if final_chunk:
+            remote.stdin.write(final_chunk)
+            await remote.stdin.drain()
+            transferred += len(final_chunk)
+        remote.stdin.write_eof()
+        remote_out, remote_err = await asyncio.wait_for(remote.communicate(), timeout=900)
         await save.wait()
-    finally:
-        for fd in (read_fd, write_fd):
-            if fd >= 0:
-                os.close(fd)
-    out = (out_b or b"").decode("utf-8", "replace")
-    err = (err_b or b"").decode("utf-8", "replace")
-    if loader.returncode == 0 and "Loaded image" in out:
-        return True, out.strip().splitlines()[-1]
-    if save.returncode not in (0, None):
-        return False, f"docker save упал: rc={save.returncode}"
-    tail = err.strip()[-200:] or out.strip()[-200:]
-    return False, f"docker load на сервере упал: {tail}"
+        assert save.stderr is not None
+        save_err = await save.stderr.read()
+    except (TimeoutError, asyncio.CancelledError):
+        save.kill()
+        remote.abort()
+        raise
+    out = (remote_out or b"").decode("utf-8", "replace")
+    err = (remote_err or b"").decode("utf-8", "replace")
+    if save.returncode != 0:
+        return False, f"docker save: {(save_err or b'').decode('utf-8', 'replace')[-180:]}"
+    if remote.exit_status != 0:
+        return False, f"docker load: {(err or out)[-220:]}"
+    return True, out.strip().splitlines()[-1] if out.strip() else "образ загружен"
+
+
+async def _ensure_database(
+    session: ssh.SSHSession, project_key: str, network: str
+) -> tuple[str, str, bool]:
+    db_name = f"omnia-db-{project_key}"
+    volume = f"omnia-db-data-{project_key}"
+    db_env = f"{_ROOT}/env/{project_key}.db.env"
+    exists = await session.run(f"test -s {db_env}", timeout=10)
+    if not exists.ok:
+        password = secrets.token_urlsafe(32)
+        await _write_file(
+            session,
+            db_env,
+            f"POSTGRES_USER=omnia\nPOSTGRES_PASSWORD={password}\nPOSTGRES_DB=omnia\n",
+        )
+    volume_state = await session.run(f"docker volume inspect {volume} >/dev/null 2>&1")
+    fresh_volume = not volume_state.ok
+    await session.run(f"docker network create {network} >/dev/null 2>&1 || true")
+    running = await session.run(
+        f"docker inspect -f '{{{{.State.Running}}}}' {db_name} 2>/dev/null || true"
+    )
+    if running.stdout.strip() != "true":
+        await session.run(f"docker rm -f {db_name} >/dev/null 2>&1 || true")
+        started = await session.run(
+            f"docker run -d --name {db_name} --restart unless-stopped "
+            f"--label omnia.managed=true --label omnia.project={project_key} "
+            f"--network {network} --network-alias db --env-file {db_env} "
+            f"-v {volume}:/var/lib/postgresql/data postgres:16-alpine",
+            timeout=180,
+        )
+        if not started.ok:
+            raise RuntimeError(f"Postgres не запустился: {started.stderr[-220:]}")
+    for _ in range(40):
+        ready = await session.run(f"docker exec {db_name} pg_isready -U omnia", timeout=10)
+        if ready.ok:
+            return db_name, db_env, fresh_volume
+        await asyncio.sleep(1.5)
+    raise RuntimeError("Postgres не стал готов за 60 секунд.")
+
+
+async def _ensure_edge(session: ssh.SSHSession) -> None:
+    await _write_file(
+        session,
+        f"{_ROOT}/caddy/Caddyfile",
+        "import /config/routes/*.caddy\n",
+        mode="644",
+    )
+    # Caddy treats an import glob without matches as invalid. Keep one inert
+    # route so the first project can bootstrap the shared edge safely.
+    await _write_file(
+        session,
+        f"{_ROOT}/caddy/routes/00-empty.caddy",
+        "http://127.0.0.1:65535 {\n  respond 404\n}\n",
+        mode="644",
+    )
+    status = await session.run(
+        f"docker inspect -f '{{{{.State.Running}}}}' {_EDGE_NAME} 2>/dev/null || true"
+    )
+    if status.stdout.strip() == "true":
+        return
+    await session.run(f"docker rm -f {_EDGE_NAME} >/dev/null 2>&1 || true")
+    result = await session.run(
+        f"docker run -d --name {_EDGE_NAME} --restart unless-stopped "
+        f"--label omnia.managed=true --network host "
+        f"-v {_ROOT}/caddy:/config -v omnia-caddy-data:/data "
+        f"caddy:2 caddy run --config /config/Caddyfile --adapter caddyfile",
+        timeout=180,
+    )
+    if not result.ok:
+        raise RuntimeError(f"Caddy не запустился: {result.stderr[-220:]}")
+
+
+async def _health(session: ssh.SSHSession, port: int) -> bool:
+    for _ in range(60):
+        result = await session.run(
+            f"curl -fsS --max-time 4 http://127.0.0.1:{port}/ >/dev/null", timeout=8
+        )
+        if result.ok:
+            return True
+        await asyncio.sleep(2)
+    return False
 
 
 async def deploy_to_target(
     *,
     creds: dict[str, object],
     image_tag: str,
+    project_id: str,
+    run_id: str,
     slug: str,
     host_port: int,
     container_port: int = 3000,
     env: dict[str, str] | None = None,
     domains: list[str] | None = None,
+    needs_database: bool = True,
+    db_dump: str | None = None,
+    db_schema: str | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
-    """Развернуть образ `image_tag` на чужом VPS. Возвращает {ok, url, detail}.
-
-    `creds` = {host, port, user, auth_type, secret}. `env` — переменные
-    окружения контейнера. `domains` — если заданы, поднимаем на машине Caddy
-    (авто-HTTPS) для них → приложение, и приложение слушаем только на 127.0.0.1
-    (наружу торчит edge на 80/443). Без доменов приложение доступно напрямую по
-    http://host:port. DATABASE_URL для fullstack пока ожидает БД на той же
-    машине — вне этого шага.
-    """
-    host = str(creds["host"])
+    """Start a candidate, check it, atomically swap its route, then prune old."""
+    project_key = _ident(project_id.replace("-", ""), limit=20)
+    run_key = _ident(run_id.replace("-", ""), limit=12)
+    name = f"omnia-app-{project_key}-{run_key}"
+    network = f"omnia-net-{project_key}"
+    env_path = f"{_ROOT}/env/{project_key}-{run_key}.env"
+    session: ssh.SSHSession | None = None
+    candidate_started = False
+    database_created = False
+    db_name: str | None = None
     try:
-        prefix, ssh_env, cleanup = ssh.ssh_prefix(
-            host=host, port=int(str(creds["port"])), user=str(creds["user"]),
-            auth_type=str(creds["auth_type"]), secret=str(creds["secret"]),
+        session = await ssh.connect(
+            resolved_ip=str(creds["resolved_ip"]),
+            port=int(str(creds["port"])),
+            user=str(creds["user"]),
+            auth_type=str(creds["auth_type"]),
+            secret=str(creds["secret"]),
+            known_host_key=str(creds["known_host_key"]),
         )
-    except OSError as exc:
-        return {"ok": False, "url": None, "detail": f"Ошибка подготовки ключа: {exc}"}
-
-    name = f"omnia-app-{slug}"
-    try:
-        # 1. Перенос образа.
-        log.info("remote_deploy.transfer", host=host, tag=image_tag)
-        ok, detail = await _save_load(image_tag, prefix, ssh_env)
+        if progress:
+            progress("Защищённое SSH-соединение установлено")
+        ok, transfer_detail = await _save_load(image_tag, session, progress)
         if not ok:
-            return {"ok": False, "url": None, "detail": f"Перенос образа не удался: {detail}"}
+            raise RuntimeError(f"Перенос образа не удался: {transfer_detail}")
 
-        # 2. Снести прошлый контейнер и запустить новый.
-        try:
-            await run([*prefix, f"docker rm -f {name}"], timeout=30, env=ssh_env)
-        except FileNotFoundError:
-            return {
-                "ok": False, "url": None,
-                "detail": "На сервере Omnia нет sshpass — вход по паролю недоступен, "
-                          "используйте ключ.",
-            }
-        env_args = ""
-        for k, v in (env or {}).items():
-            # Значения окружения — наши (не пользовательский ввод); экранируем кавычку.
-            safe = str(v).replace("'", "'\\''")
-            env_args += f" -e {k}='{safe}'"
-        # С доменом приложение слушаем только на 127.0.0.1 — наружу его отдаёт
-        # edge (Caddy) на 80/443. Без домена — напрямую (0.0.0.0:port).
-        bind = "127.0.0.1:" if domains else ""
-        runcmd = (
-            f"docker run -d --name {name} --restart unless-stopped "
-            f"-p {bind}{host_port}:{container_port}{env_args} {image_tag}"
+        image_arch = await session.run(
+            f"docker image inspect {image_tag} --format '{{{{.Architecture}}}}'", timeout=20
         )
-        rr = await run([*prefix, runcmd], timeout=60, env=ssh_env)
-        if rr.rc != 0:
-            return {"ok": False, "url": None,
-                    "detail": f"Запуск контейнера не удался: {rr.stderr.strip()[-200:]}"}
-
-        # 3. Health-check с самой машины (даём приложению подняться).
-        await asyncio.sleep(3)
-        health = await run(
-            [*prefix,
-             f"curl -s -o /dev/null -w %{{http_code}} --max-time 8 http://127.0.0.1:{host_port}/"],
-            timeout=20, env=ssh_env,
-        )
-        code = (health.stdout or "").strip()
-        code_txt = code or "нет ответа"
-        app_up = bool(code and code[0] in "23")
-        if not app_up:
-            status = await run(
-                [*prefix, f"docker ps --filter name={name} --format {{{{.Status}}}}"],
-                timeout=20, env=ssh_env,
+        host_arch = await session.run("uname -m", timeout=10)
+        normalized = {"x86_64": "amd64", "aarch64": "arm64"}
+        remote_arch = normalized.get(host_arch.stdout.strip(), host_arch.stdout.strip())
+        if remote_arch != image_arch.stdout.strip():
+            raise RuntimeError(
+                f"Архитектура образа {image_arch.stdout.strip()} не совпадает "
+                f"с сервером {host_arch.stdout.strip()}."
             )
-            if not status.stdout.strip().startswith("Up"):
-                return {"ok": False, "url": f"http://{host}:{host_port}",
-                        "detail": f"Контейнер не поднялся (HTTP {code_txt})."}
 
-        # 4. Домен: агент сам настраивает edge (Caddy, авто-HTTPS) на машине юзера.
-        if domains:
-            edge_ok, edge_detail = await _setup_edge(prefix, ssh_env, domains, host_port)
-            if edge_ok:
-                warm = "" if app_up else " Приложение прогревается."
-                return {
-                    "ok": True, "url": f"https://{domains[0]}",
-                    "detail": f"Развёрнуто на вашем сервере, домен {domains[0]} "
-                              f"настроен — SSL выпустится автоматически, как только "
-                              f"DNS укажет на сервер.{warm}",
-                }
-            return {
-                "ok": False, "url": f"http://{host}:{host_port}",
-                "detail": f"Приложение запущено, но настройка домена не удалась: {edge_detail}.",
-            }
+        db_env: str | None = None
+        if needs_database:
+            db_name, db_env, database_created = await _ensure_database(
+                session, project_key, network
+            )
+            if database_created and db_dump:
+                restored = await session.run(
+                    f"docker exec -i {db_name} psql -v ON_ERROR_STOP=1 -U omnia -d omnia",
+                    input_data=db_dump,
+                    timeout=300,
+                )
+                if not restored.ok:
+                    raise RuntimeError(f"Миграция данных не удалась: {restored.stderr[-300:]}")
+        else:
+            await session.run(f"docker network create {network} >/dev/null 2>&1 || true")
 
-        # Без домена — прямой доступ по http://host:port.
-        url = f"http://{host}:{host_port}"
-        if app_up:
-            return {"ok": True, "url": url,
-                    "detail": f"Развёрнуто на вашем сервере (HTTP {code}). {detail}"}
+        env_text = "".join(f"{key}={value}\n" for key, value in (env or {}).items())
+        await _write_file(session, env_path, env_text)
+        if db_env:
+            merged = await session.run(
+                f"set -eu; . {db_env}; "
+                f"printf 'DATABASE_URL=postgresql://omnia:%s@db:5432/omnia"
+                + (f"?options=-c%%20search_path%%3D{db_schema}" if db_schema else "")
+                + "\\n' "
+                f'"$POSTGRES_PASSWORD" >> {env_path}',
+                timeout=15,
+            )
+            if not merged.ok:
+                raise RuntimeError("Не удалось подготовить подключение к Postgres.")
+
+        started = await session.run(
+            f"docker run -d --name {name} --restart unless-stopped "
+            f"--label omnia.managed=true --label omnia.project={project_key} "
+            f"--label omnia.kind=app --label omnia.run={run_key} "
+            f"--network {network} --env-file {env_path} "
+            f"-p 127.0.0.1::{container_port} {image_tag}",
+            timeout=90,
+        )
+        if not started.ok:
+            raise RuntimeError(f"Новый контейнер не запустился: {started.stderr[-220:]}")
+        candidate_started = True
+        port_result = await session.run(
+            f"docker port {name} {container_port}/tcp | head -1 | awk -F: '{{print $NF}}'"
+        )
+        try:
+            candidate_port = int(port_result.stdout.strip())
+        except ValueError as exc:
+            raise RuntimeError("Docker не вернул порт нового контейнера.") from exc
+        if progress:
+            progress("Новый контейнер запущен, проверяем приложение")
+        if not await _health(session, candidate_port):
+            logs = await session.run(f"docker logs --tail 80 {name}", timeout=20)
+            raise RuntimeError(
+                "Новая версия не прошла health-check: " + (logs.stderr or logs.stdout)[-500:]
+            )
+
+        await _ensure_edge(session)
+        route = _caddyfile(domains or [], candidate_port, host_port)
+        route_path = f"{_ROOT}/caddy/routes/{project_key}.caddy"
+        previous_route = await session.run(
+            f"base64 -w0 {route_path} 2>/dev/null || true", timeout=10
+        )
+        await _write_file(session, route_path, route, mode="644")
+        valid = await session.run(
+            f"docker exec {_EDGE_NAME} caddy validate --config /config/Caddyfile "
+            f"--adapter caddyfile",
+            timeout=30,
+        )
+        if not valid.ok:
+            if previous_route.stdout.strip():
+                await _write_file(
+                    session,
+                    route_path,
+                    base64.b64decode(previous_route.stdout.strip()).decode("utf-8"),
+                    mode="644",
+                )
+            else:
+                await session.run(f"rm -f {route_path}")
+            raise RuntimeError(f"Конфигурация домена некорректна: {valid.stderr[-220:]}")
+        reloaded = await session.run(
+            f"docker exec {_EDGE_NAME} caddy reload --config /config/Caddyfile --adapter caddyfile",
+            timeout=30,
+        )
+        if not reloaded.ok:
+            if previous_route.stdout.strip():
+                await _write_file(
+                    session,
+                    route_path,
+                    base64.b64decode(previous_route.stdout.strip()).decode("utf-8"),
+                    mode="644",
+                )
+            else:
+                await session.run(f"rm -f {route_path}")
+            await session.run(
+                f"docker exec {_EDGE_NAME} caddy reload --config /config/Caddyfile "
+                f"--adapter caddyfile >/dev/null 2>&1 || true"
+            )
+            raise RuntimeError(f"Caddy не переключил трафик: {reloaded.stderr[-220:]}")
+
+        old = await session.run(
+            f"docker ps -aq --no-trunc --filter label=omnia.project={project_key} "
+            f"--filter label=omnia.kind=app"
+        )
+        for container_id in old.stdout.split():
+            if container_id != started.stdout.strip():
+                await session.run(f"docker rm -f {container_id}", timeout=30)
+        await session.run(
+            f"find {_ROOT}/env -maxdepth 1 -type f -name '{project_key}-*.env' "
+            f"! -name '{project_key}-{run_key}.env' -delete",
+            timeout=30,
+        )
+        safe_slug = _ident(slug)
+        await session.run(
+            f"docker images 'omnia-app-{safe_slug}' --format '{{{{.ID}}}}' "
+            f"| awk 'NR>3 {{print $1}}' | xargs -r docker rmi "
+            f">/dev/null 2>&1 || true"
+        )
+        url = (
+            f"https://{(domains or [])[0]}"
+            if domains
+            else f"http://{creds['resolved_ip']}:{host_port}"
+        )
         return {
-            "ok": True, "url": url,
-            "detail": f"Контейнер запущён на вашем сервере, приложение "
-                      f"прогревается (HTTP {code_txt}).",
+            "ok": True,
+            "url": url,
+            "detail": "Новая версия проверена и трафик переключён без простоя.",
         }
+    except asyncio.CancelledError:
+        if session is not None and candidate_started:
+            await session.run(f"docker rm -f {name} >/dev/null 2>&1 || true", timeout=30)
+        if session is not None and database_created and db_name:
+            await session.run(
+                f"docker rm -f {db_name} >/dev/null 2>&1 || true; "
+                f"docker volume rm omnia-db-data-{project_key} >/dev/null 2>&1 || true",
+                timeout=60,
+            )
+        raise
+    except Exception as exc:
+        log.warning("remote_deploy.failed", project_id=project_id, err=str(exc))
+        if session is not None and candidate_started:
+            await session.run(f"docker rm -f {name} >/dev/null 2>&1 || true", timeout=30)
+        if session is not None and database_created and db_name:
+            await session.run(
+                f"docker rm -f {db_name} >/dev/null 2>&1 || true; "
+                f"docker volume rm omnia-db-data-{project_key} >/dev/null 2>&1 || true",
+                timeout=60,
+            )
+        return {"ok": False, "url": None, "detail": str(exc)[:800]}
     finally:
-        cleanup()
+        if session is not None:
+            await session.close()
+
+
+async def teardown_target(*, creds: dict[str, object], project_id: str) -> dict[str, object]:
+    """Remove one project's containers/routes/volume without touching neighbours."""
+    project_key = _ident(project_id.replace("-", ""), limit=20)
+    session = await ssh.connect(
+        resolved_ip=str(creds["resolved_ip"]),
+        port=int(str(creds["port"])),
+        user=str(creds["user"]),
+        auth_type=str(creds["auth_type"]),
+        secret=str(creds["secret"]),
+        known_host_key=str(creds["known_host_key"]),
+    )
+    try:
+        await session.run(
+            f"ids=$(docker ps -aq --filter label=omnia.project={project_key}); "
+            f'test -z "$ids" || docker rm -f $ids; '
+            f"docker network rm omnia-net-{project_key} >/dev/null 2>&1 || true; "
+            f"docker volume rm omnia-db-data-{project_key} >/dev/null 2>&1 || true; "
+            f"rm -f {_ROOT}/caddy/routes/{project_key}.caddy {_ROOT}/env/{project_key}*.env; "
+            f"docker exec {_EDGE_NAME} caddy reload --config /config/Caddyfile "
+            f"--adapter caddyfile >/dev/null 2>&1 || true",
+            timeout=120,
+        )
+        return {"ok": True, "detail": "Удалённый runtime проекта удалён."}
+    finally:
+        await session.close()
+
+
+async def target_logs(
+    *, creds: dict[str, object], project_id: str, tail: int = 200
+) -> dict[str, object]:
+    project_key = _ident(project_id.replace("-", ""), limit=20)
+    session = await ssh.connect(
+        resolved_ip=str(creds["resolved_ip"]),
+        port=int(str(creds["port"])),
+        user=str(creds["user"]),
+        auth_type=str(creds["auth_type"]),
+        secret=str(creds["secret"]),
+        known_host_key=str(creds["known_host_key"]),
+    )
+    try:
+        result = await session.run(
+            f"id=$(docker ps -q --filter label=omnia.project={project_key} "
+            f"--filter label=omnia.kind=app | head -1); "
+            f'test -z "$id" || docker logs --tail {max(1, min(tail, 2000))} "$id"',
+            timeout=30,
+        )
+        return {"ok": result.ok, "logs": (result.stdout + result.stderr)[-100_000:]}
+    finally:
+        await session.close()
+
+
+async def sync_routes(
+    *,
+    creds: dict[str, object],
+    project_id: str,
+    domains: list[str],
+    host_port: int,
+) -> dict[str, object]:
+    """Rebuild one project's Caddy route after its domain set changes."""
+    project_key = _ident(project_id.replace("-", ""), limit=20)
+    session = await ssh.connect(
+        resolved_ip=str(creds["resolved_ip"]),
+        port=int(str(creds["port"])),
+        user=str(creds["user"]),
+        auth_type=str(creds["auth_type"]),
+        secret=str(creds["secret"]),
+        known_host_key=str(creds["known_host_key"]),
+    )
+    try:
+        container = await session.run(
+            f"docker ps -q --filter label=omnia.project={project_key} "
+            f"--filter label=omnia.kind=app | head -1"
+        )
+        if not container.stdout.strip():
+            return {"ok": True, "detail": "У проекта пока нет удалённого runtime."}
+        port = await session.run(
+            f"docker port {container.stdout.strip()} 3000/tcp | head -1 | awk -F: '{{print $NF}}'"
+        )
+        candidate_port = int(port.stdout.strip())
+        await _ensure_edge(session)
+        route_path = f"{_ROOT}/caddy/routes/{project_key}.caddy"
+        previous_route = await session.run(
+            f"base64 -w0 {route_path} 2>/dev/null || true", timeout=10
+        )
+        await _write_file(
+            session,
+            route_path,
+            _caddyfile(domains, candidate_port, host_port),
+            mode="644",
+        )
+        valid = await session.run(
+            f"docker exec {_EDGE_NAME} caddy validate --config /config/Caddyfile "
+            f"--adapter caddyfile",
+            timeout=30,
+        )
+        if not valid.ok:
+            if previous_route.stdout.strip():
+                await _write_file(
+                    session,
+                    route_path,
+                    base64.b64decode(previous_route.stdout.strip()).decode("utf-8"),
+                    mode="644",
+                )
+            else:
+                await session.run(f"rm -f {route_path}")
+            raise RuntimeError(f"Caddy не принял маршруты: {valid.stderr[-220:]}")
+        result = await session.run(
+            f"docker exec {_EDGE_NAME} caddy reload --config /config/Caddyfile --adapter caddyfile",
+            timeout=30,
+        )
+        if not result.ok:
+            if previous_route.stdout.strip():
+                await _write_file(
+                    session,
+                    route_path,
+                    base64.b64decode(previous_route.stdout.strip()).decode("utf-8"),
+                    mode="644",
+                )
+                await session.run(
+                    f"docker exec {_EDGE_NAME} caddy reload --config /config/Caddyfile "
+                    f"--adapter caddyfile >/dev/null 2>&1 || true"
+                )
+            else:
+                await session.run(f"rm -f {route_path}")
+            raise RuntimeError(f"Caddy не обновил маршруты: {result.stderr[-220:]}")
+        return {"ok": True, "detail": "Маршруты доменов обновлены."}
+    finally:
+        await session.close()

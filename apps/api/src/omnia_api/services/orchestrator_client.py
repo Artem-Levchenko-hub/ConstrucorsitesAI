@@ -8,7 +8,7 @@ ApiError taxonomy so the public response shape stays consistent.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import httpx
@@ -35,7 +35,12 @@ class OrchestratorUnavailable(ApiError):
 class OrchestratorBadRequest(ApiError):
     """Orchestrator rejected the request (4xx) — pass the reason through."""
 
-    def __init__(self, message: str, status_code: int = 400, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 400,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(
             code="orchestrator_rejected",
             message=message,
@@ -44,14 +49,14 @@ class OrchestratorBadRequest(ApiError):
         )
 
 
-async def _request(
+async def _request_raw(
     method: str,
     path: str,
     *,
     json: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
-    timeout: float = 30.0,
-) -> dict[str, Any]:
+    timeout: float = 30.0,  # noqa: ASYNC109 - outbound request deadline
+) -> Any:
     """Internal call to orchestrator. Returns parsed JSON body or raises ApiError.
 
     Note: orchestrator routes are all under `/internal/...` and require the
@@ -85,7 +90,12 @@ async def _request(
         raise OrchestratorUnavailable(f"Cannot reach orchestrator at {url}") from exc
 
     if resp.status_code >= 500:
-        log.error("orchestrator.upstream_5xx", path=path, status=resp.status_code, body=resp.text[:300])
+        log.error(
+            "orchestrator.upstream_5xx",
+            path=path,
+            status=resp.status_code,
+            body=resp.text[:300],
+        )
         raise OrchestratorUnavailable(
             f"Orchestrator returned {resp.status_code}",
             details={"upstream_body": resp.text[:300]},
@@ -108,6 +118,20 @@ async def _request(
         raise OrchestratorUnavailable(
             f"Orchestrator returned non-JSON ({resp.status_code})"
         ) from exc
+
+
+async def _request(
+    method: str,
+    path: str,
+    *,
+    json: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    timeout: float = 30.0,  # noqa: ASYNC109 - outbound request deadline
+) -> dict[str, Any]:
+    payload = await _request_raw(method, path, json=json, params=params, timeout=timeout)
+    if not isinstance(payload, dict):
+        raise OrchestratorUnavailable("Orchestrator returned an invalid object")
+    return payload
 
 
 # --- Public API ---------------------------------------------------------
@@ -158,6 +182,7 @@ async def deploy(
     commit_sha: str | None = None,
     target: dict[str, Any] | None = None,
     domains: list[str] | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """POST /internal/projects/deploy — build prod image + swap traffic.
 
@@ -173,6 +198,8 @@ async def deploy(
         payload["target"] = target
     if domains:
         payload["domains"] = domains
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
     return await _request("POST", "/internal/projects/deploy", json=payload)
 
 
@@ -183,8 +210,46 @@ async def verify_deploy_target(target: dict[str, Any]) -> dict[str, Any]:
     за X-Internal-Token, на одной машине это localhost. Возвращает
     `{ok, detail, docker_ok, docker_version, host_key}`.
     """
+    return await _request("POST", "/internal/deploy-targets/verify", json=target, timeout=45.0)
+
+
+async def teardown_remote_project(project_id: UUID, target: dict[str, Any]) -> dict[str, Any]:
     return await _request(
-        "POST", "/internal/deploy-targets/verify", json=target, timeout=45.0
+        "POST",
+        "/internal/deploy-targets/teardown",
+        json={"project_id": str(project_id), **target},
+        timeout=150.0,
+    )
+
+
+async def get_remote_logs(
+    project_id: UUID, target: dict[str, Any], *, tail: int = 200
+) -> dict[str, Any]:
+    return await _request(
+        "POST",
+        "/internal/deploy-targets/logs",
+        params={"tail": tail},
+        json={"project_id": str(project_id), **target},
+        timeout=45.0,
+    )
+
+
+async def sync_remote_routes(
+    project_id: UUID,
+    slug: str,
+    target: dict[str, Any],
+    domains: list[str],
+) -> dict[str, Any]:
+    return await _request(
+        "POST",
+        "/internal/deploy-targets/routes",
+        json={
+            "project_id": str(project_id),
+            "slug": slug,
+            "domains": domains,
+            **target,
+        },
+        timeout=60.0,
     )
 
 
@@ -195,9 +260,7 @@ async def publish_custom_domain(payload: dict[str, Any]) -> dict[str, Any]:
     проекта и выпускает Let's Encrypt (HTTP-01). Возвращает
     `{ok, cert_status, detail}`. Таймаут высокий — acme может идти долго.
     """
-    return await _request(
-        "POST", "/internal/domains/publish", json=payload, timeout=120.0
-    )
+    return await _request("POST", "/internal/domains/publish", json=payload, timeout=120.0)
 
 
 async def get_deploy(project_id: UUID) -> dict[str, Any]:
@@ -210,6 +273,17 @@ async def get_deploy(project_id: UUID) -> dict[str, Any]:
     `phase=queued` with no prod_url.
     """
     return await _request("GET", f"/internal/projects/{project_id}/deploy")
+
+
+async def get_deploy_history(project_id: UUID) -> list[dict[str, Any]]:
+    result = await _request_raw("GET", f"/internal/projects/{project_id}/deploy/history")
+    if not isinstance(result, list):
+        raise OrchestratorUnavailable("Orchestrator returned invalid deploy history")
+    return cast(list[dict[str, Any]], result)
+
+
+async def cancel_deploy(project_id: UUID) -> dict[str, Any]:
+    return await _request("POST", f"/internal/projects/{project_id}/deploy/cancel")
 
 
 async def destroy(project_id: UUID, slug: str) -> dict[str, Any]:
@@ -226,9 +300,7 @@ async def destroy(project_id: UUID, slug: str) -> dict[str, Any]:
     )
 
 
-async def get_logs(
-    project_id: UUID, *, tail: int = 200, kind: str = "dev"
-) -> dict[str, Any]:
+async def get_logs(project_id: UUID, *, tail: int = 200, kind: str = "dev") -> dict[str, Any]:
     """GET /internal/projects/<uuid>/logs — tail container stdout+stderr.
 
     Returns `{"project_id", "container_name", "tail", "logs": "<text>"}`.
@@ -241,9 +313,7 @@ async def get_logs(
     )
 
 
-async def compile_status(
-    project_id: UUID, *, slug: str | None = None
-) -> dict[str, Any]:
+async def compile_status(project_id: UUID, *, slug: str | None = None) -> dict[str, Any]:
     """GET /internal/projects/<uuid>/compile-status — does the dev build fail?
 
     Returns `{"project_id", "ok": bool, "error": str|None, "file": str|None}`.
@@ -281,9 +351,7 @@ async def runtime_status(
     )
 
 
-async def read_container_file(
-    project_id: UUID, slug: str, path: str
-) -> str | None:
+async def read_container_file(project_id: UUID, slug: str, path: str) -> str | None:
     """GET /internal/projects/{id}/read-file — read a whitelisted fixed file
     (e.g. ``src/app/globals.css``) straight from the running dev container.
 
@@ -307,9 +375,7 @@ async def read_container_file(
 # on the live dev container. Each maps to a /agent/* orchestrator endpoint.
 
 
-async def agent_read_file(
-    project_id: UUID, slug: str, path: str
-) -> str | None:
+async def agent_read_file(project_id: UUID, slug: str, path: str) -> str | None:
     """Read ANY file under /app from the dev container; None if missing/down."""
     resp = await _request(
         "GET",
@@ -333,9 +399,7 @@ async def agent_list_dir(project_id: UUID, slug: str, path: str = ".") -> str:
     return detail if isinstance(detail, str) else ""
 
 
-async def agent_grep(
-    project_id: UUID, slug: str, *, pattern: str, path: str = "src"
-) -> str:
+async def agent_grep(project_id: UUID, slug: str, *, pattern: str, path: str = "src") -> str:
     """Recursive text search under /app; returns matches (or '(no matches)')."""
     resp = await _request(
         "GET",
@@ -375,9 +439,7 @@ async def warm_routes(project_id: UUID, slug: str) -> dict[str, Any]:
     )
 
 
-async def hot_reload(
-    project_id: UUID, slug: str, files: dict[str, str]
-) -> dict[str, Any]:
+async def hot_reload(project_id: UUID, slug: str, files: dict[str, str]) -> dict[str, Any]:
     """POST /internal/projects/hot-reload — write AI-generated files into the
     dev container; orchestrator additionally runs `drizzle-kit push` if the
     diff touches `src/lib/db/schema.ts` or `src/lib/db/migrations/*`.

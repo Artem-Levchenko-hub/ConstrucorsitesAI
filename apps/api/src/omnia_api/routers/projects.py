@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.config import get_settings
-from omnia_api.core.crypto import decrypt_secret
+from omnia_api.core.crypto import decrypt_secret, decrypt_strong
 from omnia_api.core.deps import (
     CurrentUserDep,
     OptionalUserDep,
@@ -24,6 +24,7 @@ from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import get_exe_object, preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.core.security import create_access_token
+from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.lead import Lead
 from omnia_api.models.message import Message
@@ -76,9 +77,7 @@ async def create_project(
     response: Response,
     current_user: OptionalUserDep,
 ) -> Project:
-    owner = current_user if current_user is not None else await _ensure_anon_user(
-        session, response
-    )
+    owner = current_user if current_user is not None else await _ensure_anon_user(session, response)
     short_id = uuid4().hex[:6]
     base_slug = slugify(payload.name)[:60] or "project"
     slug = f"{base_slug}-{short_id}"
@@ -90,11 +89,14 @@ async def create_project(
     preset_id: str | None = None
     name_stripped = payload.name.strip()
     if len(name_stripped) > 5 and name_stripped.lower() not in _UNTITLED_NAMES:
-        preset_id = classify_preset_sync(
-            project_name=name_stripped,
-            template=payload.template,
-            first_prompt=None,
-        ) or None
+        preset_id = (
+            classify_preset_sync(
+                project_name=name_stripped,
+                template=payload.template,
+                first_prompt=None,
+            )
+            or None
+        )
 
     project = Project(
         owner_id=owner.id,
@@ -127,9 +129,7 @@ async def create_project(
         await session.commit()
     except IntegrityError as e:
         await session.rollback()
-        raise ApiError(
-            "conflict", "slug already exists", status.HTTP_409_CONFLICT
-        ) from e
+        raise ApiError("conflict", "slug already exists", status.HTTP_409_CONFLICT) from e
 
     await session.refresh(project)
     await session.refresh(snapshot)
@@ -171,9 +171,7 @@ async def import_project(
     pipeline to treat every subsequent prompt as a surgical edit — the
     original repo files are never regenerated from scratch.
     """
-    owner = current_user if current_user is not None else await _ensure_anon_user(
-        session, response
-    )
+    owner = current_user if current_user is not None else await _ensure_anon_user(session, response)
 
     try:
         gh_owner, gh_repo = repo_import.parse_github_url(payload.repo_url)
@@ -250,9 +248,7 @@ async def import_project(
         await session.commit()
     except IntegrityError as e:
         await session.rollback()
-        raise ApiError(
-            "conflict", "slug already exists", status.HTTP_409_CONFLICT
-        ) from e
+        raise ApiError("conflict", "slug already exists", status.HTTP_409_CONFLICT) from e
 
     await session.refresh(project)
     await session.refresh(snapshot)
@@ -356,9 +352,7 @@ async def perform_fork(
     HEAD snapshot, committing — lives here so the two entrypoints can never
     drift in isolation behaviour.
     """
-    owner = current_user if current_user is not None else await _ensure_anon_user(
-        session, response
-    )
+    owner = current_user if current_user is not None else await _ensure_anon_user(session, response)
 
     short_id = uuid4().hex[:6]
     base_slug = slugify(source.name)[:60] or "project"
@@ -438,9 +432,7 @@ async def perform_fork(
         await session.commit()
     except IntegrityError as e:
         await session.rollback()
-        raise ApiError(
-            "conflict", "slug already exists", status.HTTP_409_CONFLICT
-        ) from e
+        raise ApiError("conflict", "slug already exists", status.HTTP_409_CONFLICT) from e
 
     await session.refresh(fork)
     if snapshot is not None:
@@ -467,9 +459,7 @@ async def perform_fork(
 
 
 @router.get("", response_model=list[ProjectPublic])
-async def list_projects(
-    session: SessionDep, current_user: CurrentUserDep
-) -> list[Project]:
+async def list_projects(session: SessionDep, current_user: CurrentUserDep) -> list[Project]:
     res = await session.execute(
         select(Project)
         .where(Project.owner_id == current_user.id)
@@ -524,9 +514,7 @@ async def list_leads(
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     total = (
         await session.execute(
-            select(func.count())
-            .select_from(Lead)
-            .where(Lead.project_id == project_id)
+            select(func.count()).select_from(Lead).where(Lead.project_id == project_id)
         )
     ).scalar_one()
     res = await session.execute(
@@ -628,6 +616,21 @@ async def update_project(
     # вернуть на наш хостинг) от «поле не прислали» (не трогать) через
     # model_fields_set. Чужую цель назначить нельзя — проверяем владение.
     if "deploy_target_id" in payload.model_fields_set:
+        if (
+            project.previous_deploy_target_id is not None
+            and project.deploy_target_id != payload.deploy_target_id
+        ):
+            raise ApiError(
+                "deploy_target_switch_pending",
+                "Сначала опубликуйте проект на уже выбранной цели — затем можно сменить её снова.",
+                status.HTTP_409_CONFLICT,
+            )
+        previous_target = (
+            await session.get(DeployTarget, project.deploy_target_id)
+            if project.deploy_target_id
+            else None
+        )
+        selected_target: DeployTarget | None = None
         if payload.deploy_target_id is None:
             project.deploy_target_id = None
         else:
@@ -636,7 +639,37 @@ async def update_project(
                 raise ApiError(
                     "deploy_target_not_found", "VPS не найден", status.HTTP_404_NOT_FOUND
                 )
+            if target.verify_status != "ok" or not target.known_host_key or not target.resolved_ip:
+                raise ApiError(
+                    "deploy_target_not_verified",
+                    "Сначала подтвердите ключ сервера и завершите проверку VPS.",
+                    status.HTTP_409_CONFLICT,
+                )
+            selected_target = target
             project.deploy_target_id = target.id
+        if previous_target is not None and previous_target.id != project.deploy_target_id:
+            project.previous_deploy_target_id = previous_target.id
+        expected_ip = (
+            str(selected_target.resolved_ip)
+            if selected_target is not None
+            else get_settings().our_public_ip
+        )
+        domains = (
+            (
+                await session.execute(
+                    select(CustomDomain).where(CustomDomain.project_id == project.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for domain in domains:
+            if domain.expected_ip != expected_ip:
+                domain.expected_ip = expected_ip
+                domain.dns_status = "pending"
+                domain.cert_status = "none"
+                domain.verified_at = None
+                domain.last_detail = "Цель публикации изменилась — обновите A-запись."
     await session.commit()
     await session.refresh(project)
     return project
@@ -665,7 +698,32 @@ async def delete_project(
     if project.owner_id != current_user.id:
         raise ApiError("forbidden", "not your project", status.HTTP_403_FORBIDDEN)
 
-    if is_fullstack(project.template):
+    remote_target_ids = {
+        target_id
+        for target_id in (
+            project.deploy_target_id,
+            project.previous_deploy_target_id,
+        )
+        if target_id is not None
+    }
+    if remote_target_ids:
+        for target_id in remote_target_ids:
+            target = await session.get(DeployTarget, target_id)
+            if target is None or not target.known_host_key or not target.resolved_ip:
+                continue
+            await orchestrator_client.teardown_remote_project(
+                project.id,
+                {
+                    "host": target.ssh_host,
+                    "port": target.ssh_port,
+                    "user": target.ssh_user,
+                    "auth_type": target.ssh_auth_type,
+                    "secret": decrypt_strong(target.ssh_secret_enc),
+                    "known_host_key": target.known_host_key,
+                    "resolved_ip": target.resolved_ip,
+                },
+            )
+    elif is_fullstack(project.template):
         # Containers/schema/nginx — idempotent teardown. Errors propagate
         # (503/4xx) so the project row survives for a retry, no orphans.
         await orchestrator_client.destroy(project.id, project.slug)
@@ -720,9 +778,7 @@ async def build_exe_endpoint(
         )
 
     build_id = str(uuid4())
-    await asyncio.to_thread(
-        enqueue_build_exe, project.id, build_id, project.slug, files
-    )
+    await asyncio.to_thread(enqueue_build_exe, project.id, build_id, project.slug, files)
     return {"build_id": build_id}
 
 
@@ -748,9 +804,7 @@ async def download_exe_artifact(
     if artifact not in ("setup", "exe"):
         raise ApiError("not_found", "unknown artifact type", status.HTTP_404_NOT_FOUND)
 
-    result = await asyncio.to_thread(
-        get_exe_object, str(project_id), str(build_id), artifact
-    )
+    result = await asyncio.to_thread(get_exe_object, str(project_id), str(build_id), artifact)
     if result is None:
         raise ApiError("not_found", "artifact not found", status.HTTP_404_NOT_FOUND)
 

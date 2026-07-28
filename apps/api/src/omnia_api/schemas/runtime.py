@@ -14,7 +14,16 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 RuntimeState = Literal["provisioning", "running", "paused", "stopped", "failed"]
-DeployPhase = Literal["queued", "building", "pushing", "swapping", "done", "failed"]
+DeployPhase = Literal[
+    "queued",
+    "building",
+    "pushing",
+    "swapping",
+    "cancelling",
+    "cancelled",
+    "done",
+    "failed",
+]
 
 
 class RuntimeStatus(BaseModel):
@@ -43,13 +52,13 @@ class RuntimeStopRequest(BaseModel):
 class DeployRequest(BaseModel):
     commit_sha: str | None = Field(
         default=None,
-        description=(
-            "Specific commit to deploy. Defaults to project HEAD when omitted."
-        ),
+        description=("Specific commit to deploy. Defaults to project HEAD when omitted."),
     )
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 class DeployStatus(BaseModel):
+    run_id: str | None = None
     phase: DeployPhase
     started_at: str | None = None
     finished_at: str | None = None
@@ -57,6 +66,11 @@ class DeployStatus(BaseModel):
     prod_url: str | None = None
     image_tag: str | None = None
     error: str | None = None
+    detail: str | None = None
+    target_label: str | None = None
+    target_id: str | None = None
+    can_cancel: bool = False
+    logs: list[str] = Field(default_factory=list)
 
 
 class RuntimeLogs(BaseModel):

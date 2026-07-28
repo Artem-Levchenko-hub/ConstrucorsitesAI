@@ -1,6 +1,6 @@
 {
  "meta": {
-  "updated": "2026-07-27",
+  "updated": "2026-07-28",
   "version": 3,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
@@ -27,6 +27,11 @@
   "progress_note": "H79 закрыта с оценкой 9/10: уникальная кино-цепочка снова доказана end-to-end на production. Осталось перевыпустить ключ, который был передан через чат."
  },
  "owner_actions": [
+  {
+   "date": "28.07",
+   "what": "Поручил довести деплой по реквизитам на чужой VPS полностью: безопасность, устойчивость, данные, домены, отмена и понятный прогресс.",
+   "impact": "Вместо точечного патча начата замена всего опасного контура: двухшаговое доверие SSH-ключу, публичный IP и preflight, blue/green без простоя, отдельные Caddy-маршруты и Postgres по проектам, durable-запуски с отменой и очистка runtime по жизненному циклу."
+  },
   {
    "date": "27.07",
    "what": "Передал новый ключ AITunnel, попросил вернуть прежнюю сильную оркестрацию для интерактивных кинематографичных сайтов и отдельно проверить ранние коммиты.",
@@ -1489,6 +1494,18 @@
    "evidence": "Git-форензика: b8f4db5 перевёл все роли на Opus 4.8; e2747c6 и 67d2ceb закрепили AITunnel и нативный prompt caching; 2f46fd0/5f2d75a/a9d4690/2d8db12/498a03c собрали Flux→Seedance→scroll-scrub, автоматическое решение агента, all-keyframe-оптимизацию и WebP. Коммит 331eaaa позже заменил только provider/model layer на llmgw+DeepSeek, поэтому сделан не revert, а точечный eae29da: все роли/default/native-agent/autoheal снова claude-opus-4-8; upstream https://api.aitunnel.ru/v1; Omnia-id отображается в живой slug claude-opus-4.8. Сохранены поздние фиксы 0e9b180 и e6a0fa3. Локально: API 18 целевых тестов; gateway 51/51; gateway ruff+mypy; API ruff изменённых config/tests; py_compile; compose config — зелёные. Production: секрет заменён атомарно с backup и mode 0600; gateway/API/worker healthy; Alembic 0025_generation_runs (head); /v1/models показывает доступный claude-opus-4-8; chat и native Messages через AITunnel — HTTP 200. Runtime-флаги: agentic/native/runtime gates включены, max_steps=120, Flux max=8, Seedance max=3, video scrub optimization=true. Анонимный canary project 00518062-ef5f-4296-81ba-00b52993da78, run d45f8713-2a54-484e-930b-5ed8ed2abed7: один generation_run, completed, 56 сохранённых шагов, snapshot 3e042ad1-9eb6-46a7-b5f1-687203f9192a активен. AITunnel вернул два Flux-кадра и Seedance MP4 6,04 с, 1280×720, 4 433 707 байт; публичный poster отдаётся как WebP 145 274 байта. Playwright доказал video readyState=4 без ошибки, scroll 0→1100 меняет currentTime 0→4,52 с, day/night меняет DOM и фон, accordion раскрывает ровно один этап, пять parallax-слоёв меняют transform, форма сохраняет три этапа в localStorage и переживает reload; 390×844 и 1440×900 без горизонтального overflow. Публичный результат: https://constructor.lead-generator.ru/p/cinematic-canary-eae29da-2e70c7-4627b3.",
    "impact": "Главная «вау»-возможность снова работает как продуктовый конвейер, а не как набор выключенных заготовок: обычный русский промпт дошёл до уникального видео, кода, самопроверки и интерактивного сайта. Единственный оставшийся операционный риск — переданный через чат ключ нужно перевыпустить после проверки и заменить в production без изменения кода.",
    "next_vector": "V1"
+  },
+  {
+   "id": "H80",
+   "title": "Деплой на свой VPS без потери сайта, данных и контроля",
+   "status": "testing",
+   "score": null,
+   "category": "инфра / безопасность / продукт",
+   "period": "28.07",
+   "description": "Превратить экспериментальный SSH-деплой в продуктовый контур: не доверять неизвестному серверу, не удалять рабочую версию до проверки новой, сохранять Postgres, переживать рестарт оркестратора и показывать пользователю реальный ход операции.",
+   "evidence": "Реализованы AsyncSSH без sshpass; подтверждение SHA256-отпечатка до передачи реквизитов; pinning host-key и resolved public IP; запрет внутренних/loopback адресов; preflight Docker/прав/OS/архитектуры/RAM/диска/утилит/портов; отдельный постоянный ключ шифрования в production. Remote runtime переведён на blue/green с health-check до Caddy reload, rollback конфигурации, per-project route/network/Postgres volume, перенос центральной схемы через pg_dump, миграции в prod-образах, сжатую передачу, очистку временных секретов и GC образов; незавершённая первая попытка удаляет свежий DB-volume, но не трогает ранее опубликованные данные. Deploy-state атомарно хранится на диске: run_id, idempotency, фазы, журнал, история, recovery и cancel. API запрещает непроверенную цель, поддерживает ротацию реквизитов, remote logs, отложенную очистку старой цели только после успешной новой публикации и lifecycle teardown. Web показывает fingerprint/preflight, прогресс, ошибку, ссылку и Stop. Локально: orchestrator 422 passed/15 xfailed; отдельный настоящий in-process SSH server подтвердил password и key auth с pinning; 14/14 затронутых API-тестов; миграции 0001→0026 на чистой PostgreSQL; ruff/mypy, web typecheck/eslint и JSON-проверка зелёные. Живая production-проверка ещё выполняется.",
+   "impact": "Код больше не может молча принять внутренний адрес, отправить пароль до подтверждения ключа, снести рабочий контейнер перед health-check или потерять статус при рестарте. Итоговая оценка будет выставлена после миграции и smoke-проверки production.",
+   "next_vector": "V7"
   }
  ],
  "vectors": [
@@ -1809,10 +1826,31 @@
     [
      "Pull-модель для VPS за NAT (агент на машине забирает сборку) — заложить позже",
      false
+    ],
+    [
+     "Защищённый SSH: публичный IP, подтверждение fingerprint, host-key pinning и полный preflight",
+     true
+    ],
+    [
+     "Blue/green: health до переключения, rollback Caddy и отдельные маршруты нескольких проектов",
+     true
+    ],
+    [
+     "Full-stack на VPS: постоянный Postgres volume, перенос текущей схемы/данных и prod-миграции",
+     true
+    ],
+    [
+     "Durable deploy-run: idempotency, история, recovery после рестарта, live-прогресс и Stop",
+     true
+    ],
+    [
+     "Живой smoke на reachable чужом VPS: SSH→образ→БД→HTTPS→rollback→cleanup",
+     false
     ]
    ],
    "hyp_ids": [
-    "H74"
+    "H74",
+    "H80"
    ]
   }
  ],

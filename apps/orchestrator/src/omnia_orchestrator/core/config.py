@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     projects_root: str = Field(default="/opt/omnia-runtime/projects")
     nginx_sites_dir: str = Field(default="/opt/omnia-runtime/nginx/sites-enabled")
     secrets_root: str = Field(default="/opt/omnia-runtime/secrets")
+    # Durable deployment journal. Atomic JSON writes keep the latest runs
+    # observable across an orchestrator restart without coupling this host
+    # service to the product Postgres.
+    deploy_state_path: str = Field(default="/opt/omnia-runtime/state/deploy-runs.json")
+    # Comma-separated addresses which must never be accepted as BYO targets.
+    # Production sets this to the Omnia host address as an extra SSRF guard.
+    byo_blocked_ips: str = Field(default="")
 
     # Local Docker registry for prod images.
     registry_url: str = Field(default="127.0.0.1:5000")

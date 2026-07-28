@@ -395,16 +395,24 @@ export type DeployPhase =
   | "building"
   | "pushing"
   | "swapping"
+  | "cancelling"
+  | "cancelled"
   | "done"
   | "failed";
 
 export type DeployStatus = {
+  run_id: string | null;
   phase: DeployPhase;
   started_at: IsoDateTime | null;
   finished_at: IsoDateTime | null;
   prod_url: string | null;
   image_tag: string | null;
   error: string | null;
+  detail: string | null;
+  target_label: string | null;
+  target_id: string | null;
+  can_cancel: boolean;
+  logs: string[];
 };
 
 export type ApiErrorBody = {

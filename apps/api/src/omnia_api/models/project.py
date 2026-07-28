@@ -29,7 +29,9 @@ class Project(Base):
     # Import provenance (migration 0019). "native" = created/generated inside
     # Omnia; "imported" = seeded from an external GitHub repo via tarball clone.
     # The is_imported property gates pipeline bypasses (B3+B4).
-    source: Mapped[str] = mapped_column(Text, nullable=False, server_default="native", default="native")
+    source: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="native", default="native"
+    )
     external_repo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_repo_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     design_preset_id: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -52,9 +54,7 @@ class Project(Base):
     # multi_select}) and are served one per turn with NO further gateway call —
     # zero wait between questions. NULL = batch path not used (or a zero-question
     # immediate build), so discovery falls back to per-question conversation.
-    discovery_plan: Mapped[list[dict[str, Any]] | None] = mapped_column(
-        JSONB, nullable=True
-    )
+    discovery_plan: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     image_gen_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true", default=True
     )
@@ -77,6 +77,14 @@ class Project(Base):
     # пользователя по SSH. ON DELETE SET NULL: удалили цель — проект просто
     # вернётся на наш хостинг, не сломается.
     deploy_target_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("deploy_targets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Previous destination waits here until the first successful deployment to
+    # the newly selected target. This makes cleanup transactional: selection
+    # itself never destroys the only working copy.
+    previous_deploy_target_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("deploy_targets.id", ondelete="SET NULL"),
         nullable=True,

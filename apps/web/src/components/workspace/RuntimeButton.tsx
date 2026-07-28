@@ -33,7 +33,9 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import {
+  cancelDeploy,
   deployProject,
+  getLastDeploy,
   getRuntime,
   startRuntime,
   stopRuntime,
@@ -141,6 +143,17 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
       q.state.data?.state === "provisioning" ? 2_000 : false,
     retry: false,
   });
+  const deployQuery = useQuery({
+    queryKey: ["deploy", projectId],
+    queryFn: () => getLastDeploy(projectId),
+    refetchInterval: (query) =>
+      ["building", "pushing", "swapping", "cancelling"].includes(
+        query.state.data?.phase ?? "",
+      )
+        ? 1_500
+        : false,
+    retry: false,
+  });
 
   const startMut = useMutation({
     mutationFn: () => startRuntime(projectId),
@@ -171,6 +184,7 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
   const deployMut = useMutation({
     mutationFn: () => deployProject(projectId),
     onSuccess: (d) => {
+      qc.setQueryData(["deploy", projectId], d);
       toast.success("Деплой запущен", {
         description:
           d.phase === "done" ? d.prod_url ?? "готово" : `фаза: ${d.phase}`,
@@ -181,9 +195,27 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
       toast.error("Деплой не удался", { description: msg });
     },
   });
+  const cancelMut = useMutation({
+    mutationFn: () => cancelDeploy(projectId),
+    onSuccess: (d) => {
+      qc.setQueryData(["deploy", projectId], d);
+      toast.message("Деплой остановлен", {
+        description: "Предыдущая опубликованная версия продолжает работать.",
+      });
+    },
+    onError: (err: unknown) => {
+      toast.error("Не удалось остановить деплой", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    },
+  });
 
   const state: RuntimeState = runtime?.state ?? "stopped";
-  const busy = startMut.isPending || stopMut.isPending || deployMut.isPending;
+  const activeDeploy = ["building", "pushing", "swapping", "cancelling"].includes(
+    deployQuery.data?.phase ?? "",
+  );
+  const busy =
+    startMut.isPending || stopMut.isPending || deployMut.isPending || activeDeploy;
 
   if (isPending) {
     return (
@@ -194,7 +226,13 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
     );
   }
 
-  const deploy = deployUx(state, deployMut.isPending);
+  const deploy = deployUx(state, deployMut.isPending || activeDeploy);
+  const deployPhaseLabel: Record<string, string> = {
+    building: "Собираем…",
+    pushing: "Передаём…",
+    swapping: "Проверяем и переключаем…",
+    cancelling: "Останавливаем…",
+  };
 
   return (
     <div className="flex items-center gap-1">
@@ -226,6 +264,52 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
         )}
       </Badge>
 
+      {activeDeploy && (
+        <Badge
+          variant="accent"
+          className="gap-1.5 px-2 py-1 text-[11px]"
+          title={deployQuery.data?.detail ?? "Деплой выполняется"}
+        >
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {deployPhaseLabel[deployQuery.data?.phase ?? ""] ?? "Публикуем…"}
+        </Badge>
+      )}
+      {deployQuery.data?.phase === "failed" && (
+        <Badge
+          variant="danger"
+          className="max-w-56 truncate px-2 py-1 text-[11px]"
+          title={deployQuery.data.error ?? undefined}
+        >
+          Ошибка публикации
+        </Badge>
+      )}
+      {deployQuery.data?.phase === "done" && deployQuery.data.prod_url && (
+        <a
+          href={deployQuery.data.prod_url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[11px] text-accent hover:underline"
+        >
+          Открыть сайт
+        </a>
+      )}
+      {activeDeploy && deployQuery.data?.can_cancel && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs"
+          disabled={cancelMut.isPending}
+          onClick={() => cancelMut.mutate()}
+          title="Остановить текущую сборку; опубликованная версия останется доступна"
+        >
+          {cancelMut.isPending ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            "Остановить"
+          )}
+        </Button>
+      )}
+
       {state === "running" && (
         <>
           <Button
@@ -246,7 +330,7 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
             className="gap-1.5 h-7 px-2.5 text-xs"
             title={deploy.tooltip}
           >
-            {deployMut.isPending ? (
+            {deployMut.isPending || activeDeploy ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <Rocket className="h-3 w-3" />

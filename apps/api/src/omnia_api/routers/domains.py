@@ -13,10 +13,12 @@ import re
 import socket
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Response, status
 from sqlalchemy import select
 
 from omnia_api.core.config import get_settings
+from omnia_api.core.crypto import decrypt_strong
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.custom_domain import CustomDomain
@@ -72,8 +74,8 @@ async def _expected_ip(session: SessionDep, project: Project) -> str:
     если проект деплоится на свой сервер."""
     if project.deploy_target_id is not None:
         target = await session.get(DeployTarget, project.deploy_target_id)
-        if target is not None:
-            return target.ssh_host
+        if target is not None and target.verify_status == "ok" and target.resolved_ip:
+            return target.resolved_ip
     return get_settings().our_public_ip
 
 
@@ -93,12 +95,16 @@ async def list_domains(
 ) -> list[CustomDomainPublic]:
     await _owned_project(session, user.id, project_id)
     rows = (
-        await session.execute(
-            select(CustomDomain)
-            .where(CustomDomain.project_id == project_id)
-            .order_by(CustomDomain.created_at.desc())
+        (
+            await session.execute(
+                select(CustomDomain)
+                .where(CustomDomain.project_id == project_id)
+                .order_by(CustomDomain.created_at.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [_to_public(d) for d in rows]
 
 
@@ -115,9 +121,7 @@ async def connect_domain(
         await session.execute(select(CustomDomain).where(CustomDomain.host == host))
     ).scalar_one_or_none()
     if existing is not None:
-        raise ApiError(
-            "domain_taken", "Этот домен уже подключён", status.HTTP_409_CONFLICT
-        )
+        raise ApiError("domain_taken", "Этот домен уже подключён", status.HTTP_409_CONFLICT)
 
     domain = CustomDomain(
         project_id=project.id,
@@ -153,6 +157,17 @@ async def check_domain(
     elif domain.expected_ip in ips:
         domain.dns_status = "ok"
         domain.last_detail = f"A-запись указывает на {domain.expected_ip} — можно выпускать SSL."
+        if domain.cert_status == "issuing":
+            try:
+                async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                    await client.get(f"https://{domain.host}/")
+                from datetime import UTC, datetime
+
+                domain.cert_status = "active"
+                domain.verified_at = datetime.now(UTC)
+                domain.last_detail = "DNS и HTTPS работают."
+            except httpx.HTTPError:
+                domain.last_detail = "DNS настроен, Caddy ещё выпускает HTTPS-сертификат."
     else:
         domain.dns_status = "mismatch"
         domain.last_detail = (
@@ -180,6 +195,16 @@ async def issue_cert(
             status.HTTP_409_CONFLICT,
         )
     domain.dns_status = "ok"
+    # On a BYO target Caddy runs on that VPS and obtains the certificate during
+    # the next deploy. Calling the local nginx publisher would configure the
+    # wrong host, so record readiness and let deployment perform the switch.
+    if project.deploy_target_id is not None:
+        domain.cert_status = "none"
+        domain.last_detail = (
+            "DNS подтверждён. HTTPS будет настроен на вашем VPS при публикации проекта."
+        )
+        await session.commit()
+        return _to_public(domain)
     domain.cert_status = "issuing"
     await session.commit()
 
@@ -207,10 +232,44 @@ async def issue_cert(
 
 
 @router.delete("/{domain_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_domain(
-    domain_id: UUID, user: CurrentUserDep, session: SessionDep
-) -> Response:
+async def delete_domain(domain_id: UUID, user: CurrentUserDep, session: SessionDep) -> Response:
     domain = await _owned_domain(session, user.id, domain_id)
+    project = await _owned_project(session, user.id, domain.project_id)
+    if project.deploy_target_id is not None:
+        target = await session.get(DeployTarget, project.deploy_target_id)
+        if (
+            target is not None
+            and target.verify_status == "ok"
+            and target.known_host_key
+            and target.resolved_ip
+        ):
+            remaining = (
+                (
+                    await session.execute(
+                        select(CustomDomain.host).where(
+                            CustomDomain.project_id == project.id,
+                            CustomDomain.id != domain.id,
+                            CustomDomain.dns_status == "ok",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            await orchestrator_client.sync_remote_routes(
+                project.id,
+                project.slug,
+                {
+                    "host": target.ssh_host,
+                    "port": target.ssh_port,
+                    "user": target.ssh_user,
+                    "auth_type": target.ssh_auth_type,
+                    "secret": decrypt_strong(target.ssh_secret_enc),
+                    "known_host_key": target.known_host_key,
+                    "resolved_ip": target.resolved_ip,
+                },
+                list(remaining),
+            )
     await session.delete(domain)
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

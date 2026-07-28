@@ -23,11 +23,12 @@ from uuid import UUID
 import structlog
 from fastapi import APIRouter, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.config import get_settings
+from omnia_api.core.crypto import decrypt_strong
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.core.crypto import decrypt_strong
 from omnia_api.models.attestation import Attestation
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
@@ -59,9 +60,7 @@ router = APIRouter(prefix="/api/projects", tags=["runtime"])
 _CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime")
 
 
-async def _project_owned_by(
-    session: Any, project_id: UUID, user_id: UUID
-) -> Project:
+async def _project_owned_by(session: AsyncSession, project_id: UUID, user_id: UUID) -> Project:
     """Same gate snapshots.py uses — raises 404 if not owned (no leak)."""
     project = await session.get(Project, project_id)
     if project is None or project.owner_id != user_id:
@@ -83,12 +82,18 @@ def _to_runtime_status(payload: dict[str, Any]) -> RuntimeStatus:
 
 def _to_deploy_status(payload: dict[str, Any]) -> DeployStatus:
     return DeployStatus(
+        run_id=payload.get("run_id"),
         phase=payload.get("phase", "queued"),
         started_at=payload.get("started_at"),
         finished_at=payload.get("finished_at"),
         prod_url=payload.get("prod_url"),
         image_tag=payload.get("image_tag"),
         error=payload.get("error"),
+        detail=payload.get("detail"),
+        target_label=payload.get("target_label"),
+        target_id=payload.get("target_id"),
+        can_cancel=bool(payload.get("can_cancel")),
+        logs=list(payload.get("logs") or []),
     )
 
 
@@ -121,9 +126,7 @@ async def start_runtime(
     # image — they ship as plain HTML via /p/<slug>. We default those to
     # `nextjs-postgres-drizzle` so a V1 user who hits "Start" can still
     # opt into a full backend (lazy upgrade) without re-creating the project.
-    orch_template = (
-        orchestrator_template(project.template) or "nextjs-postgres-drizzle"
-    )
+    orch_template = orchestrator_template(project.template) or "nextjs-postgres-drizzle"
     payload = await orchestrator_client.provision(
         project_id=project_id,
         slug=project.slug,
@@ -146,12 +149,12 @@ async def start_runtime(
     # forget + fail-soft + flag-gated + Redis-debounced (see services.autoheal), so
     # it never delays the start response and never fires unprompted when disabled.
     if project.template in _CONTAINER_NEXT:
+
         async def _autoheal_bg() -> None:
             try:
-                _h = await autoheal_svc.maybe_autoheal_on_open(
-                    project_id, project.slug)
+                _h = await autoheal_svc.maybe_autoheal_on_open(project_id, project.slug)
                 print(f"[AUTOHEAL] {project.slug}: {_h}", flush=True)
-            except Exception as _ah_exc:  # noqa: BLE001
+            except Exception as _ah_exc:
                 print(f"[AUTOHEAL] skipped: {_ah_exc!r}", flush=True)
 
         _ah_task = asyncio.create_task(_autoheal_bg())
@@ -168,9 +171,7 @@ async def _resync_latest_snapshot(session: SessionDep, project: Project) -> None
         snap = await session.get(Snapshot, project.current_snapshot_id)
         if snap is None:
             return
-        files = await asyncio.to_thread(
-            repo_svc.read_files, project.id, snap.commit_sha
-        )
+        files = await asyncio.to_thread(repo_svc.read_files, project.id, snap.commit_sha)
         if not files:
             return
         result = await orchestrator_client.hot_reload(
@@ -184,7 +185,7 @@ async def _resync_latest_snapshot(session: SessionDep, project: Project) -> None
             files=len(files),
             written=result.get("written"),
         )
-    except Exception as exc:  # noqa: BLE001 — resync is best-effort
+    except Exception as exc:
         log.warning(
             "runtime.start_resync_failed",
             project_id=str(project.id),
@@ -208,12 +209,41 @@ async def get_runtime_logs(
     spinning up a follow-mode WebSocket here was deemed YAGNI for MVP.
     Missing container → empty `logs` with 200 (UI shows "No logs yet").
     """
-    await _project_owned_by(session, project_id, current_user.id)
+    project = await _project_owned_by(session, project_id, current_user.id)
     if tail < 1:
         tail = 1
     elif tail > 5000:
         tail = 5000
-    payload = await orchestrator_client.get_logs(project_id, tail=tail, kind=kind)
+    if kind == "prod" and project.deploy_target_id is not None:
+        target = await session.get(DeployTarget, project.deploy_target_id)
+        if (
+            target is None
+            or target.verify_status != "ok"
+            or not target.known_host_key
+            or not target.resolved_ip
+        ):
+            raise ApiError(
+                "deploy_target_not_verified",
+                "Нельзя прочитать логи: VPS требует повторной проверки.",
+                status.HTTP_409_CONFLICT,
+            )
+        payload = await orchestrator_client.get_remote_logs(
+            project_id,
+            {
+                "host": target.ssh_host,
+                "port": target.ssh_port,
+                "user": target.ssh_user,
+                "auth_type": target.ssh_auth_type,
+                "secret": decrypt_strong(target.ssh_secret_enc),
+                "known_host_key": target.known_host_key,
+                "resolved_ip": target.resolved_ip,
+            },
+            tail=tail,
+        )
+        payload.setdefault("tail", tail)
+        payload.setdefault("container_name", None)
+    else:
+        payload = await orchestrator_client.get_logs(project_id, tail=tail, kind=kind)
     return RuntimeLogs(
         container_name=payload.get("container_name"),
         tail=int(payload.get("tail", tail)),
@@ -246,6 +276,7 @@ async def trigger_deploy(
 ) -> DeployStatus:
     project = await _project_owned_by(session, project_id, current_user.id)
     sha = body.commit_sha if body is not None else None
+    idempotency_key = body.idempotency_key if body is not None else None
     # BYO-VPS: если у проекта выбран свой сервер — грузим цель, расшифровываем
     # креды и передаём оркестратору, чтобы он развернул образ на машине юзера.
     # None = наш хостинг (текущее поведение).
@@ -254,21 +285,36 @@ async def trigger_deploy(
     if project.deploy_target_id is not None:
         dt = await session.get(DeployTarget, project.deploy_target_id)
         if dt is not None:
+            if dt.verify_status != "ok" or not dt.known_host_key or not dt.resolved_ip:
+                raise ApiError(
+                    "deploy_target_not_verified",
+                    "Выбранный VPS не прошёл защищённую проверку. Проверьте его заново.",
+                    status.HTTP_409_CONFLICT,
+                )
             target = {
                 "host": dt.ssh_host,
                 "port": dt.ssh_port,
                 "user": dt.ssh_user,
                 "auth_type": dt.ssh_auth_type,
                 "secret": decrypt_strong(dt.ssh_secret_enc),
+                "known_host_key": dt.known_host_key,
+                "resolved_ip": dt.resolved_ip,
+                "label": dt.label,
+                "id": str(dt.id),
             }
             # Домены проекта — агент настроит их на VPS юзера (edge + авто-SSL).
             rows = (
-                await session.execute(
-                    select(CustomDomain.host).where(
-                        CustomDomain.project_id == project_id
+                (
+                    await session.execute(
+                        select(CustomDomain.host).where(
+                            CustomDomain.project_id == project_id,
+                            CustomDomain.dns_status == "ok",
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             domains = list(rows) or None
     # Deploy-attestation gate (Step 3, deploy ↔ proven): look up the build's saved
     # attestation, log its verdict, and refuse an unproven deploy only when blocking
@@ -282,18 +328,17 @@ async def trigger_deploy(
             if sha:
                 _stmt = _stmt.where(Attestation.commit_sha == sha)
             _att = (
-                await session.execute(
-                    _stmt.order_by(Attestation.created_at.desc()).limit(1)
-                )
-            ).scalars().first()
+                (await session.execute(_stmt.order_by(Attestation.created_at.desc()).limit(1)))
+                .scalars()
+                .first()
+            )
             _proven = bool(_att and _att.overall_passed)
             _digest = _att.digest if _att else None
-        except Exception as _ge:  # noqa: BLE001 — advisory must never break a deploy
+        except Exception as _ge:
             print(f"[DEPLOY-GATE] lookup skipped: {_ge}", flush=True)
         if _proven is not None:
             print(
-                f"[DEPLOY-GATE] project={project_id} sha={sha} "
-                f"proven={_proven} digest={_digest}",
+                f"[DEPLOY-GATE] project={project_id} sha={sha} proven={_proven} digest={_digest}",
                 flush=True,
             )
             if get_settings().deploy_attestation_blocking and not _proven:
@@ -304,7 +349,11 @@ async def trigger_deploy(
                     status.HTTP_409_CONFLICT,
                 )
     payload = await orchestrator_client.deploy(
-        project_id, commit_sha=sha, target=target, domains=domains
+        project_id,
+        commit_sha=sha,
+        target=target,
+        domains=domains,
+        idempotency_key=idempotency_key,
     )
     return _to_deploy_status(payload)
 
@@ -322,9 +371,72 @@ async def get_last_deploy(
     contract the placeholder used to enforce, without the lie that we
     "haven't implemented this yet".
     """
-    await _project_owned_by(session, project_id, current_user.id)
-    try:
-        payload = await orchestrator_client.get_deploy(project_id)
-    except Exception:  # noqa: BLE001 — fall back gracefully on any failure
-        return DeployStatus(phase="queued")
+    project = await _project_owned_by(session, project_id, current_user.id)
+    payload = await orchestrator_client.get_deploy(project_id)
+    current_target = str(project.deploy_target_id) if project.deploy_target_id else None
+    deploy_matches_target = payload.get("target_id") == current_target
+    if (
+        payload.get("phase") == "done"
+        and deploy_matches_target
+        and project.previous_deploy_target_id is not None
+    ):
+        previous = await session.get(DeployTarget, project.previous_deploy_target_id)
+        if previous is not None and previous.known_host_key and previous.resolved_ip:
+            await orchestrator_client.teardown_remote_project(
+                project.id,
+                {
+                    "host": previous.ssh_host,
+                    "port": previous.ssh_port,
+                    "user": previous.ssh_user,
+                    "auth_type": previous.ssh_auth_type,
+                    "secret": decrypt_strong(previous.ssh_secret_enc),
+                    "known_host_key": previous.known_host_key,
+                    "resolved_ip": previous.resolved_ip,
+                },
+            )
+        project.previous_deploy_target_id = None
+        await session.commit()
+    if (
+        payload.get("phase") == "done"
+        and deploy_matches_target
+        and project.deploy_target_id is not None
+    ):
+        domains = (
+            (
+                await session.execute(
+                    select(CustomDomain).where(
+                        CustomDomain.project_id == project_id,
+                        CustomDomain.dns_status == "ok",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        changed = False
+        for domain in domains:
+            if domain.cert_status not in {"active", "issuing"}:
+                domain.cert_status = "issuing"
+                domain.last_detail = "Caddy на VPS выпускает HTTPS-сертификат."
+                changed = True
+        if changed:
+            await session.commit()
     return _to_deploy_status(payload)
+
+
+@router.post("/{project_id}/deploy/cancel", response_model=DeployStatus)
+async def cancel_deploy(
+    project_id: UUID, session: SessionDep, current_user: CurrentUserDep
+) -> DeployStatus:
+    await _project_owned_by(session, project_id, current_user.id)
+    payload = await orchestrator_client.cancel_deploy(project_id)
+    return _to_deploy_status(payload)
+
+
+@router.get("/{project_id}/deploy/history", response_model=list[DeployStatus])
+async def deploy_history(
+    project_id: UUID, session: SessionDep, current_user: CurrentUserDep
+) -> list[DeployStatus]:
+    await _project_owned_by(session, project_id, current_user.id)
+    payloads = await orchestrator_client.get_deploy_history(project_id)
+    return [_to_deploy_status(payload) for payload in payloads]

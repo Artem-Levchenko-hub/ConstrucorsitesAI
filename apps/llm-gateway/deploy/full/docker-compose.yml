@@ -200,6 +200,7 @@ services:
       PROMPT_RATE_LIMIT: ${PROMPT_RATE_LIMIT:-20/minute}
       PROMPT_IP_RATE_LIMIT: ${PROMPT_IP_RATE_LIMIT:-60/hour}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?set SECRETS_ENCRYPTION_KEY in .env}
       JWT_COOKIE_SECURE: "true"
       LLM_GATEWAY_URL: http://gateway:8001
       MOCK_LLM: "false"
@@ -379,6 +380,7 @@ services:
       PEXELS_PROXY: ${PEXELS_PROXY:-}
       UNLIMITED_GENERATIONS: ${UNLIMITED_GENERATIONS:-false}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?set SECRETS_ENCRYPTION_KEY in .env}
       # The preview-render job screenshots live container apps — it asks the
       # orchestrator for the running container's name (then reaches it on the
       # shared omnia-runtime network). Without these the worker can't reach the
