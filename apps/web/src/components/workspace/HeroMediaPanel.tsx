@@ -765,7 +765,8 @@ export function HeroMediaPanel({
                       </div>
                     )}
 
-                    {activeRender.progress_log.length > 0 && (
+                    {activeRender.status !== "completed" &&
+                      activeRender.progress_log.length > 0 && (
                       <div className="rounded-lg border border-border-default bg-surface-base/30 px-3 py-3 space-y-2">
                         {activeRender.progress_log.slice(-6).map((entry, index) => (
                           <div

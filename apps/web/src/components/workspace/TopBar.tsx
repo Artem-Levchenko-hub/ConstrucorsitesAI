@@ -76,6 +76,7 @@ export function TopBar({
       <div className="flex shrink-0 items-center gap-4">
         <Link
           href="/projects"
+          aria-label="К проектам Omnia.AI"
           className="flex shrink-0 items-center gap-2 text-fg-primary font-semibold tracking-tight"
         >
           <span className="inline-block h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] shadow-[0_4px_12px_-2px_rgba(124,92,255,0.5)]" />

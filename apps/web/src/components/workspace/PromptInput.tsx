@@ -165,6 +165,7 @@ export function PromptInput({
       <div className="rounded-2xl border border-border-default bg-surface-input focus-within:border-[rgba(124,92,255,0.5)] focus-within:shadow-[0_0_0_4px_rgba(124,92,255,0.10)] transition-all">
         <textarea
           ref={ref}
+          aria-label="Опишите изменение проекта"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
