@@ -163,12 +163,12 @@ export function HeroMediaPanel({
     queryFn: () => listHeroMediaAssets(project.id),
     enabled: open,
   });
-  const { data: plans = [] } = useQuery({
+  const { data: plans = [], isPending: plansPending } = useQuery({
     queryKey: ["hero-media-plans", project.id],
     queryFn: () => listHeroMediaPlans(project.id),
     enabled: open,
   });
-  const { data: renders = [] } = useQuery({
+  const { data: renders = [], isPending: rendersPending } = useQuery({
     queryKey: ["hero-media-renders", project.id],
     queryFn: () => listHeroMediaRenders(project.id),
     enabled: open,
@@ -177,6 +177,7 @@ export function HeroMediaPanel({
   const latestPlan = plans[0] ?? null;
   const latestRenderStub = renders[0] ?? null;
   const latestRenderId = latestRenderStub?.id ?? null;
+  const heroStatePending = plansPending || rendersPending;
   const prompt = promptDraft ?? latestPlan?.input_prompt ?? "";
   const businessType =
     businessTypeDraft ?? latestPlan?.business_type ?? "";
@@ -344,14 +345,16 @@ export function HeroMediaPanel({
         exit={{ opacity: 0, x: 24 }}
         transition={{ duration: 0.22 }}
         data-testid="hero-media-panel"
-        className="absolute inset-y-2 right-2 z-20 w-[390px] max-w-[calc(100%-16px)] overflow-hidden rounded-xl border border-border-default bg-surface-raised/96 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur"
+        className="fixed inset-2 z-50 overflow-hidden rounded-xl border border-border-default bg-surface-raised/96 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur sm:absolute sm:inset-y-2 sm:left-auto sm:right-2 sm:z-20 sm:w-[390px] sm:max-w-[calc(100%-16px)]"
       >
         <div className="flex h-full flex-col">
           <div className="flex items-start justify-between gap-3 border-b border-border-subtle px-4 py-4">
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="accent">Hero media</Badge>
-                {activeRender ? (
+                {heroStatePending ? (
+                  <Badge variant="default">Восстанавливаю</Badge>
+                ) : activeRender ? (
                   <Badge variant={renderBadgeVariant(activeRender.status)}>
                     {activeRender.applied_snapshot_id
                       ? "Применено"
@@ -367,20 +370,26 @@ export function HeroMediaPanel({
               <div className="text-sm font-medium text-fg-primary">
                 Hero из фото и обычного брифа
               </div>
-              {hasCompletedResult && !showSetup ? (
-                <button
-                  type="button"
-                  onClick={() => setShowSetup(true)}
-                  className="text-xs font-medium text-accent hover:text-accent-hover"
-                >
-                  Изменить исходные фото или бриф
-                </button>
-              ) : (
-                <div className="text-xs leading-5 text-fg-secondary">
-                  Видео не включается автоматически: сначала система рекомендует
-                  формат подачи, потом вы подтверждаете или меняете его.
-                </div>
-              )}
+              <div className="min-h-10">
+                {heroStatePending ? (
+                  <div className="text-xs leading-5 text-fg-secondary">
+                    Загружаю сохранённый план и результат.
+                  </div>
+                ) : hasCompletedResult && !showSetup ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowSetup(true)}
+                    className="text-xs font-medium text-accent hover:text-accent-hover"
+                  >
+                    Изменить исходные фото или бриф
+                  </button>
+                ) : (
+                  <div className="text-xs leading-5 text-fg-secondary">
+                    Видео не включается автоматически: сначала система рекомендует
+                    формат подачи, потом вы подтверждаете или меняете его.
+                  </div>
+                )}
+              </div>
             </div>
             <Button
               size="icon"
@@ -392,7 +401,21 @@ export function HeroMediaPanel({
             </Button>
           </div>
 
-          <div className="flex-1 space-y-5 overflow-y-auto p-4 scrollbar-elegant">
+          <div className="relative flex-1 overflow-y-auto p-4 scrollbar-elegant">
+            {heroStatePending && (
+              <div className="absolute inset-0 z-10 grid place-items-center">
+                <div className="flex items-center gap-2 text-xs text-fg-secondary">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Восстанавливаю hero
+                </div>
+              </div>
+            )}
+            <div
+              className={cn(
+                "space-y-5",
+                heroStatePending && "invisible",
+              )}
+            >
             {hasCompletedResult && showSetup && (
               <Button
                 size="sm"
@@ -847,6 +870,7 @@ export function HeroMediaPanel({
                 )}
               </section>
             )}
+            </div>
           </div>
         </div>
       </motion.aside>
