@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 import re
+from datetime import UTC, datetime
+from uuid import UUID
+
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
-from uuid import UUID
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
+from omnia_api.core.redis import publish_event
 from omnia_api.models.hero_media_asset import HeroMediaAsset
 from omnia_api.models.hero_media_brief import HeroMediaBrief
 from omnia_api.models.hero_media_render import HeroMediaRender
@@ -28,13 +30,11 @@ from omnia_api.schemas.hero_media import (
     HeroMediaRenderPublic,
 )
 from omnia_api.schemas.snapshot import SnapshotPublic
+from omnia_api.services import repo as repo_svc
 from omnia_api.services.hero_media_assembler import render_preview_document
 from omnia_api.services.hero_media_planner import plan_hero_media
-from omnia_api.services import repo as repo_svc
-from omnia_api.services.queue import enqueue_hero_media_render
+from omnia_api.services.queue import enqueue_hero_media_render, enqueue_preview
 from omnia_api.services.user_uploads import UploadRejected, sanitize_and_upload_record
-from omnia_api.services.queue import enqueue_preview
-from omnia_api.core.redis import publish_event
 
 router = APIRouter(prefix="/api/projects", tags=["hero-media"])
 
@@ -44,6 +44,7 @@ _HERO_BLOCK_RE = re.compile(
     r"<!-- OMNIA_HERO_MEDIA_START -->.*?<!-- OMNIA_HERO_MEDIA_END -->",
     re.DOTALL,
 )
+_BODY_OPEN_RE = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
 
 def _require_feature() -> None:
@@ -176,15 +177,25 @@ def _render_block(render: HeroMediaRenderPublic) -> str:
 
 
 def _apply_hero_block(html: str, block: str) -> str:
-    if _HERO_BLOCK_RE.search(html):
-        return _HERO_BLOCK_RE.sub(block, html, count=1)
-    main_match = re.search(r"<main\b[^>]*>", html, re.IGNORECASE)
-    if main_match:
-        return html[: main_match.end()] + "\n" + block + html[main_match.end() :]
-    body_match = re.search(r"<body\b[^>]*>", html, re.IGNORECASE)
+    # A previous MVP inserted inside the first <main>, inheriting its max-width
+    # and utility layout. Always remove the old block and reinsert as the first
+    # body child so the namespaced hero owns a predictable viewport.
+    cleaned = _HERO_BLOCK_RE.sub("", html, count=1)
+    body_match = _BODY_OPEN_RE.search(cleaned)
     if body_match:
-        return html[: body_match.end()] + "\n" + block + html[body_match.end() :]
-    return block + "\n" + html
+        body_tag = body_match.group(0)
+        if "data-omnia-hero-media" not in body_tag.lower():
+            marked_body = body_tag[:-1] + ' data-omnia-hero-media="true">'
+            cleaned = (
+                cleaned[: body_match.start()]
+                + marked_body
+                + cleaned[body_match.end() :]
+            )
+            insert_at = body_match.start() + len(marked_body)
+        else:
+            insert_at = body_match.end()
+        return cleaned[:insert_at] + "\n" + block + cleaned[insert_at:]
+    return block + "\n" + cleaned
 
 
 @router.post("/{project_id}/hero-media/assets", response_model=HeroMediaAssetPublic)
@@ -215,7 +226,7 @@ async def upload_hero_media_asset(
         uploaded = await asyncio.to_thread(sanitize_and_upload_record, raw, str(project_id))
     except UploadRejected as exc:
         raise ApiError("validation_failed", str(exc), status.HTTP_400_BAD_REQUEST) from exc
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise ApiError(
             "internal_error",
             "Could not store the uploaded image.",
@@ -273,7 +284,10 @@ async def create_hero_media_plan(
 ) -> HeroMediaPlanPublic:
     _require_feature()
     await _owned_project(session, project_id, current_user.id)
-    asset_ids = [str(asset_id) for asset_id in payload.asset_ids[: get_settings().hero_media_max_assets]]
+    asset_ids = [
+        str(asset_id)
+        for asset_id in payload.asset_ids[: get_settings().hero_media_max_assets]
+    ]
     assets: list[HeroMediaAsset] = []
     if asset_ids:
         result = await session.execute(
@@ -582,7 +596,8 @@ async def apply_hero_media_render(
     project.current_snapshot_id = snapshot.id
     render.applied_snapshot_id = snapshot.id
     render.applied_at = datetime.now(UTC)
-    render.progress_log = list(render.progress_log or []) + [
+    render.progress_log = [
+        *(render.progress_log or []),
         {
             "at": render.applied_at.isoformat(),
             "status": "completed",
