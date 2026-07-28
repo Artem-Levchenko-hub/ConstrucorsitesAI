@@ -38,6 +38,11 @@ services:
     container_name: omnia-prod-redis
     volumes:
       - redis-data:/data
+    # The orchestrator is a host systemd service, not a Compose container.
+    # Give it a stable loopback address instead of pinning Redis's ephemeral
+    # bridge IP in /opt/omnia/apps/orchestrator/.env.
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
