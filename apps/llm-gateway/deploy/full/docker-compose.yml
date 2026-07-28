@@ -388,6 +388,9 @@ services:
       UNLIMITED_GENERATIONS: ${UNLIMITED_GENERATIONS:-false}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?set SECRETS_ENCRYPTION_KEY in .env}
+      # Hero-media render jobs run in this process, so image/video calls need
+      # the same internal gateway route as synchronous API planner calls.
+      LLM_GATEWAY_URL: http://gateway:8001
       # The preview-render job screenshots live container apps — it asks the
       # orchestrator for the running container's name (then reaches it on the
       # shared omnia-runtime network). Without these the worker can't reach the
