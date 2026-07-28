@@ -79,6 +79,27 @@ def _strip_json_fence(raw: str) -> str:
     return _JSON_FENCE_RE.sub("", raw.strip()).strip()
 
 
+def _extract_json_object(raw: str) -> dict[str, Any]:
+    """Best-effort JSON object extraction from an LLM response.
+
+    Real upstreams sometimes wrap an otherwise-correct object in prose or fenced
+    markdown. For planner reliability we accept the first top-level `{...}` blob
+    that parses as JSON instead of assuming the whole payload is object-only.
+    """
+    cleaned = _strip_json_fence(raw)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        data = json.loads(cleaned[start : end + 1])
+    if not isinstance(data, dict):
+        raise json.JSONDecodeError("planner output is not a JSON object", cleaned, 0)
+    return data
+
+
 def _stub_plan(
     *,
     prompt: str,
@@ -192,7 +213,7 @@ async def plan_hero_media(
     )
     if not raw.strip():
         raise LLMError("hero-media planner returned empty output")
-    data = json.loads(_strip_json_fence(raw))
+    data = _extract_json_object(raw)
     decision = HeroMediaDecision.model_validate(data)
     if not settings.use_video_gen and decision.plan_kind in {"video", "cinematic"}:
         decision = decision.model_copy(
