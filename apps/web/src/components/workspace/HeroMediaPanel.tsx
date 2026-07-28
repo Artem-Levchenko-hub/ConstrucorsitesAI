@@ -625,7 +625,7 @@ export function HeroMediaPanel({
               </>
             )}
 
-            {latestPlan && (
+            {latestPlan && (!hasCompletedResult || showSetup) && (
               <section className="space-y-3 border-t border-border-subtle pt-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
@@ -723,7 +723,9 @@ export function HeroMediaPanel({
             {planApproved && (
               <section className="space-y-3 border-t border-border-subtle pt-4">
                 <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
-                  4. Сборка и preview
+                  {hasCompletedResult && !showSetup
+                    ? "Готовый hero"
+                    : "4. Сборка и preview"}
                 </div>
 
                 {!activeRender && (
@@ -836,7 +838,8 @@ export function HeroMediaPanel({
                           />
                         </div>
 
-                        {!isStaticTemplate(project.template) && (
+                        {!activeRender.applied_snapshot_id &&
+                          !isStaticTemplate(project.template) && (
                           <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
                             Авто-применение в этой итерации сделано только для static
                             website templates. Preview уже честный.
