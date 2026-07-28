@@ -15,6 +15,7 @@ from omnia_orchestrator.core import ssh
 
 log = structlog.get_logger("omnia_orchestrator.remote_deploy")
 
+POSTGRES_IMAGE = "postgres:16-alpine"
 _EDGE_NAME = "omnia-edge"
 _ROOT = "$HOME/.omnia"
 _IDENT = re.compile(r"[^a-zA-Z0-9_.-]")
@@ -119,7 +120,7 @@ async def _ensure_database(
             f"docker run -d --name {db_name} --restart unless-stopped "
             f"--label omnia.managed=true --label omnia.project={project_key} "
             f"--network {network} --network-alias db --env-file {db_env} "
-            f"-v {volume}:/var/lib/postgresql/data postgres:16-alpine",
+            f"-v {volume}:/var/lib/postgresql/data {POSTGRES_IMAGE}",
             timeout=180,
         )
         if not started.ok:

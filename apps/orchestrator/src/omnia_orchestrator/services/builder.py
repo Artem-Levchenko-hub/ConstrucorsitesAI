@@ -288,7 +288,9 @@ def _load_or_create_auth_secret_safe(project_id: str) -> str:
 
 
 async def _export_project_database(project_id: str) -> tuple[str, str]:
-    """Create a schema-only/data SQL snapshot without exposing its password in argv."""
+    """Create a SQL snapshot with a client matching the managed database major."""
+    from omnia_orchestrator.services.remote_deploy import POSTGRES_IMAGE
+
     dsn = _resolve_runtime_dsn(project_id)
     if dsn == _DB_PLACEHOLDER:
         raise RuntimeError("У проекта нет доступной базы данных для переноса.")
@@ -302,6 +304,22 @@ async def _export_project_database(project_id: str) -> tuple[str, str]:
     if not schema or not schema.replace("_", "").isalnum():
         raise RuntimeError("Не удалось определить схему базы проекта.")
     process = await asyncio.create_subprocess_exec(
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-e",
+        "PGHOST",
+        "-e",
+        "PGPORT",
+        "-e",
+        "PGUSER",
+        "-e",
+        "PGPASSWORD",
+        "-e",
+        "PGDATABASE",
+        POSTGRES_IMAGE,
         "pg_dump",
         "--no-owner",
         "--no-acl",
