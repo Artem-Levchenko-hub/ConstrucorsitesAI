@@ -24,6 +24,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { EASE_OUT, springSnappy } from "@/lib/motion";
 import {
   editorModeMessages,
+  previewTargetOrigin,
   type EditorMode,
 } from "@/lib/editor-bridge";
 import { listSnapshots } from "@/lib/api/snapshots";
@@ -104,7 +105,10 @@ export function PreviewFrame({ project }: { project: Project }) {
     mode: EditorMode;
   } | null>(null);
   const postToPreview = useCallback((msg: Record<string, unknown>) => {
-    iframeRef.current?.contentWindow?.postMessage(msg, "*");
+    const frame = iframeRef.current;
+    if (!frame?.contentWindow) return;
+    const targetOrigin = previewTargetOrigin(frame.src, window.location.origin);
+    if (targetOrigin) frame.contentWindow.postMessage(msg, targetOrigin);
   }, []);
   const editorMode: EditorMode = styleMode
     ? "style"
@@ -292,6 +296,11 @@ export function PreviewFrame({ project }: { project: Project }) {
     function onMessage(e: MessageEvent) {
       const win = iframeRef.current?.contentWindow;
       if (!win || e.source !== win) return; // trust only our own preview
+      const expectedOrigin = previewTargetOrigin(
+        iframeRef.current?.src ?? "",
+        window.location.origin,
+      );
+      if (!expectedOrigin || e.origin !== expectedOrigin) return;
       const d = e.data as {
         type?: string;
         el?: Record<string, string> & {
@@ -461,7 +470,7 @@ export function PreviewFrame({ project }: { project: Project }) {
   const fullstackLive =
     isFullstack && runtime?.state === "running" && !!runtime.dev_url;
   const liveSrc =
-    `${runtime?.dev_url ?? ""}#k=${iframeKey}` +
+    `${runtime?.dev_url ?? ""}?inspect=1#k=${iframeKey}` +
     `&omniaApi=${encodeURIComponent(apiOrigin)}`;
   // `inspect=1` opts the workspace preview into select-mode (serves the inspector
   // script). The external "Открыть"/address links use `publicUrl` untouched, so

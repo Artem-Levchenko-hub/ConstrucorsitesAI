@@ -165,6 +165,21 @@ def test_inspector_atomic_editor_mode_contract() -> None:
     assert 'post({ type: "omnia:editor:state", mode: mode })' in src
 
 
+def test_inspector_has_precise_selector_and_cross_origin_guards() -> None:
+    """The universal copy must validate unique selectors and trust only Omnia."""
+    repo = Path(__file__).resolve().parents[3]
+    src = (
+        repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
+    ).read_text(encoding="utf-8")
+    assert "selectorMatchesOnly" in src
+    assert '"data-omnia-id"' in src
+    assert '"data-testid"' in src
+    assert "composedPath" in src
+    assert 'addEventListener("pointerdown", blockEarlyInteraction, true)' in src
+    assert "trustedParentOrigin && e.origin !== trustedParentOrigin" in src
+    assert 'post({ type: "omnia:inspect:ready", version: 3 })' in src
+
+
 def test_vite_spa_loads_canonical_inspector_only_inside_workspace() -> None:
     """SPA is a browser stack too: its preview must not expose dead edit buttons."""
     repo = Path(__file__).resolve().parents[3]

@@ -26,6 +26,7 @@ import os
 import re
 from contextlib import suppress
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import structlog
 
@@ -36,6 +37,8 @@ from omnia_orchestrator.core.shell import CmdResult, run
 log = structlog.get_logger("omnia_orchestrator.nginx")
 
 _HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,253}[a-z0-9])?$")
+_ASSET_TARGET_RE = re.compile(r"^127\.0\.0\.1:\d{1,5}/[A-Za-z0-9_./-]+$")
+_VHOST_TEMPLATE_MARKER = "# omnia vhost template: universal-inspector-v1"
 
 
 def dev_host(slug: str) -> str:
@@ -97,7 +100,68 @@ def _wildcard_cert_dir(host: str) -> str | None:
     return f"{root}/{suffix}"
 
 
-def _proxy_location(port: int) -> str:
+def _is_dev_host(host: str) -> bool:
+    """True only for the private/live editor hostname, never deployed prod."""
+    suffix = "." + get_settings().runtime_host_suffix
+    label = host[: -len(suffix)] if host.endswith(suffix) else host
+    return label.endswith("-dev")
+
+
+def _workspace_origin() -> str:
+    """Return a safe HTTP(S) origin for the injected postMessage allowlist."""
+    raw = get_settings().workspace_origin.rstrip("/")
+    parsed = urlsplit(raw)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or "'" in raw
+        or '"' in raw
+    ):
+        raise OrchestratorError(
+            code="validation_failed",
+            message="WORKSPACE_ORIGIN must be a plain http(s) origin",
+            status_code=500,
+        )
+    return raw
+
+
+def _inspector_asset_target() -> str:
+    """Validate the loopback-only canonical inspector upstream."""
+    target = get_settings().inspector_asset_target
+    if not _ASSET_TARGET_RE.fullmatch(target):
+        raise OrchestratorError(
+            code="validation_failed",
+            message="INSPECTOR_ASSET_TARGET must be a 127.0.0.1 host:port/path",
+            status_code=500,
+        )
+    port = int(target.split(":", 1)[1].split("/", 1)[0])
+    if not 1 <= port <= 65535:
+        raise OrchestratorError(
+            code="validation_failed",
+            message="INSPECTOR_ASSET_TARGET port is out of range",
+            status_code=500,
+        )
+    return target
+
+
+def _inspector_location() -> str:
+    """Same-origin route for the canonical, platform-controlled inspector."""
+    target = _inspector_asset_target()
+    return f"""\
+    location = /_omnia/inspector.js {{
+        proxy_pass http://{target};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+    }}"""
+
+
+def _proxy_location(port: int, *, inject_inspector: bool = False) -> str:
     # `$omnia_connection_upgrade` is defined once in conf.d/omnia-runtime.conf.
     # X-Frame-Options is hidden so the workspace can embed the preview iframe.
     #
@@ -106,6 +170,25 @@ def _proxy_location(port: int) -> str:
     # routes that to @omnia_waking, which boots the container and returns a
     # self-refreshing "waking up" page instead of a raw Bad Gateway. Once the
     # app is up the proxy_pass succeeds and @omnia_waking is never reached.
+    inspector_filter = ""
+    if inject_inspector:
+        # This is deliberately platform-owned and injected into EVERY HTML
+        # document on the *dev* hostname. It remains dormant until a trusted
+        # workspace command arrives. Unlike `?inspect=1`-only injection, it
+        # survives client-side route changes and full document navigations.
+        #
+        # Clear upstream compression on loopback so nginx's sub_filter always
+        # sees HTML bytes. Downstream gzip/brotli may still compress the response.
+        origin = _workspace_origin()
+        tag = (
+            '<script src="/_omnia/inspector.js" data-omnia-platform-inspector="1" '
+            f'data-omnia-parent-origin="{origin}"></script>'
+        )
+        inspector_filter = f"""\
+        proxy_set_header Accept-Encoding "";
+        sub_filter_once on;
+        sub_filter '</body>' '{tag}</body>';
+"""
     return f"""\
     location / {{
         proxy_pass http://127.0.0.1:{port};
@@ -118,6 +201,7 @@ def _proxy_location(port: int) -> str:
         proxy_set_header Connection $omnia_connection_upgrade;
         proxy_read_timeout 86400;
         proxy_hide_header X-Frame-Options;
+{inspector_filter.rstrip()}
         proxy_intercept_errors on;
         error_page 502 503 504 = @omnia_waking;
     }}
@@ -153,7 +237,10 @@ def _acme_location() -> str:
 
 
 def _http_block(host: str, port: int) -> str:
+    dev = _is_dev_host(host)
+    inspector = f"\n{_inspector_location()}\n" if dev else ""
     return f"""\
+{_VHOST_TEMPLATE_MARKER}
 # omnia auto-generated — {host} (HTTP)
 server {{
     listen 80;
@@ -161,8 +248,9 @@ server {{
     server_name {host};
 
 {_acme_location()}
+{inspector}
 
-{_proxy_location(port)}
+{_proxy_location(port, inject_inspector=dev)}
 }}
 """
 
@@ -171,7 +259,10 @@ def _https_block(host: str, port: int) -> str:
     # Prefer a pre-issued wildcard cert (instant, reliable); else the per-host
     # acme cert dir.
     cert_dir = _wildcard_cert_dir(host) or f"{get_settings().acme_certs_dir}/{host}"
+    dev = _is_dev_host(host)
+    inspector = f"\n{_inspector_location()}\n" if dev else ""
     return f"""\
+{_VHOST_TEMPLATE_MARKER}
 # omnia auto-generated — {host} (HTTPS)
 server {{
     listen 80;
@@ -191,8 +282,9 @@ server {{
     ssl_certificate     {cert_dir}/fullchain.pem;
     ssl_certificate_key {cert_dir}/privkey.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
+{inspector}
 
-{_proxy_location(port)}
+{_proxy_location(port, inject_inspector=dev)}
 }}
 """
 
@@ -221,7 +313,7 @@ async def _issue_cert(host: str) -> bool:
         log.info("nginx.cert_wildcard", host=host)
         return True
     s = get_settings()
-    acme = os.path.expanduser("~/.acme.sh/acme.sh")
+    acme = os.path.expanduser("~/.acme.sh/acme.sh")  # noqa: ASYNC240
     # acme.sh's default working dir is ~/.acme.sh, which the unit's
     # ProtectHome=read-only makes unwritable → "Cannot create domain key" and no
     # cert (so HTTPS for the per-project preview never comes up). Redirect --home
@@ -241,9 +333,11 @@ async def _issue_cert(host: str) -> bool:
     # pre-issued wildcard cert covering this host). Skip the acme.sh round-trip
     # — it would waste rate-limit, time, and a network call for nothing.
     try:
-        if fullchain.exists() and privkey.exists() and "BEGIN CERTIFICATE" in fullchain.read_text(errors="ignore"):
-            log.info("nginx.cert_short_circuit", host=host)
-            return True
+        if fullchain.exists() and privkey.exists():
+            has_cert = "BEGIN CERTIFICATE" in fullchain.read_text(errors="ignore")
+            if has_cert:
+                log.info("nginx.cert_short_circuit", host=host)
+                return True
     except OSError:
         pass
 
@@ -394,8 +488,10 @@ def _rewrite_legacy_confs(sites_dir: Path) -> dict[Path, str]:
     """Rewrite every legacy conf in `sites_dir` in place; return {path: old}
     backups for the ones changed. Sync (blocking FS) — call via a thread.
 
-    Idempotent: a conf already carrying `@omnia_waking`, or one we can't parse,
-    is left untouched and not backed up.
+    Idempotent: a conf carrying the current template marker, or one we can't
+    parse, is left untouched and not backed up. A versioned marker is important:
+    older vhosts may already have wake-on-request but still lack the universal
+    inspector, and must therefore be re-rendered on orchestrator startup.
     """
     backups: dict[Path, str] = {}
     if not sites_dir.is_dir():
@@ -405,8 +501,8 @@ def _rewrite_legacy_confs(sites_dir: Path) -> dict[Path, str]:
             old = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        if "@omnia_waking" in old:
-            continue  # already on the new template
+        if _VHOST_TEMPLATE_MARKER in old:
+            continue  # already on the current template
         new = _rebuild_conf(old)
         if new is None or new == old:
             continue

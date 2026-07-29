@@ -8,10 +8,12 @@
  * element's outerHTML + visible text (more useful for locating it than a CSS
  * selector alone) alongside a best-effort selector.
  *
- * Injected two ways, but this file is the single source of truth:
+ * Delivered by the platform preview boundary, with legacy fallbacks:
  *   - static `/p/<slug>?inspect=1` → inlined by apps/api routers/public.py
- *   - fullstack Next.js dev container → <script src> in the template layout
- * A drift test keeps the two copies identical (DRY of knowledge).
+ *   - every live `*-dev.preview.*` HTML response → nginx injects a same-origin
+ *     script tag pointing back to apps/api (works for already-created projects)
+ *   - fullstack template <script src> copies remain as an offline/local fallback
+ * A drift test keeps the fallback copies identical (DRY of knowledge).
  *
  * Dormant until the parent sends `omnia:inspect:enable`, so shipping it in every
  * preview costs nothing until select-mode is turned on.
@@ -32,6 +34,11 @@
   if (window.__omniaInspector) return;
   window.__omniaInspector = true;
 
+  var loaderScript = document.currentScript;
+  var trustedParentOrigin =
+    loaderScript && loaderScript.getAttribute
+      ? loaderScript.getAttribute("data-omnia-parent-origin") || ""
+      : "";
   var MAX_HTML = 1500;
   var MAX_TEXT = 120;
   var HL_COLOR = "#6366f1"; // indigo-500, matches Omnia accent
@@ -45,6 +52,8 @@
   var hoverBox = null;
   var rafId = 0;
   var pendingEvent = null;
+  var hoveredEl = null;
+  var hoveredLabel = "";
 
   // Direct style-edit (1.5): when the parent turns on styleMode, clicks select a
   // single element and the parent sends omnia:style:set / omnia:font:link to
@@ -189,7 +198,7 @@
       rafId = 0;
       var e2 = pendingEvent;
       if (!e2 || !enabled) return;
-      var el = e2.target;
+      var el = eventElement(e2);
       if (!el || el.nodeType !== 1 || isOurs(el)) return;
       // In style mode, hint what a click does (replace image / edit text) so the
       // affordances are discoverable instead of buried in the panel.
@@ -201,37 +210,119 @@
       // Always label what you're hovering — the affordance hint when there is
       // one, otherwise just the element tag. Makes every pick legible.
       var label = hint || "<" + el.nodeName.toLowerCase() + ">";
+      hoveredEl = el;
+      hoveredLabel = label;
       positionHoverBox(el.getBoundingClientRect(), label);
     });
   }
 
-  // Best-effort, reasonably-stable CSS selector. Prefers #id; otherwise builds a
-  // child-combinator path with :nth-of-type to disambiguate same-tag siblings,
-  // stopping at the nearest id or <body>. The model mostly anchors on the HTML
-  // snippet + text, so this is a hint, not a contract.
+  function eventElement(e) {
+    // `composedPath()` sees through an open shadow root. A document selector
+    // cannot cross that boundary, so persistently target the owning host.
+    var path = e && typeof e.composedPath === "function" ? e.composedPath() : [];
+    var el = path && path.length ? path[0] : e && e.target;
+    if (!el || el.nodeType !== 1) return null;
+    var root = el.getRootNode ? el.getRootNode() : document;
+    if (root && root.host) el = root.host;
+    // Raw SVG paths/circles are implementation details; the owning <svg> is the
+    // stable source element and has the useful visible geometry.
+    if (el.ownerSVGElement) el = el.ownerSVGElement;
+    return el;
+  }
+
+  function selectorMatchesOnly(selector, el) {
+    try {
+      var all = document.querySelectorAll(selector);
+      return all.length === 1 && all[0] === el;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function attrEscape(s) {
+    return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+
+  function attrCandidate(el, name) {
+    var value = el.getAttribute && el.getAttribute(name);
+    if (!value || value.length > 160) return "";
+    return (
+      el.nodeName.toLowerCase() +
+      "[" +
+      name +
+      '="' +
+      attrEscape(value) +
+      '"]'
+    );
+  }
+
+  function stableClasses(el) {
+    if (typeof el.className !== "string") return [];
+    return el.className
+      .trim()
+      .split(/\s+/)
+      .filter(function (c) {
+        if (!c || c.length > 80) return false;
+        if (/^(active|selected|focus|hover|open|closed|enter|leave)$/i.test(c))
+          return false;
+        if (/^(css|jsx|sc|emotion)-?[a-z0-9_-]*[0-9a-f]{6,}$/i.test(c))
+          return false;
+        return !/^[a-z0-9_-]*[0-9a-f]{10,}$/i.test(c);
+      })
+      .slice(0, 2);
+  }
+
+  // Deterministic, unique selector intended to survive a React re-render:
+  // stable authored identity first, semantic attributes/classes next, and a
+  // guaranteed-unique structural path last. Every short candidate is verified
+  // against the live DOM before it is returned.
   function cssPath(el) {
     if (!el || el.nodeType !== 1) return "";
-    if (el.id) return "#" + cssEscape(el.id);
+    if (el === document.documentElement) return "html";
+    if (el === document.body) return "body";
+    if (el.id) {
+      var byId = "#" + cssEscape(el.id);
+      if (selectorMatchesOnly(byId, el)) return byId;
+    }
+    var attrs = [
+      "data-omnia-id",
+      "data-testid",
+      "data-test",
+      "data-cy",
+      "name",
+      "aria-label",
+    ];
+    for (var ai = 0; ai < attrs.length; ai++) {
+      var byAttr = attrCandidate(el, attrs[ai]);
+      if (byAttr && selectorMatchesOnly(byAttr, el)) return byAttr;
+    }
+    var ownClasses = stableClasses(el);
+    if (ownClasses.length) {
+      var byClass =
+        el.nodeName.toLowerCase() +
+        ownClasses
+          .map(function (c) {
+            return "." + cssEscape(c);
+          })
+          .join("");
+      if (selectorMatchesOnly(byClass, el)) return byClass;
+    }
     var parts = [];
     var node = el;
     while (node && node.nodeType === 1 && node !== document.body) {
       var tag = node.nodeName.toLowerCase();
       if (node.id) {
-        parts.unshift("#" + cssEscape(node.id));
-        break;
+        var anchor = "#" + cssEscape(node.id);
+        if (selectorMatchesOnly(anchor, node)) {
+          parts.unshift(anchor);
+          break;
+        }
       }
-      var cls = "";
-      if (typeof node.className === "string" && node.className.trim()) {
-        cls = node.className
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean)
-          .slice(0, 2)
-          .map(function (c) {
-            return "." + cssEscape(c);
-          })
-          .join("");
-      }
+      var cls = stableClasses(node)
+        .map(function (c) {
+          return "." + cssEscape(c);
+        })
+        .join("");
       var seg = tag + cls;
       var parent = node.parentNode;
       if (parent && parent.children) {
@@ -243,9 +334,14 @@
         }
       }
       parts.unshift(seg);
+      var candidate = parts.join(" > ");
+      if (selectorMatchesOnly(candidate, el)) return candidate;
       node = node.parentNode;
     }
-    return parts.join(" > ");
+    var anchoredPath = parts.join(" > ");
+    if (selectorMatchesOnly(anchoredPath, el)) return anchoredPath;
+    var fullPath = "body > " + parts.join(" > ");
+    return selectorMatchesOnly(fullPath, el) ? fullPath : "";
   }
 
   function cssEscape(s) {
@@ -380,7 +476,7 @@
 
   function onClick(e) {
     if (!enabled) return;
-    var el = e.target;
+    var el = eventElement(e);
     if (!el || el.nodeType !== 1 || isOurs(el)) return;
     // Block the site's own navigation/handlers so picking never triggers a link
     // or button. Capture phase + stopImmediatePropagation = nothing downstream runs.
@@ -451,13 +547,35 @@
     });
   }
 
+  function blockEarlyInteraction(e) {
+    if (!enabled) return;
+    var el = eventElement(e);
+    if (!el || isOurs(el)) return;
+    // Generated controls often mutate on pointerdown, before click. Stop that
+    // phase too; onClick below remains the single element-pick path.
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+  }
+
+  function refreshHover() {
+    if (!enabled || !hoveredEl || !hoveredEl.isConnected) {
+      if (hoverBox) hoverBox.style.display = "none";
+      return;
+    }
+    positionHoverBox(hoveredEl.getBoundingClientRect(), hoveredLabel);
+  }
+
   function enable() {
     if (enabled) return;
     enabled = true;
     document.documentElement.style.cursor = "crosshair";
     document.addEventListener("mousemove", onMouseMove, true);
+    document.addEventListener("pointerdown", blockEarlyInteraction, true);
     // Capture phase so we intercept before the site's own click handlers.
     document.addEventListener("click", onClick, true);
+    window.addEventListener("scroll", refreshHover, true);
+    window.addEventListener("resize", refreshHover, true);
   }
 
   function disable() {
@@ -466,7 +584,16 @@
     enabled = false;
     document.documentElement.style.cursor = "";
     document.removeEventListener("mousemove", onMouseMove, true);
+    document.removeEventListener("pointerdown", blockEarlyInteraction, true);
     document.removeEventListener("click", onClick, true);
+    window.removeEventListener("scroll", refreshHover, true);
+    window.removeEventListener("resize", refreshHover, true);
+    hoveredEl = null;
+    pendingEvent = null;
+    if (rafId) {
+      window.cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
     if (hoverBox) hoverBox.style.display = "none";
   }
 
@@ -576,15 +703,14 @@
   }
 
   function post(msg) {
-    // Target '*' (consistent with the streaming-preview bridge): the only data
-    // we emit is the user's own generated markup, and the recipient is the
-    // workspace parent by construction. Inbound is origin-guarded below.
-    if (window.parent) window.parent.postMessage(msg, "*");
+    if (window.parent)
+      window.parent.postMessage(msg, trustedParentOrigin || "*");
   }
 
   window.addEventListener("message", function (e) {
     // Only trust the workspace shell that embeds us — ignore any other frame.
     if (e.source !== window.parent) return;
+    if (trustedParentOrigin && e.origin !== trustedParentOrigin) return;
     var d = e.data;
     if (!d || typeof d.type !== "string") return;
     switch (d.type) {
@@ -746,5 +872,5 @@
 
   // Tell the parent we're ready so it can (re)send enable after a reload while
   // select-mode is still on.
-  if (window.parent) window.parent.postMessage({ type: "omnia:inspect:ready" }, "*");
+  post({ type: "omnia:inspect:ready", version: 3 });
 })();

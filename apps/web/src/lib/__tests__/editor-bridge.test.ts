@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   editorModeMessages,
+  previewTargetOrigin,
   type EditorMode,
 } from "@/lib/editor-bridge";
 
@@ -62,5 +63,25 @@ describe("editor bridge compatibility", () => {
         mode,
       });
     }
+  });
+});
+
+describe("previewTargetOrigin", () => {
+  it("pins cross-origin messages to the iframe origin", () => {
+    expect(
+      previewTargetOrigin(
+        "https://old-project-dev.preview.example/dashboard?inspect=1#x",
+        "https://constructor.example",
+      ),
+    ).toBe("https://old-project-dev.preview.example");
+  });
+
+  it("resolves relative previews and rejects non-web schemes", () => {
+    expect(
+      previewTargetOrigin("/p/demo?inspect=1", "https://constructor.example"),
+    ).toBe("https://constructor.example");
+    expect(
+      previewTargetOrigin("javascript:alert(1)", "https://constructor.example"),
+    ).toBeNull();
   });
 });

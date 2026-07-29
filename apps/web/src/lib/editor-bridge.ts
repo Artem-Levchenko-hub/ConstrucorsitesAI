@@ -5,6 +5,21 @@ export type EditorBridgeMessage = {
   mode?: EditorMode;
 };
 
+/** Resolve the exact iframe origin used for postMessage; null means do not send. */
+export function previewTargetOrigin(
+  iframeSrc: string,
+  baseOrigin: string,
+): string | null {
+  try {
+    const url = new URL(iframeSrc, baseOrigin);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.origin
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Build one deterministic mode transition for both inspector generations.
  *

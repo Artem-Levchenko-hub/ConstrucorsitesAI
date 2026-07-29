@@ -117,6 +117,17 @@ class Settings(BaseSettings):
     # serve a "waking up" page instead of a raw Bad Gateway. This is the
     # orchestrator's own HTTP bind, reached over loopback from the shared nginx.
     orchestrator_wake_target: str = Field(default="127.0.0.1:8003")
+    # Platform-owned editor bridge injected by the per-project dev-preview
+    # reverse proxy.  The JS bytes come from apps/api (the canonical inspector),
+    # so already-created containers do not need a source/template migration.
+    inspector_asset_target: str = Field(
+        default="127.0.0.1:8200/api/kit/omnia-inspector.js"
+    )
+    # Only this parent may drive the inspector in a cross-origin preview.  It is
+    # rendered into a data attribute and enforced by the inspector's message
+    # listener; a random third-party page cannot frame a preview and exfiltrate
+    # its DOM through the picker protocol.
+    workspace_origin: str = Field(default="https://constructor.lead-generator.ru")
 
     # Per-host Let's Encrypt (HTTP-01 via webroot). No DNS API token needed
     # because sslip.io hosts already resolve to us. Fail-soft: if a cert can't

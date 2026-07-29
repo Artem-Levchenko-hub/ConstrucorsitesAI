@@ -126,6 +126,29 @@ def test_proxy_location_carries_websocket_upgrade() -> None:
     assert "proxy_hide_header X-Frame-Options" in block
 
 
+def test_dev_vhost_injects_platform_inspector_for_old_projects() -> None:
+    """The proxy—not project source—must deliver the picker to every dev HTML."""
+    block = nginx_writer._https_block(
+        "old-project-dev.preview.omniadevelop.ru", 3200
+    )
+    assert "location = /_omnia/inspector.js" in block
+    assert "127.0.0.1:8200/api/kit/omnia-inspector.js" in block
+    assert 'data-omnia-platform-inspector="1"' in block
+    assert (
+        'data-omnia-parent-origin="https://constructor.lead-generator.ru"' in block
+    )
+    assert 'proxy_set_header Accept-Encoding ""' in block
+    assert "sub_filter '</body>'" in block
+
+
+def test_prod_vhost_does_not_inject_editor_runtime() -> None:
+    """Published customer sites stay byte-for-byte free of editor machinery."""
+    block = nginx_writer._https_block("project.preview.omniadevelop.ru", 4200)
+    assert "/_omnia/inspector.js" not in block
+    assert "sub_filter" not in block
+    assert "data-omnia-platform-inspector" not in block
+
+
 # ---------- wake-on-request (scale-from-zero) ----------
 
 
@@ -166,6 +189,7 @@ def test_rebuild_conf_upgrades_legacy_vhost() -> None:
     assert "proxy_pass http://127.0.0.1:3271" in out
     assert "listen 443 ssl" in out  # TLS mode preserved
     assert "@omnia_waking" in out
+    assert "data-omnia-platform-inspector" in out
 
 
 def test_rebuild_conf_skips_unrecognized() -> None:
@@ -205,6 +229,37 @@ async def test_refresh_vhosts_idempotent_and_upgrades(
     # Second pass is a no-op (already carries the fallback).
     second = await nw.refresh_vhosts()
     assert second == 0
+
+
+async def test_refresh_vhosts_upgrades_wake_enabled_but_inspectorless_conf(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """c389a2e-era vhosts already had wake logic; they still need this migration."""
+    import omnia_orchestrator.services.nginx_writer as nw
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    async def _ok() -> CmdResult:
+        return CmdResult(rc=0, stdout="", stderr="")
+
+    monkeypatch.setattr(nw, "_reload", _ok)
+    conf = tmp_path / "old-dev.preview.omniadevelop.ru.conf"
+    conf.write_text(
+        "server {\n  listen 80;\n"
+        "  server_name old-dev.preview.omniadevelop.ru;\n"
+        "  location / { proxy_pass http://127.0.0.1:3302; }\n"
+        "  location @omnia_waking { return 200; }\n}\n",
+        encoding="utf-8",
+    )
+
+    assert await nw.refresh_vhosts() == 1
+    upgraded = conf.read_text(encoding="utf-8")
+    assert "data-omnia-platform-inspector" in upgraded
+    assert nw._VHOST_TEMPLATE_MARKER in upgraded
 
 
 async def test_refresh_vhosts_rolls_back_on_bad_config(
