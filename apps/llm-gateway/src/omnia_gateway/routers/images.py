@@ -127,7 +127,7 @@ async def images_generations(req: ImageGenerationRequest) -> dict[str, Any]:
 
     # aitunnel is hit through a SYNC httpx.Client on a worker thread with
     # trust_env=False + an explicit no-op mounts transport. Two failure modes
-    # otherwise (see providers/aitunnel.py docstring): (1) the container
+    # otherwise (same hardening as the chat provider): (1) the container
     # HTTPS_PROXY (Gemini geo-bypass) tunnels this endpoint, and (2)
     # httpx.AsyncClient inside the uvicorn loop intermittently hangs the TLS
     # handshake. A sync client on a fresh thread connects fast; a direct gen is

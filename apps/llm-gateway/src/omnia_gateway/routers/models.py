@@ -19,12 +19,12 @@ def _has(secret: SecretStr | None) -> bool:
 def _is_available(model_id: str, provider: str, s: Settings) -> bool:
     """A model is available iff the key for its upstream is present.
 
-    Everything text + flux images runs on aitunnel; only gpt-image-1 (and the
-    whisper STT surface) run on proxyapi.
+    Text models run on llmgw. Optional media routes have their own availability
+    checks and are not part of this text-model catalog.
     """
     if model_id == "gpt-image-1":
         return _has(s.proxyapi_api_key)
-    return _has(s.aitunnel_api_key)
+    return _has(s.llmgw_api_key)
 
 
 @router.get("/models")
@@ -33,8 +33,6 @@ async def list_models_endpoint() -> dict[str, object]:
     data: list[dict[str, object]] = []
     for m in list_models():
         entry = dict(m)
-        entry["available"] = _is_available(
-            str(entry["id"]), str(entry["provider"]), settings
-        )
+        entry["available"] = _is_available(str(entry["id"]), str(entry["provider"]), settings)
         data.append(entry)
     return {"object": "list", "data": data}

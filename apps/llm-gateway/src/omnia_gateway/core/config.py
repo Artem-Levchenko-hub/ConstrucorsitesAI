@@ -3,16 +3,12 @@
 R-02 (hide what changes): all env access goes through `get_settings()`. If we
 later swap pydantic-settings for vault / SSM, only this module changes.
 
-Provider model: ONE upstream — **aitunnel.ru** — serves the whole product through
-its OpenAI-compatible API. Everything lives under `https://api.aitunnel.ru/v1`:
+Text generation runs through **llmgw.ru** and its OpenAI-compatible API at
+`https://api.llmgw.ru/v1`. Omnia's native-agent endpoint adapts Anthropic-shaped
+tool turns to llmgw's documented OpenAI tool-calling contract.
 
-  * `/v1/chat/completions` — OpenAI-compatible chat + streaming,
-  * `/v1/messages`         — Anthropic-native surface (the native tool-use agent,
-    thinking + signatures preserved),
-  * `/v1/images/generations` — image generation (flux).
-
-The same `AITUNNEL_API_KEY` authenticates chat, native tools, images, and video.
-All surfaces use `Authorization: Bearer`. `proxyapi.ru` remains ONLY for
+AITunnel remains isolated to optional image/video generation because those are
+separate media products, not LLM model routes. `proxyapi.ru` remains only for
 speech-to-text (whisper) and the optional `gpt-image-1` model.
 """
 
@@ -32,10 +28,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- aitunnel.ru — the single LLM + media upstream ---
-    # ONE key + ONE base for every endpoint: chat (`/chat/completions`), native
-    # Anthropic (`/messages`), images (`/images/generations`). Flows in via env
-    # AITUNNEL_API_KEY, never committed.
+    # --- llmgw.ru — text, vision, and tool-calling LLM upstream ---
+    llmgw_api_key: SecretStr | None = None
+    llmgw_base_url: str = "https://api.llmgw.ru/v1"
+
+    # --- aitunnel.ru — optional image/video upstream only ---
     aitunnel_api_key: SecretStr | None = None
     aitunnel_base_url: str = "https://api.aitunnel.ru/v1"
 

@@ -1,17 +1,9 @@
-"""aitunnel.ru provider — chat completions over its OpenAI-compatible surface.
+"""llmgw.ru provider — chat completions over its OpenAI-compatible surface.
 
-Per the AITunnel docs (https://docs.aitunnel.ru/) the whole API lives under
-``https://api.aitunnel.ru/v1``:
-
-  * ``POST /v1/chat/completions`` — OpenAI-compatible chat (this module),
-  * ``POST /v1/messages``         — Anthropic-native surface (routers/messages_native.py),
-  * ``POST /v1/images/generations`` — image generation (routers/images.py).
-
-ONE key authenticates everything, and BOTH surfaces use
-``Authorization: Bearer <AITUNNEL_API_KEY>`` — the native surface rejects the
-Anthropic-classic ``x-api-key`` header with 401 (live-verified 15.07). Model
-slugs use dots: the catalog id for Opus 4.8 is ``claude-opus-4.8``, while the
-Omnia-facing id stays ``claude-opus-4-8``.
+The public API lives under ``https://api.llmgw.ru/v1`` and uses
+``Authorization: Bearer <LLMGW_API_KEY>``. The provider requires canonical
+vendor-prefixed model ids (``anthropic/claude-opus-4.8``), while Omnia keeps its
+stable public id (``claude-opus-4-8``).
 
 Why a sync ``httpx.Client`` on a worker thread instead of ``AsyncClient``: the
 gateway container may carry an ``HTTPS_PROXY`` (a UK egress used only to
@@ -20,7 +12,7 @@ intermittently stalls the TLS handshake. ``trust_env=False`` + an explicit no-op
 ``mounts`` transport ignores the proxy unconditionally, and a fresh sync client
 on ``asyncio.to_thread`` connects fast.
 
-R-01 (deep module): callers see ``is_aitunnel_model()`` + ``acompletion()`` +
+R-01 (deep module): callers see ``is_llmgw_model()`` + ``acompletion()`` +
 ``astream()``. Transport quirks, chain-of-thought stripping, and error
 translation live entirely inside.
 """
@@ -51,10 +43,9 @@ _TRANSIENT = (
     httpx.RemoteProtocolError,
 )
 
-# Omnia model ID → the exact AITunnel catalog id sent as the OpenAI `model`
-# field. AITunnel's canonical Opus id uses a dot in the version.
+# Omnia model ID → the exact llmgw catalog id sent as the OpenAI `model` field.
 _MODEL_SLUG: dict[str, str] = {
-    "claude-opus-4-8": "claude-opus-4.8",
+    "claude-opus-4-8": "anthropic/claude-opus-4.8",
 }
 
 # The native Messages response may add the provider prefix; accept both forms.
@@ -78,8 +69,8 @@ _DEFAULT_TIMEOUT_S = 240.0
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
-def is_aitunnel_model(model_id: str) -> bool:
-    """True if this model is served by AITunnel's chat surface."""
+def is_llmgw_model(model_id: str) -> bool:
+    """True if this model is served by llmgw's chat surface."""
     return model_id in _MODEL_SLUG
 
 
@@ -119,9 +110,7 @@ def _flatten_content(content: Any) -> str:
     return str(content)
 
 
-def _to_messages(
-    messages: list[dict[str, Any]], *, vision: bool = False
-) -> list[dict[str, Any]]:
+def _to_messages(messages: list[dict[str, Any]], *, vision: bool = False) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for m in messages:
         role = m.get("role")
@@ -143,21 +132,19 @@ def _approx_tokens(text: str) -> int:
 def _cached_tokens(usage: dict[str, Any]) -> int:
     """Prompt tokens served from the provider's context cache.
 
-    AITunnel reports them as `prompt_tokens_details.cached_tokens` (OpenAI shape);
+    llmgw reports them as `prompt_tokens_details.cached_tokens` (OpenAI shape);
     `prompt_cache_hit_tokens` is kept as a fallback for DeepSeek-style upstreams.
     """
     details = usage.get("prompt_tokens_details") or {}
-    return int(
-        details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or 0
-    )
+    return int(details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or 0)
 
 
 def _key_and_url() -> tuple[str, str]:
     settings = get_settings()
-    if not settings.aitunnel_api_key:
-        raise UpstreamProviderError("AITUNNEL_API_KEY not configured")
-    key = settings.aitunnel_api_key.get_secret_value()
-    url = f"{settings.aitunnel_base_url.rstrip('/')}/chat/completions"
+    if not settings.llmgw_api_key:
+        raise UpstreamProviderError("LLMGW_API_KEY not configured")
+    key = settings.llmgw_api_key.get_secret_value()
+    url = f"{settings.llmgw_base_url.rstrip('/')}/chat/completions"
     return key, url
 
 
@@ -169,7 +156,7 @@ async def astream(
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
 ) -> AsyncIterator[tuple[str, str]]:
-    """TRUE token streaming from AITunnel — the page builds live in the preview.
+    """TRUE token streaming from llmgw — the page builds live in the preview.
 
     A sync ``httpx.Client`` on a worker thread reads the SSE incrementally and
     bridges each delta to the async caller through an ``asyncio.Queue``. Yields
@@ -178,7 +165,7 @@ async def astream(
     """
     slug = _MODEL_SLUG.get(model)
     if slug is None:
-        raise ValidationFailedError(f"unsupported aitunnel model: {model}")
+        raise ValidationFailedError(f"unsupported llmgw model: {model}")
     key, url = _key_and_url()
 
     # Anthropic prompt caching: wrap the stable system prefix in `cache_control:
@@ -208,16 +195,19 @@ async def astream(
         emitted = False
         for attempt in range(2):
             try:
-                with httpx.Client(
-                    timeout=httpx.Timeout(timeout, connect=30.0),
-                    trust_env=False,
-                    mounts={"all://": httpx.HTTPTransport()},
-                ) as client, client.stream("POST", url, json=payload, headers=headers) as r:
+                with (
+                    httpx.Client(
+                        timeout=httpx.Timeout(timeout, connect=30.0),
+                        trust_env=False,
+                        mounts={"all://": httpx.HTTPTransport()},
+                    ) as client,
+                    client.stream("POST", url, json=payload, headers=headers) as r,
+                ):
                     if r.status_code >= 400:
                         body = r.read().decode("utf-8", "replace")[:300]
                         loop.call_soon_threadsafe(
                             queue.put_nowait,
-                            ("err", f"aitunnel HTTP {r.status_code}: {body}"),
+                            ("err", f"llmgw HTTP {r.status_code}: {body}"),
                         )
                         loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                         return
@@ -235,16 +225,14 @@ async def astream(
                         usage = obj.get("usage")
                         if usage:
                             print(
-                                f"[AITUNNEL] stream usage model={model} "
+                                f"[LLMGW] stream usage model={model} "
                                 f"prompt={usage.get('prompt_tokens')} "
                                 f"completion={usage.get('completion_tokens')} "
                                 f"cache_hit={_cached_tokens(usage)}",
                                 flush=True,
                             )
                         try:
-                            delta = (
-                                obj["choices"][0].get("delta", {}).get("content", "")
-                            )
+                            delta = obj["choices"][0].get("delta", {}).get("content", "")
                         except (KeyError, IndexError, TypeError):
                             delta = ""
                         if delta:
@@ -258,14 +246,14 @@ async def astream(
                     continue
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
-                    ("err", f"aitunnel stream transport: {type(exc).__name__}: {exc}"),
+                    ("err", f"llmgw stream transport: {type(exc).__name__}: {exc}"),
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                 return
             except Exception as exc:  # noqa: BLE001 — surface as a clean error event
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
-                    ("err", f"aitunnel stream error: {type(exc).__name__}: {exc}"),
+                    ("err", f"llmgw stream error: {type(exc).__name__}: {exc}"),
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                 return
@@ -290,7 +278,7 @@ async def acompletion(
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
 ) -> dict[str, Any]:
-    """Call AITunnel's chat surface and return an OpenAI-shaped completion dict.
+    """Call llmgw's chat surface and return an OpenAI-shaped completion dict.
 
     Raises:
         ValidationFailedError on bad input (unknown model / role).
@@ -298,7 +286,7 @@ async def acompletion(
     """
     slug = _MODEL_SLUG.get(model)
     if slug is None:
-        raise ValidationFailedError(f"unsupported aitunnel model: {model}")
+        raise ValidationFailedError(f"unsupported llmgw model: {model}")
     key, url = _key_and_url()
 
     messages = apply_anthropic_cache(model, messages)
@@ -341,24 +329,22 @@ async def acompletion(
         data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
         print(
-            f"[AITUNNEL] HTTP {exc.response.status_code}: {exc.response.text[:300]!r}",
+            f"[LLMGW] HTTP {exc.response.status_code}: {exc.response.text[:300]!r}",
             flush=True,
         )
         raise UpstreamProviderError(
-            f"aitunnel HTTP {exc.response.status_code}",
+            f"llmgw HTTP {exc.response.status_code}",
             details={"body": exc.response.text[:500]},
         ) from exc
     except httpx.HTTPError as exc:
-        raise UpstreamProviderError(
-            f"aitunnel transport error: {type(exc).__name__}: {exc}"
-        ) from exc
+        raise UpstreamProviderError(f"llmgw transport error: {type(exc).__name__}: {exc}") from exc
 
     try:
         choice = (data.get("choices") or [])[0]
         content = (choice.get("message") or {}).get("content") or ""
     except (IndexError, AttributeError, KeyError) as exc:
         raise UpstreamProviderError(
-            "aitunnel: malformed response", details={"body": str(data)[:500]}
+            "llmgw: malformed response", details={"body": str(data)[:500]}
         ) from exc
     content = _strip_reasoning(content)
 
@@ -373,7 +359,7 @@ async def acompletion(
     # Normalize to OpenAI shape with `model` = the Omnia id so chat.py bills against
     # PRICE_TABLE (the upstream slug maps back via _SLUG_TO_OMNIA).
     return {
-        "id": data.get("id") or f"aitunnel-{uuid4()}",
+        "id": data.get("id") or f"llmgw-{uuid4()}",
         "object": "chat.completion",
         "created": int(data.get("created") or time.time()),
         "model": model,

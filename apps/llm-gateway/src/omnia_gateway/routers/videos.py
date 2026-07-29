@@ -15,7 +15,7 @@ a real end-user (``user`` set) is debited the provider's reported ``cost_rub``;
 a service-account call (``user`` null — the native agent building a site) comes
 out of Omnia's own balance.
 
-Transport uses the SAME hardening as providers/aitunnel.py: a sync ``httpx.Client``
+Transport uses the same hardening as the chat provider: a sync ``httpx.Client``
 on a worker thread with ``trust_env=False`` + a no-op mounts transport, so the
 container's geo-bypass ``HTTPS_PROXY`` never tunnels these calls and a fresh
 sync client connects fast.
@@ -162,7 +162,7 @@ def _create_upstream_payload(
 
 def _client() -> httpx.Client:
     # trust_env=False + no-op mounts: ignore the container HTTPS_PROXY so aitunnel
-    # is hit DIRECT (same rationale as providers/aitunnel.py). follow_redirects:
+    # is hit DIRECT (same rationale as the chat provider). follow_redirects:
     # the finished-clip download can 302 to object storage — image_resolver's
     # media download does the same (review 2026-07-17); without it a redirect
     # returns an empty body and we'd discard a paid clip.
