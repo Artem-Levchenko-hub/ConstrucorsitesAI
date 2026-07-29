@@ -156,12 +156,19 @@ async def ensure_template_image_fresh(template_dir: Path | str, image_tag: str) 
 
         def _build() -> tuple[int, str]:
             # Fixed argv (no shell), host docker CLI — the orchestrator runs on
-            # the host with the docker socket + BuildKit layer cache.
+            # the host with the docker socket + BuildKit layer cache. Its systemd
+            # sandbox makes $HOME read-only, while Buildx writes activity metadata
+            # under $DOCKER_CONFIG. Pin that state to the writable runtime root.
+            docker_config_dir = Path(get_settings().docker_cli_config_dir)
+            docker_config_dir.mkdir(parents=True, exist_ok=True)
+            build_env = os.environ.copy()
+            build_env["DOCKER_CONFIG"] = str(docker_config_dir)
             proc = subprocess.run(
                 ["docker", "build", "-f", str(dockerfile), "-t", image_tag, str(template_dir)],
                 capture_output=True,
                 text=True,
                 timeout=900,
+                env=build_env,
             )
             return proc.returncode, (proc.stderr or proc.stdout or "")[-500:]
 

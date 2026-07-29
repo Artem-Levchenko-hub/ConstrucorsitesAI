@@ -402,3 +402,40 @@ def test_newest_source_mtime_tracks_a_real_edit(tmp_path) -> None:
     f.write_text("export default function L(){}")
     os.utime(f, (5000, 5000))
     assert docker_client._newest_source_mtime(tmp_path) == 5000.0
+
+
+async def test_template_build_uses_writable_docker_config(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Buildx must not write under the read-only systemd `$HOME`.
+
+    A brand-new stack has no cached image, so this path is the difference
+    between a provisioned container and a silent `container not found`.
+    """
+    template_dir = tmp_path / "template"
+    template_dir.mkdir()
+    (template_dir / "Dockerfile.dev").write_text("FROM scratch\n")
+    docker_config_dir = tmp_path / "docker-cli"
+    monkeypatch.setenv("DOCKER_CLI_CONFIG_DIR", str(docker_config_dir))
+
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    monkeypatch.setattr(docker_client, "_image_created_epoch", lambda _tag: None)
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> Any:
+        captured["argv"] = argv
+        captured["env"] = kwargs["env"]
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(docker_client.subprocess, "run", fake_run)
+
+    rebuilt = await docker_client.ensure_template_image_fresh(
+        template_dir, "omnia-template-new:dev"
+    )
+
+    assert rebuilt is True
+    assert docker_config_dir.is_dir()
+    assert captured["env"]["DOCKER_CONFIG"] == str(docker_config_dir)
+    assert captured["argv"][:2] == ["docker", "build"]

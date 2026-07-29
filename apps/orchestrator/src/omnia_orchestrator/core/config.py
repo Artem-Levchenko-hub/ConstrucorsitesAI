@@ -29,6 +29,10 @@ class Settings(BaseSettings):
 
     # Docker daemon socket. On prod Linux: unix:///var/run/docker.sock.
     docker_host: str = Field(default="unix:///var/run/docker.sock")
+    # Docker CLI / Buildx writes activity and builder metadata under
+    # `$DOCKER_CONFIG`. The hardened systemd unit mounts the user's home
+    # read-only, so builds must use an orchestrator-owned writable directory.
+    docker_cli_config_dir: str = Field(default="/opt/omnia-runtime/docker-cli")
 
     # ── Sandbox hardening (Phase 1, security) ───────────────────────────────
     # The agent (USE_AGENTIC_BUILDER) runs ARBITRARY code + bash inside dev
