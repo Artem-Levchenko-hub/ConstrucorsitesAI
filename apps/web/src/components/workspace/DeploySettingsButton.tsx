@@ -32,6 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { ExternalDeployWizard } from "@/components/workspace/ExternalDeployWizard";
 import { ApiError } from "@/lib/api/client";
 import {
   createDeployTarget,
@@ -84,9 +85,20 @@ export function DeploySettingsButton({ projectId }: { projectId: string }) {
           </DialogHeader>
           {open && (
             <div className="space-y-6 py-1">
-              <DeployTargetSection projectId={projectId} />
-              <Separator />
-              <DomainSection projectId={projectId} />
+              <ExternalDeployWizard projectId={projectId} />
+              <details className="group rounded-lg border border-border-subtle">
+                <summary className="cursor-pointer list-none px-3 py-2.5 text-xs font-medium text-fg-secondary">
+                  Управлять серверами и доменами отдельно
+                  <span className="float-right text-fg-tertiary transition-transform group-open:rotate-180">
+                    ▾
+                  </span>
+                </summary>
+                <div className="space-y-6 border-t border-border-subtle p-3">
+                  <DeployTargetSection projectId={projectId} />
+                  <Separator />
+                  <DomainSection projectId={projectId} />
+                </div>
+              </details>
             </div>
           )}
         </DialogContent>
