@@ -672,7 +672,7 @@ async def run_native_build(
                     done=False,
                     summary="container/orchestrator unreachable — build aborted",
                     files=written, steps=step + 1, transcript=convo,
-                    stop_reason="error",
+                    stop_reason="infra_error",
                 )
             if no_write_turns >= _NO_WRITE_ABORT_AT:
                 return AgentResult(

@@ -106,7 +106,7 @@ class AgentResult:
     files: dict[str, str]          # path -> final content the agent wrote
     steps: int
     transcript: list[dict[str, str]] = field(default_factory=list)
-    stop_reason: str = ""          # "done" | "max_steps" | "stalled" | "error"
+    stop_reason: str = ""          # "done" | "max_steps" | "stalled" | "error" | "infra_error"
 
 
 def parse_action(reply: str) -> Action | None:
@@ -647,7 +647,7 @@ async def run_agent_build(
                     done=False,
                     summary="container/orchestrator unreachable — build aborted",
                     files=written, steps=step + 1, transcript=convo,
-                    stop_reason="error",
+                    stop_reason="infra_error",
                 )
         else:
             infra_dead_streak = 0
@@ -698,7 +698,7 @@ async def run_agent_build(
 
 # Infra circuit breaker: consecutive tool ops whose failure was the CONTAINER /
 # orchestrator being unreachable (executor tags them infra_dead) → abort with
-# stop_reason="error". 3 = tolerates a transient orchestrator restart (one bad
+# stop_reason="infra_error". 3 = tolerates a transient orchestrator restart (one bad
 # op, next succeeds) while a truly dead container aborts within ~3 LLM turns
 # instead of grinding the full step budget (2026-07-08 incident).
 _INFRA_DEAD_ABORT_AT = 3

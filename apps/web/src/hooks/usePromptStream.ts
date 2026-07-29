@@ -14,8 +14,16 @@ import type {
   WalletState,
   WsEvent,
 } from "@/lib/api/types";
-import { cancelGeneration, sendPrompt } from "@/lib/api/messages";
+import {
+  cancelGeneration,
+  getLatestGeneration,
+  sendPrompt,
+} from "@/lib/api/messages";
 import { ApiError } from "@/lib/api/client";
+import {
+  isActiveGenerationForMessage,
+  streamEventMessageId,
+} from "@/lib/generation-lifecycle";
 import { USE_MOCKS } from "@/lib/api/mocks";
 import { buildJoyTrigger } from "@/lib/joy-moment";
 import { useWorkspaceStore } from "@/store/workspace";
@@ -118,10 +126,18 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   // the reconnect closure; `reconnectAttemptsRef` bounds backoff retries.
   const sendRef = useRef<((msg: unknown) => void) | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  const reconnectProbeRef = useRef(false);
+  const terminalGenerationMessagesRef = useRef<Set<string>>(new Set());
   const connectRef = useRef<() => void>(() => {});
   const streamMetaRef = useRef<
     Record<string, { lastSeq: number; resyncing: boolean }>
   >({});
+  // The silence watchdog must hear every meaningful server event, not only
+  // updates to the assistant's text. Agentic builds can legitimately spend
+  // several minutes emitting `agent.step` while the chat content stays empty.
+  const watchdogHeartbeatRef = useRef<Record<string, () => void>>({});
+  const watchdogCleanupRef = useRef<Record<string, () => void>>({});
+  const silenceNoticeRef = useRef<Set<string>>(new Set());
   // Очередь — один слот. Если юзер кидает второй промпт, пока стримит первый,
   // он сюда попадает и автоматом стартует на llm.done/llm.error. Если новый
   // промпт прилетает поверх — заменяет предыдущий (предсказуемее, чем стек).
@@ -161,6 +177,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
   const apply = useCallback(
     (event: WsEvent) => {
+      const activeMessageId = streamEventMessageId(event);
+      if (activeMessageId) {
+        watchdogHeartbeatRef.current[activeMessageId]?.();
+      }
       if (event.type === "stream.sync") {
         // (Re)connect replay: replace the in-flight message's content with the
         // server's cumulative buffer and reset our seq cursor. This is what
@@ -271,6 +291,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.invalidateQueries({ queryKey: ["generation", projectId] });
         }
         delete streamMetaRef.current[event.data.message_id];
+        silenceNoticeRef.current.delete(event.data.message_id);
         streamingRef.current = false;
         activeSubmitSignatureRef.current = null;
         fireQueued();
@@ -480,6 +501,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           queryKey: ["passes", projectId, event.data.message_id],
         });
         delete streamMetaRef.current[event.data.message_id];
+        silenceNoticeRef.current.delete(event.data.message_id);
         streamingRef.current = false;
         activeSubmitSignatureRef.current = null;
         pendingRef.current = null;
@@ -529,6 +551,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           duration: 8_000,
         });
         delete streamMetaRef.current[event.data.message_id];
+        silenceNoticeRef.current.delete(event.data.message_id);
         streamingRef.current = false;
         activeSubmitSignatureRef.current = null;
         qc.invalidateQueries({ queryKey: ["generation", projectId] });
@@ -540,28 +563,63 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
   // Silence watchdog: fires `onSilence` if the message gets no update for
   // WATCHDOG_MS while still streaming (tokens_out === null). Re-arms on every
-  // update; self-removes once the message completes. Shared by submit and the
-  // reconnect effect so the "stuck spinner" guard works in both paths.
+  // chat update and every message-scoped WS event (including `agent.step`);
+  // self-removes once the message completes. `onSilence` returns true when the
+  // durable run is still active and should remain under observation.
   const watchMessage = useCallback(
-    (messageId: string, onSilence: () => void): (() => void) => {
+    (
+      messageId: string,
+      onSilence: () => boolean | Promise<boolean>,
+    ): (() => void) => {
+      watchdogCleanupRef.current[messageId]?.();
       const WATCHDOG_MS = 180_000;
       let timer = 0;
       let unsub: () => void = () => {};
+      let checking = false;
       const stillStreaming = () => {
         const data = qc.getQueryData<Message[]>(["messages", projectId]);
         const m = data?.find((x) => x.id === messageId);
         return !!m && m.tokens_out === null;
       };
-      const fire = () => {
-        if (stillStreaming()) {
-          unsub();
-          onSilence();
+      const cleanup = () => {
+        window.clearTimeout(timer);
+        unsub();
+        if (watchdogHeartbeatRef.current[messageId] === arm) {
+          delete watchdogHeartbeatRef.current[messageId];
+        }
+        if (watchdogCleanupRef.current[messageId] === cleanup) {
+          delete watchdogCleanupRef.current[messageId];
         }
       };
       const arm = () => {
         window.clearTimeout(timer);
         timer = window.setTimeout(fire, WATCHDOG_MS);
       };
+      const fire = async () => {
+        if (!stillStreaming()) {
+          cleanup();
+          return;
+        }
+        if (checking) return;
+        checking = true;
+        let keepWatching = true;
+        try {
+          keepWatching = await onSilence();
+        } catch {
+          // A failed status probe is not proof that generation failed. Keep the
+          // durable run attached and retry later instead of inviting a duplicate.
+          keepWatching = true;
+        } finally {
+          checking = false;
+        }
+        if (keepWatching && stillStreaming()) {
+          arm();
+        } else {
+          cleanup();
+        }
+      };
+      watchdogHeartbeatRef.current[messageId] = arm;
+      watchdogCleanupRef.current[messageId] = cleanup;
       arm();
       unsub = qc.getQueryCache().subscribe((evt) => {
         if (
@@ -572,18 +630,14 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           const data = evt.query.state.data as Message[] | undefined;
           const m = data?.find((x) => x.id === messageId);
           if (m && m.tokens_out !== null && m.tokens_out !== undefined) {
-            window.clearTimeout(timer);
             streamingRef.current = false;
-            unsub();
+            cleanup();
           } else if (m) {
             arm();
           }
         }
       });
-      return () => {
-        window.clearTimeout(timer);
-        unsub();
-      };
+      return cleanup;
     },
     [qc, projectId],
   );
@@ -622,6 +676,59 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
+
+  const recoverSilentStream = useCallback(
+    async (messageId: string): Promise<boolean> => {
+      try {
+        const generation = await getLatestGeneration(projectId);
+        qc.invalidateQueries({ queryKey: ["generation", projectId] });
+        qc.invalidateQueries({ queryKey: ["messages", projectId] });
+
+        if (isActiveGenerationForMessage(generation, messageId)) {
+          // The paid server-side run is alive. Rebuild only the transport and keep
+          // the same canonical message/run; never turn a network silence into a
+          // second prompt or a fake terminal error.
+          streamingRef.current = true;
+          terminalGenerationMessagesRef.current.delete(messageId);
+          reconnectAttemptsRef.current = 0;
+          cancelRef.current?.();
+          cancelRef.current = null;
+          connect();
+          if (!silenceNoticeRef.current.has(messageId)) {
+            silenceNoticeRef.current.add(messageId);
+            toast.info("Восстанавливаю связь с генерацией", {
+              description:
+                "Сборка продолжает работать на сервере — повторный запрос не запускается.",
+              duration: 8_000,
+            });
+          }
+          return true;
+        }
+
+        // The durable lifecycle is terminal (or another run superseded this
+        // message). Hydrate the server truth and release local streaming state.
+        streamingRef.current = false;
+        terminalGenerationMessagesRef.current.add(messageId);
+        activeSubmitSignatureRef.current = null;
+        cancelRef.current?.();
+        cancelRef.current = null;
+        sendRef.current = null;
+        qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+        return false;
+      } catch {
+        // If even the status endpoint is temporarily unreachable, reconnect the
+        // WebSocket and keep watching. Absence of a probe response is never proof
+        // that the generation failed.
+        streamingRef.current = true;
+        reconnectAttemptsRef.current = 0;
+        cancelRef.current?.();
+        cancelRef.current = null;
+        connect();
+        return true;
+      }
+    },
+    [connect, projectId, qc],
+  );
 
   const submit = useCallback(
     async (
@@ -693,8 +800,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
       // Helper: collapse the optimistic placeholder into an error state so
       // the user gets an explicit message instead of a stuck "AI читает
-      // контекст" spinner. Called from both the catch block (POST failed)
-      // and the watchdog timer (no WS event for 90s).
+      // контекст" spinner. This is only for a POST that the backend did not
+      // accept. Stream silence is reconciled against durable generation state
+      // below and must never manufacture a terminal error.
       const _failPrompt = (reason: string, detail?: string) => {
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>
@@ -805,6 +913,22 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           );
           qc.invalidateQueries({ queryKey: ["messages", projectId] });
           streamingRef.current = true;
+          void getLatestGeneration(projectId)
+            .then((generation) => {
+              const canonicalMessageId = generation?.assistant_message_id;
+              if (
+                canonicalMessageId &&
+                isActiveGenerationForMessage(generation, canonicalMessageId)
+              ) {
+                watchMessage(canonicalMessageId, () =>
+                  recoverSilentStream(canonicalMessageId),
+                );
+              }
+            })
+            .catch(() => {
+              // The already-open project socket can still carry the active run.
+              // A failed status probe must not replace it with a fake error.
+            });
           toast.info("Генерация уже запущена", {
             description: "Показываю текущую сборку — повтор не отправлен.",
           });
@@ -846,28 +970,21 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         });
       }
 
-      // Watchdog: if NO WS event lands on the real message id within
-      // WATCHDOG_MS, surface an error. Catches the "POST accepted, but
-      // _process_prompt died silently and never published anything"
-      // failure mode. The backend now also calls _emergency_error in
-      // _on_done so this is a belt-and-suspenders check — both ends
-      // protect the user from a stuck spinner.
-      // Watchdog measures SILENCE, not total elapsed time: a long build
-      // (brief → writer → images → design-judge) is fine as long as events
-      // keep arriving. Reset on every update for this message; fire only
-      // after WATCHDOG_MS of true silence (a dead/stuck task).
-      // Silence watchdog (shared with the reconnect path): if the message goes
-      // quiet too long while still streaming, surface an explicit error instead
-      // of a stuck spinner. Mocks set tokens_out directly, so this also releases
-      // streamingRef on their completion.
-      watchMessage(message_id, () =>
-        _failPrompt(
-          "Нет ответа от модели",
-          "слишком долго без ответа — попробуй ещё раз или сменить модель",
-        ),
-      );
+      // Silence watchdog (shared with reload recovery). It reconciles against
+      // the durable run before changing UI state: an active run gets the same
+      // WebSocket reattached; a terminal run is hydrated from the API.
+      watchMessage(message_id, () => recoverSilentStream(message_id));
     },
-    [projectId, projectSlug, qc, apply, connect, watchMessage, fireQueued],
+    [
+      projectId,
+      projectSlug,
+      qc,
+      apply,
+      connect,
+      watchMessage,
+      recoverSilentStream,
+      fireQueued,
+    ],
   );
 
   // Сохраняем актуальный submit в ref, чтобы fireQueued мог его вызвать,
@@ -884,45 +1001,45 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   // buffer via stream.sync. Guarded so it never double-connects.
   useEffect(() => {
     if (USE_MOCKS) return;
-    const failReconnect = (messageId: string) => {
-      qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-        (prev ?? []).map((m) =>
-          m.id === messageId
-            ? {
-                ...m,
-                content:
-                  m.content ||
-                  "[Ошибка: соединение потеряно — обнови страницу или повтори промпт]",
-                tokens_out: 0,
-                tokens_in: 0,
-              }
-            : m,
-        ),
-      );
-      streamingRef.current = false;
-      activeSubmitSignatureRef.current = null;
-      cancelRef.current?.();
-      cancelRef.current = null;
-      toast.error("Соединение со стримом потеряно", {
-        description: "не удалось досмотреть генерацию — обнови страницу",
-        duration: 8_000,
-      });
-    };
     const maybeReconnect = () => {
       if (cancelRef.current) return; // already have a socket
       if (streamingRef.current) return; // submit owns the active stream
+      if (reconnectProbeRef.current) return;
       const msgs = qc.getQueryData<Message[]>(["messages", projectId]);
       const last = msgs?.[msgs.length - 1];
       if (
         last &&
         last.role === "assistant" &&
         last.tokens_out === null &&
-        !last.id.startsWith("__opt_") // real server id, not an optimistic row
+        !last.id.startsWith("__opt_") && // real server id, not an optimistic row
+        !terminalGenerationMessagesRef.current.has(last.id)
       ) {
-        streamingRef.current = true;
-        reconnectAttemptsRef.current = 0;
-        connect();
-        watchMessage(last.id, () => failReconnect(last.id));
+        reconnectProbeRef.current = true;
+        void getLatestGeneration(projectId)
+          .then((generation) => {
+            if (!isActiveGenerationForMessage(generation, last.id)) {
+              terminalGenerationMessagesRef.current.add(last.id);
+              qc.invalidateQueries({ queryKey: ["messages", projectId] });
+              qc.invalidateQueries({ queryKey: ["generation", projectId] });
+              return;
+            }
+            terminalGenerationMessagesRef.current.delete(last.id);
+            streamingRef.current = true;
+            reconnectAttemptsRef.current = 0;
+            connect();
+            watchMessage(last.id, () => recoverSilentStream(last.id));
+          })
+          .catch(() => {
+            // The status probe may be the broken transport. Reattaching the
+            // project socket is safe and cannot create a generation.
+            streamingRef.current = true;
+            reconnectAttemptsRef.current = 0;
+            connect();
+            watchMessage(last.id, () => recoverSilentStream(last.id));
+          })
+          .finally(() => {
+            reconnectProbeRef.current = false;
+          });
       }
     };
     maybeReconnect();
@@ -936,7 +1053,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
     });
     return unsub;
-  }, [projectId, qc, connect, watchMessage]);
+  }, [projectId, qc, connect, watchMessage, recoverSilentStream]);
 
   const cancel = useCallback(async () => {
     // 1) Сначала просим backend остановить durable run. WS закрываем только

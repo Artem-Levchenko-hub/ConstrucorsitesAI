@@ -2,7 +2,7 @@
 
 Covers: `_module_not_found_hint` (anti-hallucination recovery), the
 EXPLORE-STALL no-write guard (nudge → abort as 'exploring'), and the infra
-circuit breaker (container/orchestrator dead → abort as 'error' instead of
+circuit breaker (container/orchestrator dead → abort as 'infra_error' instead of
 grinding the step budget — the 2026-07-08 hibernate-mid-build incident).
 """
 
@@ -97,7 +97,7 @@ async def test_native_infra_breaker_aborts_after_dead_turns(
     res = await agent_native.run_native_build(
         system="s", task="t", execute=execute, max_steps=40,
     )
-    assert res.stop_reason == "error"
+    assert res.stop_reason == "infra_error"
     assert "unreachable" in res.summary
     assert calls["n"] == agent_native._INFRA_DEAD_ABORT_AT  # aborted, not ground out
 

@@ -22,6 +22,10 @@ import type { Project } from "@/lib/api/types";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
 import { RuntimeButton } from "@/components/workspace/RuntimeButton";
+import {
+  isGenerationActive,
+  isMaxBuildReady,
+} from "@/lib/generation-lifecycle";
 import { cn } from "@/lib/utils";
 
 type LaunchStep = {
@@ -74,13 +78,16 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
   const hasGeneratedSnapshot = (snapshots.data ?? []).some(
     (snapshot) => snapshot.prompt_text !== null,
   );
-  const generationActive = ["pending", "running", "cancel_requested"].includes(
-    generation.data?.status ?? "",
-  );
+  const generationActive = isGenerationActive(generation.data);
   const latestBuildFailed =
     generation.data?.response_mode === "build" &&
     generation.data.status === "failed";
-  const buildReady = hasGeneratedSnapshot && !generationActive;
+  const buildReady = isMaxBuildReady({
+    snapshotsLoaded: snapshots.isSuccess,
+    generationLoaded: generation.isSuccess,
+    hasGeneratedSnapshot,
+    generation: generation.data,
+  });
   const steps: LaunchStep[] = [
     {
       label: generationActive

@@ -3157,12 +3157,11 @@ async def _process_prompt(
                     emit=_agent_emit,
                     max_steps=_agent_steps,
                 )
-                # ONE bounded retry on stop=error: an "error" here is a gateway
-                # flake that outlived _call_messages' retries (oneprovider 502/504
-                # bursts) or the infra breaker — either way retrying after a pause
-                # often just works: files already written persist in the container
-                # and a dead container is woken by the first agent op. Without
-                # this, a single provider burst = «Сборка прервана» to the user.
+                # ONE bounded retry only for a provider/gateway error that outlived
+                # `_call_messages` retries. Infrastructure failures have their own
+                # `infra_error` result and MUST NOT restart a full paid agent loop:
+                # readiness is handled before the first model call, and retrying a
+                # dead container merely doubles cost while repeating the same work.
                 if not _agent_res.done and _agent_res.stop_reason == "error":
                     print(
                         "[PP] agentic_build stop=error → one retry after 30s pause",

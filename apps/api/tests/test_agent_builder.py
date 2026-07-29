@@ -165,6 +165,31 @@ def test_loop_gateway_error_is_soft():
     assert "gateway" in res.summary
 
 
+def test_infra_failure_has_non_retryable_stop_reason():
+    calls: list[str] = []
+    replies = [
+        f'<omnia:action name="read_file">{{"path":"file-{i}.ts"}}</omnia:action>'
+        for i in range(ab._INFRA_DEAD_ABORT_AT)
+    ]
+
+    async def _infra_dead(action: ab.Action):
+        calls.append(action.path)
+        return {
+            "ok": False,
+            "error": "infra: container not found",
+            "infra_dead": True,
+        }
+
+    res = asyncio.run(ab.run_agent_build(
+        system_prompt="sys", user_prompt="build it", model="m",
+        execute=_infra_dead, complete=_scripted(replies), max_steps=20,
+    ))
+
+    assert res.done is False
+    assert res.stop_reason == "infra_error"
+    assert len(calls) == ab._INFRA_DEAD_ABORT_AT
+
+
 def test_window_messages_caps_payload():
     convo = [{"role": "system", "content": "s"}, {"role": "user", "content": "task"}]
     for i in range(20):
