@@ -56,6 +56,12 @@ ErrorCode = Literal[
     "hero_media_plan_not_found",
     "hero_media_render_not_found",
     "hero_media_invalid_state",
+    "max_integration_not_found",
+    "max_token_invalid",
+    "max_api_unavailable",
+    "max_project_required",
+    "max_deploy_required",
+    "max_webhook_failed",
 ]
 
 

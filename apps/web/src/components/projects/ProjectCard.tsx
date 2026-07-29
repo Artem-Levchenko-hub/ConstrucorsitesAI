@@ -25,6 +25,7 @@ const TEMPLATE_LABEL: Record<Project["template"], string> = {
   nextjs_entities: "SaaS на сущностях",
   code: "Код",
   realtime: "Realtime-чат",
+  max_miniapp: "MAX Mini App",
   spa: "Интерактивный сайт",
   tgbot: "Телеграм-бот",
   api: "API-сервис",

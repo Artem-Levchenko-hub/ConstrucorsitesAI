@@ -35,7 +35,16 @@ def test_ru_is_byte_identical_to_default() -> None:
     This is the CRITICAL invariant: the RU prompt must never be mutated
     by the language-parameterisation machinery.
     """
-    for template in ("blank", "landing", "portfolio", "blog", "fullstack", "spa", "code"):
+    for template in (
+        "blank",
+        "landing",
+        "portfolio",
+        "blog",
+        "fullstack",
+        "spa",
+        "code",
+        "max_miniapp",
+    ):
         default_out = build_system_prompt(template=template)
         ru_out = build_system_prompt(template=template, language="ru")
         assert default_out == ru_out, (

@@ -643,6 +643,7 @@ async def deploy(
         target,
         payload.domains,
         payload.idempotency_key,
+        payload.runtime_env,
     )
     return _deploy_record_to_response(rec)
 

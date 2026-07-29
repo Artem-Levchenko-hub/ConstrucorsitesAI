@@ -32,6 +32,7 @@ from omnia_api.core.errors import ApiError
 from omnia_api.models.attestation import Attestation
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
+from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.project import orchestrator_template
@@ -57,7 +58,7 @@ router = APIRouter(prefix="/api/projects", tags=["runtime"])
 # — the "Новый проект на Omnia.AI" starter — instead of the user's app, unless
 # we re-push the latest snapshot. start_runtime does exactly that. `spa` (Vite +
 # React, Phase 7.2) holds its AI files in the writable layer too.
-_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime")
+_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
 
 
 async def _project_owned_by(session: AsyncSession, project_id: UUID, user_id: UUID) -> Project:
@@ -282,6 +283,19 @@ async def trigger_deploy(
     # None = наш хостинг (текущее поведение).
     target: dict[str, Any] | None = None
     domains: list[str] | None = None
+    runtime_env: dict[str, str] | None = None
+    if project.template == "max_miniapp":
+        max_integration = (
+            await session.execute(
+                select(MaxIntegration).where(MaxIntegration.project_id == project_id)
+            )
+        ).scalar_one_or_none()
+        if max_integration is not None:
+            runtime_env = {
+                "MAX_BOT_TOKEN": decrypt_strong(max_integration.bot_token_enc),
+                "MAX_WEBHOOK_SECRET": decrypt_strong(max_integration.webhook_secret_enc),
+                "MAX_API_BASE_URL": "https://platform-api2.max.ru",
+            }
     if project.deploy_target_id is not None:
         dt = await session.get(DeployTarget, project.deploy_target_id)
         if dt is not None:
@@ -353,6 +367,7 @@ async def trigger_deploy(
         commit_sha=sha,
         target=target,
         domains=domains,
+        runtime_env=runtime_env,
         idempotency_key=idempotency_key,
     )
     return _to_deploy_status(payload)

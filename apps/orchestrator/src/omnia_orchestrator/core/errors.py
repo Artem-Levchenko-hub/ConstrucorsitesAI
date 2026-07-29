@@ -29,6 +29,7 @@ ErrorCode = Literal[
     "invalid_path",
     "image_not_found",
     "build_timeout",
+    "unsupported_stack",
     "internal_error",
 ]
 

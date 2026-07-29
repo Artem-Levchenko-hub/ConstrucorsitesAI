@@ -55,6 +55,7 @@ export default async function WorkspacePage({
         projectName={project.name}
         projectId={project.id}
         projectSlug={project.slug}
+        projectTemplate={project.template}
         imageGenEnabled={project.image_gen_enabled ?? true}
         remixSource={remixSource(project)}
         importedRepoUrl={

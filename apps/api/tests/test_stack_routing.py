@@ -18,11 +18,47 @@ import pytest
 from omnia_api.services import orchestrator_client, stack_routing
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.discovery import (
+    _infer_max_miniapp_from_text,
     _infer_realtime_from_text,
     _infer_stack_from_text,
     infer_result_type_from_text,
     result_type_to_stack,
 )
+
+# ─── MAX Mini App routing ────────────────────────────────────────────────
+
+
+def test_max_miniapp_stack_maps_to_template() -> None:
+    assert stack_routing.discovery_stack_to_template("max_miniapp") == "max_miniapp"
+    assert stack_routing.discovery_stack_to_template("MAX_MINIAPP") == "max_miniapp"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "сделай мини-приложение в MAX",
+        "магазин внутри мессенджера max",
+        "MAX mini app для программы лояльности",
+        "приложение для мессенджера Макс",
+        "бот в max с витриной",
+    ],
+)
+def test_max_miniapp_intent_detected(text: str) -> None:
+    assert _infer_max_miniapp_from_text(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "задай max-width: 1200px",
+        "максимально быстрый сайт",
+        "обычный мессенджер для команды",
+        "лендинг для магазина",
+        "MAX_RESULTS = 20",
+    ],
+)
+def test_max_miniapp_intent_does_not_overfire(text: str) -> None:
+    assert _infer_max_miniapp_from_text(text) is False
 
 
 # ─── realtime routing (G001 — messenger / chat / live) ───────────────────
@@ -80,6 +116,7 @@ def test_realtime_intent_not_overfired(text: str) -> None:
         ("nextjs_entities", "nextjs_entities"),
         ("spa", "spa"),  # Phase 7.2 — no-backend Vite stack
         ("code", "code"),  # owner 2026-06-18 — language-agnostic source
+        ("max_miniapp", "max_miniapp"),
         ("CODE", "code"),  # case-insensitive
         ("SPA", "spa"),  # case-insensitive
         ("NEXTJS_ENTITIES", "nextjs_entities"),  # case-insensitive

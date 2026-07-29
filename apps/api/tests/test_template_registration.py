@@ -47,3 +47,9 @@ def test_realtime_stack_registered() -> None:
     assert "realtime" in _TEMPLATE_VALUES
     assert _ORCHESTRATOR_TEMPLATE_BY_API.get("realtime") == "nextjs-realtime"
     assert (_TEMPLATES_DIR / "nextjs-realtime" / "Dockerfile.dev").is_file()
+
+
+def test_max_miniapp_stack_registered() -> None:
+    assert "max_miniapp" in _TEMPLATE_VALUES
+    assert _ORCHESTRATOR_TEMPLATE_BY_API.get("max_miniapp") == "max-miniapp-nextjs"
+    assert (_TEMPLATES_DIR / "max-miniapp-nextjs" / "Dockerfile.dev").is_file()

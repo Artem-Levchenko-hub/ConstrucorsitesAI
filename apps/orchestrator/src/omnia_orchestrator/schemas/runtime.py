@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Tier = Literal["free", "pro", "business"]
 RuntimeState = Literal["provisioning", "running", "paused", "stopped", "failed"]
@@ -98,7 +98,20 @@ class DeployRequest(BaseModel):
     # Подключённые к проекту домены — при деплое на свой VPS агент сам поднимает
     # edge (Caddy, авто-HTTPS) для них на машине пользователя.
     domains: list[str] | None = None
+    # Secret runtime-only variables. They are never written into build context,
+    # deployment records or logs; the builder clears the mutable dict on exit.
+    runtime_env: dict[str, str] = Field(default_factory=dict)
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
+
+    @field_validator("runtime_env")
+    @classmethod
+    def _safe_runtime_env(cls, value: dict[str, str]) -> dict[str, str]:
+        allowed = {"MAX_BOT_TOKEN", "MAX_WEBHOOK_SECRET", "MAX_API_BASE_URL"}
+        if len(value) > len(allowed) or any(key not in allowed for key in value):
+            raise ValueError("runtime_env contains an unsupported key")
+        if any(not item or len(item) > 8192 for item in value.values()):
+            raise ValueError("runtime_env contains an invalid value")
+        return value
 
 
 # Phases match apps/api DeployStatus so the api forwards them unchanged.

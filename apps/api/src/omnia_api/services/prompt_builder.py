@@ -2045,6 +2045,36 @@ _SPA_STACK = """\
 • Шрифты подключай через <link rel="stylesheet"> в index.html (нет
   next/font в Vite)."""
 
+_MAX_MINIAPP_STACK = """\
+СТЕК — MINI APP ДЛЯ МЕССЕНДЖЕРА MAX. Next.js 15 App Router + React 18.3 +
+TypeScript + Postgres/Drizzle + официальный MAX UI и MAX Bridge.
+
+ШАБЛОН УЖЕ СОДЕРЖИТ критическую платформенную обвязку — используй её, не
+переписывай: `src/lib/max/bridge.ts`, `validate-init-data.ts`, `session.ts`,
+`bot-api.ts`, `/api/max/session`, `/api/max/webhook`, `MaxAppProvider`.
+
+• Клиент получает контекст только через `window.WebApp` из официального Bridge.
+  В обычном браузерном preview автоматически работает mock-профиль. Никаких
+  Telegram WebApp API, VK Bridge и самодельных postMessage-протоколов.
+• Авторизация конечного пользователя — проверенный на СЕРВЕРЕ MAX `initData`.
+  Для owner-scoped данных вызывай `requireMaxUser()` и фильтруй КАЖДЫЙ select /
+  update / delete по `maxUserId`. Не доверяй `user_id` из JSON/body клиента.
+• Токен бота доступен только серверу как `MAX_BOT_TOKEN`. Секрет webhook —
+  `MAX_WEBHOOK_SECRET`. Не выводи их в HTML, client bundle, логи или ответы API.
+• Не ослабляй HMAC-проверку initData, constant-time проверку webhook secret,
+  лимит тела и idempotency событий. Платформенные файлы меняй только если задача
+  прямо требует расширить интеграцию и сохраняет эти инварианты.
+• В UI используй `@maxhub/max-ui` и переменные темы MAX. Учитывай светлую/тёмную
+  тему, safe-area, мобильную ширину, крупные touch targets и системную кнопку
+  BackButton. Закрывающий confirmation включай только при несохранённых данных.
+• `requestContact` и другие чувствительные действия вызывай только по явному
+  клику пользователя с понятным объяснением.
+• Webhook обязан быстро вернуть HTTP 200; тяжёлую работу выноси из request path.
+  Повторные события дедуплицируй по event key в `max_webhook_events`.
+• Не добавляй Auth.js, отдельный login/password или Telegram-бота: личность уже
+  подтверждает MAX. Не модифицируй package.json/Dockerfile/next.config без прямой
+  необходимости — production-контракт принадлежит orchestrator-у."""
+
 _TGBOT_STACK = """\
 СТЕК — TELEGRAM-БОТ НА AIOGRAM 3 (Python 3.12, long-polling, без webhook).
 Контейнер крутится с aiogram-event-loop + aiohttp health-сервер на :3000
@@ -3207,7 +3237,7 @@ _PALETTE_TAIL_REMINDER = """\
 # stack: layout rigor, palette, style preset, visual-richness, image
 # generation toggles. The other two container-backed templates (tgbot/api)
 # are pure backend and don't get any of that.
-_VISUAL_TEMPLATES = {"fullstack", "nextjs_entities", "spa"}
+_VISUAL_TEMPLATES = {"fullstack", "nextjs_entities", "spa", "max_miniapp"}
 # Templates that are backend-only — Python + asyncio + Postgres. They
 # skip every visual block; their `_STACK` text is the entire stack
 # guidance.
@@ -3293,6 +3323,7 @@ _BRIEF_ONLY_DROP: frozenset[str] = frozenset({
     _ENTITIES_STACK,
     _ENTITIES_UI,
     _SPA_STACK,
+    _MAX_MINIAPP_STACK,
     _TGBOT_STACK,
     _API_STACK,
 })
@@ -3510,10 +3541,11 @@ def build_system_prompt(
 ) -> str:
     """Собрать system prompt под тип проекта.
 
-    Семь веток:
+    Восемь веток:
     * ``fullstack`` (Next.js + Postgres + Drizzle + Auth.js) — _FULLSTACK_STACK
     * ``nextjs_entities`` (Base44-style entity engine + generative frontend) — _ENTITIES_STACK
     * ``spa`` (Vite + React + react-router) — _SPA_STACK
+    * ``max_miniapp`` (MAX Bridge/UI + Bot API + webhook) — _MAX_MINIAPP_STACK
     * ``tgbot`` (aiogram 3 + asyncpg) — _TGBOT_STACK, бэкенд only
     * ``api`` (FastAPI + SQLAlchemy 2 + JWT) — _API_STACK, бэкенд only
     * ``blank/landing/portfolio/blog`` — _STATIC_STACK + _ANIMATION_KIT
@@ -3656,6 +3688,25 @@ def build_system_prompt(
             image_block,
             _FUNCTIONAL_CONTRACT,
             _SPA_STACK,
+            _SELF_CHECK,
+            _PALETTE_TAIL_REMINDER,
+            _RESPONSE,
+        )
+    elif template == "max_miniapp":
+        sections = (
+            *((lang_block,) if lang_block else ()),
+            _IDENTITY,
+            *((design_anchor,) if design_anchor else ()),
+            _ART_DIRECTOR,
+            _TASTE_CODEX,
+            _QUALITY_BAR,
+            _COPY_RULES,
+            _LAYOUT_RIGOR,
+            *((_DESIGN_KIT,) if include_design_kit else ()),
+            *((preset_block,) if preset_block else ()),
+            image_block,
+            _FUNCTIONAL_CONTRACT,
+            _MAX_MINIAPP_STACK,
             _SELF_CHECK,
             _PALETTE_TAIL_REMINDER,
             _RESPONSE,
@@ -4236,7 +4287,7 @@ def _build_edit_messages(
     if is_imported:
         # Generic identity: arbitrary stack, byte-exact SEARCH/REPLACE only.
         _blocks: list[str] = [_EDIT_IDENTITY_GENERIC, _EDIT_FAITHFUL, _EDIT_RESPONSE]
-    elif template in ("fullstack", "nextjs_entities", "spa"):
+    elif template in ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp"):
         _blocks = [_EDIT_IDENTITY_NEXT, _EDIT_FAITHFUL, _EDIT_RESPONSE_NEXT]
         # Give-it-functionality (DARK): on an add-functionality ask, teach the
         # model to scaffold a COMPLETE feature (entity JSON + CrudResource route +

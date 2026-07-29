@@ -182,6 +182,7 @@ async def deploy(
     commit_sha: str | None = None,
     target: dict[str, Any] | None = None,
     domains: list[str] | None = None,
+    runtime_env: dict[str, str] | None = None,
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """POST /internal/projects/deploy — build prod image + swap traffic.
@@ -198,6 +199,8 @@ async def deploy(
         payload["target"] = target
     if domains:
         payload["domains"] = domains
+    if runtime_env:
+        payload["runtime_env"] = runtime_env
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
     return await _request("POST", "/internal/projects/deploy", json=payload)

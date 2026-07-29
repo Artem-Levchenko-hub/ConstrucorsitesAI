@@ -7,6 +7,7 @@ from omnia_api.models.hero_media_asset import HeroMediaAsset
 from omnia_api.models.hero_media_brief import HeroMediaBrief
 from omnia_api.models.hero_media_render import HeroMediaRender
 from omnia_api.models.lead import Lead
+from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
@@ -25,6 +26,7 @@ __all__ = [
     "HeroMediaBrief",
     "HeroMediaRender",
     "Lead",
+    "MaxIntegration",
     "Message",
     "Project",
     "Snapshot",

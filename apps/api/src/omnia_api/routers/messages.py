@@ -2088,7 +2088,7 @@ _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 # is the Vite + React no-backend stack (Phase 7.2) — despite the historical name,
 # it's container-backed and file-extracted, so it belongs to this group, not the
 # freeform-HTML path. (tgbot/api are backend-only and handled elsewhere.)
-CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime")
+CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
 
 
 # A6a — managed auth columns the AI must never drop when it rewrites
@@ -5833,7 +5833,16 @@ async def _process_prompt(
             files
             and not surgical
             and project_template
-            not in ("fullstack", "nextjs_entities", "spa", "tgbot", "api", "code")
+            not in (
+                "fullstack",
+                "nextjs_entities",
+                "spa",
+                "tgbot",
+                "api",
+                "code",
+                "realtime",
+                "max_miniapp",
+            )
             and _acc_settings.use_acceptance_gate
             and _gen_mode in ("freeform", "catalog")
         ):

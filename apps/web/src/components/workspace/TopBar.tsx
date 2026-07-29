@@ -33,6 +33,7 @@ import { GithubPushButton } from "./GithubPushButton";
 import { ImageGenToggle } from "./ImageGenToggle";
 import { LeadsButton } from "./LeadsButton";
 import { LogsViewer } from "./LogsViewer";
+import { MaxIntegrationButton } from "./MaxIntegrationButton";
 import { PublishButton } from "./PublishButton";
 import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
@@ -46,6 +47,7 @@ export function TopBar({
   imageGenEnabled,
   remixSource = null,
   importedRepoUrl = null,
+  projectTemplate,
   showProjectControls = true,
 }: {
   user: { email: string };
@@ -66,6 +68,7 @@ export function TopBar({
   designPresetName?: string;
   /** Per-project: auto image-generation via gpt-image-1. Default true. */
   imageGenEnabled?: boolean;
+  projectTemplate?: string;
   showProjectControls?: boolean;
 }) {
   const initial = user.email.slice(0, 1).toUpperCase();
@@ -126,6 +129,12 @@ export function TopBar({
           <>
             {projectId && <RuntimeButton projectId={projectId} />}
             {projectId && <DeploySettingsButton projectId={projectId} />}
+            {projectId && (
+              <MaxIntegrationButton
+                projectId={projectId}
+                initialTemplate={projectTemplate}
+              />
+            )}
             {projectId && (
               <DownloadButton projectId={projectId} projectSlug={projectSlug} />
             )}

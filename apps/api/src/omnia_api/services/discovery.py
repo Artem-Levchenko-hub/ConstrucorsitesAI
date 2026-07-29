@@ -52,7 +52,15 @@ _ZERO_QUESTION_MIN_AXES = 2
 # INTERACTIVE tool/app that needs real build tooling but no accounts/DB — see the
 # stack-choice rules in ``_SYSTEM`` (Phase 7.2 multi-stack).
 _STACKS: frozenset[str] = frozenset(
-    {"static", "fullstack", "nextjs_entities", "spa", "code", "realtime"}
+    {
+        "static",
+        "fullstack",
+        "nextjs_entities",
+        "spa",
+        "code",
+        "realtime",
+        "max_miniapp",
+    }
 )
 _DEFAULT_STACK = "static"
 
@@ -262,6 +270,28 @@ def _infer_realtime_from_text(text: str) -> bool:
     ):
         return True
     return False
+
+
+_MAX_MINIAPP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\bмини[- ]?приложени\w*\s+(?:в|для)\s+(?:мессенджер\w*\s+)?max\b",
+        re.I,
+    ),
+    re.compile(r"\b(?:max|макс)\s+мини[- ]?приложени\w*\b", re.I),
+    re.compile(r"\bmini[- ]?app\s+(?:for\s+)?max\b", re.I),
+    re.compile(r"\bmax\s+mini[- ]?app\b", re.I),
+    re.compile(r"\bприложени\w*\s+(?:в|для)\s+мессенджер\w*\s+(?:max|макс)\b", re.I),
+    re.compile(
+        r"\b(?:бот|магазин|сервис)\w*\s+(?:в|для|внутри)\s+"
+        r"(?:мессенджер\w*\s+)?max\b",
+        re.I,
+    ),
+)
+
+
+def _infer_max_miniapp_from_text(text: str) -> bool:
+    """Route explicit MAX-platform products without matching a bare CSS `max-*`."""
+    return any(pattern.search(text or "") for pattern in _MAX_MINIAPP_PATTERNS)
 
 
 # App-ification framing (P-H1, owner 2026-06-21). On a FOLLOW-UP, an UNMISTAKABLE
@@ -779,7 +809,11 @@ def zero_question_build(
     # default. Static is opt-in (owner 2026-06-18) — a richly-specified first prompt
     # is a real site/app, so it builds as `spa`, never flat static, unless the user
     # explicitly asked for a plain HTML page.
-    stack = _infer_code_from_text(intent_text) or _infer_stack_from_text(intent_text)
+    stack = (
+        "max_miniapp"
+        if _infer_max_miniapp_from_text(intent_text)
+        else _infer_code_from_text(intent_text) or _infer_stack_from_text(intent_text)
+    )
     if stack is None:
         stack = "static" if _explicit_static(intent_text) else "spa"
     log.info(
@@ -824,6 +858,9 @@ _SYSTEM = (
     "контроль доступа по участникам + presence). Если СУТЬ продукта — мгновенный обмен "
     "сообщениями/событиями между людьми, это \"realtime\", а НЕ \"nextjs_entities\" "
     "(таблица сообщений ≠ живой чат).\n"
+    "- \"max_miniapp\" — мини-приложение именно ВНУТРИ мессенджера MAX: MAX Bridge, "
+    "MAX UI, MAX Bot API и webhook. Выбирай только при явном упоминании платформы "
+    "MAX; не путай с обычным мессенджером или CSS max-width.\n"
     "- \"static\" — ТОЛЬКО если пользователь ЯВНО просит простую СТАТИЧНУЮ "
     "HTML-страницу («просто html», «статичная страница», «без интерактива/без js»). "
     "Обычный лендинг/портфолио/блог сюда НЕ относится — это \"spa\". Не выбирай "
@@ -855,7 +892,7 @@ _SYSTEM = (
     '{"action":"build","message":"<короткая фраза: «Отлично, собираю…»>",'
     '"brief":"<сжатый бриф для генератора на русском: тип продукта, цель, '
     'аудитория, обязательные разделы/возможности, тон, цвета/референс, важные '
-    'детали>","stack":"static|spa|nextjs_entities|realtime|fullstack|code"}'
+    'детали>","stack":"static|spa|nextjs_entities|realtime|max_miniapp|fullstack|code"}'
 )
 
 
@@ -1494,6 +1531,17 @@ async def run_discovery(
         ):
             log.info("discovery: stack '%s'→'realtime' (live/chat intent, G001)", stack)
             stack = "realtime"
+        # Platform-specific routing wins over the generic "messenger" realtime
+        # signal. This is intentionally last: MAX Mini Apps need Bridge/Bot API,
+        # not the standalone SSE messenger substrate.
+        if (
+            _infer_max_miniapp_from_text(intent_text)
+            and not _static_req
+            and not code_inferred
+            and stack != "max_miniapp"
+        ):
+            log.info("discovery: stack '%s'→'max_miniapp' (explicit MAX platform)", stack)
+            stack = "max_miniapp"
         # Static is opt-in (owner 2026-06-18: «убрать статику, оставляем только
         # если задача явно требует»). Anything that ended up `static` but isn't an
         # EXPLICIT request for a plain HTML page becomes `spa` (interactive React) —

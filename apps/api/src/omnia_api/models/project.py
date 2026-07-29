@@ -119,7 +119,8 @@ class Project(Base):
         # language, file-only, no container) since 0017.
         CheckConstraint(
             "template IN ('blank', 'landing', 'portfolio', 'blog', "
-            "'fullstack', 'nextjs_entities', 'spa', 'tgbot', 'api', 'code')",
+            "'fullstack', 'nextjs_entities', 'spa', 'tgbot', 'api', 'code', "
+            "'realtime', 'max_miniapp')",
             name="ck_projects_template_allowed",
         ),
         Index("ix_projects_owner_id_created_at", "owner_id", "created_at"),

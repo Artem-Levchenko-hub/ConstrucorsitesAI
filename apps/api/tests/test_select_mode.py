@@ -198,5 +198,6 @@ def test_every_supported_container_web_stack_has_style_persistence() -> None:
         "fullstack": "src/app/globals.css",
         "nextjs_entities": "src/app/globals.css",
         "realtime": "src/app/globals.css",
+        "max_miniapp": "src/app/globals.css",
         "spa": "src/index.css",
     }

@@ -373,6 +373,7 @@ _NEXT_MARKER = "Server Actions"  # "use server" directive — Next-only primitiv
 _SPA_MARKER = "react-router-dom v7"  # SPA's routing lib version
 _TGBOT_MARKER = "long-polling"  # aiogram's update-pull mode
 _API_MARKER = "SQLAlchemy 2"  # async ORM version we ship
+_MAX_MARKER = "MAX Bridge"
 
 
 def test_fullstack_prompt_routes_to_next_stack() -> None:
@@ -410,6 +411,16 @@ def test_api_prompt_routes_to_api_stack() -> None:
     assert _NEXT_MARKER not in sp
     assert _SPA_MARKER not in sp
     assert _TGBOT_MARKER not in sp
+
+
+def test_max_miniapp_prompt_routes_to_platform_stack() -> None:
+    sp = build_system_prompt("max_miniapp")
+    assert _MAX_MARKER in sp
+    assert "MAX_BOT_TOKEN" in sp
+    assert "requireMaxUser()" in sp
+    assert "Telegram WebApp API" in sp
+    assert _TGBOT_MARKER not in sp
+    assert _SPA_MARKER not in sp
 
 
 def test_entities_public_landing_mandates_real_photos_and_public_access() -> None:

@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/projects", tags=["rollback"])
 # on the live preview). Static templates (blank/landing/portfolio/blog) have no
 # persistent container — their preview re-renders from repo files, so they roll
 # back correctly without this. Kept in sync with messages.py `CONTAINER_NEXT`.
-_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime")
+_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
 
 
 def with_rollback_deletions(

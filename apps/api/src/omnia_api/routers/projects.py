@@ -27,6 +27,7 @@ from omnia_api.core.security import create_access_token
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.lead import Lead
+from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
@@ -39,7 +40,7 @@ from omnia_api.schemas.project import (
     ProjectUpdate,
     is_fullstack,
 )
-from omnia_api.services import orchestrator_client, repo_import
+from omnia_api.services import max_client, orchestrator_client, repo_import
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.fork_recap import build_fork_recap
@@ -697,6 +698,24 @@ async def delete_project(
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     if project.owner_id != current_user.id:
         raise ApiError("forbidden", "not your project", status.HTTP_403_FORBIDDEN)
+
+    max_integration = (
+        await session.execute(
+            select(MaxIntegration).where(MaxIntegration.project_id == project.id)
+        )
+    ).scalar_one_or_none()
+    if max_integration is not None and max_integration.webhook_url:
+        try:
+            await max_client.unsubscribe(
+                decrypt_strong(max_integration.bot_token_enc),
+                max_integration.webhook_url,
+            )
+        except max_client.MaxClientError as exc:
+            raise ApiError(
+                "max_webhook_failed",
+                f"Не удалось отключить webhook MAX: {exc}",
+                status.HTTP_502_BAD_GATEWAY,
+            ) from exc
 
     remote_target_ids = {
         target_id

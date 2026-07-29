@@ -34,6 +34,7 @@ export type ProjectTemplate =
   // Next.js on the `nextjs-realtime` substrate (SSE+Redis hub + membership ACL
   // + presence). Preview points at the live container, same as fullstack.
   | "realtime"
+  | "max_miniapp"
   // Vite + React SPA, no backend (the interactive escape hatch). Container-backed
   // WEB stack → preview points at the live dev container and «Код» uses the
   // agent-step live tree, same as fullstack. Kept in sync with the backend
@@ -475,7 +476,28 @@ export type ApiErrorCode =
   | "github_state_invalid"
   | "github_state_expired"
   | "github_unavailable"
-  | "project_empty";
+  | "project_empty"
+  | "max_integration_not_found"
+  | "max_token_invalid"
+  | "max_api_unavailable"
+  | "max_project_required"
+  | "max_deploy_required"
+  | "max_webhook_failed";
+
+export type MaxIntegration = {
+  eligible: boolean;
+  connected: boolean;
+  status: "disconnected" | "verified" | "active" | "error";
+  bot_id: string | null;
+  bot_name: string | null;
+  bot_username: string | null;
+  app_url: string | null;
+  webhook_url: string | null;
+  deep_link: string | null;
+  last_error: string | null;
+  verified_at: IsoDateTime | null;
+  published_at: IsoDateTime | null;
+};
 
 // === GitHub OAuth + Push (apps/api/src/omnia_api/schemas/github.py) ===
 

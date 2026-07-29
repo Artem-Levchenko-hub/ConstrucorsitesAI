@@ -39,6 +39,7 @@ _CONTAINER_STYLE_PATH = {
     "fullstack": "src/app/globals.css",
     "nextjs_entities": "src/app/globals.css",
     "realtime": "src/app/globals.css",
+    "max_miniapp": "src/app/globals.css",
     "spa": "src/index.css",
 }
 

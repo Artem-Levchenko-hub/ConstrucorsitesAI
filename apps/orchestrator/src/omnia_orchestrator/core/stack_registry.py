@@ -81,6 +81,11 @@ STACKS: dict[str, StackSpec] = {
         production_dockerfile="Dockerfile.prod",
         needs_database=True,
     ),
+    "max-miniapp-nextjs": _stack(
+        "max-miniapp-nextjs",
+        production_dockerfile="Dockerfile.prod",
+        needs_database=True,
+    ),
     "vite-react-spa": _stack(
         "vite-react-spa",
         production_dockerfile="Dockerfile.prod",

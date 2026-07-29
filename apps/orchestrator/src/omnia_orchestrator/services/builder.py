@@ -93,6 +93,11 @@ def _resolve_runtime_dsn(project_id: str) -> str:
 # project seeds its prod build context from the entities template, not this one.
 _DEFAULT_TEMPLATE = "nextjs-postgres-drizzle"
 
+
+def _is_next_template(template: str) -> bool:
+    return template.startswith("nextjs-") or template == "max-miniapp-nextjs"
+
+
 # Prod build config the orchestrator forces into every deploy. AI-generated
 # code very often has TS/ESLint errors that `next dev` (the live preview)
 # tolerates but `next build` rejects — without this a single stray type error
@@ -129,6 +134,7 @@ async def start_deploy(
     target: dict[str, object] | None = None,
     domains: list[str] | None = None,
     idempotency_key: str | None = None,
+    runtime_env: dict[str, str] | None = None,
 ) -> deploy_state.DeployRecord:
     """Resolve the project's dev container and launch a background deploy.
 
@@ -165,7 +171,15 @@ async def start_deploy(
     rec.prod_url = None if target else nginx_writer.prod_url(resolved_slug)
 
     task = asyncio.create_task(
-        _run(project_id, resolved_slug, dev_name, target, domains, rec.run_id)
+        _run(
+            project_id,
+            resolved_slug,
+            dev_name,
+            target,
+            domains,
+            rec.run_id,
+            dict(runtime_env or {}),
+        )
     )
     _bg_tasks.add(task)
     _project_tasks[project_id] = task
@@ -216,6 +230,7 @@ async def _deploy_remote(
     domains: list[str] | None = None,
     run_id: str = "",
     template: str = _DEFAULT_TEMPLATE,
+    runtime_env: dict[str, str] | None = None,
 ) -> None:
     """Развернуть уже собранный образ `tag` на чужом VPS (BYO-VPS).
 
@@ -240,6 +255,7 @@ async def _deploy_remote(
         "AUTH_SECRET": auth_secret,
         "AUTH_URL": app_url,
         "AUTH_TRUST_HOST": "true",
+        **(runtime_env or {}),
     }
     result = await remote_deploy.deploy_to_target(
         creds=target,
@@ -362,6 +378,7 @@ async def _run(
     target: dict[str, object] | None = None,
     domains: list[str] | None = None,
     run_id: str = "",
+    runtime_env: dict[str, str] | None = None,
 ) -> None:
     build_dir = Path(tempfile.mkdtemp(prefix=f"omnia-build-{slug}-"))
     try:
@@ -378,6 +395,7 @@ async def _run(
         template = await docker_client.container_image_template(dev_name) or _DEFAULT_TEMPLATE
         log.info("deploy.template", project_id=project_id, template=template)
         stack = get_stack(template)
+        is_next_template = _is_next_template(template)
         if stack.production_dockerfile is None:
             raise OrchestratorError(
                 code="unsupported_stack",
@@ -402,7 +420,7 @@ async def _run(
 
         # 2b. Force a prod-safe next.config (tolerate AI type/lint errors +
         # standalone output). Overwrites any config the overlay brought in.
-        if template.startswith("nextjs-"):
+        if is_next_template:
             for stale in ("next.config.js", "next.config.mjs"):
                 (build_dir / stale).unlink(missing_ok=True)
             (build_dir / "next.config.ts").write_text(_PROD_NEXT_CONFIG, encoding="utf-8")
@@ -412,7 +430,7 @@ async def _run(
         # page-data collection. `next build` reads .env.production; the
         # standalone runtime does NOT read .env files (it uses the container env
         # we inject), so this placeholder never reaches production.
-        if template.startswith("nextjs-"):
+        if is_next_template:
             (build_dir / ".env.production").write_text(
                 f"DATABASE_URL={_DB_PLACEHOLDER}\n", encoding="utf-8"
             )
@@ -420,7 +438,7 @@ async def _run(
         # 2d. Dockerfile.prod has `COPY /app/public ./public`; the template
         # ships no public/ and a generated project may lack one too — ensure it
         # exists so the image build doesn't fail on a missing COPY source.
-        if template.startswith("nextjs-"):
+        if is_next_template:
             public_dir = build_dir / "public"
             public_dir.mkdir(exist_ok=True)
             (public_dir / ".gitkeep").touch()
@@ -456,7 +474,16 @@ async def _run(
             await publish_project_event(
                 project_id, "deploy.progress", {"phase": "pushing", "slug": slug}
             )
-            await _deploy_remote(project_id, slug, tag, target, domains, run_id, template)
+            await _deploy_remote(
+                project_id,
+                slug,
+                tag,
+                target,
+                domains,
+                run_id,
+                template,
+                runtime_env,
+            )
             return
 
         # 4. Run the new prod container, replacing any previous one.
@@ -488,6 +515,7 @@ async def _run(
                 "AUTH_SECRET": auth_secret,
                 "AUTH_URL": prod_origin,
                 "AUTH_TRUST_HOST": "true",
+                **(runtime_env or {}),
             },
             cpu_quota=1.0,
             memory_mb=1024,
@@ -554,6 +582,8 @@ async def _run(
     finally:
         if target is not None:
             target.clear()
+        if runtime_env is not None:
+            runtime_env.clear()
         shutil.rmtree(build_dir, ignore_errors=True)
 
 

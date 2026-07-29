@@ -27,6 +27,7 @@ from omnia_api.schemas.project import (
         ("spa", "vite-react-spa"),
         ("tgbot", "telegram-bot-aiogram"),
         ("api", "fastapi-postgres"),
+        ("max_miniapp", "max-miniapp-nextjs"),
     ],
 )
 def test_container_backed_templates_map_to_directory(
@@ -53,7 +54,7 @@ def test_unknown_template_returns_none() -> None:
 
 
 @pytest.mark.parametrize(
-    "container_template", ["fullstack", "spa", "tgbot", "api"]
+    "container_template", ["fullstack", "spa", "tgbot", "api", "max_miniapp"]
 )
 def test_is_fullstack_true_for_container_backed(container_template: str) -> None:
     assert is_fullstack(container_template) is True
@@ -74,7 +75,7 @@ def test_every_orchestrator_template_directory_exists_on_disk() -> None:
     # apps/api/tests/test_template_mapping.py → repo_root/apps/orchestrator/templates
     repo_root = Path(__file__).resolve().parents[3]
     templates_dir = repo_root / "apps" / "orchestrator" / "templates"
-    for api_value in ("fullstack", "spa", "tgbot", "api"):
+    for api_value in ("fullstack", "spa", "tgbot", "api", "max_miniapp"):
         directory = orchestrator_template(api_value)
         assert directory is not None
         candidate = templates_dir / directory
@@ -90,7 +91,7 @@ def test_template_literal_includes_new_values() -> None:
     from typing import get_args
 
     values = set(get_args(Template))
-    assert {"fullstack", "spa", "tgbot", "api"} <= values
+    assert {"fullstack", "spa", "tgbot", "api", "max_miniapp"} <= values
     assert {"blank", "landing", "portfolio", "blog"} <= values
     assert "code" in values  # owner 2026-06-18: language-agnostic source
 

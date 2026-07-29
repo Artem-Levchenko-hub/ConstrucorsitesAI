@@ -54,6 +54,7 @@ _DISCOVERY_STACK_TO_TEMPLATE: dict[str, str] = {
     # flip-template path as nextjs_entities/spa (init_repo treats the missing
     # `templates/realtime` dir as an empty starter; the agent authors on top).
     "realtime": "realtime",
+    "max_miniapp": "max_miniapp",
     # `code` (owner 2026-06-18) — language-agnostic source. NOT container-backed
     # (``is_fullstack``/``orchestrator_template`` omit it) and it has NO scaffold
     # dir under ``templates/`` — the writer creates every file into the project's

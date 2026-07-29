@@ -43,6 +43,7 @@ Template = Literal[
     "api",
     "code",
     "realtime",
+    "max_miniapp",
 ]
 
 # Map from API-side `template` value → orchestrator's template directory
@@ -58,6 +59,7 @@ _ORCHESTRATOR_TEMPLATE_BY_API: dict[str, str] = {
     # G001 — real-time stack: Next.js 15 + SSE/Redis pub-sub hub + membership ACL
     # + presence (messengers, live-chat CRMs). Template dir: templates/nextjs-realtime.
     "realtime": "nextjs-realtime",
+    "max_miniapp": "max-miniapp-nextjs",
 }
 
 
