@@ -154,6 +154,7 @@ async def provision(
     template: str,
     tier: str = "free",
     initial_env: dict[str, str] | None = None,
+    timeout: float = 30.0,  # noqa: ASYNC109 - outbound request deadline
 ) -> dict[str, Any]:
     """POST /internal/projects/provision — first-time scaffold + start."""
     payload: dict[str, Any] = {
@@ -164,7 +165,12 @@ async def provision(
     }
     if initial_env:
         payload["initial_env"] = initial_env
-    return await _request("POST", "/internal/projects/provision", json=payload)
+    return await _request(
+        "POST",
+        "/internal/projects/provision",
+        json=payload,
+        timeout=timeout,
+    )
 
 
 async def stop(project_id: UUID, *, pause: bool = True) -> dict[str, Any]:

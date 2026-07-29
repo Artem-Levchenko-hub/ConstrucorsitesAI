@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SelectedElement(BaseModel):
@@ -39,6 +39,16 @@ class MessagePublic(BaseModel):
     # frontend AgentStep type validates the shape.
     agent_steps: list[dict[str, Any]] | None = None
     created_at: datetime
+
+    @field_validator("agent_steps", mode="before")
+    @classmethod
+    def redact_agent_steps(cls, value: object) -> list[dict[str, Any]] | None:
+        # Defense in depth for historical rows written before live redaction was
+        # introduced.  The database scrub removes the originals; this validator
+        # guarantees that an unsanitized row can never cross the public API.
+        from omnia_api.services.agent_progress import sanitize_agent_steps
+
+        return sanitize_agent_steps(value)
 
 
 class PromptRequest(BaseModel):
@@ -105,6 +115,18 @@ class PromptResponse(BaseModel):
     run_id: UUID
     message_id: UUID
     snapshot_id: UUID | None = None
+    # Replayed requests share the original run rather than creating a second
+    # generation.  A terminal status lets the browser discard its optimistic
+    # spinner immediately after an accidental F5 replay.
+    replayed: bool = False
+    run_status: Literal[
+        "pending",
+        "running",
+        "cancel_requested",
+        "cancelled",
+        "completed",
+        "failed",
+    ] = "pending"
     # How the server will handle this turn, so the workspace can set the right
     # expectation immediately (before any WS event):
     #   "build"   — full (re)generation of the page (first prompt / rebuild)

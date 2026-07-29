@@ -41,6 +41,7 @@
 |---|---|---|---|
 | `POST` | `/api/projects/:id/prompt` | `{prompt: string, idempotency_key?: string, model_id?: string, selected_elements?: SelectedElement[]}` | `{run_id, message_id, snapshot_id?, mode, ...}` (snapshot_id появится позже через WS) |
 | `POST` | `/api/projects/:id/generation/cancel` | — | `GenerationRun` со статусом `cancel_requested` (202) |
+| `GET` | `/api/projects/:id/generation` | — | Последний durable `GenerationRun` или `null`; используется для восстановления реального статуса после перезагрузки |
 | `GET` | `/api/projects/:id/snapshots` | — | `Snapshot[]` (DESC по `created_at`) |
 | `GET` | `/api/projects/:id/snapshots/:sid` | — | `Snapshot & { files: { [path]: string } }` |
 | `POST` | `/api/projects/:id/rollback` | `{snapshot_id}` | `Snapshot` (новый — результат отката) |

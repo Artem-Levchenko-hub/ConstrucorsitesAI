@@ -13,6 +13,7 @@ contracts (request/response schemas) are stable and consumed by apps/api today.
 from __future__ import annotations
 
 import os
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Header
@@ -560,6 +561,50 @@ async def agent_build(
 # a follow-up; today outbound is open.) A small denylist blocks the obvious
 # foot-guns. Lets the agent run npm install / lint / tests / the dev server.
 _EXEC_DENY = ("rm -rf /", ":(){", "mkfs", "dd if=", "/dev/sd", "shutdown", "reboot")
+_EXEC_ENV_ENUM_RE = re.compile(
+    r"""(?ix)
+    \b(?:env|printenv)\b
+    |
+    (?:^|[;&|]\s*)(?:export|set|declare\s+-x)(?:\s*(?:$|[;&|]))
+    |
+    /proc/[^\s]*/environ
+    |
+    \b(?:process\.env|os\.environ|os\.getenv)\b
+    |
+    (?:^|[\s/])\.env(?:\.[\w.-]+)?(?:\s|$)
+    |
+    \$\{?[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASS|PRIVATE_KEY|ACCESS_KEY|API_KEY|DATABASE_URL)[A-Z0-9_]*\}?
+    """
+)
+_EXEC_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?im)^(\s*(?:export\s+)?[A-Z0-9_]*"
+    r"(?:SECRET|TOKEN|PASSWORD|PASS|PRIVATE_KEY|ACCESS_KEY|API_KEY|DATABASE_URL)"
+    r"[A-Z0-9_]*\s*=\s*)([^\r\n]*)$"
+)
+_EXEC_DSN_RE = re.compile(
+    r"(?i)\b((?:postgres(?:ql)?|mysql|mariadb|redis|mongodb)"
+    r"(?:\+[a-z0-9_]+)?://[^:\s/@]+:)([^@\s/]+)(@)"
+)
+_EXEC_AUTH_HEADER_RE = re.compile(
+    r"(?im)^(\s*(?:authorization|x-api-key|x-max-bot-api-secret)\s*:\s*)"
+    r"([^\r\n]+)$"
+)
+_EXEC_KNOWN_TOKEN_RE = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})\b")
+_EXEC_PRIVATE_KEY_RE = re.compile(
+    r"(?s)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----"
+)
+
+
+def _redact_exec_output(value: str) -> str:
+    redacted = _EXEC_SECRET_ASSIGNMENT_RE.sub(r"\1[REDACTED]", value)
+    redacted = _EXEC_DSN_RE.sub(r"\1[REDACTED]\3", redacted)
+    redacted = _EXEC_AUTH_HEADER_RE.sub(r"\1[REDACTED]", redacted)
+    redacted = _EXEC_KNOWN_TOKEN_RE.sub("[REDACTED]", redacted)
+    return _EXEC_PRIVATE_KEY_RE.sub("[REDACTED PRIVATE KEY]", redacted)
+
+
+def _command_exposes_environment(cmd: str) -> bool:
+    return bool(_EXEC_ENV_ENUM_RE.search(cmd.strip()))
 
 
 @router.post("/{project_id}/agent/exec")
@@ -581,6 +626,11 @@ async def agent_exec(
         )
     if any(bad in low for bad in _EXEC_DENY):
         return {"ok": False, "detail": "command blocked by safety denylist"}
+    if _command_exposes_environment(low):
+        return {
+            "ok": False,
+            "detail": "command blocked: environment and secret enumeration is not allowed",
+        }
     container_name = f"omnia-dev-{slug}"
     try:
         result = await exec_cmd(
@@ -595,7 +645,7 @@ async def agent_exec(
             raise
         return {"ok": False, "detail": exc.message}
     ok = result["exit_code"] == "0"
-    out = (result["stdout"] + "\n" + result["stderr"]).strip()
+    out = _redact_exec_output((result["stdout"] + "\n" + result["stderr"]).strip())
     return {
         "ok": ok,
         "exit_code": result["exit_code"],

@@ -73,9 +73,7 @@ def discovery_stack_to_template(stack: str) -> str | None:
     return _DISCOVERY_STACK_TO_TEMPLATE.get((stack or "").strip().lower())
 
 
-async def switch_to_stack(
-    session: object, project: Project, stack: str
-) -> UUID | None:
+async def switch_to_stack(session: object, project: Project, stack: str) -> UUID | None:
     """Switch a still-static project to the container stack discovery picked.
 
     Flips ``project.template``, re-scaffolds the project's git from the matching
@@ -102,9 +100,7 @@ async def switch_to_stack(
     # path as entities/spa: flip template, init (empty) repo, new starter snapshot.
     template_dir = TEMPLATES_DIR / target
     # pygit2 + MinIO upload are blocking — keep them off the event loop.
-    commit_sha = await asyncio.to_thread(
-        repo_svc.init_repo, project.id, template_dir, target
-    )
+    commit_sha = await asyncio.to_thread(repo_svc.init_repo, project.id, template_dir, target)
 
     snapshot = Snapshot(
         project_id=project.id,
@@ -160,9 +156,7 @@ async def pivot_code_to_web(session: object, project: Project) -> bool:
     return True
 
 
-async def pivot_static_to_app(
-    session: object, project: Project, stack: str
-) -> str | None:
+async def pivot_static_to_app(session: object, project: Project, stack: str) -> str | None:
     """Escalate a STATIC project to a container app on a FOLLOW-UP (P-H1).
 
     The H1 blind spot (owner: «написал "создай сайт" → статика; кинул 5 промптов
@@ -210,28 +204,48 @@ async def pivot_static_to_app(
     return target
 
 
-async def ensure_provisioned(project_id: UUID, slug: str, template: str) -> bool:
+async def ensure_provisioned(
+    project_id: UUID,
+    slug: str,
+    template: str,
+    *,
+    require_ready: bool = False,
+) -> bool:
     """Provision the project's orchestrator dev container if the stack needs one.
 
     No-op (returns ``False``) for static templates. For container templates calls
     the orchestrator's idempotent ``provision`` (safe to call when the container
-    already exists). Fail-soft: any orchestrator error is logged and swallowed —
-    the build proceeds and the post-build ``hot_reload`` (or a manual «Запустить»)
-    retries. Returns ``True`` when provisioning was attempted and succeeded.
+    already exists). Normal background warming remains fail-soft. Agentic builds
+    pass ``require_ready=True``: they wait through cold image provisioning and
+    fail before invoking the model if no running container is available.
     """
     orch_template = orchestrator_template(template)
     if orch_template is None:
         return False  # static — no container
     try:
-        await orchestrator_client.provision(
+        payload = await orchestrator_client.provision(
             project_id=project_id,
             slug=slug,
             template=orch_template,
             tier="free",
+            # A stale template image can legitimately take several minutes to
+            # rebuild. The prompt itself is already a background run, so waiting
+            # here is safe and prevents the agent working against no container.
+            timeout=420.0 if require_ready else 30.0,
         )
+        if require_ready and payload.get("state") != "running":
+            raise RuntimeError(f"runtime did not become ready (state={payload.get('state')!r})")
         log.info("stack_routing: provisioned %s (%s)", project_id, orch_template)
         return True
     except Exception as exc:
+        if require_ready:
+            log.error(
+                "stack_routing: required runtime failed for %s (%s): %r",
+                project_id,
+                orch_template,
+                exc,
+            )
+            raise
         log.warning(
             "stack_routing: provision failed for %s (%s) — build continues: %r",
             project_id,

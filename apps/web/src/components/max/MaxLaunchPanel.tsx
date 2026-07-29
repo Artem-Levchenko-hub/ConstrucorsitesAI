@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import {
+  AlertCircle,
   Bot,
   Check,
   Circle,
@@ -14,6 +15,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { getMaxIntegration } from "@/lib/api/max-integration";
+import { getLatestGeneration } from "@/lib/api/messages";
 import { getLastDeploy } from "@/lib/api/runtime";
 import { listSnapshots } from "@/lib/api/snapshots";
 import type { Project } from "@/lib/api/types";
@@ -27,6 +29,7 @@ type LaunchStep = {
   description: string;
   done: boolean;
   active?: boolean;
+  error?: boolean;
 };
 
 export function MaxLaunchPanel({ project }: { project: Project }) {
@@ -51,6 +54,16 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
     queryKey: ["snapshots", project.id],
     queryFn: () => listSnapshots(project.id),
   });
+  const generation = useQuery({
+    queryKey: ["generation", project.id],
+    queryFn: () => getLatestGeneration(project.id),
+    refetchInterval: (query) =>
+      ["pending", "running", "cancel_requested"].includes(
+        query.state.data?.status ?? "",
+      )
+        ? 1_500
+        : false,
+  });
 
   const connected = integration.data?.connected === true;
   const published = deploy.data?.phase === "done" && !!deploy.data.prod_url;
@@ -58,32 +71,57 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
   const busyDeploy = ["building", "pushing", "swapping", "cancelling"].includes(
     deploy.data?.phase ?? "",
   );
-  const generated = (snapshots.data ?? []).some(
+  const hasGeneratedSnapshot = (snapshots.data ?? []).some(
     (snapshot) => snapshot.prompt_text !== null,
   );
+  const generationActive = ["pending", "running", "cancel_requested"].includes(
+    generation.data?.status ?? "",
+  );
+  const latestBuildFailed =
+    generation.data?.response_mode === "build" &&
+    generation.data.status === "failed";
+  const buildReady = hasGeneratedSnapshot && !generationActive;
   const steps: LaunchStep[] = [
     {
-      label: "Приложение собрано",
-      description: "Проверьте экраны в мобильном превью.",
-      done: generated,
+      label: generationActive
+        ? hasGeneratedSnapshot
+          ? "Обновляем приложение…"
+          : "Собираем приложение…"
+        : latestBuildFailed
+          ? hasGeneratedSnapshot
+            ? "Последнее обновление не завершено"
+            : "Сборка не завершена"
+          : hasGeneratedSnapshot
+            ? "Приложение собрано"
+            : "Соберите приложение",
+      description: generationActive
+        ? "Продолжаем текущую генерацию — перезагрузка её не запустит заново."
+        : latestBuildFailed
+          ? "Исправьте ошибку и повторите сборку."
+          : hasGeneratedSnapshot
+            ? "Проверьте экраны в мобильном превью."
+            : "Первая генерация ещё не запускалась.",
+      done: buildReady && !latestBuildFailed,
+      active: generationActive || (!hasGeneratedSnapshot && !latestBuildFailed),
+      error: latestBuildFailed,
     },
     {
-      label: "MAX-бот подключён",
+      label: connected ? "MAX-бот подключён" : "Подключите MAX-бота",
       description: "Нужен секрет прошедшего модерацию бота.",
       done: connected,
-      active: !connected,
+      active: buildReady && !connected,
     },
     {
-      label: "Версия опубликована",
+      label: published ? "Версия опубликована" : "Опубликуйте версию",
       description: "Получаем постоянный защищённый HTTPS-адрес.",
       done: published,
-      active: connected && !published,
+      active: buildReady && connected && !published,
     },
     {
-      label: "Webhook активирован",
+      label: webhookActive ? "Webhook активирован" : "Активируйте webhook",
       description: "События MAX начнут приходить в приложение.",
       done: webhookActive,
-      active: connected && published && !webhookActive,
+      active: buildReady && connected && published && !webhookActive,
     },
   ];
 
@@ -132,6 +170,8 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
                   "relative z-10 mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border",
                   step.done
                     ? "border-[#7468ff] bg-[#7468ff] text-white"
+                    : step.error
+                      ? "border-danger/70 bg-danger/10 text-danger"
                     : step.active
                       ? "border-[#7468ff]/60 bg-[#7468ff]/10 text-[#9b92ff]"
                       : "border-white/[0.12] bg-[#0d0f16] text-white/25",
@@ -139,6 +179,8 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
               >
                 {step.done ? (
                   <Check className="h-3 w-3" />
+                ) : step.error ? (
+                  <AlertCircle className="h-3 w-3" />
                 ) : step.active ? (
                   <Circle className="h-2 w-2 fill-current" />
                 ) : (

@@ -42,7 +42,11 @@ export async function sendPrompt(
   prompt: string,
   modelId: string,
   selectedElements?: SelectedElement[] | null,
-  opts?: { skipClarify?: boolean; designPresetId?: string | null },
+  opts?: {
+    skipClarify?: boolean;
+    designPresetId?: string | null;
+    idempotencyKey?: string;
+  },
 ): Promise<PromptResponse> {
   if (USE_MOCKS) {
     const { assistantMessageId } = mockApi.beginPrompt(
@@ -56,7 +60,7 @@ export async function sendPrompt(
       snapshot_id: null,
     };
   }
-  const idempotencyKey = crypto.randomUUID();
+  const idempotencyKey = opts?.idempotencyKey ?? crypto.randomUUID();
   return apiFetch<PromptResponse>(`/api/projects/${projectId}/prompt`, {
     method: "POST",
     // 30s wall-clock cap on the POST itself. The backend should respond
@@ -85,6 +89,15 @@ export async function sendPrompt(
       ...(opts?.designPresetId ? { design_preset_id: opts.designPresetId } : {}),
     },
   });
+}
+
+export async function getLatestGeneration(
+  projectId: string,
+): Promise<GenerationRun | null> {
+  if (USE_MOCKS) return null;
+  return apiFetch<GenerationRun | null>(
+    `/api/projects/${projectId}/generation`,
+  );
 }
 
 export async function cancelGeneration(

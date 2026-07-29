@@ -34,6 +34,13 @@ type StreamHandle = {
   send: (msg: unknown) => void;
 };
 
+type PromptSubmitOptions = {
+  skipClarify?: boolean;
+  designPresetId?: string | null;
+  /** Stable for one logical submit so an F5 replay cannot create a new run. */
+  idempotencyKey?: string;
+};
+
 /**
  * Opens a real WebSocket to /api/ws/projects/:id and routes server events
  * through `apply`. Returns a handle to close the socket and to send control
@@ -122,7 +129,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     text: string;
     modelId: string;
     selections?: SelectedElement[];
-    opts?: { skipClarify?: boolean; designPresetId?: string | null };
+    opts?: PromptSubmitOptions;
   } | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   // submitRef нужен, потому что fireQueued вызывается из apply (стабильный
@@ -133,7 +140,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         text: string,
         modelId: string,
         selections?: SelectedElement[],
-        opts?: { skipClarify?: boolean; designPresetId?: string | null },
+        opts?: PromptSubmitOptions,
       ) => void)
     | null
   >(null);
@@ -261,6 +268,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           // this cache, so refresh it here to flip to the live-container path
           // without a manual reload.
           qc.invalidateQueries({ queryKey: ["project", projectId] });
+          qc.invalidateQueries({ queryKey: ["generation", projectId] });
         }
         delete streamMetaRef.current[event.data.message_id];
         streamingRef.current = false;
@@ -523,6 +531,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         delete streamMetaRef.current[event.data.message_id];
         streamingRef.current = false;
         activeSubmitSignatureRef.current = null;
+        qc.invalidateQueries({ queryKey: ["generation", projectId] });
         fireQueued();
       }
     },
@@ -619,7 +628,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       promptText: string,
       modelId: string,
       selections?: SelectedElement[],
-      opts?: { skipClarify?: boolean; designPresetId?: string | null },
+      opts?: PromptSubmitOptions,
     ) => {
       const submitSignature = JSON.stringify({
         promptText,
@@ -725,6 +734,32 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           opts,
         );
         message_id = resp.message_id;
+        qc.invalidateQueries({ queryKey: ["generation", projectId] });
+        if (
+          resp.replayed &&
+          ["completed", "failed", "cancelled"].includes(resp.run_status ?? "")
+        ) {
+          // A starter URL/session replay after F5 resolved to an already-finished
+          // durable run. Remove the optimistic "new generation" immediately and
+          // hydrate canonical history instead of opening a dead stream/watchdog.
+          qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+            (prev ?? []).filter(
+              (m) => m.id !== tempUserId && m.id !== tempAssistantId,
+            ),
+          );
+          qc.invalidateQueries({ queryKey: ["messages", projectId] });
+          qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+          streamingRef.current = false;
+          activeSubmitSignatureRef.current = null;
+          cancelRef.current?.();
+          cancelRef.current = null;
+          toast.info(
+            resp.run_status === "completed"
+              ? "Показываю уже готовую сборку"
+              : "Предыдущая сборка уже завершена",
+          );
+          return;
+        }
         // Record how the server will handle this turn ("edit" = surgical, keep
         // the current preview; "build" = full (re)generation). PreviewFrame reads
         // this cache to avoid morphing a diff-stream into a blanked preview.

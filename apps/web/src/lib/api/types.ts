@@ -365,6 +365,8 @@ export type PromptResponse = {
   run_id: Uuid;
   message_id: Uuid;
   snapshot_id: Uuid | null;
+  replayed?: boolean;
+  run_status?: GenerationRunStatus;
   // Optional so a stale frontend reading an older API still type-checks; the
   // hook defaults a missing value to "build".
   mode?: TurnMode;

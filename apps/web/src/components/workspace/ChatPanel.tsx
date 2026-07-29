@@ -196,7 +196,13 @@ export function ChatPanel({
     }
     if (p && p.trim() && messages.length === 0) {
       autoFiredRef.current = true;
-      submit(p.trim(), modelId, [], { skipClarify: true });
+      submit(p.trim(), modelId, [], {
+        skipClarify: true,
+        // Stable on the server across tabs/reloads/devices. Even if the handoff
+        // effect somehow fires twice, reserve_generation_run replays this exact
+        // run rather than creating a second generation.
+        idempotencyKey: `max-starter-${projectId}`,
+      });
       window.history.replaceState(null, "", basePath);
     }
   }, [messages, submit, basePath, projectId]);

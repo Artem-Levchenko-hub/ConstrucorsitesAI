@@ -59,6 +59,7 @@ from omnia_api.services import (
     zone_edit,
 )
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.agent_progress import sanitize_agent_step
 from omnia_api.services.art_director_writer import (
     art_director_writer_generate,
     supports_app_brief,
@@ -108,6 +109,7 @@ from omnia_api.services.file_extractor import (
 )
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
+    finalize_generation_run,
     reserve_generation_run,
     set_generation_run_status,
 )
@@ -214,9 +216,7 @@ async def _run_tracked_prompt(
     work_task = asyncio.create_task(work)
     cancel_task = asyncio.create_task(_wait_for_generation_cancel(run_id))
     try:
-        done, _ = await asyncio.wait(
-            {work_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED
-        )
+        done, _ = await asyncio.wait({work_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED)
         if cancel_task in done:
             work_task.cancel()
             try:
@@ -229,24 +229,20 @@ async def _run_tracked_prompt(
                     label,
                     exc_info=exc,
                 )
-            await _finalize_cancelled_generation(
-                project_id, assistant_message_id, run_id
-            )
+            await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
             return
 
         cancel_task.cancel()
         with suppress(asyncio.CancelledError):
             await cancel_task
         await work_task
-        await set_generation_run_status(run_id, "completed")
+        await finalize_generation_run(run_id)
     except asyncio.CancelledError:
         work_task.cancel()
         cancel_task.cancel()
         with suppress(asyncio.CancelledError):
             await work_task
-        await _finalize_cancelled_generation(
-            project_id, assistant_message_id, run_id
-        )
+        await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
     except Exception as exc:
         logging.getLogger(__name__).error("%s failed", label, exc_info=exc)
         await set_generation_run_status(
@@ -293,9 +289,7 @@ def _spawn_tracked_prompt(
     task.add_done_callback(_cleanup)
 
 
-async def _emergency_error(
-    project_id: UUID, assistant_message_id: UUID, err: str
-) -> None:
+async def _emergency_error(project_id: UUID, assistant_message_id: UUID, err: str) -> None:
     """Last-resort recovery when ``_process_prompt`` dies before it ever
     published an ``llm.error`` itself.
 
@@ -308,6 +302,7 @@ async def _emergency_error(
     leave the user staring at a stuck spinner.
     """
     import logging as _emerg_log
+
     _elog = _emerg_log.getLogger(__name__)
     try:
         await publish_event(
@@ -340,11 +335,7 @@ def _failed_build_body(accumulated: str, stream_error: object) -> str:
     ``llm.error`` WS event) still sees WHY the build stopped instead of a
     blank, forever-"streaming" chat row. Mirrors ``_emergency_error``.
     """
-    return (
-        accumulated
-        if accumulated.strip()
-        else f"[Ошибка генерации: {str(stream_error)[:300]}]"
-    )
+    return accumulated if accumulated.strip() else f"[Ошибка генерации: {str(stream_error)[:300]}]"
 
 
 async def _probe_compile_errors(
@@ -486,8 +477,7 @@ async def _run_app_self_repair(
         # how often DeepSeek's container builds compile vs need / get auto-healed:
         #   docker logs omnia-prod-worker | grep self_repair_metric
         print(
-            f"[PP] self_repair_metric outcome={outcome} passes={applied}/{passes} "
-            f"cat={cat}",
+            f"[PP] self_repair_metric outcome={outcome} passes={applied}/{passes} cat={cat}",
             flush=True,
         )
 
@@ -518,8 +508,7 @@ async def _run_app_self_repair(
         print(f"[PP] self_repair pass={i + 1} fixed={list(fix)} cat={category}", flush=True)
         if on_notice:
             await on_notice(
-                f"\n\n*Нашёл ошибку ({category}) — чиню и пересобираю "
-                f"({i + 1}/{passes})…*\n\n"
+                f"\n\n*Нашёл ошибку ({category}) — чиню и пересобираю ({i + 1}/{passes})…*\n\n"
             )
     # Final verdict after the last fix recompiled.
     status, category = await _probe_app_error(project_id, slug)
@@ -552,13 +541,28 @@ _STEP_VERB: dict[str, str] = {
 
 # Common route slugs → a Russian noun, so «dashboard» reads as «панель».
 _ROUTE_RU: dict[str, str] = {
-    "dashboard": "панель", "chats": "чаты", "chat": "чат", "messages": "сообщения",
-    "settings": "настройки", "profile": "профиль", "login": "вход",
-    "signin": "вход", "signup": "регистрацию", "register": "регистрацию",
-    "contacts": "контакты", "clients": "клиентов", "orders": "заказы",
-    "products": "товары", "cart": "корзину", "checkout": "оформление",
-    "admin": "админку", "users": "пользователей", "about": "«О нас»",
-    "pricing": "цены", "blog": "блог", "new-group": "создание группы",
+    "dashboard": "панель",
+    "chats": "чаты",
+    "chat": "чат",
+    "messages": "сообщения",
+    "settings": "настройки",
+    "profile": "профиль",
+    "login": "вход",
+    "signin": "вход",
+    "signup": "регистрацию",
+    "register": "регистрацию",
+    "contacts": "контакты",
+    "clients": "клиентов",
+    "orders": "заказы",
+    "products": "товары",
+    "cart": "корзину",
+    "checkout": "оформление",
+    "admin": "админку",
+    "users": "пользователей",
+    "about": "«О нас»",
+    "pricing": "цены",
+    "blog": "блог",
+    "new-group": "создание группы",
 }
 
 
@@ -572,8 +576,11 @@ def _humanize_file(path: str) -> str:
         if p.rstrip("/").endswith("app/page.tsx") or "/app/page." in p:
             return "главную страницу"
         # Last meaningful segment = the route name (skip src/app + route groups).
-        seg = [s for s in p.split("/") if s and not s.startswith("(") and s not in
-               ("src", "app", "page.tsx", "page.jsx")]
+        seg = [
+            s
+            for s in p.split("/")
+            if s and not s.startswith("(") and s not in ("src", "app", "page.tsx", "page.jsx")
+        ]
         if not seg:
             return "страницу"
         name = seg[-1]
@@ -633,9 +640,8 @@ def _agent_result_message(res: Any, *, is_edit: bool) -> str:
             else "Собрал приложение не полностью за отведённые шаги — часть уже на месте."
         )
     return (
-        ("Не удалось завершить правку" if is_edit else "Сборка прервана")
-        + ". Попробуй ещё раз или нажми «Починить»."
-    )
+        "Не удалось завершить правку" if is_edit else "Сборка прервана"
+    ) + ". Попробуй ещё раз или нажми «Починить»."
 
 
 # A follow-up that means «finish the partially-built app», not a fresh surgical
@@ -646,11 +652,23 @@ def _agent_result_message(res: Any, *, is_edit: bool) -> str:
 _CONTINUE_KEYWORDS: frozenset[str] = frozenset(
     {
         "продолж",  # продолжи / продолжай / продолжить
-        "доделай", "доделать", "доведи", "довести",
-        "дособери", "дособерите", "достро",  # дострой/достроить
-        "доработай", "допиши", "заверши сбор", "закончи сбор",
-        "не доделал", "не докончил", "до конца",
-        "finish the build", "continue building", "keep building",
+        "доделай",
+        "доделать",
+        "доведи",
+        "довести",
+        "дособери",
+        "дособерите",
+        "достро",  # дострой/достроить
+        "доработай",
+        "допиши",
+        "заверши сбор",
+        "закончи сбор",
+        "не доделал",
+        "не докончил",
+        "до конца",
+        "finish the build",
+        "continue building",
+        "keep building",
     }
 )
 
@@ -729,9 +747,7 @@ def _spawn_clarify(
     )
 
 
-async def _run_text_turn(
-    project_id: UUID, assistant_message_id: UUID, text: str
-) -> None:
+async def _run_text_turn(project_id: UUID, assistant_message_id: UUID, text: str) -> None:
     """Stream a pre-computed assistant message (no LLM, no build) and finalize.
 
     Used by the progressive-discovery ASK turn: the next question was already
@@ -776,9 +792,7 @@ _RUN_ASK_TEXT = (
     "(архив с run.bat — распаковал, двойной клик, и оно само поставится и "
     "запустится)? Или продолжим дорабатывать проект?"
 )
-_RUN_DECLINE_REPLY = (
-    "Понял, установщик не собираю. Напиши, что доработать или добавить — сделаю."
-)
+_RUN_DECLINE_REPLY = "Понял, установщик не собираю. Напиши, что доработать или добавить — сделаю."
 
 
 def _spawn_text_turn(
@@ -850,9 +864,7 @@ async def _run_async_onboarding(
     # Stash the plan on the project + serve question 0, persisting the question as
     # the assistant message content (single source of truth on reload).
     ask = serve_planned_question(plan, 0)
-    question_text = (
-        ask.message if ask is not None else _ASYNC_ONBOARDING_PLACEHOLDER
-    )
+    question_text = ask.message if ask is not None else _ASYNC_ONBOARDING_PLACEHOLDER
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with factory() as session:
         project = await session.get(Project, project_id)
@@ -941,8 +953,7 @@ def _compose_build_prompt(result: DiscoveryResult) -> str:
         )
     elif result.stack and result.stack != "static":
         brief = (
-            f"{brief}\n\n[Рекомендованный стек: {result.stack} — полноценное "
-            "приложение с данными.]"
+            f"{brief}\n\n[Рекомендованный стек: {result.stack} — полноценное приложение с данными.]"
         )
     return brief
 
@@ -1003,8 +1014,7 @@ def _build_onboarding_survey(plan: object) -> list[dict[str, object]] | None:
 
 
 _RESULT_TYPE_QUESTION = (
-    "Что именно сделать — лендинг с заявкой, приложение с аккаунтами, "
-    "или интерактивный инструмент?"
+    "Что именно сделать — лендинг с заявкой, приложение с аккаунтами, или интерактивный инструмент?"
 )
 _RESULT_TYPE_CHOICES = (
     "Лендинг с заявкой",
@@ -1014,9 +1024,7 @@ _RESULT_TYPE_CHOICES = (
 )
 
 
-async def _maybe_result_type_question(
-    prompt: str, language: str
-) -> PlannedQuestion | None:
+async def _maybe_result_type_question(prompt: str, language: str) -> PlannedQuestion | None:
     """One clarifying question about the RESULT TYPE when genuinely ambiguous
     (RT-1 bug 3). Returns a PlannedQuestion to PREPEND to the design plan (so the
     existing serve/index machinery runs the design interview right after the type
@@ -1065,7 +1073,10 @@ async def _batch_discovery_turn(
     """
     if force_build:
         return await run_discovery(
-            history, prompt, asked_count=asked_count, force_build=True,
+            history,
+            prompt,
+            asked_count=asked_count,
+            force_build=True,
             language=language,
         )
     # Plan once, on the first turn, when nothing is stashed yet. A first prompt
@@ -1077,7 +1088,10 @@ async def _batch_discovery_turn(
         # never plan palette/audience questions for a program.
         if _infer_code_from_text(prompt):
             return await run_discovery(
-                history, prompt, asked_count=asked_count, force_build=True,
+                history,
+                prompt,
+                asked_count=asked_count,
+                force_build=True,
                 language=language,
             )
         zero = zero_question_build(history, prompt)
@@ -1101,11 +1115,15 @@ async def _batch_discovery_turn(
     # gathered answers pin a recognised niche + ≥2 design axes, build now instead
     # of asking the rest of the batch — the decisive user gets a shorter path.
     # Fail-soft: an unclear interview keeps serving the planned questions.
-    if confident_enough_to_build(
-        history, prompt, asked_count=asked_count, niche=niche
-    ) and serve_planned_question(project.discovery_plan or [], asked_count) is not None:
+    if (
+        confident_enough_to_build(history, prompt, asked_count=asked_count, niche=niche)
+        and serve_planned_question(project.discovery_plan or [], asked_count) is not None
+    ):
         return await run_discovery(
-            history, prompt, asked_count=asked_count, force_build=True,
+            history,
+            prompt,
+            asked_count=asked_count,
+            force_build=True,
             language=language,
         )
     ask = serve_planned_question(project.discovery_plan or [], asked_count)
@@ -1121,7 +1139,10 @@ async def _batch_discovery_turn(
         return replace(ask, niche=niche, recap=recap, design_preview=design_preview)
     # Plan exhausted — every question answered → build from the full Q&A.
     return await run_discovery(
-        history, prompt, asked_count=asked_count, force_build=True,
+        history,
+        prompt,
+        asked_count=asked_count,
+        force_build=True,
         language=language,
     )
 
@@ -1171,9 +1192,7 @@ async def report_client_error(
     if msg is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    title, file = app_errors.client_card_signature(
-        payload.message, payload.source, payload.line
-    )
+    title, file = app_errors.client_card_signature(payload.message, payload.source, payload.line)
     if app_errors.has_client_card(msg.content or "", title, file):
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1217,13 +1236,21 @@ async def post_prompt(
     )
     if replayed:
         if generation_run.response_payload is not None:
-            return PromptResponse.model_validate(generation_run.response_payload)
+            response = PromptResponse.model_validate(generation_run.response_payload)
+            return response.model_copy(
+                update={
+                    "replayed": True,
+                    "run_status": generation_run.status,
+                }
+            )
         if generation_run.assistant_message_id is not None:
             return PromptResponse(
                 run_id=generation_run.id,
                 message_id=generation_run.assistant_message_id,
                 snapshot_id=None,
                 mode=generation_run.response_mode or "build",
+                replayed=True,
+                run_status=generation_run.status,
             )
         # The per-project advisory lock means a replay cannot observe the run
         # before its first transaction commits the assistant id and response.
@@ -1250,9 +1277,7 @@ async def post_prompt(
     # Select-mode picks (serialized for JSONB + the background task). Computed
     # first because the triage below needs the count of picked elements.
     selected_dump = (
-        [el.model_dump() for el in payload.selected_elements]
-        if payload.selected_elements
-        else None
+        [el.model_dump() for el in payload.selected_elements] if payload.selected_elements else None
     )
 
     # Smart triage — the server decides whether this prompt earns the full
@@ -1366,16 +1391,12 @@ async def post_prompt(
         if _esc_stack:
             try:
                 escalated_to_app = bool(
-                    await stack_routing.pivot_static_to_app(
-                        session, project, _esc_stack
-                    )
+                    await stack_routing.pivot_static_to_app(session, project, _esc_stack)
                 )
             except Exception as _esc_exc:
                 await session.rollback()
                 project = await session.get(Project, project_id) or project
-                logging.getLogger(__name__).warning(
-                    "static→app escalation failed: %r", _esc_exc
-                )
+                logging.getLogger(__name__).warning("static→app escalation failed: %r", _esc_exc)
 
     discovery_result: DiscoveryResult | None = None
     # Async onboarding: set when the slow first-turn plan is deferred out of the
@@ -1384,9 +1405,7 @@ async def post_prompt(
     async_onboarding = False
     do_clarify = False
     effective_prompt = payload.prompt
-    interview_eligible = (
-        is_first_build and not payload.skip_clarify and not selected_dump
-    )
+    interview_eligible = is_first_build and not payload.skip_clarify and not selected_dump
     if interview_eligible and settings.use_progressive_discovery:
         # Gather the prior conversation (questions already asked + answers) to
         # drive the next discovery turn. The newest message (payload.prompt) is
@@ -1401,11 +1420,11 @@ async def post_prompt(
                     # last ~20 rows, before it classifies/builds (owner 2026-06-18).
                     .limit(40)
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
-        _history = [
-            {"role": m.role, "content": m.content} for m in _rows if m.content
-        ]
+        _history = [{"role": m.role, "content": m.content} for m in _rows if m.content]
         _asked = sum(1 for m in _rows if m.role == "assistant")
         # Only the FIRST batch-discovery turn pays the ~60-70s Opus plan call; every
         # later turn serves the stashed plan with no gateway hop. Defer just that
@@ -1465,16 +1484,15 @@ async def post_prompt(
                 # сейчас» → spa dashboard). Re-check across EVERY user message so the
                 # original messenger intent still forces the realtime chat stack.
                 try:
-                    _full_intent = " ".join(
-                        m["content"] for m in _history if m.get("role") == "user"
-                    ) + " " + payload.prompt
-                    _resolved_stack = _resolve_messenger_stack(
-                        _build_stack, _full_intent
+                    _full_intent = (
+                        " ".join(m["content"] for m in _history if m.get("role") == "user")
+                        + " "
+                        + payload.prompt
                     )
+                    _resolved_stack = _resolve_messenger_stack(_build_stack, _full_intent)
                     if _resolved_stack != _build_stack:
                         logging.getLogger(__name__).info(
-                            "discovery-build messenger override (full intent): "
-                            "'%s'→'%s'",
+                            "discovery-build messenger override (full intent): '%s'→'%s'",
                             _build_stack,
                             _resolved_stack,
                         )
@@ -1484,9 +1502,7 @@ async def post_prompt(
                         "realtime full-intent inference failed: %r", _rt_exc
                     )
                 try:
-                    await stack_routing.switch_to_stack(
-                        session, project, _build_stack
-                    )
+                    await stack_routing.switch_to_stack(session, project, _build_stack)
                 except Exception as _sr_exc:
                     await session.rollback()
                     logging.getLogger(__name__).warning(
@@ -1515,9 +1531,7 @@ async def post_prompt(
         ).first() is not None
         do_clarify = not _has_prior_msg
 
-    discovery_ask = (
-        discovery_result is not None and discovery_result.action != DISCOVERY_BUILD
-    )
+    discovery_ask = discovery_result is not None and discovery_result.action != DISCOVERY_BUILD
 
     # First-build stack escalation when the interview was skipped.
     # `switch_to_stack` only ever runs inside the discovery BUILD branch above,
@@ -1559,7 +1573,9 @@ async def post_prompt(
                         .order_by(Message.created_at.asc())
                         .limit(40)
                     )
-                ).scalars().all()
+                )
+                .scalars()
+                .all()
             )
             _fb_intent = " ".join([*(c for c in _prior_user if c), payload.prompt])
         except Exception as _fbi_exc:
@@ -1635,9 +1651,7 @@ async def post_prompt(
             _inferred_stack = _resolved_stack
         if _inferred_stack:
             try:
-                await stack_routing.switch_to_stack(
-                    session, project, _inferred_stack
-                )
+                await stack_routing.switch_to_stack(session, project, _inferred_stack)
             except Exception as _sr_exc:
                 await session.rollback()
                 logging.getLogger(__name__).warning(
@@ -1715,14 +1729,7 @@ async def post_prompt(
     # request sees the active-run guard and cannot start in parallel.
     turn_mode = (
         "clarify"
-        if (
-            discovery_ask
-            or async_onboarding
-            or do_clarify
-            or run_intent
-            or run_ask
-            or run_decline
-        )
+        if (discovery_ask or async_onboarding or do_clarify or run_intent or run_ask or run_decline)
         else ("build" if orchestrate else "edit")
     )
     await session.flush()
@@ -1840,18 +1847,12 @@ async def post_prompt(
         # renders ONE popup form, not a chat turn per question. Only the first turn
         # (index 1) with a stashed plan; follow-up turns keep the single-question
         # fields (back-compat for a client that ignores `survey`).
-        survey = (
-            _build_onboarding_survey(project.discovery_plan)
-            if question_index == 1
-            else None
-        )
+        survey = _build_onboarding_survey(project.discovery_plan) if question_index == 1 else None
     else:
         # Uncertain run-intent question (owner 2026-06-19): tappable yes/no chips.
         # «Да…» re-enters as strong run-intent → installer card; «Нет…» is caught
         # as a decline → "what to change?" reply.
-        ask_choices = (
-            ["Да, собрать установщик", "Нет, доработать проект"] if run_ask else []
-        )
+        ask_choices = ["Да, собрать установщик", "Нет, доработать проект"] if run_ask else []
         allow_custom = True
         multi_select = False
         question_index = None
@@ -1865,6 +1866,8 @@ async def post_prompt(
         message_id=assistant_msg.id,
         snapshot_id=None,
         mode=turn_mode,
+        replayed=False,
+        run_status=generation_run.status,
         choices=ask_choices,
         allow_custom=allow_custom,
         multi_select=multi_select,
@@ -1879,6 +1882,31 @@ async def post_prompt(
     generation_run.response_payload = response.model_dump(mode="json")
     await session.commit()
     return response
+
+
+@router.get(
+    "/{project_id}/generation",
+    response_model=GenerationRunPublic | None,
+)
+async def get_latest_generation(
+    project_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> GenerationRun | None:
+    """Return the durable latest run so reloads restore real lifecycle state."""
+
+    await _ensure_owner(session, project_id, current_user.id)
+    return (
+        await session.execute(
+            select(GenerationRun)
+            .where(
+                GenerationRun.project_id == project_id,
+                GenerationRun.user_id == current_user.id,
+            )
+            .order_by(GenerationRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
 
 @router.post(
@@ -1931,11 +1959,7 @@ async def cancel_active_generation(
             "generation.cancel_requested",
             {
                 "run_id": str(run.id),
-                "message_id": (
-                    str(run.assistant_message_id)
-                    if run.assistant_message_id
-                    else None
-                ),
+                "message_id": (str(run.assistant_message_id) if run.assistant_message_id else None),
             },
         )
     except Exception:
@@ -2092,8 +2116,7 @@ CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniap
 # yet the model still strips them, which breaks signup/signin (insert/select on a
 # column that no longer exists). We re-inject them deterministically.
 _AUTH_USERS_COLUMNS = (
-    '  passwordHash: text("password_hash"),\n'
-    '  role: text("role").notNull().default("user"),\n'
+    '  passwordHash: text("password_hash"),\n  role: text("role").notNull().default("user"),\n'
 )
 
 
@@ -2102,7 +2125,7 @@ _AUTH_USERS_COLUMNS = (
 # verificationTokens } from "@/lib/db/schema"`, so if the model's schema.ts
 # rewrite omits them the whole app fails to compile ("Export users doesn't
 # exist") and 500s. This is the canonical block from the template schema.ts.
-_AUTH_TABLES_BLOCK = '''
+_AUTH_TABLES_BLOCK = """
 // ─── Auth tables (re-injected by Omnia — the model dropped them) ───────────
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -2145,7 +2168,7 @@ export const verificationTokens = pgTable("verification_tokens", {
   pk: primaryKey({ columns: [vt.identifier, vt.token] }),
 }));
 
-'''
+"""
 
 # pg-core named imports the auth block needs.
 _AUTH_PGCORE_IMPORTS = ("integer", "pgTable", "primaryKey", "text", "timestamp", "uuid")
@@ -2157,9 +2180,7 @@ def _ensure_named_imports(src: str, module: str, needed: tuple[str, ...]) -> str
     or prepending a fresh one."""
     import re
 
-    pat = re.compile(
-        r'import\s+\{([^}]*)\}\s+from\s+"' + re.escape(module) + r'"\s*;'
-    )
+    pat = re.compile(r'import\s+\{([^}]*)\}\s+from\s+"' + re.escape(module) + r'"\s*;')
     m = pat.search(src)
     if m:
         existing = {x.strip() for x in m.group(1).split(",") if x.strip()}
@@ -2180,10 +2201,7 @@ def _inject_auth_tables(src: str) -> str:
         out = _ensure_named_imports(src, "drizzle-orm/pg-core", _AUTH_PGCORE_IMPORTS)
         out = _ensure_named_imports(out, "drizzle-orm", ("sql",))
         if "AdapterAccountType" not in out:
-            out = (
-                'import type { AdapterAccountType } from "next-auth/adapters";\n'
-                + out
-            )
+            out = 'import type { AdapterAccountType } from "next-auth/adapters";\n' + out
         idx = out.find("\nexport const ")
         if idx == -1:
             idx = len(out)
@@ -2279,9 +2297,7 @@ def _normalize_entity_filenames(files: dict[str, str]) -> dict[str, str]:
         return p[len(prefix) : -len(suffix)]
 
     # Stems already present — never overwrite a correctly-named sibling.
-    existing = {
-        stem_of(p) for p in files if p.startswith(prefix) and p.endswith(suffix)
-    }
+    existing = {stem_of(p) for p in files if p.startswith(prefix) and p.endswith(suffix)}
     out = dict(files)
     renamed: list[str] = []
     for path, content in list(files.items()):
@@ -2627,6 +2643,7 @@ async def _process_prompt(
     selected_elements: list[dict[str, Any]] | None = None,
 ) -> None:
     import logging as _log_mod
+
     _log = _log_mod.getLogger(__name__)
     # Mark this async context free (gateway skips wallet debit) for the whole
     # generation — the contextvar rides every stream_chat_completion call below.
@@ -2651,14 +2668,40 @@ async def _process_prompt(
     # NOTE: project_is_imported is initialised False above and set from the DB
     # in the context-load block. The second enforcement below (after DB load)
     # is the real gate. This first assignment is a no-op until we reload.
-    print(f"[PP] start project={project_id} asst_msg={assistant_message_id} model={model_id} free={is_free} force={force_model} surgical={surgical}", flush=True)
+    print(
+        f"[PP] start project={project_id} asst_msg={assistant_message_id} model={model_id} free={is_free} force={force_model} surgical={surgical}",
+        flush=True,
+    )
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     accumulated = ""
     # Persisted agentic transcript: every `agent.step` payload published this turn
-    # is appended here so it can be saved on the assistant message at finalize —
-    # the chat re-renders the step list (with drill-in detail) after a reload.
+    # is appended and saved immediately so reload restores completed work while
+    # the same server-side run continues.
     _agent_step_log: list[dict[str, Any]] = []
+
+    async def _record_agent_step(step_row: dict[str, Any]) -> None:
+        """Sanitize, persist and publish one recoverable progress row.
+
+        Persistence happens during the run rather than only at finalization, so
+        a page reload can hydrate the already-completed work before reconnecting
+        to live WebSocket events.
+        """
+
+        safe = sanitize_agent_step(step_row)
+        if len(_agent_step_log) < 200:
+            _agent_step_log.append(safe)
+            async with factory() as progress_session:
+                progress_message = await progress_session.get(Message, assistant_message_id)
+                if progress_message is not None:
+                    progress_message.agent_steps = list(_agent_step_log)
+                    await progress_session.commit()
+        await publish_event(
+            project_id,
+            "agent.step",
+            {"message_id": str(assistant_message_id), **safe},
+        )
+
     # Resumable-stream accumulator. `_run_stream` resets its per-pass
     # `state["accumulated"]` on every fallback re-run, but the CLIENT's content
     # is the concatenation of every delta ever published for this message — so
@@ -2705,9 +2748,7 @@ async def _process_prompt(
                 .limit(40)
             )
             rows = list(reversed(list(res.scalars().all())))
-            history_serialized = [
-                {"role": m.role, "content": m.content} for m in rows if m.content
-            ]
+            history_serialized = [{"role": m.role, "content": m.content} for m in rows if m.content]
         print(f"[PP] ctx_loaded sha={current_sha} history={len(history_serialized)}", flush=True)
 
         # B4 — imported repos are ALWAYS surgical-edit only.  We enforce this
@@ -2728,14 +2769,37 @@ async def _process_prompt(
         # Imported repos are never container-backed (detect_template returns
         # "blank"/"code", neither is in CONTAINER_NEXT), but gate defensively.
         if project_template in CONTAINER_NEXT and project_slug and not project_is_imported:
+            await _record_agent_step(
+                {
+                    "step": None,
+                    "kind": "step",
+                    "action": "Подготавливаю среду проекта",
+                    "tool": "runtime",
+                    "path": "",
+                    "detail": "Запускаю контейнер и жду готовности перед сборкой.",
+                    "ok": True,
+                }
+            )
             await stack_routing.ensure_provisioned(
-                project_id, project_slug, project_template
+                project_id,
+                project_slug,
+                project_template,
+                require_ready=True,
+            )
+            await _record_agent_step(
+                {
+                    "step": None,
+                    "kind": "step",
+                    "action": "Среда готова",
+                    "tool": "runtime",
+                    "path": "",
+                    "detail": "Контейнер запущен, начинаю сборку приложения.",
+                    "ok": True,
+                }
             )
 
         if current_sha:
-            current_files = await asyncio.to_thread(
-                repo_svc.read_files, project_id, current_sha
-            )
+            current_files = await asyncio.to_thread(repo_svc.read_files, project_id, current_sha)
         print(f"[PP] files_loaded count={len(current_files)}", flush=True)
 
         # Kit files are Omnia-managed infra — keep them out of the model's context
@@ -2800,7 +2864,6 @@ async def _process_prompt(
             and not project_is_imported
             and (orchestrate or surgical)
         ):
-
             # Phase 2: container EDITS go through the agent too (read→edit→build→
             # fix), not blind SEARCH/REPLACE — fixes the "точечные правки" pain.
             # First-build/rebuild = full build prompt; a surgical follow-up = a
@@ -2857,15 +2920,7 @@ async def _process_prompt(
                     "detail": str(data.get("detail", "") or ""),
                     "ok": bool(data.get("ok", True)),
                 }
-                # Persist for the reload transcript (bounded so a runaway loop can't
-                # bloat the row; the live WS stream is unaffected by the cap).
-                if len(_agent_step_log) < 200:
-                    _agent_step_log.append(step_row)
-                await publish_event(
-                    project_id,
-                    "agent.step",
-                    {"message_id": str(assistant_message_id), **step_row},
-                )
+                await _record_agent_step(step_row)
 
             _agent_executor = agent_builder.make_container_executor(
                 project_id=project_id, slug=project_slug, emit=_agent_emit
@@ -2876,26 +2931,32 @@ async def _process_prompt(
             _seed_parts: list[str] = []
             try:
                 _ents = await orchestrator_client.agent_list_dir(
-                    project_id, project_slug, "entities")
+                    project_id, project_slug, "entities"
+                )
                 _seed_parts.append(f"entities/ contains:\n{_ents}")
                 _dash = await orchestrator_client.agent_list_dir(
-                    project_id, project_slug, "src/app/(app)/dashboard")
-                _seed_parts.append(
-                    f"src/app/(app)/dashboard/ contains:\n{_dash}")
+                    project_id, project_slug, "src/app/(app)/dashboard"
+                )
+                _seed_parts.append(f"src/app/(app)/dashboard/ contains:\n{_dash}")
                 _crud = await orchestrator_client.agent_read_file(
-                    project_id, project_slug,
-                    "src/components/omnia/crud-resource.tsx")
+                    project_id, project_slug, "src/components/omnia/crud-resource.tsx"
+                )
                 if _crud:
                     _seed_parts.append(
                         "src/components/omnia/crud-resource.tsx (the entity-page "
-                        "component — render <CrudResource entity=\"Name\"/> in each "
-                        "page):\n" + _crud[:4000])
+                        'component — render <CrudResource entity="Name"/> in each '
+                        "page):\n" + _crud[:4000]
+                    )
             except Exception as _seed_exc:
                 print(f"[PP] agent seed-context skipped: {_seed_exc!r}", flush=True)
             _seed_block = (
-                "\n\nPROJECT CONTEXT (already gathered — do NOT re-explore these):\n"
-                + "\n\n".join(_seed_parts)
-            ) if _seed_parts else ""
+                (
+                    "\n\nPROJECT CONTEXT (already gathered — do NOT re-explore these):\n"
+                    + "\n\n".join(_seed_parts)
+                )
+                if _seed_parts
+                else ""
+            )
             # Per-project DESIGN MOOD — make every app look UNIQUE instead of the
             # baked dark zinc/indigo template («дизайн всегда одинаковый»). Seeded
             # curated palette + font + density fed into the BUILD prompt so the
@@ -2905,6 +2966,7 @@ async def _process_prompt(
             if orchestrate and get_settings().use_design_mood:
                 try:
                     from omnia_api.services.design_dna import design_mood_directive
+
                     _seed_block = _seed_block + design_mood_directive(
                         str(project_id), industry_hint=prompt_text
                     )
@@ -2943,11 +3005,7 @@ async def _process_prompt(
             # + layout in the design mood — while the realtime/auth/db primitives
             # stay LOCKED (import, never rewrite). Full realtime build only; the
             # extra files lean harder on the model (accepted — loop is hardened).
-            if (
-                orchestrate
-                and _orch_name == "nextjs-realtime"
-                and get_settings().use_design_mood
-            ):
+            if orchestrate and _orch_name == "nextjs-realtime" and get_settings().use_design_mood:
                 _seed_block = _seed_block + (
                     "\n\nТЫ ВЛАДЕЕШЬ ВСЕМ ВИЗУАЛОМ. Перепиши src/app/globals.css и "
                     "src/app/(app)/layout.tsx ПОЛНОСТЬЮ под дизайн-настроение выше — НЕ "
@@ -2958,7 +3016,7 @@ async def _process_prompt(
                     "`<html>`, `<head>` ни `<body>` — они уже есть в КОРНЕВОМ "
                     "src/app/layout.tsx (он ЗАПЕРТ, не трогай). Верни ТОЛЬКО внутреннюю "
                     "оболочку — `export default function AppLayout({children}) { return "
-                    "(<div className=\"...\"><header>…шапка/нав…</header><main>{children}"
+                    '(<div className="..."><header>…шапка/нав…</header><main>{children}'
                     "</main></div>); }`. Дубль `<html>`/`<body>` ломает гидрацию React и "
                     "убивает реалтайм (сообщения перестают приходить).\n"
                     "ГОТОВЫЕ ПРИМИТИВЫ (переиспользуй ПО УМОЛЧАНИЮ — auth/realtime/"
@@ -2975,13 +3033,8 @@ async def _process_prompt(
             # and hallucinated `getChannels` / its own `Channel` type / `useChannel()`
             # then looped on TS2305/TS2322/TS2554). Independent of design_mood and of
             # `orchestrate` so an EDIT on a realtime app gets the contract too.
-            if (
-                _orch_name == "nextjs-realtime"
-                and get_settings().use_primitive_contract
-            ):
-                _seed_block = _seed_block + (
-                    "\n\n" + agent_builder.realtime_primitives_contract()
-                )
+            if _orch_name == "nextjs-realtime" and get_settings().use_primitive_contract:
+                _seed_block = _seed_block + ("\n\n" + agent_builder.realtime_primitives_contract())
             # Build Plan (эскиз перед стройкой, owner 2026-06-30). On a fresh BUILD
             # run the planner pass → a bounded feature spec (screens/entities/
             # capabilities), persist it in discovery_spec JSONB, and ride its
@@ -3095,6 +3148,7 @@ async def _process_prompt(
                 # infra circuit breaker (container dead → abort in ~3 turns) —
                 # see agent_native._NO_WRITE_*/_INFRA_DEAD_ABORT_AT.
                 from omnia_api.services import agent_native
+
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(_stack_guide, _skills),
                     task=_agent_user,
@@ -3117,8 +3171,7 @@ async def _process_prompt(
                     try:
                         await _agent_emit(
                             "agent.step",
-                            {"action": "сбой связи с моделью — повторяю сборку…",
-                             "kind": "step"},
+                            {"action": "сбой связи с моделью — повторяю сборку…", "kind": "step"},
                         )
                     except Exception:
                         pass
@@ -3143,9 +3196,7 @@ async def _process_prompt(
                     user_id=str(user_id),
                     project_id=str(project_id),
                     require_green_before_done=(
-                        False
-                        if _bare_stack
-                        else get_settings().agent_require_green_before_done
+                        False if _bare_stack else get_settings().agent_require_green_before_done
                     ),
                     ship_green_on_abort=get_settings().agent_ship_green_on_abort,
                     edit_mode=_is_edit,
@@ -3215,11 +3266,7 @@ async def _process_prompt(
             # escalated retry with an imperative "you MUST write" prompt (mirrors
             # edit_auto_repair, which is edit-only). Not a spin: single pass, strong
             # model, then whatever it produced stands.
-            if (
-                not _is_edit
-                and not files
-                and get_settings().use_agentic_builder
-            ):
+            if not _is_edit and not files and get_settings().use_agentic_builder:
                 print("[PP] agentic_build files=0 → one escalated write-floor retry", flush=True)
                 try:
                     await _agent_emit(
@@ -3280,10 +3327,7 @@ async def _process_prompt(
 
                 _guard_attempt = 0
                 _guard_max = max(0, int(get_settings().agent_gate_max_attempts))
-                while (
-                    get_settings().use_agent_gate_feedback
-                    and not _is_edit
-                ):
+                while get_settings().use_agent_gate_feedback and not _is_edit:
                     _gv = _check_backend(files)
                     _outcomes = [
                         _agf.GateOutcome(
@@ -3296,16 +3340,17 @@ async def _process_prompt(
                     # when sast_gate_blocking is on (else advisory-logged below).
                     if get_settings().use_sast_gate:
                         from omnia_api.services.sast_gate import check_sast as _check_sast
+
                         _sv = _check_sast(files)
-                        _outcomes.append(_agf.GateOutcome(
-                            name="sast",
-                            passed=_sv.safe,
-                            failures=[f"{f.path}: {f.cwe} {f.rule}" for f in _sv.findings],
-                            blocking=get_settings().sast_gate_blocking,
-                        ))
-                    _instr = _agf.build_fix_instruction(
-                        _outcomes, _guard_attempt, _guard_max
-                    )
+                        _outcomes.append(
+                            _agf.GateOutcome(
+                                name="sast",
+                                passed=_sv.safe,
+                                failures=[f"{f.path}: {f.cwe} {f.rule}" for f in _sv.findings],
+                                blocking=get_settings().sast_gate_blocking,
+                            )
+                        )
+                    _instr = _agf.build_fix_instruction(_outcomes, _guard_attempt, _guard_max)
                     if _instr is None:
                         break  # clean, or out of retry budget
                     _guard_attempt += 1
@@ -3337,6 +3382,7 @@ async def _process_prompt(
                 # when blocking/heal is off (runs regardless of the feedback loop).
                 if get_settings().use_sast_gate:
                     from omnia_api.services.sast_gate import check_sast as _check_sast2
+
                     _final_sast = _check_sast2(files)
                     if not _final_sast.safe:
                         print(
@@ -3363,7 +3409,8 @@ async def _process_prompt(
             _rt_error = ""
             try:
                 _rt = await orchestrator_client.runtime_status(
-                    project_id, slug=project_slug, path="/")
+                    project_id, slug=project_slug, path="/"
+                )
                 _runtime_ok = bool(_rt.get("ok"))
                 if not _runtime_ok:
                     _rt_err = _rt.get("error") or _rt.get("status_code") or "5xx"
@@ -3375,6 +3422,7 @@ async def _process_prompt(
                     print(f"[PP] agentic_smoke runtime FAIL {_rt.get('status_code')}", flush=True)
                 else:
                     print("[PP] agentic_smoke runtime ok", flush=True)
+
                     # Fire-and-forget route pre-warm: `next dev` compiles each
                     # route lazily on FIRST hit (~30-90s cold), so a reviewer eats
                     # that per page on a demo. Force those first hits now, in the
@@ -3382,8 +3430,7 @@ async def _process_prompt(
                     # — never blocks the response, never fails the build.
                     async def _warm_bg() -> None:
                         try:
-                            _w = await orchestrator_client.warm_routes(
-                                project_id, project_slug)
+                            _w = await orchestrator_client.warm_routes(project_id, project_slug)
                             print(f"[PP] warm routes {_w}", flush=True)
                         except Exception as _w_exc:  # noqa: BLE001
                             print(f"[PP] warm skipped: {_w_exc!r}", flush=True)
@@ -3409,9 +3456,7 @@ async def _process_prompt(
                 if not _typecheck_ok:
                     _tc_detail = str(_tc.get("detail") or "").strip()
                     _tc_first = (
-                        _tc_detail.splitlines()[0][:240]
-                        if _tc_detail
-                        else "ошибка типизации"
+                        _tc_detail.splitlines()[0][:240] if _tc_detail else "ошибка типизации"
                     )
                     _tc_error = _tc_first
                     accumulated += (
@@ -3439,9 +3484,7 @@ async def _process_prompt(
             ):
                 _ar_max = max(0, int(get_settings().edit_auto_repair_attempts))
                 _ar = 0
-                while _ar < _ar_max and (
-                    not files or not _typecheck_ok or not _runtime_ok
-                ):
+                while _ar < _ar_max and (not files or not _typecheck_ok or not _runtime_ok):
                     _ar += 1
                     _why = (
                         f"осталась ошибка типизации: {_tc_error}"
@@ -3508,9 +3551,7 @@ async def _process_prompt(
                     except Exception:
                         _runtime_ok = True
                     try:
-                        _tc2 = await orchestrator_client.agent_build(
-                            project_id, project_slug
-                        )
+                        _tc2 = await orchestrator_client.agent_build(project_id, project_slug)
                         _typecheck_ok = bool(_tc2.get("ok", True))
                         _tc_error = (
                             ""
@@ -3548,9 +3589,7 @@ async def _process_prompt(
                         project_id, project_slug, "src/app/globals.css"
                     )
                     if _gcss:
-                        _newg = design_dna.inject_into_globals(
-                            _gcss, str(project_id), None
-                        )
+                        _newg = design_dna.inject_into_globals(_gcss, str(project_id), None)
                         if _newg != _gcss:
                             await orchestrator_client.hot_reload(
                                 project_id,
@@ -3574,9 +3613,7 @@ async def _process_prompt(
                 and _typecheck_ok
             ):
                 accumulated = (
-                    "Готово — правка применена."
-                    if _is_edit
-                    else "Готово — приложение собрано."
+                    "Готово — правка применена." if _is_edit else "Готово — приложение собрано."
                 )
                 print(
                     "[PP] agentic_build looped-but-serves → reported as done",
@@ -3590,13 +3627,7 @@ async def _process_prompt(
             # unchanged and working; invite a re-phrase. Edits only — a FIRST build
             # with 0 files genuinely failed (the scaffold always typechecks green),
             # so it keeps its failure message.
-            elif (
-                not _agent_res.done
-                and _is_edit
-                and not files
-                and _runtime_ok
-                and _typecheck_ok
-            ):
+            elif not _agent_res.done and _is_edit and not files and _runtime_ok and _typecheck_ok:
                 accumulated = (
                     "Не смог применить правку за отведённые шаги — приложение не "
                     "изменилось и осталось рабочим. Переформулируй запрос или нажми "
@@ -3649,10 +3680,7 @@ async def _process_prompt(
                 _gate_touched = bool(_is_edit) and any(
                     _p.endswith(".ts")
                     and (
-                        "/api/" in _p
-                        or "/lib/" in _p
-                        or "schema" in _p
-                        or _p.endswith("route.ts")
+                        "/api/" in _p or "/lib/" in _p or "schema" in _p or _p.endswith("route.ts")
                     )
                     for _p in files
                 )
@@ -3689,11 +3717,7 @@ async def _process_prompt(
                             _fv = await isolation_gate.run_public_access_gate(
                                 project_id, project_slug, _base
                             )
-                        _fout = [
-                            _agf2.outcome_from_checks(
-                                _gate_kind, _fv.passed, _fv.checks
-                            )
-                        ]
+                        _fout = [_agf2.outcome_from_checks(_gate_kind, _fv.passed, _fv.checks)]
                         # Transport-surface security (G005) — stack-agnostic, runs
                         # alongside the functional/isolation leg through the SAME
                         # blocking heal loop. Was built+unit-tested but UNWIRED
@@ -3707,9 +3731,7 @@ async def _process_prompt(
                             _sv = await _secg.run_security_gate(_base)
                             _att_sec = _sv
                             _fout.append(
-                                _agf2.outcome_from_checks(
-                                    "security", _sv.passed, _sv.checks
-                                )
+                                _agf2.outcome_from_checks("security", _sv.passed, _sv.checks)
                             )
                         _fix = _agf2.build_fix_instruction(
                             _fout, _rg_attempt, _rg_max, stack=_orch_name
@@ -3739,9 +3761,7 @@ async def _process_prompt(
                                     )
                                     _att_capture = _att_gates
                                 except Exception as _att_exc:  # never break a build
-                                    print(
-                                        f"[ATTEST] skipped: {_att_exc}", flush=True
-                                    )
+                                    print(f"[ATTEST] skipped: {_att_exc}", flush=True)
                             if not _fv.passed:
                                 accumulated += (
                                     "\n\n⚠️ Проверка работоспособности/безопасности не "
@@ -3752,9 +3772,7 @@ async def _process_prompt(
                                     flush=True,
                                 )
                             else:
-                                print(
-                                    f"[PP] runtime_gate {_gate_kind} PASS", flush=True
-                                )
+                                print(f"[PP] runtime_gate {_gate_kind} PASS", flush=True)
                             break
                         _rg_attempt += 1
                         print(
@@ -3779,9 +3797,7 @@ async def _process_prompt(
                         # check): only an explicit ok=True earns the merge.
                         _heal_green = False
                         try:
-                            _hc = await orchestrator_client.agent_build(
-                                project_id, project_slug
-                            )
+                            _hc = await orchestrator_client.agent_build(project_id, project_slug)
                             _heal_green = bool(_hc.get("ok", False))
                         except Exception as _hc_exc:
                             print(
@@ -3851,16 +3867,13 @@ async def _process_prompt(
                         _active_checks = [
                             c
                             for c in _cv.checks
-                            if not c.ok
-                            and (c.kind == "wrong_status" or _cov_attempt == 0)
+                            if not c.ok and (c.kind == "wrong_status" or _cov_attempt == 0)
                         ]
                         _cout = [
                             _agf3.GateOutcome(
                                 name="coverage",
                                 passed=not _active_checks,
-                                failures=[
-                                    f"{c.name}: {c.detail}" for c in _active_checks
-                                ],
+                                failures=[f"{c.name}: {c.detail}" for c in _active_checks],
                             )
                         ]
                         _cfix = _agf3.build_fix_instruction(
@@ -3881,9 +3894,7 @@ async def _process_prompt(
                                         project_id,
                                         assistant_message_id,
                                         category="incomplete",
-                                        title=(
-                                            f"Готово {_cv.covered} из {_cv.total} функций"
-                                        ),
+                                        title=(f"Готово {_cv.covered} из {_cv.total} функций"),
                                         detail=(
                                             "Эти возможности пока не отвечают как "
                                             "ожидалось: " + _miss
@@ -3933,9 +3944,7 @@ async def _process_prompt(
                         # gate). A non-green / unverifiable heal is discarded.
                         _cov_green = False
                         try:
-                            _cc = await orchestrator_client.agent_build(
-                                project_id, project_slug
-                            )
+                            _cc = await orchestrator_client.agent_build(project_id, project_slug)
                             _cov_green = bool(_cc.get("ok", False))
                         except Exception as _cc_exc:
                             print(
@@ -3946,8 +3955,7 @@ async def _process_prompt(
                             files.update(_cheal.files)
                         else:
                             print(
-                                "[PP] coverage heal not green — discarding, keeping "
-                                "clean build",
+                                "[PP] coverage heal not green — discarding, keeping clean build",
                                 flush=True,
                             )
                             break
@@ -4115,6 +4123,7 @@ async def _process_prompt(
         # answer below never disagree. The empty-response fallback may switch
         # the model later, but the mode is fixed by the first pass's prompt.
         from omnia_api.core.config import generation_mode as _generation_mode
+
         _gen_mode = _generation_mode(model_id, str(project_id))
         # Non-web templates never emit a web PageIR. `code` (any-language source)
         # and the Python backends (`tgbot`/`api`) write source via <file> blocks,
@@ -4278,8 +4287,7 @@ async def _process_prompt(
                 and (
                     project_template not in CONTAINER_NEXT
                     or (
-                        _settings.use_art_director_entities
-                        and supports_app_brief(project_template)
+                        _settings.use_art_director_entities and supports_app_brief(project_template)
                     )
                 )
             )
@@ -4319,9 +4327,7 @@ async def _process_prompt(
                             discovery_spec=project_discovery_spec,
                         )
                     except Exception as _ad_exc:
-                        _log.warning(
-                            "lean art-director prompt failed, using full: %r", _ad_exc
-                        )
+                        _log.warning("lean art-director prompt failed, using full: %r", _ad_exc)
                         _ad_system = None
                 source = art_director_writer_generate(
                     base_messages=messages,
@@ -4460,11 +4466,7 @@ async def _process_prompt(
                             "message_id": str(assistant_message_id),
                             "pass": event["pass"],
                             "stage": event["stage"],
-                            **{
-                                k: v
-                                for k, v in event.items()
-                                if k not in ("pass", "stage")
-                            },
+                            **{k: v for k, v in event.items() if k not in ("pass", "stage")},
                         },
                     )
                 elif "brief" in event:
@@ -4544,19 +4546,15 @@ async def _process_prompt(
                     for _s, _r in _sr_pairs
                 )
                 _direct_image_edit = (
-                    (
-                        "Генерирую новое фоновое изображение и осветляю затемнение, "
-                        "чтобы оно было видно.\n"
-                        if _bg
-                        else "Генерирую новое изображение для выделенной зоны.\n"
-                    )
-                    + f'<edit path="index.html">\n{_blocks}</edit>\n'
-                )
+                    "Генерирую новое фоновое изображение и осветляю затемнение, "
+                    "чтобы оно было видно.\n"
+                    if _bg
+                    else "Генерирую новое изображение для выделенной зоны.\n"
+                ) + f'<edit path="index.html">\n{_blocks}</edit>\n'
                 if _gp_usage:
                     usage_data = _gp_usage  # type: ignore[assignment]
                 print(
-                    f"[PP] direct_image edit built bg={_bg} pairs={len(_sr_pairs)} "
-                    f"gp={_gp[:60]!r}",
+                    f"[PP] direct_image edit built bg={_bg} pairs={len(_sr_pairs)} gp={_gp[:60]!r}",
                     flush=True,
                 )
 
@@ -4618,6 +4616,7 @@ async def _process_prompt(
         # emits HTML — parsing that as JSON would always fail and just
         # log noise.
         from omnia_api.core.config import get_settings as _get_settings
+
         # Only catalog mode parses the answer as PageIR JSON. Freeform/plain
         # emit HTML in <file> blocks and fall straight through to the extractor.
         # Container-backed Next.js apps emit .tsx <file> blocks, not PageIR JSON —
@@ -4630,6 +4629,7 @@ async def _process_prompt(
 
             from omnia_api.sections import PageIR, render_page  # noqa: F401
             from omnia_api.sections.renderer import render_to_files
+
             raw = accumulated.strip()
             # Strip ```json fences the model may have added despite instructions.
             if raw.startswith("```"):
@@ -4647,6 +4647,7 @@ async def _process_prompt(
                 # Pure + idempotent — safe on every IR. preset_id is the
                 # classifier's pinned preset for this project.
                 from omnia_api.sections import apply_smart_defaults
+
                 ir = apply_smart_defaults(ir, preset_id=project_design_preset_id)
                 # Reuse the existing omnia-kit on disk for the project's template.
                 kit_css = current_files.get("src/assets/omnia-kit.css", "")
@@ -4654,9 +4655,7 @@ async def _process_prompt(
                 rendered = render_to_files(ir, kit_css=kit_css, kit_js=kit_js)
                 # Re-pack into the <file path="..."> format the downstream
                 # extractor expects. Order matters: index.html first.
-                blocks = [
-                    f'<file path="{p}">\n{c}\n</file>' for p, c in rendered.items()
-                ]
+                blocks = [f'<file path="{p}">\n{c}\n</file>' for p, c in rendered.items()]
                 accumulated = "\n".join(blocks)
                 print(
                     f"[PP] catalog_ir_ok sections={len(ir.sections)} "
@@ -4677,6 +4676,7 @@ async def _process_prompt(
                 # rendered <file> blocks so a real site always ships. The free-gen
                 # contextvar rides along, so this retry is not billed on a free gen.
                 from omnia_api.core.config import model_for_role as _model_for_role
+
                 try:
                     _retry_parts: list[str] = []
                     _retry_usage: dict | None = None
@@ -4699,6 +4699,7 @@ async def _process_prompt(
                         _raw2 = _raw2.strip()
                     _ir2 = PageIR.model_validate(_json.loads(_raw2))
                     from omnia_api.sections import apply_smart_defaults as _asd
+
                     _ir2 = _asd(_ir2, preset_id=project_design_preset_id)
                     # NB: kit_css/kit_js are assigned in the try-block AFTER the
                     # validate that just failed, so they're unbound here — fetch
@@ -4721,13 +4722,9 @@ async def _process_prompt(
                     # model-switch) downstream is the final fallback.
 
         try:
-            files, edit_conflicts = _extract_files_and_edits(
-                accumulated, current_files
-            )
+            files, edit_conflicts = _extract_files_and_edits(accumulated, current_files)
             if edit_conflicts:
-                _log.warning(
-                    "edit conflicts on first pass: %s", edit_conflicts[:5]
-                )
+                _log.warning("edit conflicts on first pass: %s", edit_conflicts[:5])
         except (UnsafePathError, ValueError) as e:
             # Unparsable answer — persist an honest note, not the raw model dump
             # (which would render as code / a lying chip in the chat on reload).
@@ -4774,9 +4771,7 @@ async def _process_prompt(
             # byte-exact SEARCH blocks far more reliably than the cheap edit model
             # (restores d61214b, clobbered by 2133cfd on a stale base).
             _esc_model = model_for_role("edit_escalation", override=force_model)
-            await _run_stream(
-                _esc_model, force_single_shot=True, force_all=_esc_model
-            )
+            await _run_stream(_esc_model, force_single_shot=True, force_all=_esc_model)
             _retry_acc = str(state["accumulated"])
             if _retry_acc.strip():
                 accumulated = accumulated + "\n" + _retry_acc
@@ -4815,9 +4810,7 @@ async def _process_prompt(
                 flush=True,
             )
             _esc_model = model_for_role("edit_escalation", override=force_model)
-            await _run_stream(
-                _esc_model, force_single_shot=True, force_all=_esc_model
-            )
+            await _run_stream(_esc_model, force_single_shot=True, force_all=_esc_model)
             _cr_acc = str(state["accumulated"])
             if _cr_acc.strip():
                 try:
@@ -4849,9 +4842,7 @@ async def _process_prompt(
         # and splice it back, so the rest of the page (other sections + their
         # images) stays byte-identical. This is the "выбрал секцию → меняю только
         # её, не переписываю весь сайт" path the owner asked for.
-        if surgical and not files and selected_elements and current_files.get(
-            "index.html"
-        ):
+        if surgical and not files and selected_elements and current_files.get("index.html"):
             from omnia_api.services import zone_edit as _ze
             from omnia_api.services.prompt_builder import build_zone_edit_messages
 
@@ -4861,10 +4852,7 @@ async def _process_prompt(
             )
             if _span is not None:
                 _block = _old_index_src[_span[0] : _span[1]]
-                _z_notice = (
-                    "\n\n*Меняю только выделенную зону, остальную страницу не "
-                    "трогаю…*\n\n"
-                )
+                _z_notice = "\n\n*Меняю только выделенную зону, остальную страницу не трогаю…*\n\n"
                 accumulated = accumulated + _z_notice
                 await publish_event(
                     project_id,
@@ -4879,9 +4867,7 @@ async def _process_prompt(
                 _z_usage: dict[str, Any] | None = None
                 try:
                     async for _ev in stream_chat_completion(
-                        build_zone_edit_messages(
-                            _block, prompt_text, selected_elements
-                        ),
+                        build_zone_edit_messages(_block, prompt_text, selected_elements),
                         model_for_role("freeform_writer", override=force_model),
                         str(user_id),
                         str(project_id),
@@ -4902,12 +4888,8 @@ async def _process_prompt(
                 _old_root_id = _ze.root_id(_block)
                 # Accept only a real block whose root id matches (proves the model
                 # returned the SAME zone rewritten, not a different/empty thing).
-                if _new_block and (
-                    _old_root_id is None or _ze.root_id(_new_block) == _old_root_id
-                ):
-                    files = {
-                        "index.html": _ze.splice(_old_index_src, _span, _new_block)
-                    }
+                if _new_block and (_old_root_id is None or _ze.root_id(_new_block) == _old_root_id):
+                    files = {"index.html": _ze.splice(_old_index_src, _span, _new_block)}
                     if _z_usage:
                         usage_data = _z_usage  # type: ignore[assignment]
                     # Clean chip in chat — never the raw <section>.
@@ -4936,8 +4918,7 @@ async def _process_prompt(
                 current_files, history_serialized, prompt_text, selected_elements
             )
             _rw_notice = (
-                "\n\n*Точечно не вышло — переписываю страницу аккуратно, сохраняя "
-                "остальное…*\n\n"
+                "\n\n*Точечно не вышло — переписываю страницу аккуратно, сохраняя остальное…*\n\n"
             )
             accumulated = accumulated + _rw_notice
             await publish_event(
@@ -4998,9 +4979,7 @@ async def _process_prompt(
                         f"[PP] surgical_rewrite_fallback salvaged_html len={len(_salvaged)}",
                         flush=True,
                     )
-            _ratio = (
-                _text_preserved_ratio(_old_index, _new_index) if _new_index else 0.0
-            )
+            _ratio = _text_preserved_ratio(_old_index, _new_index) if _new_index else 0.0
             # ≥0.6 of the original words must survive — a real scoped edit keeps
             # the copy; a re-design replaces it. Reject the drift, keep the page.
             if _new_index and _ratio >= 0.6:
@@ -5063,9 +5042,7 @@ async def _process_prompt(
                         _targets[_p] = current_files[_p]
             except (UnsafePathError, ValueError):
                 pass
-            for _m in re.finditer(
-                r"(?:Файл|file)\s*[:=]\s*([^\s,;]+)", prompt_text, re.I
-            ):
+            for _m in re.finditer(r"(?:Файл|file)\s*[:=]\s*([^\s,;]+)", prompt_text, re.I):
                 _cand = _m.group(1).strip().strip("`\"'.")
                 if _cand in current_files and _cand not in _targets:
                     _targets[_cand] = current_files[_cand]
@@ -5200,7 +5177,9 @@ async def _process_prompt(
                     flush=True,
                 )
                 await _run_stream(
-                    model_id, force_multipass=True, force_all=force_model,
+                    model_id,
+                    force_multipass=True,
+                    force_all=force_model,
                     allow_art_director=False,
                 )
                 mp_acc = str(state["accumulated"])
@@ -5212,15 +5191,12 @@ async def _process_prompt(
                 retried_models.append(f"{model_id}#multipass")
                 if mp_err:
                     print(
-                        f"[PP] same_model_multipass_error "
-                        f"{model_id}: {mp_err!r}",
+                        f"[PP] same_model_multipass_error {model_id}: {mp_err!r}",
                         flush=True,
                     )
                 else:
                     try:
-                        files, _ = _extract_files_and_edits(
-                            accumulated, current_files
-                        )
+                        files, _ = _extract_files_and_edits(accumulated, current_files)
                     except (UnsafePathError, ValueError):
                         files = {}
                     # If multipass of the same model recovered the output
@@ -5295,8 +5271,7 @@ async def _process_prompt(
                 files = repair_dead_links_inline(files)
                 post_inline = find_dead_links(files)
                 print(
-                    f"[PP] dead_links initial={len(initial_dead)} "
-                    f"after_inline={len(post_inline)}",
+                    f"[PP] dead_links initial={len(initial_dead)} after_inline={len(post_inline)}",
                     flush=True,
                 )
                 dead = post_inline
@@ -5306,10 +5281,7 @@ async def _process_prompt(
             # (auto_regenerate_enabled). The inline href fixer above already ran
             # (a targeted edit, kept); the LLM re-roll regenerates whole files, so
             # it only fires when auto-regen is explicitly re-enabled.
-            if (
-                get_settings().auto_regenerate_enabled
-                and len(dead) > _DEAD_LINK_LLM_THRESHOLD
-            ):
+            if get_settings().auto_regenerate_enabled and len(dead) > _DEAD_LINK_LLM_THRESHOLD:
                 print(f"[PP] dead_links remain={len(dead)} -> LLM repair pass", flush=True)
                 prior_answer = accumulated
                 notice = (
@@ -5342,9 +5314,7 @@ async def _process_prompt(
                 )
                 repaired_acc = str(state["accumulated"])
                 try:
-                    repaired_files, _ = _extract_files_and_edits(
-                        repaired_acc, current_files
-                    )
+                    repaired_files, _ = _extract_files_and_edits(repaired_acc, current_files)
                 except (UnsafePathError, ValueError):
                     repaired_files = {}
                 if repaired_files and len(find_dead_links(repaired_files)) < len(dead):
@@ -5359,7 +5329,12 @@ async def _process_prompt(
         # dropped them (so animations/interactivity never silently break).
         # Imported projects: skip entirely — their HTML is foreign and must not
         # have Omnia's kit injected (it would break the layout and leak branding).
-        if files and project_template not in CONTAINER_NEXT and not _is_code and not project_is_imported:
+        if (
+            files
+            and project_template not in CONTAINER_NEXT
+            and not _is_code
+            and not project_is_imported
+        ):
             files = {p: c for p, c in files.items() if p not in KIT_FILES}
             files = _ensure_kit_linked(files)
 
@@ -5425,15 +5400,13 @@ async def _process_prompt(
         if files:
             try:
                 html_pool = {
-                    p: c for p, c in files.items()
-                    if p.endswith(".html") or p.endswith(".htm")
+                    p: c for p, c in files.items() if p.endswith(".html") or p.endswith(".htm")
                 }
                 if html_pool:
                     report = ui_audit(html_pool)
                     failed_ids = [f.check_id for f in report.failures]
                     print(
-                        f"[PP] ui_audit score={report.score}/{report.max} "
-                        f"failed={failed_ids}",
+                        f"[PP] ui_audit score={report.score}/{report.max} failed={failed_ids}",
                         flush=True,
                     )
                     if pipeline_debug.enabled():
@@ -5443,8 +5416,7 @@ async def _process_prompt(
                             "06_ui_audit.md",
                             f"score={report.score}/{report.max}\n\n"
                             + "\n".join(
-                                f"- [{f.severity}] {f.check_id}: "
-                                f"{f.description} | {f.evidence}"
+                                f"- [{f.severity}] {f.check_id}: {f.description} | {f.evidence}"
                                 for f in report.failures
                             ),
                         )
@@ -5495,14 +5467,11 @@ async def _process_prompt(
             _retry_eligible = (
                 # Catalog-only retry (re-rolls the IR). Freeform quality is
                 # handled by the Phase 11 acceptance gate, not here.
-                _gen_mode == "catalog"
-                and _last_report is not None
-                and not _retry_done
+                _gen_mode == "catalog" and _last_report is not None and not _retry_done
             )
             if _retry_eligible and _AUDIT_JUDGE_LOW <= _score <= _AUDIT_JUDGE_HIGH:
                 _judge_html = "\n".join(
-                    c for p, c in files.items()
-                    if p.endswith(".html") or p.endswith(".htm")
+                    c for p, c in files.items() if p.endswith(".html") or p.endswith(".htm")
                 )
                 _verdict = await _audit_judge_wants_retry(
                     html=_judge_html,
@@ -5561,6 +5530,7 @@ async def _process_prompt(
                         from omnia_api.sections.renderer import (
                             render_to_files as _render_to_files_r,
                         )
+
                         raw_r = retry_accumulated.strip()
                         if raw_r.startswith("```"):
                             raw_r = raw_r.split("\n", 1)[1] if "\n" in raw_r else raw_r[3:]
@@ -5571,6 +5541,7 @@ async def _process_prompt(
                             ir_r = _PageIR_r.model_validate(_json_r.loads(raw_r))
                             # Phase L8 — Smart Defaults on retry IR too.
                             from omnia_api.sections import apply_smart_defaults as _smart_r
+
                             ir_r = _smart_r(ir_r, preset_id=project_design_preset_id)
                             kit_css_r = current_files.get("src/assets/omnia-kit.css", "")
                             kit_js_r = current_files.get("src/assets/omnia-kit.js", "")
@@ -5580,8 +5551,7 @@ async def _process_prompt(
                             # Replace files for downstream stages.
                             files = dict(rendered_r)
                             accumulated = "\n".join(
-                                f'<file path="{p}">\n{c}\n</file>'
-                                for p, c in rendered_r.items()
+                                f'<file path="{p}">\n{c}\n</file>' for p, c in rendered_r.items()
                             )
                             # Merge retry usage onto first-pass usage.
                             if usage_data is None:
@@ -5605,7 +5575,8 @@ async def _process_prompt(
                             # Re-audit so logs show the post-retry score.
                             try:
                                 html_pool_r = {
-                                    p: c for p, c in files.items()
+                                    p: c
+                                    for p, c in files.items()
                                     if p.endswith(".html") or p.endswith(".htm")
                                 }
                                 if html_pool_r:
@@ -5659,9 +5630,7 @@ async def _process_prompt(
                         },
                     )
 
-                _on_img = (
-                    _emit_img if get_settings().use_live_image_events else None
-                )
+                _on_img = _emit_img if get_settings().use_live_image_events else None
                 files, resolved, total = await asyncio.wait_for(
                     resolve_images(files, str(project_id), on_image=_on_img),
                     timeout=75,
@@ -5844,6 +5813,7 @@ async def _process_prompt(
         ):
             await _emit_stage("judge", "start")
             from omnia_api.services import acceptance as _acceptance
+
             # Design judge (premium / on-button): force the Awwwards vision-critic
             # and allow EXACTLY ONE repair re-roll even in score-only mode (owner:
             # the judge must NOT loop many times — 1 iteration is the whole point).
@@ -5866,9 +5836,7 @@ async def _process_prompt(
             # re-rolls, and ONLY when `acceptance_taste_repair_on_generic` is on.
             # Default (flag OFF / passes 0) leaves `_max_acc` untouched.
             if _acc_settings.acceptance_taste_repair_on_generic:
-                _max_acc = max(
-                    _max_acc, int(_acc_settings.acceptance_taste_repair_passes)
-                )
+                _max_acc = max(_max_acc, int(_acc_settings.acceptance_taste_repair_passes))
             # Area D (anti-sameness, DARK): soften the catalog fallback. A gauntlet/
             # structural fail (verdict "broken" / struct-not-ok — both already
             # `_repair_worthy`) earns up to `acceptance_gate_repair_passes` freeform
@@ -5878,9 +5846,7 @@ async def _process_prompt(
             # `auto_regenerate_enabled` (a targeted feedback re-roll, not a blind
             # full-page regen). Default 0 → straight to catalog (today's behaviour).
             if int(_acc_settings.acceptance_gate_repair_passes) > 0:
-                _max_acc = max(
-                    _max_acc, int(_acc_settings.acceptance_gate_repair_passes)
-                )
+                _max_acc = max(_max_acc, int(_acc_settings.acceptance_gate_repair_passes))
             # Repair floor: only spend a repair re-roll on a genuinely deficient
             # page (see acceptance_repair_floor docstring) — not on every
             # borderline vision score.
@@ -6003,7 +5969,8 @@ async def _process_prompt(
                     # on timeout we ship the pre-repair page and reach commit.
                     await asyncio.wait_for(
                         _run_stream(
-                            effective_model, force_all=force_model,
+                            effective_model,
+                            force_all=force_model,
                             allow_art_director=False,
                         ),
                         timeout=120,
@@ -6121,8 +6088,10 @@ async def _process_prompt(
         if files and not surgical:
             if pipeline_debug.enabled():
                 pipeline_debug.dump(
-                    project_id, assistant_message_id,
-                    "07_pre_palette_guard.html", files.get("index.html", ""),
+                    project_id,
+                    assistant_message_id,
+                    "07_pre_palette_guard.html",
+                    files.get("index.html", ""),
                 )
             try:
                 from omnia_api.services.app_theme import apply_app_palette
@@ -6134,8 +6103,10 @@ async def _process_prompt(
                 ).palette
                 if pipeline_debug.enabled():
                     pipeline_debug.dump(
-                        project_id, assistant_message_id,
-                        "07b_forced_palette.md", repr(_palette),
+                        project_id,
+                        assistant_message_id,
+                        "07b_forced_palette.md",
+                        repr(_palette),
                     )
                 # Entity/.tsx apps theme via a brand :root override in
                 # (app)/layout.tsx, NOT via index.html — enforce_palette below is
@@ -6149,8 +6120,10 @@ async def _process_prompt(
             files = enforce_contrast(files)
             if pipeline_debug.enabled():
                 pipeline_debug.dump(
-                    project_id, assistant_message_id,
-                    "08_post_palette_guard.html", files.get("index.html", ""),
+                    project_id,
+                    assistant_message_id,
+                    "08_post_palette_guard.html",
+                    files.get("index.html", ""),
                 )
 
         # ── Brief-narration bake (v2.21 #1A, pillar 3+4) — BEFORE commit ──
@@ -6174,9 +6147,7 @@ async def _process_prompt(
             try:
                 from omnia_api.services.brief_narration import inject_brief_narration
 
-                files["index.html"] = inject_brief_narration(
-                    files["index.html"], _bn_brief
-                )
+                files["index.html"] = inject_brief_narration(files["index.html"], _bn_brief)
                 print("[PP] brief_narration baked into index.html", flush=True)
             except Exception as _bn_exc:
                 print(f"[PP] brief_narration skipped err={_bn_exc!r}", flush=True)
@@ -6230,10 +6201,7 @@ async def _process_prompt(
                 snapshot_model_id = (
                     model_id
                     if model_id != routing_model
-                    else (
-                        force_model
-                        or (ORCHESTRATION_LABEL if orchestrate else routing_model)
-                    )
+                    else (force_model or (ORCHESTRATION_LABEL if orchestrate else routing_model))
                 )
                 snapshot = Snapshot(
                     project_id=project_id,
@@ -6272,9 +6240,7 @@ async def _process_prompt(
                 if is_free:
                     user_row = await session.get(User, user_id)
                     if user_row is not None:
-                        user_row.free_generations_used = (
-                            user_row.free_generations_used or 0
-                        ) + 1
+                        user_row.free_generations_used = (user_row.free_generations_used or 0) + 1
 
                 # Billing is the LLM Gateway's responsibility — it already
                 # wrote `wallet_charges` + `usage` + decremented `wallets`
@@ -6322,6 +6288,7 @@ async def _process_prompt(
             if _gen_mode == "freeform" and _acc_fingerprint is not None:
                 try:
                     from omnia_api.services import originality as _originality
+
                     await _originality.remember(str(project_id), _acc_fingerprint)
                 except Exception as _fp_exc:
                     print(f"[PP] originality remember failed: {_fp_exc!r}", flush=True)
@@ -6379,8 +6346,11 @@ async def _process_prompt(
 
                         try:
                             _repaired, _sr_err, _sr_cat = await _run_app_self_repair(
-                                project_id, project.slug, files,
-                                passes=_sr_passes, on_notice=_sr_notice,
+                                project_id,
+                                project.slug,
+                                files,
+                                passes=_sr_passes,
+                                on_notice=_sr_notice,
                             )
                         except Exception as _sr_exc:
                             print(f"[PP] self_repair loop failed: {_sr_exc!r}", flush=True)
@@ -6392,12 +6362,16 @@ async def _process_prompt(
                             try:
                                 files = {**files, **_repaired}
                                 _rep_sha = await asyncio.to_thread(
-                                    repo_svc.commit_files, project_id, files,
-                                    "AI: авто-починка сборки", new_sha,
+                                    repo_svc.commit_files,
+                                    project_id,
+                                    files,
+                                    "AI: авто-починка сборки",
+                                    new_sha,
                                 )
                                 async with factory() as _s:
                                     _rep_snap = Snapshot(
-                                        project_id=project_id, commit_sha=_rep_sha,
+                                        project_id=project_id,
+                                        commit_sha=_rep_sha,
                                         prompt_text="авто-починка сборки",
                                         model_id=snapshot_model_id,
                                         parent_id=new_snapshot_id,
@@ -6418,7 +6392,8 @@ async def _process_prompt(
                                     await _s.refresh(_rep_snap)
                                 await asyncio.to_thread(enqueue_preview, _rep_snap.id)
                                 await publish_event(
-                                    project_id, "snapshot.created",
+                                    project_id,
+                                    "snapshot.created",
                                     {"snapshot": _snapshot_payload(_rep_snap)},
                                 )
                                 await _sr_notice(
@@ -6430,7 +6405,9 @@ async def _process_prompt(
                         elif _sr_err is not None:
                             # Still broken after the loop — surface the card (old path).
                             await app_errors.publish(
-                                factory, project_id, assistant_message_id,
+                                factory,
+                                project_id,
+                                assistant_message_id,
                                 category=_sr_cat or "compile",
                                 detail=str(
                                     _sr_err.get("error") or "Не удалось собрать приложение."
@@ -6451,9 +6428,10 @@ async def _process_prompt(
                     # Runs in the worker (the only process that can reach the dev
                     # container over the runtime network), not here. Independent of
                     # the compile probe — it surfaces its own quality card.
-                    if (
-                        not drizzle_exit or drizzle_exit in ("0", "n/a")
-                    ) and project.template in ("nextjs_entities", "fullstack"):
+                    if (not drizzle_exit or drizzle_exit in ("0", "n/a")) and project.template in (
+                        "nextjs_entities",
+                        "fullstack",
+                    ):
                         if get_settings().acceptance_entity_composition_gate:
                             await asyncio.to_thread(
                                 enqueue_entity_gate,
@@ -6531,7 +6509,11 @@ async def _process_prompt(
 
     except Exception as e:
         import traceback as _tb
-        print(f"[PP] FATAL project={project_id} asst={assistant_message_id} err={e!r}\n{_tb.format_exc()}", flush=True)
+
+        print(
+            f"[PP] FATAL project={project_id} asst={assistant_message_id} err={e!r}\n{_tb.format_exc()}",
+            flush=True,
+        )
         # Mark the assistant row as failed so the UI input unblocks instead of
         # spinning forever; otherwise tokens_out stays NULL and ChatPanel
         # treats the message as still-streaming.
@@ -6545,6 +6527,7 @@ async def _process_prompt(
                     await session.commit()
         except Exception:
             import traceback as _tb2
+
             print(f"[PP] failure_marker_write_failed\n{_tb2.format_exc()}", flush=True)
         await publish_event(
             project_id,

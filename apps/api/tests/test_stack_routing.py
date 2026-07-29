@@ -295,9 +295,7 @@ async def test_pivot_static_to_app_escalates_static_to_entities() -> None:
     session = _FakeSession()
     project = _FakeProject(template="blank")
     old_snap = project.current_snapshot_id
-    result = await stack_routing.pivot_static_to_app(
-        session, project, "nextjs_entities"
-    )
+    result = await stack_routing.pivot_static_to_app(session, project, "nextjs_entities")
     assert result == "nextjs_entities"
     assert project.template == "nextjs_entities"
     assert session.committed
@@ -311,9 +309,7 @@ async def test_pivot_static_to_app_idempotent_for_container() -> None:
     for tmpl in ("nextjs_entities", "spa", "fullstack"):
         session = _FakeSession()
         project = _FakeProject(template=tmpl)
-        result = await stack_routing.pivot_static_to_app(
-            session, project, "nextjs_entities"
-        )
+        result = await stack_routing.pivot_static_to_app(session, project, "nextjs_entities")
         assert result is None
         assert project.template == tmpl
         assert not session.committed
@@ -377,22 +373,29 @@ async def test_provision_skipped_for_static() -> None:
 async def test_provision_container(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
-    async def _fake_provision(*, project_id, slug, template, tier):  # type: ignore[no-untyped-def]
+    async def _fake_provision(  # type: ignore[no-untyped-def]
+        *, project_id, slug, template, tier, timeout
+    ):
         seen["template"] = template
+        seen["timeout"] = timeout
         return {"state": "running"}
 
     monkeypatch.setattr(orchestrator_client, "provision", _fake_provision)
     ok = await stack_routing.ensure_provisioned(uuid4(), "slug", "nextjs_entities")
     assert ok is True
     assert seen["template"] == "nextjs-entities"  # mapped to orchestrator dir name
+    assert seen["timeout"] == 30.0
 
 
 async def test_provision_spa_container(monkeypatch: pytest.MonkeyPatch) -> None:
     """Phase 7.2 — the spa stack provisions the vite-react-spa image."""
     seen: dict[str, object] = {}
 
-    async def _fake_provision(*, project_id, slug, template, tier):  # type: ignore[no-untyped-def]
+    async def _fake_provision(  # type: ignore[no-untyped-def]
+        *, project_id, slug, template, tier, timeout
+    ):
         seen["template"] = template
+        seen["timeout"] = timeout
         return {"state": "running"}
 
     monkeypatch.setattr(orchestrator_client, "provision", _fake_provision)
@@ -409,6 +412,45 @@ async def test_provision_failsoft(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(orchestrator_client, "provision", _boom)
     assert await stack_routing.ensure_provisioned(uuid4(), "slug", "fullstack") is False
+
+
+async def test_required_provision_waits_for_ready_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_provision(**kwargs: object) -> dict[str, object]:
+        seen.update(kwargs)
+        return {"state": "running"}
+
+    monkeypatch.setattr(orchestrator_client, "provision", _fake_provision)
+    assert (
+        await stack_routing.ensure_provisioned(
+            uuid4(),
+            "slug",
+            "max_miniapp",
+            require_ready=True,
+        )
+        is True
+    )
+    assert seen["template"] == "max-miniapp-nextjs"
+    assert seen["timeout"] == 420.0
+
+
+async def test_required_provision_fails_before_agent_uses_missing_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _not_ready(**_: object) -> dict[str, object]:
+        return {"state": "provisioning"}
+
+    monkeypatch.setattr(orchestrator_client, "provision", _not_ready)
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        await stack_routing.ensure_provisioned(
+            uuid4(),
+            "slug",
+            "max_miniapp",
+            require_ready=True,
+        )
 
 
 # ── BLIND SPOT BS-3 (dogfood-eval run #2, 2026-06-16) ────────────────────────

@@ -75,7 +75,10 @@ async def reserve_generation_run(
     if active is not None and active.assistant_message_id is not None:
         assistant = await session.get(Message, active.assistant_message_id)
         if assistant is not None and assistant.tokens_out is not None:
-            active.status = "completed"
+            build_failed = active.response_mode == "build" and assistant.snapshot_id is None
+            active.status = "failed" if build_failed else "completed"
+            if build_failed and not active.error:
+                active.error = "build finished without a committed snapshot"
             active.finished_at = datetime.now(UTC)
             await session.flush()
             active = None
@@ -187,3 +190,89 @@ async def set_generation_run_status(
         if error is not None:
             run.error = error[:2000]
         await session.commit()
+
+
+async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
+    run = await session.get(GenerationRun, run_id)
+    if run is None:
+        return "failed"
+    message = (
+        await session.get(Message, run.assistant_message_id)
+        if run.assistant_message_id is not None
+        else None
+    )
+    build_failed = run.response_mode == "build" and (message is None or message.snapshot_id is None)
+    run.status = "failed" if build_failed else "completed"
+    run.finished_at = datetime.now(UTC)
+    if build_failed and not run.error:
+        run.error = "build finished without a committed snapshot"
+    await session.commit()
+    return run.status
+
+
+async def finalize_generation_run(
+    run_id: UUID,
+    session: AsyncSession | None = None,
+) -> str:
+    """Finish a run according to its product outcome, not coroutine survival.
+
+    A build coroutine can terminate normally after the agent reports a red build
+    or an unavailable container.  Historically that was recorded as
+    ``completed`` even though no snapshot existed.  Build turns are successful
+    only when their assistant message points at a committed snapshot; clarify
+    turns and legitimate edit no-ops remain successful without one.
+    """
+
+    if session is not None:
+        return await _finalize_generation_run(session, run_id)
+
+    from omnia_api.core.db import get_engine
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as own_session:
+        return await _finalize_generation_run(own_session, run_id)
+
+
+async def _reconcile_completed_build_runs(session: AsyncSession) -> int:
+    runs = list(
+        (
+            await session.execute(
+                select(GenerationRun).where(
+                    GenerationRun.status == "completed",
+                    GenerationRun.response_mode == "build",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    changed = 0
+    for run in runs:
+        message = (
+            await session.get(Message, run.assistant_message_id)
+            if run.assistant_message_id is not None
+            else None
+        )
+        if message is not None and message.snapshot_id is not None:
+            continue
+        run.status = "failed"
+        run.error = run.error or "build finished without a committed snapshot"
+        run.finished_at = run.finished_at or datetime.now(UTC)
+        changed += 1
+    await session.commit()
+    return changed
+
+
+async def reconcile_completed_build_runs(
+    session: AsyncSession | None = None,
+) -> int:
+    """Correct historical builds that were labelled complete without a snapshot."""
+
+    if session is not None:
+        return await _reconcile_completed_build_runs(session)
+
+    from omnia_api.core.db import get_engine
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as own_session:
+        return await _reconcile_completed_build_runs(own_session)

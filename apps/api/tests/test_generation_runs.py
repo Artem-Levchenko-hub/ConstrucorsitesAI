@@ -14,9 +14,12 @@ from omnia_api.main import app
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import messages
 from omnia_api.services.generation_runs import (
+    finalize_generation_run,
+    reconcile_completed_build_runs,
     recover_interrupted_generation_runs,
     reserve_generation_run,
 )
@@ -213,15 +216,23 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
             f"/api/projects/{project.id}/prompt",
             json={**payload, "idempotency_key": "submit-77777777"},
         )
+        latest = await client.get(f"/api/projects/{project.id}/generation")
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
     assert first.status_code == 202
     assert replay.status_code == 202
-    assert replay.json() == first.json()
+    assert replay.json()["run_id"] == first.json()["run_id"]
+    assert replay.json()["message_id"] == first.json()["message_id"]
+    assert first.json()["replayed"] is False
+    assert replay.json()["replayed"] is True
+    assert replay.json()["run_status"] == "pending"
     assert first.json()["run_id"]
     assert len(spawned) == 1
     assert blocked.status_code == 409
+    assert latest.status_code == 200
+    assert latest.json()["id"] == first.json()["run_id"]
+    assert latest.json()["status"] == "pending"
 
     rows = (
         await db_session.execute(
@@ -288,6 +299,154 @@ async def test_tracked_prompt_cancels_the_actual_work(
     assert statuses == ["running"]
     assert work_cancelled.is_set()
     assert finalised == [run_id]
+
+
+async def test_tracked_prompt_uses_product_outcome_finalizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid.uuid4()
+    project_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    statuses: list[str] = []
+    finalized: list[uuid.UUID] = []
+
+    async def _work() -> None:
+        return None
+
+    async def _status(_run_id: uuid.UUID, new_status: str, **_: object) -> None:
+        statuses.append(new_status)
+
+    async def _finalize(finished_run_id: uuid.UUID) -> str:
+        finalized.append(finished_run_id)
+        return "completed"
+
+    async def _never_cancel(_run_id: uuid.UUID) -> None:
+        await asyncio.Future()
+
+    async def _clear(_run_id: uuid.UUID) -> None:
+        return None
+
+    monkeypatch.setattr(messages, "set_generation_run_status", _status)
+    monkeypatch.setattr(messages, "finalize_generation_run", _finalize)
+    monkeypatch.setattr(messages, "_wait_for_generation_cancel", _never_cancel)
+    monkeypatch.setattr(messages, "clear_generation_cancel", _clear)
+
+    await messages._run_tracked_prompt(
+        _work(),
+        run_id=run_id,
+        project_id=project_id,
+        assistant_message_id=message_id,
+        label="test",
+    )
+
+    assert statuses == ["running"]
+    assert finalized == [run_id]
+
+
+async def test_build_without_snapshot_is_failed_product_outcome(
+    db_session: AsyncSession,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    assistant = Message(
+        project_id=project.id,
+        role="assistant",
+        content="Сборка прервана",
+        tokens_in=0,
+        tokens_out=0,
+    )
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="build-no-snapshot",
+        prompt_hash="hash",
+        status="running",
+        response_mode="build",
+    )
+    db_session.add(run)
+    await db_session.commit()
+
+    assert await finalize_generation_run(run.id, db_session) == "failed"
+
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.finished_at is not None
+    assert run.error == "build finished without a committed snapshot"
+
+
+async def test_build_with_snapshot_is_completed_product_outcome(
+    db_session: AsyncSession,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    snapshot = Snapshot(
+        project_id=project.id,
+        commit_sha="a" * 40,
+        prompt_text="Собери приложение",
+        model_id="test",
+    )
+    db_session.add(snapshot)
+    await db_session.flush()
+    assistant = Message(
+        project_id=project.id,
+        role="assistant",
+        content="Готово",
+        snapshot_id=snapshot.id,
+        tokens_in=1,
+        tokens_out=1,
+    )
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="build-with-snapshot",
+        prompt_hash="hash",
+        status="running",
+        response_mode="build",
+    )
+    db_session.add(run)
+    await db_session.commit()
+
+    assert await finalize_generation_run(run.id, db_session) == "completed"
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.finished_at is not None
+
+
+async def test_reconcile_historical_completed_build_without_snapshot(
+    db_session: AsyncSession,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    assistant = Message(
+        project_id=project.id,
+        role="assistant",
+        content="Агент остановился без результата",
+        tokens_in=0,
+        tokens_out=0,
+    )
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="historical-false-complete",
+        prompt_hash="hash",
+        status="completed",
+        response_mode="build",
+    )
+    db_session.add(run)
+    await db_session.commit()
+
+    assert await reconcile_completed_build_runs(db_session) == 1
+
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.error == "build finished without a committed snapshot"
 
 
 async def test_startup_recovery_releases_interrupted_run(
