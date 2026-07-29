@@ -120,3 +120,27 @@ async def test_max_connection_rejects_non_max_project(
     )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "max_project_required"
+
+
+async def test_max_connection_surfaces_tls_trust_failure(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = await _register_and_create(client, monkeypatch)
+
+    async def fail_tls(_token: str) -> max_client.MaxBot:
+        raise max_client.MaxTlsConfigurationError(
+            "TLS-сертификат MAX API не прошёл проверку доверия"
+        )
+
+    monkeypatch.setattr(max_client, "get_me", fail_tls)
+    response = await client.post(
+        f"/api/projects/{project_id}/integrations/max/connect",
+        json={"token": "max-bot-secret-value"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"] == {
+        "code": "max_api_tls_untrusted",
+        "message": "TLS-сертификат MAX API не прошёл проверку доверия",
+    }

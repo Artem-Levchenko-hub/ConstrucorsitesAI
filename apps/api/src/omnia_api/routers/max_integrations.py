@@ -74,6 +74,8 @@ def _public(project: Project, integration: MaxIntegration | None) -> MaxIntegrat
 def _map_client_error(exc: max_client.MaxClientError) -> ApiError:
     if isinstance(exc, max_client.MaxTokenInvalid):
         return ApiError("max_token_invalid", str(exc), status.HTTP_401_UNAUTHORIZED)
+    if isinstance(exc, max_client.MaxTlsConfigurationError):
+        return ApiError("max_api_tls_untrusted", str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
     if isinstance(exc, max_client.MaxApiUnavailable):
         return ApiError("max_api_unavailable", str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
     return ApiError("max_webhook_failed", str(exc), status.HTTP_502_BAD_GATEWAY)

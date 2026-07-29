@@ -59,6 +59,7 @@ ErrorCode = Literal[
     "max_integration_not_found",
     "max_token_invalid",
     "max_api_unavailable",
+    "max_api_tls_untrusted",
     "max_project_required",
     "max_deploy_required",
     "max_webhook_failed",
