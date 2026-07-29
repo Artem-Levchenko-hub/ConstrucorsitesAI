@@ -22,6 +22,10 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { EASE_OUT, springSnappy } from "@/lib/motion";
+import {
+  editorModeMessages,
+  type EditorMode,
+} from "@/lib/editor-bridge";
 import { listSnapshots } from "@/lib/api/snapshots";
 import { listMessages, reportClientError } from "@/lib/api/messages";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
@@ -97,18 +101,23 @@ export function PreviewFrame({ project }: { project: Project }) {
   // where iframeKey itself does not change.
   const editorAckRef = useRef<{
     win: Window;
-    mode: "inspect" | "style" | "off";
+    mode: EditorMode;
   } | null>(null);
   const postToPreview = useCallback((msg: Record<string, unknown>) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
-  const editorMode: "inspect" | "style" | "off" = styleMode
+  const editorMode: EditorMode = styleMode
     ? "style"
     : inspectMode
       ? "inspect"
       : "off";
   const syncEditorMode = useCallback(() => {
-    postToPreview({ type: "omnia:editor:set-mode", mode: editorMode });
+    // New inspectors consume the atomic command. Existing generated projects
+    // can still carry the legacy-only script, so follow it with one ordered
+    // disable/enable pair whose LAST message always enables the requested mode.
+    // Keeping this in one function preserves the no-race invariant on retries,
+    // frame loads and ready handshakes alike.
+    editorModeMessages(editorMode).forEach(postToPreview);
   }, [editorMode, postToPreview]);
 
   const { data: snapshots, isPending } = useQuery({
@@ -348,7 +357,11 @@ export function PreviewFrame({ project }: { project: Project }) {
         return;
       }
       if (d.type === "omnia:inspect:ready") {
-        // The script may register after the first parent postMessage.
+        // Both inspector generations emit ready. Legacy inspectors do not emit
+        // editor:state, but ready is their protocol-level proof that the ordered
+        // legacy commands below can be consumed; latch it so a healthy old
+        // project does not show a false timeout.
+        editorAckRef.current = { win, mode: editorMode };
         syncEditorMode();
         return;
       }
@@ -397,7 +410,14 @@ export function PreviewFrame({ project }: { project: Project }) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [addSelection, project.id, viewingOld, qc, syncEditorMode]);
+  }, [
+    addSelection,
+    editorMode,
+    project.id,
+    viewingOld,
+    qc,
+    syncEditorMode,
+  ]);
 
   // A new committed snapshot = a fresh build/edit: forget which preview errors
   // we've already reported so genuine errors on the new code surface again.
