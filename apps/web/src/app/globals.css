@@ -182,6 +182,33 @@
   }
   .omnia-no-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
+  .max-studio-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(141 131 255 / 0.45) transparent;
+  }
+  .max-studio-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .max-studio-scroll::-webkit-scrollbar-track { background: transparent; }
+  .max-studio-scroll::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background: rgb(141 131 255 / 0.38);
+    background-clip: padding-box;
+  }
+
+  /* The dedicated MAX workspace stays usable on phones: editor above, mobile
+     preview below. Publication controls remain in the desktop launch rail and
+     are also available from the toolbar on wider screens. */
+  @media (max-width: 1023px) {
+    .max-workspace-grid {
+      grid-template-columns: minmax(0, 1fr) !important;
+      grid-template-rows: minmax(250px, 0.9fr) minmax(320px, 1.1fr);
+      overflow-y: auto;
+    }
+    .max-workspace-grid > :nth-child(3) {
+      display: none;
+    }
+  }
+
   /* Marketing hero — soft drifting accent glow for dark-theme depth (not flat).
      Pure CSS; the global reduced-motion guard freezes the drift. */
   .hero-glow {

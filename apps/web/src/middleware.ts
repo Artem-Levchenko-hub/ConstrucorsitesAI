@@ -42,7 +42,10 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (!session && !isAuthRoute && path.startsWith("/projects")) {
+  const isProtectedRoute =
+    path.startsWith("/projects") || path === "/max" || path.startsWith("/max/");
+
+  if (!session && !isAuthRoute && isProtectedRoute) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
     // Preserve where the user actually wanted to land — including any
@@ -57,5 +60,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/projects/:path*", "/login", "/register"],
+  matcher: ["/projects/:path*", "/max/:path*", "/login", "/register"],
 };

@@ -69,7 +69,11 @@ export function ProjectCard({ project }: { project: Project }) {
       />
 
       <Link
-        href={`/projects/${project.id}`}
+        href={
+          project.template === "max_miniapp"
+            ? `/max/${project.id}`
+            : `/projects/${project.id}`
+        }
         className="block focus:outline-none"
       >
         <Card className="h-full overflow-hidden hover:border-border-strong transition-colors">

@@ -133,8 +133,15 @@ function deployUx(state: RuntimeState, deploying: boolean): DeployUx {
   }
 }
 
-export function RuntimeButton({ projectId }: { projectId: string }) {
+export function RuntimeButton({
+  projectId,
+  display = "toolbar",
+}: {
+  projectId: string;
+  display?: "toolbar" | "panel";
+}) {
   const qc = useQueryClient();
+  const panel = display === "panel";
 
   const { data: runtime, isPending } = useQuery({
     queryKey: ["runtime", projectId],
@@ -219,9 +226,15 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
 
   if (isPending) {
     return (
-      <Badge variant="outline" className="gap-1.5 px-2 py-1 text-[11px]">
+      <Badge
+        variant="outline"
+        className={cn(
+          "gap-1.5 px-2 py-1 text-[11px]",
+          panel && "h-10 w-full justify-center rounded-xl",
+        )}
+      >
         <Loader2 className="h-3 w-3 animate-spin" />
-        runtime…
+        {panel ? "Проверяем готовность…" : "runtime…"}
       </Badge>
     );
   }
@@ -235,12 +248,18 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
   };
 
   return (
-    <div className="flex items-center gap-1">
+    <div
+      className={cn(
+        "flex gap-1",
+        panel ? "flex-col items-stretch gap-2" : "items-center",
+      )}
+    >
       <Badge
         variant="outline"
         className={cn(
           "gap-1.5 px-2 py-1 text-[11px] font-normal whitespace-nowrap transition-colors",
           state === "paused" && "border-warning/40 bg-warning/[0.06]",
+          panel && "h-9 w-full justify-center rounded-xl",
         )}
         title={
           runtime?.dev_url ? `dev: ${runtime.dev_url}` : "контейнер не запущен"
@@ -267,7 +286,10 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
       {activeDeploy && (
         <Badge
           variant="accent"
-          className="gap-1.5 px-2 py-1 text-[11px]"
+          className={cn(
+            "gap-1.5 px-2 py-1 text-[11px]",
+            panel && "h-9 w-full justify-center rounded-xl",
+          )}
           title={deployQuery.data?.detail ?? "Деплой выполняется"}
         >
           <Loader2 className="h-3 w-3 animate-spin" />
@@ -277,7 +299,10 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
       {deployQuery.data?.phase === "failed" && (
         <Badge
           variant="danger"
-          className="max-w-56 truncate px-2 py-1 text-[11px]"
+          className={cn(
+            "max-w-56 truncate px-2 py-1 text-[11px]",
+            panel && "h-9 w-full max-w-none justify-center rounded-xl",
+          )}
           title={deployQuery.data.error ?? undefined}
         >
           Ошибка публикации
@@ -288,16 +313,19 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
           href={deployQuery.data.prod_url}
           target="_blank"
           rel="noreferrer"
-          className="text-[11px] text-accent hover:underline"
+          className={cn(
+            "text-[11px] text-accent hover:underline",
+            panel && "text-center",
+          )}
         >
-          Открыть сайт
+          {panel ? "Открыть опубликованное приложение" : "Открыть сайт"}
         </a>
       )}
       {activeDeploy && deployQuery.data?.can_cancel && (
         <Button
           size="sm"
           variant="ghost"
-          className="h-7 px-2 text-xs"
+          className={cn("h-7 px-2 text-xs", panel && "h-9 w-full")}
           disabled={cancelMut.isPending}
           onClick={() => cancelMut.mutate()}
           title="Остановить текущую сборку; опубликованная версия останется доступна"
@@ -312,22 +340,27 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
 
       {state === "running" && (
         <>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={busy}
-            onClick={() => stopMut.mutate()}
-            className="gap-1.5 h-7 px-2 text-xs"
-            title="Приостановить dev-контейнер (можно будет разбудить одним кликом)"
-          >
-            <Pause className="h-3 w-3" />
-            Пауза
-          </Button>
+          {!panel && (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => stopMut.mutate()}
+              className="gap-1.5 h-7 px-2 text-xs"
+              title="Приостановить dev-контейнер (можно будет разбудить одним кликом)"
+            >
+              <Pause className="h-3 w-3" />
+              Пауза
+            </Button>
+          )}
           <Button
             size="sm"
             disabled={!deploy.enabled}
             onClick={() => deployMut.mutate()}
-            className="gap-1.5 h-7 px-2.5 text-xs"
+            className={cn(
+              "gap-1.5 h-7 px-2.5 text-xs",
+              panel && "h-10 w-full rounded-xl",
+            )}
             title={deploy.tooltip}
           >
             {deployMut.isPending || activeDeploy ? (
@@ -345,7 +378,10 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
           size="sm"
           disabled={busy}
           onClick={() => startMut.mutate()}
-          className="gap-1.5 h-7 px-2.5 text-xs"
+          className={cn(
+            "gap-1.5 h-7 px-2.5 text-xs",
+            panel && "h-10 w-full rounded-xl",
+          )}
           title="Поднять контейнер из паузы — секунда, не полный перезапуск"
         >
           {startMut.isPending ? (
@@ -364,7 +400,10 @@ export function RuntimeButton({ projectId }: { projectId: string }) {
           size="sm"
           disabled={busy || state === "provisioning"}
           onClick={() => startMut.mutate()}
-          className="gap-1.5 h-7 px-2.5 text-xs"
+          className={cn(
+            "gap-1.5 h-7 px-2.5 text-xs",
+            panel && "h-10 w-full rounded-xl",
+          )}
           title={
             state === "provisioning"
               ? "Контейнер уже поднимается, подождите"

@@ -2075,6 +2075,15 @@ TypeScript + Postgres/Drizzle + официальный MAX UI и MAX Bridge.
   подтверждает MAX. Не модифицируй package.json/Dockerfile/next.config без прямой
   необходимости — production-контракт принадлежит orchestrator-у."""
 
+_MAX_MINIAPP_EDIT_GUARD = """\
+НЕИЗМЕНЯЕМЫЙ КОНТРАКТ ПРОЕКТА — ЭТО MINI APP ВНУТРИ МЕССЕНДЖЕРА MAX.
+Любую просьбу пользователя реализуй как функцию текущего MAX Mini App. Не
+переключай проект на обычный сайт, Telegram/VK Mini App или отдельное приложение,
+даже если пользователь просит «сделать сайт»: адаптируй желаемый экран под MAX.
+Сохраняй официальный `window.WebApp` Bridge, серверную проверку initData,
+MAX-профиль, server-only токен бота, защищённый идемпотентный webhook, safe-area
+и мобильные touch targets. Не добавляй отдельный email/password-вход."""
+
 _TGBOT_STACK = """\
 СТЕК — TELEGRAM-БОТ НА AIOGRAM 3 (Python 3.12, long-polling, без webhook).
 Контейнер крутится с aiogram-event-loop + aiohttp health-сервер на :3000
@@ -4288,13 +4297,16 @@ def _build_edit_messages(
         # Generic identity: arbitrary stack, byte-exact SEARCH/REPLACE only.
         _blocks: list[str] = [_EDIT_IDENTITY_GENERIC, _EDIT_FAITHFUL, _EDIT_RESPONSE]
     elif template in ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp"):
-        _blocks = [_EDIT_IDENTITY_NEXT, _EDIT_FAITHFUL, _EDIT_RESPONSE_NEXT]
+        _blocks = [_EDIT_IDENTITY_NEXT, _EDIT_FAITHFUL]
+        if template == "max_miniapp":
+            _blocks.append(_MAX_MINIAPP_EDIT_GUARD)
         # Give-it-functionality (DARK): on an add-functionality ask, teach the
         # model to scaffold a COMPLETE feature (entity JSON + CrudResource route +
         # nav wiring) instead of a half-built page. Default OFF → block omitted →
         # byte-identical to today.
         if _wants_feature and get_settings().use_feature_scaffold:
             _blocks.append(_EDIT_SCAFFOLD_NEXT)
+        _blocks.append(_EDIT_RESPONSE_NEXT)
     else:
         _blocks = [_EDIT_IDENTITY, _EDIT_FAITHFUL]
         if _wants_add:

@@ -42,9 +42,11 @@ function message(error: unknown): string {
 export function MaxIntegrationButton({
   projectId,
   initialTemplate,
+  display = "toolbar",
 }: {
   projectId: string;
   initialTemplate?: string;
+  display?: "toolbar" | "panel";
 }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -118,14 +120,20 @@ export function MaxIntegrationButton({
     <>
       <Button
         size="sm"
-        variant="secondary"
+        variant={display === "panel" ? "primary" : "secondary"}
         onClick={() => setOpen(true)}
-        className="h-7 gap-1.5 px-2.5 text-xs"
+        className={
+          display === "panel"
+            ? "h-10 w-full gap-2 rounded-xl text-xs"
+            : "h-7 gap-1.5 px-2.5 text-xs"
+        }
         title="Подключить MAX Mini App"
         data-testid="max-integration-open"
       >
         <Bot className="h-3.5 w-3.5" />
-        <span className="hidden 2xl:inline">MAX</span>
+        <span className={display === "panel" ? "" : "hidden 2xl:inline"}>
+          {display === "panel" ? "Подключить MAX-бота" : "MAX"}
+        </span>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[540px]">

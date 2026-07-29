@@ -38,9 +38,13 @@ type DiscoveryChoices = {
 export function ChatPanel({
   projectId,
   projectSlug,
+  mode = "default",
+  basePath = `/projects/${projectId}`,
 }: {
   projectId: string;
   projectSlug: string;
+  mode?: "default" | "max";
+  basePath?: string;
 }) {
   // Server orchestrates per-role models (Opus director, DeepSeek polish, …).
   // The client no longer picks a model; this label is just sent through for
@@ -183,13 +187,19 @@ export function ChatPanel({
   useEffect(() => {
     if (autoFiredRef.current) return;
     if (messages === undefined) return; // wait for the first load
-    const p = new URLSearchParams(window.location.search).get("p");
+    const params = new URLSearchParams(window.location.search);
+    let p = params.get("p");
+    if (!p && params.get("starter") === "1") {
+      const key = `omnia:max:starter:${projectId}`;
+      p = window.sessionStorage.getItem(key);
+      if (p) window.sessionStorage.removeItem(key);
+    }
     if (p && p.trim() && messages.length === 0) {
       autoFiredRef.current = true;
       submit(p.trim(), modelId, [], { skipClarify: true });
-      window.history.replaceState(null, "", `/projects/${projectId}`);
+      window.history.replaceState(null, "", basePath);
     }
-  }, [messages, submit, projectId]);
+  }, [messages, submit, basePath, projectId]);
 
   return (
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
@@ -198,7 +208,7 @@ export function ChatPanel({
     <div className="flex flex-col h-full min-h-0 bg-surface-panel-dark">
       <div className="shrink-0 px-4 h-10 flex items-center justify-between">
         <span className="text-xs font-mono text-fg-tertiary uppercase tracking-wider">
-          Чат
+          {mode === "max" ? "MAX-редактор" : "Чат"}
         </span>
         <button
           type="button"
@@ -225,12 +235,23 @@ export function ChatPanel({
         {!isPending && messages && messages.length === 0 && (
           <div className="p-6 text-center space-y-2">
             <div className="text-sm text-fg-secondary">
-              Поговорим о вашем сайте.
+              {mode === "max"
+                ? "Расскажите, что изменить в Mini App."
+                : "Поговорим о вашем сайте."}
             </div>
             <div className="text-xs text-fg-tertiary leading-5">
-              Опишите, что хотите создать. Например:
-              <br />
-              «Сделай лендинг для пиццерии с меню и формой заказа».
+              {mode === "max" ? (
+                <>
+                  Здесь нельзя переключить проект на обычный сайт: все правки
+                  сохраняют MAX Bridge, мобильный интерфейс и интеграцию бота.
+                </>
+              ) : (
+                <>
+                  Опишите, что хотите создать. Например:
+                  <br />
+                  «Сделай лендинг для пиццерии с меню и формой заказа».
+                </>
+              )}
             </div>
           </div>
         )}
@@ -274,6 +295,16 @@ export function ChatPanel({
           isStreaming={isStreaming}
           pendingPrompt={pendingPrompt}
           textareaRef={inputRef}
+          placeholder={
+            mode === "max"
+              ? "Например: добавь экран наград и кнопку обмена баллов…"
+              : undefined
+          }
+          ariaLabel={
+            mode === "max"
+              ? "Опишите изменение MAX Mini App"
+              : undefined
+          }
         />
       </div>
 

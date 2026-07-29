@@ -53,7 +53,13 @@ const DEVICE_WIDTH: Record<Device, string> = {
   desktop: "100%",
 };
 
-export function PreviewFrame({ project }: { project: Project }) {
+export function PreviewFrame({
+  project,
+  defaultDevice = "desktop",
+}: {
+  project: Project;
+  defaultDevice?: Device;
+}) {
   const selectedSnapshotId = useWorkspaceStore((s) => s.selectedSnapshotId);
   const selectSnapshot = useWorkspaceStore((s) => s.selectSnapshot);
   const viewMode = useWorkspaceStore((s) => s.viewMode);
@@ -246,7 +252,7 @@ export function PreviewFrame({ project }: { project: Project }) {
     : headSnapshot;
   const viewingOld = !!visible && !!headSnapshot && visible.id !== headSnapshot.id;
 
-  const [device, setDevice] = useState<Device>("desktop");
+  const [device, setDevice] = useState<Device>(defaultDevice);
   const [iframeKey, setIframeKey] = useState(0);
   // Phase 5.3 — content-load gate for the preview iframe. Both iframes (live dev
   // container + static /p/<slug>) render with bg-white and paint white until

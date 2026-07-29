@@ -923,6 +923,25 @@ byte-for-byte from what you read), build, fix, done.
 - Be fast and minimal — a small edit needs only a few steps. One action per reply."""
 
 
+def build_edit_system_prompt(stack_guide: str | None = None) -> str:
+    """Compose the surgical editor with the current stack's hard invariants.
+
+    Builds already receive ``SYSTEM_PROMPT.md`` through ``build_system_prompt``.
+    Edits historically used the generic entity-engine prompt alone, which let an
+    edit on a MAX Mini App remove Bridge/session/webhook primitives or pivot into
+    another platform. Appending the selected stack guide keeps edits surgical
+    while preserving the platform contract. Empty input is byte-identical to the
+    legacy prompt.
+    """
+    if not stack_guide or not stack_guide.strip():
+        return EDIT_SYSTEM_PROMPT
+    return (
+        EDIT_SYSTEM_PROMPT
+        + "\n\nSTACK-SPECIFIC CONTRACT — preserve these invariants on every edit:\n"
+        + stack_guide.strip()
+    )
+
+
 # ── Per-stack prompts (the loop builds on ANY stack, not just entities) ──────
 # The hardcoded SYSTEM_PROMPT above is the entity-engine guide. To build a realtime
 # app, a Vue app, an API, the agent needs the SAME ReAct protocol but the RIGHT

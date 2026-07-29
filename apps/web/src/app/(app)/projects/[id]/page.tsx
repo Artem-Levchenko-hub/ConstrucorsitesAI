@@ -47,6 +47,9 @@ export default async function WorkspacePage({
     notFound();
   }
   const project = result.data;
+  if (project.template === "max_miniapp") {
+    redirect(`/max/${project.id}`);
+  }
 
   return (
     <>

@@ -19,6 +19,8 @@ export function PromptInput({
   pendingPrompt,
   className,
   textareaRef,
+  placeholder,
+  ariaLabel = "Опишите изменение проекта",
 }: {
   onSubmit: (text: string, selections: SelectedElement[]) => void;
   onCancel: () => void;
@@ -26,6 +28,8 @@ export function PromptInput({
   isStreaming: boolean;
   pendingPrompt: string | null;
   className?: string;
+  placeholder?: string;
+  ariaLabel?: string;
   // Optional lifted ref so the parent can focus the input — used by the
   // discovery "Другое" chip to hand the user the free-text field. Falls back to
   // an internal ref when omitted, so existing call sites are unchanged.
@@ -165,7 +169,7 @@ export function PromptInput({
       <div className="rounded-2xl border border-border-default bg-surface-input focus-within:border-[rgba(124,92,255,0.5)] focus-within:shadow-[0_0_0_4px_rgba(124,92,255,0.10)] transition-all">
         <textarea
           ref={ref}
-          aria-label="Опишите изменение проекта"
+          aria-label={ariaLabel}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
@@ -174,7 +178,7 @@ export function PromptInput({
               ? "Можно писать следующий — отправится после текущей генерации"
               : selections.length
                 ? "Общий комментарий (необязательно) — правки по элементам уже заданы…"
-                : "Опишите, что изменить или добавить…"
+                : placeholder ?? "Опишите, что изменить или добавить…"
           }
           rows={2}
           className="w-full bg-transparent px-3.5 py-3 text-sm text-fg-primary placeholder:text-fg-tertiary resize-none focus:outline-none"

@@ -1,7 +1,10 @@
+import Link from "next/link";
+import { MessageCircleMore } from "lucide-react";
 import { getSession } from "@/lib/auth-mock";
 import { TopBar } from "@/components/workspace/TopBar";
 import { ProjectsList } from "@/components/projects/ProjectsList";
 import { NewProjectDialog } from "@/components/projects/NewProjectDialog";
+import { Button } from "@/components/ui/button";
 
 export default async function ProjectsPage() {
   const session = await getSession();
@@ -22,7 +25,15 @@ export default async function ProjectsPage() {
                 Каждый проект — отдельный сайт с git-историей и preview.
               </p>
             </div>
-            <NewProjectDialog />
+            <div className="flex items-center gap-2">
+              <Button asChild variant="secondary">
+                <Link href="/max">
+                  <MessageCircleMore className="h-4 w-4" />
+                  MAX Mini Apps
+                </Link>
+              </Button>
+              <NewProjectDialog />
+            </div>
           </div>
 
           <ProjectsList />

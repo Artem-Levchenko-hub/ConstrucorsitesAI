@@ -3063,7 +3063,7 @@ async def _process_prompt(
                     f"один read). Если ошибка указывает на бандл (src_*.js) — найди "
                     f"реальный исходник в src/ по симптому. Не пересобирай работающее."
                 )
-                _agent_system = agent_builder.EDIT_SYSTEM_PROMPT
+                _agent_system = agent_builder.build_edit_system_prompt(_stack_guide)
                 # Budget above the no-write/stall thresholds so the loop's
                 # escalate-to-stronger-model actually fires before max_steps when a
                 # cheap model explores without writing (the "Починить" did nothing bug).
