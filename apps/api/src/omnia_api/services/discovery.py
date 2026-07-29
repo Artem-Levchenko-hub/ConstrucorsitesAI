@@ -274,13 +274,17 @@ def _infer_realtime_from_text(text: str) -> bool:
 
 _MAX_MINIAPP_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        r"\bмини[- ]?приложени\w*\s+(?:в|для)\s+(?:мессенджер\w*\s+)?max\b",
+        r"\bмини[- ]?приложени\w*\s+(?:в|для|внутри)\s+"
+        r"(?:мессенджер\w*\s+)?max\b",
         re.I,
     ),
     re.compile(r"\b(?:max|макс)\s+мини[- ]?приложени\w*\b", re.I),
     re.compile(r"\bmini[- ]?app\s+(?:for\s+)?max\b", re.I),
     re.compile(r"\bmax\s+mini[- ]?app\b", re.I),
-    re.compile(r"\bприложени\w*\s+(?:в|для)\s+мессенджер\w*\s+(?:max|макс)\b", re.I),
+    re.compile(
+        r"\bприложени\w*\s+(?:в|для|внутри)\s+мессенджер\w*\s+(?:max|макс)\b",
+        re.I,
+    ),
     re.compile(
         r"\b(?:бот|магазин|сервис)\w*\s+(?:в|для|внутри)\s+"
         r"(?:мессенджер\w*\s+)?max\b",
