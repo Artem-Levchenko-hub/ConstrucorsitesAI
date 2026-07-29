@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from omnia_api.routers.public import _INSPECTOR_TAG, _inject_inspector
+from omnia_api.routers.public import (
+    _INSPECTOR_JS,
+    _INSPECTOR_TAG,
+    _KIT_ASSETS,
+    _inject_inspector,
+)
+from omnia_api.routers.style_patch import _CONTAINER_STYLE_PATH
 from omnia_api.schemas.message import PromptRequest, SelectedElement
 from omnia_api.services.prompt_builder import build_messages
 
@@ -146,3 +152,36 @@ def test_inspector_reports_runtime_errors() -> None:
     assert '"unhandledrejection"' in src
     # Gating contract: silent without a workspace parent (public /p/ stays clean).
     assert "window.parent === window" in src
+
+
+def test_inspector_atomic_editor_mode_contract() -> None:
+    """One command owns AI/manual/off transitions, so independent disable
+    messages cannot race a newly-enabled mode."""
+    repo = Path(__file__).resolve().parents[3]
+    src = (
+        repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
+    ).read_text(encoding="utf-8")
+    assert 'case "omnia:editor:set-mode"' in src
+    assert 'post({ type: "omnia:editor:state", mode: mode })' in src
+
+
+def test_vite_spa_loads_canonical_inspector_only_inside_workspace() -> None:
+    """SPA is a browser stack too: its preview must not expose dead edit buttons."""
+    repo = Path(__file__).resolve().parents[3]
+    index = (
+        repo / "apps/orchestrator/templates/vite-react-spa/index.html"
+    ).read_text(encoding="utf-8")
+    assert "window.self === window.top" in index
+    assert "document.referrer" in index
+    assert "/api/kit/omnia-inspector.js" in index
+    assert 'data-omnia-inspector-loader' in index
+    assert _INSPECTOR_JS.encode("utf-8") == _KIT_ASSETS["omnia-inspector.js"]
+
+
+def test_every_supported_container_web_stack_has_style_persistence() -> None:
+    assert _CONTAINER_STYLE_PATH == {
+        "fullstack": "src/app/globals.css",
+        "nextjs_entities": "src/app/globals.css",
+        "realtime": "src/app/globals.css",
+        "spa": "src/index.css",
+    }

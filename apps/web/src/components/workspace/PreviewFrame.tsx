@@ -62,7 +62,6 @@ export function PreviewFrame({ project }: { project: Project }) {
   // document; we drive it over postMessage through the iframe ref below.
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const inspectMode = useInspectorStore((s) => s.inspectMode);
-  const toggleInspect = useInspectorStore((s) => s.toggleInspectMode);
   const setInspectMode = useInspectorStore((s) => s.setInspectMode);
   const addSelection = useInspectorStore((s) => s.addSelection);
   const selections = useInspectorStore((s) => s.selections);
@@ -81,8 +80,8 @@ export function PreviewFrame({ project }: { project: Project }) {
   const onToggleInspect = useCallback(() => {
     setHeroMediaOpen(false);
     setStyleMode(false);
-    toggleInspect();
-  }, [setStyleMode, toggleInspect]);
+    setInspectMode(!inspectMode);
+  }, [inspectMode, setStyleMode, setInspectMode]);
   const onToggleStyle = useCallback(() => {
     setHeroMediaOpen(false);
     if (!styleMode) setInspectMode(false);
@@ -93,12 +92,24 @@ export function PreviewFrame({ project }: { project: Project }) {
     setStyleMode(false);
     setHeroMediaOpen((prev) => !prev);
   }, [setInspectMode, setStyleMode]);
-  // Tracks which iframe key has emitted `omnia:inspect:ready` — used by the
-  // race-fallback timer to know whether to warn the user.
-  const inspectorReadyKeyRef = useRef<number | null>(null);
+  // The exact iframe Window that acknowledged the current editor mode. Window
+  // identity changes on every remount, including static → live transitions
+  // where iframeKey itself does not change.
+  const editorAckRef = useRef<{
+    win: Window;
+    mode: "inspect" | "style" | "off";
+  } | null>(null);
   const postToPreview = useCallback((msg: Record<string, unknown>) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
+  const editorMode: "inspect" | "style" | "off" = styleMode
+    ? "style"
+    : inspectMode
+      ? "inspect"
+      : "off";
+  const syncEditorMode = useCallback(() => {
+    postToPreview({ type: "omnia:editor:set-mode", mode: editorMode });
+  }, [editorMode, postToPreview]);
 
   const { data: snapshots, isPending } = useQuery({
     queryKey: ["snapshots", project.id],
@@ -232,56 +243,34 @@ export function PreviewFrame({ project }: { project: Project }) {
   // without a setState-in-effect reset.
   const [loadedFrameKey, setLoadedFrameKey] = useState<string | null>(null);
 
-  // Reset the per-iframe ready latch whenever the frame remounts so the toggle
-  // effect below can correctly tell "inspector is alive in this frame" from
-  // "stale ready signal from the previous iframe".
+  // One atomic bridge owns BOTH editor modes. Previously two effects raced:
+  // switching Manual → AI sent inspect:enable and then style:disable, leaving
+  // the inspector disabled. Re-send across the listener-registration window;
+  // the ready handshake below also performs an immediate sync.
   useEffect(() => {
-    inspectorReadyKeyRef.current = null;
-  }, [iframeKey]);
-
-  // Flip picking on/off when the toolbar toggle changes. (Re)loads while the
-  // mode is on are handled by the `omnia:inspect:ready` branch below.
-  //
-  // Race fix (fullstack template): the inspector loads via Next.js
-  // `<Script strategy="afterInteractive">`, which attaches its message
-  // listener AFTER React hydration — by then our initial `enable` may have
-  // flown past a not-yet-listening script. We re-send at ~700ms and, if no
-  // `omnia:inspect:ready` arrived by 3s, surface a user-facing toast so the
-  // owner doesn't sit in front of a dead toggle wondering why hover doesn't
-  // highlight anything.
-  useEffect(() => {
-    postToPreview({
-      type: inspectMode ? "omnia:inspect:enable" : "omnia:inspect:disable",
-    });
-    if (!inspectMode) return;
-    const retry = window.setTimeout(() => {
-      postToPreview({ type: "omnia:inspect:enable" });
-    }, 700);
-    const warn = window.setTimeout(() => {
-      if (inspectorReadyKeyRef.current !== iframeKey) {
-        toast.error("Инспектор не загрузился в превью", {
-          description:
-            "Нажмите кнопку перезагрузки превью (↻ справа от инспектора) и попробуйте ещё раз.",
-        });
-      }
-    }, 3000);
+    editorAckRef.current = null;
+    syncEditorMode();
+    const retries = [100, 400, 1_000, 2_000].map((delay) =>
+      window.setTimeout(syncEditorMode, delay),
+    );
+    const warn =
+      editorMode === "off"
+        ? null
+        : window.setTimeout(() => {
+            const win = iframeRef.current?.contentWindow;
+            const ack = editorAckRef.current;
+            if (!win || !ack || ack.win !== win || ack.mode !== editorMode) {
+              toast.error("Редактор не загрузился в превью", {
+                description:
+                  "Перезагрузите превью кнопкой ↻ и попробуйте ещё раз.",
+              });
+            }
+          }, 3_500);
     return () => {
-      window.clearTimeout(retry);
-      window.clearTimeout(warn);
+      retries.forEach(window.clearTimeout);
+      if (warn !== null) window.clearTimeout(warn);
     };
-  }, [inspectMode, iframeKey, postToPreview]);
-
-  // Style-mode enable/disable bridge (mirrors the select-mode effect above).
-  useEffect(() => {
-    postToPreview({
-      type: styleMode ? "omnia:style:enable" : "omnia:style:disable",
-    });
-    if (!styleMode) return;
-    const retry = window.setTimeout(() => {
-      postToPreview({ type: "omnia:style:enable" });
-    }, 700);
-    return () => window.clearTimeout(retry);
-  }, [styleMode, iframeKey, postToPreview]);
+  }, [editorMode, iframeKey, syncEditorMode]);
 
   // Editing an old snapshot would touch HEAD — confusing, so disable both modes.
   useEffect(() => {
@@ -359,12 +348,15 @@ export function PreviewFrame({ project }: { project: Project }) {
         return;
       }
       if (d.type === "omnia:inspect:ready") {
-        // Latch which frame is alive so the toggle effect's fallback timer
-        // can distinguish "script loaded" from "script never loaded".
-        inspectorReadyKeyRef.current = iframeKey;
-        if (inspectMode) postToPreview({ type: "omnia:inspect:enable" });
-        if (useStyleEditStore.getState().styleMode)
-          postToPreview({ type: "omnia:style:enable" });
+        // The script may register after the first parent postMessage.
+        syncEditorMode();
+        return;
+      }
+      if (d.type === "omnia:editor:state") {
+        const mode = (e.data as { mode?: unknown }).mode;
+        if (mode === "inspect" || mode === "style" || mode === "off") {
+          editorAckRef.current = { win, mode };
+        }
         return;
       }
       if (d.type === "omnia:pick" && d.el) {
@@ -405,7 +397,7 @@ export function PreviewFrame({ project }: { project: Project }) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [inspectMode, iframeKey, addSelection, postToPreview, project.id, viewingOld, qc]);
+  }, [addSelection, project.id, viewingOld, qc, syncEditorMode]);
 
   // A new committed snapshot = a fresh build/edit: forget which preview errors
   // we've already reported so genuine errors on the new code surface again.
@@ -448,7 +440,9 @@ export function PreviewFrame({ project }: { project: Project }) {
   // checkout in a later sprint.
   const fullstackLive =
     isFullstack && runtime?.state === "running" && !!runtime.dev_url;
-  const liveSrc = `${runtime?.dev_url ?? ""}#k=${iframeKey}`;
+  const liveSrc =
+    `${runtime?.dev_url ?? ""}#k=${iframeKey}` +
+    `&omniaApi=${encodeURIComponent(apiOrigin)}`;
   // `inspect=1` opts the workspace preview into select-mode (serves the inspector
   // script). The external "Открыть"/address links use `publicUrl` untouched, so
   // public share links stay clean.
@@ -481,18 +475,8 @@ export function PreviewFrame({ project }: { project: Project }) {
   // attaching its message listener after our toggle effect already posted.
   const handleFrameLoad = useCallback(() => {
     setLoadedFrameKey(frameKey);
-    if (inspectMode) {
-      window.setTimeout(
-        () => postToPreview({ type: "omnia:inspect:enable" }),
-        150,
-      );
-    }
-    if (styleMode) {
-      window.setTimeout(
-        () => postToPreview({ type: "omnia:style:enable" }),
-        150,
-      );
-    }
+    syncEditorMode();
+    window.setTimeout(syncEditorMode, 150);
     // Replay the birth narration on (re)load if the brief is already here.
     if (streamBrief) {
       window.setTimeout(
@@ -500,7 +484,7 @@ export function PreviewFrame({ project }: { project: Project }) {
         150,
       );
     }
-  }, [frameKey, inspectMode, styleMode, streamBrief, postToPreview]);
+  }, [frameKey, streamBrief, postToPreview, syncEditorMode]);
 
   // Forward the art-director brief into the live container so the generated app
   // plays its "AI is designing" reveal (omnia-brief-narration.js). Cross-origin
@@ -643,8 +627,10 @@ export function PreviewFrame({ project }: { project: Project }) {
               <Button
                 size="sm"
                 variant="ghost"
+                data-testid="edit-with-ai-toggle"
                 onClick={onToggleInspect}
                 disabled={viewingOld}
+                aria-pressed={inspectMode}
                 title={
                   viewingOld
                     ? "Недоступно при просмотре старой версии"
@@ -664,8 +650,10 @@ export function PreviewFrame({ project }: { project: Project }) {
               <Button
                 size="sm"
                 variant="ghost"
+                data-testid="edit-manually-toggle"
                 onClick={onToggleStyle}
                 disabled={viewingOld}
+                aria-pressed={styleMode}
                 title={
                   viewingOld
                     ? "Недоступно при просмотре старой версии"

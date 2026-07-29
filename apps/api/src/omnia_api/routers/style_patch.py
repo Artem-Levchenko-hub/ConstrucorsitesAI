@@ -33,9 +33,14 @@ from omnia_api.services.queue import enqueue_preview
 
 router = APIRouter(prefix="/api/projects", tags=["style-patch"])
 
-# Container-backed Next.js templates render React, not a static index.html, so
-# their direct-style edits persist in ``globals.css`` (mirrors messages.py).
-_CONTAINER_NEXT = ("fullstack", "nextjs_entities")
+# Container browser stacks render React rather than the snapshot's static
+# index.html. Keep direct edits in the stylesheet each runtime actually imports.
+_CONTAINER_STYLE_PATH = {
+    "fullstack": "src/app/globals.css",
+    "nextjs_entities": "src/app/globals.css",
+    "realtime": "src/app/globals.css",
+    "spa": "src/index.css",
+}
 
 
 def _expand_hex(h: str) -> str:
@@ -139,9 +144,9 @@ async def post_style_patch(
     # render React — no index.html — so the same edits go into a managed block
     # appended to the already-imported ``src/app/globals.css`` and are pushed
     # into the live dev container via hot-reload below.
-    is_container = project.template in _CONTAINER_NEXT
+    is_container = project.template in _CONTAINER_STYLE_PATH
     if is_container:
-        target_path = "src/app/globals.css"
+        target_path = _CONTAINER_STYLE_PATH[project.template]
         # Container apps only commit AI-generated files to git; the fixed
         # globals.css lives in the image. Read the committed copy if a prior
         # edit already persisted it, else fetch the live one from the container.
@@ -155,7 +160,7 @@ async def post_style_patch(
         if src is None:
             raise ApiError(
                 "no_index",
-                "this app has no globals.css to style-edit",
+                f"this app has no {target_path} to style-edit",
                 status.HTTP_400_BAD_REQUEST,
             )
         new_content = ov.apply_css_overrides(

@@ -43,6 +43,9 @@ Emit each new or changed file inside an XML-style block:
 Same bar as the static landing generator: enterprise-grade output, NOT a scaffold. Pick a cohesive design system per the industry. See the parent prompt's `_DESIGN_KIT` / `_STYLE_KIT` for palettes & font pairs.
 
 - One accent + neutral scale (`slate`/`zinc`/`stone`), never `#000` on `#fff`. Max two fonts via Google Fonts CDN injected through `<link>` in `index.html`.
+- Preserve the `data-omnia-inspector-loader` script in `index.html` exactly. It
+  powers the owner's «Править с ИИ» and «Вручную» tools and is dormant for
+  top-level public visitors.
 - Real Russian content per prompt — no lorem ipsum, no «Заголовок 1».
 - Mobile-first responsive (375/768/1024/1440). One `<h1>`. Visible focus states.
 - SVG icons only (Lucide). NEVER emoji.

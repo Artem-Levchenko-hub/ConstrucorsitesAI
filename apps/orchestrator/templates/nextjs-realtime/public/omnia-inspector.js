@@ -470,6 +470,16 @@
     if (hoverBox) hoverBox.style.display = "none";
   }
 
+  // Atomic mode transition used by the workspace shell. A single command avoids
+  // the old inspect-enable/style-disable race when switching Manual → AI.
+  function setEditorMode(mode) {
+    if (mode !== "inspect" && mode !== "style") mode = "off";
+    styleMode = mode === "style";
+    if (mode === "off") disable();
+    else enable();
+    post({ type: "omnia:editor:state", mode: mode });
+  }
+
   function clearAll() {
     marks.forEach(restoreMark);
     marks = [];
@@ -578,11 +588,14 @@
     var d = e.data;
     if (!d || typeof d.type !== "string") return;
     switch (d.type) {
+      case "omnia:editor:set-mode":
+        setEditorMode(d.mode);
+        break;
       case "omnia:inspect:enable":
-        enable();
+        setEditorMode("inspect");
         break;
       case "omnia:inspect:disable":
-        disable();
+        if (!styleMode) setEditorMode("off");
         break;
       case "omnia:inspect:clear":
         clearAll();
@@ -591,12 +604,10 @@
         removeOne(d.id);
         break;
       case "omnia:style:enable":
-        styleMode = true;
-        enable();
+        setEditorMode("style");
         break;
       case "omnia:style:disable":
-        styleMode = false;
-        disable();
+        if (styleMode) setEditorMode("off");
         break;
       case "omnia:style:set":
         setStyle(d);

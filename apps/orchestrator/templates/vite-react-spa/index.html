@@ -13,5 +13,27 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- Workspace-only editor bridge. The inspector is served by the control
+         plane so this SPA uses the same canonical implementation as static and
+         Next.js previews. document.referrer works for local, staging and custom
+         workspace origins; top-level public visitors never load the editor. -->
+    <script>
+      (function () {
+        if (window.self === window.top) return;
+        try {
+          var params = new URLSearchParams(location.hash.slice(1));
+          var origin =
+            params.get("omniaApi") ||
+            (document.referrer ? new URL(document.referrer).origin : "");
+          if (!origin) return;
+          origin = origin.replace(/\/+$/, "");
+          var script = document.createElement("script");
+          script.src = origin + "/api/kit/omnia-inspector.js";
+          script.async = true;
+          script.setAttribute("data-omnia-inspector-loader", "1");
+          document.body.appendChild(script);
+        } catch (_) {}
+      })();
+    </script>
   </body>
 </html>

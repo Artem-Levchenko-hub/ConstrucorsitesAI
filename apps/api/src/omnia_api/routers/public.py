@@ -53,10 +53,14 @@ _KIT_ASSET_MIME = {
     "omnia-kit.css": "text/css; charset=utf-8",
     "omnia-kit.js": "application/javascript; charset=utf-8",
     "anime.min.js": "application/javascript; charset=utf-8",
+    "omnia-inspector.js": "application/javascript; charset=utf-8",
 }
 _KIT_ASSETS: dict[str, bytes] = {
-    name: (_KIT_ASSETS_DIR / name).read_bytes() for name in _KIT_ASSET_MIME
+    name: (_KIT_ASSETS_DIR / name).read_bytes()
+    for name in _KIT_ASSET_MIME
+    if name != "omnia-inspector.js"
 }
+_KIT_ASSETS["omnia-inspector.js"] = _INSPECTOR_JS.encode("utf-8")
 
 kit_router = APIRouter(prefix="/api/kit", tags=["kit"], include_in_schema=False)
 
