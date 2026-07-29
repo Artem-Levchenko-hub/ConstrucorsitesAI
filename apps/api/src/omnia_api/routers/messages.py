@@ -77,12 +77,12 @@ from omnia_api.services.discovery import (
     _has_account_intent,
     _has_conversion_intent,
     _infer_code_from_text,
-    _infer_realtime_from_text,
     _infer_run_intent,
     _infer_run_intent_maybe,
     _infer_stack_from_text,
     _infer_web_pivot,
     _is_run_decline,
+    _resolve_messenger_stack,
     classify_result_type,
     confident_enough_to_build,
     cumulative_idea,
@@ -1468,18 +1468,17 @@ async def post_prompt(
                     _full_intent = " ".join(
                         m["content"] for m in _history if m.get("role") == "user"
                     ) + " " + payload.prompt
-                    if (
-                        _build_stack not in ("realtime", "code")
-                        and _infer_realtime_from_text(_full_intent)
-                        and not _explicit_static(_full_intent)
-                        and not _infer_code_from_text(_full_intent)
-                    ):
+                    _resolved_stack = _resolve_messenger_stack(
+                        _build_stack, _full_intent
+                    )
+                    if _resolved_stack != _build_stack:
                         logging.getLogger(__name__).info(
-                            "discovery-build realtime override (full intent): "
-                            "'%s'→'realtime' (messenger/chat)",
+                            "discovery-build messenger override (full intent): "
+                            "'%s'→'%s'",
                             _build_stack,
+                            _resolved_stack,
                         )
-                        _build_stack = "realtime"
+                        _build_stack = _resolved_stack
                 except Exception as _rt_exc:
                     logging.getLogger(__name__).warning(
                         "realtime full-intent inference failed: %r", _rt_exc
@@ -1626,17 +1625,14 @@ async def post_prompt(
         # on this path; force realtime here when the messenger/chat net fires (and
         # the user didn't ask for plain static or a script). Mirrors the realtime
         # net in discovery.plan_discovery.
-        if (
-            _inferred_stack not in ("realtime", "code")
-            and _infer_realtime_from_text(_fb_intent)
-            and not _explicit_static(_fb_intent)
-            and not _infer_code_from_text(_fb_intent)
-        ):
+        _resolved_stack = _resolve_messenger_stack(_inferred_stack, _fb_intent)
+        if _resolved_stack != _inferred_stack:
             logging.getLogger(__name__).info(
-                "first-build realtime override: '%s'→'realtime' (messenger/chat, full intent)",
+                "first-build messenger override: '%s'→'%s' (full intent)",
                 _inferred_stack,
+                _resolved_stack,
             )
-            _inferred_stack = "realtime"
+            _inferred_stack = _resolved_stack
         if _inferred_stack:
             try:
                 await stack_routing.switch_to_stack(

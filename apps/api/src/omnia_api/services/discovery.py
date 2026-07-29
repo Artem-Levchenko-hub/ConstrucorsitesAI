@@ -454,6 +454,21 @@ def _explicit_static(text: str) -> bool:
     return any(sig in low for sig in _EXPLICIT_STATIC_SIGNALS)
 
 
+def _resolve_messenger_stack(stack: str | None, intent: str) -> str | None:
+    """Keep a MAX Mini App from being flattened into the generic realtime stack."""
+    if _infer_code_from_text(intent):
+        return stack
+    if _infer_max_miniapp_from_text(intent) and not _explicit_static(intent):
+        return "max_miniapp"
+    if (
+        stack not in ("realtime", "code")
+        and _infer_realtime_from_text(intent)
+        and not _explicit_static(intent)
+    ):
+        return "realtime"
+    return stack
+
+
 # Owner 2026-06-19 — a `code` project follow-up asking to RUN it as a web page
 # ("сделай веб-вид", "в браузере", "запусти здесь"). Used ONLY on a `code` project
 # to pivot it to a previewable `static` web build. PRECISE on purpose: a false

@@ -21,6 +21,7 @@ from omnia_api.services.discovery import (
     _infer_max_miniapp_from_text,
     _infer_realtime_from_text,
     _infer_stack_from_text,
+    _resolve_messenger_stack,
     infer_result_type_from_text,
     result_type_to_stack,
 )
@@ -60,6 +61,13 @@ def test_max_miniapp_intent_detected(text: str) -> None:
 )
 def test_max_miniapp_intent_does_not_overfire(text: str) -> None:
     assert _infer_max_miniapp_from_text(text) is False
+
+
+def test_max_miniapp_wins_over_generic_realtime_override() -> None:
+    intent = "мини-приложение внутри мессенджера MAX для программы лояльности"
+    assert _infer_realtime_from_text(intent) is True
+    assert _resolve_messenger_stack("realtime", intent) == "max_miniapp"
+    assert _resolve_messenger_stack("nextjs_entities", intent) == "max_miniapp"
 
 
 # ─── realtime routing (G001 — messenger / chat / live) ───────────────────
