@@ -29,12 +29,14 @@ export function middleware(req: NextRequest) {
 
   const session = req.cookies.get(AUTH_COOKIE);
   const path = req.nextUrl.pathname;
-  const isAuthRoute = path === "/login" || path === "/register";
+  const isGeneralAuthRoute = path === "/login" || path === "/register";
+  const isPublicMaxAuthRoute =
+    path === "/max/register" || path === "/max/verify-email";
 
   // Already signed-in user hitting /login or /register → honour ?next= so
   // the landing-page CTA "Войти" lands directly on whatever path it asked
   // for (default: /projects).
-  if (session && isAuthRoute) {
+  if (session && isGeneralAuthRoute) {
     const next = safeNext(req.nextUrl.searchParams.get("next"));
     const url = req.nextUrl.clone();
     url.pathname = next ?? "/projects";
@@ -45,9 +47,9 @@ export function middleware(req: NextRequest) {
   const isProtectedRoute =
     path.startsWith("/projects") || path === "/max" || path.startsWith("/max/");
 
-  if (!session && !isAuthRoute && isProtectedRoute) {
+  if (!session && !isGeneralAuthRoute && !isPublicMaxAuthRoute && isProtectedRoute) {
     const url = req.nextUrl.clone();
-    url.pathname = "/login";
+    url.pathname = path.startsWith("/max") ? "/max/register" : "/login";
     // Preserve where the user actually wanted to land — including any
     // query string, since /projects?filter=… should round-trip too.
     const target = `${path}${req.nextUrl.search}`;
