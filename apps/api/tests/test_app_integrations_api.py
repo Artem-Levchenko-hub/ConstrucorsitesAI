@@ -10,6 +10,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
+from omnia_api.core.config import get_settings
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
 from omnia_api.models.app_integration import (
     BusinessIntegration,
@@ -42,6 +43,14 @@ async def _register_and_create(
         json={"email": "integrations@example.com", "password": "secret123"},
     )
     assert registered.status_code == 201
+    # The production image correctly marks the cookie Secure, while ASGITransport
+    # uses http://testserver. Reinsert the same signed token as a transport-local
+    # cookie so this API test is independent of the deployment cookie policy.
+    cookie_name = get_settings().jwt_cookie_name
+    session_cookie = registered.cookies.get(cookie_name)
+    assert session_cookie
+    client.cookies.clear()
+    client.cookies.set(cookie_name, session_cookie)
     business = await client.put(
         "/api/max/account/business",
         json={
