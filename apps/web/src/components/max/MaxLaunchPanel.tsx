@@ -66,11 +66,23 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
     deploy.data?.phase ?? "",
   );
   const items = readiness.data?.items ?? [];
+  const readinessAvailable = readiness.isSuccess && items.length > 0;
   const completedCount = items.filter((item) => item.done).length;
-  const nextItem = items.find((item) => !item.done);
-  const nextStepCopy = nextItem
-    ? NEXT_STEP_COPY[nextItem.id] ?? "Завершите этот шаг, чтобы продолжить."
-    : "Приложение готово к работе в MAX.";
+  const nextItem = readinessAvailable
+    ? items.find((item) => !item.done)
+    : undefined;
+  const nextStepLabel = readiness.isError
+    ? "Не удалось проверить готовность"
+    : !readinessAvailable
+      ? "Проверяем готовность…"
+      : nextItem?.label ?? "Всё готово";
+  const nextStepCopy = readiness.isError
+    ? "Обновите страницу или повторите попытку чуть позже."
+    : !readinessAvailable
+      ? "Статусы появятся после ответа сервера."
+      : nextItem
+        ? NEXT_STEP_COPY[nextItem.id] ?? "Завершите этот шаг, чтобы продолжить."
+        : "Приложение готово к работе в MAX.";
   const configurationEmphasis = ["business", "legal", "max_url"].includes(
     nextItem?.id ?? "",
   );
@@ -111,7 +123,7 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
               </h2>
             </div>
             <span className="tabular-nums text-sm font-medium text-white/65">
-              {readiness.data?.progress ?? 0}%
+              {readinessAvailable ? `${readiness.data.progress}%` : "—"}
             </span>
           </div>
           <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/[0.07]">
@@ -126,7 +138,7 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
               Следующий шаг
             </p>
             <p className="mt-1 text-sm font-medium text-white/85">
-              {nextItem?.label ?? "Всё готово"}
+              {nextStepLabel}
             </p>
             <p className="mt-1 text-[11px] leading-4 text-white/40">
               {nextStepCopy}
