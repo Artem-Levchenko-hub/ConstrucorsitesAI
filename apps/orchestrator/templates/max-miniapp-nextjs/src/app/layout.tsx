@@ -4,10 +4,11 @@ import Script from "next/script";
 import "./globals.css";
 
 import { MaxAppProvider } from "@/components/MaxAppProvider";
+import { omniaMaxConfig as app } from "@/lib/omnia/max-config";
 
 export const metadata: Metadata = {
-  title: "MAX Mini App",
-  description: "Мини-приложение для мессенджера MAX",
+  title: app.app_name,
+  description: app.summary,
 };
 
 export const viewport: Viewport = {

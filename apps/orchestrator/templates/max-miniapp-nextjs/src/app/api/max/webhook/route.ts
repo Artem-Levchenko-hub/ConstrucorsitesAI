@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 
 import { db, schema } from "@/lib/db";
-import { sendMaxWelcome } from "@/lib/max/bot-api";
+import { sendMaxHelp, sendMaxWelcome } from "@/lib/max/bot-api";
 
 const MAX_BODY_BYTES = 256 * 1024;
 
@@ -11,6 +11,28 @@ function secretMatches(provided: string, expected: string): boolean {
   const left = Buffer.from(provided);
   const right = Buffer.from(expected);
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function userIdFrom(event: Record<string, unknown>): string | null {
+  const user = record(event.user);
+  const message = record(event.message);
+  const sender = record(message.sender);
+  const callback = record(event.callback);
+  const callbackUser = record(callback.user);
+  const value =
+    user.user_id ||
+    user.id ||
+    sender.user_id ||
+    sender.id ||
+    callbackUser.user_id ||
+    callbackUser.id ||
+    event.user_id ||
+    event.chat_id;
+  return value === undefined || value === null ? null : String(value);
 }
 
 export async function POST(request: NextRequest) {
@@ -48,10 +70,20 @@ export async function POST(request: NextRequest) {
 
   try {
     if (eventType === "bot_started") {
-      const user = (event.user || {}) as Record<string, unknown>;
-      const userId = user.user_id || user.id || event.user_id || event.chat_id;
+      const userId = userIdFrom(event);
       if (userId) {
-        await sendMaxWelcome(String(userId), request.nextUrl.origin);
+        await sendMaxWelcome(userId, request.nextUrl.origin);
+      }
+    } else if (eventType === "message_created") {
+      const message = record(event.message);
+      const body = record(message.body);
+      const text = String(body.text || message.text || "").trim().toLocaleLowerCase("ru-RU");
+      const userId = userIdFrom(event);
+      if (
+        userId &&
+        ["/start", "старт", "помощь", "/help", "открыть", "приложение"].includes(text)
+      ) {
+        await sendMaxHelp(userId, request.nextUrl.origin);
       }
     }
   } catch {

@@ -15,6 +15,18 @@ type MaxBackButton = {
   offClick?: (handler: () => void) => void;
 };
 
+type MaxStorage = {
+  setItem?: (key: string, value: string) => Promise<void> | void;
+  getItem?: (key: string) => Promise<string | null> | string | null;
+  removeItem?: (key: string) => Promise<void> | void;
+};
+
+type MaxHapticFeedback = {
+  impactOccurred?: (style: "light" | "medium" | "heavy" | "rigid" | "soft") => void;
+  notificationOccurred?: (type: "error" | "success" | "warning") => void;
+  selectionChanged?: () => void;
+};
+
 export type MaxWebApp = {
   initData?: string;
   initDataUnsafe?: { user?: MaxBridgeUser };
@@ -24,13 +36,55 @@ export type MaxWebApp = {
   expand?: () => void;
   enableClosingConfirmation?: () => void;
   disableClosingConfirmation?: () => void;
+  openLink?: (url: string) => void;
+  openMaxLink?: (url: string) => void;
+  downloadFile?: (params: { url: string; file_name?: string }) => Promise<boolean> | void;
+  shareContent?: (payload: { text?: string; link?: string }) => Promise<boolean> | void;
+  shareMaxContent?: (payload: { text?: string; link?: string }) => Promise<boolean> | void;
+  openCodeReader?: (params?: { text?: string }) => Promise<string | null> | void;
+  requestContact?: () => Promise<unknown> | void;
+  getViewportSize?: () => { width: number; height: number } | Promise<{ width: number; height: number }>;
   BackButton?: MaxBackButton;
+  DeviceStorage?: MaxStorage;
+  SecureStorage?: MaxStorage;
+  HapticFeedback?: MaxHapticFeedback;
 };
 
 declare global {
   interface Window {
     WebApp?: MaxWebApp;
   }
+}
+
+export function openExternalLink(url: string): void {
+  const webApp = getMaxWebApp();
+  if (url.startsWith("https://max.ru/")) webApp?.openMaxLink?.(url);
+  else if (webApp?.openLink) webApp.openLink(url);
+  else window.open(url, "_blank", "noopener,noreferrer");
+}
+
+export function shareInMax(payload: { text?: string; link?: string }): void {
+  void getMaxWebApp()?.shareContent?.(payload);
+}
+
+export function maxHaptic(
+  type: "success" | "warning" | "error" | "selection" = "selection",
+): void {
+  const haptic = getMaxWebApp()?.HapticFeedback;
+  if (type === "selection") haptic?.selectionChanged?.();
+  else haptic?.notificationOccurred?.(type);
+}
+
+export async function requestMaxContact(): Promise<unknown> {
+  return getMaxWebApp()?.requestContact?.();
+}
+
+export async function readSecureValue(key: string): Promise<string | null> {
+  return (await getMaxWebApp()?.SecureStorage?.getItem?.(key)) ?? null;
+}
+
+export async function writeSecureValue(key: string, value: string): Promise<void> {
+  await getMaxWebApp()?.SecureStorage?.setItem?.(key, value);
 }
 
 export function getMaxWebApp(): MaxWebApp | null {

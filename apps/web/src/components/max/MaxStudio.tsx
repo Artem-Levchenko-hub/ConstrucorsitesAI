@@ -34,6 +34,7 @@ import {
   type MaxStyleId,
 } from "@/lib/max-brief";
 import { createProject, listProjects } from "@/lib/api/projects";
+import { saveMaxProjectConfig } from "@/lib/api/max-studio";
 import { cn } from "@/lib/utils";
 import { MaxStudioHeader } from "./MaxStudioHeader";
 
@@ -80,13 +81,53 @@ export function MaxStudio({ email }: { email: string }) {
         style,
         brandColors,
       });
-      return { project, prompt };
+      let configSaved = true;
+      try {
+        await saveMaxProjectConfig(project.id, {
+          app_name: name.trim(),
+          app_type: appType,
+          summary: idea.trim(),
+          audience: audience.trim(),
+          primary_action: primaryAction.trim(),
+          features,
+          style,
+          brand_colors: brandColors.trim(),
+          content: [],
+          operator: { legal_name: "", inn: "", ogrn: "", address: "" },
+          support: {
+            email: null,
+            phone: "",
+            response_time: "Ответим в течение 2 рабочих дней",
+          },
+          legal: {
+            age_rating: "0+",
+            has_sales: appType === "catalog",
+            has_user_content: false,
+            marketing_notifications: features.includes("Уведомления бота"),
+            personal_data_consent: true,
+            terms_accepted: false,
+          },
+          max_url_attached: false,
+        });
+      } catch {
+        // The project itself already exists. Continue into it instead of
+        // inviting a retry that would create a duplicate; the same form is
+        // available from the launch panel.
+        configSaved = false;
+      }
+      return { project, prompt, configSaved };
     },
-    onSuccess: ({ project, prompt }) => {
+    onSuccess: ({ project, prompt, configSaved }) => {
       qc.invalidateQueries({ queryKey: ["projects"] });
-      toast.success("MAX Mini App создан", {
-        description: "Открываем студию и запускаем первую сборку.",
-      });
+      if (configSaved) {
+        toast.success("MAX Mini App создан", {
+          description: "Бизнес-профиль сохранён. Открываем студию для первой сборки.",
+        });
+      } else {
+        toast.warning("Приложение создано", {
+          description: "Профиль нужно сохранить в панели готовности.",
+        });
+      }
       try {
         window.sessionStorage.setItem(`omnia:max:starter:${project.id}`, prompt);
         router.push(`/max/${project.id}?starter=1`);

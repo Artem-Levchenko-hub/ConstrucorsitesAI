@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from uuid import uuid4
+
+from omnia_api.models.max_project_config import MaxProjectConfig
+from omnia_api.models.project import Project
+from omnia_api.models.snapshot import Snapshot
+from omnia_api.models.user import User
+from omnia_api.routers import max_studio
+from omnia_api.schemas.max_studio import MaxContentItem, MaxProjectConfigPayload
+from omnia_api.services.max_project_kit import render_max_managed_files
+
+
+def _config() -> MaxProjectConfigPayload:
+    return MaxProjectConfigPayload(
+        app_name='Кофе "Рядом"',
+        app_type="loyalty",
+        summary="Баллы, награды и предзаказ",
+        primary_action="Заказать кофе",
+        features=["Каталог", "Баллы", "Каталог"],
+        content=[
+            MaxContentItem(
+                id="flat-white",
+                title="Флэт уайт",
+                description="Двойной эспрессо",
+                price="290 ₽",
+                action_label="Заказать",
+            )
+        ],
+        operator={"legal_name": "ООО Кофе", "inn": "1234567890"},
+        support={"email": "help@example.ru"},
+        legal={"has_sales": True, "terms_accepted": True},
+    )
+
+
+def test_max_config_normalises_features() -> None:
+    assert _config().features == ["Каталог", "Баллы"]
+
+
+def test_managed_kit_contains_config_and_required_legal_routes() -> None:
+    files = render_max_managed_files(_config())
+
+    assert set(files) == {
+        "src/lib/omnia/max-config.ts",
+        "src/app/api/omnia/config/route.ts",
+        "src/app/legal/privacy/page.tsx",
+        "src/app/legal/terms/page.tsx",
+        "src/app/support/page.tsx",
+    }
+    config = files["src/lib/omnia/max-config.ts"]
+    assert '"app_name": "Кофе \\"Рядом\\""' in config
+    assert '"price": "290 ₽"' in config
+    assert "as const" in config
+
+
+def test_managed_kit_never_contains_model_or_generation_calls() -> None:
+    combined = "\n".join(render_max_managed_files(_config()).values()).lower()
+
+    assert "openai" not in combined
+    assert "llmgw" not in combined
+    assert "/chat/completions" not in combined
+    assert "generate(" not in combined
+
+
+async def test_config_save_is_versioned_and_idempotent(
+    db_session, monkeypatch
+) -> None:
+    user = User(email=f"max-{uuid4()}@example.ru")
+    db_session.add(user)
+    await db_session.flush()
+    project = Project(
+        owner_id=user.id,
+        name="Кофе Рядом",
+        slug=f"max-{uuid4().hex[:8]}",
+        template="max_miniapp",
+    )
+    db_session.add(project)
+    await db_session.flush()
+    initial = Snapshot(
+        project_id=project.id,
+        commit_sha="1" * 40,
+        prompt_text="Собери приложение",
+    )
+    db_session.add(initial)
+    await db_session.flush()
+    project.current_snapshot_id = initial.id
+    await db_session.commit()
+
+    calls: list[dict[str, str]] = []
+
+    def fake_commit(project_id, files, message, parent_sha):
+        calls.append(
+            {
+                "project_id": str(project_id),
+                "message": message,
+                "parent_sha": parent_sha,
+                "config": files["src/lib/omnia/max-config.ts"],
+            }
+        )
+        return "2" * 40
+
+    async def stopped(_project_id):
+        return {"state": "stopped"}
+
+    async def not_deployed(_project_id):
+        return {"phase": "queued"}
+
+    monkeypatch.setattr(max_studio.repo_svc, "commit_files", fake_commit)
+    monkeypatch.setattr(max_studio.orchestrator_client, "get_status", stopped)
+    monkeypatch.setattr(max_studio.orchestrator_client, "get_deploy", not_deployed)
+
+    first = await max_studio.put_max_config(project.id, _config(), db_session, user)
+    second = await max_studio.put_max_config(project.id, _config(), db_session, user)
+
+    assert first.config_version == 1
+    assert second.synced_snapshot_id == first.synced_snapshot_id
+    assert len(calls) == 1
+    assert calls[0]["parent_sha"] == "1" * 40
+    saved = await db_session.get(MaxProjectConfig, project.id)
+    assert saved is not None
+    assert saved.config["app_name"] == 'Кофе "Рядом"'
+    assert project.current_snapshot_id == saved.synced_snapshot_id

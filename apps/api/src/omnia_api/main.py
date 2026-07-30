@@ -23,6 +23,7 @@ from omnia_api.routers import fonts as fonts_router
 from omnia_api.routers import github as github_router
 from omnia_api.routers import hero_media as hero_media_router
 from omnia_api.routers import max_integrations as max_integrations_router
+from omnia_api.routers import max_studio as max_studio_router
 from omnia_api.routers import messages as messages_router
 from omnia_api.routers import models_router
 from omnia_api.routers import projects as projects_router
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(snapshots_router.router)
     app.include_router(messages_router.router)
     app.include_router(max_integrations_router.router)
+    app.include_router(max_studio_router.router)
     app.include_router(rollback_router.router)
     app.include_router(style_patch_router.router)
     app.include_router(uploads_router.router)

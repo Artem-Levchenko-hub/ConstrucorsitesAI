@@ -501,6 +501,67 @@ export type MaxIntegration = {
   published_at: IsoDateTime | null;
 };
 
+export type MaxContentItem = {
+  id: string;
+  title: string;
+  description: string;
+  price: string;
+  action_label: string;
+  active: boolean;
+};
+
+export type MaxProjectConfigPayload = {
+  app_name: string;
+  app_type: "loyalty" | "catalog" | "booking" | "event" | "education" | "custom";
+  summary: string;
+  audience: string;
+  primary_action: string;
+  features: string[];
+  style: "brand" | "clean" | "bright";
+  brand_colors: string;
+  content: MaxContentItem[];
+  operator: {
+    legal_name: string;
+    inn: string;
+    ogrn: string;
+    address: string;
+  };
+  support: {
+    email: string | null;
+    phone: string;
+    response_time: string;
+  };
+  legal: {
+    age_rating: "0+" | "6+" | "12+" | "16+" | "18+";
+    has_sales: boolean;
+    has_user_content: boolean;
+    marketing_notifications: boolean;
+    personal_data_consent: boolean;
+    terms_accepted: boolean;
+  };
+  max_url_attached: boolean;
+};
+
+export type MaxProjectConfig = {
+  project_id: Uuid;
+  config_version: number;
+  config: MaxProjectConfigPayload;
+  synced_snapshot_id: Uuid | null;
+  updated_at: IsoDateTime | null;
+};
+
+export type MaxReadiness = {
+  ready_to_launch: boolean;
+  progress: number;
+  items: {
+    id: string;
+    label: string;
+    done: boolean;
+    blocking: boolean;
+    action: string | null;
+  }[];
+};
+
 // === GitHub OAuth + Push (apps/api/src/omnia_api/schemas/github.py) ===
 
 export type GithubStatus = {

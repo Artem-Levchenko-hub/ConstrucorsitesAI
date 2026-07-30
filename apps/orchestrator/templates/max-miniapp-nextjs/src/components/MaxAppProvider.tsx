@@ -5,6 +5,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 import { configureMaxShell, getMaxWebApp } from "@/lib/max/bridge";
 import type { MaxSessionUser } from "@/lib/max/session";
+import { OmniaCompliance } from "@/components/OmniaCompliance";
 
 const MaxUI = dynamic(
   () => import("@maxhub/max-ui").then((module) => module.MaxUI),
@@ -81,7 +82,10 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(() => state, [state]);
   return (
     <MaxUI platform={appearance.platform} colorScheme={appearance.colorScheme}>
-      <MaxContext.Provider value={value}>{children}</MaxContext.Provider>
+      <MaxContext.Provider value={value}>
+        {children}
+        <OmniaCompliance />
+      </MaxContext.Provider>
     </MaxUI>
   );
 }

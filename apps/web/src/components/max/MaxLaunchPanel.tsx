@@ -22,6 +22,9 @@ import type { Project } from "@/lib/api/types";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
 import { RuntimeButton } from "@/components/workspace/RuntimeButton";
+import { MaxProjectSetupDialog } from "./MaxProjectSetupDialog";
+import { MaxLaunchButton } from "./MaxLaunchButton";
+import { getMaxReadiness } from "@/lib/api/max-studio";
 import {
   isGenerationActive,
   isMaxBuildReady,
@@ -67,6 +70,16 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
       )
         ? 1_500
         : false,
+  });
+  const readiness = useQuery({
+    queryKey: ["max-readiness", project.id],
+    queryFn: () => getMaxReadiness(project.id),
+    retry: false,
+    refetchInterval: ["building", "pushing", "swapping"].includes(
+      deploy.data?.phase ?? "",
+    )
+      ? 2_000
+      : 10_000,
   });
 
   const connected = integration.data?.connected === true;
@@ -154,11 +167,44 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
 
       <div className="max-studio-scroll flex-1 space-y-5 overflow-y-auto p-4">
         <div>
-          <h2 className="text-sm font-semibold">Готовность к публикации</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold">Готовность к публикации</h2>
+            <span className="text-[11px] font-medium text-[#9b92ff]">
+              {readiness.data?.progress ?? 0}%
+            </span>
+          </div>
           <p className="mt-1 text-xs leading-5 text-white/40">
-            Делайте шаги сверху вниз. Технические настройки студия выполнит сама.
+            Заполните данные один раз. Технические настройки студия выполнит сама.
           </p>
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+            <div
+              className="h-full rounded-full bg-[#7468ff] transition-[width]"
+              style={{ width: `${readiness.data?.progress ?? 0}%` }}
+            />
+          </div>
         </div>
+
+        {readiness.data && (
+          <div className="space-y-1.5 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3">
+            {readiness.data.items.map((item) => (
+              <div key={item.id} className="flex items-center gap-2 text-[11px]">
+                <span
+                  className={cn(
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                    item.done
+                      ? "border-success/50 bg-success/10 text-success"
+                      : "border-white/[0.14] text-white/25",
+                  )}
+                >
+                  {item.done ? <Check className="h-2.5 w-2.5" /> : <Circle className="h-1.5 w-1.5" />}
+                </span>
+                <span className={item.done ? "text-white/45" : "text-white/70"}>
+                  {item.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
 
         <ol className="space-y-1">
           {steps.map((step, index) => (
@@ -212,12 +258,14 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
         </ol>
 
         <div className="space-y-2.5 border-t border-white/[0.07] pt-5">
+          <MaxProjectSetupDialog projectId={project.id} />
           <MaxIntegrationButton
             projectId={project.id}
             initialTemplate={project.template}
             display="panel"
           />
           <RuntimeButton projectId={project.id} display="panel" />
+          <MaxLaunchButton projectId={project.id} />
         </div>
 
         {busyDeploy && (

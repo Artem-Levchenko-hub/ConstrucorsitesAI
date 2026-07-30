@@ -15,3 +15,22 @@
 - Request contacts or other sensitive platform data only after an explicit
   user action.
 - Do not add Telegram WebApp, VK Bridge, Auth.js or password login.
+- Treat `src/lib/omnia/max-config.ts`, `/legal/privacy`, `/legal/terms`,
+  `/support`, `/api/omnia/*`, the MAX session and webhook files as
+  Omnia-managed infrastructure. Import the config; do not duplicate or delete it.
+- Render `omniaMaxConfig.content` as the editable business catalog. The owner
+  changes it in MAX Studio without another model call.
+- Every primary CTA must perform a real persisted operation through
+  `/api/omnia/actions`; never ship decorative buttons or fake success states.
+- Persist explicit consent through `/api/omnia/consents` before marketing
+  notifications, contacts, payments or other optional personal-data use.
+- Track key funnel events through `/api/omnia/events`; do not send personal data
+  to third-party analytics by default.
+- Support loading, empty, error, retry and success states for every async flow.
+- Use the Bot API for start/help/open-app flows and the Bridge wrappers for
+  links, sharing, contacts, storage, haptics and the BackButton.
+- For sales include visible price/order confirmation/cancellation/refund states.
+  For bookings prevent duplicate slots. For loyalty keep a transaction ledger.
+  For user content include report/block/moderation states.
+- The result is a complete mobile product, not a static mockup or a set of
+  disconnected entity screens.
