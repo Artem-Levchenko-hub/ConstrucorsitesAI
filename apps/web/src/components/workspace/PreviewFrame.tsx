@@ -646,7 +646,7 @@ export function PreviewFrame({
             })}
           </div>
           {visible?.commit_sha && (
-            <span className="text-[11px] font-mono text-fg-tertiary ml-1">
+            <span className="ml-1 hidden text-[11px] font-mono text-fg-tertiary sm:inline">
               · {shortSha(visible.commit_sha)}
             </span>
           )}
@@ -657,7 +657,7 @@ export function PreviewFrame({
               устройств переехал в браузер-бар превью (он про сам сайт). */}
           {viewMode === "preview" && (
             <>
-              <span className="text-[11px] font-medium text-fg-tertiary ml-1 select-none">
+              <span className="ml-1 hidden select-none text-[11px] font-medium text-fg-tertiary sm:inline">
                 Править
               </span>
               <Button
@@ -680,7 +680,7 @@ export function PreviewFrame({
                 )}
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                С ИИ
+                <span className="hidden sm:inline">С ИИ</span>
               </Button>
 
               <Button
@@ -703,7 +703,7 @@ export function PreviewFrame({
                 )}
               >
                 <Pencil className="h-3.5 w-3.5" />
-                Вручную
+                <span className="hidden sm:inline">Вручную</span>
               </Button>
 
               <Button
@@ -725,7 +725,7 @@ export function PreviewFrame({
                 )}
               >
                 <Clapperboard className="h-3.5 w-3.5" />
-                Hero
+                <span className="hidden sm:inline">Hero</span>
               </Button>
 
               <Button
@@ -742,7 +742,7 @@ export function PreviewFrame({
           <Button size="sm" variant="ghost" asChild>
             <a href={publicUrl} target="_blank" rel="noreferrer">
               <ExternalLink className="h-3.5 w-3.5" />
-              Открыть
+              <span className="hidden sm:inline">Открыть</span>
             </a>
           </Button>
 

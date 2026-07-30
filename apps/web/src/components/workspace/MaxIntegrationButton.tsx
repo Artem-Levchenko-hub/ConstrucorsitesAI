@@ -43,10 +43,14 @@ export function MaxIntegrationButton({
   projectId,
   initialTemplate,
   display = "toolbar",
+  emphasized = false,
+  label,
 }: {
   projectId: string;
   initialTemplate?: string;
   display?: "toolbar" | "panel";
+  emphasized?: boolean;
+  label?: string;
 }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -120,11 +124,11 @@ export function MaxIntegrationButton({
     <>
       <Button
         size="sm"
-        variant={display === "panel" ? "primary" : "secondary"}
+        variant={emphasized ? "primary" : "secondary"}
         onClick={() => setOpen(true)}
         className={
           display === "panel"
-            ? "h-10 w-full gap-2 rounded-xl text-xs"
+            ? "h-10 w-full gap-1.5 rounded-lg px-2 text-[11px]"
             : "h-7 gap-1.5 px-2.5 text-xs"
         }
         title="Подключить MAX Mini App"
@@ -132,7 +136,7 @@ export function MaxIntegrationButton({
       >
         <Bot className="h-3.5 w-3.5" />
         <span className={display === "panel" ? "" : "hidden 2xl:inline"}>
-          {display === "panel" ? "Подключить MAX-бота" : "MAX"}
+          {display === "panel" ? label ?? "Подключить бота" : "MAX"}
         </span>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>

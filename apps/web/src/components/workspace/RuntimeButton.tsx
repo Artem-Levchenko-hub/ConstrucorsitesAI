@@ -140,10 +140,11 @@ export function RuntimeButton({
   display = "toolbar",
 }: {
   projectId: string;
-  display?: "toolbar" | "panel";
+  display?: "toolbar" | "panel" | "compact";
 }) {
   const qc = useQueryClient();
   const panel = display === "panel";
+  const compact = display === "compact";
 
   const { data: runtime, isPending } = useQuery({
     queryKey: ["runtime", projectId],
@@ -251,6 +252,14 @@ export function RuntimeButton({
     activeDeploy;
 
   if (isPending) {
+    if (compact) {
+      return (
+        <div className="flex h-9 items-center gap-2 border-t border-white/[0.07] pt-2 text-[11px] text-white/35">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Проверяем контейнер…
+        </div>
+      );
+    }
     return (
       <Badge
         variant="outline"
@@ -272,6 +281,44 @@ export function RuntimeButton({
     swapping: "Проверяем и переключаем…",
     cancelling: "Останавливаем…",
   };
+
+  if (compact) {
+    return (
+      <div className="flex min-h-10 items-center justify-between gap-3 border-t border-white/[0.07] pt-2">
+        <div className="flex min-w-0 items-center gap-2 text-[11px] text-white/45">
+          <StateIcon state={state} />
+          <span className="truncate">
+            {activeDeploy
+              ? deployPhaseLabel[deployQuery.data?.phase ?? ""] ?? "Публикуем…"
+              : STATE_LABEL[state]}
+          </span>
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-pressed={runtime?.keep_alive ?? false}
+          disabled={busy}
+          onClick={() => keepAliveMut.mutate(!runtime?.keep_alive)}
+          className={cn(
+            "h-8 shrink-0 gap-1.5 rounded-lg px-2 text-[11px] text-white/55",
+            runtime?.keep_alive && "text-success",
+          )}
+          title={
+            runtime?.keep_alive
+              ? "Разрешить автоусыпление контейнера"
+              : "Оставлять контейнер запущенным постоянно"
+          }
+        >
+          {keepAliveMut.isPending ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <InfinityIcon className="h-3 w-3" />
+          )}
+          {runtime?.keep_alive ? "Не усыпляется" : "Не усыплять"}
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div

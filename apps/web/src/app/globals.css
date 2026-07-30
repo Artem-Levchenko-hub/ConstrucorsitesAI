@@ -195,17 +195,30 @@
     background-clip: padding-box;
   }
 
-  /* The dedicated MAX workspace stays usable on phones: editor above, mobile
-     preview below. Publication controls remain in the desktop launch rail and
-     are also available from the toolbar on wider screens. */
+  /* The MAX workspace becomes one deliberate vertical flow on small screens:
+     chat, preview, then publication. No task disappears behind desktop-only
+     chrome, and the page itself owns scrolling instead of nested panels. */
   @media (max-width: 1023px) {
     .max-workspace-grid {
       grid-template-columns: minmax(0, 1fr) !important;
-      grid-template-rows: minmax(250px, 0.9fr) minmax(320px, 1.1fr);
+      grid-template-rows:
+        minmax(280px, 42vh)
+        minmax(390px, 58vh)
+        auto;
       overflow-y: auto;
     }
     .max-workspace-grid > :nth-child(3) {
-      display: none;
+      display: block;
+      min-height: 0;
+      overflow: visible;
+    }
+    .max-launch-panel {
+      height: auto;
+      border-top: 1px solid rgb(255 255 255 / 0.07);
+      border-left: 0;
+    }
+    .max-launch-panel-scroll {
+      overflow: visible;
     }
   }
 

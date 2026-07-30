@@ -130,18 +130,7 @@ export function TopBar({
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2 overflow-x-auto omnia-no-scrollbar">
         {showProjectControls && (
           <>
-            {maxMode ? (
-              <>
-                {projectId && <RuntimeButton projectId={projectId} />}
-                {projectId && (
-                  <MaxIntegrationButton
-                    projectId={projectId}
-                    initialTemplate={projectTemplate}
-                  />
-                )}
-                {projectSlug && <PublishButton projectSlug={projectSlug} />}
-              </>
-            ) : (
+            {!maxMode && (
               <>
                 {projectId && <RuntimeButton projectId={projectId} />}
                 {projectId && <DeploySettingsButton projectId={projectId} />}

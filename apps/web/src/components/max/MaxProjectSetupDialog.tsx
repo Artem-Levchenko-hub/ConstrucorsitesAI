@@ -53,9 +53,13 @@ function errorMessage(error: unknown) {
 export function MaxProjectSetupDialog({
   projectId,
   display = "panel",
+  emphasized = false,
+  label = "Данные приложения",
 }: {
   projectId: string;
   display?: "panel" | "toolbar";
+  emphasized?: boolean;
+  label?: string;
 }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -92,17 +96,21 @@ export function MaxProjectSetupDialog({
     <>
       <Button
         size="sm"
-        variant="secondary"
+        variant={emphasized ? "primary" : "secondary"}
         className={
           display === "panel"
-            ? "h-10 w-full gap-2 rounded-xl border-white/[0.1] bg-white/[0.04] text-xs text-white hover:bg-white/[0.08]"
+            ? cn(
+                "h-10 w-full gap-1.5 rounded-lg px-2 text-[11px]",
+                !emphasized &&
+                  "border-white/[0.1] bg-white/[0.035] text-white/75 hover:bg-white/[0.07]",
+              )
             : "h-7 gap-1.5 px-2.5 text-xs"
         }
         onClick={() => setOpen(true)}
         data-testid="max-settings-open"
       >
         <Settings2 className="h-3.5 w-3.5" />
-        Настройки и готовность
+        {display === "panel" ? label : "Настройки"}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[92vh] overflow-y-auto border-white/[0.1] bg-[#12141d] text-white sm:max-w-[760px]">

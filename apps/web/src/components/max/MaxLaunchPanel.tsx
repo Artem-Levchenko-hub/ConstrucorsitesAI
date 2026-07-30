@@ -2,22 +2,16 @@
 
 import { useQuery } from "@tanstack/react-query";
 import {
-  AlertCircle,
-  Bot,
   Check,
-  Circle,
+  ChevronDown,
   ExternalLink,
   Loader2,
   PanelRightClose,
-  Rocket,
   ShieldCheck,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { getMaxIntegration } from "@/lib/api/max-integration";
-import { getLatestGeneration } from "@/lib/api/messages";
 import { getLastDeploy } from "@/lib/api/runtime";
-import { listSnapshots } from "@/lib/api/snapshots";
 import type { Project } from "@/lib/api/types";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
@@ -25,18 +19,16 @@ import { RuntimeButton } from "@/components/workspace/RuntimeButton";
 import { MaxProjectSetupDialog } from "./MaxProjectSetupDialog";
 import { MaxLaunchButton } from "./MaxLaunchButton";
 import { getMaxReadiness } from "@/lib/api/max-studio";
-import {
-  isGenerationActive,
-  isMaxBuildReady,
-} from "@/lib/generation-lifecycle";
 import { cn } from "@/lib/utils";
 
-type LaunchStep = {
-  label: string;
-  description: string;
-  done: boolean;
-  active?: boolean;
-  error?: boolean;
+const NEXT_STEP_COPY: Record<string, string> = {
+  business: "Добавьте описание продукта и контакты поддержки.",
+  legal: "Заполните данные оператора и подтвердите обязательные условия.",
+  build: "Завершите текущую сборку приложения в чате.",
+  bot: "Вставьте секрет прошедшего модерацию MAX-бота.",
+  publish: "Запустите публикацию — студия сама подготовит HTTPS-адрес.",
+  webhook: "После публикации студия автоматически подключит webhook.",
+  max_url: "Добавьте HTTPS-адрес в кабинете MAX и подтвердите этот шаг.",
 };
 
 export function MaxLaunchPanel({ project }: { project: Project }) {
@@ -57,20 +49,6 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
         ? 1_500
         : false,
   });
-  const snapshots = useQuery({
-    queryKey: ["snapshots", project.id],
-    queryFn: () => listSnapshots(project.id),
-  });
-  const generation = useQuery({
-    queryKey: ["generation", project.id],
-    queryFn: () => getLatestGeneration(project.id),
-    refetchInterval: (query) =>
-      ["pending", "running", "cancel_requested"].includes(
-        query.state.data?.status ?? "",
-      )
-        ? 1_500
-        : false,
-  });
   const readiness = useQuery({
     queryKey: ["max-readiness", project.id],
     queryFn: () => getMaxReadiness(project.id),
@@ -83,76 +61,32 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
   });
 
   const connected = integration.data?.connected === true;
-  const published = deploy.data?.phase === "done" && !!deploy.data.prod_url;
   const webhookActive = integration.data?.status === "active";
   const busyDeploy = ["building", "pushing", "swapping", "cancelling"].includes(
     deploy.data?.phase ?? "",
   );
-  const hasGeneratedSnapshot = (snapshots.data ?? []).some(
-    (snapshot) => snapshot.prompt_text !== null,
+  const items = readiness.data?.items ?? [];
+  const completedCount = items.filter((item) => item.done).length;
+  const nextItem = items.find((item) => !item.done);
+  const nextStepCopy = nextItem
+    ? NEXT_STEP_COPY[nextItem.id] ?? "Завершите этот шаг, чтобы продолжить."
+    : "Приложение готово к работе в MAX.";
+  const configurationEmphasis = ["business", "legal", "max_url"].includes(
+    nextItem?.id ?? "",
   );
-  const generationActive = isGenerationActive(generation.data);
-  const latestBuildFailed =
-    generation.data?.response_mode === "build" &&
-    generation.data.status === "failed";
-  const buildReady = isMaxBuildReady({
-    snapshotsLoaded: snapshots.isSuccess,
-    generationLoaded: generation.isSuccess,
-    hasGeneratedSnapshot,
-    generation: generation.data,
-  });
-  const steps: LaunchStep[] = [
-    {
-      label: generationActive
-        ? hasGeneratedSnapshot
-          ? "Обновляем приложение…"
-          : "Собираем приложение…"
-        : latestBuildFailed
-          ? hasGeneratedSnapshot
-            ? "Последнее обновление не завершено"
-            : "Сборка не завершена"
-          : hasGeneratedSnapshot
-            ? "Приложение собрано"
-            : "Соберите приложение",
-      description: generationActive
-        ? "Продолжаем текущую генерацию — перезагрузка её не запустит заново."
-        : latestBuildFailed
-          ? "Исправьте ошибку и повторите сборку."
-          : hasGeneratedSnapshot
-            ? "Проверьте экраны в мобильном превью."
-            : "Первая генерация ещё не запускалась.",
-      done: buildReady && !latestBuildFailed,
-      active: generationActive || (!hasGeneratedSnapshot && !latestBuildFailed),
-      error: latestBuildFailed,
-    },
-    {
-      label: connected ? "MAX-бот подключён" : "Подключите MAX-бота",
-      description: "Нужен секрет прошедшего модерацию бота.",
-      done: connected,
-      active: buildReady && !connected,
-    },
-    {
-      label: published ? "Версия опубликована" : "Опубликуйте версию",
-      description: "Получаем постоянный защищённый HTTPS-адрес.",
-      done: published,
-      active: buildReady && connected && !published,
-    },
-    {
-      label: webhookActive ? "Webhook активирован" : "Активируйте webhook",
-      description: "События MAX начнут приходить в приложение.",
-      done: webhookActive,
-      active: buildReady && connected && published && !webhookActive,
-    },
-  ];
+  const botEmphasis = nextItem?.id === "bot";
 
   return (
-    <aside className="flex h-full min-h-0 flex-col border-l border-white/[0.07] bg-[#0d0f16]">
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-white/[0.07] px-4">
-        <div className="flex items-center gap-2">
-          <Rocket className="h-3.5 w-3.5 text-[#8d83ff]" />
-          <span className="text-[10px] font-mono uppercase tracking-[0.16em] text-white/45">
-            Запуск в MAX
-          </span>
+    <aside className="max-launch-panel flex h-full min-h-0 flex-col border-l border-white/[0.07] bg-[#0d0f16]">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/[0.07] px-4">
+        <div className="flex items-center gap-2.5">
+          <span
+            className={cn(
+              "h-1.5 w-1.5 rounded-full",
+              readiness.data?.ready_to_launch ? "bg-success" : "bg-[#8d83ff]",
+            )}
+          />
+          <span className="text-xs font-medium text-white/75">Публикация</span>
         </div>
         <button
           type="button"
@@ -165,156 +99,116 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
         </button>
       </div>
 
-      <div className="max-studio-scroll flex-1 space-y-5 overflow-y-auto p-4">
-        <div>
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold">Готовность к публикации</h2>
-            <span className="text-[11px] font-medium text-[#9b92ff]">
+      <div className="max-launch-panel-scroll max-studio-scroll flex-1 overflow-y-auto p-4">
+        <section aria-labelledby="max-launch-heading">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-white/30">
+                Готовность
+              </p>
+              <h2 id="max-launch-heading" className="mt-1 text-base font-semibold">
+                Запуск в MAX
+              </h2>
+            </div>
+            <span className="tabular-nums text-sm font-medium text-white/65">
               {readiness.data?.progress ?? 0}%
             </span>
           </div>
-          <p className="mt-1 text-xs leading-5 text-white/40">
-            Заполните данные один раз. Технические настройки студия выполнит сама.
-          </p>
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+          <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/[0.07]">
             <div
-              className="h-full rounded-full bg-[#7468ff] transition-[width]"
+              className="h-full rounded-full bg-[#8175ff] transition-[width]"
               style={{ width: `${readiness.data?.progress ?? 0}%` }}
             />
           </div>
-        </div>
 
-        {readiness.data && (
-          <div className="space-y-1.5 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3">
-            {readiness.data.items.map((item) => (
-              <div key={item.id} className="flex items-center gap-2 text-[11px]">
-                <span
-                  className={cn(
-                    "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                    item.done
-                      ? "border-success/50 bg-success/10 text-success"
-                      : "border-white/[0.14] text-white/25",
-                  )}
-                >
-                  {item.done ? <Check className="h-2.5 w-2.5" /> : <Circle className="h-1.5 w-1.5" />}
-                </span>
-                <span className={item.done ? "text-white/45" : "text-white/70"}>
-                  {item.label}
-                </span>
-              </div>
-            ))}
+          <div className="mt-5 border-l-2 border-[#8175ff]/70 pl-3">
+            <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/30">
+              Следующий шаг
+            </p>
+            <p className="mt-1 text-sm font-medium text-white/85">
+              {nextItem?.label ?? "Всё готово"}
+            </p>
+            <p className="mt-1 text-[11px] leading-4 text-white/40">
+              {nextStepCopy}
+            </p>
           </div>
+        </section>
+
+        {items.length > 0 && (
+          <details className="group mt-5 border-y border-white/[0.07] py-3">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs text-white/55">
+              <span>
+                {completedCount} из {items.length} шагов готово
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="space-y-2.5 pt-3">
+              {items.map((item) => (
+                <div key={item.id} className="flex items-start gap-2 text-[11px]">
+                  <span
+                    className={cn(
+                      "mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                      item.done
+                        ? "border-success/45 bg-success/10 text-success"
+                        : "border-white/[0.13] text-transparent",
+                    )}
+                  >
+                    <Check className="h-2.5 w-2.5" />
+                  </span>
+                  <span className={item.done ? "text-white/35" : "text-white/65"}>
+                    {item.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
         )}
 
-        <ol className="space-y-1">
-          {steps.map((step, index) => (
-            <li
-              key={step.label}
-              className={cn(
-                "relative grid grid-cols-[24px_1fr] gap-2.5 rounded-xl px-2 py-2.5",
-                step.active && "bg-[#7468ff]/8",
-              )}
-            >
-              {index < steps.length - 1 && (
-                <span className="absolute left-[19px] top-8 h-[calc(100%-16px)] w-px bg-white/[0.08]" />
-              )}
-              <span
-                className={cn(
-                  "relative z-10 mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border",
-                  step.done
-                    ? "border-[#7468ff] bg-[#7468ff] text-white"
-                    : step.error
-                      ? "border-danger/70 bg-danger/10 text-danger"
-                    : step.active
-                      ? "border-[#7468ff]/60 bg-[#7468ff]/10 text-[#9b92ff]"
-                      : "border-white/[0.12] bg-[#0d0f16] text-white/25",
-                )}
-              >
-                {step.done ? (
-                  <Check className="h-3 w-3" />
-                ) : step.error ? (
-                  <AlertCircle className="h-3 w-3" />
-                ) : step.active ? (
-                  <Circle className="h-2 w-2 fill-current" />
-                ) : (
-                  <span className="text-[9px]">{index + 1}</span>
-                )}
-              </span>
-              <span>
-                <span
-                  className={cn(
-                    "block text-xs font-medium",
-                    step.done ? "text-white/75" : "text-white",
-                  )}
-                >
-                  {step.label}
-                </span>
-                <span className="mt-0.5 block text-[11px] leading-4 text-white/35">
-                  {step.description}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ol>
-
-        <div className="space-y-2.5 border-t border-white/[0.07] pt-5">
-          <MaxProjectSetupDialog projectId={project.id} />
-          <MaxIntegrationButton
-            projectId={project.id}
-            initialTemplate={project.template}
-            display="panel"
-          />
-          <RuntimeButton projectId={project.id} display="panel" />
+        <section className="mt-5 space-y-2.5" aria-label="Действия публикации">
+          <div className="grid grid-cols-2 gap-2">
+            <MaxProjectSetupDialog
+              projectId={project.id}
+              emphasized={configurationEmphasis}
+              label={nextItem?.id === "max_url" ? "Подтвердить URL" : "Данные приложения"}
+            />
+            <MaxIntegrationButton
+              projectId={project.id}
+              initialTemplate={project.template}
+              display="panel"
+              emphasized={botEmphasis}
+              label={connected ? "Настройки бота" : "Подключить бота"}
+            />
+          </div>
           <MaxLaunchButton projectId={project.id} />
-        </div>
+          <RuntimeButton projectId={project.id} display="compact" />
+        </section>
 
         {busyDeploy && (
-          <div className="flex items-center gap-2 rounded-xl border border-warning/25 bg-warning/[0.06] p-3 text-xs text-white/55">
+          <div className="mt-4 flex items-center gap-2 border-t border-white/[0.07] pt-4 text-[11px] text-white/45">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-warning" />
-            Публикация идёт. Панель обновится автоматически.
+            Публикация продолжается в фоне.
           </div>
         )}
 
         {webhookActive && integration.data?.app_url && (
-          <div className="rounded-2xl border border-success/25 bg-success/[0.055] p-4">
+          <div className="mt-5 border-t border-white/[0.07] pt-4">
             <div className="flex items-center gap-2 text-xs font-medium text-success">
               <ShieldCheck className="h-4 w-4" />
               Техническая часть готова
             </div>
-            <p className="mt-2 text-[11px] leading-5 text-white/45">
-              Остался один ручной шаг: вставьте URL приложения в настройках
-              вашего бота на платформе MAX и выберите кнопку «Открыть».
+            <p className="mt-2 text-[11px] leading-4 text-white/40">
+              Добавьте URL приложения к кнопке «Открыть» в кабинете MAX.
             </p>
             <a
               href="https://business.max.ru/"
               target="_blank"
               rel="noreferrer"
-              className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[#9b92ff] hover:underline"
+              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[#9b92ff] hover:underline"
             >
               Открыть кабинет MAX
               <ExternalLink className="h-3 w-3" />
             </a>
           </div>
-        )}
-
-        {!connected && (
-          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4">
-            <div className="flex items-center gap-2 text-xs font-medium">
-              <Bot className="h-4 w-4 text-[#8d83ff]" />
-              Что останется сделать в MAX
-            </div>
-            <p className="mt-2 text-[11px] leading-5 text-white/40">
-              Создать и отправить бота на модерацию, затем один раз скопировать
-              его секрет сюда. Создание и модерацию бота MAX пока не открывает
-              через публичный API.
-            </p>
-          </div>
-        )}
-
-        {integration.data?.status === "active" && (
-          <Badge variant="success" className="w-full justify-center py-2">
-            MAX Mini App подключён
-          </Badge>
         )}
       </div>
     </aside>
