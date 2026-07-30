@@ -136,6 +136,7 @@ export function ChatMessage({
               projectId={projectId}
               messageId={message.id}
               streaming={!!streaming}
+              initialSteps={message.agent_steps}
             />
           )}
 

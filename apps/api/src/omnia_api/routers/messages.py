@@ -2002,10 +2002,10 @@ async def list_messages(
     res = await session.execute(
         select(Message)
         .where(Message.project_id == project_id)
-        .order_by(Message.created_at.asc())
+        .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(limit)
     )
-    return list(res.scalars().all())
+    return list(reversed(list(res.scalars().all())))
 
 
 # Fallback chain when the primary model returns junk (empty / <50 chars /

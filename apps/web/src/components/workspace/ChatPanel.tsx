@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PanelLeftClose } from "lucide-react";
 import { listMessages } from "@/lib/api/messages";
 import type {
+  AgentStep,
   DesignPreview,
   SelectedElement,
   SurveyQuestion,
@@ -18,6 +19,7 @@ import { OnboardingSurvey } from "./OnboardingSurvey";
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
+import { restorePersistedAgentSteps } from "@/lib/agent-steps";
 
 type DiscoveryChoices = {
   choices: string[];
@@ -69,13 +71,15 @@ export function ChatPanel({
   // Re-hydrate the agentic transcript from history: the backend persists each
   // assistant reply's steps on `message.agent_steps`, so after a reload we seed
   // the ["agent-steps",…] cache AgentTranscript reads from. Only seed when the
-  // cache is empty for that message — never clobber a live in-session stream.
+  // cache has no live steps for that message — never clobber an active stream.
   useEffect(() => {
     if (!messages) return;
     for (const m of messages) {
       if (!m.agent_steps || m.agent_steps.length === 0) continue;
       const key = ["agent-steps", projectId, m.id];
-      if (!qc.getQueryData(key)) qc.setQueryData(key, m.agent_steps);
+      const current = qc.getQueryData<AgentStep[]>(key);
+      const restored = restorePersistedAgentSteps(current, m.agent_steps);
+      if (restored !== current) qc.setQueryData(key, restored);
     }
   }, [messages, projectId, qc]);
 

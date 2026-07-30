@@ -89,10 +89,12 @@ export function AgentTranscript({
   projectId,
   messageId,
   streaming,
+  initialSteps,
 }: {
   projectId?: string;
   messageId: string;
   streaming?: boolean;
+  initialSteps?: AgentStep[] | null;
 }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(true);
@@ -121,7 +123,10 @@ export function AgentTranscript({
     // handler; this observer just re-renders on each push. Mirrors the
     // discovery-chips / passes cache pattern (client-only, staleTime Infinity).
     queryFn: () =>
-      qc.getQueryData<AgentStep[]>(["agent-steps", projectId, messageId]) ?? [],
+      qc.getQueryData<AgentStep[]>(["agent-steps", projectId, messageId]) ??
+      initialSteps ??
+      [],
+    initialData: initialSteps?.length ? initialSteps : undefined,
     enabled: !!projectId,
     staleTime: Infinity,
   });
