@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import Cookie, Depends, Header, Response, status
@@ -6,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from omnia_api.core.config import get_settings
 from omnia_api.core.db import get_session
 from omnia_api.core.errors import ApiError
-from omnia_api.core.security import decode_access_token
+from omnia_api.core.security import AccessClaims, decode_access_claims
+from omnia_api.models.account import AuthSession
 from omnia_api.models.user import User
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -46,10 +48,30 @@ async def _resolve_user(
     token = _extract_token(cookie, authorization)
     if token is None:
         return None
-    user_id = decode_access_token(token)
-    if user_id is None:
+    claims = decode_access_claims(token)
+    if claims is None:
         return None
-    return await session.get(User, user_id)
+    user = await session.get(User, claims.user_id)
+    if user is None or user.status != "active":
+        return None
+    if claims.session_version is not None and claims.session_version != user.session_version:
+        return None
+    if claims.session_id is not None:
+        auth_session = await session.get(AuthSession, claims.session_id)
+        now = datetime.now(UTC)
+        if (
+            auth_session is None
+            or auth_session.user_id != user.id
+            or auth_session.revoked_at is not None
+            or auth_session.expires_at <= now
+        ):
+            return None
+    return user
+
+
+def extract_access_claims(cookie: str | None, authorization: str | None) -> AccessClaims | None:
+    token = _extract_token(cookie, authorization)
+    return decode_access_claims(token) if token else None
 
 
 async def get_current_user(

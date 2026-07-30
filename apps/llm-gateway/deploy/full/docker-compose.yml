@@ -228,6 +228,24 @@ services:
       GITHUB_CALLBACK_URL: ${GITHUB_CALLBACK_URL:-}
       GITHUB_OAUTH_SCOPE: ${GITHUB_OAUTH_SCOPE:-repo}
       WEB_BASE_URL: ${WEB_BASE_URL:-https://constructor.lead-generator.ru}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-MAX Studio <no-reply@lead-generator.ru>}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      LEGAL_OPERATOR_NAME: ${LEGAL_OPERATOR_NAME:-}
+      LEGAL_OPERATOR_INN: ${LEGAL_OPERATOR_INN:-}
+      LEGAL_OPERATOR_ADDRESS: ${LEGAL_OPERATOR_ADDRESS:-}
+      LEGAL_SUPPORT_EMAIL: ${LEGAL_SUPPORT_EMAIL:-support@lead-generator.ru}
+      LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-07-30}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-30/minute}
+      AUTH_IP_RATE_LIMIT: ${AUTH_IP_RATE_LIMIT:-120/hour}
+      EMAIL_RATE_LIMIT: ${EMAIL_RATE_LIMIT:-10/hour}
+      YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
+      YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
+      YOOKASSA_VAT_CODE: ${YOOKASSA_VAT_CODE:-1}
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
       # Per-role model orchestration overrides. Empty = code ROLE_MODEL_MAP
@@ -510,6 +528,7 @@ services:
         NEXT_PUBLIC_API_URL: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
         NEXT_PUBLIC_WS_URL: ${PUBLIC_WS_ORIGIN:-wss://constructor.lead-generator.ru}
         NEXT_PUBLIC_USE_MOCKS: "false"
+        NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-07-30}
     image: omnia-web:prod
     container_name: omnia-prod-web
     depends_on:
@@ -522,6 +541,7 @@ services:
       NEXTAUTH_URL: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in .env}
       NODE_ENV: production
+      NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-07-30}
     ports:
       - "127.0.0.1:${WEB_HOST_PORT:-3100}:3000"
     restart: unless-stopped

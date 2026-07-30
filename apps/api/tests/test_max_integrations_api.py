@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from omnia_api.routers import max_accounts as max_accounts_router
 from omnia_api.routers import projects as projects_router
 from omnia_api.services import max_client, orchestrator_client
 from omnia_api.services import repo as repo_svc
@@ -28,6 +29,21 @@ async def _register_and_create(
         json={"email": f"{template}@example.com", "password": "secret123"},
     )
     assert registered.status_code == 201
+    if template == "max_miniapp":
+
+        async def verified_npd(_inn: str) -> tuple[str, str | None, dict[str, object]]:
+            return "verified", "НПД подтверждён", {"status": True}
+
+        monkeypatch.setattr(max_accounts_router, "_verify_self_employed", verified_npd)
+        business = await client.put(
+            "/api/max/account/business",
+            json={
+                "kind": "self_employed",
+                "inn": "500100732259",
+                "legal_name": "Тестовый владелец",
+            },
+        )
+        assert business.status_code == 200
     created = await client.post(
         "/api/projects",
         json={"name": "MAX loyalty", "template": template},

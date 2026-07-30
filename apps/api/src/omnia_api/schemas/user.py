@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 # "remix" reserves the fork-claim edge, "direct" tags a deliberate non-viral
 # signup. Omitting the field entirely (NULL) is the organic/blank case.
 SignupSource = Literal["share_link", "remix", "direct"]
+RegistrationProduct = Literal["general", "max"]
 
 
 class UserCreate(BaseModel):
@@ -23,6 +24,12 @@ class UserCreate(BaseModel):
     # with a 422 rather than silently recorded.
     source: SignupSource | None = None
     referrer_project_id: UUID | None = None
+    product: RegistrationProduct = "general"
+    terms_accepted: bool = False
+    privacy_accepted: bool = False
+    personal_data_accepted: bool = False
+    marketing_accepted: bool = False
+    document_version: str | None = Field(default=None, max_length=32)
 
     @field_validator("password")
     @classmethod
@@ -46,3 +53,34 @@ class UserPublic(BaseModel):
     is_anon: bool = False
     created_at: datetime
     last_login_at: datetime | None = None
+    email_verified_at: datetime | None = None
+    status: str = "active"
+
+
+class EmailTokenRequest(BaseModel):
+    email: EmailStr
+
+
+class EmailTokenConsume(BaseModel):
+    token: str = Field(min_length=32, max_length=512)
+
+
+class PasswordResetConsume(BaseModel):
+    token: str = Field(min_length=32, max_length=512)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def must_contain_digit(cls, v: str) -> str:
+        if not re.search(r"\d", v):
+            raise ValueError("password must contain at least one digit")
+        return v
+
+
+class SessionPublic(BaseModel):
+    id: UUID
+    current: bool
+    user_agent: str | None
+    ip_address: str | None
+    created_at: datetime
+    last_seen_at: datetime

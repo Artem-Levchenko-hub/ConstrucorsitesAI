@@ -93,4 +93,37 @@ async def rate_limit_prompt(request: Request) -> None:
         )
 
 
-__all__ = ["rate_limit_prompt"]
+async def rate_limit_auth(request: Request) -> None:
+    """Protect password hashing and login from brute force and CPU exhaustion."""
+    settings = get_settings()
+    if not settings.rate_limit_enabled:
+        return
+    client_ip = _client_ip(request)
+    if not _limiter.hit(parse(settings.auth_ip_rate_limit), f"auth-ip:{client_ip}"):
+        raise ApiError(
+            "rate_limited",
+            "Слишком много попыток. Подождите и попробуйте снова",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    if not _limiter.hit(parse(settings.auth_rate_limit), f"auth-actor:{_rate_key(request)}"):
+        raise ApiError(
+            "rate_limited",
+            "Слишком много попыток. Подождите и попробуйте снова",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+
+async def rate_limit_email(request: Request) -> None:
+    """Prevent verification and password-reset email amplification."""
+    settings = get_settings()
+    if not settings.rate_limit_enabled:
+        return
+    if not _limiter.hit(parse(settings.email_rate_limit), f"email-ip:{_client_ip(request)}"):
+        raise ApiError(
+            "rate_limited",
+            "Слишком много писем. Повторите позже",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+
+__all__ = ["rate_limit_auth", "rate_limit_email", "rate_limit_prompt"]

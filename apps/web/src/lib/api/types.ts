@@ -484,7 +484,26 @@ export type ApiErrorCode =
   | "max_api_unavailable"
   | "max_project_required"
   | "max_deploy_required"
-  | "max_webhook_failed";
+  | "max_webhook_failed"
+  | "max_registration_required"
+  | "email_verification_required"
+  | "business_profile_required"
+  | "business_verification_required"
+  | "business_locked"
+  | "business_already_registered"
+  | "inn_invalid"
+  | "inn_kind_mismatch"
+  | "ogrn_invalid"
+  | "legal_acceptance_required"
+  | "legal_version_outdated"
+  | "account_unavailable"
+  | "email_delivery_unavailable"
+  | "token_invalid"
+  | "payments_unavailable"
+  | "payment_provider_unavailable"
+  | "invalid_webhook"
+  | "refund_unavailable"
+  | "refund_balance_used";
 
 export type MaxIntegration = {
   eligible: boolean;

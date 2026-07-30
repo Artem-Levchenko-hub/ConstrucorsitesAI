@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 import { useTranslations } from "next-intl";
 import { loginAction } from "@/app/(auth)/actions";
@@ -30,7 +31,12 @@ export function LoginForm({ next }: { next?: string }) {
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="password">{t("passwordLabel")}</Label>
+        <div className="flex items-center justify-between">
+          <Label htmlFor="password">{t("passwordLabel")}</Label>
+          <Link href="/forgot-password" className="text-xs text-accent hover:underline">
+            Забыли пароль?
+          </Link>
+        </div>
         <Input
           id="password"
           name="password"

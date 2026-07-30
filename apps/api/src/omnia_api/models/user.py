@@ -32,6 +32,19 @@ class User(Base):
         nullable=False,
     )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    session_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="active", default="active"
+    )
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    delete_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # GitHub OAuth connection ("Push to GitHub"). Token is Fernet-encrypted at rest
     # (see core/crypto.py); all nullable until the user connects their account.
@@ -45,9 +58,7 @@ class User(Base):
     # First-N free generations (wow-effect onboarding). Incremented after each
     # successful free generation; once it reaches FREE_GENERATION_LIMIT
     # (core/config.py) the user is billed from their wallet like everyone else.
-    free_generations_used: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="0"
-    )
+    free_generations_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     # Viral-funnel provenance (V4.2b return-edge). Set at registration from the
     # share-link return path: `signup_source` is a bounded enum ("share_link"
@@ -58,9 +69,7 @@ class User(Base):
     # analytics pointer with no FK: the referrer project may later be deleted
     # without orphaning this signup row's lineage record.
     signup_source: Mapped[str | None] = mapped_column(Text, nullable=True)
-    referrer_project_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    referrer_project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     # Preferred language for generated content (BCP-47-ish, e.g. "ru", "en").
     # NULL means "not set yet" — the first-build detector fills it in for new

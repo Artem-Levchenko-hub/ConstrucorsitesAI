@@ -17,14 +17,8 @@ from omnia_api.core.errors import ApiError
 
 
 def _request(ip: str, *, xff: bool = True) -> Request:
-    headers = (
-        [(b"x-real-ip", ip.encode()), (b"x-forwarded-for", ip.encode())]
-        if xff
-        else []
-    )
-    return Request(
-        {"type": "http", "headers": headers, "client": (ip, 5000), "scheme": "http"}
-    )
+    headers = [(b"x-real-ip", ip.encode()), (b"x-forwarded-for", ip.encode())] if xff else []
+    return Request({"type": "http", "headers": headers, "client": (ip, 5000), "scheme": "http"})
 
 
 def _settings(limit: str = "2/minute", enabled: bool = True) -> SimpleNamespace:
@@ -32,6 +26,9 @@ def _settings(limit: str = "2/minute", enabled: bool = True) -> SimpleNamespace:
         rate_limit_enabled=enabled,
         prompt_rate_limit=limit,
         prompt_ip_rate_limit="1000/minute",
+        auth_rate_limit="1000/minute",
+        auth_ip_rate_limit="1000/minute",
+        email_rate_limit="1000/minute",
         jwt_cookie_name="omnia_session",
     )
 
@@ -93,4 +90,29 @@ async def test_ip_ceiling_survives_actor_bucket_changes(monkeypatch) -> None:
 
     with pytest.raises(ApiError) as exc_info:
         await ratelimit.rate_limit_prompt(req)
+    assert exc_info.value.status_code == 429
+
+
+async def test_auth_limit_blocks_brute_force(monkeypatch) -> None:
+    settings = _settings()
+    settings.auth_rate_limit = "2/minute"
+    monkeypatch.setattr(ratelimit, "get_settings", lambda: settings)
+    req = _request("203.0.113.91")
+
+    await ratelimit.rate_limit_auth(req)
+    await ratelimit.rate_limit_auth(req)
+    with pytest.raises(ApiError) as exc_info:
+        await ratelimit.rate_limit_auth(req)
+    assert exc_info.value.status_code == 429
+
+
+async def test_email_limit_is_separate_and_stricter(monkeypatch) -> None:
+    settings = _settings()
+    settings.email_rate_limit = "1/hour"
+    monkeypatch.setattr(ratelimit, "get_settings", lambda: settings)
+    req = _request("203.0.113.92")
+
+    await ratelimit.rate_limit_email(req)
+    with pytest.raises(ApiError) as exc_info:
+        await ratelimit.rate_limit_email(req)
     assert exc_info.value.status_code == 429

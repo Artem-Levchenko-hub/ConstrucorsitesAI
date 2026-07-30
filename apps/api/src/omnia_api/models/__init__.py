@@ -1,3 +1,13 @@
+from omnia_api.models.account import (
+    AuthSession,
+    AuthToken,
+    BusinessEntitlement,
+    BusinessMember,
+    BusinessProfile,
+    LegalAcceptance,
+    Payment,
+    WalletLedgerEntry,
+)
 from omnia_api.models.attestation import Attestation
 from omnia_api.models.base import Base
 from omnia_api.models.custom_domain import CustomDomain
@@ -19,7 +29,12 @@ from omnia_api.models.wallet_charge import WalletCharge
 
 __all__ = [
     "Attestation",
+    "AuthSession",
+    "AuthToken",
     "Base",
+    "BusinessEntitlement",
+    "BusinessMember",
+    "BusinessProfile",
     "CustomDomain",
     "DeployTarget",
     "GenerationRun",
@@ -27,13 +42,16 @@ __all__ = [
     "HeroMediaBrief",
     "HeroMediaRender",
     "Lead",
+    "LegalAcceptance",
     "MaxIntegration",
     "MaxProjectConfig",
     "Message",
+    "Payment",
     "Project",
     "Snapshot",
     "Usage",
     "User",
     "Wallet",
     "WalletCharge",
+    "WalletLedgerEntry",
 ]

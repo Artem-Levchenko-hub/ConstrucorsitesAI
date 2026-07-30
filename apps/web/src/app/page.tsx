@@ -782,10 +782,10 @@ function Footer() {
     {
       title: "Юридическое",
       links: [
-        { label: "Договор-оферта", href: "#" },
-        { label: "Политика данных", href: "#" },
-        { label: "152-ФЗ", href: "#" },
-        { label: "Безопасность", href: "#" },
+        { label: "Условия использования", href: "/legal/terms" },
+        { label: "Политика данных", href: "/legal/privacy" },
+        { label: "Согласие на ПДн", href: "/legal/personal-data" },
+        { label: "Оплата и возвраты", href: "/legal/refunds" },
       ],
     },
   ];

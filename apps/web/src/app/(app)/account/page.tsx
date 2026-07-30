@@ -1,3 +1,4 @@
+import { AccountControlCenter } from "@/components/account/AccountControlCenter";
 import { GithubConnectionCard } from "@/components/account/GithubConnectionCard";
 import { TopBar } from "@/components/workspace/TopBar";
 import { getSession } from "@/lib/auth-mock";
@@ -10,15 +11,16 @@ export default async function AccountPage() {
   return (
     <>
       <TopBar user={session} showProjectControls={false} />
-      <main className="mx-auto w-full max-w-2xl px-6 py-10 space-y-6">
+      <main className="mx-auto w-full max-w-3xl overflow-y-auto px-6 py-10 space-y-6">
         <header className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Аккаунт</h1>
           <p className="text-sm text-fg-tertiary">
-            Внешние интеграции и доступы.
+            Безопасность, реквизиты, платежи и управление данными.
           </p>
         </header>
 
         <GithubConnectionCard />
+        <AccountControlCenter email={session.email} />
       </main>
     </>
   );

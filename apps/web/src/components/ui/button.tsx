@@ -16,6 +16,9 @@ const buttonVariants = cva(
           "bg-surface-raised text-fg-primary border border-border-default hover:border-border-strong",
         ghost: "text-fg-primary hover:bg-surface-raised",
         danger: "bg-danger text-fg-on-accent hover:opacity-90",
+        destructive: "bg-danger text-fg-on-accent hover:opacity-90",
+        outline:
+          "border border-border-default bg-transparent text-fg-primary hover:border-border-strong hover:bg-surface-raised",
         "pill-primary":
           "rounded-full bg-accent text-accent-fg hover:bg-accent-hover active:scale-[0.98] transition-transform",
         "pill-secondary":

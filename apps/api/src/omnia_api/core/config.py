@@ -91,6 +91,34 @@ class Settings(BaseSettings):
     github_oauth_scope: str = Field(default="repo")
     web_base_url: str = Field(default="http://localhost:3000")
 
+    # Transactional email for MAX account verification and password recovery.
+    # No credentials means fail closed: tokens are still created, but the API
+    # reports that delivery is not configured instead of leaking a link.
+    smtp_host: str | None = Field(default=None)
+    smtp_port: int = Field(default=587)
+    smtp_user: str | None = Field(default=None)
+    smtp_password: SecretStr | None = Field(default=None)
+    smtp_from: str = Field(default="MAX Studio <no-reply@lead-generator.ru>")
+    smtp_starttls: bool = Field(default=True)
+
+    # Legal identity shown in policies. Paid checkout stays unavailable until
+    # both operator identity and YooKassa credentials are configured.
+    legal_operator_name: str | None = Field(default=None)
+    legal_operator_inn: str | None = Field(default=None)
+    legal_operator_address: str | None = Field(default=None)
+    legal_support_email: str = Field(default="support@lead-generator.ru")
+    legal_document_version: str = Field(default="2026-07-30")
+    admin_emails: str = Field(default="")
+
+    yookassa_shop_id: str | None = Field(default=None)
+    yookassa_secret_key: SecretStr | None = Field(default=None)
+    yookassa_api_url: str = Field(default="https://api.yookassa.ru/v3")
+    yookassa_vat_code: int = Field(default=1)
+
+    @property
+    def admin_emails_set(self) -> set[str]:
+        return {item.strip().lower() for item in self.admin_emails.split(",") if item.strip()}
+
     # Отдельный ключ шифрования для «тяжёлых» секретов, которые НЕЛЬЗЯ терять
     # при ротации jwt_secret: SSH-креды чужих VPS (deploy_targets) и паспортные
     # данные для регистрации доменов (merchant_profiles, 152-ФЗ). GitHub-токены
@@ -117,6 +145,9 @@ class Settings(BaseSettings):
     # Independent IP-wide ceiling. It cannot be bypassed by registering another
     # account or minting a fresh anonymous session.
     prompt_ip_rate_limit: str = Field(default="60/hour")
+    auth_rate_limit: str = Field(default="30/minute")
+    auth_ip_rate_limit: str = Field(default="120/hour")
+    email_rate_limit: str = Field(default="10/hour")
 
     # Phase B — multipass design generation for budget models.
     # Env override for the multipass router. By DEFAULT (empty value) every
@@ -1097,9 +1128,7 @@ class Settings(BaseSettings):
         intent. Production callers should use `effective_multipass_models`
         which folds in the CHEAP_MODELS default.
         """
-        return frozenset(
-            m.strip() for m in self.multipass_models.split(",") if m.strip()
-        )
+        return frozenset(m.strip() for m in self.multipass_models.split(",") if m.strip())
 
     @property
     def effective_multipass_models(self) -> frozenset[str]:
@@ -1139,25 +1168,25 @@ def get_settings() -> Settings:
 
 MODEL_TIER_MAP: dict[str, str] = {
     # Premium — full single-shot prompt, no decomposition.
-    "claude-opus-4-7":   "premium",
-    "claude-opus-4-8":   "premium",
+    "claude-opus-4-7": "premium",
+    "claude-opus-4-8": "premium",
     "gemini-3.5-flash-high": "premium",  # orchestrator (art_director)
     "deepseek-v4-pro-thinking": "premium",  # orchestrator (owner 06-02)
     "deepseek-v4-pro": "premium",  # coder (non-thinking, owner 06-02)
     "kimi-k2.6-thinking": "premium",  # design-brain (Kimi K2.6, vision+taste, owner 06-03)
-    "claude-opus-4-6":   "premium",
+    "claude-opus-4-6": "premium",
     "claude-sonnet-4-6": "premium",
-    "gpt-5":             "premium",
-    "gemini-2.5-pro":    "premium",
+    "gpt-5": "premium",
+    "gemini-2.5-pro": "premium",
     # Balanced — single-shot with trimmed kit blocks.
-    "gpt-5-mini":        "balanced",
-    "yandexgpt-5":       "balanced",
-    "gigachat-2-pro":    "balanced",
-    "gemini-2.5-flash":  "balanced",
-    "gpt-4.1":           "balanced",
+    "gpt-5-mini": "balanced",
+    "yandexgpt-5": "balanced",
+    "gigachat-2-pro": "balanced",
+    "gemini-2.5-flash": "balanced",
+    "gpt-4.1": "balanced",
     # Budget — destined for the multi-pass pipeline (Phase B).
-    "claude-haiku-4-5":  "budget",
-    "gpt-5-nano":        "budget",
+    "claude-haiku-4-5": "budget",
+    "gpt-5-nano": "budget",
     "deepseek-v4-flash-thinking": "budget",  # vsegpt cheap thinking model
 }
 
@@ -1208,15 +1237,11 @@ def _in_freeform_rollout(project_id: str | None, pct: int) -> bool:
         return False
     if not project_id:
         return True
-    bucket = int.from_bytes(
-        hashlib.sha256(str(project_id).encode()).digest()[:4], "big"
-    ) % 100
+    bucket = int.from_bytes(hashlib.sha256(str(project_id).encode()).digest()[:4], "big") % 100
     return bucket < pct
 
 
-def generation_mode(
-    model_id: str | None, project_id: str | None = None
-) -> GenerationMode:
+def generation_mode(model_id: str | None, project_id: str | None = None) -> GenerationMode:
     """Decide the generation mode for a routing model.
 
     Freeform wins over catalog for premium models when the flag is on AND the
@@ -1253,28 +1278,28 @@ ROLE_MODEL_MAP: dict[str, str] = {
     # from b8f4db5/e2747c6. One multimodal Opus 4.8 drives the whole chain:
     # classify → art direction → implementation → visual audit → repair. Flux
     # image generation and Seedance video generation remain separate media tools.
-    "classify":        "claude-opus-4-8",  # pick 1 of N presets
-    "director":        "claude-opus-4-8",  # catalog orchestrator — structure
-    "polish":          "claude-opus-4-8",  # writes the real PageIR content (RU copy)
-    "audit":           "claude-opus-4-8",  # acceptance-gate screenshot judge
-    "audit_retry":     "claude-opus-4-8",  # escalation re-roll judge
-    "skeleton":        "claude-opus-4-8",  # multipass fallback — structure
-    "content":         "claude-opus-4-8",  # multipass fallback — copy
-    "visual":          "claude-opus-4-8",  # multipass fallback — style tokens
-    "link_repair":     "claude-opus-4-8",  # rewrite dead hrefs
-    "image_prompt":    "claude-opus-4-8",  # writes TEXT prompt for Flux
-    "single_shot":     "claude-opus-4-8",  # non-catalog freeform fallback path
-    "art_director":    "claude-opus-4-8",
+    "classify": "claude-opus-4-8",  # pick 1 of N presets
+    "director": "claude-opus-4-8",  # catalog orchestrator — structure
+    "polish": "claude-opus-4-8",  # writes the real PageIR content (RU copy)
+    "audit": "claude-opus-4-8",  # acceptance-gate screenshot judge
+    "audit_retry": "claude-opus-4-8",  # escalation re-roll judge
+    "skeleton": "claude-opus-4-8",  # multipass fallback — structure
+    "content": "claude-opus-4-8",  # multipass fallback — copy
+    "visual": "claude-opus-4-8",  # multipass fallback — style tokens
+    "link_repair": "claude-opus-4-8",  # rewrite dead hrefs
+    "image_prompt": "claude-opus-4-8",  # writes TEXT prompt for Flux
+    "single_shot": "claude-opus-4-8",  # non-catalog freeform fallback path
+    "art_director": "claude-opus-4-8",
     "freeform_writer": "claude-opus-4-8",
-    "edit":            "claude-opus-4-8",  # targeted edit
+    "edit": "claude-opus-4-8",  # targeted edit
     "edit_escalation": "claude-opus-4-8",  # edit retry escalation
-    "agent":           "claude-opus-4-8",
-    "agent_escalation":"claude-opus-4-8",  # one-shot escalation on a stuck loop
-    "discovery_plan":  "claude-opus-4-8",
-    "result_type":     "claude-opus-4-8",
-    "planner":         "claude-opus-4-8",
-    "exe_doctor":      "claude-opus-4-8",  # self-heal failed executable builds
-    "app_doctor":      "claude-opus-4-8",  # app self-repair (verify->fix)
+    "agent": "claude-opus-4-8",
+    "agent_escalation": "claude-opus-4-8",  # one-shot escalation on a stuck loop
+    "discovery_plan": "claude-opus-4-8",
+    "result_type": "claude-opus-4-8",
+    "planner": "claude-opus-4-8",
+    "exe_doctor": "claude-opus-4-8",  # self-heal failed executable builds
+    "app_doctor": "claude-opus-4-8",  # app self-repair (verify->fix)
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.

@@ -176,6 +176,37 @@ export async function registerAction(
   redirect(safeNext(formData.get("next")) ?? "/projects");
 }
 
+export async function maxRegisterAction(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const email = String(formData.get("email") ?? "").trim();
+  const password = String(formData.get("password") ?? "");
+  const confirm = String(formData.get("confirm") ?? "");
+  const validationError = validateCredentials(email, password);
+  if (validationError) return { error: validationError };
+  if (password !== confirm) return { error: "Пароли не совпадают" };
+  if (
+    formData.get("terms_accepted") !== "on" ||
+    formData.get("privacy_accepted") !== "on" ||
+    formData.get("personal_data_accepted") !== "on"
+  ) {
+    return { error: "Подтвердите обязательные условия" };
+  }
+
+  const error = await callAuth("register", email, password, {
+    product: "max",
+    terms_accepted: true,
+    privacy_accepted: true,
+    personal_data_accepted: true,
+    marketing_accepted: formData.get("marketing_accepted") === "on",
+    document_version:
+      process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-07-30",
+  });
+  if (error) return { error };
+  redirect("/max/onboarding");
+}
+
 export async function logoutAction() {
   const url = `${apiBaseUrl()}/api/auth/logout`;
   try {

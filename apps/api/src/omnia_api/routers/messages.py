@@ -35,6 +35,7 @@ from omnia_api.core.redis import (
     request_generation_cancel,
     set_stream_state,
 )
+from omnia_api.models.account import BusinessEntitlement, BusinessMember
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
@@ -1261,14 +1262,36 @@ async def post_prompt(
             details={"active_run_id": str(generation_run.id)},
         )
 
-    # Free-tier gate: the first FREE_GENERATION_LIMIT generations per user are
-    # free (wow-effect onboarding) and skip the wallet floor check; the gateway
-    # also skips the debit (metadata.free=true). After that, normal balance rules.
+    # Free-tier gate: regular projects keep the historical per-user allowance.
+    # MAX projects spend the allowance attached to the verified business instead,
+    # so creating another user account cannot mint another set of free builds for
+    # the same INN. Legacy MAX projects without a business profile keep the old
+    # counter and remain editable.
     # `UNLIMITED_GENERATIONS=true` (testing escape hatch) forces every gen to be
     # free → skips this wallet-floor check AND the gateway debit (metadata.free).
-    is_free = get_settings().unlimited_generations or (
-        (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
-    )
+    free_business_id: UUID | None = None
+    if project.template == "max_miniapp":
+        free_business_id = (
+            await session.execute(
+                select(BusinessMember.business_id).where(BusinessMember.user_id == current_user.id)
+            )
+        ).scalar_one_or_none()
+    if free_business_id is not None:
+        entitlement = await session.get(BusinessEntitlement, free_business_id)
+        if entitlement is None:
+            entitlement = BusinessEntitlement(
+                business_id=free_business_id,
+                free_generation_limit=FREE_GENERATION_LIMIT,
+            )
+            session.add(entitlement)
+            await session.flush()
+        is_free = get_settings().unlimited_generations or (
+            entitlement.free_generations_used < entitlement.free_generation_limit
+        )
+    else:
+        is_free = get_settings().unlimited_generations or (
+            (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
+        )
     if not is_free:
         wallet = await session.get(Wallet, current_user.id)
         if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
@@ -1813,6 +1836,7 @@ async def post_prompt(
             model_id=routing_model,
             force_model=force_model,
             is_free=is_free,
+            free_business_id=free_business_id,
             orchestrate=orchestrate,
             selected_elements=selected_dump,
         )
@@ -2639,6 +2663,7 @@ async def _process_prompt(
     model_id: str,
     force_model: str | None = None,
     is_free: bool = False,
+    free_business_id: UUID | None = None,
     orchestrate: bool = True,
     selected_elements: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -2669,12 +2694,31 @@ async def _process_prompt(
     # in the context-load block. The second enforcement below (after DB load)
     # is the real gate. This first assignment is a no-op until we reload.
     print(
-        f"[PP] start project={project_id} asst_msg={assistant_message_id} model={model_id} free={is_free} force={force_model} surgical={surgical}",
+        f"[PP] start project={project_id} asst_msg={assistant_message_id} "
+        f"model={model_id} free={is_free} force={force_model} surgical={surgical}",
         flush=True,
     )
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     accumulated = ""
+
+    async def _consume_free_generation(session: AsyncSession) -> None:
+        if not is_free:
+            return
+        if free_business_id is not None:
+            entitlement = await session.get(
+                BusinessEntitlement,
+                free_business_id,
+                with_for_update=True,
+            )
+            if entitlement is not None:
+                entitlement.free_generations_used += 1
+                entitlement.updated_at = datetime.now(UTC)
+                return
+        user_row = await session.get(User, user_id)
+        if user_row is not None:
+            user_row.free_generations_used = (user_row.free_generations_used or 0) + 1
+
     # Persisted agentic transcript: every `agent.step` payload published this turn
     # is appended and saved immediately so reload restores completed work while
     # the same server-side run continues.
@@ -3431,7 +3475,7 @@ async def _process_prompt(
                         try:
                             _w = await orchestrator_client.warm_routes(project_id, project_slug)
                             print(f"[PP] warm routes {_w}", flush=True)
-                        except Exception as _w_exc:  # noqa: BLE001
+                        except Exception as _w_exc:
                             print(f"[PP] warm skipped: {_w_exc!r}", flush=True)
 
                     _warm_task = asyncio.create_task(_warm_bg())
@@ -3989,12 +4033,7 @@ async def _process_prompt(
                         msg.snapshot_id = snapshot.id
                         msg.tokens_out = msg.tokens_out or 0
                         msg.agent_steps = _agent_step_log or None
-                    if is_free:
-                        user_row = await session.get(User, user_id)
-                        if user_row is not None:
-                            user_row.free_generations_used = (
-                                user_row.free_generations_used or 0
-                            ) + 1
+                    await _consume_free_generation(session)
                     await session.commit()
                     await session.refresh(snapshot)
                 # Persist the build attestation in its OWN transaction (best-effort;
@@ -5581,7 +5620,8 @@ async def _process_prompt(
                                 if html_pool_r:
                                     report_r = ui_audit(html_pool_r)
                                     print(
-                                        f"[PP] ui_audit_retry score={report_r.score}/{report_r.max}",
+                                        "[PP] ui_audit_retry "
+                                        f"score={report_r.score}/{report_r.max}",
                                         flush=True,
                                     )
                                     await publish_event(
@@ -6236,10 +6276,7 @@ async def _process_prompt(
                 # Burn one free generation — only on a successful free run (we're
                 # inside `if files:`, so a snapshot was committed). Counted here,
                 # not in the gateway, because the API owns the user row.
-                if is_free:
-                    user_row = await session.get(User, user_id)
-                    if user_row is not None:
-                        user_row.free_generations_used = (user_row.free_generations_used or 0) + 1
+                await _consume_free_generation(session)
 
                 # Billing is the LLM Gateway's responsibility — it already
                 # wrote `wallet_charges` + `usage` + decremented `wallets`
@@ -6510,7 +6547,8 @@ async def _process_prompt(
         import traceback as _tb
 
         print(
-            f"[PP] FATAL project={project_id} asst={assistant_message_id} err={e!r}\n{_tb.format_exc()}",
+            f"[PP] FATAL project={project_id} asst={assistant_message_id} "
+            f"err={e!r}\n{_tb.format_exc()}",
             flush=True,
         )
         # Mark the assistant row as failed so the UI input unblocks instead of

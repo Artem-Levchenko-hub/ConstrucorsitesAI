@@ -10,7 +10,13 @@ import { cookies } from "next/headers";
 
 export const AUTH_COOKIE = "omnia_session";
 
-export type SessionUser = { id: string; email: string };
+export type SessionUser = {
+  id: string;
+  email: string;
+  isAnon: boolean;
+  emailVerifiedAt: string | null;
+  status: string;
+};
 
 function apiBaseUrl(): string {
   return (
@@ -27,7 +33,13 @@ export async function getSession(): Promise<SessionUser | null> {
   // against the in-memory mock API. Prod builds with NEXT_PUBLIC_USE_MOCKS
   // ="false" (see deploy/full/docker-compose.yml), so this branch is dead there.
   if (process.env.NEXT_PUBLIC_USE_MOCKS !== "false") {
-    return { id: "u-demo", email: "demo@omnia.ai" };
+    return {
+      id: "u-demo",
+      email: "demo@omnia.ai",
+      isAnon: false,
+      emailVerifiedAt: new Date().toISOString(),
+      status: "active",
+    };
   }
 
   const c = await cookies();
@@ -41,8 +53,41 @@ export async function getSession(): Promise<SessionUser | null> {
       cache: "no-store",
     });
     if (!r.ok) return null;
-    const user = (await r.json()) as { id: string; email: string };
-    return { id: user.id, email: user.email };
+    const user = (await r.json()) as {
+      id: string;
+      email: string | null;
+      is_anon?: boolean;
+      email_verified_at?: string | null;
+      status?: string;
+    };
+    return {
+      id: user.id,
+      email: user.email ?? "",
+      isAnon: user.is_anon ?? false,
+      emailVerifiedAt: user.email_verified_at ?? null,
+      status: user.status ?? "active",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function getMaxAccessServer(): Promise<{
+  can_create_project: boolean;
+} | null> {
+  if (process.env.NEXT_PUBLIC_USE_MOCKS !== "false") {
+    return { can_create_project: true };
+  }
+  const c = await cookies();
+  const token = c.get(AUTH_COOKIE)?.value;
+  if (!token) return null;
+  try {
+    const response = await fetch(`${apiBaseUrl()}/api/max/account/access`, {
+      headers: { Cookie: `${AUTH_COOKIE}=${token}` },
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as { can_create_project: boolean };
   } catch {
     return null;
   }
