@@ -47,7 +47,10 @@ export function middleware(req: NextRequest) {
   }
 
   const isProtectedRoute =
-    path.startsWith("/projects") || path === "/max" || path.startsWith("/max/");
+    path.startsWith("/projects") ||
+    path.startsWith("/admin") ||
+    path === "/max" ||
+    path.startsWith("/max/");
 
   if (!session && !isGeneralAuthRoute && !isPublicMaxRoute && isProtectedRoute) {
     const url = req.nextUrl.clone();
@@ -64,5 +67,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/projects/:path*", "/max/:path*", "/login", "/register"],
+  matcher: ["/projects/:path*", "/admin/:path*", "/max/:path*", "/login", "/register"],
 };

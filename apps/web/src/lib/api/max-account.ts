@@ -30,6 +30,10 @@ export type MaxAccess = {
   payments_configured: boolean;
 };
 
+export type BusinessReview = BusinessProfile & {
+  owner_email: string;
+};
+
 let mockBusiness: BusinessProfile | null = null;
 
 export function getMaxAccess(): Promise<MaxAccess> {
@@ -89,4 +93,42 @@ export function verifyEmail(token: string): Promise<{ verified: boolean }> {
     method: "POST",
     json: { token },
   });
+}
+
+export function listBusinessReviews(): Promise<BusinessReview[]> {
+  if (USE_MOCKS) {
+    return Promise.resolve(
+      mockBusiness
+        ? [{ ...mockBusiness, owner_email: "demo@omnia.ai" }]
+        : [],
+    );
+  }
+  return apiFetch<BusinessReview[]>("/api/max/account/admin/businesses");
+}
+
+export function decideBusiness(
+  inn: string,
+  approved: boolean,
+  note?: string,
+): Promise<BusinessProfile> {
+  if (USE_MOCKS) {
+    if (!mockBusiness || mockBusiness.inn !== inn) {
+      return Promise.reject(new Error("Заявка не найдена"));
+    }
+    mockBusiness = {
+      ...mockBusiness,
+      status: approved ? "verified" : "rejected",
+      verification_source: "manual",
+      verification_note: note ?? null,
+      verified_at: approved ? new Date().toISOString() : null,
+    };
+    return Promise.resolve(mockBusiness);
+  }
+  return apiFetch<BusinessProfile>(
+    `/api/max/account/business/${encodeURIComponent(inn)}/decision`,
+    {
+      method: "POST",
+      json: { approved, note: note?.trim() || null },
+    },
+  );
 }

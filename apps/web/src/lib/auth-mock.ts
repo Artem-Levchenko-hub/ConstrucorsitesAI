@@ -93,6 +93,25 @@ export async function getMaxAccessServer(): Promise<{
   }
 }
 
+export async function getMaxAdminAccessServer(): Promise<boolean> {
+  if (process.env.NEXT_PUBLIC_USE_MOCKS !== "false") return true;
+  const c = await cookies();
+  const token = c.get(AUTH_COOKIE)?.value;
+  if (!token) return false;
+  try {
+    const response = await fetch(
+      `${apiBaseUrl()}/api/max/account/admin/access`,
+      {
+        headers: { Cookie: `${AUTH_COOKIE}=${token}` },
+        cache: "no-store",
+      },
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Legacy stub kept for backwards compatibility; the real cookie is set by the
  * api response in actions.ts (`callAuth`). Calling this is a no-op in the

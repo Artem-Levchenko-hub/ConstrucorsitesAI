@@ -39,6 +39,10 @@ class BusinessProfilePublic(BaseModel):
     created_at: datetime
 
 
+class BusinessReviewPublic(BusinessProfilePublic):
+    owner_email: str
+
+
 class MaxAccessPublic(BaseModel):
     authenticated: bool = True
     email_verified: bool

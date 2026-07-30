@@ -15,10 +15,12 @@ from omnia_api.models.account import (
     BusinessMember,
     BusinessProfile,
 )
+from omnia_api.models.user import User
 from omnia_api.schemas.max_account import (
     BusinessDecision,
     BusinessProfileCreate,
     BusinessProfilePublic,
+    BusinessReviewPublic,
     MaxAccessPublic,
 )
 from omnia_api.services.max_access import get_user_business
@@ -235,3 +237,39 @@ async def decide_business(
     await session.commit()
     await session.refresh(profile)
     return profile
+
+
+@router.get("/admin/businesses", response_model=list[BusinessReviewPublic])
+async def list_businesses_for_review(
+    current_user: CurrentUserDep,
+    session: SessionDep,
+) -> list[BusinessReviewPublic]:
+    if not _is_admin(current_user.email):
+        raise ApiError("forbidden", "admin access required", status.HTTP_403_FORBIDDEN)
+
+    rows = (
+        await session.execute(
+            select(BusinessProfile, User.email)
+            .join(BusinessMember, BusinessMember.business_id == BusinessProfile.id)
+            .join(User, User.id == BusinessMember.user_id)
+            .where(BusinessMember.role == "owner", User.email.is_not(None))
+            .order_by(
+                BusinessProfile.status != "pending",
+                BusinessProfile.created_at.desc(),
+            )
+        )
+    ).all()
+    return [
+        BusinessReviewPublic(
+            **BusinessProfilePublic.model_validate(profile).model_dump(),
+            owner_email=str(owner_email),
+        )
+        for profile, owner_email in rows
+    ]
+
+
+@router.get("/admin/access")
+async def get_admin_access(current_user: CurrentUserDep) -> dict[str, bool]:
+    if not _is_admin(current_user.email):
+        raise ApiError("forbidden", "admin access required", status.HTTP_403_FORBIDDEN)
+    return {"is_admin": True}

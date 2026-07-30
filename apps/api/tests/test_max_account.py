@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.account import BusinessEntitlement, BusinessMember
+from omnia_api.models.account import BusinessEntitlement, BusinessMember, BusinessProfile
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.routers import auth as auth_router
@@ -197,3 +197,57 @@ async def test_max_free_generation_limit_belongs_to_business(
     )
     assert blocked.status_code == 402
     assert blocked.json()["error"]["code"] == "wallet_empty"
+
+
+async def test_admin_can_list_and_decide_pending_businesses(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        max_accounts_router,
+        "_is_admin",
+        lambda email: email == "admin@example.com",
+    )
+    registered = await client.post(
+        "/api/auth/register",
+        json={"email": "admin@example.com", "password": "secret123"},
+    )
+    assert registered.status_code == 201
+    admin = (
+        await db_session.execute(select(User).where(User.email == "admin@example.com"))
+    ).scalar_one()
+    profile = BusinessProfile(
+        kind="legal_entity",
+        inn="7816246925",
+        ogrn="1187847020949",
+        legal_name='ООО "КОРТЭЛ"',
+        status="pending",
+        verification_source="manual",
+        verification_note="Ожидает проверки",
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    db_session.add(
+        BusinessMember(
+            business_id=profile.id,
+            user_id=admin.id,
+            role="owner",
+        )
+    )
+    await db_session.commit()
+
+    queue = await client.get("/api/max/account/admin/businesses")
+    assert queue.status_code == 200
+    assert queue.json()[0]["owner_email"] == "admin@example.com"
+    assert queue.json()[0]["status"] == "pending"
+    access = await client.get("/api/max/account/admin/access")
+    assert access.status_code == 200
+    assert access.json() == {"is_admin": True}
+
+    decision = await client.post(
+        "/api/max/account/business/7816246925/decision",
+        json={"approved": True, "note": "Реквизиты проверены"},
+    )
+    assert decision.status_code == 200
+    assert decision.json()["status"] == "verified"

@@ -45,7 +45,8 @@ export type AccountView =
   | "security"
   | "billing"
   | "transactions"
-  | "plan";
+  | "plan"
+  | "admin";
 
 export function AccountControlCenter({
   email,

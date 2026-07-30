@@ -3,6 +3,7 @@ import {
   CreditCard,
   LayoutGrid,
   LogOut,
+  ScanSearch,
   Receipt,
   Shield,
   UserRound,
@@ -13,6 +14,7 @@ import Link from "next/link";
 import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import type { AccountView } from "@/components/account/AccountControlCenter";
+import { getMaxAdminAccessServer } from "@/lib/auth-mock";
 
 const navigation = [
   ["profile", "/account", UserRound, "Профиль"],
@@ -31,9 +33,10 @@ const copy: Record<AccountView, { eyebrow: string; title: string; lead: string }
   billing: { eyebrow: "10 / Billing", title: "Баланс и пополнение", lead: "Пакеты использования и безопасная оплата на стороне ЮKassa." },
   transactions: { eyebrow: "10 / Billing", title: "Операции", lead: "История платежей, начислений и статусов." },
   plan: { eyebrow: "10 / Billing", title: "Управление тарифом", lead: "Режим эксплуатации приложения и доступные лимиты." },
+  admin: { eyebrow: "Admin / Verification", title: "Проверка организаций", lead: "Очередь владельцев MAX Studio, которым нужна ручная проверка реквизитов." },
 };
 
-export function AccountShell({
+export async function AccountShell({
   email,
   active,
   children,
@@ -43,6 +46,7 @@ export function AccountShell({
   children: React.ReactNode;
 }) {
   const page = copy[active];
+  const isAdmin = await getMaxAdminAccessServer();
   return (
     <div data-light-shell className="flex h-dvh min-h-0 bg-[#f5f3ee] text-[#171716]">
       <aside data-graphite-shell className="hidden w-[220px] shrink-0 flex-col bg-[#171716] text-white md:flex">
@@ -56,6 +60,12 @@ export function AccountShell({
                 <Icon className={`size-4 ${active === id ? "text-[#f15a38]" : ""}`} />{label}
               </Link>
             ))}
+            {isAdmin && (
+              <Link href="/admin/max" className={`flex h-9 items-center gap-3 rounded-[8px] px-3 text-xs ${active === "admin" ? "bg-white/10 font-medium text-white" : "text-white/50 hover:bg-white/[.06] hover:text-white"}`}>
+                <ScanSearch className={`size-4 ${active === "admin" ? "text-[#f15a38]" : ""}`} />
+                Модерация
+              </Link>
+            )}
           </div>
         </nav>
         <div className="border-t border-white/12 p-3">
