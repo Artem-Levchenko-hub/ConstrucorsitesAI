@@ -379,8 +379,9 @@ export default function HomePage() {
             <Link href="/max/product">MAX Studio</Link>
             <Link href="/pricing">Тарифы</Link>
             <Link href="/legal/privacy">Конфиденциальность</Link>
-            <Link href="/legal/terms">Условия</Link>
+            <Link href="/legal/offer">Оферта</Link>
             <Link href="/requisites">Реквизиты</Link>
+            <Link href="/legal/refunds">Оплата и возвраты</Link>
             <Link href="/security">Безопасность</Link>
             <a href="mailto:support@lead-generator.ru">Поддержка <ExternalLink className="ml-1 inline size-3" /></a>
           </div>

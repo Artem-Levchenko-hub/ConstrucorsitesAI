@@ -29,6 +29,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
       "contact",
       "changelog",
       "legal/privacy",
+      "legal/offer",
+      "legal/refunds",
       "legal/terms",
     ].map((path) => ({
       url: `${PUBLIC_ORIGIN}/${path}`,

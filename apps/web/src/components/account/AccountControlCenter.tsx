@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -169,6 +170,15 @@ export function AccountControlCenter({
             </button>
           ))}
         </div>}
+        {view !== "transactions" && (
+          <p className="mt-3 text-xs leading-5 text-fg-tertiary">
+            Нажимая на пакет и оплачивая его, вы принимаете{" "}
+            <Link className="font-medium text-accent hover:underline" href="/legal/offer">
+              публичную оферту
+            </Link>
+            . Это разовое пополнение, не подписка.
+          </p>
+        )}
         {!paymentConfig.data?.enabled && (
           <p className="mt-4 rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">
             {paymentConfig.data?.reason ?? "Платёжный контур пока недоступен"}

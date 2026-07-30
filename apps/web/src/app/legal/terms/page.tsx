@@ -1,4 +1,5 @@
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
+import Link from "next/link";
 
 export default function TermsPage() {
   return (
@@ -34,9 +35,13 @@ export default function TermsPage() {
       </LegalSection>
       <LegalSection title="5. Оплата">
         <p>
-          Платные пакеты включаются после публикации полных реквизитов оператора и
-          подключения ЮKassa. Цена и объём зачисления показываются до перехода к
-          оплате. Платёж подтверждается только серверной проверкой статуса ЮKassa.
+          Цена и объём зачисления показываются до перехода к оплате. Платёж
+          подтверждается только серверной проверкой статуса ЮKassa. Оплата
+          выбранного пакета означает принятие{" "}
+          <Link className="font-medium text-[#c84528]" href="/legal/offer">
+            публичной оферты
+          </Link>
+          .
         </p>
       </LegalSection>
       <LegalSection title="6. Изменения">

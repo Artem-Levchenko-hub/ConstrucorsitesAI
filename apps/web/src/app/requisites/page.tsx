@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { ExternalLink } from "lucide-react";
+import Link from "next/link";
 
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 
@@ -40,8 +41,37 @@ export default function RequisitesPage() {
         <p>
           Доступ к онлайн-сервису Omnia, создание сайтов и веб-приложений,
           генерация программного кода, публикация и сопутствующие цифровые
-          услуги. Условия использования размещены в публичном разделе сайта.
+          услуги. Актуальные пакеты стоят 490 ₽, 1 490 ₽ и 3 990 ₽. Подробный
+          состав и сумма зачисления указаны на странице{" "}
+          <Link className="font-medium text-[#c84528]" href="/pricing">
+            «Тарифы»
+          </Link>
+          .
         </p>
+      </LegalSection>
+
+      <LegalSection title="Заказ, оплата и получение">
+        <p>
+          Покупатель выбирает пакет в личном кабинете и переходит на защищённую
+          страницу ЮKassa. После подтверждения оплаты баланс активируется
+          автоматически. Услуга предоставляется полностью онлайн: отдельная
+          доставка не требуется, результат доступен в кабинете и по ссылке
+          опубликованного проекта.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="Документы">
+        <div className="flex flex-col items-start gap-2">
+          <Link className="font-medium text-[#c84528]" href="/legal/offer">
+            Публичная оферта
+          </Link>
+          <Link className="font-medium text-[#c84528]" href="/legal/refunds">
+            Оплата и возвраты
+          </Link>
+          <Link className="font-medium text-[#c84528]" href="/legal/privacy">
+            Политика конфиденциальности
+          </Link>
+        </div>
       </LegalSection>
 
       <LegalSection title="Контакты">
