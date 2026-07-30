@@ -1,30 +1,32 @@
 import Link from "next/link";
+import { Waypoints } from "lucide-react";
 
 export function BrandMark({
   inverse = false,
   href = "/",
+  label = "Omnia",
 }: {
   inverse?: boolean;
   href?: string;
+  label?: string;
 }) {
   return (
     <Link
       href={href}
-      className="font-display inline-flex items-center gap-2.5 font-semibold tracking-[-0.025em]"
-      aria-label="Omnia — главная"
+      className="font-display inline-flex items-center gap-2 font-semibold tracking-[-0.025em]"
+      aria-label={`${label} — главная`}
     >
       <span
-        className={`grid h-8 w-8 grid-cols-2 gap-[3px] rounded-lg border p-[6px] shadow-[0_0_24px_rgba(59,130,246,0.12)] ${
-          inverse ? "border-blue-400/40 bg-blue-500/10" : "border-[#13172a]"
+        className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+          inverse
+            ? "bg-[#3b82f6] text-white"
+            : "bg-[#171716] text-[#fcfbf7]"
         }`}
         aria-hidden
       >
-        <span className={inverse ? "rounded-[2px] bg-blue-300" : "rounded-[2px] bg-[#13172a]"} />
-        <span className={inverse ? "rounded-[2px] bg-blue-500" : "rounded-[2px] bg-[#3b82f6]"} />
-        <span className={inverse ? "rounded-[2px] bg-violet-500" : "rounded-[2px] bg-[#3b82f6]"} />
-        <span className={inverse ? "rounded-[2px] bg-white" : "rounded-[2px] bg-[#13172a]"} />
+        <Waypoints className="h-[18px] w-[18px]" strokeWidth={2.2} />
       </span>
-      <span className="text-[18px]">Omnia</span>
+      <span className="text-[18px]">{label}</span>
     </Link>
   );
 }

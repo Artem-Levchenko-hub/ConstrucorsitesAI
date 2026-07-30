@@ -53,6 +53,7 @@ export function ChatMessage({
   projectId,
   onFix,
   onSuggest,
+  presentation = "default",
 }: {
   message: Message;
   streaming?: boolean;
@@ -69,8 +70,10 @@ export function ChatMessage({
   /** Submit a starter-edit prompt from a fork recap card's one-tap chips.
    *  Omitted in replays / screenshots → chips render non-interactive. */
   onSuggest?: (prompt: string) => void;
+  presentation?: "default" | "studio";
 }) {
   const isUser = message.role === "user";
+  const studio = presentation === "studio";
   const quiz = isUser ? parseQuizBrief(message.content) : null;
   const parts: AssistantPart[] = isUser ? [] : parseAssistantContent(message.content);
 
@@ -79,14 +82,22 @@ export function ChatMessage({
       variants={fadeUp}
       initial="hidden"
       animate="visible"
-      className="flex gap-3 px-4 py-3"
+      className={cn(
+        "flex gap-3 px-4 py-3",
+        studio && "px-8 py-3.5",
+        studio && isUser && "flex-row-reverse",
+      )}
     >
       <div
-        className={
+        className={cn(
+          "h-7 w-7 rounded-full flex items-center justify-center shrink-0",
           isUser
-            ? "h-7 w-7 rounded-full bg-accent-subtle border border-accent/40 flex items-center justify-center shrink-0"
-            : "h-7 w-7 rounded-full bg-surface-overlay border border-border-default flex items-center justify-center shrink-0"
-        }
+            ? "bg-accent-subtle border border-accent/40"
+            : "bg-surface-overlay border border-border-default",
+          studio && "h-8 w-8 border-0",
+          studio && isUser && "bg-[#334155]",
+          studio && !isUser && "bg-[#10172a] text-[#3b82f6]",
+        )}
       >
         {isUser ? (
           <UserIcon className="h-3.5 w-3.5 text-accent" />
@@ -95,8 +106,8 @@ export function ChatMessage({
         )}
       </div>
 
-      <div className="flex-1 min-w-0 space-y-1.5">
-        <div className="flex items-center gap-2 text-xs">
+      <div className={cn("flex-1 min-w-0 space-y-1.5", studio && "max-w-[420px]", studio && isUser && "flex flex-col items-end")}>
+        <div className={cn("flex items-center gap-2 text-xs", studio && "hidden")}>
           <span className="font-semibold text-fg-primary tracking-tight">
             {isUser ? "Вы" : "Omnia"}
           </span>
@@ -105,7 +116,13 @@ export function ChatMessage({
           </span>
         </div>
 
-        <div className="text-sm text-fg-primary leading-6 space-y-2">
+        <div
+          className={cn(
+            "text-sm text-fg-primary leading-6 space-y-2",
+            studio && "w-full rounded-2xl border border-[#202946] bg-[#13172a] px-4 py-3.5",
+            studio && isUser && "border-[#3b82f6] bg-[#3b82f6] text-white",
+          )}
+        >
           {!isUser && streaming && projectId && (
             <PassProgressBar projectId={projectId} messageId={message.id} />
           )}
@@ -126,7 +143,7 @@ export function ChatMessage({
             quiz ? (
               <QuizSummary idea={quiz.idea} items={quiz.items} />
             ) : (
-              <UserBubble text={message.content} />
+              <UserBubble text={message.content} plain={studio} />
             )
           ) : (
             parts.map((p, i) =>
@@ -169,7 +186,7 @@ export function ChatMessage({
             <SelectedChips items={message.selected_elements} className="pt-1" />
           )}
 
-        {!isUser &&
+        {!studio && !isUser &&
           message.tokens_out !== null &&
           message.tokens_in !== null && (
             <div className="text-[11px] font-mono text-fg-tertiary pt-1 flex items-center gap-2">
@@ -194,7 +211,10 @@ export function ChatMessage({
 /* ───────────────────────────── user message ───────────────────────────── */
 
 /** The user's words in a soft accent-tinted speech bubble. */
-function UserBubble({ text }: { text: string }) {
+function UserBubble({ text, plain = false }: { text: string; plain?: boolean }) {
+  if (plain) {
+    return <div className="whitespace-pre-wrap break-words text-sm leading-6 text-white">{text}</div>;
+  }
   return (
     <div className="inline-block max-w-full whitespace-pre-wrap break-words rounded-2xl rounded-tl-md border border-accent/20 bg-accent-subtle/50 px-3.5 py-2 text-sm leading-6 text-fg-primary">
       {text}

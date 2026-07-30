@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { USE_MOCKS } from "./mocks";
 
 export type BusinessKind =
   | "legal_entity"
@@ -29,7 +30,21 @@ export type MaxAccess = {
   payments_configured: boolean;
 };
 
+let mockBusiness: BusinessProfile | null = null;
+
 export function getMaxAccess(): Promise<MaxAccess> {
+  if (USE_MOCKS) {
+    return Promise.resolve({
+      authenticated: true,
+      email_verified: true,
+      email_delivery_configured: true,
+      business: mockBusiness,
+      can_create_project: mockBusiness?.status === "verified",
+      reason: mockBusiness ? null : "business_required",
+      legal_document_version: "dev",
+      payments_configured: true,
+    });
+  }
   return apiFetch<MaxAccess>("/api/max/account/access");
 }
 
@@ -39,6 +54,21 @@ export function saveBusinessProfile(input: {
   ogrn?: string;
   legal_name: string;
 }): Promise<BusinessProfile> {
+  if (USE_MOCKS) {
+    mockBusiness = {
+      id: "business-demo",
+      kind: input.kind,
+      inn: input.inn,
+      ogrn: input.ogrn ?? null,
+      legal_name: input.legal_name,
+      status: "verified",
+      verification_source: "mock",
+      verification_note: null,
+      verified_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    };
+    return Promise.resolve(mockBusiness);
+  }
   return apiFetch<BusinessProfile>("/api/max/account/business", {
     method: "PUT",
     json: input,
@@ -46,6 +76,7 @@ export function saveBusinessProfile(input: {
 }
 
 export function resendVerification(email: string): Promise<{ accepted: boolean }> {
+  if (USE_MOCKS) return Promise.resolve({ accepted: Boolean(email) });
   return apiFetch<{ accepted: boolean }>("/api/auth/email/verify/request", {
     method: "POST",
     json: { email },
@@ -53,6 +84,7 @@ export function resendVerification(email: string): Promise<{ accepted: boolean }
 }
 
 export function verifyEmail(token: string): Promise<{ verified: boolean }> {
+  if (USE_MOCKS) return Promise.resolve({ verified: Boolean(token) });
   return apiFetch<{ verified: boolean }>("/api/auth/email/verify", {
     method: "POST",
     json: { token },

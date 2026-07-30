@@ -28,18 +28,10 @@ export function MaxStudioHeader({
   return (
     <header className="flex h-16 shrink-0 items-center justify-between border-b border-[#1e243f] bg-[#080a10]/95 px-5 backdrop-blur-xl sm:px-8">
       <div className="flex min-w-0 items-center gap-3">
-        <BrandMark inverse href="/max" />
-        <span className="h-5 w-px bg-white/20" aria-hidden />
-        <Link
-          href="/max"
-          className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 transition-colors hover:text-white"
-          aria-label="MAX Studio — главная"
-        >
-          MAX Studio
-        </Link>
+        <BrandMark inverse href="/max" label="MaxStudio" />
         {compact && (
           <span className="hidden items-center gap-2 text-xs text-white/30 sm:flex">
-            <span>/</span>
+            <span className="h-4 w-px bg-white/15" />
             <span>Редактор</span>
           </span>
         )}

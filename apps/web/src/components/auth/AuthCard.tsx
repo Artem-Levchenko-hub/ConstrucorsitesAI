@@ -18,7 +18,7 @@ export function AuthCard({
     <main className="studio-grid min-h-svh bg-[#080a10] text-white">
       <div className="mx-auto grid min-h-svh max-w-[1280px] lg:grid-cols-[0.9fr_1.1fr]">
         <section className="hidden flex-col border-r border-[#1e243f] p-10 lg:flex xl:p-14">
-          <BrandMark inverse />
+          <BrandMark inverse label="MaxStudio" />
           <div className="my-auto max-w-lg">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-400">
               MAX Studio
@@ -50,7 +50,7 @@ export function AuthCard({
         <section className="flex min-h-svh items-center justify-center px-5 py-10 sm:px-8">
           <div className="w-full max-w-md">
             <div className="mb-10 flex items-center justify-between lg:hidden">
-              <BrandMark inverse />
+              <BrandMark inverse label="MaxStudio" />
               <Link href="/" className="text-slate-500 hover:text-white" aria-label="На главную">
                 <ArrowLeft className="h-5 w-5" />
               </Link>

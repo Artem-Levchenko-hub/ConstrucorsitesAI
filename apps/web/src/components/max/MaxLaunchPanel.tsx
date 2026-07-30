@@ -35,7 +35,13 @@ const NEXT_STEP_COPY: Record<string, string> = {
   max_url: "Добавьте HTTPS-адрес в кабинете MAX и подтвердите этот шаг.",
 };
 
-export function MaxLaunchPanel({ project }: { project: Project }) {
+export function MaxLaunchPanel({
+  project,
+  onClose,
+}: {
+  project: Project;
+  onClose?: () => void;
+}) {
   const toggleTimeline = useWorkspaceStore((state) => state.toggleTimeline);
   const integration = useQuery({
     queryKey: ["max-integration", project.id],
@@ -105,7 +111,7 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
         </div>
         <button
           type="button"
-          onClick={toggleTimeline}
+          onClick={onClose ?? toggleTimeline}
           aria-label="Свернуть панель запуска"
           title="Свернуть панель запуска"
           className="-mr-1 flex h-7 w-7 items-center justify-center rounded-md text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white/70"

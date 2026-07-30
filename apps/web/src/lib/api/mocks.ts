@@ -75,6 +75,7 @@ const seedProjects = (): Project[] => {
   const seeds: Array<{ name: string; template: ProjectTemplate }> = [
     { name: "Кофейня в Казани", template: "landing" },
     { name: "Портфолио иллюстратора", template: "portfolio" },
+    { name: "MAX Demo", template: "max_miniapp" },
   ];
   return seeds.map((s, i) => ({
     id: `p-${i + 1}`,

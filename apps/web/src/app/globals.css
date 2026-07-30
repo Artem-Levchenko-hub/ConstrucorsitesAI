@@ -208,6 +208,27 @@
     font-family: var(--font-display);
   }
 
+  .max-studio-chat > div:nth-child(1) {
+    padding-top: 12px;
+  }
+
+  .max-studio-chat .max-studio-prompt {
+    border-top: 1px solid #151a2c;
+    background: #080a10;
+    padding: 20px;
+  }
+
+  .max-studio-chat .max-studio-prompt > div:last-child {
+    border-color: #202946;
+    background: #13172a;
+  }
+
+  .max-studio-chat .max-studio-prompt textarea {
+    min-height: 46px;
+    padding-top: 14px;
+    padding-bottom: 10px;
+  }
+
   .studio-grid {
     background-image:
       linear-gradient(rgb(59 130 246 / 0.055) 1px, transparent 1px),

@@ -3,558 +3,446 @@ import {
   ArrowRight,
   BarChart3,
   Bot,
-  Check,
-  ChevronRight,
-  CircleDollarSign,
-  Code2,
+  CheckCircle2,
+  CreditCard,
   Database,
-  ExternalLink,
-  Globe2,
-  MessageSquareText,
-  PackageSearch,
-  PanelsTopLeft,
-  Plug,
-  Rocket,
-  ShieldCheck,
+  Layers3,
+  MessageSquare,
+  Settings,
   Smartphone,
-  Store,
-  UsersRound,
-  Webhook,
+  Waypoints,
+  Zap,
 } from "lucide-react";
 import { getLocale } from "next-intl/server";
 import Link from "next/link";
 
 import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { BrandMark } from "@/components/marketing/BrandMark";
-import { Reveal } from "@/components/marketing/Reveal";
 
-const copy = {
+type Copy = {
+  nav: [string, string, string, string];
+  signIn: string;
+  launch: string;
+  badge: string;
+  heroBefore: string;
+  heroAccent: string;
+  heroAfter: string;
+  heroLead: string;
+  heroCta: string;
+  heroAlt: string;
+  prompt: string;
+  generate: string;
+  partners: string;
+  workflowBadge: string;
+  workflowTitle: string;
+  workflowLead: string;
+  featuresBadge: string;
+  featuresTitle: string;
+  featuresLead: string;
+  integrationsBadge: string;
+  integrationsTitle: string;
+  integrationsLead: string;
+  pricingBadge: string;
+  pricingTitle: string;
+  pricingLead: string;
+  footerLead: string;
+};
+
+const COPY: Record<"ru" | "en", Copy> = {
   ru: {
-    nav: ["Возможности", "Как работает", "Интеграции", "Запуск"],
-    login: "Войти",
-    navCta: "Открыть MAX Studio",
-    eyebrow: "MAX Mini Apps · уже доступно",
-    heroA: "Превратите идею в",
-    heroB: "готовое приложение",
+    nav: ["Возможности", "Как это работает", "Интеграции", "Тарифы"],
+    signIn: "Войти",
+    launch: "Открыть студию",
+    badge: "Конструктор и публикация приложений через диалог",
+    heroBefore: "Создавайте Mini Apps для",
+    heroAccent: "MAX",
+    heroAfter: "просто общаясь с агентом",
     heroLead:
-      "Omnia собирает интерфейс, сервер и базу данных, подключает MAX-бота, бизнес-сервисы и доводит проект до постоянного HTTPS-адреса.",
-    heroCta: "Создать приложение",
-    heroAlt: "Посмотреть, что входит",
-    proof: ["Без найма разработчиков", "Код остаётся у вас", "Запуск по шагам"],
-    prompt: "Создай приложение лояльности для кофейни в MAX",
-    promptHint: "Опишите продукт обычными словами…",
-    agent: "Omnia собирает приложение",
-    agentSteps: [
-      "Проектирую мобильный сценарий",
-      "Создаю страницы и данные",
-      "Проверяю production-сборку",
-    ],
-    available: "Доступно сейчас",
-    soon: "В разработке",
-    directionsKicker: "Один продукт — один понятный сценарий",
-    directionsTitle: "Не универсальный чат, а отдельные продуктовые студии",
-    directionsLead:
-      "Каждое направление получает собственный бриф, набор проверок и маршрут публикации. Сейчас полностью открыт конструктор приложений для MAX.",
-    workflowKicker: "От задачи до запуска",
-    workflowTitle: "Техническую работу берём на себя",
+      "Опишите продукт обычными словами. Агент соберёт интерфейс, backend и базу данных, подключит нужные сервисы и доведёт приложение до запуска в MAX.",
+    heroCta: "Начать бесплатно",
+    heroAlt: "Посмотреть сценарий",
+    prompt:
+      "Создай мини-апп для заказа пиццы с каталогом, корзиной и оплатой по СБП...",
+    generate: "Создать",
+    partners: "ПОДДЕРЖИВАЕМ ИНТЕГРАЦИИ ДЛЯ РЕАЛЬНОГО БИЗНЕСА",
+    workflowBadge: "Сценарий работы",
+    workflowTitle: "Без кода. Только диалог.",
     workflowLead:
-      "Вы отвечаете за продуктовые решения. Omnia пишет код, хранит состояние сборки и показывает только те шаги, где действительно нужен владелец.",
-    integrationsKicker: "Integration Hub",
-    integrationsTitle: "Подключения без правок сгенерированного кода",
+      "Агент проводит от идеи до опубликованного мини-приложения и сохраняет состояние каждого шага.",
+    featuresBadge: "Готовый продукт",
+    featuresTitle: "Всё необходимое для бизнеса внутри MAX",
+    featuresLead:
+      "На выходе не макет, а работающий продукт с данными, оплатой, аналитикой и возможностью дальнейших правок.",
+    integrationsBadge: "Интеграции",
+    integrationsTitle: "Подключается к вашему стеку",
     integrationsLead:
-      "Платежи, CRM, учёт, доставка и аналитика подключаются через защищённый кабинет. Секреты шифруются и не попадают в исходники приложения.",
-    resultKicker: "Что остаётся у вас",
-    resultTitle: "Полноценный цифровой продукт, а не одноразовый прототип",
-    resultLead:
-      "Редактируйте через агента, возвращайтесь к прошлым версиям, подключайте домен или свою VPS. Состояние проекта хранится на сервере и не сбрасывается после обновления страницы.",
-    launchKicker: "Готовность к MAX",
-    launchTitle: "Один маршрут до работающего мини-приложения",
-    launchLead:
-      "Студия проверяет сборку, бота, HTTPS, webhook, URL в кабинете MAX, обязательные данные и политики. На выходе — понятный статус и рабочая ссылка.",
-    finalTitle: "Начните с описания продукта",
-    finalLead:
-      "Регистрация нужна сразу: она защищает бесплатный лимит и связывает проекты с ООО, ИП или самозанятым владельцем MAX-бота.",
-    finalCta: "Перейти в MAX Studio",
-    footer: "Продуктовая среда для создания и запуска MAX Mini Apps.",
+      "Платежи, учёт, CRM и аналитика настраиваются из защищённого кабинета без ручного редактирования кода.",
+    pricingBadge: "Тарифы",
+    pricingTitle: "Понятная стоимость на каждом этапе",
+    pricingLead:
+      "Начните с первой сборки, затем выберите режим для регулярных обновлений и постоянной эксплуатации.",
+    footerLead:
+      "Создание и запуск полноценных Mini Apps для MAX с помощью продуктового AI-агента.",
   },
   en: {
-    nav: ["Capabilities", "How it works", "Integrations", "Launch"],
-    login: "Sign in",
-    navCta: "Open MAX Studio",
-    eyebrow: "MAX Mini Apps · available now",
-    heroA: "Turn an idea into a",
-    heroB: "production application",
+    nav: ["Features", "How it Works", "Integrations", "Pricing"],
+    signIn: "Sign In",
+    launch: "Launch App",
+    badge: "Introducing conversational app deployment",
+    heroBefore: "Build Mini-Apps for",
+    heroAccent: "Max Messenger",
+    heroAfter: "Just by Chatting",
     heroLead:
-      "Omnia builds the interface, backend and database, connects a MAX bot and business services, then takes the project to a permanent HTTPS address.",
-    heroCta: "Build an application",
-    heroAlt: "See what is included",
-    proof: ["No development team", "You own the code", "Guided launch"],
-    prompt: "Build a loyalty application for a coffee shop in MAX",
-    promptHint: "Describe the product in plain language…",
-    agent: "Omnia is building the application",
-    agentSteps: [
-      "Designing the mobile flow",
-      "Creating screens and data",
-      "Validating the production build",
-    ],
-    available: "Available now",
-    soon: "In development",
-    directionsKicker: "One product, one clear workflow",
-    directionsTitle: "Focused product studios instead of a generic chat",
-    directionsLead:
-      "Each direction gets a dedicated brief, quality checks and publishing route. The MAX application builder is fully available today.",
-    workflowKicker: "From brief to launch",
-    workflowTitle: "We handle the technical work",
+      "Empower your brand with fully functional interactive mini-apps. Describe what you need to our AI agent, and watch it deploy directly inside MAX with full integration support.",
+    heroCta: "Start Building Free",
+    heroAlt: "Watch Product Flow",
+    prompt:
+      "Создай мини-апп для заказа пиццы с каталогом, корзиной и оплатой по СБП...",
+    generate: "Generate",
+    partners: "SUPPORTING WORLD-CLASS INTEGRATIONS",
+    workflowBadge: "Workflow",
+    workflowTitle: "Zero Code. Just Conversation.",
     workflowLead:
-      "You make product decisions. Omnia writes code, persists build state and only asks for actions that truly require the owner.",
-    integrationsKicker: "Integration Hub",
-    integrationsTitle: "Connections without editing generated code",
+      "Our visual AI agent guides you from a raw idea to a fully deployed mini-app while preserving every build step.",
+    featuresBadge: "Engineered for performance",
+    featuresTitle: "Complete Toolbox for Messenger Commerce",
+    featuresLead:
+      "Deploy production applications where your users chat, with payments, data, analytics and ongoing agent editing.",
+    integrationsBadge: "Integrations",
+    integrationsTitle: "Connect Seamlessly with Your Stack",
     integrationsLead:
-      "Payments, CRM, inventory, delivery and analytics are connected through a secure dashboard. Secrets are encrypted and never added to source code.",
-    resultKicker: "What you keep",
-    resultTitle: "A complete digital product, not a disposable prototype",
-    resultLead:
-      "Edit with the agent, restore previous versions, connect a domain or your own VPS. Project state is server-side and survives every page refresh.",
-    launchKicker: "MAX readiness",
-    launchTitle: "One route to a working mini application",
-    launchLead:
-      "The studio validates the build, bot, HTTPS, webhook, MAX dashboard URL, required business details and policies. You get a clear status and a working link.",
-    finalTitle: "Start by describing the product",
-    finalLead:
-      "Registration is required up front to protect the free limit and associate projects with a company, sole proprietor or self-employed MAX bot owner.",
-    finalCta: "Go to MAX Studio",
-    footer: "A product environment for building and launching MAX Mini Apps.",
+      "Sync catalogues, record analytics, trigger payment invoices and handle CRM flows from one secure hub.",
+    pricingBadge: "Pricing plans",
+    pricingTitle: "Predictable Pricing. Unlimited Scaling",
+    pricingLead:
+      "Start with your first build, then choose the operating mode that matches your daily usage.",
+    footerLead:
+      "Production Mini Apps for MAX, generated and operated through a product AI agent.",
   },
-} as const;
-
-const products: Array<{
-  title: string;
-  titleEn: string;
-  text: string;
-  textEn: string;
-  href: string;
-  active: boolean;
-  Icon: LucideIcon;
-}> = [
-  {
-    title: "MAX Mini Apps и боты",
-    titleEn: "MAX Mini Apps and bots",
-    text: "Мобильный интерфейс, backend, бот, webhook и публикация.",
-    textEn: "Mobile interface, backend, bot, webhook and publishing.",
-    href: "/max",
-    active: true,
-    Icon: Bot,
-  },
-  {
-    title: "Веб-приложения",
-    titleEn: "Web applications",
-    text: "Личные кабинеты, CRM, каталоги и внутренние сервисы.",
-    textEn: "Portals, CRM systems, catalogues and internal tools.",
-    href: "/web-apps",
-    active: false,
-    Icon: Globe2,
-  },
-  {
-    title: "Лендинги",
-    titleEn: "Landing pages",
-    text: "Маркетинговые страницы, формы, аналитика и домены.",
-    textEn: "Marketing pages, forms, analytics and domains.",
-    href: "/landings",
-    active: false,
-    Icon: PanelsTopLeft,
-  },
-  {
-    title: "Мобильные приложения",
-    titleEn: "Mobile applications",
-    text: "Продукты для iOS и Android с отдельным релизом.",
-    textEn: "Standalone iOS and Android products.",
-    href: "/apps",
-    active: false,
-    Icon: Smartphone,
-  },
-];
+};
 
 const workflow = [
   {
     number: "01",
-    title: "Опишите задачу",
-    titleEn: "Describe the product",
-    text: "Короткий бриф помогает агенту понять аудиторию, сценарий и обязательные функции.",
-    textEn: "A short brief gives the agent the audience, core flow and required features.",
-    Icon: MessageSquareText,
+    ru: ["Опишите приложение", "Расскажите, для кого продукт, что должен уметь и какое действие пользователь выполняет чаще всего."],
+    en: ["Describe your App", "Tell the agent who the product is for, what it should do and which action matters most."],
   },
   {
     number: "02",
-    title: "Проверьте сборку",
-    titleEn: "Review the build",
-    text: "Следите за работой в реальном времени, тестируйте мобильное превью и просите изменения.",
-    textEn: "Follow the work live, test the mobile preview and request changes.",
-    Icon: Code2,
+    ru: ["Проверьте живую сборку", "Агент создаёт страницы, данные и backend. Результат сразу появляется в мобильном превью."],
+    en: ["Review the Live Build", "The agent creates screens, data and backend while the result appears in the mobile preview."],
   },
   {
     number: "03",
-    title: "Запустите в MAX",
-    titleEn: "Launch in MAX",
-    text: "Подключите бота и сервисы. Студия опубликует HTTPS-версию и активирует webhook.",
-    textEn: "Connect the bot and services. The studio publishes HTTPS and activates the webhook.",
-    Icon: Rocket,
+    ru: ["Опубликуйте в MAX", "Подключите бота и сервисы. Студия подготовит HTTPS, webhook и проверит готовность к запуску."],
+    en: ["Deploy to MAX", "Connect the bot and services. The studio prepares HTTPS, webhook and validates launch readiness."],
+  },
+] as const;
+
+const features: Array<{
+  Icon: LucideIcon;
+  ru: [string, string];
+  en: [string, string];
+}> = [
+  {
+    Icon: Zap,
+    ru: ["Быстрая публикация", "Сборка, обновления и постоянный HTTPS-адрес без ручной настройки инфраструктуры."],
+    en: ["Instant Deploy", "Build, update and publish to a permanent HTTPS address without manual infrastructure work."],
+  },
+  {
+    Icon: CreditCard,
+    ru: ["Платежи", "ЮKassa, СБП и другие способы оплаты подключаются через защищённые настройки."],
+    en: ["Native Payments", "Connect payment providers and secure local payment methods from protected settings."],
+  },
+  {
+    Icon: Database,
+    ru: ["Backend и данные", "Каталоги, пользователи, заказы и история действий сохраняются в рабочей базе."],
+    en: ["Backend & Data", "Catalogues, users, orders and activity history are stored in a production database."],
+  },
+  {
+    Icon: Waypoints,
+    ru: ["Разработка через диалог", "Меняйте сценарии, тексты и интерфейс обычными сообщениями без найма разработчика."],
+    en: ["Conversational Agent", "Change flows, copy and interface through normal messages without hiring a developer."],
+  },
+  {
+    Icon: BarChart3,
+    ru: ["Аналитика", "События, конверсии и воронки отправляются в Метрику и другие системы аналитики."],
+    en: ["Advanced Analytics", "Events, conversions and funnels are sent to your preferred analytics platform."],
+  },
+  {
+    Icon: Settings,
+    ru: ["Внешние API", "Подключайте CRM, учёт, доставку и собственные системы через готовые коннекторы."],
+    en: ["Custom API Gateways", "Connect CRM, inventory, delivery and internal systems through managed connectors."],
   },
 ];
 
-const outcomes = [
-  { title: "Интерфейс и код", titleEn: "Interface and code", Icon: Code2 },
-  { title: "Backend и данные", titleEn: "Backend and data", Icon: Database },
-  { title: "HTTPS и домен", titleEn: "HTTPS and domain", Icon: Globe2 },
-  { title: "MAX-бот и webhook", titleEn: "MAX bot and webhook", Icon: Webhook },
-  { title: "История версий", titleEn: "Version history", Icon: ShieldCheck },
-  { title: "Бизнес-интеграции", titleEn: "Business integrations", Icon: Plug },
+const integrations: Array<{
+  Icon: LucideIcon;
+  name: string;
+  ru: string;
+  en: string;
+}> = [
+  { Icon: CreditCard, name: "ЮKassa / СБП", ru: "Приём онлайн-платежей", en: "Online payments" },
+  { Icon: Database, name: "PostgreSQL", ru: "Рабочая база данных", en: "Production database" },
+  { Icon: BarChart3, name: "Яндекс Метрика", ru: "События и конверсии", en: "Events and conversions" },
+  { Icon: Database, name: "Supabase", ru: "Auth и облачные таблицы", en: "Auth and cloud tables" },
+  { Icon: Layers3, name: "amoCRM / Битрикс24", ru: "Лиды и сделки", en: "Leads and deals" },
+  { Icon: Bot, name: "MAX Bot API", ru: "Бот, webhook и события", en: "Bot, webhook and events" },
+  { Icon: Zap, name: "iiko / r_keeper", ru: "Каталог и заказы", en: "Catalogues and orders" },
+  { Icon: Settings, name: "REST API", ru: "Ваши внутренние сервисы", en: "Internal systems" },
 ];
 
-const integrations = [
-  { name: "ЮKassa", Icon: CircleDollarSign },
-  { name: "iiko / r_keeper", Icon: Store },
-  { name: "Битрикс24 / amoCRM", Icon: UsersRound },
-  { name: "МойСклад / 1С", Icon: PackageSearch },
-  { name: "Метрика", Icon: BarChart3 },
-  { name: "MAX API", Icon: Bot },
-];
+const plans = [
+  {
+    ru: ["Старт", "Первая сборка и проверка идеи.", "0 ₽", "за регистрацию"],
+    en: ["Sandbox", "Perfect for validating the product flow.", "$0", "/start"],
+    popular: false,
+    featuresRu: ["1 MAX-приложение", "Первая AI-сборка", "Мобильное превью", "Базовая поддержка"],
+    featuresEn: ["1 MAX app", "First AI build", "Mobile preview", "Basic support"],
+  },
+  {
+    ru: ["Studio", "Для запуска и регулярных обновлений.", "По тарифу", "по использованию"],
+    en: ["Pro Studio", "For launch and ongoing iterations.", "$49", "/month"],
+    popular: true,
+    featuresRu: ["Активные MAX-приложения", "Продуктовый AI-агент", "Интеграции и платежи", "Публикация и webhook", "Приоритетная поддержка"],
+    featuresEn: ["Active MAX apps", "Product AI agent", "Integrations and payments", "Publishing and webhook", "Priority support"],
+  },
+  {
+    ru: ["Enterprise", "Для команд и корпоративных систем.", "Индивидуально", ""],
+    en: ["Enterprise Suite", "For teams and corporate systems.", "Custom", ""],
+    popular: false,
+    featuresRu: ["Собственная VPS", "Гарантия доступности", "Корпоративные API", "Персональное сопровождение"],
+    featuresEn: ["Dedicated VPS", "Availability SLA", "Corporate APIs", "Solution support"],
+  },
+] as const;
 
 function SectionHeading({
-  kicker,
+  badge,
   title,
   lead,
 }: {
-  kicker: string;
+  badge: string;
   title: string;
   lead: string;
 }) {
   return (
-    <div className="mx-auto max-w-3xl text-center">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-400">
-        {kicker}
-      </p>
-      <h2 className="font-display mt-4 text-3xl font-semibold leading-tight tracking-[-0.035em] text-slate-50 sm:text-4xl lg:text-5xl">
+    <div className="mx-auto flex max-w-[1312px] flex-col items-center text-center">
+      <span className="rounded-full border border-[#1d4f91] bg-[#0d1729] px-3 py-1.5 text-[12px] font-medium uppercase tracking-[0.01em] text-[#3b82f6]">
+        {badge}
+      </span>
+      <h2 className="font-display mt-4 text-[32px] font-bold leading-[1.1] tracking-[-0.03em] text-[#f8fafc] sm:text-[40px]">
         {title}
       </h2>
-      <p className="mt-5 text-base leading-7 text-slate-400 sm:text-lg">{lead}</p>
-    </div>
-  );
-}
-
-function AgentWindow({ t }: { t: (typeof copy)["ru"] | (typeof copy)["en"] }) {
-  return (
-    <div className="relative mx-auto mt-14 max-w-5xl px-3 sm:px-6">
-      <div className="absolute -inset-14 -z-10 bg-[radial-gradient(circle,rgba(59,130,246,0.18),transparent_62%)] blur-2xl" />
-      <div className="overflow-hidden rounded-2xl border border-[#263150] bg-[#0f121f] shadow-[0_34px_100px_rgba(0,0,0,0.5)]">
-        <div className="flex h-12 items-center justify-between border-b border-[#1e243f] px-4">
-          <div className="flex items-center gap-1.5" aria-hidden>
-            <span className="h-2.5 w-2.5 rounded-full bg-[#ef4444]/70" />
-            <span className="h-2.5 w-2.5 rounded-full bg-[#e8c547]/70" />
-            <span className="h-2.5 w-2.5 rounded-full bg-[#10b981]/70" />
-          </div>
-          <span className="text-xs text-slate-500">omnia / max-studio</span>
-          <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(16,185,129,.8)]" />
-        </div>
-        <div className="grid min-h-[410px] md:grid-cols-[1fr_280px]">
-          <div className="p-5 sm:p-8">
-            <div className="ml-auto max-w-md rounded-2xl rounded-br-md bg-blue-500 px-5 py-4 text-sm leading-6 text-white">
-              {t.prompt}
-            </div>
-            <div className="mt-6 max-w-lg rounded-2xl rounded-bl-md border border-[#1e243f] bg-[#13172a] p-5">
-              <div className="flex items-center gap-3">
-                <span className="grid h-9 w-9 place-items-center rounded-lg bg-blue-500/15 text-blue-400">
-                  <Bot className="h-4 w-4" />
-                </span>
-                <div>
-                  <p className="text-sm font-semibold text-white">{t.agent}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">3 / 3</p>
-                </div>
-              </div>
-              <div className="mt-5 space-y-3">
-                {t.agentSteps.map((step) => (
-                  <div key={step} className="flex items-center gap-3 text-sm text-slate-300">
-                    <span className="grid h-5 w-5 place-items-center rounded-full bg-emerald-400/15 text-emerald-400">
-                      <Check className="h-3 w-3" />
-                    </span>
-                    {step}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="mt-7 flex items-center gap-3 rounded-xl border border-[#263150] bg-[#080a10] p-3">
-              <span className="flex-1 px-2 text-sm text-slate-600">{t.promptHint}</span>
-              <span className="grid h-9 w-9 place-items-center rounded-lg bg-blue-500 text-white">
-                <ArrowRight className="h-4 w-4" />
-              </span>
-            </div>
-          </div>
-          <div className="hidden border-l border-[#1e243f] bg-[#13172a] p-5 md:block">
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>Live preview</span>
-              <span>390 × 844</span>
-            </div>
-            <div className="mx-auto mt-5 h-[330px] max-w-[190px] overflow-hidden rounded-[28px] border-4 border-[#293352] bg-[#f8fafc] p-3 shadow-xl">
-              <div className="mx-auto h-1.5 w-12 rounded-full bg-slate-900" />
-              <div className="mt-5 h-16 rounded-xl bg-blue-500 p-3">
-                <div className="h-2 w-20 rounded bg-white/80" />
-                <div className="mt-2 h-1.5 w-12 rounded bg-white/45" />
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {[0, 1, 2, 3].map((item) => (
-                  <div key={item} className="rounded-lg border border-slate-200 bg-white p-2">
-                    <div className="h-10 rounded bg-slate-100" />
-                    <div className="mt-2 h-1.5 rounded bg-slate-300" />
-                    <div className="mt-1 h-1.5 w-2/3 rounded bg-slate-200" />
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 h-8 rounded-lg bg-slate-900" />
-            </div>
-          </div>
-        </div>
-      </div>
+      <p className="mt-4 max-w-[720px] text-[16px] leading-[1.7] text-[#94a3b8] sm:text-[18px]">
+        {lead}
+      </p>
     </div>
   );
 }
 
 export default async function HomePage() {
   const locale = await getLocale();
-  const isEn = locale === "en";
-  const t = isEn ? copy.en : copy.ru;
+  const lang = locale.startsWith("en") ? "en" : "ru";
+  const t = COPY[lang];
 
   return (
-    <div data-marketing className="min-h-svh bg-[#080a10] text-slate-50">
-      <header className="sticky top-0 z-50 border-b border-[#1e243f]/80 bg-[#080a10]/85 backdrop-blur-xl">
-        <div className="mx-auto flex h-20 max-w-[1200px] items-center justify-between gap-5 px-5 sm:px-8">
-          <BrandMark inverse />
-          <nav className="hidden items-center gap-7 lg:flex">
-            {[
-              ["#capabilities", t.nav[0]],
-              ["#workflow", t.nav[1]],
-              ["#integrations", t.nav[2]],
-              ["#launch", t.nav[3]],
-            ].map(([href, label]) => (
-              <a key={href} href={href} className="text-sm text-slate-400 transition hover:text-white">
-                {label}
-              </a>
-            ))}
+    <div data-marketing className="min-h-svh bg-[#080a10] text-[#f8fafc]">
+      <header className="h-20 border-b border-[#111626] bg-[#080a10]">
+        <div className="mx-auto flex h-full max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-16">
+          <BrandMark inverse label="MaxStudio" />
+          <nav className="hidden items-center gap-8 text-[14px] text-[#94a3b8] lg:flex">
+            <a href="#features" className="transition-colors hover:text-white">{t.nav[0]}</a>
+            <a href="#how-it-works" className="transition-colors hover:text-white">{t.nav[1]}</a>
+            <a href="#integrations" className="transition-colors hover:text-white">{t.nav[2]}</a>
+            <a href="#pricing" className="transition-colors hover:text-white">{t.nav[3]}</a>
           </nav>
-          <div className="flex items-center gap-2">
-            <LocaleSwitcher />
-            <Link href="/login" className="hidden px-3 py-2 text-sm text-slate-300 transition hover:text-white sm:block">
-              {t.login}
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="hidden sm:block">
+              <LocaleSwitcher />
+            </div>
+            <Link href="/login" className="hidden text-[14px] text-[#94a3b8] transition-colors hover:text-white sm:block">
+              {t.signIn}
             </Link>
-            <Link href="/max" className="marketing-button marketing-button-primary min-h-10 px-4">
-              <span className="hidden sm:inline">{t.navCta}</span>
-              <ArrowRight className="h-4 w-4" />
+            <Link href="/max/register" className="rounded-lg bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] px-5 py-2.5 text-[14px] font-semibold text-white">
+              <span className="sm:hidden">{lang === "ru" ? "Начать" : "Start"}</span>
+              <span className="hidden sm:inline">{t.launch}</span>
             </Link>
           </div>
         </div>
       </header>
 
       <main>
-        <section className="studio-grid studio-glow overflow-hidden border-b border-[#1e243f] pb-24 pt-24 sm:pt-32">
-          <div className="mx-auto max-w-[1080px] px-5 text-center sm:px-8">
-            <Reveal>
-              <span className="inline-flex items-center gap-2 rounded-full border border-blue-400/25 bg-blue-400/[0.07] px-3 py-1.5 text-xs font-medium text-blue-300">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                {t.eyebrow}
-              </span>
-              <h1 className="font-display mx-auto mt-7 max-w-5xl text-5xl font-semibold leading-[0.98] tracking-[-0.05em] sm:text-6xl lg:text-[76px]">
-                {t.heroA}{" "}
-                <span className="text-blue-400">{t.heroB}</span>
-              </h1>
-              <p className="mx-auto mt-7 max-w-3xl text-lg leading-8 text-slate-400 sm:text-xl">
-                {t.heroLead}
-              </p>
-              <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
-                <Link href="/max" className="marketing-button marketing-button-primary min-h-12 px-6">
-                  {t.heroCta}
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-                <a href="#capabilities" className="marketing-button marketing-button-secondary min-h-12 px-6">
-                  {t.heroAlt}
-                  <ChevronRight className="h-4 w-4" />
-                </a>
-              </div>
-              <div className="mt-8 flex flex-wrap justify-center gap-x-6 gap-y-2 text-xs text-slate-500">
-                {t.proof.map((item) => (
-                  <span key={item} className="inline-flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    {item}
-                  </span>
-                ))}
-              </div>
-            </Reveal>
-            <Reveal delay={120}>
-              <AgentWindow t={t} />
-            </Reveal>
-          </div>
-        </section>
-
-        <section id="capabilities" className="border-b border-[#1e243f] py-24 sm:py-32">
-          <div className="mx-auto max-w-[1200px] px-5 sm:px-8">
-            <Reveal>
-              <SectionHeading kicker={t.directionsKicker} title={t.directionsTitle} lead={t.directionsLead} />
-            </Reveal>
-            <div className="mt-14 grid gap-4 md:grid-cols-2">
-              {products.map(({ Icon, ...product }, index) => (
-                <Reveal key={product.href} delay={index * 60}>
-                  <Link
-                    href={product.href}
-                    className={`group flex min-h-56 flex-col rounded-2xl border p-7 transition ${
-                      product.active
-                        ? "border-blue-400/35 bg-[#0f121f] hover:border-blue-400/65"
-                        : "border-[#1e243f] bg-[#0b0e17] hover:bg-[#0f121f]"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <span className={`grid h-11 w-11 place-items-center rounded-xl ${product.active ? "bg-blue-500 text-white" : "bg-[#13172a] text-slate-500"}`}>
-                        <Icon className="h-5 w-5" />
-                      </span>
-                      <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ${product.active ? "border-emerald-400/25 bg-emerald-400/[0.08] text-emerald-300" : "border-[#293352] text-slate-600"}`}>
-                        {product.active ? t.available : t.soon}
-                      </span>
-                    </div>
-                    <h3 className="font-display mt-8 text-2xl font-semibold">{isEn ? product.titleEn : product.title}</h3>
-                    <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{isEn ? product.textEn : product.text}</p>
-                    <ArrowRight className={`mt-auto h-4 w-4 transition-transform group-hover:translate-x-1 ${product.active ? "text-blue-400" : "text-slate-700"}`} />
-                  </Link>
-                </Reveal>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="workflow" className="bg-[#0b0e17] py-24 sm:py-32">
-          <div className="mx-auto max-w-[1200px] px-5 sm:px-8">
-            <Reveal>
-              <SectionHeading kicker={t.workflowKicker} title={t.workflowTitle} lead={t.workflowLead} />
-            </Reveal>
-            <div className="mt-16 grid gap-4 lg:grid-cols-3">
-              {workflow.map(({ Icon, ...item }, index) => (
-                <Reveal key={item.number} delay={index * 70}>
-                  <article className="studio-card relative h-full min-h-72 overflow-hidden p-7">
-                    <span className="font-mono text-xs text-blue-400">{item.number}</span>
-                    <Icon className="mt-14 h-7 w-7 text-slate-300" />
-                    <h3 className="font-display mt-6 text-xl font-semibold">{isEn ? item.titleEn : item.title}</h3>
-                    <p className="mt-3 text-sm leading-6 text-slate-500">{isEn ? item.textEn : item.text}</p>
-                    <span className="absolute -right-6 -top-10 font-display text-[150px] font-bold leading-none text-white/[0.018]">{item.number}</span>
-                  </article>
-                </Reveal>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="border-y border-[#1e243f] py-24 sm:py-32">
-          <div className="mx-auto grid max-w-[1200px] gap-14 px-5 sm:px-8 lg:grid-cols-[0.8fr_1.2fr] lg:items-start">
-            <Reveal>
-              <div className="lg:sticky lg:top-32">
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-400">{t.resultKicker}</p>
-                <h2 className="font-display mt-4 text-3xl font-semibold leading-tight tracking-[-0.035em] sm:text-4xl">{t.resultTitle}</h2>
-                <p className="mt-5 text-base leading-7 text-slate-400">{t.resultLead}</p>
-              </div>
-            </Reveal>
-            <div className="grid gap-px overflow-hidden rounded-2xl border border-[#1e243f] bg-[#1e243f] sm:grid-cols-2">
-              {outcomes.map(({ Icon, ...item }, index) => (
-                <Reveal key={item.title} delay={index * 40}>
-                  <div className="flex min-h-32 items-center gap-4 bg-[#0f121f] p-6">
-                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-blue-400/[0.08] text-blue-400">
-                      <Icon className="h-5 w-5" />
-                    </span>
-                    <span className="font-display text-base font-semibold">{isEn ? item.titleEn : item.title}</span>
-                  </div>
-                </Reveal>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="integrations" className="bg-[#0b0e17] py-24 sm:py-32">
-          <div className="mx-auto max-w-[1200px] px-5 sm:px-8">
-            <Reveal>
-              <SectionHeading kicker={t.integrationsKicker} title={t.integrationsTitle} lead={t.integrationsLead} />
-            </Reveal>
-            <div className="mt-14 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-              {integrations.map(({ name, Icon }, index) => (
-                <Reveal key={name} delay={index * 40}>
-                  <div className="studio-card flex min-h-32 flex-col items-center justify-center gap-4 p-4 text-center">
-                    <Icon className="h-6 w-6 text-blue-400" />
-                    <span className="text-xs font-medium text-slate-300">{name}</span>
-                  </div>
-                </Reveal>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="launch" className="border-y border-[#1e243f] py-24 sm:py-32">
-          <div className="mx-auto grid max-w-[1200px] gap-12 px-5 sm:px-8 lg:grid-cols-2 lg:items-center">
-            <Reveal>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-400">{t.launchKicker}</p>
-                <h2 className="font-display mt-4 text-3xl font-semibold leading-tight tracking-[-0.035em] sm:text-5xl">{t.launchTitle}</h2>
-                <p className="mt-5 max-w-xl text-base leading-7 text-slate-400">{t.launchLead}</p>
-                <Link href="/max" className="marketing-button marketing-button-primary mt-8">
-                  {t.heroCta}
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-              </div>
-            </Reveal>
-            <Reveal delay={80}>
-              <div className="studio-card p-4 sm:p-6">
-                {[
-                  ["01", isEn ? "Application build" : "Рабочая сборка приложения"],
-                  ["02", isEn ? "Verified MAX bot" : "Проверенный MAX-бот"],
-                  ["03", isEn ? "Permanent HTTPS version" : "Постоянная HTTPS-версия"],
-                  ["04", isEn ? "Active webhook" : "Активный webhook"],
-                  ["05", isEn ? "MAX dashboard URL" : "URL добавлен в кабинете MAX"],
-                ].map(([number, label], index) => (
-                  <div key={number} className="flex items-center gap-4 border-b border-[#1e243f] px-2 py-4 last:border-0">
-                    <span className="font-mono text-xs text-slate-600">{number}</span>
-                    <span className="flex-1 text-sm text-slate-300">{label}</span>
-                    <span className={`grid h-6 w-6 place-items-center rounded-full ${index < 4 ? "bg-emerald-400/10 text-emerald-400" : "border border-[#334166] text-slate-600"}`}>
-                      {index < 4 ? <Check className="h-3.5 w-3.5" /> : null}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </Reveal>
-          </div>
-        </section>
-
-        <section className="studio-grid studio-glow py-24 text-center sm:py-32">
-          <Reveal>
-            <div className="mx-auto max-w-3xl px-5 sm:px-8">
-              <h2 className="font-display text-4xl font-semibold tracking-[-0.04em] sm:text-6xl">{t.finalTitle}</h2>
-              <p className="mx-auto mt-6 max-w-2xl text-base leading-7 text-slate-400">{t.finalLead}</p>
-              <Link href="/max" className="marketing-button marketing-button-primary mt-9 min-h-12 px-7">
-                {t.finalCta}
+        <section className="relative min-h-[751px] overflow-hidden border-b border-[#0d1220] px-5 py-20 sm:px-8 lg:px-16 lg:py-[100px]">
+          <div className="pointer-events-none absolute left-1/2 top-[-220px] h-[600px] w-[900px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(57,68,177,0.19),transparent_67%)]" />
+          <div className="relative mx-auto flex max-w-[1000px] flex-col items-center text-center">
+            <span className="inline-flex items-center gap-2 rounded-full border border-[#342166] bg-[#18132f] px-3.5 py-2 text-[13px] text-[#9b6cff]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[#8b5cf6]" />
+              {t.badge}
+            </span>
+            <h1 className="font-display mt-6 text-[42px] font-bold leading-[1.05] tracking-[-0.045em] text-[#f8fafc] sm:text-[54px] lg:text-[64px]">
+              {t.heroBefore}{" "}
+              <span className="text-[#3b82f6]">{t.heroAccent}</span>{" "}
+              {t.heroAfter}
+            </h1>
+            <p className="mt-7 max-w-[760px] text-[17px] leading-[1.65] text-[#94a3b8] sm:text-[20px]">
+              {t.heroLead}
+            </p>
+            <div className="mt-12 flex flex-col gap-4 sm:flex-row">
+              <Link href="/max/register" className="inline-flex h-[49px] items-center justify-center gap-3 rounded-lg bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] px-7 text-[16px] font-semibold text-white">
+                {t.heroCta}
                 <ArrowRight className="h-4 w-4" />
               </Link>
+              <a href="#how-it-works" className="inline-flex h-[49px] items-center justify-center rounded-lg border border-[#202946] bg-[#13172a] px-7 text-[16px] font-semibold text-[#f8fafc]">
+                {t.heroAlt}
+              </a>
             </div>
-          </Reveal>
+            <div className="mt-12 w-full max-w-[800px] rounded-2xl border border-[#202946] bg-[#111525] p-5 text-left shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
+              <div className="mb-4 flex gap-4">
+                <span className="h-3 w-3 rounded-full bg-[#fb4b58]" />
+                <span className="h-3 w-3 rounded-full bg-[#20c997]" />
+              </div>
+              <div className="flex min-h-[53px] items-center gap-3 rounded-lg border border-[#26304f] bg-[#080a10] px-3">
+                <MessageSquare className="h-[18px] w-[18px] shrink-0 text-[#3b82f6]" />
+                <span className="min-w-0 flex-1 truncate text-[15px] text-[#d6d9e4]">{t.prompt}</span>
+                <Link href="/max/register" className="rounded-md bg-[#3b82f6] px-3 py-2 text-[12px] font-semibold text-white">
+                  {t.generate}
+                </Link>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="flex min-h-[159px] items-center border-b border-[#0d1220] px-5 sm:px-8 lg:px-16">
+          <div className="mx-auto w-full max-w-[900px]">
+            <p className="text-center text-[11px] font-semibold uppercase text-[#60708d]">{t.partners}</p>
+            <div className="mt-7 grid grid-cols-2 gap-5 text-center text-[15px] font-semibold text-[#60708d] sm:grid-cols-5">
+              {["ЮKassa", "PostgreSQL", "amoCRM", "Яндекс Метрика", "Supabase"].map((name) => (
+                <span key={name} className="inline-flex items-center justify-center gap-2">
+                  <Waypoints className="h-4 w-4" />
+                  {name}
+                </span>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="how-it-works" className="min-h-[628px] px-5 py-24 sm:px-8 lg:px-16">
+          <SectionHeading badge={t.workflowBadge} title={t.workflowTitle} lead={t.workflowLead} />
+          <div className="mx-auto mt-14 grid max-w-[1312px] gap-6 lg:grid-cols-3">
+            {workflow.map((item) => {
+              const [title, text] = item[lang];
+              return (
+                <article key={item.number} className="min-h-[222px] rounded-2xl border border-[#202946] bg-[#13172a] p-8">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#17213d] text-[17px] font-bold text-[#3b82f6]">{item.number}</span>
+                  <h3 className="mt-5 text-[18px] font-semibold">{title}</h3>
+                  <p className="mt-2 text-[14px] leading-[1.55] text-[#94a3b8]">{text}</p>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+
+        <section id="features" className="min-h-[812px] px-5 py-24 sm:px-8 lg:px-16">
+          <SectionHeading badge={t.featuresBadge} title={t.featuresTitle} lead={t.featuresLead} />
+          <div className="mx-auto mt-14 grid max-w-[1312px] gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {features.map(({ Icon, ...item }) => {
+              const [title, text] = item[lang];
+              return (
+                <article key={title} className="min-h-[193px] rounded-2xl border border-[#202946] bg-[#13172a] p-7">
+                  <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#211b4a] text-[#8b5cf6]">
+                    <Icon className="h-6 w-6" />
+                  </span>
+                  <h3 className="mt-4 text-[17px] font-semibold">{title}</h3>
+                  <p className="mt-2 text-[14px] leading-[1.5] text-[#94a3b8]">{text}</p>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+
+        <section id="integrations" className="min-h-[560px] px-5 py-24 sm:px-8 lg:px-16">
+          <SectionHeading badge={t.integrationsBadge} title={t.integrationsTitle} lead={t.integrationsLead} />
+          <div className="mx-auto mt-14 grid max-w-[1312px] gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {integrations.map(({ Icon, name, ru, en }) => (
+              <article key={name} className="flex min-h-[69px] items-center gap-4 rounded-xl border border-[#202946] bg-[#13172a] px-4 py-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#17213d] text-[#3b82f6]">
+                  <Icon className="h-[18px] w-[18px]" />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="truncate text-[14px] font-semibold">{name}</h3>
+                  <p className="mt-0.5 truncate text-[11px] text-[#7b89a4]">{lang === "ru" ? ru : en}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section id="pricing" className="min-h-[880px] px-5 py-24 sm:px-8 lg:px-16">
+          <SectionHeading badge={t.pricingBadge} title={t.pricingTitle} lead={t.pricingLead} />
+          <div className="mx-auto mt-14 grid max-w-[1312px] gap-6 lg:grid-cols-3">
+            {plans.map((plan) => {
+              const [title, description, price, suffix] = plan[lang];
+              const items = lang === "ru" ? plan.featuresRu : plan.featuresEn;
+              return (
+                <article key={title} className={`relative min-h-[480px] rounded-2xl border bg-[#13172a] p-10 ${plan.popular ? "border-[#3b82f6]" : "border-[#202946]"}`}>
+                  {plan.popular && (
+                    <span className="absolute right-10 top-10 rounded-full border border-[#244a85] bg-[#10213f] px-3 py-1.5 text-[11px] font-semibold uppercase text-[#3b82f6]">
+                      {lang === "ru" ? "Популярный" : "Most popular"}
+                    </span>
+                  )}
+                  <h3 className="text-[18px] font-semibold">{title}</h3>
+                  <p className="mt-3 text-[14px] text-[#94a3b8]">{description}</p>
+                  <div className="mt-9 flex items-end gap-2">
+                    <span className="text-[40px] font-bold tracking-[-0.04em]">{price}</span>
+                    {suffix && <span className="pb-2 text-[13px] text-[#60708d]">{suffix}</span>}
+                  </div>
+                  <ul className="mt-8 space-y-4">
+                    {items.map((feature) => (
+                      <li key={feature} className="flex items-center gap-2.5 text-[13px] text-[#94a3b8]">
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-[#3b82f6]" />
+                        {feature}
+                      </li>
+                    ))}
+                  </ul>
+                  <Link href="/max/register" className={`mt-9 inline-flex h-12 items-center justify-center rounded-lg px-7 text-[14px] font-semibold ${plan.popular ? "bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] text-white" : "border border-[#202946] text-white"}`}>
+                    {lang === "ru" ? "Начать" : "Get Started Instantly"}
+                  </Link>
+                </article>
+              );
+            })}
+          </div>
         </section>
       </main>
 
-      <footer className="border-t border-[#1e243f] bg-[#080a10]">
-        <div className="mx-auto grid max-w-[1200px] gap-10 px-5 py-12 sm:px-8 md:grid-cols-[1fr_auto]">
+      <footer className="min-h-[430px] border-t border-[#0d1220] px-5 py-20 sm:px-8 lg:px-16">
+        <div className="mx-auto grid max-w-[1312px] gap-16 md:grid-cols-[1fr_auto_auto]">
           <div>
-            <BrandMark inverse />
-            <p className="mt-4 max-w-sm text-sm leading-6 text-slate-500">{t.footer}</p>
+            <BrandMark inverse label="MaxStudio" />
+            <p className="mt-6 max-w-[360px] text-[14px] leading-6 text-[#7b89a4]">{t.footerLead}</p>
           </div>
-          <div className="grid grid-cols-2 gap-x-10 gap-y-3 text-sm text-slate-500 sm:grid-cols-3">
-            <Link href="/legal/privacy" className="hover:text-white">{isEn ? "Privacy" : "Конфиденциальность"}</Link>
-            <Link href="/legal/terms" className="hover:text-white">{isEn ? "Terms" : "Условия"}</Link>
-            <Link href="/legal/personal-data" className="hover:text-white">{isEn ? "Personal data" : "Персональные данные"}</Link>
-            <Link href="/legal/cookies" className="hover:text-white">Cookies</Link>
-            <Link href="/legal/refunds" className="hover:text-white">{isEn ? "Refunds" : "Оплата и возвраты"}</Link>
-            <a href="mailto:support@lead-generator.ru" className="inline-flex items-center gap-1 hover:text-white">
-              Support
-              <ExternalLink className="h-3 w-3" />
-            </a>
+          <div>
+            <h3 className="text-[13px] font-semibold">Product</h3>
+            <div className="mt-5 flex flex-col gap-4 text-[13px] text-[#94a3b8]">
+              <a href="#features">{t.nav[0]}</a>
+              <a href="#integrations">{t.nav[2]}</a>
+              <Link href="/pricing">{t.nav[3]}</Link>
+              <Link href="/changelog">Changelog</Link>
+            </div>
           </div>
+          <div>
+            <h3 className="text-[13px] font-semibold">Company</h3>
+            <div className="mt-5 flex flex-col gap-4 text-[13px] text-[#94a3b8]">
+              <Link href="/about">{lang === "ru" ? "О компании" : "About Us"}</Link>
+              <Link href="/security">{lang === "ru" ? "Безопасность" : "Security"}</Link>
+              <Link href="/contact">{lang === "ru" ? "Связаться" : "Contact Sales"}</Link>
+              <Link href="/legal/privacy">{lang === "ru" ? "Конфиденциальность" : "Privacy Policy"}</Link>
+              <Link href="/legal/terms">{lang === "ru" ? "Условия" : "Terms of Service"}</Link>
+            </div>
+          </div>
+        </div>
+        <div className="mx-auto mt-24 flex max-w-[1312px] flex-col gap-4 border-t border-[#111626] pt-6 text-[12px] text-[#60708d] sm:flex-row sm:items-center sm:justify-between">
+          <span>© 2026 MaxStudio by Omnia. All rights reserved.</span>
+          <span className="inline-flex items-center gap-2"><Smartphone className="h-3.5 w-3.5" /> MAX Mini Apps</span>
         </div>
       </footer>
     </div>

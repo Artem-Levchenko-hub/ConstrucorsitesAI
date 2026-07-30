@@ -40,11 +40,13 @@ export function ChatPanel({
   projectSlug,
   mode = "default",
   basePath = `/projects/${projectId}`,
+  embedded = false,
 }: {
   projectId: string;
   projectSlug: string;
   mode?: "default" | "max";
   basePath?: string;
+  embedded?: boolean;
 }) {
   // Server orchestrates per-role models (Opus director, DeepSeek polish, …).
   // The client no longer picks a model; this label is just sent through for
@@ -211,21 +213,23 @@ export function ChatPanel({
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
     // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
-    <div className="flex h-full min-h-0 flex-col border-r border-[#1e243f] bg-[#080a10]">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#1e243f] px-4">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          {mode === "max" ? "MAX-редактор" : "Чат"}
-        </span>
-        <button
-          type="button"
-          onClick={toggleChat}
-          aria-label="Свернуть чат"
-          title="Свернуть чат"
-          className="-mr-1.5 flex h-6 w-6 items-center justify-center rounded text-fg-tertiary transition-colors hover:bg-surface-overlay hover:text-fg-secondary"
-        >
-          <PanelLeftClose className="h-3.5 w-3.5" />
-        </button>
-      </div>
+    <div className={`flex h-full min-h-0 flex-col bg-[#080a10] ${embedded ? "max-studio-chat" : "border-r border-[#1e243f]"}`}>
+      {!embedded && (
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#1e243f] px-4">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            {mode === "max" ? "MAX-редактор" : "Чат"}
+          </span>
+          <button
+            type="button"
+            onClick={toggleChat}
+            aria-label="Свернуть чат"
+            title="Свернуть чат"
+            className="-mr-1.5 flex h-6 w-6 items-center justify-center rounded text-fg-tertiary transition-colors hover:bg-surface-overlay hover:text-fg-secondary"
+          >
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       <div
         ref={scrollRef}
@@ -270,6 +274,7 @@ export function ChatPanel({
             projectId={projectId}
             onFix={handleFix}
             onSuggest={handleSuggest}
+            presentation={embedded ? "studio" : "default"}
           />
         ))}
 
@@ -311,6 +316,7 @@ export function ChatPanel({
               ? "Опишите изменение MAX Mini App"
               : undefined
           }
+          className={embedded ? "max-studio-prompt" : undefined}
         />
       </div>
 
