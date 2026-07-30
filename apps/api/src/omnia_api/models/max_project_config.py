@@ -25,6 +25,7 @@ class MaxProjectConfig(Base):
         nullable=False,
     )
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    managed_kit_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     synced_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

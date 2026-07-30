@@ -14,7 +14,10 @@ from omnia_api.schemas.max_studio import (
     MaxProjectConfigPayload,
     MaxUrlAttachedPayload,
 )
-from omnia_api.services.max_project_kit import render_max_managed_files
+from omnia_api.services.max_project_kit import (
+    MAX_MANAGED_KIT_VERSION,
+    render_max_managed_files,
+)
 
 
 def _config() -> MaxProjectConfigPayload:
@@ -132,7 +135,25 @@ async def test_config_save_is_versioned_and_idempotent(
     saved = await db_session.get(MaxProjectConfig, project.id)
     assert saved is not None
     assert saved.config["app_name"] == 'Кофе "Рядом"'
+    assert saved.managed_kit_version == MAX_MANAGED_KIT_VERSION
     assert project.current_snapshot_id == saved.synced_snapshot_id
+
+    # A project carrying an older managed kit is upgraded once even when its
+    # business config and current snapshot are otherwise unchanged.
+    saved.managed_kit_version = MAX_MANAGED_KIT_VERSION - 1
+    await db_session.commit()
+    upgraded = await max_studio.put_max_config(
+        project.id, _config(), db_session, user
+    )
+    repeated_after_upgrade = await max_studio.put_max_config(
+        project.id, _config(), db_session, user
+    )
+    refreshed = await db_session.get(MaxProjectConfig, project.id)
+
+    assert len(calls) == 2
+    assert refreshed is not None
+    assert refreshed.managed_kit_version == MAX_MANAGED_KIT_VERSION
+    assert repeated_after_upgrade.synced_snapshot_id == upgraded.synced_snapshot_id
 
 
 async def test_url_confirmation_is_persisted_without_new_snapshot(db_session) -> None:

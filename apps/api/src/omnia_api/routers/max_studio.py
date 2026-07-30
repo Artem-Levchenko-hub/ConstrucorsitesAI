@@ -30,7 +30,10 @@ from omnia_api.schemas.max_studio import (
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
-from omnia_api.services.max_project_kit import render_max_managed_files
+from omnia_api.services.max_project_kit import (
+    MAX_MANAGED_KIT_VERSION,
+    render_max_managed_files,
+)
 
 router = APIRouter(prefix="/api/projects", tags=["max-studio"])
 log = structlog.get_logger(__name__)
@@ -189,6 +192,7 @@ async def put_max_config(
         record is not None
         and record.config == config_data
         and record.synced_snapshot_id == project.current_snapshot_id
+        and record.managed_kit_version == MAX_MANAGED_KIT_VERSION
     ):
         return _public(project, record)
 
@@ -216,11 +220,13 @@ async def put_max_config(
             owner_id=current_user.id,
             config=config_data,
             config_version=1,
+            managed_kit_version=MAX_MANAGED_KIT_VERSION,
         )
         session.add(record)
     else:
         record.config = config_data
         record.config_version += 1
+        record.managed_kit_version = MAX_MANAGED_KIT_VERSION
     record.synced_snapshot_id = snapshot.id
     await session.commit()
     await session.refresh(record)
@@ -235,6 +241,23 @@ async def put_max_config(
     except Exception:
         log.warning("max_config_live_sync_failed", project_id=str(project.id), exc_info=True)
     return _public(project, record)
+
+
+@router.post("/{project_id}/max/sync-kit", response_model=MaxProjectConfigPublic)
+async def sync_max_managed_kit(
+    project_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> MaxProjectConfigPublic:
+    """Apply the current model-free managed kit to an existing MAX project."""
+    project = await _owned_max_project(session, project_id, current_user.id)
+    record = await session.get(MaxProjectConfig, project_id)
+    payload = (
+        MaxProjectConfigPayload.model_validate(record.config)
+        if record is not None
+        else _default_config(project)
+    )
+    return await put_max_config(project_id, payload, session, current_user)
 
 
 @router.get("/{project_id}/max/readiness", response_model=MaxReadinessPublic)

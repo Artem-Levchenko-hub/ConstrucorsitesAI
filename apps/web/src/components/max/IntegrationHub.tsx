@@ -23,7 +23,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -47,6 +47,7 @@ import {
   verifyAppIntegration,
 } from "@/lib/api/app-integrations";
 import { ApiError } from "@/lib/api/client";
+import { syncMaxManagedKit } from "@/lib/api/max-studio";
 import type {
   AppIntegration,
   IntegrationCategory,
@@ -265,6 +266,26 @@ export function IntegrationHub({
     queryFn: () => getIntegrationCatalog(projectId),
   });
 
+  // Existing projects receive new platform-owned SDK routes without a model
+  // run. The endpoint is versioned and therefore creates a snapshot only when
+  // the managed kit actually changed.
+  useEffect(() => {
+    void syncMaxManagedKit(projectId).catch(() => {
+      // A running generation/deploy intentionally blocks source mutations.
+      // The same sync is retried after every explicit integration action.
+    });
+  }, [projectId]);
+
+  async function syncKitAfterAction() {
+    try {
+      await syncMaxManagedKit(projectId);
+    } catch (error) {
+      toast.warning("Подключение сохранено, SDK обновится позже", {
+        description: errorMessage(error),
+      });
+    }
+  }
+
   const connect = useMutation({
     mutationFn: ({
       provider,
@@ -275,6 +296,7 @@ export function IntegrationHub({
     }) => connectAppIntegration(projectId, provider, payload),
     onSuccess: (connection) => {
       queryClient.invalidateQueries({ queryKey });
+      void syncKitAfterAction();
       setSelected(null);
       setValues({});
       toast.success("Интеграция подключена", {
@@ -289,6 +311,7 @@ export function IntegrationHub({
       bindAppIntegration(projectId, provider),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey });
+      void syncKitAfterAction();
       toast.success("Подключение включено для проекта");
     },
     onError: (error) =>
@@ -298,6 +321,7 @@ export function IntegrationHub({
     mutationFn: () => applyIntegrationPack(projectId),
     onSuccess: ({ bound_provider_keys, remaining_provider_keys }) => {
       queryClient.invalidateQueries({ queryKey });
+      void syncKitAfterAction();
       if (remaining_provider_keys.length === 0) {
         toast.success("Набор интеграций готов");
         return;
