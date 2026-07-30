@@ -64,7 +64,7 @@
     "d": "Pop-up теперь расположен выше затемняющего слоя: окно остаётся чётким, а blur применяется только к фону. Галочка бота обновляется сразу, а активация недоступна до появления HTTPS."
    }
   ],
-  "progress_note": "H97: web test/typecheck/ESLint, Python compileall, целевые orchestrator-тесты и browser QA зелёные. Проверены real preview, пошаговая публикация, копирование ссылки, полный диалог настроек, Integration Hub и post-launch на 1440/768/390 px. Обязательный остаток сохранён в docs/plans/2026-07-30-builder-continuation.md: controlled real hero-media render и путь фото → план → подтверждение → preview → apply."
+  "progress_note": "H97 доставлена на dev в 8b89da54 + container-path fix 05957263. Linux Docker build зелёный: typecheck, 42/42 страницы и standalone image; 16 API-тестов preview/managed-kit и 7 orchestrator security-тестов прошли. api/web/orchestrator healthy, внешние /, /max/product и /otchet/ отвечают 200, свежих traceback/error в логах нет. Browser QA проверил real preview, пошаговую публикацию, копирование ссылки, полный диалог настроек, Integration Hub и post-launch на 1440/768/390 px. Обязательный остаток сохранён в docs/plans/2026-07-30-builder-continuation.md: controlled real hero-media render и путь фото → план → подтверждение → preview → apply."
  },
  "owner_actions": [
   {
