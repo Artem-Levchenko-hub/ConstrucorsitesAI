@@ -24,6 +24,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CircleCheck,
   CircleX,
+  Infinity as InfinityIcon,
   Loader2,
   Pause,
   Play,
@@ -37,6 +38,7 @@ import {
   deployProject,
   getLastDeploy,
   getRuntime,
+  setRuntimeKeepAlive,
   startRuntime,
   stopRuntime,
 } from "@/lib/api/runtime";
@@ -188,6 +190,26 @@ export function RuntimeButton({
     },
   });
 
+  const keepAliveMut = useMutation({
+    mutationFn: (enabled: boolean) => setRuntimeKeepAlive(projectId, enabled),
+    onSuccess: (s) => {
+      qc.setQueryData(["runtime", projectId], s);
+      toast.success(
+        s.keep_alive ? "Контейнер всегда запущен" : "Автоусыпление включено",
+        {
+          description: s.keep_alive
+            ? "Он не уснёт от бездействия и восстановится после остановки."
+            : "Контейнер продолжит работать сейчас, но сможет уснуть при простое.",
+        },
+      );
+    },
+    onError: (err: unknown) => {
+      toast.error("Не удалось изменить режим контейнера", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    },
+  });
+
   const deployMut = useMutation({
     mutationFn: () => deployProject(projectId),
     onSuccess: (d) => {
@@ -222,7 +244,11 @@ export function RuntimeButton({
     deployQuery.data?.phase ?? "",
   );
   const busy =
-    startMut.isPending || stopMut.isPending || deployMut.isPending || activeDeploy;
+    startMut.isPending ||
+    stopMut.isPending ||
+    keepAliveMut.isPending ||
+    deployMut.isPending ||
+    activeDeploy;
 
   if (isPending) {
     return (
@@ -283,6 +309,31 @@ export function RuntimeButton({
         )}
       </Badge>
 
+      <Button
+        size="sm"
+        variant={runtime?.keep_alive ? "secondary" : "ghost"}
+        aria-pressed={runtime?.keep_alive ?? false}
+        disabled={busy}
+        onClick={() => keepAliveMut.mutate(!runtime?.keep_alive)}
+        className={cn(
+          "gap-1.5 h-7 px-2 text-xs",
+          runtime?.keep_alive && "text-success",
+          panel && "h-9 w-full rounded-xl",
+        )}
+        title={
+          runtime?.keep_alive
+            ? "Отключить постоянную работу и снова разрешить автоусыпление"
+            : "Не усыплять dev-контейнер и автоматически поднимать его после остановки"
+        }
+      >
+        {keepAliveMut.isPending ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <InfinityIcon className="h-3 w-3" />
+        )}
+        {runtime?.keep_alive ? "Всегда запущено" : "Не усыплять"}
+      </Button>
+
       {activeDeploy && (
         <Badge
           variant="accent"
@@ -340,7 +391,7 @@ export function RuntimeButton({
 
       {state === "running" && (
         <>
-          {!panel && (
+          {!panel && !runtime?.keep_alive && (
             <Button
               size="sm"
               variant="secondary"

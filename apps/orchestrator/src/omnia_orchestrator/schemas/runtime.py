@@ -49,6 +49,16 @@ class StopRequest(BaseModel):
     pause: bool = True  # True = docker pause (keep memory), False = docker stop
 
 
+class KeepAliveRequest(BaseModel):
+    project_id: UUID
+    enabled: bool
+
+
+class KeepAliveResponse(BaseModel):
+    project_id: UUID
+    enabled: bool
+
+
 class HotReloadRequest(BaseModel):
     project_id: UUID
     # files: dict path → content. Same shape as `<file path="...">...</file>` extraction
@@ -66,6 +76,7 @@ class StatusResponse(BaseModel):
     cpu_pct: float | None = None
     memory_mb: int | None = None
     logs_tail_url: str | None = None  # signed url for last 200 lines
+    keep_alive: bool = False
     # Area C (DARK): {email, auth_secret} for the gate's seed operator account,
     # populated ONLY when the orchestrator runs with OMNIA_GATE_SEED=1. Null on
     # every normal deployment, so the public contract is unchanged.

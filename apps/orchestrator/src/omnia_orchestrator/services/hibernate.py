@@ -42,7 +42,9 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import docker  # type: ignore[import-untyped]
 import structlog
@@ -69,6 +71,39 @@ _redis_client: Any = None  # redis.asyncio.Redis | None — lazy import
 _SWEEP_INTERVAL_SECONDS = 60
 # Backoff between Redis reconnect attempts on the pubsub side.
 _PUBSUB_RECONNECT_BACKOFF_SECONDS = 5
+_KEEP_ALIVE_MARKER = ".omnia-keep-alive"
+
+
+def _keep_alive_path(project_id: str) -> Path:
+    """Durable per-project flag that survives orchestrator restarts."""
+    project_key = str(UUID(project_id))
+    return Path(get_settings().projects_root) / project_key / _KEEP_ALIVE_MARKER
+
+
+def is_keep_alive_enabled(project_id: str) -> bool:
+    """Return whether automatic hibernation is disabled for this project."""
+    try:
+        return _keep_alive_path(project_id).is_file()
+    except ValueError:
+        # A malformed Docker label must not abort hibernation for every other
+        # tenant in the sweep.
+        return False
+
+
+async def set_keep_alive(project_id: str, enabled: bool) -> None:
+    """Persist the always-running mode outside the disposable container."""
+
+    def _write() -> None:
+        marker = _keep_alive_path(project_id)
+        if enabled:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch(exist_ok=True)
+        else:
+            marker.unlink(missing_ok=True)
+
+    await asyncio.to_thread(_write)
+    if enabled:
+        await record_activity(project_id)
 
 
 def _tier_threshold_seconds(tier: str) -> int:
@@ -112,9 +147,7 @@ def _list_dev_containers() -> list[tuple[str, str, str, str]]:
         project_id = labels.get("omnia.project_id")
         if not project_id:
             continue
-        out.append(
-            (c.name, c.status, project_id, labels.get("omnia.tier", "free"))
-        )
+        out.append((c.name, c.status, project_id, labels.get("omnia.tier", "free")))
     return out
 
 
@@ -183,6 +216,31 @@ async def _sweep_once() -> None:
         return
 
     for name, status, project_id, tier in containers:
+        if is_keep_alive_enabled(project_id):
+            # "Always running" is an operational promise, not only a request
+            # to skip this sweep. Heal a manually stopped / unexpectedly
+            # exited dev container as well. API provisioning handles the case
+            # where no container exists yet.
+            if status != "running":
+                try:
+                    await docker_client.wake_container(name)
+                    await record_activity(project_id)
+                    log.info(
+                        "hibernate.keep_alive_woke",
+                        project_id=project_id,
+                        container=name,
+                    )
+                except OrchestratorError as exc:
+                    log.warning(
+                        "hibernate.keep_alive_wake_failed",
+                        project_id=project_id,
+                        container=name,
+                        err=exc.message,
+                    )
+            else:
+                _last_activity[project_id] = now
+            continue
+
         if status != "running":
             continue  # already paused / stopped / exited — nothing to do
 

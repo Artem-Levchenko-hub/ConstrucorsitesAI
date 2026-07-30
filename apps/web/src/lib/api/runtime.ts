@@ -47,6 +47,19 @@ export async function stopRuntime(
   });
 }
 
+export async function setRuntimeKeepAlive(
+  projectId: Uuid,
+  enabled: boolean,
+): Promise<RuntimeStatus> {
+  return apiFetch<RuntimeStatus>(
+    `/api/projects/${projectId}/runtime/keep-alive`,
+    {
+      method: "POST",
+      json: { enabled },
+    },
+  );
+}
+
 export async function deployProject(
   projectId: Uuid,
   commitSha?: string,

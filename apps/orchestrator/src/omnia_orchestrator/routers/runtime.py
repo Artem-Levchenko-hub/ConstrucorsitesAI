@@ -42,6 +42,8 @@ from omnia_orchestrator.schemas.runtime import (
     DeployRequest,
     DeployResponse,
     HotReloadRequest,
+    KeepAliveRequest,
+    KeepAliveResponse,
     LogsResponse,
     ProvisionRequest,
     ProvisionResponse,
@@ -59,7 +61,11 @@ from omnia_orchestrator.services import (
     nginx_writer,
 )
 from omnia_orchestrator.services.compile_status import parse_next_compile_error
-from omnia_orchestrator.services.hibernate import record_activity
+from omnia_orchestrator.services.hibernate import (
+    is_keep_alive_enabled,
+    record_activity,
+    set_keep_alive,
+)
 from omnia_orchestrator.services.port_allocator import (
     get_port_allocator,
     get_prod_port_allocator,
@@ -202,6 +208,17 @@ async def heartbeat(
     _verify_token(x_internal_token)
     await record_activity(project_id)
     return {"state": "recorded"}
+
+
+@router.post("/keep-alive", response_model=KeepAliveResponse)
+async def keep_alive(
+    payload: KeepAliveRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> KeepAliveResponse:
+    """Enable or disable the durable no-hibernation mode for a project."""
+    _verify_token(x_internal_token)
+    await set_keep_alive(str(payload.project_id), payload.enabled)
+    return KeepAliveResponse(project_id=payload.project_id, enabled=payload.enabled)
 
 
 @router.post("/stop", response_model=WakeResponse)
@@ -755,14 +772,23 @@ async def status(
     from uuid import UUID
 
     name = await find_project_container(project_id, kind="dev")
+    keep_alive = is_keep_alive_enabled(project_id)
     if name is None and slug:
         name = f"omnia-dev-{slug}"
     if name is None:
-        return StatusResponse(project_id=UUID(project_id), state="stopped")
+        return StatusResponse(
+            project_id=UUID(project_id),
+            state="stopped",
+            keep_alive=keep_alive,
+        )
 
     info = await docker_container_status(name)
     if info["state"] == "not_found":
-        return StatusResponse(project_id=UUID(project_id), state="stopped")
+        return StatusResponse(
+            project_id=UUID(project_id),
+            state="stopped",
+            keep_alive=keep_alive,
+        )
 
     state_map = {
         "running": "running",
@@ -796,6 +822,7 @@ async def status(
         container_name=name,
         port=int(info["port"]) if info["port"] else None,
         dev_url=nginx_writer.dev_url(derived_slug) if derived_slug else None,
+        keep_alive=keep_alive,
         gate_seed=gate_seed,
     )
 

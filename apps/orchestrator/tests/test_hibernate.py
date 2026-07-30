@@ -19,6 +19,7 @@ regresses; the docker SDK glue is covered separately in docker_client tests
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -28,7 +29,7 @@ from omnia_orchestrator.services import hibernate
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Reset settings + module state for every test."""
     monkeypatch.setenv(
         "DATABASE_URL",
@@ -38,6 +39,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HIBERNATE_FREE_TIER_MINUTES", "15")
     monkeypatch.setenv("HIBERNATE_PRO_TIER_MINUTES", "60")
     monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path / "projects"))
     from omnia_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
@@ -99,6 +101,59 @@ async def test_record_activity_overwrites_existing() -> None:
     hibernate._last_activity[pid] = 0.0  # ancient
     await hibernate.record_activity(pid)
     assert hibernate._last_activity[pid] > 1_000_000_000  # not the ancient one
+
+
+# ---------- durable keep-alive mode ----------
+
+
+async def test_keep_alive_flag_is_durable_and_reversible() -> None:
+    pid = "00000000-0000-0000-0000-000000000003"
+    assert hibernate.is_keep_alive_enabled(pid) is False
+
+    await hibernate.set_keep_alive(pid, True)
+    assert hibernate.is_keep_alive_enabled(pid) is True
+    assert pid in hibernate._last_activity
+
+    await hibernate.set_keep_alive(pid, False)
+    assert hibernate.is_keep_alive_enabled(pid) is False
+
+
+async def test_sweep_never_hibernates_keep_alive_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid = "00000000-0000-0000-0000-000000000004"
+    await hibernate.set_keep_alive(pid, True)
+    hibernate._last_activity[pid] = time.time() - 24 * 60 * 60
+    monkeypatch.setattr(
+        hibernate,
+        "_list_dev_containers",
+        lambda: [("omnia-dev-always", "running", pid, "free")],
+    )
+    stop_mock = AsyncMock()
+    monkeypatch.setattr(hibernate.docker_client, "stop_container", stop_mock)
+
+    await hibernate._sweep_once()
+
+    stop_mock.assert_not_called()
+    assert hibernate._last_activity[pid] > time.time() - 2
+
+
+async def test_sweep_wakes_stopped_keep_alive_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid = "00000000-0000-0000-0000-000000000005"
+    await hibernate.set_keep_alive(pid, True)
+    monkeypatch.setattr(
+        hibernate,
+        "_list_dev_containers",
+        lambda: [("omnia-dev-always", "exited", pid, "free")],
+    )
+    wake_mock = AsyncMock()
+    monkeypatch.setattr(hibernate.docker_client, "wake_container", wake_mock)
+
+    await hibernate._sweep_once()
+
+    wake_mock.assert_awaited_once_with("omnia-dev-always")
 
 
 # ---------- network-activity probe ----------

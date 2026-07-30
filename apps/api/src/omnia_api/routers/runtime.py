@@ -39,6 +39,7 @@ from omnia_api.schemas.project import orchestrator_template
 from omnia_api.schemas.runtime import (
     DeployRequest,
     DeployStatus,
+    RuntimeKeepAliveRequest,
     RuntimeLogs,
     RuntimeStatus,
     RuntimeStopRequest,
@@ -78,6 +79,7 @@ def _to_runtime_status(payload: dict[str, Any]) -> RuntimeStatus:
         dev_url=payload.get("dev_url"),
         last_active_at=payload.get("last_active_at"),
         hibernate_after_seconds=payload.get("hibernate_after_seconds"),
+        keep_alive=bool(payload.get("keep_alive")),
     )
 
 
@@ -262,6 +264,28 @@ async def stop_runtime(
     await _project_owned_by(session, project_id, current_user.id)
     pause = body.pause if body is not None else True
     payload = await orchestrator_client.stop(project_id, pause=pause)
+    return _to_runtime_status(payload)
+
+
+@router.post("/{project_id}/runtime/keep-alive", response_model=RuntimeStatus)
+async def set_runtime_keep_alive(
+    project_id: UUID,
+    body: RuntimeKeepAliveRequest,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> RuntimeStatus:
+    """Keep the dev runtime hot across inactivity and orchestrator restarts."""
+    await _project_owned_by(session, project_id, current_user.id)
+    if body.enabled:
+        # Provision or wake first. Only persist the promise after a successful
+        # start, so the UI never says "always running" for a runtime that could
+        # not be created.
+        runtime = await start_runtime(project_id, session, current_user)
+        await orchestrator_client.set_keep_alive(project_id, enabled=True)
+        return runtime.model_copy(update={"keep_alive": True, "hibernate_after_seconds": None})
+
+    await orchestrator_client.set_keep_alive(project_id, enabled=False)
+    payload = await orchestrator_client.get_status(project_id)
     return _to_runtime_status(payload)
 
 

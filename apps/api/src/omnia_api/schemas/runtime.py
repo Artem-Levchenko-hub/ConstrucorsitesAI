@@ -40,6 +40,9 @@ class RuntimeStatus(BaseModel):
     last_active_at: str | None = None
     # Idle time before automatic hibernation (seconds, tier-dependent).
     hibernate_after_seconds: int | None = None
+    # True means the dev container is excluded from automatic hibernation and
+    # the orchestrator will wake it again if it unexpectedly stops.
+    keep_alive: bool = False
 
 
 class RuntimeStopRequest(BaseModel):
@@ -47,6 +50,10 @@ class RuntimeStopRequest(BaseModel):
         default=True,
         description="True = docker pause (faster wake, keeps RAM). False = docker stop.",
     )
+
+
+class RuntimeKeepAliveRequest(BaseModel):
+    enabled: bool
 
 
 class DeployRequest(BaseModel):

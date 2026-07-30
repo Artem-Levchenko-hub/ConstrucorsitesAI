@@ -182,6 +182,15 @@ async def stop(project_id: UUID, *, pause: bool = True) -> dict[str, Any]:
     )
 
 
+async def set_keep_alive(project_id: UUID, *, enabled: bool) -> dict[str, Any]:
+    """Persist whether the project's dev runtime may be auto-hibernated."""
+    return await _request(
+        "POST",
+        "/internal/projects/keep-alive",
+        json={"project_id": str(project_id), "enabled": enabled},
+    )
+
+
 async def deploy(
     project_id: UUID,
     *,

@@ -541,6 +541,7 @@ export type RuntimeStatus = {
   dev_url: string | null;
   last_active_at: IsoDateTime | null;
   hibernate_after_seconds: number | null;
+  keep_alive: boolean;
 };
 
 export type DeployPhase =
