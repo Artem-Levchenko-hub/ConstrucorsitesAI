@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -16,6 +17,7 @@ from omnia_api.schemas.max_studio import (
 )
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
+    _template_candidates,
     render_max_managed_files,
 )
 
@@ -66,14 +68,24 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert '"price": "290 ₽"' in config
     assert "as const" in config
     assert "max_url_attached" not in config
-    assert str(project_id) in files[
-        "src/app/api/omnia/integrations/[...path]/route.ts"
-    ]
+    assert str(project_id) in files["src/app/api/omnia/integrations/[...path]/route.ts"]
     preview_route = files["src/app/api/omnia/preview-session/route.ts"]
     assert 'process.env.NODE_ENV !== "development"' in preview_route
     assert "partitioned: true" in preview_route
     assert "PREVIEW_SESSION_MAX_AGE_SECONDS" in preview_route
     assert "options: { maxAge?: number } = {}" in files["src/lib/max/session.ts"]
+
+
+def test_template_lookup_does_not_depend_on_repository_depth() -> None:
+    candidates = _template_candidates(
+        "missing.ts",
+        Path("/app/src/omnia_api/services/max_project_kit.py"),
+    )
+
+    assert len(candidates) >= 2
+    assert (
+        candidates[0].as_posix().endswith("/orchestrator/templates/max-miniapp-nextjs/missing.ts")
+    )
 
 
 def test_managed_kit_never_contains_model_or_generation_calls() -> None:
@@ -85,9 +97,7 @@ def test_managed_kit_never_contains_model_or_generation_calls() -> None:
     assert "generate(" not in combined
 
 
-async def test_config_save_is_versioned_and_idempotent(
-    db_session, monkeypatch
-) -> None:
+async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) -> None:
     user = User(email=f"max-{uuid4()}@example.ru")
     db_session.add(user)
     await db_session.flush()
@@ -149,9 +159,7 @@ async def test_config_save_is_versioned_and_idempotent(
     # business config and current snapshot are otherwise unchanged.
     saved.managed_kit_version = MAX_MANAGED_KIT_VERSION - 1
     await db_session.commit()
-    upgraded = await max_studio.put_max_config(
-        project.id, _config(), db_session, user
-    )
+    upgraded = await max_studio.put_max_config(project.id, _config(), db_session, user)
     repeated_after_upgrade = await max_studio.put_max_config(
         project.id, _config(), db_session, user
     )

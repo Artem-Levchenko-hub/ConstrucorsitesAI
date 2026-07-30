@@ -16,18 +16,23 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 MAX_MANAGED_KIT_VERSION = 3
 
 
+def _template_candidates(
+    relative_path: str,
+    source_file: Path | None = None,
+) -> tuple[Path, ...]:
+    source = (source_file or Path(__file__)).resolve()
+    return (
+        Path("/orchestrator/templates/max-miniapp-nextjs") / relative_path,
+        *(
+            parent / "apps" / "orchestrator" / "templates" / "max-miniapp-nextjs" / relative_path
+            for parent in source.parents
+        ),
+    )
+
+
 def _template_file(relative_path: str) -> str:
     """Read one platform-owned MAX template file from dev or the API mount."""
-    candidates = (
-        Path("/orchestrator/templates/max-miniapp-nextjs") / relative_path,
-        Path(__file__).resolve().parents[5]
-        / "apps"
-        / "orchestrator"
-        / "templates"
-        / "max-miniapp-nextjs"
-        / relative_path,
-    )
-    for candidate in candidates:
+    for candidate in _template_candidates(relative_path):
         if candidate.is_file():
             return candidate.read_text(encoding="utf-8")
     raise RuntimeError(f"MAX managed template file is unavailable: {relative_path}")
