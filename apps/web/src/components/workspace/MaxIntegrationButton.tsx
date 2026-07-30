@@ -34,6 +34,7 @@ import {
   verifyMaxIntegration,
 } from "@/lib/api/max-integration";
 import { getProject } from "@/lib/api/projects";
+import { canActivateMaxWebhook } from "@/lib/max-integration-flow";
 
 function message(error: unknown): string {
   return error instanceof ApiError ? error.message : "Не удалось выполнить действие";
@@ -72,6 +73,7 @@ export function MaxIntegrationButton({
     mutationFn: () => connectMaxIntegration(projectId, token),
     onSuccess: (data) => {
       qc.setQueryData(queryKey, data);
+      void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       setToken("");
       toast.success("MAX-бот подключён");
     },
@@ -82,6 +84,7 @@ export function MaxIntegrationButton({
     mutationFn: () => verifyMaxIntegration(projectId),
     onSuccess: (data) => {
       qc.setQueryData(queryKey, data);
+      void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       toast.success("Подключение MAX работает");
     },
     onError: (error) =>
@@ -91,6 +94,8 @@ export function MaxIntegrationButton({
     mutationFn: () => activateMaxIntegration(projectId),
     onSuccess: (data) => {
       qc.setQueryData(queryKey, data);
+      void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
+      void qc.invalidateQueries({ queryKey: ["deploy", projectId] });
       toast.success("Webhook MAX активирован");
     },
     onError: (error) =>
@@ -99,7 +104,8 @@ export function MaxIntegrationButton({
   const disconnect = useMutation({
     mutationFn: () => disconnectMaxIntegration(projectId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey });
+      void qc.invalidateQueries({ queryKey });
+      void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       toast.success("Интеграция MAX отключена");
     },
     onError: (error) =>
@@ -107,6 +113,7 @@ export function MaxIntegrationButton({
   });
 
   const data = integration.data;
+  const activationReady = canActivateMaxWebhook(data);
   const busy =
     connect.isPending ||
     verify.isPending ||
@@ -241,8 +248,13 @@ export function MaxIntegrationButton({
                   Проверить
                 </Button>
                 <Button
-                  disabled={busy}
+                  disabled={busy || !activationReady}
                   onClick={() => activate.mutate()}
+                  title={
+                    activationReady
+                      ? "Активировать защищённый webhook MAX"
+                      : "Сначала опубликуйте приложение на стабильном HTTPS-адресе"
+                  }
                   data-testid="max-activate"
                 >
                   {activate.isPending ? (
@@ -250,7 +262,7 @@ export function MaxIntegrationButton({
                   ) : (
                     <Radio className="mr-1.5 h-3.5 w-3.5" />
                   )}
-                  Активировать
+                  {activationReady ? "Активировать" : "Сначала опубликуйте"}
                 </Button>
               </div>
 
