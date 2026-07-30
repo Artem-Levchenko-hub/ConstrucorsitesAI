@@ -16,6 +16,7 @@ from omnia_api.core.errors import (
 )
 from omnia_api.core.redis import dispose_redis
 from omnia_api.routers import account as account_router
+from omnia_api.routers import app_integrations as app_integrations_router
 from omnia_api.routers import auth as auth_router
 from omnia_api.routers import deploy_targets as deploy_targets_router
 from omnia_api.routers import design_presets as design_presets_router
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router.router)
     app.include_router(account_router.router)
+    app.include_router(app_integrations_router.router)
     app.include_router(account_router.legal_router)
     app.include_router(github_router.router)
     app.include_router(projects_router.router)

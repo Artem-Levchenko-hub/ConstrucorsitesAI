@@ -64,6 +64,11 @@ ErrorCode = Literal[
     "max_project_required",
     "max_deploy_required",
     "max_webhook_failed",
+    "integration_not_found",
+    "integration_credentials_invalid",
+    "integration_credentials_corrupted",
+    "integration_provider_unavailable",
+    "integration_connection_failed",
     # MAX Studio account, legal and payment lifecycle.
     "max_registration_required",
     "email_verification_required",

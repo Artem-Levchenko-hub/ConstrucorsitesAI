@@ -8,6 +8,7 @@ from omnia_api.models.account import (
     Payment,
     WalletLedgerEntry,
 )
+from omnia_api.models.app_integration import AppIntegration
 from omnia_api.models.attestation import Attestation
 from omnia_api.models.base import Base
 from omnia_api.models.custom_domain import CustomDomain
@@ -28,6 +29,7 @@ from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
 
 __all__ = [
+    "AppIntegration",
     "Attestation",
     "AuthSession",
     "AuthToken",

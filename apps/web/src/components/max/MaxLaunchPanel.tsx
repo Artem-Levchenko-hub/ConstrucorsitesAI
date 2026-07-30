@@ -4,15 +4,19 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Check,
   ChevronDown,
+  ChevronRight,
   ExternalLink,
   Loader2,
   PanelRightClose,
+  Plug,
   ShieldCheck,
 } from "lucide-react";
+import Link from "next/link";
 
 import { getMaxIntegration } from "@/lib/api/max-integration";
 import { getLastDeploy } from "@/lib/api/runtime";
 import type { Project } from "@/lib/api/types";
+import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
 import { RuntimeButton } from "@/components/workspace/RuntimeButton";
@@ -190,6 +194,19 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
               label="MAX-бот"
             />
           </div>
+          <Button
+            asChild
+            variant="secondary"
+            className="h-10 w-full justify-between border-white/[0.1] bg-white/[0.035] px-3 text-xs text-white/70 hover:bg-white/[0.07] hover:text-white"
+          >
+            <Link href={`/max/${project.id}/integrations`}>
+              <span className="flex items-center gap-2">
+                <Plug className="h-3.5 w-3.5 text-[#7897f4]" />
+                Интеграции
+              </span>
+              <ChevronRight className="h-3.5 w-3.5 text-white/25" />
+            </Link>
+          </Button>
           <MaxLaunchButton projectId={project.id} />
           <RuntimeButton projectId={project.id} display="compact" />
         </section>

@@ -485,6 +485,11 @@ export type ApiErrorCode =
   | "max_project_required"
   | "max_deploy_required"
   | "max_webhook_failed"
+  | "integration_not_found"
+  | "integration_credentials_invalid"
+  | "integration_credentials_corrupted"
+  | "integration_provider_unavailable"
+  | "integration_connection_failed"
   | "max_registration_required"
   | "email_verification_required"
   | "business_profile_required"
@@ -518,6 +523,57 @@ export type MaxIntegration = {
   last_error: string | null;
   verified_at: IsoDateTime | null;
   published_at: IsoDateTime | null;
+};
+
+export type IntegrationCategory =
+  | "payments"
+  | "restaurant"
+  | "crm"
+  | "inventory"
+  | "analytics"
+  | "booking"
+  | "delivery";
+
+export type IntegrationField = {
+  key: string;
+  label: string;
+  placeholder: string;
+  help: string;
+  secret: boolean;
+  required: boolean;
+};
+
+export type IntegrationProvider = {
+  key: string;
+  name: string;
+  category: IntegrationCategory;
+  description: string;
+  capabilities: string[];
+  fields: IntegrationField[];
+  available: boolean;
+  recommended: boolean;
+  requirement: string | null;
+  docs_url: string;
+};
+
+export type AppIntegration = {
+  id: Uuid;
+  provider: string;
+  status: "active" | "error";
+  account_label: string | null;
+  public_config: Record<string, string>;
+  capabilities: string[];
+  configured_fields: string[];
+  last_error: string | null;
+  verified_at: IsoDateTime | null;
+  last_checked_at: IsoDateTime | null;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+};
+
+export type IntegrationCatalog = {
+  providers: IntegrationProvider[];
+  connections: AppIntegration[];
 };
 
 export type MaxContentItem = {
