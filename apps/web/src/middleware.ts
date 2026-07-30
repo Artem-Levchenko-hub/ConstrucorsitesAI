@@ -30,8 +30,10 @@ export function middleware(req: NextRequest) {
   const session = req.cookies.get(AUTH_COOKIE);
   const path = req.nextUrl.pathname;
   const isGeneralAuthRoute = path === "/login" || path === "/register";
-  const isPublicMaxAuthRoute =
-    path === "/max/register" || path === "/max/verify-email";
+  const isPublicMaxRoute =
+    path === "/max/product" ||
+    path === "/max/register" ||
+    path === "/max/verify-email";
 
   // Already signed-in user hitting /login or /register → honour ?next= so
   // the landing-page CTA "Войти" lands directly on whatever path it asked
@@ -47,7 +49,7 @@ export function middleware(req: NextRequest) {
   const isProtectedRoute =
     path.startsWith("/projects") || path === "/max" || path.startsWith("/max/");
 
-  if (!session && !isGeneralAuthRoute && !isPublicMaxAuthRoute && isProtectedRoute) {
+  if (!session && !isGeneralAuthRoute && !isPublicMaxRoute && isProtectedRoute) {
     const url = req.nextUrl.clone();
     url.pathname = path.startsWith("/max") ? "/max/register" : "/login";
     // Preserve where the user actually wanted to land — including any
