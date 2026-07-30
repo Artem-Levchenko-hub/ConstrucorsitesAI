@@ -17,6 +17,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "weekly",
       priority: 1.0,
     },
+    ...["web-apps", "landings", "apps"].map((path) => ({
+      url: `${PUBLIC_ORIGIN}/${path}`,
+      lastModified: now,
+      changeFrequency: "monthly" as const,
+      priority: 0.6,
+    })),
     {
       url: `${PUBLIC_ORIGIN}/login`,
       lastModified: now,

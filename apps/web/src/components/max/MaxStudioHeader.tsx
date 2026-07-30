@@ -6,6 +6,7 @@ import { ArrowLeft, ChevronDown, LogOut, Settings, User } from "lucide-react";
 import { logoutAction } from "@/app/(auth)/actions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "@/components/marketing/BrandMark";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,31 +26,21 @@ export function MaxStudioHeader({
   const initial = email.slice(0, 1).toUpperCase();
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.07] bg-[#0b0c12]/90 px-5 backdrop-blur-xl sm:px-8">
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.12] bg-[#121310]/95 px-5 backdrop-blur-xl sm:px-8">
       <div className="flex min-w-0 items-center gap-3">
+        <BrandMark inverse href="/max" />
+        <span className="h-5 w-px bg-white/20" aria-hidden />
         <Link
           href="/max"
-          className="flex min-w-0 items-center gap-3"
+          className="truncate text-sm font-medium text-white/70 transition-colors hover:text-white"
           aria-label="MAX Studio — главная"
         >
-          <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-[12px] bg-[linear-gradient(145deg,#7468ff,#5b5cff)] shadow-[0_10px_30px_-10px_rgba(102,92,255,0.9)]">
-            <span className="h-3.5 w-4 rounded-[5px] border-2 border-white after:absolute after:bottom-[8px] after:left-[11px] after:h-1.5 after:w-1.5 after:rotate-45 after:border-b-2 after:border-r-2 after:border-white" />
-          </span>
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold tracking-tight text-white">
-              MAX Studio
-            </span>
-            {!compact && (
-              <span className="hidden text-[11px] text-white/40 sm:block">
-                от Omnia.AI
-              </span>
-            )}
-          </span>
+          MAX Studio
         </Link>
         {compact && (
-          <span className="hidden items-center gap-2 text-xs text-white/35 sm:flex">
+          <span className="hidden items-center gap-2 text-xs text-white/30 sm:flex">
             <span>/</span>
-            <span>Конструктор мини-приложений</span>
+            <span>Редактор</span>
           </span>
         )}
       </div>
@@ -59,7 +50,7 @@ export function MaxStudioHeader({
           asChild
           variant="ghost"
           size="sm"
-          className="hidden text-white/60 hover:bg-white/[0.06] hover:text-white sm:inline-flex"
+          className="hidden text-white/55 hover:bg-white/[0.06] hover:text-white sm:inline-flex"
         >
           <Link href="/projects">
             <ArrowLeft className="h-3.5 w-3.5" />

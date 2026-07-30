@@ -103,7 +103,7 @@ export function MaxOnboarding({ email }: { email: string }) {
   if (access.isLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
-        <Loader2 className="size-6 animate-spin text-[#8175ff]" />
+        <Loader2 className="size-6 animate-spin text-[#7897f4]" />
       </div>
     );
   }
@@ -118,9 +118,9 @@ export function MaxOnboarding({ email }: { email: string }) {
   }
 
   return (
-    <main className="max-studio-scroll flex-1 overflow-y-auto bg-[#0b0c12] px-5 py-10 text-white">
+    <main className="max-studio-scroll flex-1 overflow-y-auto bg-[#121310] px-5 py-10 text-white">
       <div className="mx-auto max-w-4xl">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#8d83ff]">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#7897f4]">
           Настройка владельца
         </p>
         <div className="mt-3 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
@@ -150,7 +150,7 @@ export function MaxOnboarding({ email }: { email: string }) {
                   complete
                     ? "border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-200"
                     : index + 1 === step
-                      ? "border-[#7569ff]/35 bg-[#7569ff]/10"
+                      ? "border-[#7897f4]/45 bg-[#315bd7]/12"
                       : "border-white/[0.08] text-white/35",
                 )}
               >
@@ -162,8 +162,8 @@ export function MaxOnboarding({ email }: { email: string }) {
         </div>
 
         {!data?.email_verified && (
-          <section className="mt-8 rounded-[28px] border border-white/10 bg-[#141620] p-6 sm:p-8">
-            <MailCheck className="size-6 text-[#8d83ff]" />
+          <section className="mt-8 rounded-xl border border-white/10 bg-[#1a1b18] p-6 sm:p-8">
+            <MailCheck className="size-6 text-[#7897f4]" />
             <h2 className="mt-5 text-2xl font-semibold">Подтвердите рабочий email</h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-white/50">
               Мы отправили ссылку на <span className="text-white">{email}</span>.
@@ -196,9 +196,9 @@ export function MaxOnboarding({ email }: { email: string }) {
         {data?.email_verified && !business && (
           <form
             onSubmit={submit}
-            className="mt-8 rounded-[28px] border border-white/10 bg-[#141620] p-6 sm:p-8"
+            className="mt-8 rounded-xl border border-white/10 bg-[#1a1b18] p-6 sm:p-8"
           >
-            <UserRoundCheck className="size-6 text-[#8d83ff]" />
+            <UserRoundCheck className="size-6 text-[#7897f4]" />
             <h2 className="mt-5 text-2xl font-semibold">Кто владеет приложением?</h2>
             <p className="mt-2 text-sm text-white/45">
               Тип должен совпадать с владельцем MAX-бота.
@@ -216,7 +216,7 @@ export function MaxOnboarding({ email }: { email: string }) {
                   className={cn(
                     "rounded-2xl border p-4 text-left transition",
                     kind === item.id
-                      ? "border-[#7569ff]/60 bg-[#7569ff]/12"
+                      ? "border-[#7897f4]/60 bg-[#315bd7]/14"
                       : "border-white/[0.08] hover:border-white/20",
                   )}
                 >
@@ -281,7 +281,7 @@ export function MaxOnboarding({ email }: { email: string }) {
 
             <Button
               disabled={save.isPending}
-              className="mt-7 h-12 rounded-xl bg-[#6f5cf5] px-6 hover:bg-[#7b69ff]"
+              className="mt-7 h-12 rounded-md bg-[#315bd7] px-6 hover:bg-[#2449b7]"
             >
               {save.isPending ? (
                 <Loader2 className="mr-2 size-4 animate-spin" />
@@ -294,7 +294,7 @@ export function MaxOnboarding({ email }: { email: string }) {
         )}
 
         {business && business.status !== "verified" && (
-          <section className="mt-8 rounded-[28px] border border-white/10 bg-[#141620] p-6 sm:p-8">
+          <section className="mt-8 rounded-xl border border-white/10 bg-[#1a1b18] p-6 sm:p-8">
             <div className="flex size-11 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300">
               {business.status === "rejected" ? (
                 <CircleAlert className="size-5" />

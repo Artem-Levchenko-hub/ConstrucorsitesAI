@@ -636,7 +636,7 @@ export function PreviewFrame({
                     <motion.span
                       layoutId="preview-tab-pill"
                       transition={springSnappy}
-                      className="absolute inset-0 rounded-full bg-accent-subtle ring-1 ring-inset ring-[rgba(124,92,255,0.25)]"
+                      className="absolute inset-0 rounded-full bg-accent-subtle ring-1 ring-inset ring-[rgba(49,91,215,0.3)]"
                     />
                   )}
                   <Icon className="relative z-10 h-3 w-3" />

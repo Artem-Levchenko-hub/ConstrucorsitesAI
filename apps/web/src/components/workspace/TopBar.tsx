@@ -38,6 +38,7 @@ import { PublishButton } from "./PublishButton";
 import { RuntimeButton } from "./RuntimeButton";
 import { WalletBadge } from "./WalletBadge";
 import { LocaleSwitcher } from "@/components/LocaleSwitcher";
+import { BrandMark } from "@/components/marketing/BrandMark";
 
 export function TopBar({
   user,
@@ -78,16 +79,20 @@ export function TopBar({
   const maxMode = workspaceMode === "max";
 
   return (
-    <header className="shrink-0 h-14 flex items-center justify-between gap-3 px-6 bg-[rgba(13,13,18,0.72)] backdrop-blur-xl">
+    <header className="shrink-0 h-14 flex items-center justify-between gap-3 border-b border-white/[0.1] bg-[#121310]/95 px-6 backdrop-blur-xl">
       <div className="flex shrink-0 items-center gap-4">
-        <Link
-          href={maxMode ? "/max" : "/projects"}
-          aria-label={maxMode ? "К MAX-приложениям" : "К проектам Omnia.AI"}
-          className="flex shrink-0 items-center gap-2 text-fg-primary font-semibold tracking-tight"
-        >
-          <span className="inline-block h-6 w-6 rounded-lg bg-[linear-gradient(135deg,#7c5cff_0%,#a48aff_100%)] shadow-[0_4px_12px_-2px_rgba(124,92,255,0.5)]" />
-          <span className="hidden sm:inline">{maxMode ? "MAX Studio" : "Omnia.AI"}</span>
-        </Link>
+        <BrandMark inverse href={maxMode ? "/max" : "/projects"} />
+        {maxMode && (
+          <>
+            <span className="h-5 w-px bg-white/20" aria-hidden />
+            <Link
+              href="/max"
+              className="hidden text-sm font-medium text-white/65 hover:text-white sm:inline"
+            >
+              MAX Studio
+            </Link>
+          </>
+        )}
 
         {projectName && (
           <>

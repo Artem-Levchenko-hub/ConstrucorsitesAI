@@ -61,11 +61,11 @@ export function MaxRegisterForm() {
             name="terms_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#7668ff]"
+            className="mt-1 size-4 accent-[#315bd7]"
           />
           <span className="text-white/65">
             Принимаю{" "}
-            <Link className="text-[#9b93ff] hover:underline" href="/legal/terms">
+            <Link className="text-[#7897f4] hover:underline" href="/legal/terms">
               условия использования
             </Link>
           </span>
@@ -75,11 +75,11 @@ export function MaxRegisterForm() {
             name="privacy_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#7668ff]"
+            className="mt-1 size-4 accent-[#315bd7]"
           />
           <span className="text-white/65">
             Ознакомлен с{" "}
-            <Link className="text-[#9b93ff] hover:underline" href="/legal/privacy">
+            <Link className="text-[#7897f4] hover:underline" href="/legal/privacy">
               политикой конфиденциальности
             </Link>
           </span>
@@ -89,12 +89,12 @@ export function MaxRegisterForm() {
             name="personal_data_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#7668ff]"
+            className="mt-1 size-4 accent-[#315bd7]"
           />
           <span className="text-white/65">
             Даю отдельное{" "}
             <Link
-              className="text-[#9b93ff] hover:underline"
+              className="text-[#7897f4] hover:underline"
               href="/legal/personal-data"
             >
               согласие на обработку персональных данных
@@ -105,7 +105,7 @@ export function MaxRegisterForm() {
           <input
             name="marketing_accepted"
             type="checkbox"
-            className="mt-1 size-4 accent-[#7668ff]"
+            className="mt-1 size-4 accent-[#315bd7]"
           />
           <span className="text-white/45">
             Получать новости продукта — необязательно
@@ -121,7 +121,7 @@ export function MaxRegisterForm() {
 
       <Button
         disabled={pending}
-        className="h-12 w-full rounded-xl bg-[#6f5cf5] text-base hover:bg-[#7b69ff]"
+        className="h-12 w-full rounded-md bg-[#315bd7] text-base hover:bg-[#2449b7]"
       >
         {pending ? "Создаём аккаунт…" : "Продолжить"}
         {!pending && <ArrowRight className="ml-2 size-4" />}
@@ -136,7 +136,7 @@ export function MaxRegisterForm() {
           const ItemIcon = Icon as typeof Building2;
           return (
             <div key={String(text)} className="flex items-center gap-2">
-              <ItemIcon className="size-3.5 text-[#8d83ff]" />
+              <ItemIcon className="size-3.5 text-[#7897f4]" />
               {String(text)}
             </div>
           );

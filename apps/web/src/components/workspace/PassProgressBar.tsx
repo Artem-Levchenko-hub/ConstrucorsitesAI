@@ -273,12 +273,12 @@ export function PassProgressBar({
                     active
                       ? {
                           boxShadow: [
-                            "0 0 0 0 rgba(110,91,232,0.0)",
-                            "0 0 0 4px rgba(110,91,232,0.18)",
-                            "0 0 0 0 rgba(110,91,232,0.0)",
+                            "0 0 0 0 rgba(49,91,215,0.0)",
+                            "0 0 0 4px rgba(49,91,215,0.18)",
+                            "0 0 0 0 rgba(49,91,215,0.0)",
                           ],
                         }
-                      : { boxShadow: "0 0 0 0 rgba(110,91,232,0)" }
+                      : { boxShadow: "0 0 0 0 rgba(49,91,215,0)" }
                   }
                   transition={
                     active

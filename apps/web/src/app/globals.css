@@ -1,17 +1,15 @@
 @import "tailwindcss";
 
-/* Apple System Dark — hierarchy via material elevation + 0.5px hairlines, not glow.
-   Tailwind v4 generates utilities from --color-* / --font-* / --radius-* / --shadow-*. */
+/* Omnia product system: warm tool surfaces, precise borders and one cobalt
+   action colour. Marketing uses the same typography and geometry on a light
+   editorial canvas; workspaces keep the low-glare dark counterpart. */
 
 @theme {
-  /* Warm charcoal (not pure black) + violet/indigo accent — friendlier than the
-     cold #000/#0a84ff while keeping the engineering Apple-system feel. Base #0d0d12
-     matches the TopBar header rgba(13,13,18,…) so chrome reads as one surface. */
-  --color-bg-base: #0d0d12;
-  --color-bg-elevated-1: #1a1a20;
-  --color-surface: #26262e;
-  --color-surface-2: #34343e;
-  --color-surface-3: #43434e;
+  --color-bg-base: #121310;
+  --color-bg-elevated-1: #1a1b18;
+  --color-surface: #23241f;
+  --color-surface-2: #2d2e29;
+  --color-surface-3: #3a3b35;
 
   --color-separator: rgb(84 84 88 / 0.6);
   --color-separator-solid: #38383a;
@@ -21,7 +19,7 @@
   --color-label-3: rgb(235 235 245 / 0.3);
   --color-label-4: rgb(235 235 245 / 0.18);
 
-  --color-accent: #6e5be8;
+  --color-accent: #315bd7;
   --color-accent-fg: #ffffff;
 
   --color-system-red: #ff453a;
@@ -31,17 +29,17 @@
   --color-system-teal: #5ac8fa;
   --color-system-indigo: #5e5ce6;
 
-  --material-ultrathin-bg: rgb(26 26 32 / 0.5);
-  --material-thin-bg: rgb(26 26 32 / 0.65);
-  --material-regular-bg: rgb(26 26 32 / 0.78);
-  --material-thick-bg: rgb(26 26 32 / 0.87);
-  --material-ultrathick-bg: rgb(26 26 32 / 0.94);
+  --material-ultrathin-bg: rgb(26 27 24 / 0.5);
+  --material-thin-bg: rgb(26 27 24 / 0.68);
+  --material-regular-bg: rgb(26 27 24 / 0.8);
+  --material-thick-bg: rgb(26 27 24 / 0.89);
+  --material-ultrathick-bg: rgb(26 27 24 / 0.95);
 
   --radius-xs: 6px;
-  --radius-sm: 10px;
-  --radius-md: 14px;
-  --radius-lg: 22px;
-  --radius-xl: 28px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
   --radius-pill: 999px;
 
   --shadow-edge: 0 0.5px 0 var(--color-separator-solid);
@@ -56,24 +54,24 @@
     Menlo, Monaco, Consolas, monospace;
 
   /* Legacy aliases — kept until W2 component sweep replaces direct refs. */
-  --color-surface-base: #0d0d12;
-  --color-surface-raised: #1a1a20;
-  --color-surface-overlay: #26262e;
-  --color-surface-input: #1a1a20;
-  --color-surface-panel-dark: #0d0d12;
-  --color-surface-glass: rgb(26 26 32 / 0.65);
+  --color-surface-base: #121310;
+  --color-surface-raised: #1a1b18;
+  --color-surface-overlay: #23241f;
+  --color-surface-input: #1a1b18;
+  --color-surface-panel-dark: #121310;
+  --color-surface-glass: rgb(26 27 24 / 0.68);
   --color-border-subtle: rgb(84 84 88 / 0.6);
   --color-border-default: rgb(84 84 88 / 0.6);
   --color-border-strong: #38383a;
-  --color-border-accent: #6e5be8;
+  --color-border-accent: #315bd7;
   --color-fg-primary: rgb(255 255 255 / 1);
   --color-fg-secondary: rgb(235 235 245 / 0.6);
   --color-fg-tertiary: rgb(235 235 245 / 0.3);
   --color-fg-muted: rgb(235 235 245 / 0.18);
   --color-fg-on-accent: #ffffff;
-  --color-accent-hover: #5d4ad0;
-  --color-accent-subtle: rgb(110 91 232 / 0.14);
-  --color-accent-secondary: #9a86ff;
+  --color-accent-hover: #2449b7;
+  --color-accent-subtle: rgb(49 91 215 / 0.14);
+  --color-accent-secondary: #7897f4;
   --color-success: #32d74b;
   --color-warning: #ff9f0a;
   --color-danger: #ff453a;
@@ -98,6 +96,10 @@
     text-rendering: optimizeLegibility;
     overflow-x: clip;
     max-width: 100%;
+  }
+
+  [data-marketing] {
+    color-scheme: light;
   }
 
   ::selection {
@@ -152,6 +154,54 @@
   .hairline-top { box-shadow: 0 -0.5px 0 var(--color-separator-solid); }
 
   .tabular-nums { font-variant-numeric: tabular-nums; }
+
+  .marketing-kicker {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    line-height: 1rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .marketing-button {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid #171815;
+    padding: 0.65rem 1.1rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 600;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      transform 160ms ease;
+  }
+  .marketing-button:active { transform: translateY(1px); }
+  .marketing-button-primary {
+    background: #171815;
+    color: #ffffff;
+  }
+  .marketing-button-primary:hover { background: #315bd7; }
+  .marketing-button-secondary {
+    background: transparent;
+    color: #171815;
+  }
+  .marketing-button-secondary:hover { background: #e4e1d8; }
+
+  .product-state {
+    display: inline-flex;
+    min-height: 1.75rem;
+    align-items: center;
+    padding: 0 0.65rem;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    line-height: 1rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
 
   /* Elegant overlay-style scrollbar — kills the chunky native Windows bar
      (track + arrow buttons = the "worm"). Thin, rounded, translucent thumb on
@@ -222,18 +272,4 @@
     }
   }
 
-  /* Marketing hero — soft drifting accent glow for dark-theme depth (not flat).
-     Pure CSS; the global reduced-motion guard freezes the drift. */
-  .hero-glow {
-    position: absolute;
-    border-radius: 9999px;
-    filter: blur(80px);
-    pointer-events: none;
-    background: radial-gradient(circle, var(--color-accent) 0%, transparent 70%);
-    animation: omnia-hero-glow 14s var(--ease-system) infinite;
-  }
-  @keyframes omnia-hero-glow {
-    0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.4; }
-    50% { transform: translate3d(4%, -6%, 0) scale(1.18); opacity: 0.62; }
-  }
 }

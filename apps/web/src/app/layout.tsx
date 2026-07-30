@@ -41,15 +41,12 @@ export async function generateMetadata(): Promise<Metadata> {
     authors: [{ name: "Omnia.AI" }],
     generator: "Omnia.AI",
     keywords: [
-      "AI сайт-билдер",
-      "конструктор сайтов",
-      "сайт под ключ",
-      "AI генератор сайтов",
-      "лендинг по промпту",
-      "сайт на русском",
-      "GigaChat сайт",
-      "no-code сайт",
-      "сделать сайт без программиста",
+      "MAX Mini App",
+      "конструктор MAX",
+      "бот MAX",
+      "мини-приложение MAX",
+      "разработка цифровых продуктов",
+      "MAX Studio",
     ],
     alternates: {
       canonical: "/",
@@ -67,10 +64,10 @@ export async function generateMetadata(): Promise<Metadata> {
       url: PUBLIC_ORIGIN,
       images: [
         {
-          url: "/og-image.png",
+          url: "/og.png",
           width: 1200,
           height: 630,
-          alt: "Omnia.AI — AI-сайт-билдер",
+          alt: "Omnia — продуктовая студия для MAX Mini Apps",
         },
       ],
     },
@@ -78,7 +75,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
-      images: ["/og-image.png"],
+      images: ["/og.png"],
     },
     robots: {
       index: true,
@@ -111,8 +108,8 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#000000" },
+    { media: "(prefers-color-scheme: light)", color: "#f2f0e9" },
+    { media: "(prefers-color-scheme: dark)", color: "#121310" },
   ],
   width: "device-width",
   initialScale: 1,
@@ -143,7 +140,7 @@ const APP_JSON_LD = {
     priceCurrency: "RUB",
     description: "Бесплатный старт; оплата по факту использования AI-токенов",
   },
-  description: "AI-сайт-билдер для российского рынка",
+  description: "Продуктовая студия для MAX Mini Apps и цифровых сервисов",
   inLanguage: "ru-RU",
 };
 

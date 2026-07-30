@@ -289,7 +289,7 @@ function TargetRow({
   const selectable = !status || status === "ok";
   return (
     <div
-      className={`rounded-lg border p-2.5 ${selected ? "border-[#7c5cff] bg-[rgba(124,92,255,0.08)]" : "border-border-subtle"}`}
+      className={`rounded-lg border p-2.5 ${selected ? "border-[#315bd7] bg-[rgba(49,91,215,0.1)]" : "border-border-subtle"}`}
     >
       <div className="flex items-center gap-2">
         <button
@@ -299,7 +299,7 @@ function TargetRow({
           className="flex flex-1 items-center gap-2 text-left"
         >
           <span
-            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${selected ? "border-[#7c5cff] bg-[#7c5cff]" : "border-border-strong"}`}
+            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${selected ? "border-[#315bd7] bg-[#315bd7]" : "border-border-strong"}`}
           >
             {selected && <Check className="h-2.5 w-2.5 text-white" />}
           </span>
@@ -440,10 +440,10 @@ function AddTargetForm({ onDone, onCancel }: { onDone: () => void; onCancel: () 
       <div>
         <Label className="text-xs mb-1 block">Способ входа</Label>
         <div className="flex gap-1.5">
-          <button type="button" onClick={() => setAuthType("key")} className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${authType === "key" ? "border-[#7c5cff] bg-[rgba(124,92,255,0.08)]" : "border-border-subtle text-fg-secondary"}`}>
+          <button type="button" onClick={() => setAuthType("key")} className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${authType === "key" ? "border-[#315bd7] bg-[rgba(49,91,215,0.1)]" : "border-border-subtle text-fg-secondary"}`}>
             SSH-ключ (безопаснее)
           </button>
-          <button type="button" onClick={() => setAuthType("password")} className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${authType === "password" ? "border-[#7c5cff] bg-[rgba(124,92,255,0.08)]" : "border-border-subtle text-fg-secondary"}`}>
+          <button type="button" onClick={() => setAuthType("password")} className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${authType === "password" ? "border-[#315bd7] bg-[rgba(49,91,215,0.1)]" : "border-border-subtle text-fg-secondary"}`}>
             Логин + пароль
           </button>
         </div>
@@ -567,7 +567,7 @@ function CopyValue({ label, value }: { label: string; value: string }) {
         }}
         className="shrink-0 text-fg-tertiary hover:text-fg-primary"
       >
-        {copied ? <Check className="h-3.5 w-3.5 text-[#7c5cff]" /> : <Copy className="h-3.5 w-3.5" />}
+        {copied ? <Check className="h-3.5 w-3.5 text-[#7897f4]" /> : <Copy className="h-3.5 w-3.5" />}
       </button>
     </div>
   );
@@ -607,7 +607,7 @@ function DomainRow({ domain, projectId }: { domain: CustomDomain; projectId: str
           <span className="block text-sm font-medium truncate">{domain.host}</span>
         </span>
         {certActive ? (
-          <a href={`https://${domain.host}`} target="_blank" rel="noreferrer" className="text-xs text-[#7c5cff] hover:underline flex items-center gap-1">
+          <a href={`https://${domain.host}`} target="_blank" rel="noreferrer" className="text-xs text-[#7897f4] hover:underline flex items-center gap-1">
             <ShieldCheck className="h-3.5 w-3.5" /> открыть
           </a>
         ) : (
@@ -661,7 +661,7 @@ function DomainRow({ domain, projectId }: { domain: CustomDomain; projectId: str
           </div>
 
           {/* Шаг 3 — остальное автоматически. */}
-          <div className="rounded-md bg-[rgba(124,92,255,0.08)] border border-[#7c5cff]/30 p-2">
+          <div className="rounded-md border border-[#315bd7]/30 bg-[rgba(49,91,215,0.1)] p-2">
             <p className="text-[11px] text-fg-secondary leading-relaxed">
               <span className="font-semibold text-fg-primary">Шаг 3 · Дальше — за нас.</span>{" "}
               {dnsOk
