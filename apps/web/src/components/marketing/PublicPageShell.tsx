@@ -39,7 +39,7 @@ export function PublicPageShell({
       <footer className="border-t border-[#d8d4cb] bg-[#fcfbf7] px-5 py-10 sm:px-8">
         <div className="mx-auto flex max-w-[1180px] flex-col gap-5 text-xs text-[#8d887f] sm:flex-row sm:items-center sm:justify-between">
           <span>© 2026 Omnia</span>
-          <div className="flex flex-wrap gap-5"><Link href="/legal/privacy">Конфиденциальность</Link><Link href="/legal/terms">Условия</Link><Link href="/security">Безопасность</Link></div>
+          <div className="flex flex-wrap gap-5"><Link href="/requisites">Реквизиты</Link><Link href="/legal/privacy">Конфиденциальность</Link><Link href="/legal/terms">Условия</Link><Link href="/security">Безопасность</Link></div>
         </div>
       </footer>
     </div>

@@ -33,7 +33,7 @@ const copy: Record<AccountView, { eyebrow: string; title: string; lead: string }
   billing: { eyebrow: "10 / Billing", title: "Баланс и пополнение", lead: "Пакеты использования и безопасная оплата на стороне ЮKassa." },
   transactions: { eyebrow: "10 / Billing", title: "Операции", lead: "История платежей, начислений и статусов." },
   plan: { eyebrow: "10 / Billing", title: "Управление тарифом", lead: "Режим эксплуатации приложения и доступные лимиты." },
-  admin: { eyebrow: "Admin / Verification", title: "Проверка организаций", lead: "Очередь владельцев MAX Studio, которым нужна ручная проверка реквизитов." },
+  admin: { eyebrow: "Admin / Control", title: "Админ-центр", lead: "Аккаунты, роли, подтверждение организаций и журнал административных изменений." },
 };
 
 export async function AccountShell({
@@ -63,7 +63,7 @@ export async function AccountShell({
             {isAdmin && (
               <Link href="/admin/max" className={`flex h-9 items-center gap-3 rounded-[8px] px-3 text-xs ${active === "admin" ? "bg-white/10 font-medium text-white" : "text-white/50 hover:bg-white/[.06] hover:text-white"}`}>
                 <ScanSearch className={`size-4 ${active === "admin" ? "text-[#f15a38]" : ""}`} />
-                Модерация
+                Админ-центр
               </Link>
             )}
           </div>

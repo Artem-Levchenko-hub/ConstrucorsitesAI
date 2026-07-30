@@ -7,6 +7,7 @@ from fastapi import APIRouter, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from omnia_api.core.admin import is_admin_user
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
@@ -71,8 +72,8 @@ async def _verify_self_employed(inn: str) -> tuple[str, str | None, dict[str, ob
     )
 
 
-def _is_admin(email: str | None) -> bool:
-    return bool(email and email.lower() in get_settings().admin_emails_set)
+def _is_admin(user: User) -> bool:
+    return is_admin_user(user)
 
 
 @router.get("/access", response_model=MaxAccessPublic)
@@ -223,7 +224,7 @@ async def decide_business(
     current_user: CurrentUserDep,
     session: SessionDep,
 ) -> BusinessProfile:
-    if not _is_admin(current_user.email):
+    if not _is_admin(current_user):
         raise ApiError("forbidden", "admin access required", status.HTTP_403_FORBIDDEN)
     profile = (
         await session.execute(select(BusinessProfile).where(BusinessProfile.inn == inn))
@@ -244,7 +245,7 @@ async def list_businesses_for_review(
     current_user: CurrentUserDep,
     session: SessionDep,
 ) -> list[BusinessReviewPublic]:
-    if not _is_admin(current_user.email):
+    if not _is_admin(current_user):
         raise ApiError("forbidden", "admin access required", status.HTTP_403_FORBIDDEN)
 
     rows = (
@@ -270,6 +271,6 @@ async def list_businesses_for_review(
 
 @router.get("/admin/access")
 async def get_admin_access(current_user: CurrentUserDep) -> dict[str, bool]:
-    if not _is_admin(current_user.email):
+    if not _is_admin(current_user):
         raise ApiError("forbidden", "admin access required", status.HTTP_403_FORBIDDEN)
     return {"is_admin": True}

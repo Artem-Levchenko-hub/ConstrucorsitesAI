@@ -55,6 +55,7 @@ class UserPublic(BaseModel):
     last_login_at: datetime | None = None
     email_verified_at: datetime | None = None
     status: str = "active"
+    role: Literal["user", "admin"] = "user"
 
 
 class EmailTokenRequest(BaseModel):

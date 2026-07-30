@@ -100,7 +100,7 @@ export async function getMaxAdminAccessServer(): Promise<boolean> {
   if (!token) return false;
   try {
     const response = await fetch(
-      `${apiBaseUrl()}/api/max/account/admin/access`,
+      `${apiBaseUrl()}/api/admin/access`,
       {
         headers: { Cookie: `${AUTH_COOKIE}=${token}` },
         cache: "no-store",

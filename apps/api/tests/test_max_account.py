@@ -207,7 +207,7 @@ async def test_admin_can_list_and_decide_pending_businesses(
     monkeypatch.setattr(
         max_accounts_router,
         "_is_admin",
-        lambda email: email == "admin@example.com",
+        lambda user: user.email == "admin@example.com",
     )
     registered = await client.post(
         "/api/auth/register",

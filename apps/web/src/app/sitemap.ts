@@ -25,6 +25,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
       "pricing",
       "about",
       "security",
+      "requisites",
       "contact",
       "changelog",
       "legal/privacy",

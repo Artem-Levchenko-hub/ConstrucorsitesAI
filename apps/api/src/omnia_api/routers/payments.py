@@ -7,10 +7,12 @@ from uuid import UUID
 from fastapi import APIRouter, Request, status
 from sqlalchemy import select
 
+from omnia_api.core.admin import is_admin_user
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.account import Payment, WalletLedgerEntry
+from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.payments import PaymentConfigPublic, PaymentCreate, PaymentPublic
 from omnia_api.services import yookassa
@@ -40,8 +42,8 @@ def _configured() -> bool:
     )
 
 
-def _is_admin(email: str | None) -> bool:
-    return bool(email and email.lower() in get_settings().admin_emails_set)
+def _is_admin(user: User) -> bool:
+    return is_admin_user(user)
 
 
 @router.get("/config", response_model=PaymentConfigPublic)
@@ -236,7 +238,7 @@ async def reconcile_payment(
         await session.execute(select(Payment).where(Payment.id == payment_id).with_for_update())
     ).scalar_one_or_none()
     if payment is None or (
-        payment.user_id != current_user.id and not _is_admin(current_user.email)
+        payment.user_id != current_user.id and not _is_admin(current_user)
     ):
         raise ApiError("not_found", "payment not found", status.HTTP_404_NOT_FOUND)
     if not payment.provider_payment_id:
@@ -261,7 +263,7 @@ async def refund_payment(
     current_user: CurrentUserDep,
     session: SessionDep,
 ) -> Payment:
-    if not _is_admin(current_user.email):
+    if not _is_admin(current_user):
         raise ApiError("forbidden", "admin access required", status.HTTP_403_FORBIDDEN)
     payment = (
         await session.execute(select(Payment).where(Payment.id == payment_id).with_for_update())

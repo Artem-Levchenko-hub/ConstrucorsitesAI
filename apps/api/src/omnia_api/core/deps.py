@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Cookie, Depends, Header, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from omnia_api.core.admin import is_admin_user
 from omnia_api.core.config import get_settings
 from omnia_api.core.db import get_session
 from omnia_api.core.errors import ApiError
@@ -101,3 +102,12 @@ async def get_optional_user(
 
 CurrentUserDep = Annotated[User, Depends(get_current_user)]
 OptionalUserDep = Annotated[User | None, Depends(get_optional_user)]
+
+
+async def get_admin_user(current_user: CurrentUserDep) -> User:
+    if not is_admin_user(current_user):
+        raise ApiError("forbidden", "admin access required", status.HTTP_403_FORBIDDEN)
+    return current_user
+
+
+AdminUserDep = Annotated[User, Depends(get_admin_user)]

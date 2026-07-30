@@ -41,6 +41,9 @@ class User(Base):
     status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="active", default="active"
     )
+    role: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="user", default="user"
+    )
     deletion_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

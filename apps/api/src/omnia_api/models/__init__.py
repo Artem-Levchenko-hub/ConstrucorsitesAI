@@ -8,6 +8,7 @@ from omnia_api.models.account import (
     Payment,
     WalletLedgerEntry,
 )
+from omnia_api.models.admin_audit import AdminAuditEvent
 from omnia_api.models.app_integration import (
     AppIntegration,
     BusinessIntegration,
@@ -34,6 +35,7 @@ from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
 
 __all__ = [
+    "AdminAuditEvent",
     "AppIntegration",
     "Attestation",
     "AuthSession",

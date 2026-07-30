@@ -274,6 +274,7 @@ export default function MaxProductPage() {
           <div className="flex flex-wrap gap-5 text-xs text-[#6d6962]">
             <Link href="/legal/privacy">Конфиденциальность</Link>
             <Link href="/legal/terms">Условия</Link>
+            <Link href="/requisites">Реквизиты</Link>
             <Link href="/security">Безопасность</Link>
           </div>
         </div>

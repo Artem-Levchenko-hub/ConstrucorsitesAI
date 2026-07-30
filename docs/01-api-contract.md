@@ -24,6 +24,23 @@
 
 **Валидация регистрации:** email формат, password ≥ 8 символов и хотя бы 1 цифра. Хэш — bcrypt (12 rounds).
 
+`User.role` принимает `user | admin`. Роль хранится в PostgreSQL; `ADMIN_EMAILS`
+используется только как bootstrap-доступ. Все admin endpoints дополнительно
+проверяют активную сессию и effective admin role.
+
+### Admin
+
+| Метод | Path | Тело | Ответ |
+|---|---|---|---|
+| `GET` | `/api/admin/access` | — | `{is_admin, role, email}` |
+| `GET` | `/api/admin/users` | `?query=&limit=` | `AdminUser[]` |
+| `PATCH` | `/api/admin/users/:id` | `{role?, email_verified?, status?, business_verified?, note?}` | `AdminUser` |
+| `GET` | `/api/admin/audit` | `?limit=` | `AdminAuditEvent[]` |
+
+Изменение роли, статуса и верификации записывается в `admin_audit_events` с
+инициатором, целевым аккаунтом и состоянием до/после. Самоблокировка и снятие
+собственной persisted admin-роли запрещены.
+
 ### Projects
 
 | Метод | Path | Тело | Ответ |

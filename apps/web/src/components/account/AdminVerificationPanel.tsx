@@ -94,7 +94,7 @@ export function AdminVerificationPanel() {
         <CircleAlert className="mx-auto size-7 text-[#c63d35]" />
         <h2 className="mt-4 text-lg font-semibold">Нет административного доступа</h2>
         <p className="mt-2 text-sm text-[#6d6962]">
-          Этот аккаунт не включён в production-список администраторов.
+          Этот аккаунт не имеет роли администратора.
         </p>
       </section>
     );
