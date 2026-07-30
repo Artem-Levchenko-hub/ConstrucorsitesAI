@@ -21,8 +21,8 @@ export function VerifyMaxEmail({ token }: { token: string }) {
   }, [token]);
 
   return (
-    <div className="w-full max-w-md rounded-xl border border-white/10 bg-[#1a1b18] p-8 text-center">
-      <div className="mx-auto flex size-12 items-center justify-center rounded-lg bg-[#315bd7]/15 text-[#7897f4]">
+    <div className="w-full max-w-md rounded-xl border border-white/10 bg-[#0f121f] p-8 text-center">
+      <div className="mx-auto flex size-12 items-center justify-center rounded-lg bg-[#3b82f6]/15 text-[#8b5cf6]">
         {state === "loading" && <Loader2 className="size-5 animate-spin" />}
         {state === "success" && <Check className="size-5" />}
         {state === "error" && <CircleAlert className="size-5 text-red-300" />}
@@ -42,7 +42,7 @@ export function VerifyMaxEmail({ token }: { token: string }) {
             : "Возможно, ссылка устарела или уже была использована."}
       </p>
       {state !== "loading" && (
-        <Button asChild className="mt-6 h-11 rounded-md bg-[#315bd7] hover:bg-[#2449b7]">
+        <Button asChild className="mt-6 h-11 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb]">
           <Link href="/max/onboarding">
             {state === "success" ? "Продолжить" : "Вернуться в настройку"}
           </Link>

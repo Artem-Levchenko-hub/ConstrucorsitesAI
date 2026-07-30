@@ -1,14 +1,28 @@
 import type { Metadata, Viewport } from "next";
-import { Inter_Tight, JetBrains_Mono } from "next/font/google";
+import { Geist, Inter, JetBrains_Mono, Outfit } from "next/font/google";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages, getTranslations } from "next-intl/server";
 import "./globals.css";
 import { Providers } from "./providers";
 
-const interTight = Inter_Tight({
+const inter = Inter({
   subsets: ["latin", "cyrillic"],
-  variable: "--font-inter-tight",
+  variable: "--font-inter",
   weight: ["400", "500", "600", "700"],
+  display: "swap",
+});
+
+const geist = Geist({
+  subsets: ["latin"],
+  variable: "--font-geist",
+  weight: ["400", "500", "600", "700"],
+  display: "swap",
+});
+
+const outfit = Outfit({
+  subsets: ["latin"],
+  variable: "--font-outfit",
+  weight: ["500", "600", "700"],
   display: "swap",
 });
 
@@ -109,7 +123,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export const viewport: Viewport = {
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f2f0e9" },
-    { media: "(prefers-color-scheme: dark)", color: "#121310" },
+    { media: "(prefers-color-scheme: dark)", color: "#080a10" },
   ],
   width: "device-width",
   initialScale: 1,
@@ -153,7 +167,7 @@ export default async function RootLayout({
   return (
     <html
       lang={locale}
-      className={`dark ${interTight.variable} ${jetbrainsMono.variable}`}
+      className={`dark ${inter.variable} ${geist.variable} ${outfit.variable} ${jetbrainsMono.variable}`}
     >
       <head>
         <script

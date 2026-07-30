@@ -91,7 +91,7 @@ function errorMessage(error: unknown): string {
 function ProviderMark({ provider }: { provider: IntegrationProvider }) {
   const Icon = PROVIDER_ICONS[provider.key] ?? CloudCog;
   return (
-    <span className="flex h-11 w-11 items-center justify-center border border-white/[0.1] bg-white/[0.04] text-[#7897f4]">
+    <span className="flex h-11 w-11 items-center justify-center border border-white/[0.1] bg-white/[0.04] text-[#8b5cf6]">
       <Icon className="h-5 w-5" />
     </span>
   );
@@ -123,8 +123,8 @@ function ProviderCard({
       className={cn(
         "group flex min-h-[280px] flex-col border p-5 transition-colors",
         connected
-          ? "border-[#315bd7]/50 bg-[#315bd7]/[0.06]"
-          : "border-white/[0.1] bg-[#171815] hover:border-white/[0.2]",
+          ? "border-[#3b82f6]/50 bg-[#3b82f6]/[0.06]"
+          : "border-white/[0.1] bg-[#13172a] hover:border-white/[0.2]",
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -135,7 +135,7 @@ function ProviderCard({
             Подключено
           </span>
         ) : reusable ? (
-          <span className="border border-[#7897f4]/30 bg-[#7897f4]/[0.06] px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-[#9bb1f5]">
+          <span className="border border-[#8b5cf6]/30 bg-[#8b5cf6]/[0.06] px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-[#9bb1f5]">
             Уже у бизнеса
           </span>
         ) : provider.available ? (
@@ -153,7 +153,7 @@ function ProviderCard({
         <div className="flex items-center gap-2">
           <h3 className="text-lg font-semibold text-white">{provider.name}</h3>
           {provider.recommended && (
-            <span className="text-[9px] font-medium uppercase tracking-[0.13em] text-[#7897f4]">
+            <span className="text-[9px] font-medium uppercase tracking-[0.13em] text-[#8b5cf6]">
               Приоритет
             </span>
           )}
@@ -429,8 +429,8 @@ export function IntegrationHub({
   ).length;
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto bg-[#10110f] text-white">
-      <header className="sticky top-0 z-20 border-b border-white/[0.1] bg-[#10110f]/95 px-5 py-4 backdrop-blur-xl sm:px-8">
+    <div className="min-h-0 flex-1 overflow-y-auto bg-[#080a10] text-white">
+      <header className="sticky top-0 z-20 border-b border-white/[0.1] bg-[#080a10]/95 px-5 py-4 backdrop-blur-xl sm:px-8">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4">
             <Button
@@ -444,7 +444,7 @@ export function IntegrationHub({
               </Link>
             </Button>
             <div className="min-w-0">
-              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-[#7897f4]">
+              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-[#8b5cf6]">
                 {projectName}
               </p>
               <h1 className="mt-0.5 truncate text-lg font-semibold">
@@ -475,7 +475,7 @@ export function IntegrationHub({
               включать в новые проекты без повторного ввода ключей.
             </p>
           </div>
-          <div className="border-l-2 border-[#315bd7] bg-white/[0.025] p-5">
+          <div className="border-l-2 border-[#3b82f6] bg-white/[0.025] p-5">
             <p className="text-xs font-medium text-white/75">Как подключаем</p>
             <ol className="mt-4 space-y-3 text-xs leading-5 text-white/40">
               <li>1. OAuth открывает кабинет сервиса и запрашивает согласие.</li>
@@ -487,9 +487,9 @@ export function IntegrationHub({
 
         {catalog.data?.recommended_pack && (
           <section className="border-b border-white/[0.1] py-7">
-            <div className="grid gap-5 border border-[#315bd7]/40 bg-[#315bd7]/[0.07] p-5 sm:p-6 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div className="grid gap-5 border border-[#3b82f6]/40 bg-[#3b82f6]/[0.07] p-5 sm:p-6 lg:grid-cols-[1fr_auto] lg:items-center">
               <div className="flex items-start gap-4">
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center bg-[#315bd7] text-white">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center bg-[#3b82f6] text-white">
                   <Sparkles className="h-5 w-5" />
                 </span>
                 <div>
@@ -543,7 +543,7 @@ export function IntegrationHub({
                     className={cn(
                       "inline-flex h-9 shrink-0 items-center gap-2 border px-3 text-xs transition-colors",
                       category === key
-                        ? "border-[#315bd7] bg-[#315bd7] text-white"
+                        ? "border-[#3b82f6] bg-[#3b82f6] text-white"
                         : "border-white/[0.1] text-white/45 hover:border-white/[0.2] hover:text-white/75",
                     )}
                   >
@@ -566,7 +566,7 @@ export function IntegrationHub({
 
           {catalog.isLoading ? (
             <div className="flex min-h-80 items-center justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-[#7897f4]" />
+              <Loader2 className="h-6 w-6 animate-spin text-[#8b5cf6]" />
             </div>
           ) : catalog.isError ? (
             <div className="mt-8 border border-red-400/20 bg-red-400/[0.06] p-5 text-sm text-red-200">
@@ -614,7 +614,7 @@ export function IntegrationHub({
           }
         }}
       >
-        <DialogContent className="max-h-[90vh] overflow-y-auto border-white/[0.12] bg-[#171815] sm:max-w-[620px]">
+        <DialogContent className="max-h-[90vh] overflow-y-auto border-white/[0.12] bg-[#13172a] sm:max-w-[620px]">
           {selected && (
             <>
               <DialogHeader className="pr-8">
@@ -633,14 +633,14 @@ export function IntegrationHub({
 
               {connections.has(selected.key) &&
                 connections.get(selected.key)?.auth_mode !== "oauth" && (
-                <div className="border-l-2 border-[#7897f4] bg-white/[0.025] px-4 py-3 text-xs leading-5 text-white/45">
+                <div className="border-l-2 border-[#8b5cf6] bg-white/[0.025] px-4 py-3 text-xs leading-5 text-white/45">
                   Секреты не показываются повторно. Чтобы изменить подключение,
                   введите новые реквизиты целиком.
                 </div>
               )}
 
               {selected.oauth_available && (
-                <div className="border border-[#315bd7]/40 bg-[#315bd7]/[0.07] p-4">
+                <div className="border border-[#3b82f6]/40 bg-[#3b82f6]/[0.07] p-4">
                   <p className="text-sm font-medium text-white">
                     Рекомендуется: вход через {selected.name}
                   </p>
@@ -686,7 +686,7 @@ export function IntegrationHub({
                         }))
                       }
                       placeholder={field.placeholder}
-                      className="border-white/[0.12] bg-[#10110f] text-white placeholder:text-white/20"
+                      className="border-white/[0.12] bg-[#080a10] text-white placeholder:text-white/20"
                     />
                     {field.help && (
                       <p className="text-xs leading-5 text-white/35">

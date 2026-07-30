@@ -11,16 +11,19 @@ export default async function AccountPage() {
   return (
     <>
       <TopBar user={session} showProjectControls={false} />
-      <main className="mx-auto w-full max-w-3xl overflow-y-auto px-6 py-10 space-y-6">
-        <header className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Аккаунт</h1>
-          <p className="text-sm text-fg-tertiary">
+      <main className="studio-grid flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-4xl space-y-6 px-5 py-10 sm:px-8 sm:py-14">
+        <header className="mb-10 space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-400">Настройки</p>
+          <h1 className="text-3xl font-semibold tracking-[-0.035em]">Аккаунт и безопасность</h1>
+          <p className="max-w-xl text-sm leading-6 text-fg-tertiary">
             Безопасность, реквизиты, платежи и управление данными.
           </p>
         </header>
 
         <GithubConnectionCard />
         <AccountControlCenter email={session.email} />
+        </div>
       </main>
     </>
   );

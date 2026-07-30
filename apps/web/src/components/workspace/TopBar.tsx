@@ -79,7 +79,7 @@ export function TopBar({
   const maxMode = workspaceMode === "max";
 
   return (
-    <header className="shrink-0 h-14 flex items-center justify-between gap-3 border-b border-white/[0.1] bg-[#121310]/95 px-6 backdrop-blur-xl">
+    <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[#1e243f] bg-[#080a10]/95 px-5 backdrop-blur-xl sm:px-6">
       <div className="flex shrink-0 items-center gap-4">
         <BrandMark inverse href={maxMode ? "/max" : "/projects"} />
         {maxMode && (
@@ -87,7 +87,7 @@ export function TopBar({
             <span className="h-5 w-px bg-white/20" aria-hidden />
             <Link
               href="/max"
-              className="hidden text-sm font-medium text-white/65 hover:text-white sm:inline"
+              className="hidden text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 hover:text-white sm:inline"
             >
               MAX Studio
             </Link>
@@ -108,7 +108,7 @@ export function TopBar({
               <span>{maxMode ? "MAX-приложения" : tNav("projects")}</span>
             </Link>
             <span className="text-fg-tertiary">/</span>
-            <span className="max-w-[12rem] truncate text-sm font-medium">{projectName}</span>
+            <span className="max-w-[14rem] truncate text-sm font-semibold text-slate-100">{projectName}</span>
             {remixSource && projectId && (
               <RemixSourceModal projectId={projectId} source={remixSource} />
             )}
@@ -172,7 +172,7 @@ export function TopBar({
 
       {/* Right rail: balance + language + account stay ALWAYS visible — never part
           of the scroll — so the user can always reach the wallet/account menu. */}
-      <div className="flex shrink-0 items-center gap-2 pl-1">
+      <div className="flex shrink-0 items-center gap-1.5 pl-1">
         {showProjectControls && <WalletBadge />}
 
         <LocaleSwitcher />

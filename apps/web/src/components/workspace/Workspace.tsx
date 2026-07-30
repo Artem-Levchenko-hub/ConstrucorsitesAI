@@ -29,8 +29,8 @@ export function Workspace({
         maxMode ? "max-workspace-grid" : ""
       }`}
       style={{
-        gridTemplateColumns: `${chatCollapsed ? "0px" : maxMode ? "360px" : "320px"} minmax(0, 1fr) ${
-          timelineCollapsed ? "0px" : maxMode ? "292px" : "220px"
+        gridTemplateColumns: `${chatCollapsed ? "0px" : maxMode ? "300px" : "320px"} minmax(0, 1fr) ${
+          timelineCollapsed ? "0px" : maxMode ? "360px" : "240px"
         }`,
       }}
     >

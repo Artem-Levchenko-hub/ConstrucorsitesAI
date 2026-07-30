@@ -26,13 +26,13 @@ export function MaxStudioHeader({
   const initial = email.slice(0, 1).toUpperCase();
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.12] bg-[#121310]/95 px-5 backdrop-blur-xl sm:px-8">
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-[#1e243f] bg-[#080a10]/95 px-5 backdrop-blur-xl sm:px-8">
       <div className="flex min-w-0 items-center gap-3">
         <BrandMark inverse href="/max" />
         <span className="h-5 w-px bg-white/20" aria-hidden />
         <Link
           href="/max"
-          className="truncate text-sm font-medium text-white/70 transition-colors hover:text-white"
+          className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 transition-colors hover:text-white"
           aria-label="MAX Studio — главная"
         >
           MAX Studio

@@ -1,14 +1,14 @@
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowRight,
-  ArrowUpRight,
   BarChart3,
-  Blocks,
   Bot,
   Check,
+  ChevronRight,
   CircleDollarSign,
   Code2,
   Database,
+  ExternalLink,
   Globe2,
   MessageSquareText,
   PackageSearch,
@@ -28,467 +28,418 @@ import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { Reveal } from "@/components/marketing/Reveal";
 
-const RU = {
-  nav: {
-    result: "Что получите",
-    products: "Направления",
-    process: "Как работает",
-    integrations: "Интеграции",
+const copy = {
+  ru: {
+    nav: ["Возможности", "Как работает", "Интеграции", "Запуск"],
     login: "Войти",
-    cta: "Создать MAX-приложение",
-  },
-  hero: {
-    badge: "MAX Mini Apps · доступно сейчас",
-    title: "Полноценное приложение для MAX — без команды разработки",
-    lead:
-      "Опишите задачу обычными словами. Omnia соберёт интерфейс и серверную часть, подключит бота, опубликует HTTPS-версию и проведёт до запуска.",
-    primary: "Начать создание",
-    secondary: "Посмотреть результат",
-    owner: "Для ООО, ИП и самозанятых",
-  },
-  result: {
-    eyebrow: "Результат на выходе",
-    title: "Не картинка и не прототип. Работающий цифровой сервис.",
-    lead:
-      "Внутри одного проекта остаются код, данные, публикация, бот и подключения к бизнес-системам.",
-  },
-  products: {
-    eyebrow: "Направления Omnia",
-    title: "Отдельный билдер под каждый тип продукта",
-    lead:
-      "Сейчас открыт MAX Studio. Остальные направления получат собственные сценарии, а не один универсальный чат.",
-    open: "Работает",
+    navCta: "Открыть MAX Studio",
+    eyebrow: "MAX Mini Apps · уже доступно",
+    heroA: "Превратите идею в",
+    heroB: "готовое приложение",
+    heroLead:
+      "Omnia собирает интерфейс, сервер и базу данных, подключает MAX-бота, бизнес-сервисы и доводит проект до постоянного HTTPS-адреса.",
+    heroCta: "Создать приложение",
+    heroAlt: "Посмотреть, что входит",
+    proof: ["Без найма разработчиков", "Код остаётся у вас", "Запуск по шагам"],
+    prompt: "Создай приложение лояльности для кофейни в MAX",
+    promptHint: "Опишите продукт обычными словами…",
+    agent: "Omnia собирает приложение",
+    agentSteps: [
+      "Проектирую мобильный сценарий",
+      "Создаю страницы и данные",
+      "Проверяю production-сборку",
+    ],
+    available: "Доступно сейчас",
     soon: "В разработке",
+    directionsKicker: "Один продукт — один понятный сценарий",
+    directionsTitle: "Не универсальный чат, а отдельные продуктовые студии",
+    directionsLead:
+      "Каждое направление получает собственный бриф, набор проверок и маршрут публикации. Сейчас полностью открыт конструктор приложений для MAX.",
+    workflowKicker: "От задачи до запуска",
+    workflowTitle: "Техническую работу берём на себя",
+    workflowLead:
+      "Вы отвечаете за продуктовые решения. Omnia пишет код, хранит состояние сборки и показывает только те шаги, где действительно нужен владелец.",
+    integrationsKicker: "Integration Hub",
+    integrationsTitle: "Подключения без правок сгенерированного кода",
+    integrationsLead:
+      "Платежи, CRM, учёт, доставка и аналитика подключаются через защищённый кабинет. Секреты шифруются и не попадают в исходники приложения.",
+    resultKicker: "Что остаётся у вас",
+    resultTitle: "Полноценный цифровой продукт, а не одноразовый прототип",
+    resultLead:
+      "Редактируйте через агента, возвращайтесь к прошлым версиям, подключайте домен или свою VPS. Состояние проекта хранится на сервере и не сбрасывается после обновления страницы.",
+    launchKicker: "Готовность к MAX",
+    launchTitle: "Один маршрут до работающего мини-приложения",
+    launchLead:
+      "Студия проверяет сборку, бота, HTTPS, webhook, URL в кабинете MAX, обязательные данные и политики. На выходе — понятный статус и рабочая ссылка.",
+    finalTitle: "Начните с описания продукта",
+    finalLead:
+      "Регистрация нужна сразу: она защищает бесплатный лимит и связывает проекты с ООО, ИП или самозанятым владельцем MAX-бота.",
+    finalCta: "Перейти в MAX Studio",
+    footer: "Продуктовая среда для создания и запуска MAX Mini Apps.",
   },
-  process: {
-    eyebrow: "Путь до запуска",
-    title: "Понятные этапы и проверяемые статусы",
-    lead:
-      "Вы принимаете продуктовые решения. Студия берёт на себя реализацию, инфраструктуру и технические проверки.",
-  },
-  integrations: {
-    eyebrow: "Integration Hub",
-    title: "Платежи, CRM, ресторанные и учётные системы",
-    lead:
-      "Подключения настраиваются отдельно от сгенерированного кода. Секреты шифруются, а доступ проверяется реальным запросом к сервису.",
-  },
-  final: {
-    eyebrow: "MAX Studio уже доступна",
-    title: "Начните с задачи. Технические шаги студия соберёт в один маршрут.",
-    cta: "Создать приложение",
-  },
-} as const;
-
-const EN = {
-  nav: {
-    result: "Deliverable",
-    products: "Products",
-    process: "Workflow",
-    integrations: "Integrations",
+  en: {
+    nav: ["Capabilities", "How it works", "Integrations", "Launch"],
     login: "Sign in",
-    cta: "Build a MAX app",
-  },
-  hero: {
-    badge: "MAX Mini Apps · available now",
-    title: "A complete MAX application — without a development team",
-    lead:
-      "Describe the product in plain language. Omnia builds the interface and backend, connects the bot, publishes an HTTPS version and guides the launch.",
-    primary: "Start building",
-    secondary: "See the deliverable",
-    owner: "For companies, sole proprietors and self-employed professionals",
-  },
-  result: {
-    eyebrow: "The deliverable",
-    title: "Not an image or a prototype. A working digital service.",
-    lead:
-      "Code, data, publishing, bot configuration and business connections stay in one project.",
-  },
-  products: {
-    eyebrow: "Omnia product studios",
-    title: "A focused builder for each product type",
-    lead:
-      "MAX Studio is open now. Other products will receive dedicated workflows instead of one generic chat.",
-    open: "Available",
+    navCta: "Open MAX Studio",
+    eyebrow: "MAX Mini Apps · available now",
+    heroA: "Turn an idea into a",
+    heroB: "production application",
+    heroLead:
+      "Omnia builds the interface, backend and database, connects a MAX bot and business services, then takes the project to a permanent HTTPS address.",
+    heroCta: "Build an application",
+    heroAlt: "See what is included",
+    proof: ["No development team", "You own the code", "Guided launch"],
+    prompt: "Build a loyalty application for a coffee shop in MAX",
+    promptHint: "Describe the product in plain language…",
+    agent: "Omnia is building the application",
+    agentSteps: [
+      "Designing the mobile flow",
+      "Creating screens and data",
+      "Validating the production build",
+    ],
+    available: "Available now",
     soon: "In development",
-  },
-  process: {
-    eyebrow: "Launch workflow",
-    title: "Clear stages and verifiable states",
-    lead:
-      "You make product decisions. The studio takes care of implementation, infrastructure and technical checks.",
-  },
-  integrations: {
-    eyebrow: "Integration Hub",
-    title: "Payments, CRM, restaurant and inventory systems",
-    lead:
-      "Connections live outside generated code. Secrets are encrypted and credentials are verified against the actual provider.",
-  },
-  final: {
-    eyebrow: "MAX Studio is available now",
-    title: "Start with the product. The studio turns technical steps into one route.",
-    cta: "Build an application",
+    directionsKicker: "One product, one clear workflow",
+    directionsTitle: "Focused product studios instead of a generic chat",
+    directionsLead:
+      "Each direction gets a dedicated brief, quality checks and publishing route. The MAX application builder is fully available today.",
+    workflowKicker: "From brief to launch",
+    workflowTitle: "We handle the technical work",
+    workflowLead:
+      "You make product decisions. Omnia writes code, persists build state and only asks for actions that truly require the owner.",
+    integrationsKicker: "Integration Hub",
+    integrationsTitle: "Connections without editing generated code",
+    integrationsLead:
+      "Payments, CRM, inventory, delivery and analytics are connected through a secure dashboard. Secrets are encrypted and never added to source code.",
+    resultKicker: "What you keep",
+    resultTitle: "A complete digital product, not a disposable prototype",
+    resultLead:
+      "Edit with the agent, restore previous versions, connect a domain or your own VPS. Project state is server-side and survives every page refresh.",
+    launchKicker: "MAX readiness",
+    launchTitle: "One route to a working mini application",
+    launchLead:
+      "The studio validates the build, bot, HTTPS, webhook, MAX dashboard URL, required business details and policies. You get a clear status and a working link.",
+    finalTitle: "Start by describing the product",
+    finalLead:
+      "Registration is required up front to protect the free limit and associate projects with a company, sole proprietor or self-employed MAX bot owner.",
+    finalCta: "Go to MAX Studio",
+    footer: "A product environment for building and launching MAX Mini Apps.",
   },
 } as const;
 
-type Product = {
-  href: string;
+const products: Array<{
   title: string;
-  description: string;
+  titleEn: string;
+  text: string;
+  textEn: string;
+  href: string;
   active: boolean;
   Icon: LucideIcon;
-};
-
-const PRODUCTS_RU: Product[] = [
+}> = [
   {
-    href: "/max",
     title: "MAX Mini Apps и боты",
-    description:
-      "Интерфейс внутри MAX, база данных, бот, webhook, HTTPS и контроль запуска.",
+    titleEn: "MAX Mini Apps and bots",
+    text: "Мобильный интерфейс, backend, бот, webhook и публикация.",
+    textEn: "Mobile interface, backend, bot, webhook and publishing.",
+    href: "/max",
     active: true,
     Icon: Bot,
   },
   {
-    href: "/web-apps",
     title: "Веб-приложения",
-    description:
-      "Личные кабинеты, CRM, каталоги и сервисы с ролями и базой данных.",
+    titleEn: "Web applications",
+    text: "Личные кабинеты, CRM, каталоги и внутренние сервисы.",
+    textEn: "Portals, CRM systems, catalogues and internal tools.",
+    href: "/web-apps",
     active: false,
     Icon: Globe2,
   },
   {
-    href: "/landings",
     title: "Лендинги",
-    description:
-      "Маркетинговые страницы, формы, аналитика, домены и публикация.",
+    titleEn: "Landing pages",
+    text: "Маркетинговые страницы, формы, аналитика и домены.",
+    textEn: "Marketing pages, forms, analytics and domains.",
+    href: "/landings",
     active: false,
     Icon: PanelsTopLeft,
   },
   {
-    href: "/apps",
     title: "Мобильные приложения",
-    description:
-      "Самостоятельные продукты для iOS и Android с отдельным релизом.",
+    titleEn: "Mobile applications",
+    text: "Продукты для iOS и Android с отдельным релизом.",
+    textEn: "Standalone iOS and Android products.",
+    href: "/apps",
     active: false,
     Icon: Smartphone,
   },
 ];
 
-const PRODUCTS_EN: Product[] = [
+const workflow = [
   {
-    ...PRODUCTS_RU[0],
-    title: "MAX Mini Apps and bots",
-    description:
-      "In-MAX interface, database, bot, webhook, HTTPS and launch checks.",
+    number: "01",
+    title: "Опишите задачу",
+    titleEn: "Describe the product",
+    text: "Короткий бриф помогает агенту понять аудиторию, сценарий и обязательные функции.",
+    textEn: "A short brief gives the agent the audience, core flow and required features.",
+    Icon: MessageSquareText,
   },
   {
-    ...PRODUCTS_RU[1],
-    title: "Web applications",
-    description:
-      "Customer portals, CRM systems and role-based database products.",
+    number: "02",
+    title: "Проверьте сборку",
+    titleEn: "Review the build",
+    text: "Следите за работой в реальном времени, тестируйте мобильное превью и просите изменения.",
+    textEn: "Follow the work live, test the mobile preview and request changes.",
+    Icon: Code2,
   },
   {
-    ...PRODUCTS_RU[2],
-    title: "Landing pages",
-    description:
-      "Marketing pages, forms, analytics, domains and publishing.",
-  },
-  {
-    ...PRODUCTS_RU[3],
-    title: "Mobile applications",
-    description:
-      "Standalone iOS and Android products with a dedicated release workflow.",
+    number: "03",
+    title: "Запустите в MAX",
+    titleEn: "Launch in MAX",
+    text: "Подключите бота и сервисы. Студия опубликует HTTPS-версию и активирует webhook.",
+    textEn: "Connect the bot and services. The studio publishes HTTPS and activates the webhook.",
+    Icon: Rocket,
   },
 ];
 
-const DELIVERABLES_RU = [
-  {
-    title: "Интерфейс и код",
-    text: "Полноценный проект, который можно продолжать развивать.",
-    Icon: Code2,
-  },
-  {
-    title: "Сервер и данные",
-    text: "Backend, база данных, роли и бизнес-логика — когда они нужны продукту.",
-    Icon: Database,
-  },
-  {
-    title: "Публикация",
-    text: "Постоянный HTTPS-адрес, deployment и проверка доступности.",
-    Icon: Rocket,
-  },
-  {
-    title: "Интеграции",
-    text: "Бот и проверенные подключения к платежам, CRM, аналитике и учётным системам.",
-    Icon: Plug,
-  },
-] as const;
+const outcomes = [
+  { title: "Интерфейс и код", titleEn: "Interface and code", Icon: Code2 },
+  { title: "Backend и данные", titleEn: "Backend and data", Icon: Database },
+  { title: "HTTPS и домен", titleEn: "HTTPS and domain", Icon: Globe2 },
+  { title: "MAX-бот и webhook", titleEn: "MAX bot and webhook", Icon: Webhook },
+  { title: "История версий", titleEn: "Version history", Icon: ShieldCheck },
+  { title: "Бизнес-интеграции", titleEn: "Business integrations", Icon: Plug },
+];
 
-const DELIVERABLES_EN = [
-  {
-    title: "Interface and code",
-    text: "A complete project that can keep evolving after launch.",
-    Icon: Code2,
-  },
-  {
-    title: "Backend and data",
-    text: "Backend, database, roles and product logic whenever the service needs them.",
-    Icon: Database,
-  },
-  {
-    title: "Publishing",
-    text: "A permanent HTTPS address, deployment and availability checks.",
-    Icon: Rocket,
-  },
-  {
-    title: "Integrations",
-    text: "Bot and verified connections to payments, CRM, analytics and inventory systems.",
-    Icon: Plug,
-  },
-] as const;
+const integrations = [
+  { name: "ЮKassa", Icon: CircleDollarSign },
+  { name: "iiko / r_keeper", Icon: Store },
+  { name: "Битрикс24 / amoCRM", Icon: UsersRound },
+  { name: "МойСклад / 1С", Icon: PackageSearch },
+  { name: "Метрика", Icon: BarChart3 },
+  { name: "MAX API", Icon: Bot },
+];
 
-const PROCESS_RU = [
-  {
-    step: "01",
-    title: "Опишите продукт",
-    text: "Студия уточнит аудиторию, сценарий, функции и визуальный характер.",
-    Icon: MessageSquareText,
-  },
-  {
-    step: "02",
-    title: "Следите за сборкой",
-    text: "Код и рабочее мобильное превью появляются прямо в проекте.",
-    Icon: Blocks,
-  },
-  {
-    step: "03",
-    title: "Подключите сервисы",
-    text: "MAX-бот, ЮKassa, CRM и учётные системы проверяются через API.",
-    Icon: Webhook,
-  },
-  {
-    step: "04",
-    title: "Запустите",
-    text: "Публикация, HTTPS и обязательные шаги подтверждаются фактами.",
-    Icon: Check,
-  },
-] as const;
+function SectionHeading({
+  kicker,
+  title,
+  lead,
+}: {
+  kicker: string;
+  title: string;
+  lead: string;
+}) {
+  return (
+    <div className="mx-auto max-w-3xl text-center">
+      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-400">
+        {kicker}
+      </p>
+      <h2 className="font-display mt-4 text-3xl font-semibold leading-tight tracking-[-0.035em] text-slate-50 sm:text-4xl lg:text-5xl">
+        {title}
+      </h2>
+      <p className="mt-5 text-base leading-7 text-slate-400 sm:text-lg">{lead}</p>
+    </div>
+  );
+}
 
-const PROCESS_EN = [
-  {
-    step: "01",
-    title: "Describe the product",
-    text: "The studio clarifies the audience, workflow, features and visual direction.",
-    Icon: MessageSquareText,
-  },
-  {
-    step: "02",
-    title: "Follow the build",
-    text: "Code and a working mobile preview appear directly in the project.",
-    Icon: Blocks,
-  },
-  {
-    step: "03",
-    title: "Connect services",
-    text: "The MAX bot, YooKassa, CRM and business systems are verified through their APIs.",
-    Icon: Webhook,
-  },
-  {
-    step: "04",
-    title: "Launch",
-    text: "Publishing, HTTPS and mandatory steps are confirmed by actual system state.",
-    Icon: Check,
-  },
-] as const;
+function AgentWindow({ t }: { t: (typeof copy)["ru"] | (typeof copy)["en"] }) {
+  return (
+    <div className="relative mx-auto mt-14 max-w-5xl px-3 sm:px-6">
+      <div className="absolute -inset-14 -z-10 bg-[radial-gradient(circle,rgba(59,130,246,0.18),transparent_62%)] blur-2xl" />
+      <div className="overflow-hidden rounded-2xl border border-[#263150] bg-[#0f121f] shadow-[0_34px_100px_rgba(0,0,0,0.5)]">
+        <div className="flex h-12 items-center justify-between border-b border-[#1e243f] px-4">
+          <div className="flex items-center gap-1.5" aria-hidden>
+            <span className="h-2.5 w-2.5 rounded-full bg-[#ef4444]/70" />
+            <span className="h-2.5 w-2.5 rounded-full bg-[#e8c547]/70" />
+            <span className="h-2.5 w-2.5 rounded-full bg-[#10b981]/70" />
+          </div>
+          <span className="text-xs text-slate-500">omnia / max-studio</span>
+          <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(16,185,129,.8)]" />
+        </div>
+        <div className="grid min-h-[410px] md:grid-cols-[1fr_280px]">
+          <div className="p-5 sm:p-8">
+            <div className="ml-auto max-w-md rounded-2xl rounded-br-md bg-blue-500 px-5 py-4 text-sm leading-6 text-white">
+              {t.prompt}
+            </div>
+            <div className="mt-6 max-w-lg rounded-2xl rounded-bl-md border border-[#1e243f] bg-[#13172a] p-5">
+              <div className="flex items-center gap-3">
+                <span className="grid h-9 w-9 place-items-center rounded-lg bg-blue-500/15 text-blue-400">
+                  <Bot className="h-4 w-4" />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-white">{t.agent}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">3 / 3</p>
+                </div>
+              </div>
+              <div className="mt-5 space-y-3">
+                {t.agentSteps.map((step) => (
+                  <div key={step} className="flex items-center gap-3 text-sm text-slate-300">
+                    <span className="grid h-5 w-5 place-items-center rounded-full bg-emerald-400/15 text-emerald-400">
+                      <Check className="h-3 w-3" />
+                    </span>
+                    {step}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="mt-7 flex items-center gap-3 rounded-xl border border-[#263150] bg-[#080a10] p-3">
+              <span className="flex-1 px-2 text-sm text-slate-600">{t.promptHint}</span>
+              <span className="grid h-9 w-9 place-items-center rounded-lg bg-blue-500 text-white">
+                <ArrowRight className="h-4 w-4" />
+              </span>
+            </div>
+          </div>
+          <div className="hidden border-l border-[#1e243f] bg-[#13172a] p-5 md:block">
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span>Live preview</span>
+              <span>390 × 844</span>
+            </div>
+            <div className="mx-auto mt-5 h-[330px] max-w-[190px] overflow-hidden rounded-[28px] border-4 border-[#293352] bg-[#f8fafc] p-3 shadow-xl">
+              <div className="mx-auto h-1.5 w-12 rounded-full bg-slate-900" />
+              <div className="mt-5 h-16 rounded-xl bg-blue-500 p-3">
+                <div className="h-2 w-20 rounded bg-white/80" />
+                <div className="mt-2 h-1.5 w-12 rounded bg-white/45" />
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {[0, 1, 2, 3].map((item) => (
+                  <div key={item} className="rounded-lg border border-slate-200 bg-white p-2">
+                    <div className="h-10 rounded bg-slate-100" />
+                    <div className="mt-2 h-1.5 rounded bg-slate-300" />
+                    <div className="mt-1 h-1.5 w-2/3 rounded bg-slate-200" />
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 h-8 rounded-lg bg-slate-900" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-const INTEGRATIONS_RU = [
-  {
-    name: "ЮKassa",
-    task: "Проверка магазина",
-    status: "Можно подключить",
-    active: true,
-    Icon: CircleDollarSign,
-  },
-  {
-    name: "iikoCloud",
-    task: "Проверка API",
-    status: "Можно подключить",
-    active: true,
-    Icon: Store,
-  },
-  {
-    name: "Битрикс24",
-    task: "Проверка webhook",
-    status: "Можно подключить",
-    active: true,
-    Icon: UsersRound,
-  },
-  {
-    name: "МойСклад",
-    task: "Проверка токена",
-    status: "Можно подключить",
-    active: true,
-    Icon: PackageSearch,
-  },
-  {
-    name: "Яндекс Метрика",
-    task: "Проверка счётчика",
-    status: "Можно подключить",
-    active: true,
-    Icon: BarChart3,
-  },
-  {
-    name: "r_keeper",
-    task: "Локальный коннектор",
-    status: "Готовим",
-    active: false,
-    Icon: Store,
-  },
-] as const;
-
-const INTEGRATIONS_EN = [
-  {
-    name: "YooKassa",
-    task: "Store verification",
-    status: "Connect now",
-    active: true,
-    Icon: CircleDollarSign,
-  },
-  {
-    name: "iikoCloud",
-    task: "API verification",
-    status: "Connect now",
-    active: true,
-    Icon: Store,
-  },
-  {
-    name: "Bitrix24",
-    task: "Webhook verification",
-    status: "Connect now",
-    active: true,
-    Icon: UsersRound,
-  },
-  {
-    name: "MoySklad",
-    task: "Token verification",
-    status: "Connect now",
-    active: true,
-    Icon: PackageSearch,
-  },
-  {
-    name: "Yandex Metrica",
-    task: "Counter verification",
-    status: "Connect now",
-    active: true,
-    Icon: BarChart3,
-  },
-  {
-    name: "r_keeper",
-    task: "Local connector",
-    status: "In progress",
-    active: false,
-    Icon: Store,
-  },
-] as const;
-
-export default async function LandingPage() {
+export default async function HomePage() {
   const locale = await getLocale();
-  const copy = locale === "en" ? EN : RU;
-  const products = locale === "en" ? PRODUCTS_EN : PRODUCTS_RU;
-  const deliverables =
-    locale === "en" ? DELIVERABLES_EN : DELIVERABLES_RU;
-  const process = locale === "en" ? PROCESS_EN : PROCESS_RU;
-  const integrations =
-    locale === "en" ? INTEGRATIONS_EN : INTEGRATIONS_RU;
+  const isEn = locale === "en";
+  const t = isEn ? copy.en : copy.ru;
 
   return (
-    <div
-      data-marketing
-      className="min-h-svh bg-[#10110f] text-white antialiased"
-    >
-      <MarketingNav copy={copy.nav} />
+    <div data-marketing className="min-h-svh bg-[#080a10] text-slate-50">
+      <header className="sticky top-0 z-50 border-b border-[#1e243f]/80 bg-[#080a10]/85 backdrop-blur-xl">
+        <div className="mx-auto flex h-20 max-w-[1200px] items-center justify-between gap-5 px-5 sm:px-8">
+          <BrandMark inverse />
+          <nav className="hidden items-center gap-7 lg:flex">
+            {[
+              ["#capabilities", t.nav[0]],
+              ["#workflow", t.nav[1]],
+              ["#integrations", t.nav[2]],
+              ["#launch", t.nav[3]],
+            ].map(([href, label]) => (
+              <a key={href} href={href} className="text-sm text-slate-400 transition hover:text-white">
+                {label}
+              </a>
+            ))}
+          </nav>
+          <div className="flex items-center gap-2">
+            <LocaleSwitcher />
+            <Link href="/login" className="hidden px-3 py-2 text-sm text-slate-300 transition hover:text-white sm:block">
+              {t.login}
+            </Link>
+            <Link href="/max" className="marketing-button marketing-button-primary min-h-10 px-4">
+              <span className="hidden sm:inline">{t.navCta}</span>
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+        </div>
+      </header>
 
       <main>
-        <section className="border-b border-white/[0.1]">
-          <div className="mx-auto grid min-h-[calc(100svh-64px)] max-w-[1440px] lg:grid-cols-[minmax(0,0.92fr)_minmax(520px,1.08fr)]">
-            <div className="flex flex-col justify-center px-5 py-12 sm:px-8 lg:border-r lg:border-white/[0.1] lg:px-12 lg:py-10 xl:px-16">
-              <Reveal>
-                <span className="inline-flex w-fit items-center gap-2 border border-[#315bd7]/60 bg-[#315bd7]/10 px-3 py-1.5 text-[11px] font-medium text-[#9bb1f8]">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#5f82ec]" />
-                  {copy.hero.badge}
-                </span>
-              </Reveal>
-              <Reveal delay={0.05}>
-                <h1 className="mt-6 max-w-3xl text-[clamp(42px,4.5vw,64px)] font-semibold leading-[0.97] tracking-[-0.052em]">
-                  {copy.hero.title}
-                </h1>
-              </Reveal>
-              <Reveal delay={0.1}>
-                <p className="mt-6 max-w-2xl text-[16px] leading-7 text-white/55 sm:text-[17px]">
-                  {copy.hero.lead}
-                </p>
-              </Reveal>
-              <Reveal delay={0.15}>
-                <div className="mt-7 flex flex-wrap gap-3">
-                  <Link
-                    href="/max"
-                    className="inline-flex h-12 items-center gap-2 bg-[#315bd7] px-5 text-sm font-semibold transition-colors hover:bg-[#4169df]"
-                  >
-                    {copy.hero.primary}
-                    <ArrowRight className="h-4 w-4" />
-                  </Link>
-                  <a
-                    href="#result"
-                    className="inline-flex h-12 items-center gap-2 border border-white/[0.16] px-5 text-sm font-medium text-white/70 transition-colors hover:border-white/30 hover:text-white"
-                  >
-                    {copy.hero.secondary}
-                  </a>
-                </div>
-              </Reveal>
-              <Reveal delay={0.2}>
-                <div className="mt-6 flex flex-wrap gap-x-6 gap-y-3 border-t border-white/[0.1] pt-5 text-xs text-white/38">
-                  <span className="flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-[#7897f4]" />
-                    {copy.hero.owner}
+        <section className="studio-grid studio-glow overflow-hidden border-b border-[#1e243f] pb-24 pt-24 sm:pt-32">
+          <div className="mx-auto max-w-[1080px] px-5 text-center sm:px-8">
+            <Reveal>
+              <span className="inline-flex items-center gap-2 rounded-full border border-blue-400/25 bg-blue-400/[0.07] px-3 py-1.5 text-xs font-medium text-blue-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                {t.eyebrow}
+              </span>
+              <h1 className="font-display mx-auto mt-7 max-w-5xl text-5xl font-semibold leading-[0.98] tracking-[-0.05em] sm:text-6xl lg:text-[76px]">
+                {t.heroA}{" "}
+                <span className="text-blue-400">{t.heroB}</span>
+              </h1>
+              <p className="mx-auto mt-7 max-w-3xl text-lg leading-8 text-slate-400 sm:text-xl">
+                {t.heroLead}
+              </p>
+              <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
+                <Link href="/max" className="marketing-button marketing-button-primary min-h-12 px-6">
+                  {t.heroCta}
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+                <a href="#capabilities" className="marketing-button marketing-button-secondary min-h-12 px-6">
+                  {t.heroAlt}
+                  <ChevronRight className="h-4 w-4" />
+                </a>
+              </div>
+              <div className="mt-8 flex flex-wrap justify-center gap-x-6 gap-y-2 text-xs text-slate-500">
+                {t.proof.map((item) => (
+                  <span key={item} className="inline-flex items-center gap-2">
+                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                    {item}
                   </span>
-                  <span className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-400" />
-                    Статусы из реальных систем
-                  </span>
-                </div>
-              </Reveal>
-            </div>
+                ))}
+              </div>
+            </Reveal>
+            <Reveal delay={120}>
+              <AgentWindow t={t} />
+            </Reveal>
+          </div>
+        </section>
 
-            <div className="flex items-center bg-[#151613] px-5 py-12 sm:px-8 lg:px-10 xl:px-14">
-              <Reveal className="w-full" delay={0.08} y={16}>
-                <ProductPreview />
-              </Reveal>
+        <section id="capabilities" className="border-b border-[#1e243f] py-24 sm:py-32">
+          <div className="mx-auto max-w-[1200px] px-5 sm:px-8">
+            <Reveal>
+              <SectionHeading kicker={t.directionsKicker} title={t.directionsTitle} lead={t.directionsLead} />
+            </Reveal>
+            <div className="mt-14 grid gap-4 md:grid-cols-2">
+              {products.map(({ Icon, ...product }, index) => (
+                <Reveal key={product.href} delay={index * 60}>
+                  <Link
+                    href={product.href}
+                    className={`group flex min-h-56 flex-col rounded-2xl border p-7 transition ${
+                      product.active
+                        ? "border-blue-400/35 bg-[#0f121f] hover:border-blue-400/65"
+                        : "border-[#1e243f] bg-[#0b0e17] hover:bg-[#0f121f]"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <span className={`grid h-11 w-11 place-items-center rounded-xl ${product.active ? "bg-blue-500 text-white" : "bg-[#13172a] text-slate-500"}`}>
+                        <Icon className="h-5 w-5" />
+                      </span>
+                      <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ${product.active ? "border-emerald-400/25 bg-emerald-400/[0.08] text-emerald-300" : "border-[#293352] text-slate-600"}`}>
+                        {product.active ? t.available : t.soon}
+                      </span>
+                    </div>
+                    <h3 className="font-display mt-8 text-2xl font-semibold">{isEn ? product.titleEn : product.title}</h3>
+                    <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{isEn ? product.textEn : product.text}</p>
+                    <ArrowRight className={`mt-auto h-4 w-4 transition-transform group-hover:translate-x-1 ${product.active ? "text-blue-400" : "text-slate-700"}`} />
+                  </Link>
+                </Reveal>
+              ))}
             </div>
           </div>
         </section>
 
-        <section id="result" className="border-b border-white/[0.1]">
-          <div className="mx-auto max-w-[1440px] px-5 py-20 sm:px-8 lg:px-12 lg:py-24 xl:px-16">
-            <SectionIntro
-              eyebrow={copy.result.eyebrow}
-              title={copy.result.title}
-              lead={copy.result.lead}
-            />
-            <div className="mt-12 grid border-l border-t border-white/[0.1] sm:grid-cols-2 lg:grid-cols-4">
-              {deliverables.map(({ title, text, Icon }, index) => (
-                <Reveal key={title} delay={index * 0.04}>
-                  <article className="flex min-h-[250px] flex-col border-b border-r border-white/[0.1] bg-[#141513] p-6">
-                    <div className="flex items-center justify-between">
-                      <Icon className="h-5 w-5 text-[#7897f4]" />
-                      <span className="font-mono text-[10px] text-white/20">
-                        0{index + 1}
-                      </span>
-                    </div>
-                    <div className="mt-auto">
-                      <h3 className="text-lg font-semibold">{title}</h3>
-                      <p className="mt-3 text-sm leading-6 text-white/42">
-                        {text}
-                      </p>
-                    </div>
+        <section id="workflow" className="bg-[#0b0e17] py-24 sm:py-32">
+          <div className="mx-auto max-w-[1200px] px-5 sm:px-8">
+            <Reveal>
+              <SectionHeading kicker={t.workflowKicker} title={t.workflowTitle} lead={t.workflowLead} />
+            </Reveal>
+            <div className="mt-16 grid gap-4 lg:grid-cols-3">
+              {workflow.map(({ Icon, ...item }, index) => (
+                <Reveal key={item.number} delay={index * 70}>
+                  <article className="studio-card relative h-full min-h-72 overflow-hidden p-7">
+                    <span className="font-mono text-xs text-blue-400">{item.number}</span>
+                    <Icon className="mt-14 h-7 w-7 text-slate-300" />
+                    <h3 className="font-display mt-6 text-xl font-semibold">{isEn ? item.titleEn : item.title}</h3>
+                    <p className="mt-3 text-sm leading-6 text-slate-500">{isEn ? item.textEn : item.text}</p>
+                    <span className="absolute -right-6 -top-10 font-display text-[150px] font-bold leading-none text-white/[0.018]">{item.number}</span>
                   </article>
                 </Reveal>
               ))}
@@ -496,370 +447,116 @@ export default async function LandingPage() {
           </div>
         </section>
 
-        <section id="products" className="border-b border-white/[0.1] bg-[#151613]">
-          <div className="mx-auto max-w-[1440px] px-5 py-20 sm:px-8 lg:px-12 lg:py-24 xl:px-16">
-            <SectionIntro
-              eyebrow={copy.products.eyebrow}
-              title={copy.products.title}
-              lead={copy.products.lead}
-            />
-            <div className="mt-12 grid gap-3 lg:grid-cols-4">
-              {products.map(({ href, title, description, active, Icon }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className="group flex min-h-[300px] flex-col border border-white/[0.1] bg-[#10110f] p-5 transition-colors hover:border-white/[0.22]"
-                >
-                  <div className="flex items-start justify-between">
-                    <span className="flex h-10 w-10 items-center justify-center border border-white/[0.1] bg-white/[0.03]">
-                      <Icon className="h-5 w-5 text-[#7897f4]" />
+        <section className="border-y border-[#1e243f] py-24 sm:py-32">
+          <div className="mx-auto grid max-w-[1200px] gap-14 px-5 sm:px-8 lg:grid-cols-[0.8fr_1.2fr] lg:items-start">
+            <Reveal>
+              <div className="lg:sticky lg:top-32">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-400">{t.resultKicker}</p>
+                <h2 className="font-display mt-4 text-3xl font-semibold leading-tight tracking-[-0.035em] sm:text-4xl">{t.resultTitle}</h2>
+                <p className="mt-5 text-base leading-7 text-slate-400">{t.resultLead}</p>
+              </div>
+            </Reveal>
+            <div className="grid gap-px overflow-hidden rounded-2xl border border-[#1e243f] bg-[#1e243f] sm:grid-cols-2">
+              {outcomes.map(({ Icon, ...item }, index) => (
+                <Reveal key={item.title} delay={index * 40}>
+                  <div className="flex min-h-32 items-center gap-4 bg-[#0f121f] p-6">
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-blue-400/[0.08] text-blue-400">
+                      <Icon className="h-5 w-5" />
                     </span>
-                    <span
-                      className={
-                        active
-                          ? "bg-[#315bd7] px-2 py-1 text-[10px] font-medium uppercase tracking-[0.12em]"
-                          : "border border-white/[0.1] px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-white/30"
-                      }
-                    >
-                      {active ? copy.products.open : copy.products.soon}
-                    </span>
+                    <span className="font-display text-base font-semibold">{isEn ? item.titleEn : item.title}</span>
                   </div>
-                  <div className="mt-auto">
-                    <h3 className="text-xl font-semibold tracking-[-0.025em]">
-                      {title}
-                    </h3>
-                    <p className="mt-3 text-sm leading-6 text-white/42">
-                      {description}
-                    </p>
-                    <div className="mt-5 flex items-center justify-between border-t border-white/[0.08] pt-4 text-xs text-white/35">
-                      <span>{active ? "Открыть билдер" : "Подробнее"}</span>
-                      <ArrowUpRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-                    </div>
-                  </div>
-                </Link>
+                </Reveal>
               ))}
             </div>
           </div>
         </section>
 
-        <section id="process" className="border-b border-white/[0.1]">
-          <div className="mx-auto max-w-[1440px] px-5 py-20 sm:px-8 lg:px-12 lg:py-24 xl:px-16">
-            <SectionIntro
-              eyebrow={copy.process.eyebrow}
-              title={copy.process.title}
-              lead={copy.process.lead}
-            />
-            <div className="mt-12 grid gap-px border border-white/[0.1] bg-white/[0.1] lg:grid-cols-4">
-              {process.map(({ step, title, text, Icon }) => (
-                <article key={step} className="bg-[#10110f] p-6">
-                  <div className="flex items-center justify-between text-white/25">
-                    <span className="font-mono text-xs">{step}</span>
-                    <Icon className="h-5 w-5 text-[#7897f4]" />
+        <section id="integrations" className="bg-[#0b0e17] py-24 sm:py-32">
+          <div className="mx-auto max-w-[1200px] px-5 sm:px-8">
+            <Reveal>
+              <SectionHeading kicker={t.integrationsKicker} title={t.integrationsTitle} lead={t.integrationsLead} />
+            </Reveal>
+            <div className="mt-14 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+              {integrations.map(({ name, Icon }, index) => (
+                <Reveal key={name} delay={index * 40}>
+                  <div className="studio-card flex min-h-32 flex-col items-center justify-center gap-4 p-4 text-center">
+                    <Icon className="h-6 w-6 text-blue-400" />
+                    <span className="text-xs font-medium text-slate-300">{name}</span>
                   </div>
-                  <h3 className="mt-16 text-lg font-semibold">{title}</h3>
-                  <p className="mt-3 text-sm leading-6 text-white/42">{text}</p>
-                </article>
+                </Reveal>
               ))}
             </div>
           </div>
         </section>
 
-        <section
-          id="integrations"
-          className="border-b border-white/[0.1] bg-[#151613]"
-        >
-          <div className="mx-auto max-w-[1440px] px-5 py-20 sm:px-8 lg:px-12 lg:py-24 xl:px-16">
-            <div className="grid gap-12 lg:grid-cols-[0.72fr_1.28fr]">
+        <section id="launch" className="border-y border-[#1e243f] py-24 sm:py-32">
+          <div className="mx-auto grid max-w-[1200px] gap-12 px-5 sm:px-8 lg:grid-cols-2 lg:items-center">
+            <Reveal>
               <div>
-                <p className="marketing-kicker text-[#7897f4]">
-                  {copy.integrations.eyebrow}
-                </p>
-                <h2 className="mt-5 max-w-2xl text-[clamp(38px,4vw,58px)] font-semibold leading-[1] tracking-[-0.045em]">
-                  {copy.integrations.title}
-                </h2>
-                <p className="mt-6 max-w-xl text-[15px] leading-7 text-white/45">
-                  {copy.integrations.lead}
-                </p>
-                <Link
-                  href="/max"
-                  className="mt-8 inline-flex items-center gap-2 text-sm font-medium text-[#9bb1f8] hover:text-white"
-                >
-                  Перейти в MAX Studio
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-400">{t.launchKicker}</p>
+                <h2 className="font-display mt-4 text-3xl font-semibold leading-tight tracking-[-0.035em] sm:text-5xl">{t.launchTitle}</h2>
+                <p className="mt-5 max-w-xl text-base leading-7 text-slate-400">{t.launchLead}</p>
+                <Link href="/max" className="marketing-button marketing-button-primary mt-8">
+                  {t.heroCta}
                   <ArrowRight className="h-4 w-4" />
                 </Link>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {integrations.map(({ name, task, status, active, Icon }) => (
-                  <article
-                    key={name}
-                    className="flex items-center gap-4 border border-white/[0.1] bg-[#10110f] p-4"
-                  >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center border border-white/[0.1] text-[#7897f4]">
-                      <Icon className="h-[18px] w-[18px]" />
+            </Reveal>
+            <Reveal delay={80}>
+              <div className="studio-card p-4 sm:p-6">
+                {[
+                  ["01", isEn ? "Application build" : "Рабочая сборка приложения"],
+                  ["02", isEn ? "Verified MAX bot" : "Проверенный MAX-бот"],
+                  ["03", isEn ? "Permanent HTTPS version" : "Постоянная HTTPS-версия"],
+                  ["04", isEn ? "Active webhook" : "Активный webhook"],
+                  ["05", isEn ? "MAX dashboard URL" : "URL добавлен в кабинете MAX"],
+                ].map(([number, label], index) => (
+                  <div key={number} className="flex items-center gap-4 border-b border-[#1e243f] px-2 py-4 last:border-0">
+                    <span className="font-mono text-xs text-slate-600">{number}</span>
+                    <span className="flex-1 text-sm text-slate-300">{label}</span>
+                    <span className={`grid h-6 w-6 place-items-center rounded-full ${index < 4 ? "bg-emerald-400/10 text-emerald-400" : "border border-[#334166] text-slate-600"}`}>
+                      {index < 4 ? <Check className="h-3.5 w-3.5" /> : null}
                     </span>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="font-medium">{name}</h3>
-                      <p className="mt-0.5 text-xs text-white/35">{task}</p>
-                    </div>
-                    <span
-                      className={
-                        active
-                          ? "text-[10px] font-medium uppercase tracking-[0.1em] text-emerald-400"
-                          : "text-[10px] uppercase tracking-[0.1em] text-white/25"
-                      }
-                    >
-                      {status}
-                    </span>
-                  </article>
+                  </div>
                 ))}
               </div>
-            </div>
+            </Reveal>
           </div>
         </section>
 
-        <section className="bg-[#315bd7]">
-          <div className="mx-auto grid max-w-[1440px] gap-10 px-5 py-16 sm:px-8 lg:grid-cols-[1fr_auto] lg:items-end lg:px-12 lg:py-20 xl:px-16">
-            <div>
-              <p className="marketing-kicker text-white/60">
-                {copy.final.eyebrow}
-              </p>
-              <h2 className="mt-5 max-w-4xl text-[clamp(38px,5vw,70px)] font-semibold leading-[0.98] tracking-[-0.05em]">
-                {copy.final.title}
-              </h2>
+        <section className="studio-grid studio-glow py-24 text-center sm:py-32">
+          <Reveal>
+            <div className="mx-auto max-w-3xl px-5 sm:px-8">
+              <h2 className="font-display text-4xl font-semibold tracking-[-0.04em] sm:text-6xl">{t.finalTitle}</h2>
+              <p className="mx-auto mt-6 max-w-2xl text-base leading-7 text-slate-400">{t.finalLead}</p>
+              <Link href="/max" className="marketing-button marketing-button-primary mt-9 min-h-12 px-7">
+                {t.finalCta}
+                <ArrowRight className="h-4 w-4" />
+              </Link>
             </div>
-            <Link
-              href="/max"
-              className="inline-flex h-12 items-center justify-center gap-2 bg-white px-6 text-sm font-semibold text-[#151613] hover:bg-[#eceff8]"
-            >
-              {copy.final.cta}
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </div>
+          </Reveal>
         </section>
       </main>
 
-      <MarketingFooter />
+      <footer className="border-t border-[#1e243f] bg-[#080a10]">
+        <div className="mx-auto grid max-w-[1200px] gap-10 px-5 py-12 sm:px-8 md:grid-cols-[1fr_auto]">
+          <div>
+            <BrandMark inverse />
+            <p className="mt-4 max-w-sm text-sm leading-6 text-slate-500">{t.footer}</p>
+          </div>
+          <div className="grid grid-cols-2 gap-x-10 gap-y-3 text-sm text-slate-500 sm:grid-cols-3">
+            <Link href="/legal/privacy" className="hover:text-white">{isEn ? "Privacy" : "Конфиденциальность"}</Link>
+            <Link href="/legal/terms" className="hover:text-white">{isEn ? "Terms" : "Условия"}</Link>
+            <Link href="/legal/personal-data" className="hover:text-white">{isEn ? "Personal data" : "Персональные данные"}</Link>
+            <Link href="/legal/cookies" className="hover:text-white">Cookies</Link>
+            <Link href="/legal/refunds" className="hover:text-white">{isEn ? "Refunds" : "Оплата и возвраты"}</Link>
+            <a href="mailto:support@lead-generator.ru" className="inline-flex items-center gap-1 hover:text-white">
+              Support
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        </div>
+      </footer>
     </div>
-  );
-}
-
-function ProductPreview() {
-  return (
-    <div className="border border-white/[0.14] bg-[#10110f] shadow-2xl shadow-black/30">
-      <div className="flex items-center justify-between border-b border-white/[0.1] px-4 py-3">
-        <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-emerald-400" />
-          <span className="text-xs font-medium text-white/70">Кофе Рядом</span>
-        </div>
-        <span className="text-[10px] uppercase tracking-[0.12em] text-white/25">
-          MAX Studio
-        </span>
-      </div>
-      <div className="grid gap-px bg-white/[0.1] sm:grid-cols-[0.82fr_1.18fr]">
-        <div className="bg-[#151613] p-4 sm:p-5">
-          <div className="mx-auto max-w-[230px] border border-white/[0.12] bg-[#f4f1e8] p-3 text-[#171815]">
-            <div className="flex items-center justify-between text-[9px] font-medium">
-              <span>КОФЕ РЯДОМ</span>
-              <span>1 250 баллов</span>
-            </div>
-            <div className="mt-4 bg-[#262824] p-4 text-white">
-              <p className="text-[9px] uppercase tracking-[0.14em] text-white/45">
-                Персональное предложение
-              </p>
-              <p className="mt-2 text-xl font-semibold leading-5">
-                Ваш шестой кофе — за наш счёт
-              </p>
-              <button
-                type="button"
-                className="mt-4 w-full bg-[#315bd7] px-3 py-2 text-[10px] font-semibold"
-              >
-                Активировать
-              </button>
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <div className="border border-black/10 p-2">
-                <p className="text-[8px] text-black/45">Заказов</p>
-                <p className="mt-1 text-sm font-semibold">12</p>
-              </div>
-              <div className="border border-black/10 p-2">
-                <p className="text-[8px] text-black/45">Скидка</p>
-                <p className="mt-1 text-sm font-semibold">10%</p>
-              </div>
-            </div>
-          </div>
-          <p className="mt-4 text-center text-[10px] text-white/25">
-            Мобильное превью внутри MAX
-          </p>
-        </div>
-        <div className="bg-[#10110f] p-5">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.14em] text-white/25">
-                Готовность к запуску
-              </p>
-              <p className="mt-1 text-2xl font-semibold">86%</p>
-            </div>
-            <span className="border border-emerald-400/25 bg-emerald-400/[0.07] px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-emerald-300">
-              Сборка готова
-            </span>
-          </div>
-          <div className="mt-4 h-1 bg-white/[0.08]">
-            <div className="h-full w-[86%] bg-[#315bd7]" />
-          </div>
-          <div className="mt-6 space-y-0 border-t border-white/[0.1]">
-            {[
-              ["Приложение собрано", true],
-              ["MAX-бот проверен", true],
-              ["HTTPS опубликован", true],
-              ["URL добавлен в MAX", false],
-            ].map(([label, done]) => (
-              <div
-                key={String(label)}
-                className="flex items-center gap-3 border-b border-white/[0.1] py-3 text-xs"
-              >
-                <span
-                  className={
-                    done
-                      ? "flex h-4 w-4 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
-                      : "h-4 w-4 rounded-full border border-white/20"
-                  }
-                >
-                  {done && <Check className="h-2.5 w-2.5" />}
-                </span>
-                <span className={done ? "text-white/45" : "text-white/80"}>
-                  {label}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-5 grid grid-cols-2 gap-2">
-            <div className="border border-white/[0.1] p-3">
-              <p className="text-[9px] uppercase tracking-[0.1em] text-white/25">
-                Интеграции
-              </p>
-              <p className="mt-2 text-xs text-white/70">ЮKassa · iiko</p>
-            </div>
-            <div className="border border-white/[0.1] p-3">
-              <p className="text-[9px] uppercase tracking-[0.1em] text-white/25">
-                Публикация
-              </p>
-              <p className="mt-2 text-xs text-white/70">Постоянный HTTPS</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MarketingNav({
-  copy,
-}: {
-  copy: (typeof RU)["nav"] | (typeof EN)["nav"];
-}) {
-  return (
-    <header className="sticky top-0 z-50 border-b border-white/[0.1] bg-[#10110f]/95 backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-12 xl:px-16">
-        <BrandMark inverse />
-        <nav className="hidden items-center gap-7 text-xs text-white/50 lg:flex">
-          <a href="#result" className="transition-colors hover:text-white">
-            {copy.result}
-          </a>
-          <a href="#products" className="transition-colors hover:text-white">
-            {copy.products}
-          </a>
-          <a href="#process" className="transition-colors hover:text-white">
-            {copy.process}
-          </a>
-          <a href="#integrations" className="transition-colors hover:text-white">
-            {copy.integrations}
-          </a>
-        </nav>
-        <div className="flex items-center gap-2">
-          <div className="hidden sm:block">
-            <LocaleSwitcher />
-          </div>
-          <Link
-            href="/login"
-            className="hidden h-9 items-center px-3 text-xs text-white/50 transition-colors hover:text-white sm:flex"
-          >
-            {copy.login}
-          </Link>
-          <Link
-            href="/max"
-            className="inline-flex h-9 items-center gap-2 bg-[#315bd7] px-4 text-xs font-semibold text-white transition-colors hover:bg-[#4169df]"
-          >
-            <span className="sm:hidden">MAX Studio</span>
-            <span className="hidden sm:inline">{copy.cta}</span>
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          </Link>
-        </div>
-      </div>
-    </header>
-  );
-}
-
-function SectionIntro({
-  eyebrow,
-  title,
-  lead,
-}: {
-  eyebrow: string;
-  title: string;
-  lead: string;
-}) {
-  return (
-    <Reveal>
-      <div className="grid gap-7 lg:grid-cols-[0.65fr_1.35fr] lg:gap-12">
-        <p className="marketing-kicker text-[#7897f4]">{eyebrow}</p>
-        <div>
-          <h2 className="max-w-4xl text-[clamp(36px,4.4vw,62px)] font-semibold leading-[1] tracking-[-0.045em]">
-            {title}
-          </h2>
-          <p className="mt-6 max-w-2xl text-[15px] leading-7 text-white/45">
-            {lead}
-          </p>
-        </div>
-      </div>
-    </Reveal>
-  );
-}
-
-function MarketingFooter() {
-  return (
-    <footer className="border-t border-white/[0.1] bg-[#10110f]">
-      <div className="mx-auto grid max-w-[1440px] gap-10 px-5 py-12 sm:px-8 md:grid-cols-[1fr_auto] lg:px-12 xl:px-16">
-        <div>
-          <BrandMark inverse />
-          <p className="mt-5 max-w-md text-sm leading-6 text-white/35">
-            Продуктовые билдеры для запуска цифровых сервисов. Сейчас доступно
-            направление MAX.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-x-10 gap-y-3 text-xs text-white/45">
-          <Link href="/max" className="hover:text-white">
-            MAX Studio
-          </Link>
-          <Link href="/legal/terms" className="hover:text-white">
-            Условия
-          </Link>
-          <Link href="/max/register" className="hover:text-white">
-            Регистрация
-          </Link>
-          <Link href="/legal/privacy" className="hover:text-white">
-            Политика данных
-          </Link>
-          <Link href="/login" className="hover:text-white">
-            Войти
-          </Link>
-          <Link href="/legal/refunds" className="hover:text-white">
-            Оплата и возвраты
-          </Link>
-        </div>
-        <div className="border-t border-white/[0.1] pt-5 text-xs text-white/25 md:col-span-2">
-          © 2026 Omnia · Россия
-        </div>
-      </div>
-    </footer>
   );
 }

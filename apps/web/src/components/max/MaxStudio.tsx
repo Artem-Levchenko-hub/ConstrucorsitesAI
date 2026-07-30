@@ -156,7 +156,7 @@ export function MaxStudio({ email }: { email: string }) {
   const ready = name.trim().length > 1 && idea.trim().length > 9;
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#121310] text-white">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#080a10] text-white">
       <MaxStudioHeader email={email} />
 
       <main className="max-studio-scroll flex-1 overflow-y-auto">
@@ -168,7 +168,7 @@ export function MaxStudio({ email }: { email: string }) {
             <div className="flex flex-col justify-center">
               <div className="px-5 py-12 sm:px-8 lg:px-12 lg:py-16 xl:px-16">
               <div className="mb-8 inline-flex w-fit items-center gap-2 border border-white/20 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-white/55">
-                <Sparkles className="h-3.5 w-3.5 text-[#7897f4]" />
+                <Sparkles className="h-3.5 w-3.5 text-[#8b5cf6]" />
                 Рабочая среда для MAX
               </div>
               <h1 className="max-w-3xl text-4xl font-semibold leading-[0.94] tracking-[-0.05em] sm:text-5xl xl:text-[70px]">
@@ -202,7 +202,7 @@ export function MaxStudio({ email }: { email: string }) {
                     key={title}
                     className="border-b border-white/15 py-5 sm:border-b-0 sm:border-r sm:px-5 first:sm:pl-0 last:sm:border-r-0"
                   >
-                    <Icon className="mb-8 h-5 w-5 text-[#7897f4]" />
+                    <Icon className="mb-8 h-5 w-5 text-[#8b5cf6]" />
                     <div className="text-sm font-medium">{title}</div>
                     <div className="mt-1 text-xs leading-5 text-white/40">{text}</div>
                   </div>
@@ -212,7 +212,7 @@ export function MaxStudio({ email }: { email: string }) {
             </div>
 
             <form
-              className="border-t border-white/[0.12] bg-[#1a1b18] p-5 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
+              className="border-t border-white/[0.12] bg-[#0f121f] p-5 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (ready && !create.isPending) create.mutate();
@@ -220,7 +220,7 @@ export function MaxStudio({ email }: { email: string }) {
             >
               <div className="mb-7 flex items-start justify-between gap-4">
                 <div>
-                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#7897f4]">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#8b5cf6]">
                     Новый MAX-проект
                   </p>
                   <h2 className="mt-2 text-2xl font-semibold tracking-tight">
@@ -241,7 +241,7 @@ export function MaxStudio({ email }: { email: string }) {
                       value={name}
                       onChange={(event) => setName(event.target.value)}
                       placeholder="Например, Кофе рядом"
-                      className="h-11 rounded-md border-white/[0.14] bg-[#121310]"
+                      className="h-11 rounded-md border-white/[0.14] bg-[#080a10]"
                       autoComplete="off"
                       maxLength={100}
                     />
@@ -255,7 +255,7 @@ export function MaxStudio({ email }: { email: string }) {
                       value={idea}
                       onChange={(event) => setIdea(event.target.value)}
                       placeholder="Получать баллы за покупки, выбирать награды и видеть персональные акции"
-                      className="min-h-24 resize-none rounded-md border-white/[0.14] bg-[#121310]"
+                      className="min-h-24 resize-none rounded-md border-white/[0.14] bg-[#080a10]"
                       maxLength={600}
                     />
                   </div>
@@ -275,13 +275,13 @@ export function MaxStudio({ email }: { email: string }) {
                           className={cn(
                             "rounded-md border p-3 text-left transition-colors",
                             active
-                              ? "border-[#7897f4] bg-[#315bd7]/14"
+                              ? "border-[#8b5cf6] bg-[#3b82f6]/14"
                               : "border-white/[0.1] bg-transparent hover:border-white/[0.22]",
                           )}
                         >
                           <span className="flex items-center justify-between gap-2">
                             <span className="text-sm font-medium">{item.label}</span>
-                            {active && <Check className="h-4 w-4 text-[#7897f4]" />}
+                            {active && <Check className="h-4 w-4 text-[#8b5cf6]" />}
                           </span>
                           <span className="mt-1 block text-xs leading-4 text-white/40">
                             {item.description}
@@ -306,7 +306,7 @@ export function MaxStudio({ email }: { email: string }) {
                           value={audience}
                           onChange={(event) => setAudience(event.target.value)}
                           placeholder="Постоянные гости"
-                          className="rounded-md border-white/[0.14] bg-[#121310]"
+                          className="rounded-md border-white/[0.14] bg-[#080a10]"
                           maxLength={160}
                         />
                       </div>
@@ -317,7 +317,7 @@ export function MaxStudio({ email }: { email: string }) {
                           value={primaryAction}
                           onChange={(event) => setPrimaryAction(event.target.value)}
                           placeholder="Обменять баллы"
-                          className="rounded-md border-white/[0.14] bg-[#121310]"
+                          className="rounded-md border-white/[0.14] bg-[#080a10]"
                           maxLength={160}
                         />
                       </div>
@@ -337,7 +337,7 @@ export function MaxStudio({ email }: { email: string }) {
                               className={cn(
                                 "rounded-md border px-3 py-1.5 text-xs transition-colors",
                                 active
-                                  ? "border-[#7897f4]/70 bg-[#315bd7]/16 text-white"
+                                  ? "border-[#8b5cf6]/70 bg-[#3b82f6]/16 text-white"
                                   : "border-white/[0.1] text-white/50 hover:border-white/20 hover:text-white/75",
                               )}
                             >
@@ -361,7 +361,7 @@ export function MaxStudio({ email }: { email: string }) {
                             className={cn(
                               "rounded-md border p-3 text-left",
                               style === item.id
-                                ? "border-[#7897f4] bg-[#315bd7]/14"
+                                ? "border-[#8b5cf6] bg-[#3b82f6]/14"
                                 : "border-white/[0.08] hover:border-white/[0.18]",
                             )}
                           >
@@ -383,7 +383,7 @@ export function MaxStudio({ email }: { email: string }) {
                         value={brandColors}
                         onChange={(event) => setBrandColors(event.target.value)}
                         placeholder="Например, графитовый и молочный"
-                        className="rounded-md border-white/[0.14] bg-[#121310]"
+                        className="rounded-md border-white/[0.14] bg-[#080a10]"
                         maxLength={120}
                       />
                     </div>
@@ -395,7 +395,7 @@ export function MaxStudio({ email }: { email: string }) {
                 type="submit"
                 size="xl"
                 disabled={!ready || create.isPending}
-                className="mt-7 w-full rounded-md bg-[#315bd7] hover:bg-[#2449b7]"
+                className="mt-7 w-full rounded-lg bg-[#3b82f6] hover:bg-[#2563eb]"
               >
                 {create.isPending ? (
                   <>
@@ -420,7 +420,7 @@ export function MaxStudio({ email }: { email: string }) {
         <section className="mx-auto w-full max-w-[1440px] px-5 py-12 sm:px-8 lg:px-12 lg:py-16 xl:px-16">
           <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#7897f4]">
+              <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#8b5cf6]">
                 Рабочая область
               </p>
               <h2 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
@@ -431,7 +431,7 @@ export function MaxStudio({ email }: { email: string }) {
               </p>
             </div>
             <div className="flex items-center gap-2 border border-white/[0.12] px-3 py-1.5 text-xs text-white/45">
-              <ShieldCheck className="h-3.5 w-3.5 text-[#7897f4]" />
+              <ShieldCheck className="h-3.5 w-3.5 text-[#8b5cf6]" />
               MAX Bridge и webhook уже в шаблоне
             </div>
           </div>

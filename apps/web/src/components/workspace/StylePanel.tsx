@@ -540,7 +540,7 @@ export function StylePanel({
               type="checkbox"
               checked={siteWide}
               onChange={(e) => setSiteWide(e.target.checked)}
-              className="accent-[var(--color-accent,#315bd7)]"
+              className="accent-[var(--color-accent,#3b82f6)]"
             />
             <Globe className="h-3 w-3" />
             Применить ко всему сайту

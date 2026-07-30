@@ -140,10 +140,10 @@ export function MaxProjectSetupDialog({
         </span>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto border-white/[0.1] bg-[#1a1b18] text-white sm:max-w-[760px]">
+        <DialogContent className="max-h-[92vh] overflow-y-auto border-white/[0.1] bg-[#0f121f] text-white sm:max-w-[760px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-white">
-              <FileCheck2 className="h-5 w-5 text-[#7897f4]" />
+              <FileCheck2 className="h-5 w-5 text-[#8b5cf6]" />
               Готовое приложение без разработчика
             </DialogTitle>
             <DialogDescription className="text-white/45">
@@ -154,7 +154,7 @@ export function MaxProjectSetupDialog({
 
           {config.isLoading || !current ? (
             <div className="flex min-h-44 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-[#7897f4]" />
+              <Loader2 className="h-5 w-5 animate-spin text-[#8b5cf6]" />
             </div>
           ) : (
             <div className="space-y-4">
@@ -207,7 +207,7 @@ export function MaxProjectSetupDialog({
                     <Label htmlFor="max-config-type">Тип приложения</Label>
                     <select
                       id="max-config-type"
-                      className="h-10 w-full rounded-md border border-white/[0.1] bg-[#121310] px-3 text-sm"
+                      className="h-10 w-full rounded-md border border-white/[0.1] bg-[#080a10] px-3 text-sm"
                       value={current.app_type}
                       onChange={(event) =>
                         setDraft({
@@ -241,7 +241,7 @@ export function MaxProjectSetupDialog({
                       id="max-config-colors"
                       className={inputClass}
                       value={current.brand_colors}
-                      placeholder="#315bd7, #f2f0e9"
+                      placeholder="#3b82f6, #f2f0e9"
                       onChange={(event) =>
                         setDraft({ ...current, brand_colors: event.target.value })
                       }
@@ -467,7 +467,7 @@ export function MaxProjectSetupDialog({
                         className={cn(
                           "rounded-xl border p-3 text-left",
                           checked
-                            ? "border-[#7897f4] bg-[#315bd7]/12"
+                            ? "border-[#8b5cf6] bg-[#3b82f6]/12"
                             : "border-white/[0.08] bg-black/15",
                         )}
                         onClick={() =>
@@ -482,7 +482,7 @@ export function MaxProjectSetupDialog({
                             className={cn(
                               "flex h-4 w-4 items-center justify-center rounded border",
                               checked
-                                ? "border-[#315bd7] bg-[#315bd7]"
+                                ? "border-[#3b82f6] bg-[#3b82f6]"
                                 : "border-white/20",
                             )}
                           >
@@ -501,7 +501,7 @@ export function MaxProjectSetupDialog({
                   <Label htmlFor="max-age-rating">Возрастная маркировка</Label>
                   <select
                     id="max-age-rating"
-                    className="h-10 w-full rounded-md border border-white/[0.1] bg-[#121310] px-3 text-sm sm:w-48"
+                    className="h-10 w-full rounded-md border border-white/[0.1] bg-[#080a10] px-3 text-sm sm:w-48"
                     value={current.legal.age_rating}
                     onChange={(event) =>
                       setDraft({
@@ -524,7 +524,7 @@ export function MaxProjectSetupDialog({
                 <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/[0.08] bg-black/15 p-3">
                   <input
                     type="checkbox"
-                    className="mt-0.5 h-4 w-4 accent-[#315bd7]"
+                    className="mt-0.5 h-4 w-4 accent-[#3b82f6]"
                     checked={current.legal.terms_accepted}
                     onChange={(event) =>
                       setDraft({
@@ -549,7 +549,7 @@ export function MaxProjectSetupDialog({
                 <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/[0.08] bg-black/15 p-3">
                   <input
                     type="checkbox"
-                    className="mt-0.5 h-4 w-4 accent-[#315bd7]"
+                    className="mt-0.5 h-4 w-4 accent-[#3b82f6]"
                     checked={current.max_url_attached}
                     disabled={save.isPending || saveMaxUrl.isPending}
                     onChange={(event) => {
@@ -565,7 +565,7 @@ export function MaxProjectSetupDialog({
                   <span>
                     <span className="flex items-center gap-2 text-xs font-medium">
                       {saveMaxUrl.isPending && (
-                        <Loader2 className="h-3 w-3 animate-spin text-[#7897f4]" />
+                        <Loader2 className="h-3 w-3 animate-spin text-[#8b5cf6]" />
                       )}
                       {saveMaxUrl.isPending
                         ? "Сохраняем подтверждение…"
@@ -579,7 +579,7 @@ export function MaxProjectSetupDialog({
                 </label>
               </section>
 
-              <div className="sticky bottom-0 z-10 -mx-1 bg-[#1a1b18]/95 px-1 pb-1 pt-3 backdrop-blur">
+              <div className="sticky bottom-0 z-10 -mx-1 bg-[#0f121f]/95 px-1 pb-1 pt-3 backdrop-blur">
                 <Button
                   className="h-11 w-full"
                   disabled={

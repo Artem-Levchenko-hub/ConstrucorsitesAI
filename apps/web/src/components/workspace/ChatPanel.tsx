@@ -211,9 +211,9 @@ export function ChatPanel({
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
     // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
-    <div className="flex flex-col h-full min-h-0 bg-surface-panel-dark">
-      <div className="shrink-0 px-4 h-10 flex items-center justify-between">
-        <span className="text-xs font-mono text-fg-tertiary uppercase tracking-wider">
+    <div className="flex h-full min-h-0 flex-col border-r border-[#1e243f] bg-[#080a10]">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#1e243f] px-4">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
           {mode === "max" ? "MAX-редактор" : "Чат"}
         </span>
         <button

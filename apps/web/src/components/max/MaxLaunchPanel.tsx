@@ -92,16 +92,16 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
   const botEmphasis = nextItem?.id === "bot";
 
   return (
-    <aside className="max-launch-panel flex h-full min-h-0 flex-col border-l border-white/[0.1] bg-[#151613]">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/[0.1] px-4">
+    <aside className="max-launch-panel flex h-full min-h-0 flex-col border-l border-[#1e243f] bg-[#13172a]">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#1e243f] px-4">
         <div className="flex items-center gap-2.5">
           <span
             className={cn(
               "h-1.5 w-1.5 rounded-full",
-              readiness.data?.ready_to_launch ? "bg-success" : "bg-[#7897f4]",
+              readiness.data?.ready_to_launch ? "bg-success" : "bg-[#8b5cf6]",
             )}
           />
-          <span className="text-xs font-medium text-white/75">Публикация</span>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Публикация</span>
         </div>
         <button
           type="button"
@@ -129,14 +129,14 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
               {readinessAvailable ? `${readiness.data.progress}%` : "—"}
             </span>
           </div>
-          <div className="mt-3 h-1 overflow-hidden bg-white/[0.08]">
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
             <div
-              className="h-full bg-[#315bd7] transition-[width]"
+              className="h-full rounded-full bg-[#3b82f6] transition-[width]"
               style={{ width: `${readiness.data?.progress ?? 0}%` }}
             />
           </div>
 
-          <div className="mt-5 border-l-2 border-[#7897f4]/70 pl-3">
+          <div className="mt-5 border-l-2 border-[#8b5cf6]/70 pl-3">
             <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/30">
               Следующий шаг
             </p>
@@ -201,7 +201,7 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
           >
             <Link href={`/max/${project.id}/integrations`}>
               <span className="flex items-center gap-2">
-                <Plug className="h-3.5 w-3.5 text-[#7897f4]" />
+                <Plug className="h-3.5 w-3.5 text-[#8b5cf6]" />
                 Интеграции
               </span>
               <ChevronRight className="h-3.5 w-3.5 text-white/25" />
@@ -231,7 +231,7 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
               href="https://business.max.ru/"
               target="_blank"
               rel="noreferrer"
-              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[#7897f4] hover:underline"
+              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[#8b5cf6] hover:underline"
             >
               Открыть кабинет MAX
               <ExternalLink className="h-3 w-3" />

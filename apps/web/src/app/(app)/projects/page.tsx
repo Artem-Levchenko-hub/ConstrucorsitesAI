@@ -16,11 +16,12 @@ export default async function ProjectsPage() {
       {/* The (app) layout pins height to the viewport (h-dvh + overflow-hidden)
           for the workspace. The projects page is a normal document — give it its
           own scroll area so >6 projects (rows past the fold) are reachable. */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="studio-grid min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[1240px] px-8 py-10 space-y-8">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1">
-              <h1 className="text-3xl font-semibold tracking-tight">Проекты</h1>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-400">Рабочее пространство</p>
+              <h1 className="font-display text-3xl font-semibold tracking-[-0.035em]">Проекты</h1>
               <p className="text-sm text-fg-secondary">
                 Каждый проект — отдельный сайт с git-историей и preview.
               </p>
