@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -15,7 +15,7 @@ from omnia_api.core.redis import publish_event
 from omnia_api.models.hero_media_asset import HeroMediaAsset
 from omnia_api.models.hero_media_brief import HeroMediaBrief
 from omnia_api.models.hero_media_render import HeroMediaRender
-from omnia_api.schemas.hero_media import HeroMediaDecision
+from omnia_api.schemas.hero_media import HeroMediaDecision, HeroMediaPlanKind
 from omnia_api.services import agent_media
 from omnia_api.services.hero_media_assembler import build_hero_bundle
 from omnia_api.services.image_resolver import generate_and_store_image
@@ -82,6 +82,11 @@ def _pick_asset(assets: list[HeroMediaAsset], index: int | None) -> HeroMediaAss
     return None
 
 
+def _locked_media_plan(render: HeroMediaRender) -> HeroMediaPlanKind:
+    """Use the immutable choice captured when this render was queued."""
+    return cast(HeroMediaPlanKind, render.media_plan)
+
+
 async def run_hero_media_render(render_id: UUID) -> None:
     settings = get_settings()
     engine = get_engine()
@@ -108,15 +113,23 @@ async def run_hero_media_render(render_id: UUID) -> None:
         )
         source_assets = _ordered_assets(brief.asset_ids, list(result.scalars()))
         decision = HeroMediaDecision.model_validate(brief.plan)
-        effective_plan = brief.selected_plan_kind or brief.recommended_plan_kind
+        # A brief can be approved again after this render was queued. Retry the
+        # original choice instead of silently turning motion into paid video.
+        effective_plan = _locked_media_plan(render)
 
         _append_progress(render, status="rendering", detail="Готовлю постер и media-plan hero")
         render.started_at = _now()
         await session.commit()
         await _publish_status(render)
 
-        primary_asset = _pick_asset(source_assets, decision.storyboard[0].primary_asset_index if decision.storyboard else None)
-        secondary_asset = _pick_asset(source_assets, decision.storyboard[0].secondary_asset_index if decision.storyboard else None)
+        primary_asset = _pick_asset(
+            source_assets,
+            decision.storyboard[0].primary_asset_index if decision.storyboard else None,
+        )
+        secondary_asset = _pick_asset(
+            source_assets,
+            decision.storyboard[0].secondary_asset_index if decision.storyboard else None,
+        )
         shot = decision.storyboard[0] if decision.storyboard else None
 
         poster_asset: HeroMediaAsset | None = None
@@ -143,12 +156,17 @@ async def run_hero_media_render(render_id: UUID) -> None:
             )
             render.poster_asset_id = poster_asset.id
             render.video_asset_id = None
-            render.provider_summary = "stub-mode: planner/render simulated; no real vendor media call"
+            render.provider_summary = (
+                "stub-mode: planner/render simulated; no real vendor media call"
+            )
             render.bundle = bundle.model_dump()
             _append_progress(
                 render,
                 status="completed",
-                detail="Stub-mode hero готов: preview/apply path реальный, media provider симулирован",
+                detail=(
+                    "Stub-mode hero готов: preview/apply path реальный, "
+                    "media provider симулирован"
+                ),
             )
             render.finished_at = _now()
             await session.commit()
@@ -165,7 +183,9 @@ async def run_hero_media_render(render_id: UUID) -> None:
             if not poster_url and primary_asset is not None:
                 poster_asset = primary_asset
             elif not poster_url:
-                raise RuntimeError("poster generation failed and no uploaded source asset is available")
+                raise RuntimeError(
+                    "poster generation failed and no uploaded source asset is available"
+                )
             else:
                 poster_asset = HeroMediaAsset(
                     project_id=render.project_id,
@@ -208,8 +228,12 @@ async def run_hero_media_render(render_id: UUID) -> None:
                     aspect="16:9",
                     first_frame=shot.first_frame_prompt if shot and primary_asset is None else None,
                     last_frame=shot.last_frame_prompt if shot and secondary_asset is None else None,
-                    first_frame_url=primary_asset.storage_url if primary_asset is not None else None,
-                    last_frame_url=secondary_asset.storage_url if secondary_asset is not None else None,
+                    first_frame_url=primary_asset.storage_url
+                    if primary_asset is not None
+                    else None,
+                    last_frame_url=secondary_asset.storage_url
+                    if secondary_asset is not None
+                    else None,
                 )
                 if video_result.get("ok"):
                     break
@@ -264,9 +288,8 @@ async def run_hero_media_render(render_id: UUID) -> None:
 
         render.poster_asset_id = poster_asset.id
         render.video_asset_id = video_asset.id if video_asset is not None else None
-        render.provider_summary = (
-            f"plan={effective_plan}; video_model={settings.video_gen_model if video_asset else 'none'}"
-        )
+        video_model = settings.video_gen_model if video_asset else "none"
+        render.provider_summary = f"plan={effective_plan}; video_model={video_model}"
         render.bundle = bundle.model_dump()
         _append_progress(render, status="completed", detail="Hero готов")
         render.finished_at = _now()

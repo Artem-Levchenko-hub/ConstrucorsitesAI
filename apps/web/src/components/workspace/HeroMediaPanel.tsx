@@ -344,7 +344,8 @@ export function HeroMediaPanel({
 
   const retryMut = useMutation({
     mutationFn: () => retryHeroMediaRender(project.id, activeRender!.id),
-    onSuccess: () => {
+    onSuccess: (render) => {
+      qc.setQueryData(["hero-media-render", project.id, render.id], render);
       qc.invalidateQueries({ queryKey: ["hero-media-renders", project.id] });
       toast.success("Рендер отправлен на повтор");
     },
@@ -360,6 +361,9 @@ export function HeroMediaPanel({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["snapshots", project.id] });
       qc.invalidateQueries({ queryKey: ["hero-media-renders", project.id] });
+      qc.invalidateQueries({
+        queryKey: ["hero-media-render", project.id, activeRender!.id],
+      });
       toast.success("Hero применён в текущую версию сайта");
       onApplied?.();
     },

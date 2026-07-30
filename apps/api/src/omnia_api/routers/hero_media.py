@@ -169,9 +169,9 @@ def _render_block(render: HeroMediaRenderPublic) -> str:
         )
     return (
         "<!-- OMNIA_HERO_MEDIA_START -->\n"
-        f"<style id=\"omnia-hero-media-style\">{bundle.css}</style>\n"
+        f'<style id="omnia-hero-media-style">{bundle.css}</style>\n'
         f"{bundle.html}\n"
-        f"<script id=\"omnia-hero-media-script\">{bundle.js}</script>\n"
+        f'<script id="omnia-hero-media-script">{bundle.js}</script>\n'
         "<!-- OMNIA_HERO_MEDIA_END -->"
     )
 
@@ -186,16 +186,36 @@ def _apply_hero_block(html: str, block: str) -> str:
         body_tag = body_match.group(0)
         if "data-omnia-hero-media" not in body_tag.lower():
             marked_body = body_tag[:-1] + ' data-omnia-hero-media="true">'
-            cleaned = (
-                cleaned[: body_match.start()]
-                + marked_body
-                + cleaned[body_match.end() :]
-            )
+            cleaned = cleaned[: body_match.start()] + marked_body + cleaned[body_match.end() :]
             insert_at = body_match.start() + len(marked_body)
         else:
             insert_at = body_match.end()
         return cleaned[:insert_at] + "\n" + block + cleaned[insert_at:]
     return block + "\n" + cleaned
+
+
+def _prepare_render_retry(render: HeroMediaRender) -> None:
+    render.status = "queued"
+    render.status_detail = "Повторно поставлено в очередь"
+    render.provider_summary = None
+    render.error = None
+    render.bundle = None
+    render.poster_asset_id = None
+    render.video_asset_id = None
+    render.applied_snapshot_id = None
+    render.applied_at = None
+    render.started_at = None
+    render.finished_at = None
+    render.retry_count += 1
+    log = list(render.progress_log or [])
+    log.append(
+        {
+            "at": datetime.now(UTC).isoformat(),
+            "status": "queued",
+            "detail": "Повторно поставлено в очередь",
+        }
+    )
+    render.progress_log = log
 
 
 @router.post("/{project_id}/hero-media/assets", response_model=HeroMediaAssetPublic)
@@ -285,8 +305,7 @@ async def create_hero_media_plan(
     _require_feature()
     await _owned_project(session, project_id, current_user.id)
     asset_ids = [
-        str(asset_id)
-        for asset_id in payload.asset_ids[: get_settings().hero_media_max_assets]
+        str(asset_id) for asset_id in payload.asset_ids[: get_settings().hero_media_max_assets]
     ]
     assets: list[HeroMediaAsset] = []
     if asset_ids:
@@ -483,23 +502,7 @@ async def retry_hero_media_render(
             "Render can be retried only after it failed or completed.",
             status.HTTP_409_CONFLICT,
         )
-    render.status = "queued"
-    render.status_detail = "Повторно поставлено в очередь"
-    render.error = None
-    render.bundle = None
-    render.poster_asset_id = None
-    render.video_asset_id = None
-    render.applied_snapshot_id = None
-    render.applied_at = None
-    log = list(render.progress_log or [])
-    log.append(
-        {
-            "at": datetime.now(UTC).isoformat(),
-            "status": "queued",
-            "detail": "Повторно поставлено в очередь",
-        }
-    )
-    render.progress_log = log
+    _prepare_render_retry(render)
     await session.commit()
     await session.refresh(render)
     enqueue_hero_media_render(render.id)
@@ -602,7 +605,7 @@ async def apply_hero_media_render(
             "at": render.applied_at.isoformat(),
             "status": "completed",
             "detail": "Hero применён в текущий static snapshot",
-        }
+        },
     ]
     await session.commit()
     await session.refresh(snapshot)
