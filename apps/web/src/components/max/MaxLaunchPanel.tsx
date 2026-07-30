@@ -60,7 +60,6 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
       : 10_000,
   });
 
-  const connected = integration.data?.connected === true;
   const webhookActive = integration.data?.status === "active";
   const busyDeploy = ["building", "pushing", "swapping", "cancelling"].includes(
     deploy.data?.phase ?? "",
@@ -181,14 +180,14 @@ export function MaxLaunchPanel({ project }: { project: Project }) {
             <MaxProjectSetupDialog
               projectId={project.id}
               emphasized={configurationEmphasis}
-              label={nextItem?.id === "max_url" ? "Подтвердить URL" : "Данные приложения"}
+              label={nextItem?.id === "max_url" ? "URL в MAX" : "Приложение"}
             />
             <MaxIntegrationButton
               projectId={project.id}
               initialTemplate={project.template}
               display="panel"
               emphasized={botEmphasis}
-              label={connected ? "Настройки бота" : "Подключить бота"}
+              label="MAX-бот"
             />
           </div>
           <MaxLaunchButton projectId={project.id} />

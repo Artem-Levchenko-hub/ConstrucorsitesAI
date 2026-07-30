@@ -100,7 +100,7 @@ export function MaxProjectSetupDialog({
         className={
           display === "panel"
             ? cn(
-                "h-10 w-full gap-1.5 rounded-lg px-2 text-[11px]",
+                "h-10 min-w-0 w-full gap-1.5 overflow-hidden rounded-lg px-2 text-[11px]",
                 !emphasized &&
                   "border-white/[0.1] bg-white/[0.035] text-white/75 hover:bg-white/[0.07]",
               )
@@ -110,7 +110,9 @@ export function MaxProjectSetupDialog({
         data-testid="max-settings-open"
       >
         <Settings2 className="h-3.5 w-3.5" />
-        {display === "panel" ? label : "Настройки"}
+        <span className="min-w-0 truncate">
+          {display === "panel" ? label : "Настройки"}
+        </span>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[92vh] overflow-y-auto border-white/[0.1] bg-[#12141d] text-white sm:max-w-[760px]">

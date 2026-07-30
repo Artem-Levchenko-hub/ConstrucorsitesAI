@@ -128,14 +128,18 @@ export function MaxIntegrationButton({
         onClick={() => setOpen(true)}
         className={
           display === "panel"
-            ? "h-10 w-full gap-1.5 rounded-lg px-2 text-[11px]"
+            ? "h-10 min-w-0 w-full gap-1.5 overflow-hidden rounded-lg px-2 text-[11px]"
             : "h-7 gap-1.5 px-2.5 text-xs"
         }
         title="Подключить MAX Mini App"
         data-testid="max-integration-open"
       >
         <Bot className="h-3.5 w-3.5" />
-        <span className={display === "panel" ? "" : "hidden 2xl:inline"}>
+        <span
+          className={
+            display === "panel" ? "min-w-0 truncate" : "hidden 2xl:inline"
+          }
+        >
           {display === "panel" ? label ?? "Подключить бота" : "MAX"}
         </span>
       </Button>
