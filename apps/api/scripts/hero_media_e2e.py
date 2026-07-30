@@ -144,10 +144,22 @@ async def run_ui_flow(
             _make_sample_image(sample)
             await page.get_by_test_id("hero-media-upload-input").set_input_files(str(sample))
 
-        await _wait_until(
-            lambda: page.locator("[data-testid='hero-media-panel'] img").count(),
-            label="uploaded asset thumbnail",
-        )
+        try:
+            await _wait_until(
+                lambda: page.locator("[data-testid='hero-media-panel'] img").count(),
+                label="uploaded asset thumbnail",
+            )
+        except Exception:
+            await page.screenshot(
+                path=str(artifacts_dir / f"{scenario_label}-upload-failed.png")
+            )
+            (artifacts_dir / f"{scenario_label}-upload-failed.html").write_text(
+                await page.content(),
+                encoding="utf-8",
+            )
+            raise
+        await page.get_by_test_id("hero-media-photos-next").click()
+        await page.get_by_test_id("hero-media-prompt").wait_for(state="visible")
         await page.get_by_test_id("hero-media-prompt").fill(prompt)
         await page.get_by_test_id("hero-media-business-type").fill(business_type)
         await page.get_by_test_id("hero-media-style").fill(style_preference)

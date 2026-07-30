@@ -92,6 +92,41 @@ const MOTION_OPTIONS: Array<{
   { value: "cinematic", label: "Кинематографичный" },
 ];
 
+type HeroSetupStep = 1 | 2;
+type HeroJourneyStep = 1 | 2 | 3 | 4 | 5;
+
+const HERO_JOURNEY_STEPS: Array<{
+  value: HeroJourneyStep;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 1,
+    label: "Фото",
+    description: "Добавьте свои кадры или продолжите только с текстовым брифом.",
+  },
+  {
+    value: 2,
+    label: "Задача",
+    description: "Опишите продукт, настроение и то, что должно быть главным.",
+  },
+  {
+    value: 3,
+    label: "План",
+    description: "Проверьте рекомендацию системы и подтвердите формат подачи.",
+  },
+  {
+    value: 4,
+    label: "Preview",
+    description: "Дождитесь сборки, проверьте результат и примените его.",
+  },
+  {
+    value: 5,
+    label: "Готово",
+    description: "Hero применён в текущую dev-версию сайта.",
+  },
+];
+
 function isStaticTemplate(template: Project["template"]) {
   return (
     template === "blank" ||
@@ -140,8 +175,10 @@ export function HeroMediaPanel({
 }) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
+  const consentRef = useRef<HTMLInputElement>(null);
 
   const [consentConfirmed, setConsentConfirmed] = useState(false);
+  const [setupStep, setSetupStep] = useState<HeroSetupStep>(1);
   const [promptDraft, setPrompt] = useState<string | null>(null);
   const [businessTypeDraft, setBusinessType] = useState<string | null>(null);
   const [stylePreferenceDraft, setStylePreference] = useState<string | null>(
@@ -220,12 +257,18 @@ export function HeroMediaPanel({
     "motion";
 
   const uploadMut = useMutation({
-    mutationFn: async (files: File[]) => {
+    mutationFn: async ({
+      files,
+      consent,
+    }: {
+      files: File[];
+      consent: boolean;
+    }) => {
       const uploaded = [];
       for (const file of files) {
         uploaded.push(
           await uploadHeroMediaAsset(project.id, file, {
-            consentConfirmed,
+            consentConfirmed: consent,
             filename: file.name,
           }),
         );
@@ -262,6 +305,7 @@ export function HeroMediaPanel({
     onSuccess: (plan) => {
       qc.invalidateQueries({ queryKey: ["hero-media-plans", project.id] });
       setSelectedPlanKind(plan.recommended_plan_kind);
+      setShowSetup(false);
       toast.success("План подачи собран");
     },
     onError: (error) => {
@@ -334,6 +378,18 @@ export function HeroMediaPanel({
   const previewUrl = activeRender
     ? heroMediaPreviewUrl(project.id, activeRender.id)
     : null;
+  const journeyStep: HeroJourneyStep = showSetup
+    ? setupStep
+    : activeRender?.applied_snapshot_id
+      ? 5
+      : planApproved || activeRender
+        ? 4
+        : latestPlan
+          ? 3
+          : setupStep;
+  const journeyDescription =
+    HERO_JOURNEY_STEPS.find((step) => step.value === journeyStep)?.description ??
+    "";
 
   if (!open) return null;
 
@@ -378,7 +434,10 @@ export function HeroMediaPanel({
                 ) : hasCompletedResult && !showSetup ? (
                   <button
                     type="button"
-                    onClick={() => setShowSetup(true)}
+                    onClick={() => {
+                      setShowSetup(true);
+                      setSetupStep(1);
+                    }}
                     className="text-xs font-medium text-accent hover:text-accent-hover"
                   >
                     Изменить исходные фото или бриф
@@ -409,7 +468,70 @@ export function HeroMediaPanel({
                   Восстанавливаю hero
                 </div>
               </div>
-            )}
+              )}
+              <div
+                className="rounded-xl border border-border-default bg-surface-base/45 p-3"
+                aria-label={`Шаг ${journeyStep} из 5`}
+              >
+                <div className="grid grid-cols-5 gap-1">
+                  {HERO_JOURNEY_STEPS.map((step) => {
+                    const active = step.value === journeyStep;
+                    const complete = step.value < journeyStep;
+                    const canEditSetup = step.value === 1 || step.value === 2;
+                    const content = (
+                      <>
+                        <span
+                          className={cn(
+                            "grid h-8 w-8 place-items-center rounded-full border text-xs font-semibold",
+                            active &&
+                              "border-accent bg-accent text-on-accent",
+                            complete &&
+                              "border-success/50 bg-success/15 text-success",
+                            !active &&
+                              !complete &&
+                              "border-border-default text-fg-tertiary",
+                          )}
+                        >
+                          {complete ? <Check className="h-3.5 w-3.5" /> : step.value}
+                        </span>
+                        <span
+                          className={cn(
+                            "truncate text-[10px]",
+                            active ? "text-fg-primary" : "text-fg-tertiary",
+                          )}
+                        >
+                          {step.label}
+                        </span>
+                      </>
+                    );
+                    return canEditSetup ? (
+                      <button
+                        key={step.value}
+                        type="button"
+                        aria-current={active ? "step" : undefined}
+                        onClick={() => {
+                          setShowSetup(true);
+                          setSetupStep(step.value as HeroSetupStep);
+                        }}
+                        className="flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-lg"
+                      >
+                        {content}
+                      </button>
+                    ) : (
+                      <div
+                        key={step.value}
+                        aria-current={active ? "step" : undefined}
+                        className="flex min-h-11 min-w-0 flex-col items-center justify-center gap-1"
+                      >
+                        {content}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 text-center text-xs leading-5 text-fg-secondary">
+                  Шаг {journeyStep} из 5. {journeyDescription}
+                </div>
+              </div>
             <div
               className={cn(
                 "space-y-5",
@@ -426,14 +548,14 @@ export function HeroMediaPanel({
                 Вернуться к готовому hero
               </Button>
             )}
-            {(!hasCompletedResult || showSetup) && (
-              <>
+            {(!latestPlan || showSetup) && setupStep === 1 && (
                 <section className="space-y-3">
                   <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
                     1. Исходные фото
                   </div>
               <label className="flex items-start gap-2 rounded-lg border border-border-default bg-surface-base/60 px-3 py-3 text-xs leading-5 text-fg-secondary">
                 <input
+                  ref={consentRef}
                   type="checkbox"
                   data-testid="hero-media-consent"
                   checked={consentConfirmed}
@@ -456,21 +578,28 @@ export function HeroMediaPanel({
                 onChange={(e) => {
                   const files = Array.from(e.target.files ?? []);
                   if (!files.length) return;
-                  if (!consentConfirmed) {
+                  if (!consentRef.current?.checked) {
                     toast.error("Сначала подтвердите право на использование фото");
                     e.currentTarget.value = "";
                     return;
                   }
-                  uploadMut.mutate(files);
+                  uploadMut.mutate({ files, consent: true });
                   e.currentTarget.value = "";
                 }}
               />
               <button
                 type="button"
-                onClick={() => fileRef.current?.click()}
+                onClick={() => {
+                  if (!consentRef.current?.checked) {
+                    toast.error("Сначала подтвердите право на использование фото");
+                    return;
+                  }
+                  fileRef.current?.click();
+                }}
                 className={cn(
                   "w-full rounded-xl border border-dashed border-border-strong bg-surface-base/40 px-4 py-4 text-left transition-colors",
                   "hover:border-accent/50 hover:bg-accent-subtle/20",
+                  !consentConfirmed && "opacity-70",
                 )}
               >
                 <div className="flex items-center gap-3">
@@ -530,11 +659,38 @@ export function HeroMediaPanel({
                   })}
                 </div>
               )}
+                  <Button
+                    data-testid="hero-media-photos-next"
+                    variant="primary"
+                    className="w-full"
+                    disabled={uploadMut.isPending}
+                    onClick={() => setSetupStep(2)}
+                  >
+                    {selectedAssetIds.length > 0
+                      ? `Продолжить с фото: ${selectedAssetIds.length}`
+                      : "Продолжить без фото"}
+                  </Button>
                 </section>
+            )}
 
+            {(!latestPlan || showSetup) && setupStep === 2 && (
                 <section className="space-y-3">
-                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
-                    2. Что важно показать
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
+                      2. Что важно показать
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSetupStep(1)}
+                      className="min-h-11 text-xs font-medium text-accent hover:text-accent-hover"
+                    >
+                      Назад к фото
+                    </button>
+                  </div>
+                  <div className="rounded-lg border border-border-default bg-surface-base/45 px-3 py-2 text-xs text-fg-secondary">
+                    {selectedAssetIds.length > 0
+                      ? `В плане: ${selectedAssetIds.length} фото`
+                      : "Фото не выбраны — система соберёт visual по брифу."}
                   </div>
               <Textarea
                 data-testid="hero-media-prompt"
@@ -622,10 +778,9 @@ export function HeroMediaPanel({
                 Собрать рекомендацию
               </Button>
                 </section>
-              </>
             )}
 
-            {latestPlan && (!hasCompletedResult || showSetup) && (
+            {latestPlan && !showSetup && !planApproved && (
               <section className="space-y-3 border-t border-border-subtle pt-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
