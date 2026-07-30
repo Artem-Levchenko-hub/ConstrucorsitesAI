@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from sqlalchemy import func, select
+
 from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import max_studio
-from omnia_api.schemas.max_studio import MaxContentItem, MaxProjectConfigPayload
+from omnia_api.schemas.max_studio import (
+    MaxContentItem,
+    MaxProjectConfigPayload,
+    MaxUrlAttachedPayload,
+)
 from omnia_api.services.max_project_kit import render_max_managed_files
 
 
@@ -51,6 +57,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert '"app_name": "Кофе \\"Рядом\\""' in config
     assert '"price": "290 ₽"' in config
     assert "as const" in config
+    assert "max_url_attached" not in config
 
 
 def test_managed_kit_never_contains_model_or_generation_calls() -> None:
@@ -120,3 +127,60 @@ async def test_config_save_is_versioned_and_idempotent(
     assert saved is not None
     assert saved.config["app_name"] == 'Кофе "Рядом"'
     assert project.current_snapshot_id == saved.synced_snapshot_id
+
+
+async def test_url_confirmation_is_persisted_without_new_snapshot(db_session) -> None:
+    user = User(email=f"max-url-{uuid4()}@example.ru")
+    db_session.add(user)
+    await db_session.flush()
+    project = Project(
+        owner_id=user.id,
+        name="MAX URL",
+        slug=f"max-url-{uuid4().hex[:8]}",
+        template="max_miniapp",
+    )
+    db_session.add(project)
+    await db_session.flush()
+    initial = Snapshot(
+        project_id=project.id,
+        commit_sha="3" * 40,
+        prompt_text="Собери приложение",
+    )
+    db_session.add(initial)
+    await db_session.flush()
+    project.current_snapshot_id = initial.id
+    await db_session.commit()
+
+    before = int(
+        (
+            await db_session.execute(
+                select(func.count(Snapshot.id)).where(Snapshot.project_id == project.id)
+            )
+        ).scalar_one()
+    )
+    saved = await max_studio.patch_max_url_attached(
+        project.id,
+        MaxUrlAttachedPayload(attached=True),
+        db_session,
+        user,
+    )
+    repeated = await max_studio.patch_max_url_attached(
+        project.id,
+        MaxUrlAttachedPayload(attached=True),
+        db_session,
+        user,
+    )
+    after = int(
+        (
+            await db_session.execute(
+                select(func.count(Snapshot.id)).where(Snapshot.project_id == project.id)
+            )
+        ).scalar_one()
+    )
+
+    assert saved.config.max_url_attached is True
+    assert saved.config_version == 1
+    assert repeated.config_version == 1
+    assert saved.synced_snapshot_id is None
+    assert project.current_snapshot_id == initial.id
+    assert before == after == 1

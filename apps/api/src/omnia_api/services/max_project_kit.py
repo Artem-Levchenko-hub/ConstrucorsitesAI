@@ -11,7 +11,7 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 
 def _json(config: MaxProjectConfigPayload) -> str:
     return json.dumps(
-        config.model_dump(mode="json"),
+        config.model_dump(mode="json", exclude={"max_url_attached"}),
         ensure_ascii=False,
         indent=2,
         separators=(",", ": "),

@@ -22,6 +22,16 @@ export function saveMaxProjectConfig(
   });
 }
 
+export function saveMaxUrlAttached(
+  projectId: Uuid,
+  attached: boolean,
+): Promise<MaxProjectConfig> {
+  return apiFetch<MaxProjectConfig>(`${path(projectId)}/config/url-attached`, {
+    method: "PATCH",
+    json: { attached },
+  });
+}
+
 export function getMaxReadiness(projectId: Uuid): Promise<MaxReadiness> {
   return apiFetch<MaxReadiness>(`${path(projectId)}/readiness`);
 }

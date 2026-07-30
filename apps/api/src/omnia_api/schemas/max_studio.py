@@ -74,6 +74,10 @@ class MaxProjectConfigPublic(BaseModel):
     updated_at: datetime | None = None
 
 
+class MaxUrlAttachedPayload(BaseModel):
+    attached: bool
+
+
 class MaxReadinessItem(BaseModel):
     id: str
     label: str

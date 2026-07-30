@@ -25,6 +25,7 @@ from omnia_api.schemas.max_studio import (
     MaxReadinessItem,
     MaxReadinessPublic,
     MaxSupport,
+    MaxUrlAttachedPayload,
 )
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
@@ -88,6 +89,48 @@ async def get_max_config(
 ) -> MaxProjectConfigPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
     record = await session.get(MaxProjectConfig, project_id)
+    return _public(project, record)
+
+
+@router.patch(
+    "/{project_id}/max/config/url-attached",
+    response_model=MaxProjectConfigPublic,
+)
+async def patch_max_url_attached(
+    project_id: UUID,
+    payload: MaxUrlAttachedPayload,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> MaxProjectConfigPublic:
+    """Persist the manual MAX-cabinet confirmation without changing app code."""
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    project = await _owned_max_project(session, project_id, current_user.id, lock=True)
+    record = await session.get(MaxProjectConfig, project_id)
+    current = (
+        MaxProjectConfigPayload.model_validate(record.config)
+        if record is not None
+        else _default_config(project)
+    )
+    if current.max_url_attached == payload.attached:
+        return _public(project, record)
+
+    updated = current.model_copy(update={"max_url_attached": payload.attached})
+    if record is None:
+        record = MaxProjectConfig(
+            project_id=project.id,
+            owner_id=current_user.id,
+            config=updated.model_dump(mode="json"),
+            config_version=1,
+        )
+        session.add(record)
+    else:
+        record.config = updated.model_dump(mode="json")
+        record.config_version += 1
+    await session.commit()
+    await session.refresh(record)
     return _public(project, record)
 
 

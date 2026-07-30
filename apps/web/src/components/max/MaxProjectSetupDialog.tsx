@@ -20,6 +20,7 @@ import { ApiError } from "@/lib/api/client";
 import {
   getMaxProjectConfig,
   saveMaxProjectConfig,
+  saveMaxUrlAttached,
 } from "@/lib/api/max-studio";
 import type { MaxProjectConfigPayload } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
@@ -86,6 +87,30 @@ export function MaxProjectSetupDialog({
     },
     onError: (error) =>
       toast.error("Не удалось сохранить", { description: errorMessage(error) }),
+  });
+  const saveMaxUrl = useMutation({
+    mutationFn: ({
+      next,
+    }: {
+      next: MaxProjectConfigPayload;
+      previous: MaxProjectConfigPayload;
+    }) => saveMaxUrlAttached(projectId, next.max_url_attached),
+    onSuccess: (data, variables) => {
+      qc.setQueryData(["max-config", projectId], data);
+      void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
+      setDraft(variables.next);
+      toast.success(
+        data.config.max_url_attached
+          ? "URL в кабинете MAX подтверждён"
+          : "Подтверждение URL снято",
+      );
+    },
+    onError: (error, variables) => {
+      setDraft(variables.previous);
+      toast.error("Не удалось сохранить подтверждение URL", {
+        description: errorMessage(error),
+      });
+    },
   });
 
   const inputClass = "h-10 border-white/[0.1] bg-black/20";
@@ -526,13 +551,25 @@ export function MaxProjectSetupDialog({
                     type="checkbox"
                     className="mt-0.5 h-4 w-4 accent-[#7468ff]"
                     checked={current.max_url_attached}
-                    onChange={(event) =>
-                      setDraft({ ...current, max_url_attached: event.target.checked })
-                    }
+                    disabled={save.isPending || saveMaxUrl.isPending}
+                    onChange={(event) => {
+                      const next = {
+                        ...current,
+                        max_url_attached: event.target.checked,
+                      };
+                      const previous = current;
+                      setDraft(next);
+                      saveMaxUrl.mutate({ next, previous });
+                    }}
                   />
                   <span>
-                    <span className="block text-xs font-medium">
-                      HTTPS-адрес уже вставлен в кабинете MAX
+                    <span className="flex items-center gap-2 text-xs font-medium">
+                      {saveMaxUrl.isPending && (
+                        <Loader2 className="h-3 w-3 animate-spin text-[#8d83ff]" />
+                      )}
+                      {saveMaxUrl.isPending
+                        ? "Сохраняем подтверждение…"
+                        : "HTTPS-адрес уже вставлен в кабинете MAX"}
                     </span>
                     <span className="mt-1 block text-[10px] leading-4 text-white/35">
                       MAX пока не даёт публичного API для этой операции, поэтому
@@ -542,18 +579,23 @@ export function MaxProjectSetupDialog({
                 </label>
               </section>
 
-              <Button
-                className="h-11 w-full"
-                disabled={
-                  save.isPending ||
-                  current.app_name.trim().length < 1 ||
-                  current.summary.trim().length < 1
-                }
-                onClick={() => save.mutate(current)}
-              >
-                {save.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Сохранить и применить без генерации
-              </Button>
+              <div className="sticky bottom-0 z-10 -mx-1 bg-[#12141d]/95 px-1 pb-1 pt-3 backdrop-blur">
+                <Button
+                  className="h-11 w-full"
+                  disabled={
+                    save.isPending ||
+                    saveMaxUrl.isPending ||
+                    current.app_name.trim().length < 1 ||
+                    current.summary.trim().length < 1
+                  }
+                  onClick={() => save.mutate(current)}
+                >
+                  {save.isPending && (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  Сохранить остальные изменения
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>
