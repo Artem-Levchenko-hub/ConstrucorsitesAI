@@ -554,12 +554,20 @@ export type IntegrationProvider = {
   recommended: boolean;
   requirement: string | null;
   docs_url: string;
+  oauth_supported: boolean;
+  oauth_available: boolean;
+  connection_mode: "oauth" | "credentials" | "partner";
 };
 
 export type AppIntegration = {
   id: Uuid;
   provider: string;
   status: "active" | "error";
+  auth_mode: "credentials" | "oauth" | "connector";
+  business_scoped: boolean;
+  bound_to_project: boolean;
+  binding_status: "ready" | "needs_setup" | "error" | null;
+  binding_config: Record<string, unknown>;
   account_label: string | null;
   public_config: Record<string, string>;
   capabilities: string[];
@@ -574,6 +582,14 @@ export type AppIntegration = {
 export type IntegrationCatalog = {
   providers: IntegrationProvider[];
   connections: AppIntegration[];
+  recommended_pack: {
+    key: string;
+    title: string;
+    description: string;
+    provider_keys: string[];
+    bound_count: number;
+    reusable_count: number;
+  };
 };
 
 export type MaxContentItem = {

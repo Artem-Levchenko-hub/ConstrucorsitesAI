@@ -44,11 +44,14 @@ def test_max_config_normalises_features() -> None:
 
 
 def test_managed_kit_contains_config_and_required_legal_routes() -> None:
-    files = render_max_managed_files(_config())
+    project_id = uuid4()
+    files = render_max_managed_files(_config(), project_id)
 
     assert set(files) == {
         "src/lib/omnia/max-config.ts",
         "src/app/api/omnia/config/route.ts",
+        "src/lib/omnia/integration-client.ts",
+        "src/app/api/omnia/integrations/[...path]/route.ts",
         "src/app/legal/privacy/page.tsx",
         "src/app/legal/terms/page.tsx",
         "src/app/support/page.tsx",
@@ -58,6 +61,9 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert '"price": "290 ₽"' in config
     assert "as const" in config
     assert "max_url_attached" not in config
+    assert str(project_id) in files[
+        "src/app/api/omnia/integrations/[...path]/route.ts"
+    ]
 
 
 def test_managed_kit_never_contains_model_or_generation_calls() -> None:

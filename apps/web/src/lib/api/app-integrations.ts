@@ -36,6 +36,33 @@ export function verifyAppIntegration(
   );
 }
 
+export function bindAppIntegration(
+  projectId: Uuid,
+  provider: string,
+): Promise<AppIntegration> {
+  return apiFetch<AppIntegration>(`${path(projectId)}/${provider}/bind`, {
+    method: "POST",
+  });
+}
+
+export function applyIntegrationPack(
+  projectId: Uuid,
+): Promise<{
+  bound_provider_keys: string[];
+  remaining_provider_keys: string[];
+}> {
+  return apiFetch(`${path(projectId)}/pack/apply`, { method: "POST" });
+}
+
+export function startIntegrationOAuth(
+  projectId: Uuid,
+  provider: string,
+): Promise<{ authorization_url: string }> {
+  return apiFetch(`${path(projectId)}/${provider}/oauth/start`, {
+    method: "POST",
+  });
+}
+
 export function disconnectAppIntegration(
   projectId: Uuid,
   provider: string,

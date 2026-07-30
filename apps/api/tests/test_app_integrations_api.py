@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import time
+from urllib.parse import urlencode
+
 import httpx
 import pytest
 from sqlalchemy import select
 
-from omnia_api.core.crypto import decrypt_strong
-from omnia_api.models.app_integration import AppIntegration
+from omnia_api.core.crypto import decrypt_strong, encrypt_strong
+from omnia_api.models.app_integration import (
+    BusinessIntegration,
+    ProjectIntegrationBinding,
+)
+from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.routers import max_accounts as max_accounts_router
 from omnia_api.routers import projects as projects_router
 from omnia_api.services import integration_providers
@@ -77,6 +87,7 @@ async def test_catalog_and_connection_never_expose_provider_secrets(
     assert providers["rkeeper"]["available"] is False
     assert providers["rkeeper"]["requirement"]
     assert catalog_body["connections"] == []
+    assert catalog_body["recommended_pack"]["provider_keys"]
 
     connected = await client.put(
         f"/api/projects/{project_id}/app-integrations/yookassa",
@@ -90,6 +101,8 @@ async def test_catalog_and_connection_never_expose_provider_secrets(
     assert connected.status_code == 200
     body = connected.json()
     assert body["status"] == "active"
+    assert body["business_scoped"] is True
+    assert body["bound_to_project"] is True
     assert body["account_label"] == "Магазин 123456"
     assert body["public_config"] == {"shop_id": "123456"}
     assert body["configured_fields"] == ["secret_key"]
@@ -97,7 +110,9 @@ async def test_catalog_and_connection_never_expose_provider_secrets(
 
     stored = (
         await db_session.execute(
-            select(AppIntegration).where(AppIntegration.project_id == project_id)
+            select(BusinessIntegration).where(
+                BusinessIntegration.provider == "yookassa"
+            )
         )
     ).scalar_one()
     assert "live_secret_value" not in stored.credentials_enc
@@ -107,6 +122,32 @@ async def test_catalog_and_connection_never_expose_provider_secrets(
     assert refreshed.status_code == 200
     assert "live_secret_value" not in refreshed.text
     assert len(refreshed.json()["connections"]) == 1
+    assert refreshed.json()["connections"][0]["bound_to_project"] is True
+
+    second = await client.post(
+        "/api/projects",
+        json={"name": "Second MAX app", "template": "max_miniapp"},
+    )
+    assert second.status_code == 201
+    second_id = second.json()["id"]
+    reusable = await client.get(f"/api/projects/{second_id}/app-integrations")
+    assert reusable.status_code == 200
+    assert reusable.json()["connections"][0]["bound_to_project"] is False
+    bound = await client.post(
+        f"/api/projects/{second_id}/app-integrations/yookassa/bind"
+    )
+    assert bound.status_code == 200
+    assert bound.json()["bound_to_project"] is True
+    bindings = list(
+        (
+            await db_session.execute(
+                select(ProjectIntegrationBinding).where(
+                    ProjectIntegrationBinding.provider == "yookassa"
+                )
+            )
+        ).scalars()
+    )
+    assert len(bindings) == 2
 
 
 @pytest.mark.asyncio
@@ -163,6 +204,15 @@ async def test_verify_marks_broken_connection_without_exposing_credentials(
         f"/api/projects/{project_id}/app-integrations/yandex_metrica"
     )
     assert disconnected.status_code == 204
+    still_saved = await client.get(f"/api/projects/{project_id}/app-integrations")
+    assert still_saved.json()["connections"][0]["bound_to_project"] is False
+
+    removed = await client.delete(
+        f"/api/projects/{project_id}/app-integrations/yandex_metrica/business"
+    )
+    assert removed.status_code == 204
+    empty = await client.get(f"/api/projects/{project_id}/app-integrations")
+    assert empty.json()["connections"] == []
 
 
 def test_provider_values_are_split_and_unknown_fields_rejected() -> None:
@@ -179,3 +229,64 @@ def test_provider_values_are_split_and_unknown_fields_rejected() -> None:
             provider,
             {"shop_id": "100", "secret_key": "secret", "unexpected": "value"},
         )
+
+
+def _max_init_data(token: str, user_id: int = 42) -> str:
+    values = {
+        "auth_date": str(int(time.time())),
+        "query_id": "runtime-test",
+        "user": json.dumps({"id": user_id, "first_name": "Тест"}, separators=(",", ":")),
+    }
+    check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    values["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urlencode(values)
+
+
+@pytest.mark.asyncio
+async def test_bound_integration_is_available_to_signed_max_runtime(
+    client: httpx.AsyncClient,
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = await _register_and_create(client, monkeypatch)
+
+    async def verified(*_args, **_kwargs) -> str:
+        return "Магазин 123"
+
+    monkeypatch.setattr(integration_providers, "verify_provider", verified)
+    connected = await client.put(
+        f"/api/projects/{project_id}/app-integrations/yookassa",
+        json={"values": {"shop_id": "123", "secret_key": "secret"}},
+    )
+    assert connected.status_code == 200
+    token = "max-bot-token"
+    db_session.add(
+        MaxIntegration(
+            project_id=project_id,
+            owner_id=(
+                await db_session.execute(
+                    select(BusinessIntegration.created_by_user_id).where(
+                        BusinessIntegration.provider == "yookassa"
+                    )
+                )
+            ).scalar_one(),
+            bot_token_enc=encrypt_strong(token),
+            webhook_secret_enc=encrypt_strong("webhook"),
+        )
+    )
+    await db_session.commit()
+
+    runtime = await client.get(
+        f"/api/runtime/projects/{project_id}/integrations",
+        headers={"X-MAX-Init-Data": _max_init_data(token)},
+    )
+    assert runtime.status_code == 200
+    assert runtime.json()["providers"] == ["yookassa"]
+    assert "Оплата" in runtime.json()["capabilities"]
+
+    tampered = await client.get(
+        f"/api/runtime/projects/{project_id}/integrations",
+        headers={"X-MAX-Init-Data": _max_init_data(token) + "x"},
+    )
+    assert tampered.status_code == 401

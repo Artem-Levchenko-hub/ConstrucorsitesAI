@@ -1,4 +1,4 @@
-"""Public contracts for project-scoped third-party integrations."""
+"""Public contracts for the business Integration Hub."""
 
 from datetime import datetime
 from typing import Any
@@ -26,12 +26,20 @@ class IntegrationProviderPublic(BaseModel):
     recommended: bool = False
     requirement: str | None = None
     docs_url: str
+    oauth_supported: bool = False
+    oauth_available: bool = False
+    connection_mode: str = "credentials"
 
 
 class AppIntegrationPublic(BaseModel):
     id: str
     provider: str
     status: str
+    auth_mode: str = "credentials"
+    business_scoped: bool = True
+    bound_to_project: bool = False
+    binding_status: str | None = None
+    binding_config: dict[str, Any] = Field(default_factory=dict)
     account_label: str | None = None
     public_config: dict[str, Any] = Field(default_factory=dict)
     capabilities: list[str] = Field(default_factory=list)
@@ -43,9 +51,28 @@ class AppIntegrationPublic(BaseModel):
     updated_at: datetime
 
 
+class IntegrationPackPublic(BaseModel):
+    key: str
+    title: str
+    description: str
+    provider_keys: list[str]
+    bound_count: int = 0
+    reusable_count: int = 0
+
+
 class IntegrationCatalogPublic(BaseModel):
     providers: list[IntegrationProviderPublic]
     connections: list[AppIntegrationPublic]
+    recommended_pack: IntegrationPackPublic
+
+
+class IntegrationPackApplyPublic(BaseModel):
+    bound_provider_keys: list[str]
+    remaining_provider_keys: list[str]
+
+
+class IntegrationOAuthStartPublic(BaseModel):
+    authorization_url: str
 
 
 class IntegrationConnectRequest(BaseModel):

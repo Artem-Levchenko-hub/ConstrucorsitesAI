@@ -214,6 +214,10 @@ async def provision(req: ProvisionRequest) -> ProvisionResponse:
     env = {
         "DATABASE_URL": database_url,
         "NODE_ENV": "development",
+        "OMNIA_PROJECT_ID": str(req.project_id),
+        "OMNIA_PLATFORM_API_URL": os.getenv(
+            "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
+        ),
         "AUTH_SECRET": auth_secret,
         "AUTH_URL": dev_origin,
         "AUTH_TRUST_HOST": "true",

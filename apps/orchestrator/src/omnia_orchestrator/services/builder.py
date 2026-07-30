@@ -252,6 +252,10 @@ async def _deploy_remote(
         "NODE_ENV": "production",
         "PORT": "3000",
         "HOSTNAME": "0.0.0.0",
+        "OMNIA_PROJECT_ID": project_id,
+        "OMNIA_PLATFORM_API_URL": os.getenv(
+            "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
+        ),
         "AUTH_SECRET": auth_secret,
         "AUTH_URL": app_url,
         "AUTH_TRUST_HOST": "true",
@@ -511,6 +515,10 @@ async def _run(
                 "NODE_ENV": "production",
                 "PORT": "3000",
                 "HOSTNAME": "0.0.0.0",  # standalone server must bind all ifaces
+                "OMNIA_PROJECT_ID": project_id,
+                "OMNIA_PLATFORM_API_URL": os.getenv(
+                    "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
+                ),
                 "DATABASE_URL": _resolve_runtime_dsn(project_id),
                 "AUTH_SECRET": auth_secret,
                 "AUTH_URL": prod_origin,

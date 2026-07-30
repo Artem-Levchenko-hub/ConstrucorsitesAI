@@ -16,6 +16,7 @@ import {
   Plug,
   RefreshCw,
   Search,
+  Sparkles,
   Store,
   Trash2,
   Truck,
@@ -37,9 +38,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  applyIntegrationPack,
+  bindAppIntegration,
   connectAppIntegration,
   disconnectAppIntegration,
   getIntegrationCatalog,
+  startIntegrationOAuth,
   verifyAppIntegration,
 } from "@/lib/api/app-integrations";
 import { ApiError } from "@/lib/api/client";
@@ -97,6 +101,7 @@ function ProviderCard({
   connection,
   busy,
   onOpen,
+  onBind,
   onVerify,
   onDisconnect,
 }: {
@@ -104,10 +109,14 @@ function ProviderCard({
   connection?: AppIntegration;
   busy: boolean;
   onOpen: () => void;
+  onBind: () => void;
   onVerify: () => void;
   onDisconnect: () => void;
 }) {
-  const connected = connection?.status === "active";
+  const reusable =
+    connection?.status === "active" && !connection.bound_to_project;
+  const connected =
+    connection?.status === "active" && connection.bound_to_project;
   return (
     <article
       className={cn(
@@ -123,6 +132,10 @@ function ProviderCard({
           <span className="inline-flex items-center gap-1.5 border border-emerald-400/25 bg-emerald-400/[0.07] px-2 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-emerald-300">
             <Check className="h-3 w-3" />
             Подключено
+          </span>
+        ) : reusable ? (
+          <span className="border border-[#7897f4]/30 bg-[#7897f4]/[0.06] px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-[#9bb1f5]">
+            Уже у бизнеса
           </span>
         ) : provider.available ? (
           <span className="border border-white/[0.1] px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-white/45">
@@ -203,6 +216,16 @@ function ProviderCard({
               <Trash2 className="h-4 w-4" />
             </Button>
           </div>
+        ) : reusable ? (
+          <Button
+            className="w-full"
+            size="sm"
+            disabled={busy}
+            onClick={onBind}
+          >
+            Использовать в проекте
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
         ) : provider.available ? (
           <Button className="w-full" size="sm" onClick={onOpen}>
             Подключить
@@ -251,19 +274,7 @@ export function IntegrationHub({
       payload: Record<string, string>;
     }) => connectAppIntegration(projectId, provider, payload),
     onSuccess: (connection) => {
-      queryClient.setQueryData(queryKey, (current: typeof catalog.data) =>
-        current
-          ? {
-              ...current,
-              connections: [
-                ...current.connections.filter(
-                  (item) => item.provider !== connection.provider,
-                ),
-                connection,
-              ],
-            }
-          : current,
-      );
+      queryClient.invalidateQueries({ queryKey });
       setSelected(null);
       setValues({});
       toast.success("Интеграция подключена", {
@@ -272,6 +283,54 @@ export function IntegrationHub({
     },
     onError: (error) =>
       toast.error("Проверка не пройдена", { description: errorMessage(error) }),
+  });
+  const bind = useMutation({
+    mutationFn: (provider: string) =>
+      bindAppIntegration(projectId, provider),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      toast.success("Подключение включено для проекта");
+    },
+    onError: (error) =>
+      toast.error("Не удалось включить", { description: errorMessage(error) }),
+  });
+  const applyPack = useMutation({
+    mutationFn: () => applyIntegrationPack(projectId),
+    onSuccess: ({ bound_provider_keys, remaining_provider_keys }) => {
+      queryClient.invalidateQueries({ queryKey });
+      if (remaining_provider_keys.length === 0) {
+        toast.success("Набор интеграций готов");
+        return;
+      }
+      const first = catalog.data?.providers.find(
+        (provider) =>
+          remaining_provider_keys.includes(provider.key) && provider.available,
+      );
+      if (first) openProvider(first);
+      toast.success(
+        bound_provider_keys.length
+          ? `Повторно использовано: ${bound_provider_keys.length}`
+          : "Набор подготовлен",
+        {
+          description: `Осталось авторизовать сервисов: ${remaining_provider_keys.length}`,
+        },
+      );
+    },
+    onError: (error) =>
+      toast.error("Не удалось подготовить набор", {
+        description: errorMessage(error),
+      }),
+  });
+  const oauth = useMutation({
+    mutationFn: (provider: string) =>
+      startIntegrationOAuth(projectId, provider),
+    onSuccess: ({ authorization_url }) => {
+      window.location.assign(authorization_url);
+    },
+    onError: (error) =>
+      toast.error("Не удалось начать авторизацию", {
+        description: errorMessage(error),
+      }),
   });
   const verify = useMutation({
     mutationFn: (provider: string) =>
@@ -342,7 +401,7 @@ export function IntegrationHub({
       (field) => !field.required || Boolean(values[field.key]?.trim()),
     ) ?? false;
   const connectedCount = catalog.data?.connections.filter(
-    (item) => item.status === "active",
+    (item) => item.status === "active" && item.bound_to_project,
   ).length;
 
   return (
@@ -388,19 +447,61 @@ export function IntegrationHub({
               Подключите бизнес-сервисы один раз.
             </h2>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-white/45 sm:text-base">
-              Студия проверит доступ и сохранит секреты зашифрованно. Ключи не
-              попадают в промпт, браузер или исходный код приложения.
+              Авторизуйте сервис один раз для бизнеса. После этого его можно
+              включать в новые проекты без повторного ввода ключей.
             </p>
           </div>
           <div className="border-l-2 border-[#315bd7] bg-white/[0.025] p-5">
             <p className="text-xs font-medium text-white/75">Как подключаем</p>
             <ol className="mt-4 space-y-3 text-xs leading-5 text-white/40">
-              <li>1. Вы вводите реквизиты из кабинета сервиса.</li>
-              <li>2. Integration Hub делает безопасную проверку доступа.</li>
-              <li>3. Подключение закрепляется за этим приложением.</li>
+              <li>1. OAuth открывает кабинет сервиса и запрашивает согласие.</li>
+              <li>2. Секреты остаются в зашифрованном сейфе бизнеса.</li>
+              <li>3. Приложение получает только безопасные функции, не ключи.</li>
             </ol>
           </div>
         </section>
+
+        {catalog.data?.recommended_pack && (
+          <section className="border-b border-white/[0.1] py-7">
+            <div className="grid gap-5 border border-[#315bd7]/40 bg-[#315bd7]/[0.07] p-5 sm:p-6 lg:grid-cols-[1fr_auto] lg:items-center">
+              <div className="flex items-start gap-4">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center bg-[#315bd7] text-white">
+                  <Sparkles className="h-5 w-5" />
+                </span>
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-[#9bb1f5]">
+                    Рекомендуемый набор
+                  </p>
+                  <h2 className="mt-1 text-xl font-semibold">
+                    {catalog.data.recommended_pack.title}
+                  </h2>
+                  <p className="mt-2 text-sm leading-5 text-white/45">
+                    {catalog.data.recommended_pack.description}
+                  </p>
+                  <p className="mt-3 text-xs text-white/35">
+                    Готово {catalog.data.recommended_pack.bound_count} из{" "}
+                    {catalog.data.recommended_pack.provider_keys.length}
+                    {catalog.data.recommended_pack.reusable_count > 0 &&
+                      ` · ${catalog.data.recommended_pack.reusable_count} можно включить сразу`}
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="lg"
+                disabled={applyPack.isPending}
+                onClick={() => applyPack.mutate()}
+                className="w-full lg:w-auto"
+              >
+                {applyPack.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+                Подключить всё
+              </Button>
+            </div>
+          </section>
+        )}
 
         <section className="pt-7">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -457,15 +558,17 @@ export function IntegrationHub({
                   busy={
                     (verify.isPending &&
                       verify.variables === provider.key) ||
+                    (bind.isPending && bind.variables === provider.key) ||
                     (disconnect.isPending &&
                       disconnect.variables === provider.key)
                   }
                   onOpen={() => openProvider(provider)}
+                  onBind={() => bind.mutate(provider.key)}
                   onVerify={() => verify.mutate(provider.key)}
                   onDisconnect={() => {
                     if (
                       window.confirm(
-                        `Отключить ${provider.name} от этого приложения?`,
+                        `Убрать ${provider.name} из этого проекта? Подключение бизнеса сохранится.`,
                       )
                     ) {
                       disconnect.mutate(provider.key);
@@ -499,20 +602,50 @@ export function IntegrationHub({
                   {selected.name}
                 </DialogTitle>
                 <DialogDescription className="leading-5 text-white/45">
-                  {selected.description} Перед сохранением мы выполним
-                  read-only проверку доступа.
+                  {selected.description} Подключение сохранится для всего
+                  бизнеса, а в проект попадут только разрешённые действия.
                 </DialogDescription>
               </DialogHeader>
 
-              {connections.has(selected.key) && (
+              {connections.has(selected.key) &&
+                connections.get(selected.key)?.auth_mode !== "oauth" && (
                 <div className="border-l-2 border-[#7897f4] bg-white/[0.025] px-4 py-3 text-xs leading-5 text-white/45">
                   Секреты не показываются повторно. Чтобы изменить подключение,
                   введите новые реквизиты целиком.
                 </div>
               )}
 
-              <div className="space-y-5 py-2">
-                {selected.fields.map((field) => (
+              {selected.oauth_available && (
+                <div className="border border-[#315bd7]/40 bg-[#315bd7]/[0.07] p-4">
+                  <p className="text-sm font-medium text-white">
+                    Рекомендуется: вход через {selected.name}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-white/45">
+                    Откроется официальный кабинет. Пароли и API-ключи вводить у
+                    нас не потребуется.
+                  </p>
+                  <Button
+                    className="mt-4 w-full"
+                    disabled={oauth.isPending}
+                    onClick={() => oauth.mutate(selected.key)}
+                  >
+                    {oauth.isPending && (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    )}
+                    Войти и разрешить доступ
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
+
+              {selected.fields.length > 0 && (
+                <div className="space-y-5 py-2">
+                  {selected.oauth_available && (
+                    <p className="text-[10px] font-medium uppercase tracking-[0.15em] text-white/30">
+                      Или подключить по реквизитам
+                    </p>
+                  )}
+                  {selected.fields.map((field) => (
                   <div key={field.key} className="space-y-2">
                     <Label htmlFor={`integration-${field.key}`} className="text-white/75">
                       {field.label}
@@ -537,8 +670,9 @@ export function IntegrationHub({
                       </p>
                     )}
                   </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
 
               <div className="flex flex-wrap gap-1.5">
                 {selected.capabilities.map((capability) => (
@@ -561,20 +695,22 @@ export function IntegrationHub({
                   Документация сервиса
                   <ExternalLink className="h-3.5 w-3.5" />
                 </a>
-                <Button
-                  disabled={!canSubmit || connect.isPending}
-                  onClick={() =>
-                    connect.mutate({
-                      provider: selected.key,
-                      payload: values,
-                    })
-                  }
-                >
-                  {connect.isPending && (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  )}
-                  Проверить и подключить
-                </Button>
+                {selected.fields.length > 0 && (
+                  <Button
+                    disabled={!canSubmit || connect.isPending}
+                    onClick={() =>
+                      connect.mutate({
+                        provider: selected.key,
+                        payload: values,
+                      })
+                    }
+                  >
+                    {connect.isPending && (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    )}
+                    Проверить и подключить
+                  </Button>
+                )}
               </DialogFooter>
             </>
           )}

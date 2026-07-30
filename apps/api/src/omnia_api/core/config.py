@@ -115,6 +115,21 @@ class Settings(BaseSettings):
     yookassa_api_url: str = Field(default="https://api.yookassa.ru/v3")
     yookassa_vat_code: int = Field(default=1)
 
+    # OAuth applications for customer-owned business integrations. When a
+    # provider pair is absent, Integration Hub keeps the verified credential
+    # fallback and tells the UI that one-click authorization is not configured.
+    integration_oauth_callback_base_url: str = Field(
+        default="http://localhost:8000/api/integrations/oauth"
+    )
+    integration_yookassa_client_id: str | None = Field(default=None)
+    integration_yookassa_client_secret: SecretStr | None = Field(default=None)
+    integration_yandex_client_id: str | None = Field(default=None)
+    integration_yandex_client_secret: SecretStr | None = Field(default=None)
+    integration_bitrix24_client_id: str | None = Field(default=None)
+    integration_bitrix24_client_secret: SecretStr | None = Field(default=None)
+    integration_amocrm_client_id: str | None = Field(default=None)
+    integration_amocrm_client_secret: SecretStr | None = Field(default=None)
+
     @property
     def admin_emails_set(self) -> set[str]:
         return {item.strip().lower() for item in self.admin_emails.split(",") if item.strip()}

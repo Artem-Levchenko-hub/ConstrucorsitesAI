@@ -24,6 +24,7 @@ from omnia_api.routers import domains as domains_router
 from omnia_api.routers import fonts as fonts_router
 from omnia_api.routers import github as github_router
 from omnia_api.routers import hero_media as hero_media_router
+from omnia_api.routers import integration_runtime as integration_runtime_router
 from omnia_api.routers import max_accounts as max_accounts_router
 from omnia_api.routers import max_integrations as max_integrations_router
 from omnia_api.routers import max_studio as max_studio_router
@@ -83,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router)
     app.include_router(account_router.router)
     app.include_router(app_integrations_router.router)
+    app.include_router(integration_runtime_router.router)
     app.include_router(account_router.legal_router)
     app.include_router(github_router.router)
     app.include_router(projects_router.router)

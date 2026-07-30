@@ -43,6 +43,7 @@ class IntegrationProvider:
     docs_url: str
     recommended: bool = False
     requirement: str | None = None
+    oauth_supported: bool = False
 
 
 PROVIDERS: tuple[IntegrationProvider, ...] = (
@@ -70,6 +71,7 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         available=True,
         docs_url="https://yookassa.ru/developers/api",
         recommended=True,
+        oauth_supported=True,
     ),
     IntegrationProvider(
         key="iiko",
@@ -107,6 +109,7 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         ),
         available=True,
         docs_url="https://apidocs.bitrix24.ru/",
+        oauth_supported=True,
     ),
     IntegrationProvider(
         key="moysklad",
@@ -149,6 +152,7 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         ),
         available=True,
         docs_url="https://yandex.ru/dev/metrika/",
+        oauth_supported=True,
     ),
     IntegrationProvider(
         key="rkeeper",
@@ -183,6 +187,7 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         available=False,
         requirement="Нужно зарегистрировать интеграцию amoCRM и настроить OAuth callback.",
         docs_url="https://www.amocrm.ru/developers/content/oauth/step-by-step",
+        oauth_supported=True,
     ),
     IntegrationProvider(
         key="one_c",
@@ -291,7 +296,8 @@ async def verify_provider(
 ) -> str:
     """Verify credentials against a read-only provider endpoint."""
     provider = get_provider(provider_key)
-    if not provider.available:
+    is_oauth = bool(secret_values.get("access_token"))
+    if not provider.available and not (provider.oauth_supported and is_oauth):
         raise IntegrationProviderError(provider.requirement or "Интеграция пока недоступна")
 
     headers = {"User-Agent": "Omnia-Integration-Hub/1.0", "Accept": "application/json"}
@@ -302,6 +308,20 @@ async def verify_provider(
             headers=headers,
         ) as client:
             if provider_key == "yookassa":
+                if is_oauth:
+                    response = await client.get(
+                        "https://api.yookassa.ru/v3/me",
+                        headers={
+                            **headers,
+                            "Authorization": f"Bearer {secret_values['access_token']}",
+                        },
+                    )
+                    _provider_http_error(provider.name, response)
+                    yookassa_payload = response.json()
+                    account_id = yookassa_payload.get(
+                        "account_id"
+                    ) or public_values.get("shop_id")
+                    return f"Магазин {account_id}" if account_id else "ЮKassa"
                 response = await client.get(
                     "https://api.yookassa.ru/v3/payments",
                     params={"limit": 1},
@@ -323,6 +343,22 @@ async def verify_provider(
                 return "iikoCloud API"
 
             if provider_key == "bitrix24":
+                if is_oauth:
+                    endpoint = public_values.get("client_endpoint", "").rstrip("/")
+                    parsed = urlparse(endpoint)
+                    if parsed.scheme != "https" or not parsed.hostname:
+                        raise IntegrationCredentialsInvalid(
+                            "Сохранённый адрес портала Битрикс24 некорректен."
+                        )
+                    response = await client.get(
+                        f"{endpoint}/profile.json",
+                        params={"auth": secret_values["access_token"]},
+                    )
+                    _provider_http_error(provider.name, response)
+                    payload = response.json()
+                    result = payload.get("result", {}) if isinstance(payload, dict) else {}
+                    display = result.get("NAME") or result.get("ID") or parsed.hostname
+                    return f"{parsed.hostname} · {display}"
                 profile_url, host = _bitrix_profile_url(secret_values["webhook_url"])
                 response = await client.get(profile_url)
                 _provider_http_error(provider.name, response)
@@ -364,6 +400,28 @@ async def verify_provider(
                 payload = response.json()
                 counter = payload.get("counter", {}) if isinstance(payload, dict) else {}
                 return str(counter.get("name") or f"Счётчик {counter_id}")
+
+            if provider_key == "amocrm" and is_oauth:
+                base_url = public_values.get("base_url", "").rstrip("/")
+                parsed = urlparse(base_url)
+                if (
+                    parsed.scheme != "https"
+                    or not parsed.hostname
+                    or not parsed.hostname.endswith((".amocrm.ru", ".kommo.com"))
+                ):
+                    raise IntegrationCredentialsInvalid(
+                        "Сохранённый адрес аккаунта amoCRM некорректен."
+                    )
+                response = await client.get(
+                    f"{base_url}/api/v4/account",
+                    headers={
+                        **headers,
+                        "Authorization": f"Bearer {secret_values['access_token']}",
+                    },
+                )
+                _provider_http_error(provider.name, response)
+                payload = response.json()
+                return str(payload.get("name") or parsed.hostname)
     except IntegrationProviderError:
         raise
     except (httpx.TimeoutException, httpx.NetworkError) as exc:

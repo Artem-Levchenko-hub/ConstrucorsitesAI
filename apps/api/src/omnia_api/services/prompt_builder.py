@@ -2069,6 +2069,15 @@ TypeScript + Postgres/Drizzle + официальный MAX UI и MAX Bridge.
   BackButton. Закрывающий confirmation включай только при несохранённых данных.
 • `requestContact` и другие чувствительные действия вызывай только по явному
   клику пользователя с понятным объяснением.
+• Бизнес-интеграции уже доступны через безопасный клиент
+  `src/lib/omnia/integration-client.ts`: `getOmniaIntegrations()`,
+  `createOmniaPayment()`, `getOmniaPayment()`, `createOmniaLead()`,
+  `getOmniaCatalog()` и `trackOmniaGoal()`. Для оплаты, заявок, меню/товаров и
+  аналитики вызывай эти функции — никогда не проси пользователя вставлять
+  API-ключ в сгенерированное приложение и не обращайся к провайдеру напрямую.
+  Клиент передаёт подписанный MAX initData платформе, а секреты остаются в
+  Integration Hub. Обрабатывай состояние «интеграция ещё не подключена» понятным
+  CTA.
 • Webhook обязан быстро вернуть HTTP 200; тяжёлую работу выноси из request path.
   Повторные события дедуплицируй по event key в `max_webhook_events`.
 • Не добавляй Auth.js, отдельный login/password или Telegram-бота: личность уже

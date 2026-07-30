@@ -192,7 +192,7 @@ async def put_max_config(
     ):
         return _public(project, record)
 
-    files = render_max_managed_files(payload)
+    files = render_max_managed_files(payload, project.id)
     commit_sha = await asyncio.to_thread(
         repo_svc.commit_files,
         project.id,

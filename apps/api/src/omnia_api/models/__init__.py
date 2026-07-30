@@ -8,7 +8,12 @@ from omnia_api.models.account import (
     Payment,
     WalletLedgerEntry,
 )
-from omnia_api.models.app_integration import AppIntegration
+from omnia_api.models.app_integration import (
+    AppIntegration,
+    BusinessIntegration,
+    IntegrationOAuthState,
+    ProjectIntegrationBinding,
+)
 from omnia_api.models.attestation import Attestation
 from omnia_api.models.base import Base
 from omnia_api.models.custom_domain import CustomDomain
@@ -35,6 +40,7 @@ __all__ = [
     "AuthToken",
     "Base",
     "BusinessEntitlement",
+    "BusinessIntegration",
     "BusinessMember",
     "BusinessProfile",
     "CustomDomain",
@@ -43,6 +49,7 @@ __all__ = [
     "HeroMediaAsset",
     "HeroMediaBrief",
     "HeroMediaRender",
+    "IntegrationOAuthState",
     "Lead",
     "LegalAcceptance",
     "MaxIntegration",
@@ -50,6 +57,7 @@ __all__ = [
     "Message",
     "Payment",
     "Project",
+    "ProjectIntegrationBinding",
     "Snapshot",
     "Usage",
     "User",
