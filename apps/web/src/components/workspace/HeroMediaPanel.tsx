@@ -438,7 +438,7 @@ export function HeroMediaPanel({
                       setShowSetup(true);
                       setSetupStep(1);
                     }}
-                    className="text-xs font-medium text-accent hover:text-accent-hover"
+                    className="inline-flex min-h-11 items-center text-xs font-medium text-accent hover:text-accent-hover"
                   >
                     Изменить исходные фото или бриф
                   </button>
@@ -454,6 +454,7 @@ export function HeroMediaPanel({
               size="icon"
               variant="ghost"
               aria-label="Закрыть Hero media"
+              className="min-h-11 min-w-11"
               onClick={onClose}
             >
               <X className="h-4 w-4" />
@@ -542,7 +543,7 @@ export function HeroMediaPanel({
               <Button
                 size="sm"
                 variant="ghost"
-                className="w-full"
+                className="min-h-11 w-full"
                 onClick={() => setShowSetup(false)}
               >
                 Вернуться к готовому hero
@@ -662,7 +663,7 @@ export function HeroMediaPanel({
                   <Button
                     data-testid="hero-media-photos-next"
                     variant="primary"
-                    className="w-full"
+                    className="min-h-11 w-full"
                     disabled={uploadMut.isPending}
                     onClick={() => setSetupStep(2)}
                   >
@@ -727,6 +728,7 @@ export function HeroMediaPanel({
                       key={option.value}
                       data-testid={`hero-media-focus-${option.value}`}
                       size="sm"
+                      className="min-h-11"
                       variant={
                         focusPreference === option.value
                           ? "pill-primary"
@@ -750,6 +752,7 @@ export function HeroMediaPanel({
                       key={option.value}
                       data-testid={`hero-media-motion-${option.value}`}
                       size="sm"
+                      className="min-h-11"
                       variant={
                         motionPreference === option.value
                           ? "pill-primary"
@@ -766,7 +769,7 @@ export function HeroMediaPanel({
               <Button
                 data-testid="hero-media-build-plan"
                 variant="primary"
-                className="w-full"
+                className="min-h-11 w-full"
                 disabled={!prompt.trim() || planMut.isPending}
                 onClick={() => planMut.mutate()}
               >
@@ -859,7 +862,7 @@ export function HeroMediaPanel({
                     <Button
                       data-testid="hero-media-approve-plan"
                       variant="primary"
-                      className="w-full"
+                      className="min-h-11 w-full"
                       disabled={approveMut.isPending}
                       onClick={() => approveMut.mutate()}
                     >
@@ -875,7 +878,7 @@ export function HeroMediaPanel({
               </section>
             )}
 
-            {planApproved && (
+            {planApproved && !showSetup && (
               <section className="space-y-3 border-t border-border-subtle pt-4">
                 <div className="text-xs font-medium uppercase tracking-[0.14em] text-fg-secondary">
                   {hasCompletedResult && !showSetup
@@ -887,7 +890,7 @@ export function HeroMediaPanel({
                   <Button
                     data-testid="hero-media-render"
                     variant="primary"
-                    className="w-full"
+                    className="min-h-11 w-full"
                     disabled={renderMut.isPending}
                     onClick={() => renderMut.mutate()}
                   >
@@ -947,7 +950,7 @@ export function HeroMediaPanel({
                       <Button
                         data-testid="hero-media-retry-render"
                         variant="secondary"
-                        className="w-full"
+                        className="min-h-11 w-full"
                         disabled={retryMut.isPending}
                         onClick={() => retryMut.mutate()}
                       >
@@ -973,7 +976,12 @@ export function HeroMediaPanel({
                               Узкая версия проверяет mobile fallback
                             </div>
                           </div>
-                          <Button size="sm" variant="ghost" asChild>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="min-h-11"
+                            asChild
+                          >
                             <a
                               href={previewUrl ?? undefined}
                               target="_blank"
@@ -1011,7 +1019,7 @@ export function HeroMediaPanel({
                           <Button
                             data-testid="hero-media-apply"
                             variant="primary"
-                            className="w-full"
+                            className="min-h-11 w-full"
                             disabled={!canApply || applyMut.isPending}
                             onClick={() => applyMut.mutate()}
                           >
