@@ -121,10 +121,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f2f0e9" },
-    { media: "(prefers-color-scheme: dark)", color: "#080a10" },
-  ],
+  themeColor: "#f5f3ee",
   width: "device-width",
   initialScale: 1,
 };
@@ -167,7 +164,7 @@ export default async function RootLayout({
   return (
     <html
       lang={locale}
-      className={`dark ${inter.variable} ${geist.variable} ${outfit.variable} ${jetbrainsMono.variable}`}
+      className={`${inter.variable} ${geist.variable} ${outfit.variable} ${jetbrainsMono.variable}`}
     >
       <head>
         <script

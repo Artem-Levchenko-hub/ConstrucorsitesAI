@@ -18,15 +18,15 @@ export default function PricingPage() {
     >
       <div className="grid gap-6 lg:grid-cols-3">
         {plans.map((plan) => (
-          <article key={plan.name} className={`relative rounded-2xl border bg-[#13172a] p-8 ${plan.popular ? "border-[#3b82f6]" : "border-[#202946]"}`}>
-            {plan.popular && <span className="absolute right-8 top-8 rounded-full border border-[#244a85] bg-[#10213f] px-3 py-1 text-[10px] uppercase text-[#3b82f6]">Популярный</span>}
+          <article key={plan.name} className={`relative rounded-[12px] border bg-[#fcfbf7] p-8 ${plan.popular ? "border-2 border-[#f15a38]" : "border-[#d8d4cb]"}`}>
+            {plan.popular && <span className="absolute right-8 top-8 rounded-full bg-[#f15a38]/10 px-3 py-1 text-[10px] uppercase text-[#c84528]">Популярный</span>}
             <h2 className="text-[18px] font-semibold">{plan.name}</h2>
-            <p className="mt-3 min-h-12 text-[14px] leading-6 text-[#94a3b8]">{plan.text}</p>
+            <p className="mt-3 min-h-12 text-[14px] leading-6 text-[#6d6962]">{plan.text}</p>
             <div className="mt-7 text-[32px] font-bold tracking-[-0.04em]">{plan.price}</div>
             <ul className="mt-7 space-y-4">
-              {plan.items.map((item) => <li key={item} className="flex items-center gap-2.5 text-[13px] text-[#94a3b8]"><CheckCircle2 className="h-4 w-4 text-[#3b82f6]" />{item}</li>)}
+              {plan.items.map((item) => <li key={item} className="flex items-center gap-2.5 text-[13px] text-[#6d6962]"><CheckCircle2 className="h-4 w-4 text-[#248a4b]" />{item}</li>)}
             </ul>
-            <Link href="/max/register" className={`mt-8 inline-flex h-11 w-full items-center justify-center rounded-lg text-[13px] font-semibold ${plan.popular ? "bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6]" : "border border-[#202946]"}`}>
+            <Link href="/max/register" className={`mt-8 inline-flex h-11 w-full items-center justify-center rounded-[8px] text-[13px] font-semibold ${plan.popular ? "bg-[#f15a38] text-white" : "border border-[#d8d4cb]"}`}>
               Начать
             </Link>
           </article>

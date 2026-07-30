@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { BrandMark } from "@/components/marketing/BrandMark";
+
 export function LegalPage({
   title,
   updated = "30 июля 2026",
@@ -10,38 +12,29 @@ export function LegalPage({
   children: React.ReactNode;
 }) {
   return (
-    <main className="studio-grid min-h-screen bg-[#080a10] px-5 py-10 text-white">
-      <article className="mx-auto max-w-3xl rounded-2xl border border-[#1e243f] bg-[#0f121f] p-6 sm:p-10">
-        <Link href="/" className="text-sm text-blue-400 hover:text-white">
-          ← Omnia
-        </Link>
-        <h1 className="mt-10 text-4xl font-semibold tracking-[-0.04em] sm:text-5xl">{title}</h1>
-        <p className="mt-3 text-xs uppercase tracking-[0.12em] text-slate-600">Редакция от {updated}</p>
-        <div className="legal-copy mt-10 space-y-8 text-[15px] leading-7 text-slate-400">
+    <main data-light-shell className="min-h-screen bg-[#f5f3ee] text-[#171716]">
+      <header className="border-b border-[#d8d4cb] bg-[#fcfbf7]">
+        <div className="mx-auto flex h-16 max-w-[1120px] items-center justify-between px-5 sm:px-8">
+          <BrandMark />
+          <Link href="/" className="text-xs text-[#6d6962] hover:text-[#171716]">На главную</Link>
+        </div>
+      </header>
+      <article className="mx-auto max-w-[720px] px-5 py-16 sm:px-8 sm:py-24">
+        <p className="omnia-kicker text-[#f15a38]">11 / Legal</p>
+        <h1 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[54px]">{title}</h1>
+        <p className="mt-4 font-mono text-[10px] uppercase tracking-[.08em] text-[#8d887f]">Редакция от {updated}</p>
+        <div className="legal-copy mt-12 space-y-9 border-t border-[#d8d4cb] pt-10 text-[15px] leading-7 text-[#6d6962]">
           {children}
         </div>
-        <div className="mt-12 border-t border-[#1e243f] pt-6 text-sm text-slate-500">
+        <div className="mt-14 border-t border-[#d8d4cb] pt-7 text-sm text-[#8d887f]">
           Вопросы по документу:{" "}
-          <a className="text-blue-400" href="mailto:support@lead-generator.ru">
-            support@lead-generator.ru
-          </a>
+          <a className="font-medium text-[#c84528]" href="mailto:support@lead-generator.ru">support@lead-generator.ru</a>
         </div>
       </article>
     </main>
   );
 }
 
-export function LegalSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section>
-      <h2 className="mb-3 text-xl font-semibold text-white">{title}</h2>
-      {children}
-    </section>
-  );
+export function LegalSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section><h2 className="mb-3 text-xl font-semibold text-[#171716]">{title}</h2>{children}</section>;
 }

@@ -1,450 +1,394 @@
-import type { LucideIcon } from "lucide-react";
 import {
   ArrowRight,
-  BarChart3,
   Bot,
-  CheckCircle2,
-  CreditCard,
+  Box,
+  Check,
+  ChevronDown,
+  CircleDollarSign,
+  Cloud,
+  Code2,
   Database,
-  Layers3,
-  MessageSquare,
-  Settings,
+  ExternalLink,
+  Globe2,
+  LockKeyhole,
+  MessageSquareText,
+  PlugZap,
+  Rocket,
+  ShieldCheck,
   Smartphone,
+  Store,
   Waypoints,
-  Zap,
 } from "lucide-react";
-import { getLocale } from "next-intl/server";
 import Link from "next/link";
 
-import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { BrandMark } from "@/components/marketing/BrandMark";
 
-type Copy = {
-  nav: [string, string, string, string];
-  signIn: string;
-  launch: string;
-  badge: string;
-  heroBefore: string;
-  heroAccent: string;
-  heroAfter: string;
-  heroLead: string;
-  heroCta: string;
-  heroAlt: string;
-  prompt: string;
-  generate: string;
-  partners: string;
-  workflowBadge: string;
-  workflowTitle: string;
-  workflowLead: string;
-  featuresBadge: string;
-  featuresTitle: string;
-  featuresLead: string;
-  integrationsBadge: string;
-  integrationsTitle: string;
-  integrationsLead: string;
-  pricingBadge: string;
-  pricingTitle: string;
-  pricingLead: string;
-  footerLead: string;
-};
-
-const COPY: Record<"ru" | "en", Copy> = {
-  ru: {
-    nav: ["Возможности", "Как это работает", "Интеграции", "Тарифы"],
-    signIn: "Войти",
-    launch: "Открыть студию",
-    badge: "Конструктор и публикация приложений через диалог",
-    heroBefore: "Создавайте Mini Apps для",
-    heroAccent: "MAX",
-    heroAfter: "просто общаясь с агентом",
-    heroLead:
-      "Опишите продукт обычными словами. Агент соберёт интерфейс, backend и базу данных, подключит нужные сервисы и доведёт приложение до запуска в MAX.",
-    heroCta: "Начать бесплатно",
-    heroAlt: "Посмотреть сценарий",
-    prompt:
-      "Создай мини-апп для заказа пиццы с каталогом, корзиной и оплатой по СБП...",
-    generate: "Создать",
-    partners: "ПОДДЕРЖИВАЕМ ИНТЕГРАЦИИ ДЛЯ РЕАЛЬНОГО БИЗНЕСА",
-    workflowBadge: "Сценарий работы",
-    workflowTitle: "Без кода. Только диалог.",
-    workflowLead:
-      "Агент проводит от идеи до опубликованного мини-приложения и сохраняет состояние каждого шага.",
-    featuresBadge: "Готовый продукт",
-    featuresTitle: "Всё необходимое для бизнеса внутри MAX",
-    featuresLead:
-      "На выходе не макет, а работающий продукт с данными, оплатой, аналитикой и возможностью дальнейших правок.",
-    integrationsBadge: "Интеграции",
-    integrationsTitle: "Подключается к вашему стеку",
-    integrationsLead:
-      "Платежи, учёт, CRM и аналитика настраиваются из защищённого кабинета без ручного редактирования кода.",
-    pricingBadge: "Тарифы",
-    pricingTitle: "Понятная стоимость на каждом этапе",
-    pricingLead:
-      "Начните с первой сборки, затем выберите режим для регулярных обновлений и постоянной эксплуатации.",
-    footerLead:
-      "Создание и запуск полноценных Mini Apps для MAX с помощью продуктового AI-агента.",
-  },
-  en: {
-    nav: ["Features", "How it Works", "Integrations", "Pricing"],
-    signIn: "Sign In",
-    launch: "Launch App",
-    badge: "Introducing conversational app deployment",
-    heroBefore: "Build Mini-Apps for",
-    heroAccent: "Max Messenger",
-    heroAfter: "Just by Chatting",
-    heroLead:
-      "Empower your brand with fully functional interactive mini-apps. Describe what you need to our AI agent, and watch it deploy directly inside MAX with full integration support.",
-    heroCta: "Start Building Free",
-    heroAlt: "Watch Product Flow",
-    prompt:
-      "Создай мини-апп для заказа пиццы с каталогом, корзиной и оплатой по СБП...",
-    generate: "Generate",
-    partners: "SUPPORTING WORLD-CLASS INTEGRATIONS",
-    workflowBadge: "Workflow",
-    workflowTitle: "Zero Code. Just Conversation.",
-    workflowLead:
-      "Our visual AI agent guides you from a raw idea to a fully deployed mini-app while preserving every build step.",
-    featuresBadge: "Engineered for performance",
-    featuresTitle: "Complete Toolbox for Messenger Commerce",
-    featuresLead:
-      "Deploy production applications where your users chat, with payments, data, analytics and ongoing agent editing.",
-    integrationsBadge: "Integrations",
-    integrationsTitle: "Connect Seamlessly with Your Stack",
-    integrationsLead:
-      "Sync catalogues, record analytics, trigger payment invoices and handle CRM flows from one secure hub.",
-    pricingBadge: "Pricing plans",
-    pricingTitle: "Predictable Pricing. Unlimited Scaling",
-    pricingLead:
-      "Start with your first build, then choose the operating mode that matches your daily usage.",
-    footerLead:
-      "Production Mini Apps for MAX, generated and operated through a product AI agent.",
-  },
-};
-
-const workflow = [
-  {
-    number: "01",
-    ru: ["Опишите приложение", "Расскажите, для кого продукт, что должен уметь и какое действие пользователь выполняет чаще всего."],
-    en: ["Describe your App", "Tell the agent who the product is for, what it should do and which action matters most."],
-  },
-  {
-    number: "02",
-    ru: ["Проверьте живую сборку", "Агент создаёт страницы, данные и backend. Результат сразу появляется в мобильном превью."],
-    en: ["Review the Live Build", "The agent creates screens, data and backend while the result appears in the mobile preview."],
-  },
-  {
-    number: "03",
-    ru: ["Опубликуйте в MAX", "Подключите бота и сервисы. Студия подготовит HTTPS, webhook и проверит готовность к запуску."],
-    en: ["Deploy to MAX", "Connect the bot and services. The studio prepares HTTPS, webhook and validates launch readiness."],
-  },
-] as const;
-
-const features: Array<{
-  Icon: LucideIcon;
-  ru: [string, string];
-  en: [string, string];
-}> = [
-  {
-    Icon: Zap,
-    ru: ["Быстрая публикация", "Сборка, обновления и постоянный HTTPS-адрес без ручной настройки инфраструктуры."],
-    en: ["Instant Deploy", "Build, update and publish to a permanent HTTPS address without manual infrastructure work."],
-  },
-  {
-    Icon: CreditCard,
-    ru: ["Платежи", "ЮKassa, СБП и другие способы оплаты подключаются через защищённые настройки."],
-    en: ["Native Payments", "Connect payment providers and secure local payment methods from protected settings."],
-  },
-  {
-    Icon: Database,
-    ru: ["Backend и данные", "Каталоги, пользователи, заказы и история действий сохраняются в рабочей базе."],
-    en: ["Backend & Data", "Catalogues, users, orders and activity history are stored in a production database."],
-  },
-  {
-    Icon: Waypoints,
-    ru: ["Разработка через диалог", "Меняйте сценарии, тексты и интерфейс обычными сообщениями без найма разработчика."],
-    en: ["Conversational Agent", "Change flows, copy and interface through normal messages without hiring a developer."],
-  },
-  {
-    Icon: BarChart3,
-    ru: ["Аналитика", "События, конверсии и воронки отправляются в Метрику и другие системы аналитики."],
-    en: ["Advanced Analytics", "Events, conversions and funnels are sent to your preferred analytics platform."],
-  },
-  {
-    Icon: Settings,
-    ru: ["Внешние API", "Подключайте CRM, учёт, доставку и собственные системы через готовые коннекторы."],
-    en: ["Custom API Gateways", "Connect CRM, inventory, delivery and internal systems through managed connectors."],
-  },
-];
-
-const integrations: Array<{
-  Icon: LucideIcon;
-  name: string;
-  ru: string;
-  en: string;
-}> = [
-  { Icon: CreditCard, name: "ЮKassa / СБП", ru: "Приём онлайн-платежей", en: "Online payments" },
-  { Icon: Database, name: "PostgreSQL", ru: "Рабочая база данных", en: "Production database" },
-  { Icon: BarChart3, name: "Яндекс Метрика", ru: "События и конверсии", en: "Events and conversions" },
-  { Icon: Database, name: "Supabase", ru: "Auth и облачные таблицы", en: "Auth and cloud tables" },
-  { Icon: Layers3, name: "amoCRM / Битрикс24", ru: "Лиды и сделки", en: "Leads and deals" },
-  { Icon: Bot, name: "MAX Bot API", ru: "Бот, webhook и события", en: "Bot, webhook and events" },
-  { Icon: Zap, name: "iiko / r_keeper", ru: "Каталог и заказы", en: "Catalogues and orders" },
-  { Icon: Settings, name: "REST API", ru: "Ваши внутренние сервисы", en: "Internal systems" },
-];
-
-const plans = [
-  {
-    ru: ["Старт", "Первая сборка и проверка идеи.", "0 ₽", "за регистрацию"],
-    en: ["Sandbox", "Perfect for validating the product flow.", "$0", "/start"],
-    popular: false,
-    featuresRu: ["1 MAX-приложение", "Первая AI-сборка", "Мобильное превью", "Базовая поддержка"],
-    featuresEn: ["1 MAX app", "First AI build", "Mobile preview", "Basic support"],
-  },
-  {
-    ru: ["Studio", "Для запуска и регулярных обновлений.", "По тарифу", "по использованию"],
-    en: ["Pro Studio", "For launch and ongoing iterations.", "$49", "/month"],
-    popular: true,
-    featuresRu: ["Активные MAX-приложения", "Продуктовый AI-агент", "Интеграции и платежи", "Публикация и webhook", "Приоритетная поддержка"],
-    featuresEn: ["Active MAX apps", "Product AI agent", "Integrations and payments", "Publishing and webhook", "Priority support"],
-  },
-  {
-    ru: ["Enterprise", "Для команд и корпоративных систем.", "Индивидуально", ""],
-    en: ["Enterprise Suite", "For teams and corporate systems.", "Custom", ""],
-    popular: false,
-    featuresRu: ["Собственная VPS", "Гарантия доступности", "Корпоративные API", "Персональное сопровождение"],
-    featuresEn: ["Dedicated VPS", "Availability SLA", "Corporate APIs", "Solution support"],
-  },
-] as const;
-
-function SectionHeading({
-  badge,
-  title,
-  lead,
-}: {
-  badge: string;
+const directions: Array<{
+  icon: typeof Smartphone;
   title: string;
-  lead: string;
-}) {
+  text: string;
+  state: string;
+  href?: string;
+}> = [
+  {
+    icon: Smartphone,
+    title: "Приложения для MAX",
+    text: "Мини-приложение, бот, платежи, данные и публикация — в одном сценарии.",
+    state: "Доступно",
+    href: "/max/product",
+  },
+  {
+    icon: Globe2,
+    title: "Веб-приложения",
+    text: "Личные кабинеты, внутренние сервисы и продукты с авторизацией.",
+    state: "В разработке",
+  },
+  {
+    icon: Waypoints,
+    title: "Лендинги",
+    text: "Маркетинговые страницы, формы заявок, аналитика и собственный домен.",
+    state: "В разработке",
+  },
+  {
+    icon: Code2,
+    title: "Обычные приложения",
+    text: "Самостоятельные продукты с backend, базой данных и API.",
+    state: "В разработке",
+  },
+];
+
+const steps = [
+  ["01", "Опишите продукт", "Расскажите агенту задачу обычными словами. Он задаст только необходимые вопросы."],
+  ["02", "Проверьте сборку", "Интерфейс, backend и база данных появляются в живом мобильном превью."],
+  ["03", "Подключите сервисы", "Платежи, CRM, учёт и аналитику можно авторизовать из защищённого кабинета."],
+  ["04", "Опубликуйте", "Omnia подготовит HTTPS, контейнер, webhook и проверит готовность запуска."],
+  ["05", "Управляйте после запуска", "Меняйте приложение через агента, следите за версиями и откатывайте обновления."],
+] as const;
+
+const integrations = [
+  ["ЮKassa", "Оплата и возвраты"],
+  ["MAX Bot API", "Бот и webhook"],
+  ["iiko", "Каталог и заказы"],
+  ["r_keeper", "Меню и касса"],
+  ["Битрикс24", "Лиды и сделки"],
+  ["amoCRM", "CRM-сценарии"],
+  ["МойСклад", "Товары и остатки"],
+  ["Яндекс Метрика", "События и конверсии"],
+] as const;
+
+const faqs = [
+  ["Это макет или настоящее приложение?", "Настоящее приложение: исходный код, backend, рабочая база данных, HTTPS-адрес и управляемый контейнер."],
+  ["Нужно ли уметь программировать?", "Нет. Требования, правки и публикация выполняются через интерфейс студии и диалог с агентом."],
+  ["Что потребуется для запуска в MAX?", "Подтверждённый аккаунт владельца, MAX-бот от организации, ИП или самозанятого и его токен."],
+  ["Можно использовать свою VPS?", "Да. Укажите IP и доступ — студия проверит сервер, развернёт проект и покажет результат диагностики."],
+] as const;
+
+function ProductPreview() {
   return (
-    <div className="mx-auto flex max-w-[1312px] flex-col items-center text-center">
-      <span className="rounded-full border border-[#1d4f91] bg-[#0d1729] px-3 py-1.5 text-[12px] font-medium uppercase tracking-[0.01em] text-[#3b82f6]">
-        {badge}
-      </span>
-      <h2 className="font-display mt-4 text-[32px] font-bold leading-[1.1] tracking-[-0.03em] text-[#f8fafc] sm:text-[40px]">
-        {title}
-      </h2>
-      <p className="mt-4 max-w-[720px] text-[16px] leading-[1.7] text-[#94a3b8] sm:text-[18px]">
-        {lead}
-      </p>
+    <div className="relative mx-auto mt-14 max-w-[1120px] px-4 sm:px-8">
+      <div className="overflow-hidden rounded-[14px] border border-white/15 bg-[#23231f] shadow-[0_40px_100px_rgba(0,0,0,.28)]">
+        <div className="flex h-11 items-center justify-between border-b border-white/10 px-4 text-[10px] text-white/45">
+          <span className="flex gap-1.5">
+            <i className="size-2 rounded-full bg-white/25" />
+            <i className="size-2 rounded-full bg-white/25" />
+            <i className="size-2 rounded-full bg-white/25" />
+          </span>
+          <span className="font-mono">studio.omnia.ru/max/coffee</span>
+          <span className="rounded-md border border-white/10 px-2 py-1">Сохранено</span>
+        </div>
+        <div className="grid min-h-[460px] md:grid-cols-[300px_1fr_250px]">
+          <section className="border-r border-white/10 p-5">
+            <p className="omnia-kicker text-white/35">Продуктовый агент</p>
+            <div className="mt-8 space-y-4 text-[13px] leading-5">
+              <div className="rounded-[10px] bg-white/[.06] p-3 text-white/70">
+                Создай приложение кофейни: каталог, программа лояльности и заказ к выдаче.
+              </div>
+              <div className="border-l-2 border-[#f15a38] pl-3 text-white/55">
+                Собираю каталог и сценарий заказа. Затем подключу профиль MAX и проверю мобильную навигацию.
+              </div>
+              <div className="space-y-2 pt-3 text-[11px] text-white/35">
+                <p className="flex items-center gap-2"><Check className="size-3.5 text-[#5ac77e]" /> Схема данных создана</p>
+                <p className="flex items-center gap-2"><Check className="size-3.5 text-[#5ac77e]" /> Экран каталога готов</p>
+                <p className="flex items-center gap-2"><span className="size-3 animate-pulse rounded-full bg-[#f15a38]" /> Настраиваю корзину</p>
+              </div>
+            </div>
+            <div className="mt-16 rounded-[8px] border border-white/10 p-3 text-[11px] text-white/30">
+              Напишите, что изменить…
+            </div>
+          </section>
+          <section className="grid place-items-center bg-[#1b1b18] p-8">
+            <div className="w-[230px] rounded-[32px] border-[7px] border-[#0d0d0c] bg-[#f8f3e8] p-3 shadow-2xl">
+              <div className="mx-auto mb-4 h-1 w-14 rounded-full bg-black/20" />
+              <div className="rounded-[16px] bg-[#36271f] p-5 text-[#fff7e8]">
+                <p className="text-xs text-white/55">Доброе утро</p>
+                <h3 className="mt-1 text-xl font-semibold">Кофе рядом</h3>
+                <button className="mt-5 rounded-full bg-[#f15a38] px-4 py-2 text-[11px] font-semibold">Заказать</button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {["Капучино", "Флэт уайт", "Раф", "Матча"].map((item, index) => (
+                  <div key={item} className="rounded-[12px] bg-white p-3 text-[#171716] shadow-sm">
+                    <div className={`mb-4 aspect-square rounded-[8px] ${index % 2 ? "bg-[#d8b08a]" : "bg-[#a76a43]"}`} />
+                    <p className="text-[10px] font-semibold">{item}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+          <section className="hidden border-l border-white/10 p-5 md:block">
+            <p className="omnia-kicker text-white/35">Готовность</p>
+            <p className="mt-3 text-3xl font-semibold">4/7</p>
+            <div className="mt-5 h-1.5 rounded-full bg-white/10">
+              <div className="h-full w-4/7 rounded-full bg-[#f15a38]" />
+            </div>
+            <div className="mt-7 space-y-4 text-[12px] text-white/45">
+              {["Приложение собрано", "MAX-бот проверен", "Интеграции", "Публикация"].map((item, index) => (
+                <p key={item} className="flex items-center gap-2">
+                  <span className={`grid size-5 place-items-center rounded-full border ${index < 2 ? "border-[#5ac77e] text-[#5ac77e]" : "border-white/20"}`}>
+                    {index < 2 && <Check className="size-3" />}
+                  </span>
+                  {item}
+                </p>
+              ))}
+            </div>
+            <button className="mt-9 w-full rounded-[8px] bg-[#f15a38] py-3 text-xs font-semibold text-white">Продолжить настройку</button>
+          </section>
+        </div>
+      </div>
     </div>
   );
 }
 
-export default async function HomePage() {
-  const locale = await getLocale();
-  const lang = locale.startsWith("en") ? "en" : "ru";
-  const t = COPY[lang];
-
+export default function HomePage() {
   return (
-    <div data-marketing className="min-h-svh bg-[#080a10] text-[#f8fafc]">
-      <header className="h-20 border-b border-[#111626] bg-[#080a10]">
-        <div className="mx-auto flex h-full max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-16">
-          <BrandMark inverse label="MaxStudio" />
-          <nav className="hidden items-center gap-8 text-[14px] text-[#94a3b8] lg:flex">
-            <a href="#features" className="transition-colors hover:text-white">{t.nav[0]}</a>
-            <a href="#how-it-works" className="transition-colors hover:text-white">{t.nav[1]}</a>
-            <a href="#integrations" className="transition-colors hover:text-white">{t.nav[2]}</a>
-            <a href="#pricing" className="transition-colors hover:text-white">{t.nav[3]}</a>
+    <main className="min-h-screen bg-[#f5f3ee] text-[#171716]">
+      <section data-graphite-shell className="overflow-hidden border-b border-black bg-[#171716]">
+        <header className="mx-auto flex h-18 max-w-[1320px] items-center justify-between px-5 sm:px-8">
+          <BrandMark inverse />
+          <nav className="hidden items-center gap-7 text-[13px] text-white/60 lg:flex">
+            <a href="#products" className="hover:text-white">Продукты</a>
+            <a href="#process" className="hover:text-white">Как работает</a>
+            <a href="#integrations" className="hover:text-white">Интеграции</a>
+            <Link href="/pricing" className="hover:text-white">Тарифы</Link>
           </nav>
-          <div className="flex items-center gap-3 sm:gap-4">
-            <div className="hidden sm:block">
-              <LocaleSwitcher />
-            </div>
-            <Link href="/login" className="hidden text-[14px] text-[#94a3b8] transition-colors hover:text-white sm:block">
-              {t.signIn}
+          <div className="flex items-center gap-2.5">
+            <Link href="/login?next=/max" className="hidden px-3 py-2 text-[13px] text-white/65 hover:text-white sm:block">Войти</Link>
+            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-9 px-4 text-[13px]">Создать приложение</Link>
+          </div>
+        </header>
+
+        <div className="mx-auto max-w-[1320px] px-5 pb-24 pt-22 text-center sm:px-8 sm:pt-28">
+          <p className="omnia-kicker text-[#f15a38]">Продуктовая AI-студия</p>
+          <h1 className="mx-auto mt-6 max-w-[1000px] text-[48px] font-semibold leading-[.98] tracking-[-.055em] sm:text-[72px] lg:text-[92px]">
+            Приложение для MAX
+            <span className="block text-white/42">без команды разработки</span>
+          </h1>
+          <p className="mx-auto mt-8 max-w-[680px] text-[16px] leading-7 text-white/56 sm:text-[18px]">
+            Опишите продукт обычными словами. Omnia соберёт интерфейс, backend и базу данных,
+            подключит сервисы и доведёт приложение до запуска.
+          </p>
+          <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-12 px-6">
+              Начать бесплатно <ArrowRight className="size-4" />
             </Link>
-            <Link href="/max/register" className="rounded-lg bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] px-5 py-2.5 text-[14px] font-semibold text-white">
-              <span className="sm:hidden">{lang === "ru" ? "Начать" : "Start"}</span>
-              <span className="hidden sm:inline">{t.launch}</span>
+            <Link href="/max/product" className="omnia-button min-h-12 border border-white/20 px-6 text-white hover:bg-white/5">
+              Как устроен MAX Studio
             </Link>
           </div>
+          <ProductPreview />
         </div>
-      </header>
+      </section>
 
-      <main>
-        <section className="relative min-h-[751px] overflow-hidden border-b border-[#0d1220] px-5 py-20 sm:px-8 lg:px-16 lg:py-[100px]">
-          <div className="pointer-events-none absolute left-1/2 top-[-220px] h-[600px] w-[900px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(57,68,177,0.19),transparent_67%)]" />
-          <div className="relative mx-auto flex max-w-[1000px] flex-col items-center text-center">
-            <span className="inline-flex items-center gap-2 rounded-full border border-[#342166] bg-[#18132f] px-3.5 py-2 text-[13px] text-[#9b6cff]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#8b5cf6]" />
-              {t.badge}
-            </span>
-            <h1 className="font-display mt-6 text-[42px] font-bold leading-[1.05] tracking-[-0.045em] text-[#f8fafc] sm:text-[54px] lg:text-[64px]">
-              {t.heroBefore}{" "}
-              <span className="text-[#3b82f6]">{t.heroAccent}</span>{" "}
-              {t.heroAfter}
-            </h1>
-            <p className="mt-7 max-w-[760px] text-[17px] leading-[1.65] text-[#94a3b8] sm:text-[20px]">
-              {t.heroLead}
-            </p>
-            <div className="mt-12 flex flex-col gap-4 sm:flex-row">
-              <Link href="/max/register" className="inline-flex h-[49px] items-center justify-center gap-3 rounded-lg bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] px-7 text-[16px] font-semibold text-white">
-                {t.heroCta}
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-              <a href="#how-it-works" className="inline-flex h-[49px] items-center justify-center rounded-lg border border-[#202946] bg-[#13172a] px-7 text-[16px] font-semibold text-[#f8fafc]">
-                {t.heroAlt}
-              </a>
-            </div>
-            <div className="mt-12 w-full max-w-[800px] rounded-2xl border border-[#202946] bg-[#111525] p-5 text-left shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
-              <div className="mb-4 flex gap-4">
-                <span className="h-3 w-3 rounded-full bg-[#fb4b58]" />
-                <span className="h-3 w-3 rounded-full bg-[#20c997]" />
-              </div>
-              <div className="flex min-h-[53px] items-center gap-3 rounded-lg border border-[#26304f] bg-[#080a10] px-3">
-                <MessageSquare className="h-[18px] w-[18px] shrink-0 text-[#3b82f6]" />
-                <span className="min-w-0 flex-1 truncate text-[15px] text-[#d6d9e4]">{t.prompt}</span>
-                <Link href="/max/register" className="rounded-md bg-[#3b82f6] px-3 py-2 text-[12px] font-semibold text-white">
-                  {t.generate}
-                </Link>
-              </div>
-            </div>
+      <section id="products" className="mx-auto max-w-[1320px] px-5 py-24 sm:px-8 lg:py-32">
+        <div className="grid gap-10 border-b border-[#d8d4cb] pb-12 lg:grid-cols-[.75fr_1.25fr] lg:items-end">
+          <div>
+            <p className="omnia-kicker text-[#f15a38]">Направления</p>
+            <h2 className="mt-4 text-[38px] font-semibold leading-[1.05] tracking-[-.045em] sm:text-[52px]">Что можно создать</h2>
           </div>
-        </section>
-
-        <section className="flex min-h-[159px] items-center border-b border-[#0d1220] px-5 sm:px-8 lg:px-16">
-          <div className="mx-auto w-full max-w-[900px]">
-            <p className="text-center text-[11px] font-semibold uppercase text-[#60708d]">{t.partners}</p>
-            <div className="mt-7 grid grid-cols-2 gap-5 text-center text-[15px] font-semibold text-[#60708d] sm:grid-cols-5">
-              {["ЮKassa", "PostgreSQL", "amoCRM", "Яндекс Метрика", "Supabase"].map((name) => (
-                <span key={name} className="inline-flex items-center justify-center gap-2">
-                  <Waypoints className="h-4 w-4" />
-                  {name}
-                </span>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="how-it-works" className="min-h-[628px] px-5 py-24 sm:px-8 lg:px-16">
-          <SectionHeading badge={t.workflowBadge} title={t.workflowTitle} lead={t.workflowLead} />
-          <div className="mx-auto mt-14 grid max-w-[1312px] gap-6 lg:grid-cols-3">
-            {workflow.map((item) => {
-              const [title, text] = item[lang];
-              return (
-                <article key={item.number} className="min-h-[222px] rounded-2xl border border-[#202946] bg-[#13172a] p-8">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#17213d] text-[17px] font-bold text-[#3b82f6]">{item.number}</span>
-                  <h3 className="mt-5 text-[18px] font-semibold">{title}</h3>
-                  <p className="mt-2 text-[14px] leading-[1.55] text-[#94a3b8]">{text}</p>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-
-        <section id="features" className="min-h-[812px] px-5 py-24 sm:px-8 lg:px-16">
-          <SectionHeading badge={t.featuresBadge} title={t.featuresTitle} lead={t.featuresLead} />
-          <div className="mx-auto mt-14 grid max-w-[1312px] gap-5 md:grid-cols-2 lg:grid-cols-3">
-            {features.map(({ Icon, ...item }) => {
-              const [title, text] = item[lang];
-              return (
-                <article key={title} className="min-h-[193px] rounded-2xl border border-[#202946] bg-[#13172a] p-7">
-                  <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#211b4a] text-[#8b5cf6]">
-                    <Icon className="h-6 w-6" />
+          <p className="max-w-[620px] text-[16px] leading-7 text-[#6d6962] lg:justify-self-end">
+            Один инженерный контур для разных цифровых продуктов. Сейчас открыт полный сценарий
+            MAX Mini App; остальные направления появятся после закрытого тестирования.
+          </p>
+        </div>
+        <div className="mt-8 grid gap-px overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#d8d4cb] md:grid-cols-2">
+          {directions.map(({ icon: Icon, title, text, state, href }, index) => {
+            const body = (
+              <article className="group min-h-[270px] bg-[#fcfbf7] p-7 sm:p-9">
+                <div className="flex items-start justify-between gap-6">
+                  <span className={`grid size-11 place-items-center rounded-[8px] ${index === 0 ? "bg-[#f15a38] text-white" : "bg-[#ece8df] text-[#6d6962]"}`}>
+                    <Icon className="size-5" />
                   </span>
-                  <h3 className="mt-4 text-[17px] font-semibold">{title}</h3>
-                  <p className="mt-2 text-[14px] leading-[1.5] text-[#94a3b8]">{text}</p>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-
-        <section id="integrations" className="min-h-[560px] px-5 py-24 sm:px-8 lg:px-16">
-          <SectionHeading badge={t.integrationsBadge} title={t.integrationsTitle} lead={t.integrationsLead} />
-          <div className="mx-auto mt-14 grid max-w-[1312px] gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {integrations.map(({ Icon, name, ru, en }) => (
-              <article key={name} className="flex min-h-[69px] items-center gap-4 rounded-xl border border-[#202946] bg-[#13172a] px-4 py-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#17213d] text-[#3b82f6]">
-                  <Icon className="h-[18px] w-[18px]" />
-                </span>
-                <div className="min-w-0">
-                  <h3 className="truncate text-[14px] font-semibold">{name}</h3>
-                  <p className="mt-0.5 truncate text-[11px] text-[#7b89a4]">{lang === "ru" ? ru : en}</p>
+                  <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] uppercase tracking-[.1em] ${index === 0 ? "border-[#f15a38]/30 bg-[#f15a38]/8 text-[#c84528]" : "border-[#d8d4cb] text-[#8d887f]"}`}>
+                    {state}
+                  </span>
                 </div>
+                <h3 className="mt-14 text-2xl font-semibold tracking-[-.025em]">{title}</h3>
+                <p className="mt-3 max-w-[460px] text-sm leading-6 text-[#6d6962]">{text}</p>
+                {href && <span className="mt-7 inline-flex items-center gap-2 text-sm font-semibold text-[#c84528]">Подробнее <ArrowRight className="size-4" /></span>}
+              </article>
+            );
+            return href ? <Link key={title} href={href}>{body}</Link> : <div key={title}>{body}</div>;
+          })}
+        </div>
+      </section>
+
+      <section id="process" data-graphite-shell className="bg-[#171716] px-5 py-24 sm:px-8 lg:py-32">
+        <div className="mx-auto max-w-[1320px]">
+          <p className="omnia-kicker text-[#f15a38]">От идеи до продакшена</p>
+          <div className="mt-4 grid gap-8 border-b border-white/15 pb-12 lg:grid-cols-2">
+            <h2 className="text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[56px]">Пять шагов.<br />Без ручной сборки.</h2>
+            <p className="max-w-[560px] text-base leading-7 text-white/50 lg:justify-self-end">
+              Агент не отдаёт макет и не исчезает. Он ведёт проект через проверяемые этапы,
+              сохраняет прогресс и продолжает с того же места после перезагрузки.
+            </p>
+          </div>
+          <div className="divide-y divide-white/12">
+            {steps.map(([number, title, text]) => (
+              <article key={number} className="grid gap-4 py-8 sm:grid-cols-[72px_280px_1fr] sm:items-start">
+                <span className="font-mono text-xs text-[#f15a38]">{number}</span>
+                <h3 className="text-xl font-semibold">{title}</h3>
+                <p className="max-w-[620px] text-sm leading-6 text-white/48">{text}</p>
               </article>
             ))}
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section id="pricing" className="min-h-[880px] px-5 py-24 sm:px-8 lg:px-16">
-          <SectionHeading badge={t.pricingBadge} title={t.pricingTitle} lead={t.pricingLead} />
-          <div className="mx-auto mt-14 grid max-w-[1312px] gap-6 lg:grid-cols-3">
-            {plans.map((plan) => {
-              const [title, description, price, suffix] = plan[lang];
-              const items = lang === "ru" ? plan.featuresRu : plan.featuresEn;
+      <section className="mx-auto max-w-[1320px] px-5 py-24 sm:px-8 lg:py-32">
+        <div className="grid gap-12 lg:grid-cols-[1fr_1.1fr]">
+          <div>
+            <p className="omnia-kicker text-[#f15a38]">На выходе</p>
+            <h2 className="mt-4 max-w-[560px] text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[56px]">Полноценный продукт, а не прототип</h2>
+            <p className="mt-6 max-w-[540px] text-base leading-7 text-[#6d6962]">
+              Исходный код остаётся вашим. Приложение разворачивается в изолированном контейнере,
+              получает рабочие данные, версии, мониторинг и возможность отката.
+            </p>
+            <Link href="/max/register" className="omnia-button omnia-button-primary mt-8">Создать MAX-приложение <ArrowRight className="size-4" /></Link>
+          </div>
+          <div className="grid gap-px overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#d8d4cb] sm:grid-cols-2">
+            {[
+              [Box, "Исходный код", "Экспортируемый проект, который не привязан к закрытому редактору."],
+              [Database, "Backend и данные", "Пользователи, каталог, заказы и история в рабочей базе."],
+              [Cloud, "Постоянный HTTPS", "Управляемый хостинг Omnia или автоматический деплой на вашу VPS."],
+              [ShieldCheck, "Эксплуатация", "Health-check, логи, версии, повторный деплой и безопасный откат."],
+            ].map(([Icon, title, text]) => {
+              const ItemIcon = Icon as typeof Box;
               return (
-                <article key={title} className={`relative min-h-[480px] rounded-2xl border bg-[#13172a] p-10 ${plan.popular ? "border-[#3b82f6]" : "border-[#202946]"}`}>
-                  {plan.popular && (
-                    <span className="absolute right-10 top-10 rounded-full border border-[#244a85] bg-[#10213f] px-3 py-1.5 text-[11px] font-semibold uppercase text-[#3b82f6]">
-                      {lang === "ru" ? "Популярный" : "Most popular"}
-                    </span>
-                  )}
-                  <h3 className="text-[18px] font-semibold">{title}</h3>
-                  <p className="mt-3 text-[14px] text-[#94a3b8]">{description}</p>
-                  <div className="mt-9 flex items-end gap-2">
-                    <span className="text-[40px] font-bold tracking-[-0.04em]">{price}</span>
-                    {suffix && <span className="pb-2 text-[13px] text-[#60708d]">{suffix}</span>}
-                  </div>
-                  <ul className="mt-8 space-y-4">
-                    {items.map((feature) => (
-                      <li key={feature} className="flex items-center gap-2.5 text-[13px] text-[#94a3b8]">
-                        <CheckCircle2 className="h-4 w-4 shrink-0 text-[#3b82f6]" />
-                        {feature}
-                      </li>
-                    ))}
-                  </ul>
-                  <Link href="/max/register" className={`mt-9 inline-flex h-12 items-center justify-center rounded-lg px-7 text-[14px] font-semibold ${plan.popular ? "bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] text-white" : "border border-[#202946] text-white"}`}>
-                    {lang === "ru" ? "Начать" : "Get Started Instantly"}
-                  </Link>
+                <article key={String(title)} className="min-h-[220px] bg-[#fcfbf7] p-7">
+                  <ItemIcon className="size-5 text-[#f15a38]" />
+                  <h3 className="mt-12 text-xl font-semibold">{String(title)}</h3>
+                  <p className="mt-3 text-sm leading-6 text-[#6d6962]">{String(text)}</p>
                 </article>
               );
             })}
           </div>
-        </section>
-      </main>
+        </div>
+      </section>
 
-      <footer className="min-h-[430px] border-t border-[#0d1220] px-5 py-20 sm:px-8 lg:px-16">
-        <div className="mx-auto grid max-w-[1312px] gap-16 md:grid-cols-[1fr_auto_auto]">
-          <div>
-            <BrandMark inverse label="MaxStudio" />
-            <p className="mt-6 max-w-[360px] text-[14px] leading-6 text-[#7b89a4]">{t.footerLead}</p>
-          </div>
-          <div>
-            <h3 className="text-[13px] font-semibold">Product</h3>
-            <div className="mt-5 flex flex-col gap-4 text-[13px] text-[#94a3b8]">
-              <a href="#features">{t.nav[0]}</a>
-              <a href="#integrations">{t.nav[2]}</a>
-              <Link href="/pricing">{t.nav[3]}</Link>
-              <Link href="/changelog">Changelog</Link>
+      <section id="integrations" className="border-y border-[#d8d4cb] bg-[#fcfbf7] px-5 py-24 sm:px-8 lg:py-32">
+        <div className="mx-auto max-w-[1320px]">
+          <div className="grid gap-8 lg:grid-cols-2">
+            <div>
+              <p className="omnia-kicker text-[#f15a38]">Интеграции</p>
+              <h2 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[56px]">Сервисы бизнеса<br />подключаются из кабинета</h2>
             </div>
+            <p className="max-w-[560px] text-base leading-7 text-[#6d6962] lg:justify-self-end">
+              OAuth, защищённое хранилище ключей и автоматическая проверка соединения.
+              Приложение получает только разрешённые действия — секреты не попадают в код.
+            </p>
           </div>
-          <div>
-            <h3 className="text-[13px] font-semibold">Company</h3>
-            <div className="mt-5 flex flex-col gap-4 text-[13px] text-[#94a3b8]">
-              <Link href="/about">{lang === "ru" ? "О компании" : "About Us"}</Link>
-              <Link href="/security">{lang === "ru" ? "Безопасность" : "Security"}</Link>
-              <Link href="/contact">{lang === "ru" ? "Связаться" : "Contact Sales"}</Link>
-              <Link href="/legal/privacy">{lang === "ru" ? "Конфиденциальность" : "Privacy Policy"}</Link>
-              <Link href="/legal/terms">{lang === "ru" ? "Условия" : "Terms of Service"}</Link>
-            </div>
+          <div className="mt-14 grid border-l border-t border-[#d8d4cb] sm:grid-cols-2 lg:grid-cols-4">
+            {integrations.map(([name, text], index) => (
+              <article key={name} className="min-h-[150px] border-b border-r border-[#d8d4cb] p-6">
+                <div className="flex items-center justify-between">
+                  <PlugZap className="size-4 text-[#f15a38]" />
+                  <span className="font-mono text-[9px] text-[#aaa59b]">{String(index + 1).padStart(2, "0")}</span>
+                </div>
+                <h3 className="mt-8 font-semibold">{name}</h3>
+                <p className="mt-1 text-xs text-[#8d887f]">{text}</p>
+              </article>
+            ))}
           </div>
         </div>
-        <div className="mx-auto mt-24 flex max-w-[1312px] flex-col gap-4 border-t border-[#111626] pt-6 text-[12px] text-[#60708d] sm:flex-row sm:items-center sm:justify-between">
-          <span>© 2026 MaxStudio by Omnia. All rights reserved.</span>
-          <span className="inline-flex items-center gap-2"><Smartphone className="h-3.5 w-3.5" /> MAX Mini Apps</span>
+      </section>
+
+      <section data-graphite-shell className="bg-[#171716] px-5 py-24 sm:px-8 lg:py-32">
+        <div className="mx-auto grid max-w-[1320px] gap-14 lg:grid-cols-[.85fr_1.15fr]">
+          <div>
+            <p className="omnia-kicker text-[#f15a38]">Инфраструктура</p>
+            <h2 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[54px]">Запуск на Omnia<br />или на вашей VPS</h2>
+            <p className="mt-6 max-w-[500px] text-sm leading-6 text-white/48">
+              Для своей инфраструктуры достаточно IP, пользователя и пароля или SSH-ключа.
+              Перед деплоем студия проверит сервер и покажет каждую операцию.
+            </p>
+          </div>
+          <div className="grid gap-3">
+            {[
+              [Cloud, "Хостинг Omnia", "Постоянный HTTPS, обновления и мониторинг без настройки сервера."],
+              [LockKeyhole, "Собственная VPS", "Проверка доступа, Docker, firewall, домен и развёртывание end-to-end."],
+              [Rocket, "Управляемые версии", "Каждый релиз сохраняется; неудачную версию можно откатить."],
+            ].map(([Icon, title, text]) => {
+              const ItemIcon = Icon as typeof Cloud;
+              return (
+                <article key={String(title)} className="grid gap-4 rounded-[12px] border border-white/14 p-6 sm:grid-cols-[44px_1fr]">
+                  <span className="grid size-11 place-items-center rounded-[8px] bg-white/8"><ItemIcon className="size-5 text-[#f15a38]" /></span>
+                  <div>
+                    <h3 className="font-semibold">{String(title)}</h3>
+                    <p className="mt-2 text-sm leading-6 text-white/45">{String(text)}</p>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-[1000px] px-5 py-24 sm:px-8 lg:py-32">
+        <div className="text-center">
+          <p className="omnia-kicker text-[#f15a38]">Ответы</p>
+          <h2 className="mt-4 text-[40px] font-semibold tracking-[-.045em] sm:text-[52px]">Частые вопросы</h2>
+        </div>
+        <div className="mt-12 divide-y divide-[#d8d4cb] border-y border-[#d8d4cb]">
+          {faqs.map(([question, answer], index) => (
+            <details key={question} className="group py-1" open={index === 0}>
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-6 text-lg font-semibold [&::-webkit-details-marker]:hidden">
+                {question}
+                <ChevronDown className="size-5 shrink-0 text-[#8d887f] transition-transform group-open:rotate-180" />
+              </summary>
+              <p className="max-w-[760px] pb-6 text-sm leading-6 text-[#6d6962]">{answer}</p>
+            </details>
+          ))}
+        </div>
+      </section>
+
+      <section className="px-5 pb-5 sm:px-8 sm:pb-8">
+        <div data-graphite-shell className="mx-auto max-w-[1320px] rounded-[14px] bg-[#171716] px-6 py-20 text-center sm:px-12">
+          <MessageSquareText className="mx-auto size-7 text-[#f15a38]" />
+          <h2 className="mx-auto mt-6 max-w-[780px] text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[58px]">Опишите приложение.<br />Остальное соберёт Omnia.</h2>
+          <p className="mx-auto mt-5 max-w-[560px] text-sm leading-6 text-white/48">Регистрация займёт несколько минут. Первая сборка запускается только после подтверждения владельца.</p>
+          <Link href="/max/register" className="omnia-button omnia-button-primary mt-8 min-h-12 px-6">Начать бесплатно <ArrowRight className="size-4" /></Link>
+        </div>
+      </section>
+
+      <footer className="px-5 py-12 sm:px-8">
+        <div className="mx-auto grid max-w-[1320px] gap-10 border-t border-[#d8d4cb] pt-10 sm:grid-cols-[1fr_auto]">
+          <div>
+            <BrandMark />
+            <p className="mt-4 max-w-[380px] text-sm leading-6 text-[#8d887f]">Продуктовая AI-студия для создания, публикации и эксплуатации приложений.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-x-14 gap-y-3 text-sm text-[#6d6962]">
+            <Link href="/max/product">MAX Studio</Link>
+            <Link href="/pricing">Тарифы</Link>
+            <Link href="/legal/privacy">Конфиденциальность</Link>
+            <Link href="/legal/terms">Условия</Link>
+            <Link href="/security">Безопасность</Link>
+            <a href="mailto:support@lead-generator.ru">Поддержка <ExternalLink className="ml-1 inline size-3" /></a>
+          </div>
+        </div>
+        <div className="mx-auto mt-10 flex max-w-[1320px] justify-between border-t border-[#d8d4cb] pt-5 font-mono text-[9px] uppercase tracking-[.08em] text-[#aaa59b]">
+          <span>© 2026 Omnia</span>
+          <span>Сделано для работающих продуктов</span>
         </div>
       </footer>
-    </div>
+    </main>
   );
 }

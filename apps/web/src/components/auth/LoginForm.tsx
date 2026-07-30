@@ -51,9 +51,9 @@ export function LoginForm({ next }: { next?: string }) {
 
       <Button
         type="submit"
-        variant="pill-primary"
+        variant="primary"
         size="lg"
-        className="w-full"
+        className="w-full rounded-[8px]"
         disabled={pending}
       >
         {pending ? t("loginPending") : t("loginButton")}

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Waypoints } from "lucide-react";
+import { Asterisk } from "lucide-react";
 
 export function BrandMark({
   inverse = false,
@@ -17,14 +17,14 @@ export function BrandMark({
       aria-label={`${label} — главная`}
     >
       <span
-        className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+        className={`flex h-8 w-8 items-center justify-center rounded-[8px] ${
           inverse
-            ? "bg-[#3b82f6] text-white"
+            ? "bg-[#f15a38] text-white"
             : "bg-[#171716] text-[#fcfbf7]"
         }`}
         aria-hidden
       >
-        <Waypoints className="h-[18px] w-[18px]" strokeWidth={2.2} />
+        <Asterisk className="h-[18px] w-[18px]" strokeWidth={2.2} />
       </span>
       <span className="text-[18px]">{label}</span>
     </Link>

@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og";
 
 // Node runtime — Edge requires streaming infra our standalone container lacks.
 export const runtime = "nodejs";
-export const alt = "Omnia.AI — пиши промпты, получай готовый сайт";
+export const alt = "Omnia — приложение для MAX без команды разработки";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -18,7 +18,7 @@ export default function OpenGraphImage() {
         style={{
           width: "100%",
           height: "100%",
-          background: "linear-gradient(135deg, #0a0a0a 0%, #1e293b 100%)",
+          background: "#171716",
           display: "flex",
           flexDirection: "column",
           justifyContent: "center",
@@ -29,7 +29,7 @@ export default function OpenGraphImage() {
         <div
           style={{
             display: "flex",
-            color: "#3b82f6",
+            color: "#f15a38",
             fontSize: 36,
             fontWeight: 700,
             letterSpacing: "-0.02em",
@@ -48,7 +48,7 @@ export default function OpenGraphImage() {
             letterSpacing: "-0.04em",
           }}
         >
-          Пиши промпты —
+          Приложение для MAX
         </div>
         <div
           style={{
@@ -60,20 +60,19 @@ export default function OpenGraphImage() {
             letterSpacing: "-0.04em",
           }}
         >
-          получай готовый сайт.
+          без команды разработки
         </div>
         <div
           style={{
             display: "flex",
             marginTop: 32,
-            color: "#94a3b8",
+            color: "#aaa59b",
             fontSize: 28,
             fontWeight: 400,
             maxWidth: 1000,
           }}
         >
-          Сайт + бэкенд + домен + хостинг. С историей и кнопкой откатить любой
-          промпт. В рублях.
+          Интерфейс, backend, интеграции, MAX-бот, HTTPS и управляемая публикация.
         </div>
       </div>
     ),

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 
-import { IntegrationHub } from "@/components/max/IntegrationHub";
+import { FigmaIntegrationHub } from "@/components/max/FigmaIntegrationHub";
 import { getSession } from "@/lib/auth-mock";
 import { mockApi, USE_MOCKS } from "@/lib/api/mocks";
 import { serverApiFetchResult, type ServerFetchResult } from "@/lib/api/server";
@@ -43,7 +43,7 @@ export default async function MaxIntegrationsPage({
   }
 
   return (
-    <IntegrationHub
+    <FigmaIntegrationHub
       projectId={result.data.id}
       projectName={result.data.name}
     />

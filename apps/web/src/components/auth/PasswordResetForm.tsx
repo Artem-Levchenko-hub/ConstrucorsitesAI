@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import Link from "next/link";
-import { Check, Loader2 } from "lucide-react";
+import { AlertTriangle, Check, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,6 +51,23 @@ export function PasswordResetForm({ token }: { token: string }) {
     );
   }
 
+  if (!token) {
+    return (
+      <div className="text-center">
+        <span className="mx-auto grid size-11 place-items-center rounded-[8px] bg-[#c63d35]/10 text-[#c63d35]">
+          <AlertTriangle className="size-5" />
+        </span>
+        <p className="mt-4 text-sm font-medium">Ссылка недействительна</p>
+        <p className="mt-2 text-xs leading-5 text-[#6d6962]">
+          Запросите новую ссылку восстановления — старая могла истечь или уже использоваться.
+        </p>
+        <Button asChild className="mt-5">
+          <Link href="/forgot-password">Получить новую ссылку</Link>
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={submit} className="space-y-4">
       <div className="space-y-2">
@@ -78,7 +95,7 @@ export function PasswordResetForm({ token }: { token: string }) {
         />
       </div>
       {error && <p className="text-sm text-danger">{error}</p>}
-      <Button className="w-full" disabled={pending || !token}>
+      <Button className="w-full" disabled={pending}>
         {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
         Сохранить пароль
       </Button>

@@ -1,39 +1,37 @@
 @import "tailwindcss";
 
-/* Omnia product system. The public site and agent workspace follow the dark
-   MAX Studio frames from Figma. Registration, setup and management screens use
-   the warm operational palette from the Foundations frame. */
+/* Omnia product system — Figma 00 / Foundations. */
 
 @theme {
-  --color-bg-base: #080a10;
-  --color-bg-elevated-1: #0f121f;
-  --color-surface: #13172a;
-  --color-surface-2: #1a2037;
-  --color-surface-3: #232a47;
+  --color-bg-base: #f5f3ee;
+  --color-bg-elevated-1: #fcfbf7;
+  --color-surface: #ffffff;
+  --color-surface-2: #f5f3ee;
+  --color-surface-3: #ece8df;
 
-  --color-separator: rgb(30 36 63 / 0.9);
-  --color-separator-solid: #1e243f;
+  --color-separator: #e7e3da;
+  --color-separator-solid: #d8d4cb;
 
-  --color-label-1: rgb(255 255 255 / 1);
-  --color-label-2: #94a3b8;
-  --color-label-3: #64748b;
-  --color-label-4: #475569;
+  --color-label-1: #171716;
+  --color-label-2: #6d6962;
+  --color-label-3: #8d887f;
+  --color-label-4: #aaa59b;
 
-  --color-accent: #3b82f6;
+  --color-accent: #f15a38;
   --color-accent-fg: #ffffff;
 
-  --color-system-red: #ef4444;
+  --color-system-red: #c63d35;
   --color-system-orange: #f59e0b;
   --color-system-yellow: #e8c547;
-  --color-system-green: #10b981;
-  --color-system-teal: #22d3ee;
-  --color-system-indigo: #8b5cf6;
+  --color-system-green: #248a4b;
+  --color-system-teal: #3d7c79;
+  --color-system-indigo: #725f4f;
 
-  --material-ultrathin-bg: rgb(15 18 31 / 0.5);
-  --material-thin-bg: rgb(15 18 31 / 0.72);
-  --material-regular-bg: rgb(15 18 31 / 0.84);
-  --material-thick-bg: rgb(15 18 31 / 0.92);
-  --material-ultrathick-bg: rgb(15 18 31 / 0.97);
+  --material-ultrathin-bg: rgb(252 251 247 / 0.65);
+  --material-thin-bg: rgb(252 251 247 / 0.78);
+  --material-regular-bg: rgb(252 251 247 / 0.88);
+  --material-thick-bg: rgb(252 251 247 / 0.94);
+  --material-ultrathick-bg: rgb(252 251 247 / 0.98);
 
   --radius-xs: 6px;
   --radius-sm: 8px;
@@ -47,38 +45,37 @@
   --ease-system: cubic-bezier(0.25, 0.1, 0.25, 1);
 
   --font-sans:
-    var(--font-geist), var(--font-inter), -apple-system, BlinkMacSystemFont,
+    var(--font-inter), -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, sans-serif;
   --font-display:
-    var(--font-outfit), var(--font-geist), var(--font-inter), system-ui,
-    sans-serif;
+    var(--font-inter), system-ui, sans-serif;
   --font-mono:
     ui-monospace, "SF Mono", var(--font-jetbrains), "Cascadia Mono",
     Menlo, Monaco, Consolas, monospace;
 
   /* Legacy aliases — kept until W2 component sweep replaces direct refs. */
-  --color-surface-base: #080a10;
-  --color-surface-raised: #0f121f;
-  --color-surface-overlay: #13172a;
-  --color-surface-input: #0f121f;
-  --color-surface-panel-dark: #080a10;
-  --color-surface-glass: rgb(15 18 31 / 0.76);
-  --color-border-subtle: rgb(30 36 63 / 0.9);
-  --color-border-default: #1e243f;
-  --color-border-strong: #334166;
-  --color-border-accent: #3b82f6;
-  --color-fg-primary: rgb(255 255 255 / 1);
-  --color-fg-secondary: #94a3b8;
-  --color-fg-tertiary: #64748b;
-  --color-fg-muted: #475569;
+  --color-surface-base: #f5f3ee;
+  --color-surface-raised: #fcfbf7;
+  --color-surface-overlay: #ffffff;
+  --color-surface-input: #ffffff;
+  --color-surface-panel-dark: #171716;
+  --color-surface-glass: rgb(252 251 247 / 0.84);
+  --color-border-subtle: #e7e3da;
+  --color-border-default: #d8d4cb;
+  --color-border-strong: #aaa59b;
+  --color-border-accent: #f15a38;
+  --color-fg-primary: #171716;
+  --color-fg-secondary: #6d6962;
+  --color-fg-tertiary: #8d887f;
+  --color-fg-muted: #aaa59b;
   --color-fg-on-accent: #ffffff;
-  --color-accent-hover: #2563eb;
-  --color-accent-subtle: rgb(59 130 246 / 0.14);
-  --color-accent-secondary: #8b5cf6;
-  --color-success: #10b981;
+  --color-accent-hover: #d94929;
+  --color-accent-subtle: rgb(241 90 56 / 0.1);
+  --color-accent-secondary: #e8c547;
+  --color-success: #248a4b;
   --color-warning: #e8c547;
-  --color-danger: #ef4444;
-  --color-info: #22d3ee;
+  --color-danger: #c63d35;
+  --color-info: #3d7c79;
 
   --color-paper: #fcfbf7;
   --color-warm-white: #f5f3ee;
@@ -91,7 +88,7 @@
 
 @layer base {
   html {
-    color-scheme: dark;
+    color-scheme: light;
     scroll-behavior: smooth;
     /* `clip` (not `hidden`) kills stray horizontal scroll app-wide without
        creating a scroll container — so it never breaks position: sticky. */
@@ -141,6 +138,12 @@
     --color-accent-secondary: #e8c547;
     color: var(--color-ink);
     background: var(--color-warm-white);
+  }
+
+  [data-graphite-shell] {
+    color-scheme: dark;
+    color: #fcfbf7;
+    background: #171716;
   }
 
   ::selection {
@@ -204,6 +207,73 @@
     text-transform: uppercase;
   }
 
+  .omnia-kicker {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .omnia-card {
+    border: 1px solid #d8d4cb;
+    border-radius: 12px;
+    background: #fcfbf7;
+  }
+
+  .omnia-button {
+    display: inline-flex;
+    min-height: 40px;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 8px;
+    padding: 0 16px;
+    font-size: 14px;
+    font-weight: 600;
+    transition: background-color 150ms ease, border-color 150ms ease;
+  }
+
+  .omnia-button-primary {
+    border: 1px solid #f15a38;
+    background: #f15a38;
+    color: #ffffff;
+  }
+
+  .omnia-button-primary:hover {
+    border-color: #d94929;
+    background: #d94929;
+  }
+
+  .omnia-button-secondary {
+    border: 1px solid #d8d4cb;
+    background: #fcfbf7;
+    color: #171716;
+  }
+
+  .omnia-button-secondary:hover {
+    background: #f5f3ee;
+  }
+
+  .omnia-input {
+    min-height: 44px;
+    width: 100%;
+    border: 1px solid #d8d4cb;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 0 12px;
+    color: #171716;
+  }
+
+  .omnia-input::placeholder {
+    color: #aaa59b;
+  }
+
+  .omnia-rule {
+    border-color: #d8d4cb;
+  }
+
   .font-display {
     font-family: var(--font-display);
   }
@@ -213,14 +283,14 @@
   }
 
   .max-studio-chat .max-studio-prompt {
-    border-top: 1px solid #151a2c;
-    background: #080a10;
+    border-top: 1px solid #d8d4cb;
+    background: #fcfbf7;
     padding: 20px;
   }
 
   .max-studio-chat .max-studio-prompt > div:last-child {
-    border-color: #202946;
-    background: #13172a;
+    border-color: #d8d4cb;
+    background: #ffffff;
   }
 
   .max-studio-chat .max-studio-prompt textarea {
@@ -231,22 +301,20 @@
 
   .studio-grid {
     background-image:
-      linear-gradient(rgb(59 130 246 / 0.055) 1px, transparent 1px),
-      linear-gradient(90deg, rgb(59 130 246 / 0.055) 1px, transparent 1px);
-    background-size: 48px 48px;
+      linear-gradient(rgb(23 23 22 / 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(23 23 22 / 0.035) 1px, transparent 1px);
+    background-size: 32px 32px;
     background-position: center top;
   }
 
   .studio-glow {
-    background:
-      radial-gradient(circle at 50% 0%, rgb(59 130 246 / 0.18), transparent 40%),
-      radial-gradient(circle at 82% 24%, rgb(139 92 246 / 0.13), transparent 32%);
+    background: radial-gradient(circle at 50% 0%, rgb(241 90 56 / 0.09), transparent 42%);
   }
 
   .studio-card {
-    border: 1px solid #1e243f;
-    background: #0f121f;
-    border-radius: 14px;
+    border: 1px solid #d8d4cb;
+    background: #fcfbf7;
+    border-radius: 12px;
   }
 
   .warm-shell {
@@ -267,7 +335,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    border: 1px solid #334166;
+    border: 1px solid #d8d4cb;
     border-radius: 8px;
     padding: 0.65rem 1.1rem;
     font-size: 0.875rem;
@@ -280,16 +348,16 @@
   }
   .marketing-button:active { transform: translateY(1px); }
   .marketing-button-primary {
-    border-color: #3b82f6;
-    background: #3b82f6;
+    border-color: #f15a38;
+    background: #f15a38;
     color: #ffffff;
   }
-  .marketing-button-primary:hover { background: #2563eb; }
+  .marketing-button-primary:hover { background: #d94929; }
   .marketing-button-secondary {
-    background: #0f121f;
-    color: #f8fafc;
+    background: #fcfbf7;
+    color: #171716;
   }
-  .marketing-button-secondary:hover { background: #13172a; }
+  .marketing-button-secondary:hover { background: #ece8df; }
 
   .product-state {
     display: inline-flex;

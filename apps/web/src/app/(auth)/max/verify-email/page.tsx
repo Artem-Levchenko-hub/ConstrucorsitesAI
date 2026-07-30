@@ -7,7 +7,7 @@ export default async function VerifyMaxEmailPage({
 }) {
   const { token } = await searchParams;
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#080a10] px-5 text-white">
+    <main data-light-shell className="flex min-h-screen items-center justify-center bg-[#f5f3ee] px-5 text-[#171716]">
       <VerifyMaxEmail token={token ?? ""} />
     </main>
   );

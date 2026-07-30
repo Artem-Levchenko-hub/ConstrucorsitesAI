@@ -26,7 +26,7 @@ export function MaxRegisterForm() {
             autoComplete="email"
             required
             placeholder="name@company.ru"
-            className="h-12 border-white/10 bg-white/[0.04]"
+            className="h-12 border-[#d8d4cb] bg-white"
           />
         </div>
         <div className="space-y-2">
@@ -38,7 +38,7 @@ export function MaxRegisterForm() {
             autoComplete="new-password"
             required
             minLength={8}
-            className="h-12 border-white/10 bg-white/[0.04]"
+            className="h-12 border-[#d8d4cb] bg-white"
           />
         </div>
         <div className="space-y-2">
@@ -50,22 +50,22 @@ export function MaxRegisterForm() {
             autoComplete="new-password"
             required
             minLength={8}
-            className="h-12 border-white/10 bg-white/[0.04]"
+            className="h-12 border-[#d8d4cb] bg-white"
           />
         </div>
       </div>
 
-      <div className="space-y-3 rounded-2xl border border-white/[0.08] bg-black/20 p-4 text-sm">
+      <div className="space-y-3 rounded-[10px] border border-[#d8d4cb] bg-[#f5f3ee] p-4 text-sm">
         <label className="flex cursor-pointer items-start gap-3">
           <input
             name="terms_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#3b82f6]"
+            className="mt-1 size-4 accent-[#f15a38]"
           />
-          <span className="text-white/65">
+          <span className="text-[#6d6962]">
             Принимаю{" "}
-            <Link className="text-[#8b5cf6] hover:underline" href="/legal/terms">
+            <Link className="text-[#c84528] hover:underline" href="/legal/terms">
               условия использования
             </Link>
           </span>
@@ -75,11 +75,11 @@ export function MaxRegisterForm() {
             name="privacy_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#3b82f6]"
+            className="mt-1 size-4 accent-[#f15a38]"
           />
-          <span className="text-white/65">
+          <span className="text-[#6d6962]">
             Ознакомлен с{" "}
-            <Link className="text-[#8b5cf6] hover:underline" href="/legal/privacy">
+            <Link className="text-[#c84528] hover:underline" href="/legal/privacy">
               политикой конфиденциальности
             </Link>
           </span>
@@ -89,12 +89,12 @@ export function MaxRegisterForm() {
             name="personal_data_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#3b82f6]"
+            className="mt-1 size-4 accent-[#f15a38]"
           />
-          <span className="text-white/65">
+          <span className="text-[#6d6962]">
             Даю отдельное{" "}
             <Link
-              className="text-[#8b5cf6] hover:underline"
+              className="text-[#c84528] hover:underline"
               href="/legal/personal-data"
             >
               согласие на обработку персональных данных
@@ -105,29 +105,29 @@ export function MaxRegisterForm() {
           <input
             name="marketing_accepted"
             type="checkbox"
-            className="mt-1 size-4 accent-[#3b82f6]"
+            className="mt-1 size-4 accent-[#f15a38]"
           />
-          <span className="text-white/45">
+          <span className="text-[#8d887f]">
             Получать новости продукта — необязательно
           </span>
         </label>
       </div>
 
       {state.error && (
-        <p role="alert" className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-300">
+        <p role="alert" className="rounded-[8px] bg-[#c63d35]/10 px-4 py-3 text-sm text-[#a9302a]">
           {state.error}
         </p>
       )}
 
       <Button
         disabled={pending}
-        className="h-12 w-full rounded-lg bg-[#3b82f6] text-base hover:bg-[#2563eb]"
+        className="h-12 w-full rounded-lg bg-[#f15a38] text-base text-white hover:bg-[#d94929]"
       >
         {pending ? "Создаём аккаунт…" : "Продолжить"}
         {!pending && <ArrowRight className="ml-2 size-4" />}
       </Button>
 
-      <div className="grid gap-2 text-xs text-white/40 sm:grid-cols-3">
+      <div className="grid gap-2 text-xs text-[#8d887f] sm:grid-cols-3">
         {[
           [Building2, "ООО, ИП или самозанятый"],
           [ShieldCheck, "Реквизиты проверяются"],
@@ -136,7 +136,7 @@ export function MaxRegisterForm() {
           const ItemIcon = Icon as typeof Building2;
           return (
             <div key={String(text)} className="flex items-center gap-2">
-              <ItemIcon className="size-3.5 text-[#8b5cf6]" />
+              <ItemIcon className="size-3.5 text-[#f15a38]" />
               {String(text)}
             </div>
           );

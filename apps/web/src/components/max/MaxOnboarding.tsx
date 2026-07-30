@@ -103,7 +103,7 @@ export function MaxOnboarding({ email }: { email: string }) {
   if (access.isLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
-        <Loader2 className="size-6 animate-spin text-[#8b5cf6]" />
+        <Loader2 className="size-6 animate-spin text-[#f15a38]" />
       </div>
     );
   }
@@ -118,9 +118,9 @@ export function MaxOnboarding({ email }: { email: string }) {
   }
 
   return (
-    <main className="max-studio-scroll flex-1 overflow-y-auto bg-[#080a10] px-5 py-10 text-white">
+    <main data-light-shell className="max-studio-scroll flex-1 overflow-y-auto bg-[#f5f3ee] px-5 py-10 text-[#171716]">
       <div className="mx-auto max-w-4xl">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#8b5cf6]">
+        <p className="omnia-kicker text-[#f15a38]">
           Настройка владельца
         </p>
         <div className="mt-3 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
@@ -128,11 +128,11 @@ export function MaxOnboarding({ email }: { email: string }) {
             <h1 className="text-3xl font-semibold tracking-[-0.03em] sm:text-4xl">
               Подготовим доступ к MAX Studio
             </h1>
-            <p className="mt-3 text-sm text-white/45">
+            <p className="mt-3 text-sm text-[#6d6962]">
               Проверка выполняется один раз для всех будущих приложений бизнеса.
             </p>
           </div>
-          <span className="text-sm text-white/35">Шаг {step} из 3</span>
+          <span className="text-sm text-[#8d887f]">Шаг {step} из 3</span>
         </div>
 
         <div className="mt-8 grid gap-3 sm:grid-cols-3">
@@ -146,12 +146,12 @@ export function MaxOnboarding({ email }: { email: string }) {
               <div
                 key={String(label)}
                 className={cn(
-                  "flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm",
+                  "flex items-center gap-3 rounded-[10px] border px-4 py-3 text-sm",
                   complete
-                    ? "border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-200"
+                    ? "border-[#248a4b]/25 bg-[#248a4b]/[0.06] text-[#248a4b]"
                     : index + 1 === step
-                      ? "border-[#8b5cf6]/45 bg-[#3b82f6]/12"
-                      : "border-white/[0.08] text-white/35",
+                      ? "border-[#f15a38]/45 bg-[#f15a38]/8"
+                      : "border-[#d8d4cb] text-[#8d887f]",
                 )}
               >
                 {complete ? <Check className="size-4" /> : <ItemIcon className="size-4" />}
@@ -162,15 +162,15 @@ export function MaxOnboarding({ email }: { email: string }) {
         </div>
 
         {!data?.email_verified && (
-          <section className="mt-8 rounded-xl border border-white/10 bg-[#0f121f] p-6 sm:p-8">
-            <MailCheck className="size-6 text-[#8b5cf6]" />
+          <section className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
+            <MailCheck className="size-6 text-[#f15a38]" />
             <h2 className="mt-5 text-2xl font-semibold">Подтвердите рабочий email</h2>
-            <p className="mt-2 max-w-xl text-sm leading-6 text-white/50">
-              Мы отправили ссылку на <span className="text-white">{email}</span>.
+            <p className="mt-2 max-w-xl text-sm leading-6 text-[#6d6962]">
+              Мы отправили ссылку на <span className="text-[#171716]">{email}</span>.
               После перехода вернитесь сюда — статус обновится автоматически.
             </p>
             {!data?.email_delivery_configured && (
-              <div className="mt-5 flex gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-4 text-sm text-amber-100/80">
+              <div className="mt-5 flex gap-3 rounded-[10px] border border-[#e8c547]/40 bg-[#e8c547]/10 p-4 text-sm text-[#745f16]">
                 <CircleAlert className="mt-0.5 size-4 shrink-0" />
                 Почтовый канал ещё подключается. Аккаунт сохранён; поддержка
                 подтвердит адрес после настройки отправки.
@@ -181,7 +181,7 @@ export function MaxOnboarding({ email }: { email: string }) {
               variant="outline"
               disabled={resend.isPending || !data?.email_delivery_configured}
               onClick={() => resend.mutate()}
-              className="mt-6 border-white/10 bg-transparent"
+              className="mt-6 border-[#d8d4cb] bg-transparent"
             >
               {resend.isPending ? (
                 <Loader2 className="mr-2 size-4 animate-spin" />
@@ -196,11 +196,11 @@ export function MaxOnboarding({ email }: { email: string }) {
         {data?.email_verified && !business && (
           <form
             onSubmit={submit}
-            className="mt-8 rounded-xl border border-white/10 bg-[#0f121f] p-6 sm:p-8"
+            className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8"
           >
-            <UserRoundCheck className="size-6 text-[#8b5cf6]" />
+            <UserRoundCheck className="size-6 text-[#f15a38]" />
             <h2 className="mt-5 text-2xl font-semibold">Кто владеет приложением?</h2>
-            <p className="mt-2 text-sm text-white/45">
+            <p className="mt-2 text-sm text-[#6d6962]">
               Тип должен совпадать с владельцем MAX-бота.
             </p>
 
@@ -214,14 +214,14 @@ export function MaxOnboarding({ email }: { email: string }) {
                     setOgrn("");
                   }}
                   className={cn(
-                    "rounded-2xl border p-4 text-left transition",
+                    "rounded-[10px] border p-4 text-left transition",
                     kind === item.id
-                      ? "border-[#8b5cf6]/60 bg-[#3b82f6]/14"
-                      : "border-white/[0.08] hover:border-white/20",
+                      ? "border-[#f15a38]/60 bg-[#f15a38]/8"
+                      : "border-[#d8d4cb] hover:border-[#aaa59b]",
                   )}
                 >
                   <span className="block text-sm font-medium">{item.title}</span>
-                  <span className="mt-1 block text-xs leading-5 text-white/35">
+                  <span className="mt-1 block text-xs leading-5 text-[#8d887f]">
                     {item.hint}
                   </span>
                 </button>
@@ -244,7 +244,7 @@ export function MaxOnboarding({ email }: { email: string }) {
                   required
                   minLength={3}
                   maxLength={300}
-                  className="h-12 border-white/10 bg-black/20"
+                  className="h-12 border-[#d8d4cb] bg-white"
                 />
               </div>
               <div className="space-y-2">
@@ -257,7 +257,7 @@ export function MaxOnboarding({ email }: { email: string }) {
                   required
                   minLength={kind === "legal_entity" ? 10 : 12}
                   maxLength={kind === "legal_entity" ? 10 : 12}
-                  className="h-12 border-white/10 bg-black/20"
+                  className="h-12 border-[#d8d4cb] bg-white"
                 />
               </div>
               {kind !== "self_employed" && (
@@ -273,7 +273,7 @@ export function MaxOnboarding({ email }: { email: string }) {
                     required
                     minLength={kind === "legal_entity" ? 13 : 15}
                     maxLength={kind === "legal_entity" ? 13 : 15}
-                    className="h-12 border-white/10 bg-black/20"
+                    className="h-12 border-[#d8d4cb] bg-white"
                   />
                 </div>
               )}
@@ -281,7 +281,7 @@ export function MaxOnboarding({ email }: { email: string }) {
 
             <Button
               disabled={save.isPending}
-              className="mt-7 h-12 rounded-lg bg-[#3b82f6] px-6 hover:bg-[#2563eb]"
+              className="mt-7 h-12 rounded-lg bg-[#f15a38] px-6 text-white hover:bg-[#d94929]"
             >
               {save.isPending ? (
                 <Loader2 className="mr-2 size-4 animate-spin" />
@@ -294,8 +294,8 @@ export function MaxOnboarding({ email }: { email: string }) {
         )}
 
         {business && business.status !== "verified" && (
-          <section className="mt-8 rounded-xl border border-white/10 bg-[#0f121f] p-6 sm:p-8">
-            <div className="flex size-11 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300">
+          <section className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
+            <div className="flex size-11 items-center justify-center rounded-[10px] bg-[#e8c547]/15 text-[#745f16]">
               {business.status === "rejected" ? (
                 <CircleAlert className="size-5" />
               ) : (
@@ -307,24 +307,24 @@ export function MaxOnboarding({ email }: { email: string }) {
                 ? "Нужна корректировка реквизитов"
                 : "Проверяем владельца"}
             </h2>
-            <p className="mt-2 max-w-xl text-sm leading-6 text-white/50">
+            <p className="mt-2 max-w-xl text-sm leading-6 text-[#6d6962]">
               {business.verification_note ??
                 "Результат появится здесь. Повторно создавать аккаунт не нужно."}
             </p>
-            <dl className="mt-6 grid gap-3 rounded-2xl border border-white/[0.08] p-4 text-sm sm:grid-cols-2">
+            <dl className="mt-6 grid gap-3 rounded-[10px] border border-[#d8d4cb] p-4 text-sm sm:grid-cols-2">
               <div>
-                <dt className="text-white/35">Владелец</dt>
+                <dt className="text-[#8d887f]">Владелец</dt>
                 <dd className="mt-1">{business.legal_name}</dd>
               </div>
               <div>
-                <dt className="text-white/35">ИНН</dt>
+                <dt className="text-[#8d887f]">ИНН</dt>
                 <dd className="mt-1 font-mono">{business.inn}</dd>
               </div>
             </dl>
             <Button
               variant="outline"
               onClick={() => access.refetch()}
-              className="mt-6 border-white/10 bg-transparent"
+              className="mt-6 border-[#d8d4cb] bg-transparent"
             >
               <RefreshCw className="mr-2 size-4" />
               Обновить статус

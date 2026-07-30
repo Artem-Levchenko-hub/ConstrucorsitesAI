@@ -98,23 +98,23 @@ export function MaxLaunchPanel({
   const botEmphasis = nextItem?.id === "bot";
 
   return (
-    <aside className="max-launch-panel flex h-full min-h-0 flex-col border-l border-[#1e243f] bg-[#13172a]">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#1e243f] px-4">
+    <aside data-light-shell className="max-launch-panel flex h-full min-h-0 flex-col border-l border-[#d8d4cb] bg-[#fcfbf7] text-[#171716]">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#d8d4cb] px-4">
         <div className="flex items-center gap-2.5">
           <span
             className={cn(
               "h-1.5 w-1.5 rounded-full",
-              readiness.data?.ready_to_launch ? "bg-success" : "bg-[#8b5cf6]",
+              readiness.data?.ready_to_launch ? "bg-success" : "bg-[#f15a38]",
             )}
           />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Публикация</span>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8d887f]">Публикация</span>
         </div>
         <button
           type="button"
           onClick={onClose ?? toggleTimeline}
           aria-label="Свернуть панель запуска"
           title="Свернуть панель запуска"
-          className="-mr-1 flex h-7 w-7 items-center justify-center rounded-md text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white/70"
+          className="-mr-1 flex h-7 w-7 items-center justify-center rounded-md text-[#8d887f] transition-colors hover:bg-[#f5f3ee] hover:text-[#171716]"
         >
           <PanelRightClose className="h-3.5 w-3.5" />
         </button>
@@ -124,40 +124,40 @@ export function MaxLaunchPanel({
         <section aria-labelledby="max-launch-heading">
           <div className="flex items-end justify-between gap-3">
             <div>
-              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-white/30">
+              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-[#8d887f]">
                 Готовность
               </p>
               <h2 id="max-launch-heading" className="mt-1 text-base font-semibold">
                 Запуск в MAX
               </h2>
             </div>
-            <span className="tabular-nums text-sm font-medium text-white/65">
+            <span className="tabular-nums text-sm font-medium text-[#6d6962]">
               {readinessAvailable ? `${readiness.data.progress}%` : "—"}
             </span>
           </div>
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#e7e3da]">
             <div
-              className="h-full rounded-full bg-[#3b82f6] transition-[width]"
+              className="h-full rounded-full bg-[#f15a38] transition-[width]"
               style={{ width: `${readiness.data?.progress ?? 0}%` }}
             />
           </div>
 
-          <div className="mt-5 border-l-2 border-[#8b5cf6]/70 pl-3">
-            <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/30">
+          <div className="mt-5 border-l-2 border-[#f15a38]/70 pl-3">
+            <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[#8d887f]">
               Следующий шаг
             </p>
-            <p className="mt-1 text-sm font-medium text-white/85">
+            <p className="mt-1 text-sm font-medium text-[#171716]">
               {nextStepLabel}
             </p>
-            <p className="mt-1 text-[11px] leading-4 text-white/40">
+            <p className="mt-1 text-[11px] leading-4 text-[#6d6962]">
               {nextStepCopy}
             </p>
           </div>
         </section>
 
         {items.length > 0 && (
-          <details className="group mt-5 border-y border-white/[0.07] py-3">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs text-white/55">
+          <details className="group mt-5 border-y border-[#e7e3da] py-3">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs text-[#6d6962]">
               <span>
                 {completedCount} из {items.length} шагов готово
               </span>
@@ -171,12 +171,12 @@ export function MaxLaunchPanel({
                       "mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
                       item.done
                         ? "border-success/45 bg-success/10 text-success"
-                        : "border-white/[0.13] text-transparent",
+                        : "border-[#d8d4cb] text-transparent",
                     )}
                   >
                     <Check className="h-2.5 w-2.5" />
                   </span>
-                  <span className={item.done ? "text-white/35" : "text-white/65"}>
+                  <span className={item.done ? "text-[#8d887f]" : "text-[#171716]"}>
                     {item.label}
                   </span>
                 </div>
@@ -203,14 +203,14 @@ export function MaxLaunchPanel({
           <Button
             asChild
             variant="secondary"
-            className="h-10 w-full justify-between border-white/[0.1] bg-white/[0.035] px-3 text-xs text-white/70 hover:bg-white/[0.07] hover:text-white"
+            className="h-10 w-full justify-between border-[#d8d4cb] bg-[#fcfbf7] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee] hover:text-[#171716]"
           >
             <Link href={`/max/${project.id}/integrations`}>
               <span className="flex items-center gap-2">
-                <Plug className="h-3.5 w-3.5 text-[#8b5cf6]" />
+                <Plug className="h-3.5 w-3.5 text-[#f15a38]" />
                 Интеграции
               </span>
-              <ChevronRight className="h-3.5 w-3.5 text-white/25" />
+              <ChevronRight className="h-3.5 w-3.5 text-[#aaa59b]" />
             </Link>
           </Button>
           <MaxLaunchButton projectId={project.id} />
@@ -218,26 +218,26 @@ export function MaxLaunchPanel({
         </section>
 
         {busyDeploy && (
-          <div className="mt-4 flex items-center gap-2 border-t border-white/[0.07] pt-4 text-[11px] text-white/45">
+          <div className="mt-4 flex items-center gap-2 border-t border-[#e7e3da] pt-4 text-[11px] text-[#6d6962]">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-warning" />
             Публикация продолжается в фоне.
           </div>
         )}
 
         {webhookActive && integration.data?.app_url && (
-          <div className="mt-5 border-t border-white/[0.07] pt-4">
+          <div className="mt-5 border-t border-[#e7e3da] pt-4">
             <div className="flex items-center gap-2 text-xs font-medium text-success">
               <ShieldCheck className="h-4 w-4" />
               Техническая часть готова
             </div>
-            <p className="mt-2 text-[11px] leading-4 text-white/40">
+            <p className="mt-2 text-[11px] leading-4 text-[#6d6962]">
               Добавьте URL приложения к кнопке «Открыть» в кабинете MAX.
             </p>
             <a
               href="https://business.max.ru/"
               target="_blank"
               rel="noreferrer"
-              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[#8b5cf6] hover:underline"
+              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[#c84528] hover:underline"
             >
               Открыть кабинет MAX
               <ExternalLink className="h-3 w-3" />

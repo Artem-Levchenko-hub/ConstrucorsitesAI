@@ -38,7 +38,22 @@ function formatDevice(value: string | null): string {
   return "Браузер";
 }
 
-export function AccountControlCenter({ email }: { email: string }) {
+export type AccountView =
+  | "all"
+  | "profile"
+  | "organization"
+  | "security"
+  | "billing"
+  | "transactions"
+  | "plan";
+
+export function AccountControlCenter({
+  email,
+  view = "all",
+}: {
+  email: string;
+  view?: AccountView;
+}) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [deleteConfirm, setDeleteConfirm] = useState("");
@@ -90,7 +105,7 @@ export function AccountControlCenter({ email }: { email: string }) {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-separator bg-bg-elevated-1 p-6">
+      {(view === "all" || view === "organization") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
         <div className="flex items-start gap-4">
           <div className="rounded-xl bg-accent/10 p-3 text-accent">
             <Building2 className="size-5" />
@@ -120,9 +135,9 @@ export function AccountControlCenter({ email }: { email: string }) {
             Настроить
           </Button>
         </div>
-      </section>
+      </section>}
 
-      <section className="rounded-2xl border border-separator bg-bg-elevated-1 p-6">
+      {(view === "all" || view === "billing" || view === "transactions" || view === "plan") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
         <div className="flex items-start gap-4">
           <div className="rounded-xl bg-accent/10 p-3 text-accent">
             <ReceiptRussianRuble className="size-5" />
@@ -134,14 +149,14 @@ export function AccountControlCenter({ email }: { email: string }) {
             </p>
           </div>
         </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        {view !== "transactions" && <div className="mt-5 grid gap-3 sm:grid-cols-3">
           {(paymentConfig.data?.packages ?? []).map((item) => (
             <button
               key={item.code}
               type="button"
               disabled={!paymentConfig.data?.enabled || pay.isPending}
               onClick={() => pay.mutate(item.code)}
-              className="rounded-xl border border-separator p-4 text-left transition hover:border-accent disabled:cursor-not-allowed disabled:opacity-45"
+              className="rounded-[10px] border border-[#d8d4cb] bg-white p-4 text-left transition hover:border-[#f15a38] disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="block text-sm font-medium">{item.title}</span>
               <span className="mt-2 block text-lg font-semibold">
@@ -152,7 +167,7 @@ export function AccountControlCenter({ email }: { email: string }) {
               </span>
             </button>
           ))}
-        </div>
+        </div>}
         {!paymentConfig.data?.enabled && (
           <p className="mt-4 rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">
             {paymentConfig.data?.reason ?? "Платёжный контур пока недоступен"}
@@ -170,9 +185,9 @@ export function AccountControlCenter({ email }: { email: string }) {
             ))}
           </div>
         )}
-      </section>
+      </section>}
 
-      <section className="rounded-2xl border border-separator bg-bg-elevated-1 p-6">
+      {(view === "all" || view === "security") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
         <div className="flex items-start gap-4">
           <div className="rounded-xl bg-accent/10 p-3 text-accent">
             <Shield className="size-5" />
@@ -212,9 +227,19 @@ export function AccountControlCenter({ email }: { email: string }) {
             </div>
           ))}
         </div>
-      </section>
+      </section>}
 
-      <section className="rounded-2xl border border-separator bg-bg-elevated-1 p-6">
+      {(view === "all" || view === "profile") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+        <div className="mb-6 grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="mb-2 block text-xs font-medium text-[#6d6962]" htmlFor="account-email">Рабочий email</label>
+            <Input id="account-email" value={email} readOnly className="border-[#d8d4cb] bg-[#f5f3ee]" />
+          </div>
+          <div>
+            <label className="mb-2 block text-xs font-medium text-[#6d6962]" htmlFor="account-role">Роль</label>
+            <Input id="account-role" value="Владелец бизнеса" readOnly className="border-[#d8d4cb] bg-[#f5f3ee]" />
+          </div>
+        </div>
         <h2 className="font-medium">Данные аккаунта</h2>
         <p className="mt-1 text-sm text-fg-tertiary">
           Скачайте машиночитаемую копию профиля, согласий, проектов и операций.
@@ -251,7 +276,7 @@ export function AccountControlCenter({ email }: { email: string }) {
             </Button>
           </div>
         </div>
-      </section>
+      </section>}
     </div>
   );
 }

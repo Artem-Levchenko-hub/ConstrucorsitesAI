@@ -213,9 +213,9 @@ export function ChatPanel({
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
     // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
-    <div className={`flex h-full min-h-0 flex-col bg-[#080a10] ${embedded ? "max-studio-chat" : "border-r border-[#1e243f]"}`}>
+    <div className={`flex h-full min-h-0 flex-col ${embedded ? "max-studio-chat bg-[#fcfbf7]" : "border-r border-[#d8d4cb] bg-[#f5f3ee]"}`}>
       {!embedded && (
-        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#1e243f] px-4">
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#d8d4cb] px-4">
           <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
             {mode === "max" ? "MAX-редактор" : "Чат"}
           </span>

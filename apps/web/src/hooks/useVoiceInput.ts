@@ -1,9 +1,15 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError, postBlob } from "@/lib/api/client";
 
 export type VoiceState = "idle" | "recording" | "transcribing";
+
+const subscribeVoiceSupport = () => () => undefined;
+const getVoiceSupport = () =>
+  typeof navigator !== "undefined" &&
+  !!navigator.mediaDevices?.getUserMedia &&
+  typeof MediaRecorder !== "undefined";
 
 /**
  * Voice prompt dictation. Records the mic with MediaRecorder, POSTs the blob to
@@ -22,11 +28,14 @@ export function useVoiceInput(onText: (text: string) => void) {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  const supported =
-    typeof window !== "undefined" &&
-    typeof navigator !== "undefined" &&
-    !!navigator.mediaDevices?.getUserMedia &&
-    typeof MediaRecorder !== "undefined";
+  // Keep the server render and the first browser render identical. Feature
+  // detection during render made SSR output a send button while the browser
+  // immediately rendered a microphone, causing a hydration mismatch.
+  const supported = useSyncExternalStore(
+    subscribeVoiceSupport,
+    getVoiceSupport,
+    () => false,
+  );
 
   const stop = useCallback(() => {
     const rec = recorderRef.current;
