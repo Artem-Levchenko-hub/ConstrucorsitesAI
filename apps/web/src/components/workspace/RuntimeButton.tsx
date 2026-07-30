@@ -254,7 +254,7 @@ export function RuntimeButton({
   if (isPending) {
     if (compact) {
       return (
-        <div className="flex h-9 items-center gap-2 border-t border-white/[0.07] pt-2 text-[11px] text-white/35">
+        <div className="flex min-h-11 items-center gap-2 border-t border-[#e7e3da] pt-2 text-[11px] text-[#8d887f]">
           <Loader2 className="h-3 w-3 animate-spin" />
           Проверяем контейнер…
         </div>
@@ -284,8 +284,8 @@ export function RuntimeButton({
 
   if (compact) {
     return (
-      <div className="flex min-h-10 items-center justify-between gap-3 border-t border-white/[0.07] pt-2">
-        <div className="flex min-w-0 items-center gap-2 text-[11px] text-white/45">
+      <div className="flex min-h-11 items-center justify-between gap-3 border-t border-[#e7e3da] pt-2">
+        <div className="flex min-w-0 items-center gap-2 text-[11px] text-[#6d6962]">
           <StateIcon state={state} />
           <span className="truncate">
             {activeDeploy
@@ -300,7 +300,7 @@ export function RuntimeButton({
           disabled={busy}
           onClick={() => keepAliveMut.mutate(!runtime?.keep_alive)}
           className={cn(
-            "h-8 shrink-0 gap-1.5 rounded-lg px-2 text-[11px] text-white/55",
+            "h-11 shrink-0 gap-1.5 rounded-lg px-2 text-[11px] text-[#6d6962] sm:h-8",
             runtime?.keep_alive && "text-success",
           )}
           title={

@@ -222,7 +222,7 @@ export function PromptInput({
                 size="sm"
                 onClick={voice.toggle}
                 disabled={voice.state === "transcribing"}
-                className={cn("px-2.5", voice.state === "recording" && "text-danger")}
+                className={cn("h-11 px-2.5 sm:h-8", voice.state === "recording" && "text-danger")}
                 title={
                   voice.state === "recording"
                     ? "Остановить запись"
@@ -246,7 +246,7 @@ export function PromptInput({
                 variant="secondary"
                 size="sm"
                 onClick={onCancel}
-                className="px-2.5"
+                className="h-11 px-2.5 sm:h-8"
                 title="Прервать текущую генерацию"
                 aria-label="Прервать генерацию"
               >
@@ -259,7 +259,7 @@ export function PromptInput({
               size="sm"
               onClick={send}
               disabled={!value.trim() && selections.length === 0}
-              className="gap-1.5 rounded-full px-3.5"
+              className="h-11 gap-1.5 rounded-full px-3.5 sm:h-8"
               title={
                 isStreaming
                   ? "Будет отправлено после текущей генерации"

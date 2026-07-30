@@ -142,6 +142,11 @@ async def get_status(project_id: UUID) -> dict[str, Any]:
     return await _request("GET", f"/internal/projects/{project_id}/status")
 
 
+async def create_max_preview_session(project_id: UUID) -> dict[str, Any]:
+    """POST a short-lived, signed bootstrap session for a MAX preview."""
+    return await _request("POST", f"/internal/projects/{project_id}/max-preview-session")
+
+
 async def wake(project_id: UUID) -> dict[str, Any]:
     """POST /internal/projects/wake — start (or unpause) a previously provisioned project."""
     return await _request("POST", "/internal/projects/wake", json={"project_id": str(project_id)})

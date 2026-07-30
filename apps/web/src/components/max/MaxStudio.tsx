@@ -18,7 +18,6 @@ import {
   Settings,
   Sparkles,
   UserRound,
-  X,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -27,6 +26,12 @@ import { toast } from "sonner";
 import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -269,25 +274,31 @@ export function MaxStudio({ email }: { email: string }) {
         </main>
       </div>
 
-      {dialogOpen && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-[#171716]/55 p-4 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-labelledby="new-project-title">
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent
+          data-light-shell
+          className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#d8d4cb] bg-[#fcfbf7] p-0 text-[#171716] sm:max-h-[92dvh] sm:max-w-[720px] sm:p-0"
+        >
           <form
-            className="max-h-[92vh] w-full max-w-[720px] overflow-y-auto rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] shadow-[0_30px_100px_rgba(0,0,0,.22)]"
+            className="contents"
             onSubmit={(event) => {
               event.preventDefault();
               if (ready && !create.isPending) create.mutate();
             }}
           >
-            <div className="sticky top-0 z-10 flex items-start justify-between border-b border-[#d8d4cb] bg-[#fcfbf7] p-6">
+            <div className="shrink-0 border-b border-[#d8d4cb] px-5 pb-5 pr-16 pt-5 sm:p-6 sm:pr-14">
               <div>
                 <p className="omnia-kicker text-[#f15a38]">Новый MAX-проект</p>
-                <h2 id="new-project-title" className="mt-2 text-2xl font-semibold">Что создаём?</h2>
-                <p className="mt-1 text-sm text-[#6d6962]">Короткого описания достаточно для первой сборки.</p>
+                <DialogTitle className="mt-2 text-2xl font-semibold text-[#171716]">
+                  Что создаём?
+                </DialogTitle>
+                <DialogDescription className="mt-1 text-sm text-[#6d6962]">
+                  Короткого описания достаточно для первой сборки.
+                </DialogDescription>
               </div>
-              <button type="button" onClick={() => setDialogOpen(false)} className="grid size-9 place-items-center rounded-[8px] text-[#8d887f] hover:bg-[#f5f3ee]"><X className="size-4" /></button>
             </div>
 
-            <div className="space-y-6 p-6">
+            <div className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain p-5 sm:p-6">
               <div className="space-y-2">
                 <Label htmlFor="max-project-name">Название</Label>
                 <Input id="max-project-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Кофе рядом" className="h-11 border-[#d8d4cb] bg-white" maxLength={100} />
@@ -338,19 +349,19 @@ export function MaxStudio({ email }: { email: string }) {
               </details>
             </div>
 
-            <div className="sticky bottom-0 flex items-center justify-between gap-4 border-t border-[#d8d4cb] bg-[#fcfbf7] p-5">
+            <div className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#d8d4cb] bg-[#fcfbf7] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:p-5">
               <p className="hidden text-xs text-[#8d887f] sm:block">Генерация начнётся один раз после открытия проекта.</p>
-              <div className="ml-auto flex gap-2">
-                <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Отмена</Button>
-                <Button disabled={!ready || create.isPending} className="bg-[#f15a38] text-white hover:bg-[#d94929]">
+              <div className="flex flex-col-reverse gap-2 sm:ml-auto sm:flex-row">
+                <Button type="button" variant="outline" className="min-h-11" onClick={() => setDialogOpen(false)}>Отмена</Button>
+                <Button disabled={!ready || create.isPending} className="min-h-11 bg-[#f15a38] text-white hover:bg-[#d94929]">
                   {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                   Создать проект
                 </Button>
               </div>
             </div>
           </form>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

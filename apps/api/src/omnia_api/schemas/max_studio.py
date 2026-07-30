@@ -90,3 +90,18 @@ class MaxReadinessPublic(BaseModel):
     ready_to_launch: bool
     progress: int
     items: list[MaxReadinessItem]
+
+
+class MaxPreviewSessionUpstream(BaseModel):
+    """Trusted shape returned by the internal orchestrator endpoint."""
+
+    project_id: UUID
+    bootstrap_url: str
+    expires_at: datetime
+
+
+class MaxPreviewSessionPublic(BaseModel):
+    """One-time bootstrap URL for a MAX Mini App preview."""
+
+    url: str
+    expires_at: datetime

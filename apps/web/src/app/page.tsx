@@ -83,6 +83,29 @@ const faqs = [
   ["Можно использовать свою VPS?", "Да. Укажите IP и доступ — студия проверит сервер, развернёт проект и покажет результат диагностики."],
 ] as const;
 
+const todayUpdates = [
+  [
+    Smartphone,
+    "Real preview",
+    "Живое MAX-приложение открывается в защищённой dev-сессии внутри viewport 390 × 844.",
+  ],
+  [
+    Rocket,
+    "Пошаговый запуск",
+    "Публикация показывает завершённые этапы, одно текущее действие и автоматически копирует URL для кабинета MAX.",
+  ],
+  [
+    Waypoints,
+    "Полные настройки",
+    "Продукт, функции, стиль, контент, поддержка и обязательные политики управляются без повторной генерации.",
+  ],
+  [
+    ShieldCheck,
+    "Responsive-проверка",
+    "Редактор, настройки, интеграции и post-launch проверены реальными взаимодействиями на 1440, 768 и 390 px.",
+  ],
+] as const;
+
 function ProductPreview() {
   return (
     <div className="relative mx-auto mt-14 max-w-[1120px] px-4 sm:px-8">
@@ -195,6 +218,35 @@ export default function HomePage() {
             </Link>
           </div>
           <ProductPreview />
+        </div>
+      </section>
+
+      <section className="border-b border-[#d8d4cb] bg-[#fcfbf7] px-5 py-16 sm:px-8">
+        <div className="mx-auto max-w-[1320px]">
+          <div className="flex flex-col gap-5 border-b border-[#d8d4cb] pb-7 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="omnia-kicker text-[#f15a38]">30 июля 2026</p>
+              <h2 className="mt-3 text-[32px] font-semibold tracking-[-.04em] sm:text-[42px]">
+                Что сделано сегодня
+              </h2>
+            </div>
+            <Link
+              href="/otchet/"
+              className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-[#c84528]"
+            >
+              Открыть полный отчёт
+              <ArrowRight className="size-4" />
+            </Link>
+          </div>
+          <div className="grid divide-y divide-[#d8d4cb] lg:grid-cols-4 lg:divide-x lg:divide-y-0">
+            {todayUpdates.map(([Icon, title, text]) => (
+              <article key={title} className="py-6 lg:px-6 lg:first:pl-0 lg:last:pr-0">
+                <Icon className="size-5 text-[#f15a38]" />
+                <h3 className="mt-5 text-lg font-semibold">{title}</h3>
+                <p className="mt-2 text-sm leading-6 text-[#6d6962]">{text}</p>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
 

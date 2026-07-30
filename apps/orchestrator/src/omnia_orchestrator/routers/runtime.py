@@ -14,13 +14,20 @@ from __future__ import annotations
 
 import os
 import re
+from base64 import urlsafe_b64encode
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from hmac import new as hmac_new
 from typing import Annotated
+from urllib.parse import urlencode
+from uuid import UUID
 
 from fastapi import APIRouter, Header
 
 from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import (
+    container_image_template,
     container_logs,
     destroy_container,
     exec_cmd,
@@ -45,6 +52,7 @@ from omnia_orchestrator.schemas.runtime import (
     KeepAliveRequest,
     KeepAliveResponse,
     LogsResponse,
+    MaxPreviewSessionResponse,
     ProvisionRequest,
     ProvisionResponse,
     RuntimeStatusResponse,
@@ -70,7 +78,12 @@ from omnia_orchestrator.services.port_allocator import (
     get_port_allocator,
     get_prod_port_allocator,
 )
-from omnia_orchestrator.services.provisioner import provision as provision_svc
+from omnia_orchestrator.services.provisioner import (
+    load_existing_auth_secret,
+)
+from omnia_orchestrator.services.provisioner import (
+    provision as provision_svc,
+)
 from omnia_orchestrator.services.runtime_probe import probe_runtime_error
 from omnia_orchestrator.services.warm import warm_routes
 
@@ -88,6 +101,24 @@ _AGENT_MAX_READ = 1_000_000
 _AGENT_MAX_LIST = 16_000
 _AGENT_MAX_GREP = 16_000
 _AGENT_MAX_BUILD = 24_000
+
+_MAX_PREVIEW_TEMPLATE = "max-miniapp-nextjs"
+_MAX_PREVIEW_BOOTSTRAP_TTL = timedelta(seconds=120)
+_MAX_PREVIEW_BOOTSTRAP_PATH = "/api/omnia/preview-session"
+
+
+def _max_preview_bootstrap_message(project_id: str, expires: int) -> bytes:
+    """Canonical, domain-separated signing input shared with the template."""
+    return f"omnia:max-preview-session:v1\n{project_id}\n{expires}".encode("ascii")
+
+
+def _max_preview_bootstrap_signature(secret: str, project_id: str, expires: int) -> str:
+    digest = hmac_new(
+        secret.encode("utf-8"),
+        _max_preview_bootstrap_message(project_id, expires),
+        sha256,
+    ).digest()
+    return urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 def _safe_app_path(path: str) -> str:
@@ -119,6 +150,70 @@ async def provision(
     """
     _verify_token(x_internal_token)
     return await provision_svc(payload)
+
+
+@router.post("/{project_id}/max-preview-session", response_model=MaxPreviewSessionResponse)
+async def create_max_preview_session(
+    project_id: UUID,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> MaxPreviewSessionResponse:
+    """Issue a short-lived, development-only MAX preview bootstrap URL.
+
+    This deliberately never starts containers or creates secrets: callers can
+    bootstrap only a running MAX template which was previously provisioned.
+    """
+    _verify_token(x_internal_token)
+    canonical_project_id = str(project_id)
+
+    container_name = await find_project_container(canonical_project_id, kind="dev")
+    if container_name is None:
+        raise OrchestratorError(
+            code="not_found",
+            message="no running MAX preview for this project",
+            status_code=404,
+        )
+    status = await docker_container_status(container_name)
+    if status["state"] != "running":
+        raise OrchestratorError(
+            code="container_not_running",
+            message="MAX preview container is not running",
+            status_code=409,
+        )
+    if await container_image_template(container_name) != _MAX_PREVIEW_TEMPLATE:
+        raise OrchestratorError(
+            code="unsupported_stack",
+            message="project is not a MAX Mini App preview",
+            status_code=409,
+        )
+
+    secret = load_existing_auth_secret(canonical_project_id)
+    if secret is None:
+        # A missing secret is not repaired here: doing so would make an unknown
+        # project bootstrap-able and would hide an incomplete provision.
+        raise OrchestratorError(
+            code="not_found",
+            message="MAX preview credentials are unavailable",
+            status_code=404,
+        )
+
+    now = datetime.now(UTC)
+    expires_at = now + _MAX_PREVIEW_BOOTSTRAP_TTL
+    expires = int(expires_at.timestamp())
+    signature = _max_preview_bootstrap_signature(secret, canonical_project_id, expires)
+    slug = container_name.removeprefix("omnia-dev-")
+    origin = nginx_writer.dev_url(slug)
+    if not origin.startswith("https://"):
+        raise OrchestratorError(
+            code="container_failure",
+            message="MAX preview requires an HTTPS development origin",
+            status_code=503,
+        )
+    query = urlencode({"expires": expires, "signature": signature})
+    bootstrap_url = f"{origin}{_MAX_PREVIEW_BOOTSTRAP_PATH}?{query}"
+    return MaxPreviewSessionResponse(
+        bootstrap_url=bootstrap_url,
+        expires_at=expires_at.isoformat().replace("+00:00", "Z"),
+    )
 
 
 @router.post("/wake", response_model=WakeResponse)

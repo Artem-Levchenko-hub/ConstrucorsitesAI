@@ -34,6 +34,18 @@ class ProvisionResponse(BaseModel):
     state: RuntimeState
 
 
+class MaxPreviewSessionResponse(BaseModel):
+    """One-time bootstrap URL for a development MAX Mini App preview.
+
+    The signature is deliberately part of the URL rather than this response's
+    separate fields: the caller only needs to navigate to ``bootstrap_url``.
+    It expires quickly and is validated inside the project container.
+    """
+
+    bootstrap_url: str
+    expires_at: str  # ISO8601 UTC
+
+
 class WakeRequest(BaseModel):
     project_id: UUID
 

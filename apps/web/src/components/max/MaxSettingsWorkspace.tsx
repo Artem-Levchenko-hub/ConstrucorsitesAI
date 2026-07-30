@@ -12,6 +12,7 @@ import {
   Server,
   ShieldCheck,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
 import { MaxProjectSetupDialog } from "@/components/max/MaxProjectSetupDialog";
@@ -19,6 +20,7 @@ import { ExternalDeployWizard } from "@/components/workspace/ExternalDeployWizar
 import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
 import { getMaxIntegration } from "@/lib/api/max-integration";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
+import { copyMaxLaunchUrl } from "@/lib/max-launch-steps";
 import { cn } from "@/lib/utils";
 
 type Tab = "bot" | "app" | "vps";
@@ -44,6 +46,29 @@ export function MaxSettingsWorkspace({
     retry: false,
   });
 
+  function openMaxCabinet(event: React.MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    const appUrl = integration.data?.app_url;
+    if (appUrl) {
+      void copyMaxLaunchUrl(appUrl).then((copied) => {
+        if (copied) {
+          toast.success("Ссылка на приложение скопирована", {
+            description: "Кабинет MAX открыт — вставьте ссылку в кнопку приложения.",
+          });
+        } else {
+          toast.error("Не удалось скопировать ссылку", {
+            description: "Скопируйте адрес приложения вручную после публикации.",
+          });
+        }
+      });
+    } else {
+      toast.info("Ссылка появится после публикации", {
+        description: "Кабинет MAX открыт, но приложение пока без постоянного URL.",
+      });
+    }
+    window.open("https://business.max.ru/", "_blank", "noopener,noreferrer");
+  }
+
   return (
     <MaxSectionShell
       projectId={projectId}
@@ -53,13 +78,13 @@ export function MaxSettingsWorkspace({
       title="MAX и приложение"
       lead="Здесь собраны три независимых шага: проверка бота, данные приложения и инфраструктура. Каждый статус основан на ответе сервера, а не на локальной галочке."
     >
-      <div className="mt-8 flex gap-2 overflow-x-auto pb-1">
+      <div className="mt-8 flex flex-wrap gap-2">
         {[
           ["bot", Bot, "MAX-бот"],
           ["app", FileCheck2, "Данные приложения"],
           ["vps", Server, "Своя VPS"],
         ].map(([id, Icon, label]) => (
-          <button key={String(id)} onClick={() => setTab(id as Tab)} className={cn("inline-flex h-10 shrink-0 items-center gap-2 rounded-[8px] border px-4 text-sm", tab === id ? "border-[#171716] bg-[#171716] text-white" : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962]")}>
+          <button key={String(id)} onClick={() => setTab(id as Tab)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-4 text-sm sm:h-10", tab === id ? "border-[#171716] bg-[#171716] text-white" : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962]")}>
             <Icon className="size-4" />{String(label)}
           </button>
         ))}
@@ -90,7 +115,19 @@ export function MaxSettingsWorkspace({
                 <li key={item} className="flex gap-3"><span className="grid size-6 shrink-0 place-items-center rounded-full border border-[#d8d4cb] font-mono text-[9px] text-[#8d887f]">{index + 1}</span><span className="pt-0.5 text-[#6d6962]">{item}</span></li>
               ))}
             </ol>
-            <a href="https://business.max.ru/" target="_blank" rel="noreferrer" className="mt-6 inline-flex items-center gap-1.5 text-xs font-medium text-[#c84528]">Открыть кабинет MAX <ExternalLink className="size-3" /></a>
+            <a
+              href="https://business.max.ru/"
+              target="_blank"
+              rel="noreferrer"
+              onClick={openMaxCabinet}
+              className="mt-6 inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-[#c84528]"
+            >
+              Открыть кабинет MAX
+              <ExternalLink className="size-3" />
+            </a>
+            <p className="mt-1 text-[10px] leading-4 text-[#8d887f]">
+              Если приложение опубликовано, его ссылка скопируется автоматически.
+            </p>
           </aside>
         </section>
       )}
@@ -100,7 +137,7 @@ export function MaxSettingsWorkspace({
           <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
             <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]"><FileCheck2 className="size-5" /></span>
             <h2 className="mt-6 text-2xl font-semibold">Данные готового приложения</h2>
-            <p className="mt-3 max-w-[620px] text-sm leading-6 text-[#6d6962]">Название, сценарий, оператор, поддержка, возрастной рейтинг и обязательные юридические страницы. Эти изменения версионируются без расходов на модель.</p>
+            <p className="mt-3 max-w-[620px] text-sm leading-6 text-[#6d6962]">Название, сценарий, функции, стиль, управляемый контент, оператор, поддержка, возрастной рейтинг и обязательные юридические страницы. Эти изменения версионируются без расходов на модель.</p>
             <div className="mt-7 max-w-[260px]"><MaxProjectSetupDialog projectId={projectId} display="panel" emphasized={!config.data?.config.legal.terms_accepted} label="Открыть данные приложения" /></div>
           </div>
           <aside className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
@@ -108,6 +145,8 @@ export function MaxSettingsWorkspace({
             <div className="mt-5 space-y-4 text-sm">
               {[
                 ["Название и сценарий", Boolean(config.data?.config.app_name && config.data?.config.summary)],
+                ["Функции и стиль", Boolean(config.data?.config.features.length || config.data?.config.brand_colors)],
+                ["Управляемый контент", Boolean(config.data?.config.content.length)],
                 ["Данные оператора", Boolean(config.data?.config.operator.legal_name && config.data?.config.operator.inn)],
                 ["Контакты поддержки", Boolean(config.data?.config.support.email || config.data?.config.support.phone)],
                 ["Условия приняты", Boolean(config.data?.config.legal.terms_accepted)],

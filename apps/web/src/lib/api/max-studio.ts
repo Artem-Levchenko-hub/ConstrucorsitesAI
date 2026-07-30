@@ -2,6 +2,7 @@ import { apiFetch } from "./client";
 import type {
   MaxProjectConfig,
   MaxProjectConfigPayload,
+  MaxPreviewSession,
   MaxReadiness,
   Uuid,
 } from "./types";
@@ -42,4 +43,12 @@ export function saveMaxUrlAttached(
 
 export function getMaxReadiness(projectId: Uuid): Promise<MaxReadiness> {
   return apiFetch<MaxReadiness>(`${path(projectId)}/readiness`);
+}
+
+export function createMaxPreviewSession(
+  projectId: Uuid,
+): Promise<MaxPreviewSession> {
+  return apiFetch<MaxPreviewSession>(`${path(projectId)}/preview-session`, {
+    method: "POST",
+  });
 }

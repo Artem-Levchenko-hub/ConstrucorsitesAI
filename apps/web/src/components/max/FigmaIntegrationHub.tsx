@@ -22,12 +22,17 @@ import {
   Trash2,
   Truck,
   UsersRound,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -199,7 +204,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
               <p className="mt-2 text-sm leading-6 text-[#6d6962]">{catalog.data?.recommended_pack?.description ?? "Оплата, CRM, учёт и аналитика для вашего сценария."}</p>
             </div>
           </div>
-          <Button onClick={() => pack.mutate()} disabled={pack.isPending || !catalog.data?.recommended_pack} className="mt-6 bg-[#f15a38] text-white hover:bg-[#d94929]">
+          <Button onClick={() => pack.mutate()} disabled={pack.isPending || !catalog.data?.recommended_pack} className="mt-6 min-h-11 bg-[#f15a38] text-white hover:bg-[#d94929]">
             {pack.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
             Подключить рекомендуемые
           </Button>
@@ -214,11 +219,11 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
 
       <section className="mt-8">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="flex flex-wrap gap-2">
             {(Object.keys(categories) as Array<IntegrationCategory | "all">).map((key) => {
               const item = categories[key];
               return (
-                <button key={key} onClick={() => setCategory(key)} className={cn("inline-flex h-9 shrink-0 items-center gap-2 rounded-[8px] border px-3 text-xs", category === key ? "border-[#171716] bg-[#171716] text-white" : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962]")}>
+                <button key={key} onClick={() => setCategory(key)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-3 text-xs sm:h-9", category === key ? "border-[#171716] bg-[#171716] text-white" : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962]")}>
                   <item.icon className="size-3.5" />{item.label}
                 </button>
               );
@@ -226,12 +231,12 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
           </div>
           <label className="relative block w-full lg:w-[280px]">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#aaa59b]" />
-            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти сервис" className="h-9 border-[#d8d4cb] bg-[#fcfbf7] pl-9" />
+            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти сервис" className="h-11 border-[#d8d4cb] bg-[#fcfbf7] pl-9 sm:h-9" />
           </label>
         </div>
 
         <div className="mt-5 overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7]">
-          <div className="hidden grid-cols-[1.3fr_1fr_150px_130px] border-b border-[#d8d4cb] px-5 py-3 font-mono text-[9px] uppercase tracking-[.1em] text-[#8d887f] md:grid">
+          <div className="hidden grid-cols-[1.3fr_1fr_150px_150px] border-b border-[#d8d4cb] px-5 py-3 font-mono text-[9px] uppercase tracking-[.1em] text-[#8d887f] lg:grid">
             <span>Сервис</span><span>Возможности</span><span>Статус</span><span />
           </div>
           {catalog.isLoading ? (
@@ -260,7 +265,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                 const reusable = connection?.status === "active" && !connection.bound_to_project;
                 const Icon = providerIcons[provider.key] ?? CloudCog;
                 return (
-                  <article key={provider.key} className="grid gap-4 p-5 md:grid-cols-[1.3fr_1fr_150px_130px] md:items-center">
+                  <article key={provider.key} className="grid gap-4 p-5 lg:grid-cols-[1.3fr_1fr_150px_150px] lg:items-center">
                     <div className="flex items-center gap-3">
                       <span className="grid size-10 shrink-0 place-items-center rounded-[8px] border border-[#d8d4cb] bg-white text-[#f15a38]"><Icon className="size-4" /></span>
                       <div><h3 className="text-sm font-semibold">{provider.name}</h3><p className="mt-1 line-clamp-1 text-xs text-[#8d887f]">{provider.description}</p></div>
@@ -277,14 +282,14 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                     <div className="flex justify-end gap-1">
                       {connected ? (
                         <>
-                          <button onClick={() => verify.mutate(provider.key)} className="grid size-8 place-items-center rounded-[8px] text-[#6d6962] hover:bg-[#f5f3ee]" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
-                          <button onClick={() => disconnect.mutate(provider.key)} className="grid size-8 place-items-center rounded-[8px] text-[#8d887f] hover:bg-[#c63d35]/10 hover:text-[#c63d35]" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
-                          <Button size="sm" variant="outline" onClick={() => openProvider(provider)}>Настроить</Button>
+                          <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#6d6962] hover:bg-[#f5f3ee] sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
+                          <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#8d887f] hover:bg-[#c63d35]/10 hover:text-[#c63d35] sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
+                          <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Настроить</Button>
                         </>
                       ) : reusable ? (
-                        <Button size="sm" onClick={() => bind.mutate(provider.key)}>Использовать</Button>
+                        <Button size="sm" className="h-11 sm:h-8" onClick={() => bind.mutate(provider.key)}>Использовать</Button>
                       ) : provider.available ? (
-                        <Button size="sm" onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
+                        <Button size="sm" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
                       ) : (
                         <a href={provider.docs_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-[#8d887f]">Требования <ExternalLink className="size-3" /></a>
                       )}
@@ -297,19 +302,29 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
         </div>
       </section>
 
-      {selected && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-[#171716]/50 p-4 backdrop-blur-[2px]">
-          <button className="absolute inset-0" onClick={() => !connect.isPending && setSelected(null)} aria-label="Закрыть" />
-          <section className="relative max-h-[90vh] w-full max-w-[600px] overflow-y-auto rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] shadow-[0_30px_100px_rgba(0,0,0,.2)]">
-            <header className="flex items-start justify-between border-b border-[#d8d4cb] p-6">
+      <Dialog
+        open={Boolean(selected)}
+        onOpenChange={(open) => {
+          if (!open && !connect.isPending) setSelected(null);
+        }}
+      >
+        {selected && (
+          <DialogContent
+            data-light-shell
+            className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#d8d4cb] bg-[#fcfbf7] p-0 text-[#171716] sm:max-h-[90dvh] sm:max-w-[600px] sm:p-0"
+          >
+            <header className="shrink-0 border-b border-[#d8d4cb] p-5 pr-16 sm:p-6 sm:pr-14">
               <div>
                 <p className="omnia-kicker text-[#f15a38]">Подключение</p>
-                <h2 className="mt-2 text-2xl font-semibold">{selected.name}</h2>
-                <p className="mt-2 max-w-[470px] text-sm leading-6 text-[#6d6962]">{selected.description}</p>
+                <DialogTitle className="mt-2 text-2xl font-semibold text-[#171716]">
+                  {selected.name}
+                </DialogTitle>
+                <DialogDescription className="mt-2 max-w-[470px] text-sm leading-6 text-[#6d6962]">
+                  {selected.description}
+                </DialogDescription>
               </div>
-              <button onClick={() => setSelected(null)} className="grid size-9 place-items-center rounded-[8px] text-[#8d887f] hover:bg-[#f5f3ee]"><X className="size-4" /></button>
             </header>
-            <div className="space-y-5 p-6">
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5 sm:p-6">
               {selected.oauth_available && (
                 <div className="rounded-[10px] border border-[#f15a38]/30 bg-[#f15a38]/[.06] p-4">
                   <h3 className="text-sm font-semibold">Рекомендуется: вход через {selected.name}</h3>
@@ -326,13 +341,13 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
               ))}
               <div className="rounded-[10px] bg-[#f5f3ee] p-4 text-xs leading-5 text-[#6d6962]"><ShieldCheck className="mb-2 size-4 text-[#248a4b]" />Секреты сохраняются зашифрованно и не показываются повторно.</div>
             </div>
-            <footer className="flex items-center justify-between gap-3 border-t border-[#d8d4cb] p-5">
-              <a href={selected.docs_url} target="_blank" rel="noreferrer" className="text-xs text-[#8d887f]">Документация сервиса</a>
-              {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="bg-[#f15a38] text-white hover:bg-[#d94929]">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
+            <footer className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#d8d4cb] p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between">
+              <a href={selected.docs_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-xs text-[#8d887f]">Документация сервиса</a>
+              {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-[#f15a38] text-white hover:bg-[#d94929]">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
             </footer>
-          </section>
-        </div>
-      )}
+          </DialogContent>
+        )}
+      </Dialog>
     </MaxSectionShell>
   );
 }

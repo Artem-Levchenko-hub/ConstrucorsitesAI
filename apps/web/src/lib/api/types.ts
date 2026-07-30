@@ -653,6 +653,11 @@ export type MaxReadiness = {
   }[];
 };
 
+export type MaxPreviewSession = {
+  url: string;
+  expires_at: IsoDateTime;
+};
+
 // === GitHub OAuth + Push (apps/api/src/omnia_api/schemas/github.py) ===
 
 export type GithubStatus = {

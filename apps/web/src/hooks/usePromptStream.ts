@@ -413,6 +413,12 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         // clicking the new card in the timeline. `null` = "show HEAD",
         // which PreviewFrame resolves to snapshots[0].
         selectSnapshot(null);
+        // MAX preview bootstrap files are platform-owned. A new generated
+        // snapshot may replace them, so re-run the idempotent managed-kit sync
+        // before the live phone iframe mints its next preview session.
+        qc.invalidateQueries({
+          queryKey: ["max-managed-kit-sync", projectId],
+        });
         return;
       }
 

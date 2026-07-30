@@ -219,7 +219,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                   reset();
                 }}
                 placeholder="site.example.ru"
-                className="h-8"
+                className="h-11 sm:h-8"
                 disabled={!!target}
                 data-testid="external-deploy-domain"
               />
@@ -232,7 +232,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                   reset();
                 }}
                 placeholder="203.0.113.10"
-                className="h-8"
+                className="h-11 sm:h-8"
                 disabled={!!target}
                 data-testid="external-deploy-host"
               />
@@ -245,7 +245,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                   reset();
                 }}
                 placeholder="root"
-                className="h-8"
+                className="h-11 sm:h-8"
                 disabled={!!target}
               />
             </Field>
@@ -258,7 +258,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                 }}
                 placeholder="22"
                 inputMode="numeric"
-                className="h-8"
+                className="h-11 sm:h-8"
                 disabled={!!target}
               />
             </Field>
@@ -314,7 +314,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                   reset();
                 }}
                 placeholder="Пароль от VPS"
-                className="h-8"
+                className="h-11 sm:h-8"
                 disabled={!!target}
                 data-testid="external-deploy-secret"
               />
@@ -335,7 +335,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
           {!target && (
             <Button
               size="sm"
-              className="h-8 w-full gap-2 text-xs"
+              className="h-11 w-full gap-2 text-xs sm:h-8"
               disabled={!canDiscover || discoverMutation.isPending}
               onClick={() => discoverMutation.mutate()}
               data-testid="external-deploy-check"
@@ -370,14 +370,14 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-7 text-xs"
+                  className="h-11 text-xs sm:h-7"
                   onClick={reset}
                 >
                   Изменить данные
                 </Button>
                 <Button
                   size="sm"
-                  className="h-7 flex-1 gap-1.5 text-xs"
+                  className="h-11 flex-1 gap-1.5 text-xs sm:h-7"
                   disabled={launchMutation.isPending}
                   onClick={() => launchMutation.mutate()}
                   data-testid="external-deploy-confirm"
@@ -412,7 +412,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="mt-2 h-7 text-xs"
+                  className="mt-2 h-11 text-xs sm:h-7"
                   onClick={reset}
                 >
                   Изменить данные
@@ -465,7 +465,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
             <Button
               size="sm"
               variant="ghost"
-              className="h-7 text-xs"
+              className="h-11 text-xs sm:h-7"
               onClick={reset}
             >
               Настроить другой сервер

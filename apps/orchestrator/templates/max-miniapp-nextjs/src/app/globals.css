@@ -24,19 +24,19 @@
 
 html,
 body {
+  width: 100%;
+  max-width: 100%;
   min-height: 100%;
   margin: 0;
+  overflow-x: clip;
   background: var(--app-bg);
   color: var(--app-text);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-body {
-  min-width: 320px;
-}
-
 .max-shell {
   width: min(100%, 560px);
+  min-width: 0;
   min-height: 100dvh;
   margin: 0 auto;
   padding:

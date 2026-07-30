@@ -28,17 +28,21 @@ function signature(value: string): string {
   return createHmac("sha256", secret()).update(value).digest("base64url");
 }
 
-export function createMaxSession(user: MaxSessionUser): {
+export function createMaxSession(
+  user: MaxSessionUser,
+  options: { maxAge?: number } = {},
+): {
   value: string;
   maxAge: number;
 } {
+  const maxAge = options.maxAge ?? SESSION_AGE_SECONDS;
   const encoded = Buffer.from(
     JSON.stringify({
       ...user,
-      expiresAt: Math.floor(Date.now() / 1000) + SESSION_AGE_SECONDS,
+      expiresAt: Math.floor(Date.now() / 1000) + maxAge,
     } satisfies SessionPayload),
   ).toString("base64url");
-  return { value: `${encoded}.${signature(encoded)}`, maxAge: SESSION_AGE_SECONDS };
+  return { value: `${encoded}.${signature(encoded)}`, maxAge };
 }
 
 export function readMaxSession(value: string | undefined): MaxSessionUser | null {

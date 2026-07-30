@@ -93,12 +93,12 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
           </section>
 
           <section className="mt-5 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
-            <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-              <div>
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
                 <p className="text-sm font-semibold">Рабочий контейнер</p>
                 <p className="mt-1 text-xs text-[#6d6962]">Текущий статус: {runtime.data?.state ?? "проверяем"}. Режим «Всегда активен» управляется здесь.</p>
               </div>
-              <div className="min-w-[260px]"><RuntimeButton projectId={projectId} display="compact" /></div>
+              <div className="w-full lg:min-w-[260px] lg:w-auto"><RuntimeButton projectId={projectId} display="compact" /></div>
             </div>
           </section>
         </>

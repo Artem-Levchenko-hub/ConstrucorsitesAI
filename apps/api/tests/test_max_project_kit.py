@@ -51,6 +51,8 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     files = render_max_managed_files(_config(), project_id)
 
     assert set(files) == {
+        "src/lib/max/session.ts",
+        "src/app/api/omnia/preview-session/route.ts",
         "src/lib/omnia/max-config.ts",
         "src/app/api/omnia/config/route.ts",
         "src/lib/omnia/integration-client.ts",
@@ -67,6 +69,11 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert str(project_id) in files[
         "src/app/api/omnia/integrations/[...path]/route.ts"
     ]
+    preview_route = files["src/app/api/omnia/preview-session/route.ts"]
+    assert 'process.env.NODE_ENV !== "development"' in preview_route
+    assert "partitioned: true" in preview_route
+    assert "PREVIEW_SESSION_MAX_AGE_SECONDS" in preview_route
+    assert "options: { maxAge?: number } = {}" in files["src/lib/max/session.ts"]
 
 
 def test_managed_kit_never_contains_model_or_generation_calls() -> None:

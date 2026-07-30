@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from urllib.parse import parse_qsl, urlparse
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
+from pydantic import ValidationError
 from sqlalchemy import func, select, text
 
 from omnia_api.core.deps import CurrentUserDep, SessionDep
@@ -20,6 +22,8 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.max_studio import (
     MaxLegal,
     MaxOperator,
+    MaxPreviewSessionPublic,
+    MaxPreviewSessionUpstream,
     MaxProjectConfigPayload,
     MaxProjectConfigPublic,
     MaxReadinessItem,
@@ -86,6 +90,50 @@ def _public(
     )
 
 
+def _preview_session_public(
+    project: Project, payload: object
+) -> MaxPreviewSessionPublic:
+    """Accept only signed preview URLs for this project's dev hostname."""
+    try:
+        session = MaxPreviewSessionUpstream.model_validate(payload)
+        parsed = urlparse(session.bootstrap_url)
+        hostname = parsed.hostname or ""
+    except (ValidationError, ValueError) as exc:
+        raise orchestrator_client.OrchestratorUnavailable(
+            "Orchestrator returned an invalid MAX preview session"
+        ) from exc
+
+    expected_prefix = f"{project.slug}-dev."
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    query_keys = [key for key, _value in query_pairs]
+    query = dict(query_pairs)
+    expires = query.get("expires", "")
+    signature = query.get("signature", "")
+    valid_url = (
+        session.project_id == project.id
+        and parsed.scheme == "https"
+        and hostname.startswith(expected_prefix)
+        and len(hostname) > len(expected_prefix)
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.port is None
+        and not parsed.fragment
+        and parsed.path == "/api/omnia/preview-session"
+        and len(query_keys) == 2
+        and set(query_keys) == {"expires", "signature"}
+        and 10 <= len(expires) <= 12
+        and expires.isascii()
+        and expires.isdigit()
+        and len(signature) == 43
+        and all(char.isalnum() or char in "-_" for char in signature)
+    )
+    if not valid_url:
+        raise orchestrator_client.OrchestratorUnavailable(
+            "Orchestrator returned an invalid MAX preview session"
+        )
+    return MaxPreviewSessionPublic(url=session.bootstrap_url, expires_at=session.expires_at)
+
+
 @router.get("/{project_id}/max/config", response_model=MaxProjectConfigPublic)
 async def get_max_config(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
@@ -93,6 +141,22 @@ async def get_max_config(
     project = await _owned_max_project(session, project_id, current_user.id)
     record = await session.get(MaxProjectConfig, project_id)
     return _public(project, record)
+
+
+@router.post(
+    "/{project_id}/max/preview-session",
+    response_model=MaxPreviewSessionPublic,
+)
+async def create_max_preview_session(
+    project_id: UUID,
+    response: Response,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> MaxPreviewSessionPublic:
+    project = await _owned_max_project(session, project_id, current_user.id)
+    payload = await orchestrator_client.create_max_preview_session(project.id)
+    response.headers["Cache-Control"] = "no-store"
+    return _preview_session_public(project, payload)
 
 
 @router.patch(

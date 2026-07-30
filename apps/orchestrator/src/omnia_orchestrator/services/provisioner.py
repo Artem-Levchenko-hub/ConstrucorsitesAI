@@ -120,6 +120,21 @@ def _load_or_create_auth_secret(project_id: str) -> str:
         pass  # Windows dev path
     return value
 
+
+def load_existing_auth_secret(project_id: str) -> str | None:
+    """Return a previously provisioned project's auth secret, if present.
+
+    Unlike :func:`_load_or_create_auth_secret`, this read-only helper must not
+    create a directory or a secret. It is used by capabilities that may only
+    operate on an already-provisioned project.
+    """
+    secret_file = Path(get_settings().secrets_root) / project_id / "auth.secret"
+    try:
+        value = secret_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
+
 log = structlog.get_logger("omnia_orchestrator.provisioner")
 
 

@@ -135,8 +135,8 @@ export function MaxIntegrationButton({
         onClick={() => setOpen(true)}
         className={
           display === "panel"
-            ? "h-10 min-w-0 w-full gap-1.5 overflow-hidden rounded-lg px-2 text-[11px]"
-            : "h-7 gap-1.5 px-2.5 text-xs"
+            ? "h-11 min-w-0 w-full gap-1.5 overflow-hidden rounded-lg px-2 text-[11px]"
+            : "h-11 gap-1.5 px-2.5 text-xs sm:h-7"
         }
         title="Подключить MAX Mini App"
         data-testid="max-integration-open"

@@ -3,7 +3,6 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Check,
-  ChevronDown,
   ChevronRight,
   ExternalLink,
   Loader2,
@@ -12,6 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 
 import { getMaxIntegration } from "@/lib/api/max-integration";
 import { getLastDeploy } from "@/lib/api/runtime";
@@ -23,17 +23,11 @@ import { RuntimeButton } from "@/components/workspace/RuntimeButton";
 import { MaxProjectSetupDialog } from "./MaxProjectSetupDialog";
 import { MaxLaunchButton } from "./MaxLaunchButton";
 import { getMaxReadiness } from "@/lib/api/max-studio";
+import {
+  copyMaxLaunchUrl,
+  getMaxLaunchWizard,
+} from "@/lib/max-launch-steps";
 import { cn } from "@/lib/utils";
-
-const NEXT_STEP_COPY: Record<string, string> = {
-  business: "Добавьте описание продукта и контакты поддержки.",
-  legal: "Заполните данные оператора и подтвердите обязательные условия.",
-  build: "Завершите текущую сборку приложения в чате.",
-  bot: "Вставьте секрет прошедшего модерацию MAX-бота.",
-  publish: "Запустите публикацию — студия сама подготовит HTTPS-адрес.",
-  webhook: "После публикации студия автоматически подключит webhook.",
-  max_url: "Добавьте HTTPS-адрес в кабинете MAX и подтвердите этот шаг.",
-};
 
 export function MaxLaunchPanel({
   project,
@@ -76,10 +70,8 @@ export function MaxLaunchPanel({
   );
   const items = readiness.data?.items ?? [];
   const readinessAvailable = readiness.isSuccess && items.length > 0;
-  const completedCount = items.filter((item) => item.done).length;
-  const nextItem = readinessAvailable
-    ? items.find((item) => !item.done)
-    : undefined;
+  const wizard = getMaxLaunchWizard(items);
+  const nextItem = readinessAvailable ? wizard.currentStep : undefined;
   const nextStepLabel = readiness.isError
     ? "Не удалось проверить готовность"
     : !readinessAvailable
@@ -87,18 +79,43 @@ export function MaxLaunchPanel({
       : nextItem?.label ?? "Всё готово";
   const nextStepCopy = readiness.isError
     ? "Обновите страницу или повторите попытку чуть позже."
-    : !readinessAvailable
+      : !readinessAvailable
       ? "Статусы появятся после ответа сервера."
       : nextItem
-        ? NEXT_STEP_COPY[nextItem.id] ?? "Завершите этот шаг, чтобы продолжить."
+        ? nextItem.instruction
         : "Приложение готово к работе в MAX.";
   const configurationEmphasis = ["business", "legal", "max_url"].includes(
     nextItem?.id ?? "",
   );
   const botEmphasis = nextItem?.id === "bot";
 
+  async function copyAppUrl() {
+    const appUrl = integration.data?.app_url;
+    if (!appUrl) return;
+
+    if (await copyMaxLaunchUrl(appUrl)) {
+      toast.success("Ссылка на приложение скопирована", {
+        description: "В кабинете MAX добавьте её к кнопке «Открыть».",
+      });
+    } else {
+      toast.error("Не удалось скопировать ссылку", {
+        description: "Ссылка остаётся доступна ниже — скопируйте её вручную.",
+      });
+    }
+  }
+
+  function openMaxCabinet(event: React.MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    void copyAppUrl();
+    window.open(
+      "https://business.max.ru/",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  }
+
   return (
-    <aside data-light-shell className="max-launch-panel flex h-full min-h-0 flex-col border-l border-[#d8d4cb] bg-[#fcfbf7] text-[#171716]">
+    <aside data-light-shell data-testid="max-launch-panel" className="max-launch-panel flex h-full min-h-0 flex-col border-l border-[#d8d4cb] bg-[#fcfbf7] text-[#171716]">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#d8d4cb] px-4">
         <div className="flex items-center gap-2.5">
           <span
@@ -114,7 +131,7 @@ export function MaxLaunchPanel({
           onClick={onClose ?? toggleTimeline}
           aria-label="Свернуть панель запуска"
           title="Свернуть панель запуска"
-          className="-mr-1 flex h-7 w-7 items-center justify-center rounded-md text-[#8d887f] transition-colors hover:bg-[#f5f3ee] hover:text-[#171716]"
+          className="-mr-1 flex h-11 w-11 items-center justify-center rounded-md text-[#8d887f] transition-colors hover:bg-[#f5f3ee] hover:text-[#171716] sm:h-8 sm:w-8"
         >
           <PanelRightClose className="h-3.5 w-3.5" />
         </button>
@@ -137,14 +154,20 @@ export function MaxLaunchPanel({
           </div>
           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#e7e3da]">
             <div
+              aria-label={`Готовность к запуску: ${readinessAvailable ? readiness.data.progress : 0}%`}
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={readinessAvailable ? readiness.data.progress : 0}
+              data-testid="max-launch-progress"
+              role="progressbar"
               className="h-full rounded-full bg-[#f15a38] transition-[width]"
               style={{ width: `${readiness.data?.progress ?? 0}%` }}
             />
           </div>
 
-          <div className="mt-5 border-l-2 border-[#f15a38]/70 pl-3">
+          <div aria-live="polite" data-testid="max-launch-current-step" className="mt-5 border-l-2 border-[#f15a38]/70 pl-3">
             <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[#8d887f]">
-              Следующий шаг
+              {nextItem ? `Шаг ${nextItem.position} из ${wizard.total}` : "Запуск завершён"}
             </p>
             <p className="mt-1 text-sm font-medium text-[#171716]">
               {nextStepLabel}
@@ -152,40 +175,53 @@ export function MaxLaunchPanel({
             <p className="mt-1 text-[11px] leading-4 text-[#6d6962]">
               {nextStepCopy}
             </p>
+            {nextItem?.action && (
+              <p className="mt-2 text-[11px] font-semibold text-[#c84528]">
+                Действие: {nextItem.action}
+              </p>
+            )}
           </div>
         </section>
 
-        {items.length > 0 && (
-          <details className="group mt-5 border-y border-[#e7e3da] py-3">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs text-[#6d6962]">
-              <span>
-                {completedCount} из {items.length} шагов готово
-              </span>
-              <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
-            </summary>
-            <div className="space-y-2.5 pt-3">
-              {items.map((item) => (
-                <div key={item.id} className="flex items-start gap-2 text-[11px]">
-                  <span
-                    className={cn(
-                      "mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                      item.done
-                        ? "border-success/45 bg-success/10 text-success"
-                        : "border-[#d8d4cb] text-transparent",
-                    )}
-                  >
-                    <Check className="h-2.5 w-2.5" />
+        {readinessAvailable && (
+          <ol aria-label="Шаги публикации в MAX" className="mt-5 space-y-1 border-y border-[#e7e3da] py-3">
+            {wizard.steps.map((step) => (
+              <li
+                key={step.id}
+                aria-current={step.status === "current" ? "step" : undefined}
+                data-status={step.status}
+                data-testid={`max-launch-step-${step.id}`}
+                className={cn(
+                  "flex items-start gap-2.5 rounded-md px-2 py-2 text-[11px]",
+                  step.status === "current" && "bg-[#f15a38]/[.08]",
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px] font-semibold",
+                    step.status === "completed" && "border-success/45 bg-success/10 text-success",
+                    step.status === "current" && "border-[#f15a38] bg-[#f15a38] text-white",
+                    step.status === "upcoming" && "border-[#d8d4cb] text-[#8d887f]",
+                  )}
+                >
+                  {step.status === "completed" ? <Check className="h-2.5 w-2.5" /> : step.position}
+                </span>
+                <span className="min-w-0">
+                  <span className={cn("block", step.status === "completed" ? "text-[#8d887f]" : "text-[#171716]", step.status === "current" && "font-semibold")}>
+                    {step.label}
                   </span>
-                  <span className={item.done ? "text-[#8d887f]" : "text-[#171716]"}>
-                    {item.label}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </details>
+                  {step.status === "current" && step.action && (
+                    <span className="mt-0.5 block text-[#c84528]">Сейчас: {step.action}</span>
+                  )}
+                  {step.status === "upcoming" && <span className="mt-0.5 block text-[#8d887f]">Далее</span>}
+                </span>
+              </li>
+            ))}
+          </ol>
         )}
 
-        <section className="mt-5 space-y-2.5" aria-label="Действия публикации">
+        <section className="mt-5 space-y-2.5" aria-label="Действия публикации" data-testid="max-launch-actions">
           <div className="grid grid-cols-2 gap-2">
             <MaxProjectSetupDialog
               projectId={project.id}
@@ -234,13 +270,25 @@ export function MaxLaunchPanel({
               Добавьте URL приложения к кнопке «Открыть» в кабинете MAX.
             </p>
             <a
+              href={integration.data.app_url}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="max-launch-app-url"
+              className="mt-2 block truncate font-mono text-[10px] text-[#6d6962] hover:text-[#171716] hover:underline"
+              title={integration.data.app_url}
+            >
+              {integration.data.app_url}
+            </a>
+            <a
               href="https://business.max.ru/"
               target="_blank"
               rel="noreferrer"
-              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[#c84528] hover:underline"
+              onClick={openMaxCabinet}
+              data-testid="max-open-business-cabinet"
+              className="mt-2 inline-flex min-h-11 items-center gap-1 text-xs font-medium text-[#c84528] hover:underline"
             >
               Открыть кабинет MAX
-              <ExternalLink className="h-3 w-3" />
+              <ExternalLink className="h-3 w-3" aria-hidden="true" />
             </a>
           </div>
         )}

@@ -2056,6 +2056,10 @@ TypeScript + Postgres/Drizzle + официальный MAX UI и MAX Bridge.
 • Клиент получает контекст только через `window.WebApp` из официального Bridge.
   В обычном браузерном preview автоматически работает mock-профиль. Никаких
   Telegram WebApp API, VK Bridge и самодельных postMessage-протоколов.
+  ОБЯЗАТЕЛЬНО учитывай `useMaxApp().mode`: пока `loading` показывай skeleton,
+  в `preview` рендери реалистичные demo/local данные и НЕ вызывай API, которым
+  нужна настоящая MAX-сессия; запросы к защищённым данным разрешены только при
+  `mode === "max"`. Preview не должен показывать пользователю `Unauthorized`.
 • Авторизация конечного пользователя — проверенный на СЕРВЕРЕ MAX `initData`.
   Для owner-scoped данных вызывай `requireMaxUser()` и фильтруй КАЖДЫЙ select /
   update / delete по `maxUserId`. Не доверяй `user_id` из JSON/body клиента.

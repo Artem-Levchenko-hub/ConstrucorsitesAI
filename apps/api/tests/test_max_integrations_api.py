@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 import httpx
 import pytest
 
+from omnia_api.models.project import Project
 from omnia_api.routers import max_accounts as max_accounts_router
+from omnia_api.routers import max_studio
 from omnia_api.routers import projects as projects_router
 from omnia_api.services import max_client, orchestrator_client
 from omnia_api.services import repo as repo_svc
@@ -160,3 +164,112 @@ async def test_max_connection_surfaces_tls_trust_failure(
         "code": "max_api_tls_untrusted",
         "message": "TLS-сертификат MAX API не прошёл проверку доверия",
     }
+
+
+async def test_max_preview_session_returns_validated_url_without_caching(
+    client: httpx.AsyncClient,
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = await _register_and_create(client, monkeypatch)
+    project = await db_session.get(Project, UUID(project_id))
+    assert project is not None
+    expected_url = (
+        f"https://{project.slug}-dev.preview.example/api/omnia/preview-session"
+        "?expires=1893456000&signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+
+    async def fake_create_preview_session(received_project_id: UUID) -> dict[str, str]:
+        assert received_project_id == project.id
+        return {
+            "project_id": str(project.id),
+            "bootstrap_url": expected_url,
+            "expires_at": "2030-01-01T00:00:00Z",
+        }
+
+    monkeypatch.setattr(
+        max_studio.orchestrator_client,
+        "create_max_preview_session",
+        fake_create_preview_session,
+    )
+
+    response = await client.post(f"/api/projects/{project_id}/max/preview-session")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "url": expected_url,
+        "expires_at": "2030-01-01T00:00:00Z",
+    }
+
+
+async def test_max_preview_session_rejects_foreign_project(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = await _register_and_create(client, monkeypatch)
+    logged_out = await client.post("/api/auth/logout")
+    assert logged_out.status_code == 204
+    registered = await client.post(
+        "/api/auth/register",
+        json={"email": "preview-foreign@example.com", "password": "secret123"},
+    )
+    assert registered.status_code == 201
+
+    response = await client.post(f"/api/projects/{project_id}/max/preview-session")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+async def test_max_preview_session_rejects_non_max_project(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = await _register_and_create(client, monkeypatch, template="spa")
+
+    response = await client.post(f"/api/projects/{project_id}/max/preview-session")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "max_project_required"
+
+
+@pytest.mark.parametrize(
+    "url_template",
+    [
+        "http://{host}/api/omnia/preview-session?expires=1893456000&signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "https://{slug}-dev.preview.example/other?expires=1893456000&signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "https://{host}/api/omnia/preview-session?expires=1893456000&signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&extra=bad",
+        "https://attacker@{host}/api/omnia/preview-session?expires=1893456000&signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ],
+)
+async def test_max_preview_session_rejects_malformed_orchestrator_url(
+    client: httpx.AsyncClient,
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+    url_template: str,
+) -> None:
+    project_id = await _register_and_create(client, monkeypatch)
+    project = await db_session.get(Project, UUID(project_id))
+    assert project is not None
+
+    async def fake_create_preview_session(_project_id: UUID) -> dict[str, str]:
+        return {
+            "project_id": str(project.id),
+            "bootstrap_url": url_template.format(
+                slug=project.slug,
+                host=f"{project.slug}-dev.preview.example",
+            ),
+            "expires_at": "2030-01-01T00:00:00Z",
+        }
+
+    monkeypatch.setattr(
+        max_studio.orchestrator_client,
+        "create_max_preview_session",
+        fake_create_preview_session,
+    )
+
+    response = await client.post(f"/api/projects/{project_id}/max/preview-session")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "orchestrator_unavailable"

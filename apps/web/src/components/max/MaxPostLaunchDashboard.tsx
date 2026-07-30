@@ -41,18 +41,18 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
       lead="Production-состояние, URL, контейнер, MAX webhook и история версий. Данные обновляются с сервера — этот экран не имитирует готовность локальными флагами."
     >
       <section className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7]">
-        <div className="flex flex-col gap-5 border-b border-[#d8d4cb] p-6 sm:flex-row sm:items-center sm:justify-between">
-          <div>
+        <div className="flex flex-col gap-5 border-b border-[#d8d4cb] p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className={`size-2 rounded-full ${healthy ? "bg-[#248a4b]" : "bg-[#e8c547]"}`} />
               <span className={`text-xs font-medium ${healthy ? "text-[#248a4b]" : "text-[#745f16]"}`}>{healthy ? "Production работает" : "Нужна проверка"}</span>
             </div>
             <h2 className="mt-3 text-2xl font-semibold">{projectName}</h2>
             {url ? (
-              <a href={url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1.5 font-mono text-xs text-[#c84528]">{url}<ExternalLink className="size-3" /></a>
+              <a href={url} target="_blank" rel="noreferrer" className="mt-2 flex min-w-0 items-center gap-1.5 font-mono text-xs text-[#c84528]"><span className="truncate">{url}</span><ExternalLink className="size-3 shrink-0" /></a>
             ) : <p className="mt-2 text-xs text-[#8d887f]">Постоянный URL появится после публикации</p>}
           </div>
-          <div className="min-w-[280px]"><RuntimeButton projectId={projectId} display="compact" /></div>
+          <div className="w-full lg:min-w-[280px] lg:w-auto"><RuntimeButton projectId={projectId} display="compact" /></div>
         </div>
         <div className="grid divide-y divide-[#d8d4cb] sm:grid-cols-4 sm:divide-x sm:divide-y-0">
           {[
@@ -95,10 +95,10 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
           </div>
           <div className="divide-y divide-[#e7e3da]">
             {(history.data ?? []).slice(0, 8).map((item, index) => (
-              <div key={item.run_id ?? `${item.started_at}-${index}`} className="grid gap-3 p-5 sm:grid-cols-[1fr_130px_110px] sm:items-center">
-                <div className="flex items-center gap-3">
+              <div key={item.run_id ?? `${item.started_at}-${index}`} className="grid gap-3 p-5 lg:grid-cols-[minmax(0,1fr)_130px_110px] lg:items-center">
+                <div className="flex min-w-0 items-center gap-3">
                   <span className={`grid size-8 place-items-center rounded-full ${item.phase === "done" ? "bg-[#248a4b]/10 text-[#248a4b]" : "bg-[#c63d35]/10 text-[#c63d35]"}`}><GitCommitHorizontal className="size-4" /></span>
-                  <div><p className="text-sm font-medium">{item.image_tag?.split(":").at(-1) ?? "Production build"}</p><p className="mt-1 text-[10px] text-[#8d887f]">{item.detail ?? item.target_label ?? "Omnia"}</p></div>
+                  <div className="min-w-0"><p className="truncate text-sm font-medium">{item.image_tag?.split(":").at(-1) ?? "Production build"}</p><p className="mt-1 truncate text-[10px] text-[#8d887f]">{item.detail ?? item.target_label ?? "Omnia"}</p></div>
                 </div>
                 <span className="text-xs text-[#6d6962]">{item.finished_at ? new Date(item.finished_at).toLocaleDateString("ru-RU") : "в процессе"}</span>
                 <span className={`text-xs font-medium ${item.phase === "done" ? "text-[#248a4b]" : item.phase === "failed" ? "text-[#c63d35]" : "text-[#745f16]"}`}>{item.phase}</span>
