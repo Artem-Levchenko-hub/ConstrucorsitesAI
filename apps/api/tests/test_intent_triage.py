@@ -23,15 +23,9 @@ def test_selected_element_always_edits_even_if_first_build() -> None:
     """Owner regression (2026-06-06): after a rollback to the starter snapshot the
     project looks like a first build, but a CLICK on the page means there's a zone
     to edit — it must be a scoped edit, never a full rebuild that loses images."""
-    assert (
-        decide_intent("поменяй фон на графику", is_first_prompt=True, selected_count=1)
-        == CHEAP
-    )
+    assert decide_intent("поменяй фон на графику", is_first_prompt=True, selected_count=1) == CHEAP
     # And even with a build-noun in the prompt, a selection keeps it an edit.
-    assert (
-        decide_intent("сделай этот раздел ярче", is_first_prompt=True, selected_count=2)
-        == CHEAP
-    )
+    assert decide_intent("сделай этот раздел ярче", is_first_prompt=True, selected_count=2) == CHEAP
 
 
 def test_add_intro_to_existing_site_is_cheap() -> None:
@@ -53,9 +47,7 @@ def test_section_add_on_existing_project_is_cheap() -> None:
 
 def test_cosmetic_edit_is_cheap() -> None:
     assert (
-        decide_intent(
-            "покрась кнопку войти в синий", is_first_prompt=False, selected_count=1
-        )
+        decide_intent("покрась кнопку войти в синий", is_first_prompt=False, selected_count=1)
         == CHEAP
     )
     assert decide_intent("поменяй текст заголовка", is_first_prompt=False) == CHEAP
@@ -89,10 +81,12 @@ def test_explicit_rebuild_orchestrates() -> None:
 
 
 def test_bare_peredelai_on_one_thing_is_cheap() -> None:
-    """"переделай" alone (a single element) must stay an edit — only whole-page
+    """ "переделай" alone (a single element) must stay an edit — only whole-page
     rebuild phrases ("переделай сайт", "с нуля", "заново") orchestrate."""
     assert decide_intent("переделай кнопку покрасивее", is_first_prompt=False) == CHEAP
-    assert decide_intent("переделай этот заголовок", is_first_prompt=False, selected_count=1) == CHEAP
+    assert (
+        decide_intent("переделай этот заголовок", is_first_prompt=False, selected_count=1) == CHEAP
+    )
 
 
 def test_structural_fullstack_addition_orchestrates() -> None:
@@ -135,10 +129,9 @@ def test_appification_followup_escalates_when_flag_on() -> None:
     surgical edit — so the handler's static→container escalation runs the full
     pipeline instead of patching the flat page."""
     for prompt in _APPIFY_FOLLOWUPS:
-        assert (
-            decide_intent(prompt, is_first_prompt=False, appify_enabled=True)
-            == ORCHESTRATE
-        ), prompt
+        assert decide_intent(prompt, is_first_prompt=False, appify_enabled=True) == ORCHESTRATE, (
+            prompt
+        )
         # The detector itself fires on every real app-ification ask.
         assert detect_appification(prompt) is True, prompt
 
@@ -149,9 +142,7 @@ def test_appification_followup_stays_cheap_when_flag_off() -> None:
     unchanged until the feature is explicitly enabled."""
     for prompt in _APPIFY_FOLLOWUPS:
         assert decide_intent(prompt, is_first_prompt=False) == CHEAP, prompt
-        assert (
-            decide_intent(prompt, is_first_prompt=False, appify_enabled=False) == CHEAP
-        ), prompt
+        assert decide_intent(prompt, is_first_prompt=False, appify_enabled=False) == CHEAP, prompt
 
 
 # False-positive guard (P-H1): even with the flag ON, a cosmetic edit that merely
@@ -176,9 +167,7 @@ _APPIFY_FALSE_POSITIVES = [
 def test_appification_false_positives_stay_cheap() -> None:
     for prompt in _APPIFY_FALSE_POSITIVES:
         assert detect_appification(prompt) is False, prompt
-        assert (
-            decide_intent(prompt, is_first_prompt=False, appify_enabled=True) == CHEAP
-        ), prompt
+        assert decide_intent(prompt, is_first_prompt=False, appify_enabled=True) == CHEAP, prompt
 
 
 def test_result_type_router_does_not_change_followup_triage() -> None:

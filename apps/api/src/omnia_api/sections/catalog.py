@@ -18,12 +18,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from omnia_api.sections.ir import (
-    AboutV1,
-    BandV1,
-    ContactV1,
     CTAV1,
     CTAV2,
     FAQV1,
+    AboutV1,
+    BandV1,
+    ContactV1,
     FeaturesV1,
     FeaturesV2,
     FeaturesV3,
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 # default when the model is uncertain. Pick the safest / most common as
 # vN=1 for each section kind.
 
-REGISTRY: dict[str, tuple[type["BaseModel"], str]] = {
+REGISTRY: dict[str, tuple[type[BaseModel], str]] = {
     # type_variant         (PydanticClass,      template_path)
     "header.v1":         (HeaderV1,            "header/v1.html.j2"),
     "hero.v1":           (HeroV1,              "hero/v1.html.j2"),
@@ -80,7 +80,7 @@ VARIANT_IDS: list[str] = list(REGISTRY.keys())
 
 TEMPLATE_FOR: dict[str, str] = {vid: path for vid, (_, path) in REGISTRY.items()}
 
-CLASS_FOR: dict[str, type["BaseModel"]] = {vid: cls for vid, (cls, _) in REGISTRY.items()}
+CLASS_FOR: dict[str, type[BaseModel]] = {vid: cls for vid, (cls, _) in REGISTRY.items()}
 
 
 # ─── Human-readable catalog blurb for the LLM system prompt ──────────────

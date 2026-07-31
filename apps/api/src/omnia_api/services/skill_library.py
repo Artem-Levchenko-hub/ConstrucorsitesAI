@@ -910,13 +910,13 @@ def derive_gradient_pair(primary_hex: str) -> tuple[str, str]:
     r, g, b = _hex_to_rgb01(normalized)
     # colorsys uses HLS (hue, lightness, saturation) — order differs from
     # HSL but the model is identical.
-    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    h, lightness, s = colorsys.rgb_to_hls(r, g, b)
     # Hue rotation: + 25° on a 360° wheel == + (25/360) on the [0, 1) ring.
     # `% 1.0` handles wrap (340° + 25° → 5° / 0.014…).
     h_shifted = (h + 25.0 / 360.0) % 1.0
     # Saturation drop: × 0.9, clamped to [0, 1].
     s_shifted = max(0.0, min(1.0, s * 0.9))
-    r2, g2, b2 = colorsys.hls_to_rgb(h_shifted, l, s_shifted)
+    r2, g2, b2 = colorsys.hls_to_rgb(h_shifted, lightness, s_shifted)
     return normalized, _rgb01_to_hex(r2, g2, b2)
 
 
@@ -1242,7 +1242,9 @@ def lookup_awwwards_reference(
     def _score(entry: dict[str, Any]) -> int:
         # Match tokens against industry_tags + style_id. Each tag-token
         # substring hit = +1; style_id hit = +1.
-        hay = " ".join(entry.get("industry_tags", []) + [entry.get("style_id", "")]).lower()
+        hay = " ".join(
+            [*entry.get("industry_tags", []), entry.get("style_id", "")]
+        ).lower()
         return sum(1 for t in lowered if t and t in hay)
 
     scored = [(_score(e), e) for e in pool]

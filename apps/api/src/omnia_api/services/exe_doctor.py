@@ -2,6 +2,7 @@
 structured patch (extra hidden-imports / collect-all / requirements pin) and apply it
 to the BuildSpec. Returns None when the model gives nothing usable (caller gives up)."""
 from __future__ import annotations
+
 import json
 import re
 from dataclasses import replace
@@ -43,7 +44,7 @@ async def heal(error_log: str, spec: BuildSpec, sources: dict[str, str]) -> Buil
         return None
     try:
         patch = json.loads(m.group(0))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     if not isinstance(patch, dict):
         return None

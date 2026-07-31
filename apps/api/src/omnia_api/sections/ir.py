@@ -29,7 +29,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # ─── Reusable primitives ──────────────────────────────────────────────────
 
 class CTA(BaseModel):

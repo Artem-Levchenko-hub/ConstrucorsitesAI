@@ -92,6 +92,20 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "migrations/**" = ["E501"]
 "tests/**" = ["B"]
+# These modules contain exact LLM prompts, shell templates, or compact palette
+# data. Reflowing their literal text changes the payload consumed at runtime,
+# while Ruff cannot safely wrap it without changing the value.
+"src/omnia_api/sections/catalog.py" = ["E501"]
+"src/omnia_api/sections/palettes.py" = ["E501"]
+"src/omnia_api/services/agent_builder.py" = ["E501"]
+"src/omnia_api/services/art_director_writer.py" = ["E501"]
+"src/omnia_api/services/design_presets.py" = ["E501"]
+"src/omnia_api/services/lean_prompt.py" = ["E501"]
+"src/omnia_api/services/multipass_generator.py" = ["E501"]
+"src/omnia_api/services/prompt_builder.py" = ["E501"]
+"src/omnia_api/services/run_bundle.py" = ["E501"]
+"src/omnia_api/services/visual_enricher.py" = ["E501"]
+"tests/test_container_edit_tsx_validity.py" = ["B", "E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["omnia_api"]

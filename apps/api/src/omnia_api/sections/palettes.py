@@ -30,9 +30,8 @@ applied.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
-
 
 # ─── Contrast math (WCAG 2.x) ────────────────────────────────────────────
 

@@ -1941,4 +1941,4 @@ ANTI-PATTERNS (категорически НЕ делать):
 """
 
 
-__all__ = ["DesignPreset", "PRESETS", "AWWWARDS_PRINCIPLES", "format_preset_block"]
+__all__ = ["AWWWARDS_PRINCIPLES", "PRESETS", "DesignPreset", "format_preset_block"]

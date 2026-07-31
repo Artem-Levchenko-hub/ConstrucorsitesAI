@@ -12,7 +12,6 @@ import pytest
 
 from omnia_api.services.ui_audit import AuditReport, audit, parse_styles
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

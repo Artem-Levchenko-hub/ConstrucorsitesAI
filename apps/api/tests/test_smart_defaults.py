@@ -7,7 +7,6 @@ from copy import deepcopy
 
 from omnia_api.sections import PageIR, apply_smart_defaults
 
-
 # ─── Test fixtures ──────────────────────────────────────────────────────
 
 

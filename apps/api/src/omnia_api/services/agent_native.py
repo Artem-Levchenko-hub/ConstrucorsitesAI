@@ -78,60 +78,104 @@ def _tool(
 _TOOLS: list[dict[str, Any]] = [
     _tool("list_dir", "List a directory in the project.", {"path": _STR}),
     _tool("read_file", "Read a file's full contents.", {"path": _STR}, ["path"]),
-    _tool("grep", "Regex-search files under a path.",
-          {"pattern": _STR, "path": _STR}, ["pattern"]),
-    _tool("docs", "Fetch up-to-date external-library docs (Context7) so you use the "
-          "REAL current API, not a stale/guessed one.",
-          {"library": _STR, "query": _STR}, ["library", "query"]),
-    _tool("write_file", "Create or overwrite a whole file with its FULL content.",
-          {"path": _STR, "content": _STR}, ["path", "content"]),
-    _tool("edit_file", "Replace an exact, unique snippet inside a file.",
-          {"path": _STR, "search": _STR, "replace": _STR},
-          ["path", "search", "replace"]),
-    _tool("build", "Typecheck/compile the app. Returns the real errors to fix "
-          "(empty = clean).", {}),
+    _tool("grep", "Regex-search files under a path.", {"pattern": _STR, "path": _STR}, ["pattern"]),
+    _tool(
+        "docs",
+        "Fetch up-to-date external-library docs (Context7) so you use the "
+        "REAL current API, not a stale/guessed one.",
+        {"library": _STR, "query": _STR},
+        ["library", "query"],
+    ),
+    _tool(
+        "write_file",
+        "Create or overwrite a whole file with its FULL content.",
+        {"path": _STR, "content": _STR},
+        ["path", "content"],
+    ),
+    _tool(
+        "edit_file",
+        "Replace an exact, unique snippet inside a file.",
+        {"path": _STR, "search": _STR, "replace": _STR},
+        ["path", "search", "replace"],
+    ),
+    _tool(
+        "build", "Typecheck/compile the app. Returns the real errors to fix (empty = clean).", {}
+    ),
     _tool("bash", "Run a shell command in the dev container.", {"cmd": _STR}, ["cmd"]),
-    _tool("read_logs", "Tail the live dev-server logs (runtime errors build can't see).",
-          {"tail": {"type": "integer"}}),
-    _tool("runtime_check", "Open a route in the RUNNING app and get the REAL HTTP "
-          "status — a typecheck-clean app can still 5xx on render.",
-          {"path": _STR}, ["path"]),
-    _tool("see", "LOOK at a rendered route with your eyes: screenshots the running "
-          "page (desktop + mobile) and returns a strict vision-designer critique — "
-          "concrete fixes (hero too small, 3 identical cards, weak contrast, cramped "
-          "spacing, generic look). A clean build does NOT mean it looks good; `see` "
-          "is the only way to judge and fix TASTE. Default path '/'.",
-          {"path": _STR}),
-    _tool("generate_media", "GENERATE a real IMAGE or short VIDEO with AI (same key) "
-          "and get back a hosted URL to EMBED (returned in the tool result — copy it "
-          "into src). kind='image' (flux, ~5s — photoreal hero/section still). "
-          "kind='video' (~1-3 min) — the SIGNATURE move is KEYFRAME "
-          "INTERPOLATION: pass first_frame AND last_frame (each a vivid English scene "
-          "prompt) and Flux paints both stills while the video model generates the UNIQUE "
-          "motion BETWEEN them — a real fly-through ('летишь по острову при скролле'), not a "
-          "generic loop. `prompt` = the MOTION/camera between the two frames. Each "
-          "stage shows as its own live step. Optional: duration (3-10s), aspect "
-          "('16:9'|'9:16'|'1:1'); first_frame_url/last_frame_url to reuse an already-"
-          "made still instead of a prompt. Embed `<img src>` / `<video src autoPlay "
-          "muted loop playsInline>` (or scroll-scrub currentTime). Video is SLOW + "
-          "pricey (hard cap per build) — ONE key clip, reuse it, do NOT spam per-card.",
-          {"kind": _STR, "prompt": _STR, "first_frame": _STR, "last_frame": _STR,
-           "duration": {"type": "integer"}, "aspect": _STR,
-           "first_frame_url": _STR, "last_frame_url": _STR, "image_url": _STR},
-          ["kind", "prompt"]),
-    _tool("probe", "Make a REAL request AS A LOGGED-IN test user and get the exact "
-          "status+body — the only way to prove an interactive feature (create/"
-          "save/submit) works end-to-end, which a clean build + 200 page do NOT.",
-          {"method": _STR, "path": _STR, "body": {"type": "object"}}, ["path"]),
-    _tool("verify_isolation", "PROVE no cross-tenant leak: logs in TWO users, A "
-          "creates the resource, then asserts B is DENIED reading it AND it is "
-          "absent from B's list. Run for EVERY owned resource — a green build "
-          "never proves isolation.",
-          {"create": {"type": "object"}, "read": {"type": "object"}}, ["create"]),
-    _tool("done", "Finish — the requested app is built AND the last build is clean. "
-          "`summary` = structured RU markdown for the user (bold one-line result, then "
-          "«## » sections by meaning, `code` for identifiers, lists) — see the preamble.",
-          {"summary": _STR}, ["summary"]),
+    _tool(
+        "read_logs",
+        "Tail the live dev-server logs (runtime errors build can't see).",
+        {"tail": {"type": "integer"}},
+    ),
+    _tool(
+        "runtime_check",
+        "Open a route in the RUNNING app and get the REAL HTTP "
+        "status — a typecheck-clean app can still 5xx on render.",
+        {"path": _STR},
+        ["path"],
+    ),
+    _tool(
+        "see",
+        "LOOK at a rendered route with your eyes: screenshots the running "
+        "page (desktop + mobile) and returns a strict vision-designer critique — "
+        "concrete fixes (hero too small, 3 identical cards, weak contrast, cramped "
+        "spacing, generic look). A clean build does NOT mean it looks good; `see` "
+        "is the only way to judge and fix TASTE. Default path '/'.",
+        {"path": _STR},
+    ),
+    _tool(
+        "generate_media",
+        "GENERATE a real IMAGE or short VIDEO with AI (same key) "
+        "and get back a hosted URL to EMBED (returned in the tool result — copy it "
+        "into src). kind='image' (flux, ~5s — photoreal hero/section still). "
+        "kind='video' (~1-3 min) — the SIGNATURE move is KEYFRAME "
+        "INTERPOLATION: pass first_frame AND last_frame (each a vivid English scene "
+        "prompt) and Flux paints both stills while the video model generates the UNIQUE "
+        "motion BETWEEN them — a real fly-through ('летишь по острову при скролле'), not a "
+        "generic loop. `prompt` = the MOTION/camera between the two frames. Each "
+        "stage shows as its own live step. Optional: duration (3-10s), aspect "
+        "('16:9'|'9:16'|'1:1'); first_frame_url/last_frame_url to reuse an already-"
+        "made still instead of a prompt. Embed `<img src>` / `<video src autoPlay "
+        "muted loop playsInline>` (or scroll-scrub currentTime). Video is SLOW + "
+        "pricey (hard cap per build) — ONE key clip, reuse it, do NOT spam per-card.",
+        {
+            "kind": _STR,
+            "prompt": _STR,
+            "first_frame": _STR,
+            "last_frame": _STR,
+            "duration": {"type": "integer"},
+            "aspect": _STR,
+            "first_frame_url": _STR,
+            "last_frame_url": _STR,
+            "image_url": _STR,
+        },
+        ["kind", "prompt"],
+    ),
+    _tool(
+        "probe",
+        "Make a REAL request AS A LOGGED-IN test user and get the exact "
+        "status+body — the only way to prove an interactive feature (create/"
+        "save/submit) works end-to-end, which a clean build + 200 page do NOT.",
+        {"method": _STR, "path": _STR, "body": {"type": "object"}},
+        ["path"],
+    ),
+    _tool(
+        "verify_isolation",
+        "PROVE no cross-tenant leak: logs in TWO users, A "
+        "creates the resource, then asserts B is DENIED reading it AND it is "
+        "absent from B's list. Run for EVERY owned resource — a green build "
+        "never proves isolation.",
+        {"create": {"type": "object"}, "read": {"type": "object"}},
+        ["create"],
+    ),
+    _tool(
+        "done",
+        "Finish — the requested app is built AND the last build is clean. "
+        "`summary` = structured RU markdown for the user (bold one-line result, then "
+        "«## » sections by meaning, `code` for identifiers, lists) — see the preamble.",
+        {"summary": _STR},
+        ["summary"],
+    ),
 ]
 
 # --- Anthropic prompt caching (AITunnel honours it on the native surface —
@@ -190,9 +234,7 @@ def _tool_use_to_action(block: dict[str, Any]) -> Action:
 
 def _obs_to_tool_result(tool_use_id: str, obs: dict[str, Any]) -> dict[str, Any]:
     ok = bool(obs.get("ok"))
-    body = obs.get("content") or obs.get("detail") or obs.get("error") or (
-        "ok" if ok else "error"
-    )
+    body = obs.get("content") or obs.get("detail") or obs.get("error") or ("ok" if ok else "error")
     text = str(body)[:_MAX_TOOL_RESULT_CHARS]
     block: dict[str, Any] = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text}
     if not ok:
@@ -264,17 +306,18 @@ def _build_error_hint(build_output: str) -> str:
     """Concatenate every deterministic recovery hint that applies to this build
     error (empty string if none). Keeps the fact-loop steering in one place."""
     return "".join(
-        h for h in (
+        h
+        for h in (
             _module_not_found_hint(build_output),
             _parallel_pages_hint(build_output),
-        ) if h
+        )
+        if h
     )
 
 
 def _text_of(content: list[dict[str, Any]]) -> str:
     return "\n".join(
-        str(b.get("text", "")) for b in content
-        if isinstance(b, dict) and b.get("type") == "text"
+        str(b.get("text", "")) for b in content if isinstance(b, dict) and b.get("type") == "text"
     ).strip()
 
 
@@ -285,6 +328,7 @@ _STEP_DETAIL_CAP = 1400
 def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
     """A short, human-inspectable preview of what a tool step DID — shown when the
     user drills into the step. Empty string when there's nothing useful to show."""
+
     def _cap(s: Any) -> str:
         t = str(s or "")
         return t if len(t) <= _STEP_DETAIL_CAP else t[:_STEP_DETAIL_CAP] + "\n… (обрезано)"
@@ -365,7 +409,7 @@ _NATIVE_PREAMBLE = (
     "видео-модель) виден пользователю отдельным шагом. Встраивание: (a) фоновый луп — "
     "`<video autoPlay muted loop playsInline>` в `absolute inset-0 object-cover -z-10`, "
     "контент поверх; (b) скролл-скраб «летишь при скролле» — sticky-контейнер на "
-    "100–300vh, `video.currentTime` привязан к прогрессу скролла (`preload=\"metadata\"` "
+    '100–300vh, `video.currentTime` привязан к прогрессу скролла (`preload="metadata"` '
     "`muted`). Всегда `poster=` + градиент-оверлей для читаемости текста. Видео МЕДЛЕННОЕ "
     "и дорогое (жёсткий лимит клипов на сборку) — 1 ключевой клип, переиспользуй, НЕ по "
     "клипу на карточку. Не медиа ради медиа — только когда усиливает смысл ниши.\n\n"
@@ -379,7 +423,7 @@ _NATIVE_PREAMBLE = (
     "скраб только когда «полёт» реально привязан к сюжету; (3) GPU-композит: анимируй "
     "ТОЛЬКО `transform`/`opacity` (+`will-change`,`translateZ(0)`), никогда top/left/"
     "width/height и не тяжёлый `backdrop-blur` на большой скролл-зоне; (4) `IntersectionObserver`, "
-    "не scroll-математика, для появления секций; (5) картинки — `loading=\"lazy\" decoding=\"async\"`, "
+    'не scroll-математика, для появления секций; (5) картинки — `loading="lazy" decoding="async"`, '
     "ширина под контейнер (не 4K-PNG в карточку 400px); (6) один тяжёлый клип на страницу.\n\n"
     "ЖИВЫЕ МИКРО-ВЗАИМОДЕЙСТВИЯ (hover/скролл) — статичная страница мертва; оживляй "
     "точечно на наведение и появление. Приёмы: карточка на hover — лёгкий подъём "
@@ -400,7 +444,8 @@ _NATIVE_PREAMBLE = (
     "лишние read, когда контекста хватает.\n\n"
     "ФИНАЛЬНЫЙ ОТВЕТ (аргумент summary в done) — это markdown, его показывают "
     "пользователю С ФОРМАТИРОВАНИЕМ. Оформи СТРУКТУРНО по СМЫСЛУ, не сплошным текстом:\n"
-    "• Первая строка — ИТОГ одним предложением, ключевой результат выдели **жирным**. Без заголовка над ней.\n"
+    "• Первая строка — ИТОГ одним предложением, ключевой результат выдели "
+    "**жирным**. Без заголовка над ней.\n"
     "• Дальше — секции с заголовками «## » ПО СМЫСЛУ (бери только нужные, обычно 2–4): "
     "что сделал · как это работает · что проверил · что дальше.\n"
     "• `бэктики` — на КАЖДЫЙ идентификатор: имена файлов, функций, флагов, роутов, команд, полей.\n"
@@ -465,9 +510,7 @@ async def _call_messages(
                     "PAYMENT_REQUIRED: баланс LLM-провайдера (LLMGW) исчерпан — "
                     "пополни ключ и повтори промпт"
                 )
-            if r.status_code == 429 or (
-                r.status_code >= 400 and "rate_limit" in r.text[:300]
-            ):
+            if r.status_code == 429 or (r.status_code >= 400 and "rate_limit" in r.text[:300]):
                 await asyncio.sleep(6.0 * (attempt + 1))
                 last = RuntimeError(f"429 concurrency (attempt {attempt + 1})")
                 continue
@@ -482,7 +525,7 @@ async def _call_messages(
             # 3-15s backoff only covered ~30s; exponential-with-cap rides out a
             # multi-minute flake window (~3.5 min total) before giving up.
             last = exc
-            await asyncio.sleep(min(45.0, 4.0 * (2 ** attempt)))
+            await asyncio.sleep(min(45.0, 4.0 * (2**attempt)))
     raise last or RuntimeError("messages call failed")
 
 
@@ -524,15 +567,23 @@ async def run_native_build(
                 resp = await _call_messages(client, url, convo, system)
             except Exception as exc:
                 return AgentResult(
-                    done=False, summary=f"gateway error: {exc}",
-                    files=written, steps=step, transcript=convo, stop_reason="error",
+                    done=False,
+                    summary=f"gateway error: {exc}",
+                    files=written,
+                    steps=step,
+                    transcript=convo,
+                    stop_reason="error",
                 )
 
             content = resp.get("content")
             if not isinstance(content, list):
                 return AgentResult(
-                    done=False, summary="malformed upstream (no content list)",
-                    files=written, steps=step + 1, transcript=convo, stop_reason="error",
+                    done=False,
+                    summary="malformed upstream (no content list)",
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="error",
                 )
             # Echo the assistant turn VERBATIM — thinking blocks (with signatures)
             # MUST be preserved for the next turn or Anthropic rejects the round-trip.
@@ -546,9 +597,7 @@ async def run_native_build(
                 if _narration:
                     await emit("agent.text", {"step": step, "text": _narration})
 
-            tool_uses = [
-                b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"
-            ]
+            tool_uses = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
             if not tool_uses:
                 # Model ended its turn with prose and no tool — it's done talking.
                 # A prose-less finish must NOT leak "(no tool call)" to the chat
@@ -566,7 +615,9 @@ async def run_native_build(
                 return AgentResult(
                     done=_done,
                     summary=_text,
-                    files=written, steps=step + 1, transcript=convo,
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
                     stop_reason="no_tool",
                 )
 
@@ -584,11 +635,15 @@ async def run_native_build(
                     premature = wrote_since_build or last_build_ok is not True
                     if premature and done_rejections < _DONE_REJECT_CAP:
                         done_rejections += 1
-                        results.append({
-                            "type": "tool_result", "tool_use_id": tu_id, "is_error": True,
-                            "content": "Not done yet: run the `build` tool and make it "
-                                       "CLEAN (fix any errors) before calling done.",
-                        })
+                        results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tu_id,
+                                "is_error": True,
+                                "content": "Not done yet: run the `build` tool and make it "
+                                "CLEAN (fix any errors) before calling done.",
+                            }
+                        )
                         continue
                     done_summary = str((tu.get("input") or {}).get("summary", ""))
                     results.append({"type": "tool_result", "tool_use_id": tu_id, "content": "done"})
@@ -603,11 +658,16 @@ async def run_native_build(
                 # actually did (written content preview, build output, read result)
                 # — so the UI can let the user drill INTO a step and see inside it.
                 if emit:
-                    await emit("agent.step", {
-                        "step": step, "action": name, "path": action.path,
-                        "detail": _step_detail(name, action, obs),
-                        "ok": bool(obs.get("ok", True)),
-                    })
+                    await emit(
+                        "agent.step",
+                        {
+                            "step": step,
+                            "action": name,
+                            "path": action.path,
+                            "detail": _step_detail(name, action, obs),
+                            "ok": bool(obs.get("ok", True)),
+                        },
+                    )
 
                 ops_this_turn += 1
                 if obs.get("infra_dead"):
@@ -636,8 +696,12 @@ async def run_native_build(
                 if emit:
                     await emit("agent.done", {"step": step, "files": len(written)})
                 return AgentResult(
-                    done=True, summary=done_summary, files=written,
-                    steps=step + 1, transcript=convo, stop_reason="done",
+                    done=True,
+                    summary=done_summary,
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="done",
                 )
             # Infra circuit breaker: a turn where EVERY executed op died on
             # infra means the container/orchestrator is gone — the model can't
@@ -658,14 +722,16 @@ async def run_native_build(
             else:
                 no_write_turns += 1
                 if _NO_WRITE_NUDGE_AT <= no_write_turns < _NO_WRITE_ABORT_AT:
-                    results.append({
-                        "type": "text",
-                        "text": (
-                            _DONE_WHEN_GREEN_NUDGE
-                            if last_build_ok is True and not wrote_since_build
-                            else _EXPLORE_STALL_NUDGE
-                        ),
-                    })
+                    results.append(
+                        {
+                            "type": "text",
+                            "text": (
+                                _DONE_WHEN_GREEN_NUDGE
+                                if last_build_ok is True and not wrote_since_build
+                                else _EXPLORE_STALL_NUDGE
+                            ),
+                        }
+                    )
                     if emit:
                         await emit("agent.stalled", {"step": step})
             convo.append({"role": "user", "content": results})
@@ -674,18 +740,26 @@ async def run_native_build(
                 return AgentResult(
                     done=False,
                     summary="container/orchestrator unreachable — build aborted",
-                    files=written, steps=step + 1, transcript=convo,
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
                     stop_reason="infra_error",
                 )
             if no_write_turns >= _NO_WRITE_ABORT_AT:
                 return AgentResult(
                     done=False,
                     summary="stuck exploring (reading/verifying) without writing any file",
-                    files=written, steps=step + 1, transcript=convo,
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
                     stop_reason="exploring",
                 )
 
     return AgentResult(
-        done=False, summary="hit step budget without calling done",
-        files=written, steps=max_steps, transcript=convo, stop_reason="max_steps",
+        done=False,
+        summary="hit step budget without calling done",
+        files=written,
+        steps=max_steps,
+        transcript=convo,
+        stop_reason="max_steps",
     )

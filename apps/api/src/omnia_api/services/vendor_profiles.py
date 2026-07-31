@@ -183,8 +183,8 @@ __all__ = [
     "GOOGLE",
     "OPENAI",
     "SBER",
-    "YANDEX",
     "VENDOR_DIRECTIVES",
+    "YANDEX",
     "vendor_directive",
     "vendor_for_model",
 ]

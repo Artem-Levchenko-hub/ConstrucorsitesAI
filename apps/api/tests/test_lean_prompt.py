@@ -7,7 +7,6 @@ as a new opt-in section in the freeform path — not bloat the lean prompt.
 
 from __future__ import annotations
 
-
 # Approx 4 chars per token for mixed Russian + English + Tailwind classes.
 # Real tiktoken count is slightly lower (closer to 3.7 chars/token for
 # Russian-heavy text); 4 chars/token is a *conservative* over-count, so

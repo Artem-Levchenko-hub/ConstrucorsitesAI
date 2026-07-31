@@ -144,7 +144,7 @@ def enrich_html(content: str) -> tuple[str, int, int]:
             )
             enriched += 1
         return new_content, enriched, total
-    except Exception:  # noqa: BLE001 — pipeline не должен падать на enricher
+    except Exception:
         log.exception("visual_enricher.enrich_html failed; returning original")
         return content, 0, 0
 
@@ -219,6 +219,6 @@ def ensure_signature_floor(files: dict[str, str]) -> tuple[dict[str, str], int]:
             cut = m.end()
             new_files[path] = content[:cut] + _SIGNATURE_DIVIDER + content[cut:]
             injected += 1
-        except Exception:  # noqa: BLE001 — floor must never break the pipeline
+        except Exception:
             log.exception("ensure_signature_floor failed for %s; leaving as-is", path)
     return new_files, injected

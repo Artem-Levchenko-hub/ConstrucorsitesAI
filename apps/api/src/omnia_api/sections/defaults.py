@@ -204,7 +204,7 @@ def _rule_palette(
                 dark_mode=bool(theme.get("dark_mode", False)),
                 industry_hint=preset_id,
             )
-        except Exception:  # noqa: BLE001 — palette pick must not crash defaults
+        except Exception:
             palette = None  # type: ignore[assignment]
         if palette is not None:
             theme["background"] = palette.bg

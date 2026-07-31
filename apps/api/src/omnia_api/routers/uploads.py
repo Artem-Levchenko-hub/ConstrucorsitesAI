@@ -85,7 +85,7 @@ async def upload_image(
         )
     except user_uploads.UploadRejected as exc:
         raise ApiError("bad_image", str(exc), status.HTTP_400_BAD_REQUEST) from exc
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise ApiError(
             "upload_failed", "не удалось сохранить изображение",
             status.HTTP_502_BAD_GATEWAY,

@@ -62,7 +62,7 @@ async def see_page(
 
     try:
         shots = await preview.capture_live_url(url, _SEE_WIDTHS)
-    except Exception as exc:  # noqa: BLE001 — a render error must not kill the loop
+    except Exception as exc:
         return {"ok": False, "error": f"could not render {rel}: {type(exc).__name__}"}
     if not shots:
         return {"ok": False, "error": f"render produced no screenshot for {rel}"}
@@ -99,7 +99,7 @@ async def see_page(
                     "Console / page errors:\n" + "\n".join(f"  - {x}" for x in cons)
                 )
             diag_text = "\n\nBROWSER SIGNALS:\n" + "\n\n".join(blocks)
-    except Exception:  # noqa: BLE001 — diagnostics are best-effort, never fatal
+    except Exception:
         pass
 
     return {

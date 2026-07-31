@@ -240,7 +240,7 @@ async def _fetch_one(prompt: str) -> bytes | None:
     try:
         async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
             resp = await client.post(url, json=payload)
-    except Exception as exc:  # noqa: BLE001 — never break the resolve over one tag
+    except Exception as exc:
         log.warning(
             "image_resolver: gateway transport error prompt=%.40s err=%r",
             prompt,
@@ -268,7 +268,7 @@ async def _fetch_one(prompt: str) -> bytes | None:
     if b64:
         try:
             return base64.b64decode(b64)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("image_resolver: b64 decode failed err=%r", exc)
             return None
     # OpenAI sometimes returns a hosted URL instead. Fetch it.
@@ -284,7 +284,7 @@ async def _fetch_one(prompt: str) -> bytes | None:
                 img_resp.status_code,
                 img_url,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("image_resolver: url-fetch transport err=%r", exc)
     return None
 
@@ -314,7 +314,7 @@ async def _enrich_prompt(prompt: str) -> str:
         text = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
         text = (text or "").strip()
         return text or prompt
-    except Exception as exc:  # noqa: BLE001 — never break a resolve over enrichment
+    except Exception as exc:
         log.warning(
             "image_resolver: prompt enrich failed prompt=%.40s err=%r", prompt, exc
         )
@@ -352,7 +352,7 @@ def _optimize_image_bytes(data: bytes) -> tuple[bytes, str]:
         return data, "image/png"
     try:
         from PIL import Image  # lazy: keep Pillow off the module-load path
-    except Exception:  # noqa: BLE001 — no Pillow → ship the PNG unchanged
+    except Exception:
         return data, "image/png"
     try:
         im: Image.Image = Image.open(BytesIO(data))
@@ -371,7 +371,7 @@ def _optimize_image_bytes(data: bytes) -> tuple[bytes, str]:
         if not webp or len(webp) >= len(data):
             return data, "image/png"  # no win → keep original
         return webp, "image/webp"
-    except Exception as exc:  # noqa: BLE001 — never lose an image over the optimizer
+    except Exception as exc:
         log.warning("image_resolver: webp optimize failed err=%r — using original", exc)
         return data, "image/png"
 
@@ -385,7 +385,7 @@ def _upload_image(image_bytes: bytes, project_id: str, prompt: str) -> str | Non
     if not _ensure_bucket(client, bucket):
         return None
     sha = hashlib.sha256(
-        f"{project_id}|{prompt}".encode("utf-8")
+        f"{project_id}|{prompt}".encode()
     ).hexdigest()[:32]
     key = f"{project_id}/{sha}.png"  # `.png` kept for cache-key lineage; bytes=WebP
     data, content_type = _optimize_image_bytes(image_bytes)
@@ -416,11 +416,11 @@ def _cached_image_url(project_id: str, prompt: str) -> str | None:
         client = get_minio_client()
         bucket = settings.minio_bucket_images
         sha = hashlib.sha256(
-            f"{project_id}|{prompt}".encode("utf-8")
+            f"{project_id}|{prompt}".encode()
         ).hexdigest()[:32]
         key = f"{project_id}/{sha}.png"
         client.stat_object(bucket, key)  # raises if the object is absent
-    except Exception:  # noqa: BLE001 — absent/transport error → regenerate
+    except Exception:
         return None
     base = settings.minio_public_url.rstrip("/")
     return f"{base}/{bucket}/{key}"
@@ -496,7 +496,7 @@ async def _fetch_photo(keywords: str, project_id: str) -> bytes | None:
     try:
         async with httpx.AsyncClient(**_pexels_client_kwargs()) as client:
             resp = await client.get(_PEXELS_SEARCH_URL, params=params, headers=headers)
-    except Exception as exc:  # noqa: BLE001 — never break a resolve over one tag
+    except Exception as exc:
         log.warning("image_resolver: pexels transport error kw=%.40s err=%r", keywords, exc)
         return None
     if resp.status_code >= 400:
@@ -509,7 +509,7 @@ async def _fetch_photo(keywords: str, project_id: str) -> bytes | None:
     if not photos:
         return None
     pick = int(
-        hashlib.sha256(f"{project_id}|{keywords}".encode("utf-8")).hexdigest(), 16
+        hashlib.sha256(f"{project_id}|{keywords}".encode()).hexdigest(), 16
     ) % len(photos)
     src = photos[pick].get("src") or {}
     img_url = src.get("large2x") or src.get("large") or src.get("original")
@@ -521,7 +521,7 @@ async def _fetch_photo(keywords: str, project_id: str) -> bytes | None:
         if img_resp.status_code == 200:
             return img_resp.content
         log.warning("image_resolver: pexels img-fetch %d", img_resp.status_code)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("image_resolver: pexels img-fetch transport err=%r", exc)
     return None
 
@@ -566,7 +566,7 @@ async def _openverse_token() -> str | None:
                 log.warning("image_resolver: openverse token %d", resp.status_code)
                 return None
             body = resp.json()
-        except Exception as exc:  # noqa: BLE001 — anonymous fallback on any failure
+        except Exception as exc:
             log.warning("image_resolver: openverse token err=%r", exc)
             return None
         token = body.get("access_token")
@@ -659,7 +659,7 @@ async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None
             resp = await client.get(
                 _OPENVERSE_SEARCH_URL, params=params, headers=headers
             )
-        except Exception as exc:  # noqa: BLE001 — never break a resolve over one tag
+        except Exception as exc:
             log.warning("image_resolver: openverse transport q=%.40s err=%r", query, exc)
             return []
         if resp.status_code >= 400:
@@ -714,7 +714,7 @@ async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None
             if img_resp.status_code == 200 and img_resp.content:
                 return img_resp.content
             log.warning("image_resolver: openverse img-fetch %d", img_resp.status_code)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("image_resolver: openverse img-fetch err=%r", exc)
     return None
 
@@ -739,7 +739,7 @@ def _upload_photo(image_bytes: bytes, project_id: str, keywords: str) -> str | N
     if not _ensure_bucket(client, bucket):
         return None
     sha = hashlib.sha256(
-        f"{settings.photo_source}|{project_id}|{keywords}".encode("utf-8")
+        f"{settings.photo_source}|{project_id}|{keywords}".encode()
     ).hexdigest()[:32]
     key = f"{project_id}/{sha}.jpg"
     try:

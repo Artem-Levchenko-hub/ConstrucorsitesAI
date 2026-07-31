@@ -19,7 +19,6 @@ import pytest
 
 from omnia_api.services.lang_detect import _reply_language_line
 
-
 # ─── 1. _reply_language_line ────────────────────────────────────────────────
 
 
@@ -127,7 +126,9 @@ def test_innocent_english_does_not_fire_build_now():
 def test_english_login_routes_to_entities():
     from omnia_api.services.discovery import _infer_stack_from_text
 
-    assert _infer_stack_from_text("users need to login and see their dashboard") == "nextjs_entities"
+    assert (
+        _infer_stack_from_text("users need to login and see their dashboard") == "nextjs_entities"
+    )
 
 
 def test_english_signup_routes_to_entities():
@@ -213,12 +214,14 @@ async def test_run_discovery_ru_system_prompt_unchanged():
 
     captured: list[dict] = []
 
-    async def fake_post(url, *, json=None, **_kw):  # noqa: A002
+    async def fake_post(url, *, json=None, **_kw):
         captured.append(json or {})
         return _FakeResp(200, _ask_reply())
 
     mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=MagicMock(post=AsyncMock(side_effect=fake_post)))
+    mock_client.__aenter__ = AsyncMock(
+        return_value=MagicMock(post=AsyncMock(side_effect=fake_post))
+    )
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with patch("omnia_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
@@ -239,12 +242,14 @@ async def test_run_discovery_en_system_prompt_has_suffix():
 
     captured: list[dict] = []
 
-    async def fake_post(url, *, json=None, **_kw):  # noqa: A002
+    async def fake_post(url, *, json=None, **_kw):
         captured.append(json or {})
         return _FakeResp(200, _ask_reply())
 
     mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=MagicMock(post=AsyncMock(side_effect=fake_post)))
+    mock_client.__aenter__ = AsyncMock(
+        return_value=MagicMock(post=AsyncMock(side_effect=fake_post))
+    )
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with patch("omnia_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
@@ -285,12 +290,14 @@ async def test_plan_discovery_ru_system_prompt_unchanged():
         ]
     }
 
-    async def fake_post(url, *, json=None, **_kw):  # noqa: A002
+    async def fake_post(url, *, json=None, **_kw):
         captured.append(json or {})
         return _FakeResp(200, plan_reply)
 
     mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=MagicMock(post=AsyncMock(side_effect=fake_post)))
+    mock_client.__aenter__ = AsyncMock(
+        return_value=MagicMock(post=AsyncMock(side_effect=fake_post))
+    )
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with patch("omnia_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
@@ -326,12 +333,14 @@ async def test_plan_discovery_en_system_prompt_has_suffix():
         ]
     }
 
-    async def fake_post(url, *, json=None, **_kw):  # noqa: A002
+    async def fake_post(url, *, json=None, **_kw):
         captured.append(json or {})
         return _FakeResp(200, plan_reply)
 
     mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=MagicMock(post=AsyncMock(side_effect=fake_post)))
+    mock_client.__aenter__ = AsyncMock(
+        return_value=MagicMock(post=AsyncMock(side_effect=fake_post))
+    )
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with patch("omnia_api.services.discovery.httpx.AsyncClient", return_value=mock_client):

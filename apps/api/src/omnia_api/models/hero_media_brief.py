@@ -65,7 +65,8 @@ class HeroMediaBrief(Base):
             name="recommended_plan_kind_allowed",
         ),
         CheckConstraint(
-            "selected_plan_kind IS NULL OR selected_plan_kind IN ('static', 'product-demo', 'motion', 'video', 'cinematic')",
+            "selected_plan_kind IS NULL OR selected_plan_kind IN "
+            "('static', 'product-demo', 'motion', 'video', 'cinematic')",
             name="selected_plan_kind_allowed",
         ),
     )

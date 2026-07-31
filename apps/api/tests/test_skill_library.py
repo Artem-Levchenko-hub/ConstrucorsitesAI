@@ -152,7 +152,7 @@ def test_derive_gradient_pair_rejects_garbage() -> None:
 def test_derive_gradient_pair_hue_wrap() -> None:
     """Hue + 25° must wrap properly past 360 — deep pink near hue 328
     rotates to about hue 353, still produces a valid hex (not crash)."""
-    a, b = skill_library.derive_gradient_pair("#FF1493")
+    _, b = skill_library.derive_gradient_pair("#FF1493")
     assert len(b) == 7
     # Returned hex must parse as valid hex
     int(b.lstrip("#"), 16)
@@ -161,7 +161,7 @@ def test_derive_gradient_pair_hue_wrap() -> None:
 def test_derive_gradient_pair_saturation_clamp() -> None:
     """Saturation × 0.9 of fully-saturated input still produces valid hex —
     no negative-saturation crash."""
-    a, b = skill_library.derive_gradient_pair("#000000")  # zero sat
+    _, b = skill_library.derive_gradient_pair("#000000")  # zero sat
     assert b == "#000000" or b.startswith("#")  # black stays black
 
 

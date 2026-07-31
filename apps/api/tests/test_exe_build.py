@@ -1,5 +1,12 @@
 from __future__ import annotations
-from omnia_api.services.exe_build import build_spec, BuildSpec
+
+from omnia_api.services.exe_build import (
+    BuildSpec,
+    build_spec,
+    render,
+    render_nsi,
+    render_pyinstaller_args,
+)
 
 
 def test_entry_and_name_from_snake_bundle() -> None:
@@ -47,9 +54,6 @@ def test_from_pygame_import_also_collects() -> None:
         slug="game")
     assert spec.windowed is True
     assert spec.collect_all == ["pygame"]
-
-
-from omnia_api.services.exe_build import render_pyinstaller_args, render_nsi, render
 
 
 def test_render_pyinstaller_args() -> None:

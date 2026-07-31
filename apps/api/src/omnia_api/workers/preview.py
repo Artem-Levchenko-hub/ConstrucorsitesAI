@@ -120,9 +120,11 @@ async def _await_content(page: Page) -> None:
     try:
         await page.wait_for_function(
             "() => {"
-            "  if (document.querySelector('[data-omnia-skeleton],[aria-busy=\"true\"]')) return false;"
+            "  if (document.querySelector("
+            "'[data-omnia-skeleton],[aria-busy=\"true\"]')) return false;"
             "  var t = ((document.body && document.body.innerText) || '').trim().length;"
-            "  var visual = !!document.querySelector('main,[role=\"main\"],img,svg,table,form,article,section');"
+            "  var visual = !!document.querySelector("
+            "'main,[role=\"main\"],img,svg,table,form,article,section');"
             "  return t > 40 || visual;"
             "}",
             timeout=_CONTENT_READY_MS,
@@ -201,6 +203,7 @@ async def _block_external_fonts(page: Page) -> None:
     fast (fonts error → system fallback) instead of hanging the screenshot. The
     page still renders its real content — just in fallback fonts, which for a
     thumbnail is invisible next to a blank-white miss. Best-effort (R-10)."""
+
     async def _abort(route: object) -> None:
         try:
             await route.abort()  # type: ignore[attr-defined]
@@ -353,9 +356,7 @@ async def capture_live_url(
                 try:
                     await _block_external_fonts(page)
                     await _route_media_internal(page)
-                    await page.goto(
-                        url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS
-                    )
+                    await page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS)
                     if settle_container:
                         await _await_container_ready(page)
                     await _await_paint(page)
@@ -477,17 +478,13 @@ async def _render_async(snapshot_id: str) -> None:
                 for path, content in files.items():
                     full = workdir / path
                     full.parent.mkdir(parents=True, exist_ok=True)
-                    full.write_text(
-                        _rewrite_minio_to_internal(content), encoding="utf-8"
-                    )
+                    full.write_text(_rewrite_minio_to_internal(content), encoding="utf-8")
                 target_url = (workdir / "index.html").as_uri()
 
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 try:
-                    page = await browser.new_page(
-                        viewport=VIEWPORT, reduced_motion="reduce"
-                    )
+                    page = await browser.new_page(viewport=VIEWPORT, reduced_motion="reduce")
                     # Abort unreachable web fonts so the screenshot's font-wait
                     # can't hang → blank white thumbnail (2026-07-18).
                     await _block_external_fonts(page)

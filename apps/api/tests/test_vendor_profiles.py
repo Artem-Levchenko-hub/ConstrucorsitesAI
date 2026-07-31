@@ -15,7 +15,7 @@ import os
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://x:x@localhost/x")
 os.environ.setdefault("JWT_SECRET", "test-secret")
 
-from omnia_api.services.vendor_profiles import (  # noqa: E402
+from omnia_api.services.vendor_profiles import (
     CLAUDE,
     DEEPSEEK,
     GENERIC,

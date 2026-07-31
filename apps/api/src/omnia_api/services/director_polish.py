@@ -44,7 +44,6 @@ from omnia_api.core.config import model_for_role
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.vendor_profiles import vendor_directive
 
-
 # Director sees a single appended user-turn instruction to keep its
 # output structural.
 _DIRECTOR_INSTRUCTION = """\
@@ -113,10 +112,12 @@ def _build_director_messages(
     directive = vendor_directive(model_id, json_strict=True)
     suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
-    msgs.append({
-        "role": "user",
-        "content": f"{user_prompt}\n\n{_DIRECTOR_INSTRUCTION}{suffix}",
-    })
+    msgs.append(
+        {
+            "role": "user",
+            "content": f"{user_prompt}\n\n{_DIRECTOR_INSTRUCTION}{suffix}",
+        }
+    )
     return msgs
 
 
@@ -138,17 +139,20 @@ def _build_polish_messages(
     # the polish turn so the instruction-level «реальный русский контент / ₽»
     # doesn't override the system-level language directive.
     from omnia_api.services.prompt_builder import _language_directive
+
     _lang_note = _language_directive(language)
     lang_prefix = f"{_lang_note}\n\n" if _lang_note else ""
     msgs = list(base_messages[:-1])
-    msgs.append({
-        "role": "user",
-        "content": (
-            f"{lang_prefix}{user_prompt}\n\n"
-            f"{_POLISH_INSTRUCTION_TEMPLATE.format(director_ir=director_ir)}"
-            f"{suffix}"
-        ),
-    })
+    msgs.append(
+        {
+            "role": "user",
+            "content": (
+                f"{lang_prefix}{user_prompt}\n\n"
+                f"{_POLISH_INSTRUCTION_TEMPLATE.format(director_ir=director_ir)}"
+                f"{suffix}"
+            ),
+        }
+    )
     return msgs
 
 
@@ -214,7 +218,9 @@ async def director_polish_generate(
 
     # ─── Pass 2: Polish (streams to user) ────────────────────────────
     yield {"pass": "polish", "stage": "start", "model": polish_model}
-    polish_msgs = _build_polish_messages(base_messages, user_prompt, director_acc, polish_model, language=language)
+    polish_msgs = _build_polish_messages(
+        base_messages, user_prompt, director_acc, polish_model, language=language
+    )
     polish_usage: dict[str, Any] | None = None
     async for event in stream_chat_completion(
         polish_msgs,

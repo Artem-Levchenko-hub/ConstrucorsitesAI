@@ -85,6 +85,6 @@ async def fetch_docs(library: str, query: str) -> str:
                 return ""
             text = (r.text or "").strip()
             return text[:_MAX_CHARS]
-    except Exception as exc:  # noqa: BLE001 — docs are best-effort, never fatal
+    except Exception as exc:
         log.warning("context7.fetch_failed", library=library, err=str(exc))
         return ""

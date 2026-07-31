@@ -214,7 +214,7 @@ def build_lean_system_prompt(
             parts.append(
                 "<preset>\n" + format_preset_block(preset_id) + "\n</preset>"
             )
-        except Exception:  # noqa: BLE001 — preset formatting must never block the lean prompt
+        except Exception:
             pass
 
     if skill_brief:
@@ -232,7 +232,7 @@ def build_lean_system_prompt(
             ref_block = top_reference_block(user_prompt, industry_hint=industry_hint)
             if ref_block:
                 parts.append(f"<rag_reference>\n{ref_block}\n</rag_reference>")
-        except Exception:  # noqa: BLE001 — RAG must never block the prompt
+        except Exception:
             pass
 
     parts.extend([

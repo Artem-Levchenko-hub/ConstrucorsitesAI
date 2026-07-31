@@ -89,8 +89,9 @@ def test_skips_oversized_file(monkeypatch):
     monkeypatch.setattr(repo_svc, "MAX_FILE_BYTES", 10)
     tar = _make_tar({"big.txt": b"x" * 20, "small.txt": b"y" * 5})
     # Re-import after monkeypatch — tarball_to_files reads MAX_FILE_BYTES at call time
-    from omnia_api.services import repo_import as ri_mod
     import importlib
+
+    from omnia_api.services import repo_import as ri_mod
     importlib.reload(ri_mod)
     r = ri_mod.tarball_to_files(tar)
     assert "small.txt" in r.files

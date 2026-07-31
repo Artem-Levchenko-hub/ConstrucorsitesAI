@@ -1615,6 +1615,8 @@ __all__ = [
     "RESULT_TYPES",
     "DiscoveryResult",
     "PlannedQuestion",
+    "_has_account_intent",
+    "_has_conversion_intent",
     "classify_result_type",
     "confident_enough_to_build",
     "cumulative_idea",
@@ -1629,6 +1631,4 @@ __all__ = [
     "serve_planned_question",
     "wants_build_now",
     "zero_question_build",
-    "_has_account_intent",
-    "_has_conversion_intent",
 ]

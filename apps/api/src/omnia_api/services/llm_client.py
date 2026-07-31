@@ -117,10 +117,12 @@ async def stream_chat_completion(
                             )
                         elif "rate" in _low or "429" in _low:
                             _msg = (
-                                "Провайдер перегружен (rate-limit) — попробуй ещё раз "
-                                "через минуту."
+                                "Провайдер перегружен (rate-limit) — попробуй ещё раз через минуту."
                             )
-                        elif any(k in _low for k in ("unavailable", "501", "unknown main", "not available")):
+                        elif any(
+                            k in _low
+                            for k in ("unavailable", "501", "unknown main", "not available")
+                        ):
                             _msg = (
                                 "Модель временно недоступна у провайдера — попробуй "
                                 "другую модель или позже."
@@ -130,11 +132,7 @@ async def stream_chat_completion(
                         print(f"[LLM] upstream_error {_raw[:200]!r}", flush=True)
                         yield {"error": _msg}
                         return
-                    delta = (
-                        data.get("choices", [{}])[0]
-                        .get("delta", {})
-                        .get("content")
-                    )
+                    delta = data.get("choices", [{}])[0].get("delta", {}).get("content")
                     if delta:
                         delta_count += 1
                         yield {"delta": delta}
@@ -156,10 +154,12 @@ async def stream_chat_completion(
                         }
     except httpx.HTTPError as e:
         import traceback as _tb
+
         print(f"[LLM] transport_error err={e!r}\n{_tb.format_exc()}", flush=True)
         yield {"error": f"http: {e}"}
     print(
-        f"[LLM] done lines={line_count} deltas={delta_count} usage_seen={usage_seen} last={last_line_sample!r}",
+        f"[LLM] done lines={line_count} deltas={delta_count} "
+        f"usage_seen={usage_seen} last={last_line_sample!r}",
         flush=True,
     )
 
@@ -208,9 +208,7 @@ async def complete_chat(
             data = resp.json()
     except httpx.HTTPError as exc:
         raise LLMError(f"http: {exc}") from exc
-    return (
-        data.get("choices", [{}])[0].get("message", {}).get("content") or ""
-    )
+    return data.get("choices", [{}])[0].get("message", {}).get("content") or ""
 
 
 async def _mock_stream(messages: list[dict[str, str]]) -> AsyncIterator[dict[str, Any]]:
@@ -221,10 +219,10 @@ async def _mock_stream(messages: list[dict[str, str]]) -> AsyncIterator[dict[str
     chunks = [
         f"Готово. Сгенерировал сайт по запросу: «{user_text}»\n\n",
         '<file path="index.html">',
-        "\n<!DOCTYPE html><html lang=\"ru\"><head>",
-        "<meta charset=\"utf-8\"><title>Omnia mock</title>",
+        '\n<!DOCTYPE html><html lang="ru"><head>',
+        '<meta charset="utf-8"><title>Omnia mock</title>',
         '\n<script src="https://cdn.tailwindcss.com"></script>',
-        "\n</head><body class=\"bg-slate-50 p-12 font-sans\">",
+        '\n</head><body class="bg-slate-50 p-12 font-sans">',
         '\n  <h1 class="text-4xl font-bold mb-4">Сайт по запросу</h1>',
         f'\n  <p class="text-slate-700 max-w-2xl">{user_text}</p>',
         "\n</body></html>\n",

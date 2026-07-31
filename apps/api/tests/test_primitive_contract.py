@@ -46,7 +46,7 @@ def test_every_promised_export_exists(rel_path: str, names: tuple[str, ...]) -> 
             or f"export type {name}" in src
             or f"export interface {name}" in src
             # destructured re-export, e.g. `export const { signIn, signOut, auth } = NextAuth(...)`
-            or (f"export const {{" in src and name in src)
+            or ("export const {" in src and name in src)
         ), f"{rel_path} no longer exports `{name}` — update the contract card"
 
 

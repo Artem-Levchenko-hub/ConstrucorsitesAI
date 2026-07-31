@@ -79,6 +79,7 @@ def preview_public_url(preview_key: str | None) -> str | None:
 # existing bucket without a new provisioning step. Keys are never exposed as
 # public MinIO URLs — the api's download endpoint streams them owner-scoped.
 
+
 def _exe_key(project_id: str, build_id: str, filename: str) -> str:
     return f"exe/{project_id}/{build_id}/{filename}"
 
@@ -104,12 +105,18 @@ def put_exe_artifacts(
     exe_key = _exe_key(project_id, build_id, f"{name}.exe")
 
     client.put_object(
-        bucket, setup_key, io.BytesIO(setup_bytes), len(setup_bytes),
+        bucket,
+        setup_key,
+        io.BytesIO(setup_bytes),
+        len(setup_bytes),
         content_type=_EXE_CONTENT_TYPE,
     )
     if exe_bytes:
         client.put_object(
-            bucket, exe_key, io.BytesIO(exe_bytes), len(exe_bytes),
+            bucket,
+            exe_key,
+            io.BytesIO(exe_bytes),
+            len(exe_bytes),
             content_type=_EXE_CONTENT_TYPE,
         )
 
@@ -127,9 +134,7 @@ def put_exe_artifacts(
     }
 
 
-def get_exe_object(
-    project_id: str, build_id: str, artifact: str
-) -> tuple[Any, int] | None:
+def get_exe_object(project_id: str, build_id: str, artifact: str) -> tuple[Any, int] | None:
     """Fetch an exe artifact stream from MinIO.
 
     `artifact` must be ``"setup"`` or ``"exe"``. Returns ``(stream, size)``
@@ -145,7 +150,6 @@ def get_exe_object(
     # know project_id/build_id/artifact. We use a glob-style prefix scan to
     # find the exact key (there is at most one .exe and one Setup.exe per build).
     prefix = f"exe/{project_id}/{build_id}/"
-    suffix = "-Setup.exe" if artifact == "setup" else ".exe"
 
     try:
         objects = list(client.list_objects(bucket, prefix=prefix))
@@ -160,7 +164,9 @@ def get_exe_object(
         if artifact == "setup" and obj_name.endswith("-Setup.exe"):
             key = obj_name
             break
-        elif artifact == "exe" and obj_name.endswith(".exe") and not obj_name.endswith("-Setup.exe"):
+        elif (
+            artifact == "exe" and obj_name.endswith(".exe") and not obj_name.endswith("-Setup.exe")
+        ):
             key = obj_name
             break
 

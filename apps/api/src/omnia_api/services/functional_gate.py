@@ -112,9 +112,7 @@ async def _login(page: Page, base_url: str, email: str, password: str) -> None:
         raise RuntimeError(f"login failed for {email}: {result}")
 
 
-async def _api(
-    page: Page, method: str, path: str, body: object | None = None
-) -> dict[str, Any]:
+async def _api(page: Page, method: str, path: str, body: object | None = None) -> dict[str, Any]:
     """Run `fetch` inside the page (browser network + cookies) and return
     ``{status, json}``. Used for every API assertion so the gate exercises the
     exact path a logged-in user's browser would."""
@@ -137,9 +135,7 @@ async def _api(
     )
 
 
-async def _await_sse_message(
-    page: Page, channel: str, match_text: str, timeout_ms: int
-) -> bool:
+async def _await_sse_message(page: Page, channel: str, match_text: str, timeout_ms: int) -> bool:
     """Open an EventSource on `channel` inside the page and resolve True iff a
     `message` event whose body contains `match_text` arrives within the budget.
     This is the live-delivery proof — it would never pass on a polling-only app."""
@@ -195,9 +191,7 @@ async def run_functional_gate(base_url: str) -> FunctionalVerdict:
 
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True, args=preview_resolver_args()
-            )
+            browser = await p.chromium.launch(headless=True, args=preview_resolver_args())
             try:
                 ctx_t = await browser.new_context()
                 ctx_s = await browser.new_context()
@@ -236,7 +230,9 @@ async def run_functional_gate(base_url: str) -> FunctionalVerdict:
                 add = await _api(
                     page_t, "POST", f"/api/channels/{channel_id}/members", {"email": student}
                 )
-                checks.append(Check("add student as member", add["status"] == 200, str(add["status"])))
+                checks.append(
+                    Check("add student as member", add["status"] == 200, str(add["status"]))
+                )
 
                 # 4. Student subscribes; teacher publishes; student must receive it live.
                 channel = f"conversation:{channel_id}"
@@ -250,7 +246,9 @@ async def run_functional_gate(base_url: str) -> FunctionalVerdict:
                     f"/api/realtime/{channel}",
                     {"type": "message", "data": {"text": f"привет {nonce}"}},
                 )
-                checks.append(Check("teacher publish message", pub["status"] == 200, str(pub["status"])))
+                checks.append(
+                    Check("teacher publish message", pub["status"] == 200, str(pub["status"]))
+                )
                 delivered = await sse_task
                 checks.append(
                     Check(
@@ -264,7 +262,9 @@ async def run_functional_gate(base_url: str) -> FunctionalVerdict:
                 #    the stream, the history AND publish — zero leak.
                 hist = await _api(page_o, "GET", f"/api/channels/{channel_id}/messages")
                 checks.append(
-                    Check("outsider DENIED history (403)", hist["status"] == 403, str(hist["status"]))
+                    Check(
+                        "outsider DENIED history (403)", hist["status"] == 403, str(hist["status"])
+                    )
                 )
                 opub = await _api(
                     page_o,
@@ -273,17 +273,23 @@ async def run_functional_gate(base_url: str) -> FunctionalVerdict:
                     {"type": "message", "data": {"text": "leak attempt"}},
                 )
                 checks.append(
-                    Check("outsider DENIED publish (403)", opub["status"] == 403, str(opub["status"]))
+                    Check(
+                        "outsider DENIED publish (403)", opub["status"] == 403, str(opub["status"])
+                    )
                 )
                 # Stream auth is checked before any bytes flow, so a plain fetch of
                 # the stream URL returns the 403 synchronously for a non-member.
                 ostream = await _api(page_o, "GET", f"/api/realtime/{channel}/stream")
                 checks.append(
-                    Check("outsider DENIED stream (403)", ostream["status"] == 403, str(ostream["status"]))
+                    Check(
+                        "outsider DENIED stream (403)",
+                        ostream["status"] == 403,
+                        str(ostream["status"]),
+                    )
                 )
             finally:
                 await browser.close()
-    except Exception as exc:  # noqa: BLE001 — a crashed gate is "not proven", fail-soft
+    except Exception as exc:
         checks.append(Check("gate executed", False, f"{type(exc).__name__}: {exc}"))
 
     return summarize(checks)

@@ -43,8 +43,15 @@ from omnia_api.routers.messages import _normalize_entity_filenames
 
 # The exact malformed payload dumped by the live writer (03_writer_raw.html):
 # an unterminated `access` string that swallows the rest of the object.
-_BROKEN_CLIENT = '{\n  "name": "Client",\n  "access":",\n  "fields": {\n    "name": { "type": "string", "required": true }\n  }\n}'
-_VALID_DEAL = '{"name": "Deal", "access": "admin", "fields": {"title": {"type": "string", "required": true}, "clientId": {"type": "reference", "entity": "Client"}}}'
+_BROKEN_CLIENT = (
+    '{\n  "name": "Client",\n  "access":",\n  "fields": {\n'
+    '    "name": { "type": "string", "required": true }\n  }\n}'
+)
+_VALID_DEAL = (
+    '{"name": "Deal", "access": "admin", "fields": {'
+    '"title": {"type": "string", "required": true}, '
+    '"clientId": {"type": "reference", "entity": "Client"}}}'
+)
 
 
 def test_live_payload_is_genuinely_unparseable() -> None:

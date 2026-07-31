@@ -526,7 +526,9 @@ async def multipass_generate(
     yield {"pass": "content", "stage": "start"}
     yield {"pass": "visual", "stage": "start"}
 
-    content_msgs = _build_content_messages(base_messages, user_prompt, skeleton_clean, content_model)
+    content_msgs = _build_content_messages(
+        base_messages, user_prompt, skeleton_clean, content_model
+    )
     visual_msgs = _build_visual_messages(base_messages, user_prompt, skeleton_clean, visual_model)
 
     content_task = _run_pass(

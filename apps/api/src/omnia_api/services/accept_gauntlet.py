@@ -101,7 +101,17 @@ CABINET = "cabinet"
 #: is in the order tuple (so ``run()`` fans it) but is ADVISORY (a non-blocking
 #: quality-card) and runs ONLY behind its own ``catalog=`` dial, never via
 #: ``include_rendered``.
-RENDERED_GATES = (WOW_DOM, PERF_A11Y, CHIP_PIXEL, TASTE, HIERARCHY, DATA, REFERENCE, CATALOG, CABINET)
+RENDERED_GATES = (
+    WOW_DOM,
+    PERF_A11Y,
+    CHIP_PIXEL,
+    TASTE,
+    HIERARCHY,
+    DATA,
+    REFERENCE,
+    CATALOG,
+    CABINET,
+)
 
 #: The COMPOSITION legs (V1.6 14/5). Taste + hierarchy score richness — type
 #: scale, focal dominance, layered depth, hero imagery — at DESKTOP width, where
@@ -452,9 +462,7 @@ def _resolve_composition_policy(
     )
     t_min = taste_min_score if taste_min_score is not None else int(s.gate_taste_min_score)
     h_min = (
-        hierarchy_min_score
-        if hierarchy_min_score is not None
-        else int(s.gate_hierarchy_min_score)
+        hierarchy_min_score if hierarchy_min_score is not None else int(s.gate_hierarchy_min_score)
     )
     return {
         TASTE: {"advisory": t_adv, "min_score": t_min},
@@ -484,8 +492,12 @@ def _from_composition_leg(
     if getattr(rep, "surface", "content") == "login":
         # the composition rubric is WAIVED on a sparse auth surface — preserve it
         return GateVerdict(
-            gate=gate, passed=True, abstained=False, classes=(),
-            summary=rep.summary(), subscore=rep.subscore(),
+            gate=gate,
+            passed=True,
+            abstained=False,
+            classes=(),
+            summary=rep.summary(),
+            subscore=rep.subscore(),
         )
     if advisory:
         blocking = tuple(c for c in rep.classes if c not in advisory)
@@ -536,17 +548,25 @@ async def _audit_one(
         if gate == PERF_A11Y:
             return await perf_a11y_gate.audit_url(url, width=width, storage_state=storage_state)
         if gate == CHIP_PIXEL:
-            return await chip_pixel_gate.audit_url(url, spec, width=width, storage_state=storage_state)
+            return await chip_pixel_gate.audit_url(
+                url, spec, width=width, storage_state=storage_state
+            )
         if gate == TASTE:
-            return await taste_gate.audit_url(url, width=composition_width, storage_state=storage_state)
+            return await taste_gate.audit_url(
+                url, width=composition_width, storage_state=storage_state
+            )
         if gate == HIERARCHY:
-            return await hierarchy_gate.audit_url(url, width=composition_width, storage_state=storage_state)
+            return await hierarchy_gate.audit_url(
+                url, width=composition_width, storage_state=storage_state
+            )
         if gate == DATA:
             return await data_gate.audit_url(url, width=width, storage_state=storage_state)
         if gate == REFERENCE:
             return await reference_corpus.audit_url(
-                url, width=composition_width,
-                enforce_score=reference_enforce_score, tolerance=reference_tolerance,
+                url,
+                width=composition_width,
+                enforce_score=reference_enforce_score,
+                tolerance=reference_tolerance,
             )
         if gate == CATALOG:
             return await catalog_coherence_gate.audit_url(
@@ -572,8 +592,10 @@ async def _audit_one(
             return await data_gate.audit_files(files, width=width)
         if gate == REFERENCE:
             return await reference_corpus.audit_files(
-                files, width=composition_width,
-                enforce_score=reference_enforce_score, tolerance=reference_tolerance,
+                files,
+                width=composition_width,
+                enforce_score=reference_enforce_score,
+                tolerance=reference_tolerance,
             )
         if gate == CATALOG:
             return await catalog_coherence_gate.audit_files(files, width=composition_width)
@@ -785,9 +807,7 @@ async def run(
     # own switch, so a hot caller that flips ``include_rendered`` on never silently
     # pays for the advisory render.
     legs: set[str] = (
-        {g for g in RENDERED_GATES if g not in ADVISORY_GATES}
-        if include_rendered
-        else set()
+        {g for g in RENDERED_GATES if g not in ADVISORY_GATES} if include_rendered else set()
     )
     if composition:
         legs |= set(COMPOSITION_LEGS)

@@ -374,7 +374,7 @@ async def test_provision_container(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
     async def _fake_provision(  # type: ignore[no-untyped-def]
-        *, project_id, slug, template, tier, timeout
+        *, project_id, slug, template, tier, timeout  # noqa: ASYNC109
     ):
         seen["template"] = template
         seen["timeout"] = timeout
@@ -392,7 +392,7 @@ async def test_provision_spa_container(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
     async def _fake_provision(  # type: ignore[no-untyped-def]
-        *, project_id, slug, template, tier, timeout
+        *, project_id, slug, template, tier, timeout  # noqa: ASYNC109
     ):
         seen["template"] = template
         seen["timeout"] = timeout

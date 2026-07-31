@@ -45,12 +45,12 @@ These tests LOCK the root cause (routing) + the evidence (the two corruption
 signatures) green, and keep the build-time guarantee (a syntax gate exists and
 rejects un-parseable container .tsx before commit) RED as a strict-xfail.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from omnia_api.services.intent_triage import CHEAP, ORCHESTRATE, decide_intent
-
 
 # The exact follow-up that triggered the live repro.
 _FOLLOWUP = (
@@ -87,8 +87,7 @@ export default function ServicesPage() {
 """
 
 _BROKEN_LAYOUT_NAV_LINE = (
-    '  { label: "Услуги", hrefdashboard/services", icon: <Scissors />, '
-    'section: "Управление" },'
+    '  { label: "Услуги", hrefdashboard/services", icon: <Scissors />, section: "Управление" },'
 )
 
 
@@ -117,7 +116,7 @@ def test_committed_followup_tsx_is_structurally_corrupt_evidence() -> None:
     assert "]}" not in between, "columns array unexpectedly closed before fields"
     # layout.tsx — the nav href attribute lost its `="/`: a JSX attribute name is
     # fused with its value (`hrefdashboard/...` instead of `href="/dashboard/...`).
-    assert 'hrefdashboard' in _BROKEN_LAYOUT_NAV_LINE
+    assert "hrefdashboard" in _BROKEN_LAYOUT_NAV_LINE
     assert 'href="/dashboard' not in _BROKEN_LAYOUT_NAV_LINE
 
 
@@ -132,7 +131,7 @@ def test_container_surgical_edit_rejects_unparseable_tsx() -> None:
     committed container `.tsx` does not parse and reject the edit (keep the
     last-good snapshot) instead of shipping it. No such gate exists yet, so the
     import below fails and the strict-xfail records the open gap."""
-    from omnia_api.services.file_extractor import (  # noqa: F401
+    from omnia_api.services.file_extractor import (
         validate_container_tsx,
     )
 

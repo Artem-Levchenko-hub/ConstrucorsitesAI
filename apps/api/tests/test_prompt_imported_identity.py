@@ -10,8 +10,6 @@ These are 100 % offline (no DB, no network):
 
 from __future__ import annotations
 
-import pytest
-
 from omnia_api.services.prompt_builder import (
     _EDIT_IDENTITY_GENERIC,
     _build_edit_messages,

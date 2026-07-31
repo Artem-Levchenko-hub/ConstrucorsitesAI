@@ -618,11 +618,12 @@ def _temperature_of_hex(hex_val: str) -> str:
     r, g, b = _hex_to_rgb(hex_val)
     mx = max(r, g, b)
     mn = min(r, g, b)
-    l = (mx + mn) / 2 / 255
+    lightness = (mx + mn) / 2 / 255
     if mx == mn:
         return "neutral"
     d = (mx - mn) / 255
-    s = d / (1 - abs(2 * l - 1)) if (1 - abs(2 * l - 1)) > 0 else 0
+    denominator = 1 - abs(2 * lightness - 1)
+    s = d / denominator if denominator > 0 else 0
     if s < 0.15:
         return "neutral"
     rr, gg, bb = r / 255, g / 255, b / 255

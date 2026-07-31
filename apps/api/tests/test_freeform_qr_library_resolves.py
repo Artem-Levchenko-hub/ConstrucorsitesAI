@@ -59,7 +59,6 @@ import pytest
 
 from omnia_api.services.prompt_builder import KIT_FILES
 
-
 # The exact <script src> the writer emitted on the "генератор QR-кодов" prompt,
 # both in the run #43 dogfood gen and the run #44 real-prod gen.
 _DEAD_QR_CDN = "https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"

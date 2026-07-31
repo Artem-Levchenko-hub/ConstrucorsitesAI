@@ -16,7 +16,10 @@ from omnia_api.services.backend_guardrail import (
 
 def test_writer_raw_db_import_is_flagged() -> None:
     files = {
-        "src/app/actions/transfer.ts": 'import { db } from "@/lib/db";\nexport async function run(){}',
+        "src/app/actions/transfer.ts": (
+            'import { db } from "@/lib/db";\n'
+            "export async function run(){}"
+        ),
     }
     v = scan_backend_safety(files)
     assert len(v) == 1
@@ -36,7 +39,10 @@ def test_writer_raw_pool_is_flagged() -> None:
 def test_engine_file_may_use_raw_db() -> None:
     # The fixed engine IS the safe data layer — it is allowed raw access.
     files = {
-        "src/lib/entities/engine.ts": 'import { db } from "@/lib/db";\nimport { eq } from "drizzle-orm";',
+        "src/lib/entities/engine.ts": (
+            'import { db } from "@/lib/db";\n'
+            'import { eq } from "drizzle-orm";'
+        ),
         "src/lib/db/index.ts": 'import { Pool } from "pg";\nconst pool = new Pool({});',
     }
     assert scan_backend_safety(files) == []
@@ -57,14 +63,12 @@ def test_writer_using_sdk_is_safe() -> None:
 
 def test_non_server_files_ignored() -> None:
     # A .json or .css can't run a query; don't flag a coincidental string.
-    files = {"src/app/page.module.css": '.db{}', "entities/Order.json": '{"db":"x"}'}
+    files = {"src/app/page.module.css": ".db{}", "entities/Order.json": '{"db":"x"}'}
     assert scan_backend_safety(files) == []
 
 
 def test_summary_lists_offending_paths() -> None:
-    v = scan_backend_safety(
-        {"src/app/x/route.ts": 'import { db } from "@/lib/db";'}
-    )
+    v = scan_backend_safety({"src/app/x/route.ts": 'import { db } from "@/lib/db";'})
     verdict = summarize(v)
     assert verdict.safe is False
     assert "src/app/x/route.ts" in verdict.summary

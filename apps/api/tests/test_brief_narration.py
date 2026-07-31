@@ -46,12 +46,17 @@ def test_brief_lines_carry_brief_values_in_order() -> None:
     palette → font → sections → motion. This is the falsifiable proof the brief
     surfaced (a hardcoded list would not change with the brief)."""
     lines = brief_lines(_FULL_BRIEF)
-    assert lines == [
-        "Подбираю палитру — #b45309 и #1c1917",  # accent → primary, role-ordered, hex only
-        "Беру шрифт «Playfair Display» для заголовков",
-        "Компоную секции: Геро → Меню → О нас → Галерея …",  # 4 shown + " …"
-        "Оживляю движением — плавное появление секций при скролле с лёгким…",  # short_motion cut on word boundary
-    ]
+    assert (
+        lines
+        == [
+            # accent → primary, role-ordered, hex only
+            "Подбираю палитру — #b45309 и #1c1917",
+            "Беру шрифт «Playfair Display» для заголовков",
+            "Компоную секции: Геро → Меню → О нас → Галерея …",  # 4 shown + " …"
+            # short_motion cut on word boundary
+            "Оживляю движением — плавное появление секций при скролле с лёгким…",
+        ]
+    )
 
 
 def test_empty_or_null_brief_yields_no_lines() -> None:
@@ -86,9 +91,7 @@ def test_inject_carries_birth_conductor() -> None:
     overlay concludes, then the page assembles section-by-section in the brand
     accent (the same born swipe the workspace plays on-stream). Pinned so the
     shared /p/<slug> can't silently regress back to "fade to a static page"."""
-    out = inject_brief_narration(
-        "<head></head><body></body>", _FULL_BRIEF
-    )
+    out = inject_brief_narration("<head></head><body></body>", _FULL_BRIEF)
     assert "omnia-born-bar" in out  # brand-accent born swipe element
     assert "function birthWave" in out  # the conductor is wired in
     # Reduced-motion still settles the page (no orphaned hidden sections).

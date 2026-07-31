@@ -8,6 +8,8 @@ pygit2-push: только httpx с токеном пользователя в з
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 from urllib.parse import urlencode
 
@@ -15,9 +17,6 @@ import httpx
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.errors import ApiError
-
-import asyncio
-import logging
 
 _GH_API = "https://api.github.com"
 _GH_OAUTH = "https://github.com"

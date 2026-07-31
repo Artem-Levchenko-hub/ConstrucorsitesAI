@@ -17,7 +17,6 @@ import pytest
 
 from omnia_api.services.auth_session import derive_seed_password, establish_session
 
-
 # ── pure derivation ─────────────────────────────────────────────────────────
 
 
@@ -62,7 +61,12 @@ class _FakePage:
         self._evaluate_raises = evaluate_raises
         self.evaluated_args: list | None = None
 
-    async def goto(self, url: str, *, timeout: int) -> _FakeResponse:
+    async def goto(
+        self,
+        url: str,
+        *,
+        timeout: int,  # noqa: ASYNC109 -- mirrors Playwright's keyword signature
+    ) -> _FakeResponse:
         return _FakeResponse(self._csrf_payload)
 
     async def evaluate(self, script: str, args: list) -> None:
@@ -155,9 +159,7 @@ async def test_establish_session_success_returns_state(
         monkeypatch, csrf_payload={"csrfToken": "tok"}, storage_state=state
     )
 
-    result = await establish_session(
-        "http://app:3000/", "gate@omnia.local", "secret"
-    )
+    result = await establish_session("http://app:3000/", "gate@omnia.local", "secret")
 
     assert result == state
     # the in-page credentials fetch was driven with [csrf, email, password, cb]
@@ -174,9 +176,7 @@ async def test_establish_session_secure_prefix_cookie_returns_state(
 ) -> None:
     """The ``__Secure-`` prefixed v5 cookie (https) is also accepted."""
     state = {"cookies": [{"name": "__Secure-authjs.session-token", "value": "x"}]}
-    _install_fake_playwright(
-        monkeypatch, csrf_payload={"csrfToken": "tok"}, storage_state=state
-    )
+    _install_fake_playwright(monkeypatch, csrf_payload={"csrfToken": "tok"}, storage_state=state)
     result = await establish_session("http://app:3000", "gate@omnia.local", "s")
     assert result == state
 
@@ -186,9 +186,7 @@ async def test_establish_session_no_cookie_returns_none(
 ) -> None:
     """No session cookie after the callback (bad creds / login rejected) → None."""
     state = {"cookies": [{"name": "authjs.csrf-token", "value": "x"}]}
-    _install_fake_playwright(
-        monkeypatch, csrf_payload={"csrfToken": "tok"}, storage_state=state
-    )
+    _install_fake_playwright(monkeypatch, csrf_payload={"csrfToken": "tok"}, storage_state=state)
     result = await establish_session("http://app:3000", "gate@omnia.local", "s")
     assert result is None
 
@@ -197,9 +195,7 @@ async def test_establish_session_no_csrf_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A CSRF endpoint that yields no token → None (never posts the callback)."""
-    page = _install_fake_playwright(
-        monkeypatch, csrf_payload={}, storage_state={"cookies": []}
-    )
+    page = _install_fake_playwright(monkeypatch, csrf_payload={}, storage_state={"cookies": []})
     result = await establish_session("http://app:3000", "gate@omnia.local", "s")
     assert result is None
     assert page.evaluated_args is None  # callback fetch never ran
@@ -237,18 +233,32 @@ async def test_establish_session_playwright_import_failure_returns_none(
 def test_preview_resolver_args_empty_by_default(monkeypatch):
     """Default (empty setting) → no launch args (authenticated path off)."""
     from types import SimpleNamespace
+
     from omnia_api.services import auth_session
-    monkeypatch.setattr(auth_session, "get_settings", lambda: SimpleNamespace(gate_preview_resolver_rules=""), raising=False)
+
+    monkeypatch.setattr(
+        auth_session,
+        "get_settings",
+        lambda: SimpleNamespace(gate_preview_resolver_rules=""),
+        raising=False,
+    )
     import omnia_api.core.config as cfg
-    monkeypatch.setattr(cfg, "get_settings", lambda: SimpleNamespace(gate_preview_resolver_rules=""))
+
+    monkeypatch.setattr(
+        cfg, "get_settings", lambda: SimpleNamespace(gate_preview_resolver_rules="")
+    )
     assert auth_session.preview_resolver_args() == []
 
 
 def test_preview_resolver_args_emits_host_resolver_rule(monkeypatch):
     """When set → a single --host-resolver-rules Chromium arg (b2)."""
     from types import SimpleNamespace
-    from omnia_api.services import auth_session
+
     import omnia_api.core.config as cfg
+    from omnia_api.services import auth_session
+
     rule = "MAP *.preview.lead-generator.ru 172.21.0.1"
-    monkeypatch.setattr(cfg, "get_settings", lambda: SimpleNamespace(gate_preview_resolver_rules=rule))
+    monkeypatch.setattr(
+        cfg, "get_settings", lambda: SimpleNamespace(gate_preview_resolver_rules=rule)
+    )
     assert auth_session.preview_resolver_args() == [f"--host-resolver-rules={rule}"]

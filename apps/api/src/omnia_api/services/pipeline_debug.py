@@ -38,4 +38,4 @@ def dump(project_id: object, message_id: object, name: str, content: str) -> Non
         print(f"[PP] debug_dump_failed {name}: {exc!r}", flush=True)
 
 
-__all__ = ["enabled", "dump"]
+__all__ = ["dump", "enabled"]

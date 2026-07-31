@@ -34,8 +34,8 @@ _ENGINE_PREFIXES: tuple[str, ...] = (
     "src/lib/session",
     "src/lib/integrations/",
     "src/app/api/entities/",  # fixed CRUD routes (template-owned)
-    "src/app/api/auth/",      # fixed auth routes (template-owned)
-    "src/app/api/users/",     # fixed users directory (template-owned)
+    "src/app/api/auth/",  # fixed auth routes (template-owned)
+    "src/app/api/users/",  # fixed users directory (template-owned)
     "scripts/",
 )
 
@@ -101,7 +101,9 @@ def summarize(violations: list[Violation]) -> GuardrailVerdict:
     """Aggregate violations into a verdict. Pure — unit-testable. Safe iff there
     are zero raw-DB escapes in writer code."""
     if not violations:
-        return GuardrailVerdict(safe=True, violations=[], summary="backend guardrail OK — no raw-DB escapes")
+        return GuardrailVerdict(
+            safe=True, violations=[], summary="backend guardrail OK — no raw-DB escapes"
+        )
     where = ", ".join(sorted({v.path for v in violations}))
     return GuardrailVerdict(
         safe=False,

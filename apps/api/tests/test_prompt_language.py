@@ -7,7 +7,6 @@ argument.  Any deviation is a regression, even a single leading newline.
 
 from omnia_api.services.prompt_builder import _language_directive, build_system_prompt
 
-
 # ─── _language_directive unit tests ──────────────────────────────────────────
 
 
@@ -47,9 +46,16 @@ def test_ru_is_byte_identical_to_default() -> None:
     ):
         default_out = build_system_prompt(template=template)
         ru_out = build_system_prompt(template=template, language="ru")
+        first_diff: int | str = "length differs"
+        if default_out != ru_out and len(default_out) == len(ru_out):
+            first_diff = next(
+                i
+                for i, (default_char, ru_char) in enumerate(zip(default_out, ru_out))
+                if default_char != ru_char
+            )
         assert default_out == ru_out, (
             f"[{template}] language='ru' produced different output from default!\n"
-            f"First diff at char {next(i for i,(a,b) in enumerate(zip(default_out, ru_out)) if a != b) if default_out != ru_out and len(default_out) == len(ru_out) else 'length differs'}"
+            f"First diff at char {first_diff}"
         )
         # No leading blank sections introduced
         assert not ru_out.startswith("\n"), f"[{template}] output starts with newline"

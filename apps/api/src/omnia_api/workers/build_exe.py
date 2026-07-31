@@ -76,7 +76,7 @@ async def _run(
             await publish_event(
                 project_id, "exe.stage", {"build_id": build_id, "stage": "build"}
             )
-        except Exception as exc:  # noqa: BLE001 — fail-soft, never abort the build (R-10)
+        except Exception as exc:
             log.warning("exe_build.stage_publish_failed", err=str(exc))
 
         # --- call orchestrator ------------------------------------------------
@@ -88,7 +88,7 @@ async def _run(
                 installer_nsi=rendered["installer.nsi"],
                 requirements=spec.requirements,
             )
-        except Exception as exc:  # noqa: BLE001 — network / 5xx from orchestrator
+        except Exception as exc:
             log.error("exe_build.orchestrator_error", attempt=attempt, err=str(exc))
             res = {"ok": False, "log": str(exc)}
 
@@ -115,7 +115,7 @@ async def _run(
             await publish_event(
                 project_id, "exe.heal", {"build_id": build_id, "attempt": attempt}
             )
-        except Exception as exc:  # noqa: BLE001 — fail-soft (R-10)
+        except Exception as exc:
             log.warning("exe_build.heal_publish_failed", err=str(exc))
 
         patched = await exe_doctor.heal(raw_log, spec, files)
@@ -144,7 +144,7 @@ async def _run(
     # --- decode & size-check --------------------------------------------------
     try:
         setup_bytes = base64.b64decode(res["setup_b64"])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.error("exe_build.decode_error", err=str(exc))
         await _publish_failed(project_id, build_id, f"base64 decode error: {exc}")
         return
@@ -153,7 +153,7 @@ async def _run(
     if res.get("exe_b64"):
         try:
             exe_bytes = base64.b64decode(res["exe_b64"])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("exe_build.exe_decode_error", err=str(exc))
             # Non-fatal: Setup.exe is the primary deliverable; bare .exe is optional.
 
@@ -170,7 +170,7 @@ async def _run(
     # --- upload to MinIO ------------------------------------------------------
     try:
         urls = put_exe_artifacts(project_id, build_id, spec.name, setup_bytes, exe_bytes)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.error("exe_build.minio_error", err=str(exc))
         await _publish_failed(project_id, build_id, f"MinIO upload failed: {exc}")
         return
@@ -196,7 +196,7 @@ async def _run(
                 "size": urls["size"],
             },
         )
-    except Exception as exc:  # noqa: BLE001 — fail-soft (R-10)
+    except Exception as exc:
         log.warning("exe_build.ready_publish_failed", err=str(exc))
 
 
@@ -208,5 +208,5 @@ async def _publish_failed(project_id: str, build_id: str, raw_log: str) -> None:
             "exe.failed",
             {"build_id": build_id, "log": raw_log[-4000:]},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("exe_build.failed_publish_failed", err=str(exc))

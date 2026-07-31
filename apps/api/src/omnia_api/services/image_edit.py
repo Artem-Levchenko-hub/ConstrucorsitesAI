@@ -104,7 +104,7 @@ _GRADIENT_DIV_RE = re.compile(r"<div\b[^>]*\bbg-gradient[^>]*>", re.IGNORECASE)
 _OPACITY_SUFFIX_RE = re.compile(r"/(\d{2,3})\b")
 
 
-def _reduce_opacity(m: "re.Match[str]") -> str:
+def _reduce_opacity(m: re.Match[str]) -> str:
     n = int(m.group(1))
     # Only soften the HEAVY dark stops (≥50). The subtle accent stops (e.g. a
     # gold /5) are single-digit and never match this 2–3 digit pattern anyway.

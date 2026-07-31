@@ -47,11 +47,15 @@ def test_static_prompt_includes_landing_section_kit() -> None:
         sp = build_system_prompt(tmpl)
         assert "КИТ ПРЕМИУМ-СЕКЦИЙ ЛЕНДИНГА" in sp, tmpl
         for variant in (
-            "header-nav",  # v2.22 #3 — the page FRAME (sticky nav) is now kit, not hand-rolled
-            "hero-centered",  # v2.22 #2 — the hero (rubric crit. 5) is now kit, not hand-rolled
+            # v2.22 #3 — the page FRAME (sticky nav) is now kit, not hand-rolled
+            "header-nav",
+            # v2.22 #2 — hero (rubric crit. 5) is now kit, not hand-rolled
+            "hero-centered",
             "hero-split",
-            "hero-editorial",  # v2.23 #1 — archetype hero: type-as-graphic (Bold Studio/Kinetic/portfolio)
-            "hero-cinematic",  # v2.23 #1 — archetype hero: full-bleed photo-art (Apple Tech/luxury/premium)
+            # v2.23 #1 — archetype hero: type-as-graphic
+            "hero-editorial",
+            # v2.23 #1 — archetype hero: full-bleed photo-art
+            "hero-cinematic",
             "logos-strip",  # v2.22 #3 — social-proof band, kit-sourced
             "features-grid",
             "pricing-plans",
@@ -172,9 +176,7 @@ def test_compute_skill_brief_returns_none_when_no_signal() -> None:
 
 def test_compute_skill_brief_matches_industry_keyword() -> None:
     """A prompt naming a clear industry surfaces a palette + UX rules block."""
-    brief = _compute_skill_brief(
-        "сделай сайт для SaaS с дашбордом и тарифами", "proj-1"
-    )
+    brief = _compute_skill_brief("сделай сайт для SaaS с дашбордом и тарифами", "proj-1")
     assert brief is not None
     assert "PALETTE" in brief or "UX RULES" in brief
 
@@ -331,9 +333,7 @@ def test_short_substring_does_not_falsely_trigger() -> None:
     """Earlier bug: stem ``ai`` substring-matched ``сайт`` → dental prompts
     landed on AI/Chatbot. Prefix-of-word matching kills the false-positive."""
     # "сайт стоматологии" should NOT route to AI/Chatbot.
-    palette = skill_library.lookup_palette(
-        *_expand_ru_to_en("сайт стоматологии")
-    )
+    palette = skill_library.lookup_palette(*_expand_ru_to_en("сайт стоматологии"))
     assert palette is not None
     assert "AI" not in palette["product_type"]
     assert "Chatbot" not in palette["product_type"]
@@ -349,7 +349,7 @@ def test_expand_ru_to_en_keeps_original_tokens() -> None:
     """
     tokens = _expand_ru_to_en("крипто-биржа фондовый")
     assert "крипто" in tokens  # left half after hyphen-split
-    assert "биржа" in tokens   # right half
+    assert "биржа" in tokens  # right half
     assert "фондовый" in tokens
     # And English equivalents from `крипт` stem
     assert "fintech" in tokens or "crypto" in tokens
@@ -463,14 +463,14 @@ def test_phase_g_malewicz_rules_present_for_all_tiers() -> None:
     there would silently vanish. These markers prove the rules landed in
     surviving blocks."""
     markers = [
-        "SHADOW RECIPES",       # G1, G2 — in extended _QUALITY_BAR
-        "Double-W",             # G5 — in _QUALITY_BAR BUTTON RULES (RU keeps EN term)
-        "primary CTA",          # G7 — in _QUALITY_BAR BUTTON RULES
-        "ICON DISCIPLINE",      # G9, G10
-        "Lorem ipsum",          # G12 — forbidden, in _COPY_RULES
-        "dark pattern",         # G14 — in AWWWARDS_PRINCIPLES (NO DARK PATTERNS header EN)
-        "MODERN",               # G15 — "MODERN ≠ PURELY FLAT" header
-        "LESS IS MORE",         # G18 — "LESS IS MORE" header
+        "SHADOW RECIPES",  # G1, G2 — in extended _QUALITY_BAR
+        "Double-W",  # G5 — in _QUALITY_BAR BUTTON RULES (RU keeps EN term)
+        "primary CTA",  # G7 — in _QUALITY_BAR BUTTON RULES
+        "ICON DISCIPLINE",  # G9, G10
+        "Lorem ipsum",  # G12 — forbidden, in _COPY_RULES
+        "dark pattern",  # G14 — in AWWWARDS_PRINCIPLES (NO DARK PATTERNS header EN)
+        "MODERN",  # G15 — "MODERN ≠ PURELY FLAT" header
+        "LESS IS MORE",  # G18 — "LESS IS MORE" header
     ]
     for model_id in ("claude-opus-4-7", "gpt-5-mini", "claude-haiku-4-5"):
         sp = build_system_prompt("landing", model_id=model_id)
@@ -575,9 +575,7 @@ def test_compute_skill_brief_includes_derived_tokens_for_industry_match() -> Non
     """Phase J — when palette is matched, the brief should include the
     derived gradient pair + shadow tint so the AI gets concrete values,
     not just rule prose."""
-    brief = _compute_skill_brief(
-        "сделай сайт SaaS-стартапа с дашбордом и тарифами", "proj-J"
-    )
+    brief = _compute_skill_brief("сделай сайт SaaS-стартапа с дашбордом и тарифами", "proj-J")
     assert brief is not None
     # At least one Phase-J derived block must surface
     assert "ПРОИЗВОДНЫЕ ТОКЕНЫ" in brief or "gradient_pair" in brief
@@ -600,6 +598,7 @@ def test_omnia_kit_css_phase_i_block_is_byte_identical_across_4_templates() -> N
     this; Phase I must too. A divergent block per template means a single
     edit forgot to sync — measure it before it leaks to production."""
     import pathlib
+
     base = pathlib.Path(__file__).parent.parent / "src/omnia_api/templates"
     files = [
         (base / t / "assets/omnia-kit.css").read_text(encoding="utf-8")
@@ -619,12 +618,12 @@ def test_omnia_kit_css_phase_i_block_is_byte_identical_across_4_templates() -> N
 # Unique headers of the build-only blocks that caused the drift. None may leak
 # into the edit prompt.
 _BUILD_ONLY_MARKERS = (
-    "СТАНДАРТ КАЧЕСТВА",        # _QUALITY_BAR
+    "СТАНДАРТ КАЧЕСТВА",  # _QUALITY_BAR
     "ВИЗУАЛЬНАЯ НАСЫЩЕННОСТЬ",  # _VISUAL_RICH_KIT
-    "ВИЗУАЛЬНЫЙ СТИЛЬ",         # _STYLE_KIT
-    "ДИЗАЙН-КИТ",               # _DESIGN_KIT
-    "АРТ-ДИРЕКТОР",             # _ART_DIRECTOR
-    "ФИНАЛЬНАЯ САМОПРОВЕРКА",   # _SELF_CHECK
+    "ВИЗУАЛЬНЫЙ СТИЛЬ",  # _STYLE_KIT
+    "ДИЗАЙН-КИТ",  # _DESIGN_KIT
+    "АРТ-ДИРЕКТОР",  # _ART_DIRECTOR
+    "ФИНАЛЬНАЯ САМОПРОВЕРКА",  # _SELF_CHECK
 )
 
 
@@ -709,10 +708,7 @@ def test_edit_rewrite_messages_asks_full_file_and_preserve() -> None:
 
 
 def test_text_preserved_ratio_scoped_edit_vs_redesign() -> None:
-    old = (
-        "<h1>Суши Юген</h1><p>Дикий тунец блюфин премиум класса</p>"
-        "<a>Забронировать стол</a>"
-    )
+    old = "<h1>Суши Юген</h1><p>Дикий тунец блюфин премиум класса</p><a>Забронировать стол</a>"
     # Background-only change — same copy → nearly all words survive.
     bg_only = (
         "<body style='background:#111'><h1>Суши Юген</h1>"
@@ -727,7 +723,9 @@ def test_text_preserved_ratio_scoped_edit_vs_redesign() -> None:
 
 def test_salvage_html_rescues_unwrapped_and_fenced() -> None:
     body = "x" * 900
-    raw = f"Готово, поменял фон.\n<!doctype html><html><body><h1>Hi</h1>{body}</body></html>\nготово"
+    raw = (
+        f"Готово, поменял фон.\n<!doctype html><html><body><h1>Hi</h1>{body}</body></html>\nготово"
+    )
     out = _salvage_html(raw)
     assert out is not None
     assert out.startswith("<!doctype html")
@@ -758,6 +756,7 @@ def test_anime_and_kit_js_byte_identical_across_4_templates() -> None:
     4 static templates. The kit-edit-then-copy workflow silently forgets a dir
     otherwise, and KIT_FILES protection assumes one canonical copy per asset."""
     import pathlib
+
     base = pathlib.Path(__file__).parent.parent / "src/omnia_api/templates"
     for asset in ("assets/anime.min.js", "assets/omnia-kit.js"):
         files = [
@@ -784,8 +783,8 @@ def test_build_system_prompt_honours_discovery_spec() -> None:
 
     out = build_system_prompt("fullstack", discovery_spec=_violet_dark_spec())
     assert "ЯВНЫЙ ВЫБОР ПОЛЬЗОВАТЕЛЯ" in out
-    assert _FAMILY_HEX["violet"] in out          # violet HEX anchor
-    assert "ТЁМНАЯ" in out                        # dark directive
+    assert _FAMILY_HEX["violet"] in out  # violet HEX anchor
+    assert "ТЁМНАЯ" in out  # dark directive
     assert 'id="catalog"' in out and 'id="contact"' in out  # both sections
 
 
@@ -800,13 +799,9 @@ def test_build_system_prompt_spec_directive_precedes_palette_anchor() -> None:
     # The explicit user choice must sit ABOVE the preset palette anchor so the
     # model reads it first (and the directive lifts any palette ban on the
     # chip-picked family).
-    out = build_system_prompt(
-        "fullstack", preset_id="fintech", discovery_spec=_violet_dark_spec()
-    )
+    out = build_system_prompt("fullstack", preset_id="fintech", discovery_spec=_violet_dark_spec())
     if "ОБЯЗАТЕЛЬНАЯ ПАЛИТРА И ШРИФТЫ" in out:  # preset resolved → anchor present
-        assert out.index("ЯВНЫЙ ВЫБОР ПОЛЬЗОВАТЕЛЯ") < out.index(
-            "ОБЯЗАТЕЛЬНАЯ ПАЛИТРА И ШРИФТЫ"
-        )
+        assert out.index("ЯВНЫЙ ВЫБОР ПОЛЬЗОВАТЕЛЯ") < out.index("ОБЯЗАТЕЛЬНАЯ ПАЛИТРА И ШРИФТЫ")
 
 
 def test_entities_ui_brief_selects_screen_archetype() -> None:
@@ -826,9 +821,7 @@ def test_entities_ui_brief_selects_screen_archetype() -> None:
     ):
         assert name in _ENTITIES_UI, f"archetype {name} dropped from _ENTITIES_UI"
     # archetype block sits ABOVE the dashboard recipe (it reframes it)
-    assert _ENTITIES_UI.index("АРХЕТИП ГЛАВНОГО ЭКРАНА") < _ENTITIES_UI.index(
-        "рецепт архетипа"
-    )
+    assert _ENTITIES_UI.index("АРХЕТИП ГЛАВНОГО ЭКРАНА") < _ENTITIES_UI.index("рецепт архетипа")
     # the kit OWNS the kanban + calendar + master-detail (split) views — the brief
     # must route to them, NOT tell the writer they're missing (stale-guidance guard).
     assert "Канбан-доски в ките НЕТ" not in _ENTITIES_UI
@@ -849,13 +842,9 @@ def test_entities_ui_public_home_uses_storefront_hero() -> None:
     # it's offered as the public counterpart of DashboardHero (cabinet hero)
     assert "ПЕРВЫЙ ЭКРАН ГЛАВНОЙ" in _ENTITIES_UI
     # the guidance sits in the public-home half, ABOVE the cabinet AppShell block
-    assert _ENTITIES_UI.index("StorefrontHero") < _ENTITIES_UI.index(
-        "src/app/(app)/layout.tsx"
-    )
+    assert _ENTITIES_UI.index("StorefrontHero") < _ENTITIES_UI.index("src/app/(app)/layout.tsx")
     # it must be importable from the kit barrel (appears in the import line)
-    assert _ENTITIES_UI.index("StorefrontHero") < _ENTITIES_UI.index(
-        '} from "@/components/omnia"'
-    )
+    assert _ENTITIES_UI.index("StorefrontHero") < _ENTITIES_UI.index('} from "@/components/omnia"')
 
 
 def test_entities_ui_public_home_uses_storefront_section() -> None:
@@ -873,13 +862,9 @@ def test_entities_ui_public_home_uses_storefront_section() -> None:
     # section headings must be <h2> (the single <h1> stays on the hero)
     assert "Заголовки секций = <h2>" in _ENTITIES_UI
     # both primitives sit in the public-home half, ABOVE the cabinet AppShell block
-    assert _ENTITIES_UI.index("StorefrontSection") < _ENTITIES_UI.index(
-        "src/app/(app)/layout.tsx"
-    )
+    assert _ENTITIES_UI.index("StorefrontSection") < _ENTITIES_UI.index("src/app/(app)/layout.tsx")
     # both must be importable from the kit barrel (appear in the import line)
-    assert _ENTITIES_UI.index("FeatureCard") < _ENTITIES_UI.index(
-        '} from "@/components/omnia"'
-    )
+    assert _ENTITIES_UI.index("FeatureCard") < _ENTITIES_UI.index('} from "@/components/omnia"')
 
 
 def test_entities_ui_public_home_uses_pricing_plans() -> None:
@@ -895,13 +880,9 @@ def test_entities_ui_public_home_uses_pricing_plans() -> None:
     # the recommended tier is highlighted (the gradient-border draw)
     assert "highlighted" in _ENTITIES_UI
     # it sits in the public-home half, ABOVE the cabinet AppShell block
-    assert _ENTITIES_UI.index("PricingPlans") < _ENTITIES_UI.index(
-        "src/app/(app)/layout.tsx"
-    )
+    assert _ENTITIES_UI.index("PricingPlans") < _ENTITIES_UI.index("src/app/(app)/layout.tsx")
     # must be importable from the kit barrel (appear in the import line)
-    assert _ENTITIES_UI.index("PricingPlans") < _ENTITIES_UI.index(
-        '} from "@/components/omnia"'
-    )
+    assert _ENTITIES_UI.index("PricingPlans") < _ENTITIES_UI.index('} from "@/components/omnia"')
 
 
 def test_entities_ui_public_home_uses_testimonial_wall() -> None:
@@ -918,13 +899,9 @@ def test_entities_ui_public_home_uses_testimonial_wall() -> None:
     # keeps the manual fallback, but testimonials now route to the kit primitive
     assert "для отзывов используй <TestimonialWall>" in _ENTITIES_UI
     # it sits in the public-home half, ABOVE the cabinet AppShell block
-    assert _ENTITIES_UI.index("TestimonialWall") < _ENTITIES_UI.index(
-        "src/app/(app)/layout.tsx"
-    )
+    assert _ENTITIES_UI.index("TestimonialWall") < _ENTITIES_UI.index("src/app/(app)/layout.tsx")
     # must be importable from the kit barrel (appear in the import line)
-    assert _ENTITIES_UI.index("TestimonialWall") < _ENTITIES_UI.index(
-        '} from "@/components/omnia"'
-    )
+    assert _ENTITIES_UI.index("TestimonialWall") < _ENTITIES_UI.index('} from "@/components/omnia"')
 
 
 def test_entities_ui_public_home_uses_faq_accordion() -> None:
@@ -942,13 +919,9 @@ def test_entities_ui_public_home_uses_faq_accordion() -> None:
     assert "сверстай содержимое сам" not in _ENTITIES_UI
     assert "для FAQ —" in _ENTITIES_UI
     # it sits in the public-home half, ABOVE the cabinet AppShell block
-    assert _ENTITIES_UI.index("FaqAccordion") < _ENTITIES_UI.index(
-        "src/app/(app)/layout.tsx"
-    )
+    assert _ENTITIES_UI.index("FaqAccordion") < _ENTITIES_UI.index("src/app/(app)/layout.tsx")
     # must be importable from the kit barrel (appear in the import line)
-    assert _ENTITIES_UI.index("FaqAccordion") < _ENTITIES_UI.index(
-        '} from "@/components/omnia"'
-    )
+    assert _ENTITIES_UI.index("FaqAccordion") < _ENTITIES_UI.index('} from "@/components/omnia"')
 
 
 def test_entities_ui_public_home_uses_cta_band() -> None:
@@ -964,13 +937,9 @@ def test_entities_ui_public_home_uses_cta_band() -> None:
     # it explicitly tells the model NOT to hand-roll the final CTA
     assert "НЕ верстай финальный призыв сырьём" in _ENTITIES_UI
     # it sits in the public-home half, ABOVE the cabinet AppShell block
-    assert _ENTITIES_UI.index("CtaBand") < _ENTITIES_UI.index(
-        "src/app/(app)/layout.tsx"
-    )
+    assert _ENTITIES_UI.index("CtaBand") < _ENTITIES_UI.index("src/app/(app)/layout.tsx")
     # must be importable from the kit barrel (appear in the import line)
-    assert _ENTITIES_UI.index("CtaBand") < _ENTITIES_UI.index(
-        '} from "@/components/omnia"'
-    )
+    assert _ENTITIES_UI.index("CtaBand") < _ENTITIES_UI.index('} from "@/components/omnia"')
 
 
 def test_entities_ui_dashboard_loading_never_blank() -> None:

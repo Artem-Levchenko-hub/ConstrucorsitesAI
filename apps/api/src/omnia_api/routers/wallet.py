@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from sqlalchemy import select
-
 from fastapi import APIRouter
+from sqlalchemy import select
 
 from omnia_api.core.config import FREE_GENERATION_LIMIT, get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.core.redis import publish_event
 from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.schemas.wallet import (

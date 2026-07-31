@@ -31,7 +31,8 @@ async def test_gate_live_app_disabled_returns_none(monkeypatch) -> None:
         return "http://omnia-dev-x:3000"
 
     monkeypatch.setattr(
-        entity_gate, "get_settings",
+        entity_gate,
+        "get_settings",
         lambda: SimpleNamespace(acceptance_entity_composition_gate=False),
     )
     monkeypatch.setattr(entity_gate, "resolve_live_url", _resolve)
@@ -50,7 +51,8 @@ async def test_gate_live_app_unreachable_returns_none(monkeypatch) -> None:
         ran["gauntlet"] = True
 
     monkeypatch.setattr(
-        entity_gate, "get_settings",
+        entity_gate,
+        "get_settings",
         lambda: SimpleNamespace(acceptance_entity_composition_gate=True),
     )
     monkeypatch.setattr(entity_gate, "resolve_live_url", _resolve)
@@ -74,7 +76,8 @@ async def test_gate_live_app_runs_composition_only(monkeypatch) -> None:
         return sentinel
 
     monkeypatch.setattr(
-        entity_gate, "get_settings",
+        entity_gate,
+        "get_settings",
         lambda: SimpleNamespace(acceptance_entity_composition_gate=True),
     )
     monkeypatch.setattr(entity_gate, "resolve_live_url", _resolve)
@@ -91,6 +94,7 @@ async def test_gate_live_app_runs_composition_only(monkeypatch) -> None:
 
 async def test_gate_live_app_render_error_returns_none(monkeypatch) -> None:
     """A browser/render hiccup never sinks the build — fail-soft to None."""
+
     async def _resolve(_pid, route="/"):
         return "http://omnia-dev-x:3000"
 
@@ -98,7 +102,8 @@ async def test_gate_live_app_render_error_returns_none(monkeypatch) -> None:
         raise RuntimeError("chromium crashed")
 
     monkeypatch.setattr(
-        entity_gate, "get_settings",
+        entity_gate,
+        "get_settings",
         lambda: SimpleNamespace(acceptance_entity_composition_gate=True),
     )
     monkeypatch.setattr(entity_gate, "resolve_live_url", _resolve)
@@ -191,10 +196,9 @@ def _patch_route(monkeypatch, *, route: str = "/") -> None:
 async def test_gate_async_disabled_no_publish(monkeypatch) -> None:
     published = _patch_publish(monkeypatch)
     monkeypatch.setattr(
-        quality, "get_settings",
-        lambda: SimpleNamespace(
-            acceptance_entity_composition_gate=False, database_url="x"
-        ),
+        quality,
+        "get_settings",
+        lambda: SimpleNamespace(acceptance_entity_composition_gate=False, database_url="x"),
     )
     await quality._gate_async(str(uuid4()), str(uuid4()), "shop")
     assert published == []
@@ -204,10 +208,9 @@ async def test_gate_async_compile_broken_no_publish(monkeypatch) -> None:
     _fast_settle(monkeypatch)
     published = _patch_publish(monkeypatch)
     monkeypatch.setattr(
-        quality, "get_settings",
-        lambda: SimpleNamespace(
-            acceptance_entity_composition_gate=True, database_url="x"
-        ),
+        quality,
+        "get_settings",
+        lambda: SimpleNamespace(acceptance_entity_composition_gate=True, database_url="x"),
     )
 
     async def _status(_pid, *, slug):
@@ -222,7 +225,8 @@ async def test_gate_async_passing_verdict_no_publish(monkeypatch) -> None:
     _fast_settle(monkeypatch)
     published = _patch_publish(monkeypatch)
     monkeypatch.setattr(
-        quality, "get_settings",
+        quality,
+        "get_settings",
         lambda: SimpleNamespace(
             acceptance_entity_composition_gate=True,
             gate_authenticated_cabinet=False,
@@ -251,7 +255,8 @@ async def test_gate_async_hard_fail_publishes_card(monkeypatch) -> None:
     captured: dict = {}
     mid, pid = uuid4(), uuid4()
     monkeypatch.setattr(
-        quality, "get_settings",
+        quality,
+        "get_settings",
         lambda: SimpleNamespace(
             acceptance_entity_composition_gate=True,
             gate_authenticated_cabinet=False,
@@ -265,7 +270,8 @@ async def test_gate_async_hard_fail_publishes_card(monkeypatch) -> None:
     async def _gate(_pid, _slug, route="/", *, storage_state=None, public_base=None):
         captured["route"] = route
         return SimpleNamespace(
-            hard_failed=(object(),), failed_classes=("taste", "hierarchy"),
+            hard_failed=(object(),),
+            failed_classes=("taste", "hierarchy"),
             abstained=True,
         )
 
@@ -315,9 +321,7 @@ def test_messages_enqueues_entity_gate_on_entity_template() -> None:
     src = (_SRC / "routers" / "messages.py").read_text(encoding="utf-8")
     assert "enqueue_entity_gate" in src
     # enqueue is scoped to the entity templates that bypass the acceptance gate
-    assert re.search(
-        r'project\.template in \("nextjs_entities", "fullstack"\)', src
-    )
+    assert re.search(r'project\.template in \("nextjs_entities", "fullstack"\)', src)
 
 
 # ── Area C: authenticated cabinet gate (DARK) ─────────────────────────────────
@@ -335,7 +339,11 @@ async def test_gate_live_app_authenticated_runs_cabinet_and_390(monkeypatch) -> 
 
     def _verdict(gate: str) -> GauntletVerdict:
         return GauntletVerdict(
-            (GateVerdict(gate=gate, passed=True, abstained=False, classes=(), summary="", subscore={}),),
+            (
+                GateVerdict(
+                    gate=gate, passed=True, abstained=False, classes=(), summary="", subscore={}
+                ),
+            ),
             render_expected=True,
         )
 
@@ -345,7 +353,8 @@ async def test_gate_live_app_authenticated_runs_cabinet_and_390(monkeypatch) -> 
         return _verdict("hierarchy") if kw.get("composition_width") == 390 else _verdict("taste")
 
     monkeypatch.setattr(
-        entity_gate, "get_settings",
+        entity_gate,
+        "get_settings",
         lambda: SimpleNamespace(acceptance_entity_composition_gate=True),
     )
     monkeypatch.setattr(entity_gate, "resolve_live_url", _resolve)
@@ -376,7 +385,8 @@ async def test_gate_async_authenticated_logs_in(monkeypatch) -> None:
     captured: dict = {}
 
     monkeypatch.setattr(
-        quality, "get_settings",
+        quality,
+        "get_settings",
         lambda: SimpleNamespace(
             acceptance_entity_composition_gate=True,
             gate_authenticated_cabinet=True,
@@ -434,7 +444,8 @@ async def test_gate_async_seed_missing_falls_back_to_anonymous(monkeypatch) -> N
     captured: dict = {}
 
     monkeypatch.setattr(
-        quality, "get_settings",
+        quality,
+        "get_settings",
         lambda: SimpleNamespace(
             acceptance_entity_composition_gate=True,
             gate_authenticated_cabinet=True,
@@ -475,8 +486,7 @@ async def test_gate_async_seed_missing_falls_back_to_anonymous(monkeypatch) -> N
 # ── Area C: template markers + init-db seed survive (de-orphan source scan) ───
 
 _TEMPLATE = (
-    Path(__file__).resolve().parent.parent.parent
-    / "orchestrator" / "templates" / "nextjs-entities"
+    Path(__file__).resolve().parent.parent.parent / "orchestrator" / "templates" / "nextjs-entities"
 )
 
 

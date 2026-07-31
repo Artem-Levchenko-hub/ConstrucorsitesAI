@@ -13,16 +13,21 @@ import asyncio
 
 from omnia_api.services import agent_builder as ab
 
-
 # ── parse_action ────────────────────────────────────────────────────────────
 
+
 def test_parse_bare_json():
-    a = ab.parse_action('thinking...\n<omnia:action name="read_file">{"path": "src/app/page.tsx"}</omnia:action>')
+    a = ab.parse_action(
+        'thinking...\n<omnia:action name="read_file">{"path": "src/app/page.tsx"}</omnia:action>'
+    )
     assert a is not None and a.name == "read_file" and a.path == "src/app/page.tsx"
 
 
 def test_parse_fenced_json():
-    reply = '<omnia:action name="write_file">\n```json\n{"path":"a.ts","content":"x"}\n```\n</omnia:action>'
+    reply = (
+        '<omnia:action name="write_file">\n```json\n'
+        '{"path":"a.ts","content":"x"}\n```\n</omnia:action>'
+    )
     a = ab.parse_action(reply)
     assert a is not None and a.name == "write_file" and a.args["content"] == "x"
 
@@ -50,9 +55,11 @@ def test_docs_action_known_and_parses():
 
 
 def test_probe_action_parses():
-    # The `probe` E2E tool (authenticated real request) must parse with method+path+body.
+    # The `probe` E2E tool (authenticated real request) must parse with
+    # method + path + body.
     a = ab.parse_action(
-        '<omnia:action name="probe">{"method":"POST","path":"/api/realtime/x","body":{"data":{"body":"hi"}}}</omnia:action>'
+        '<omnia:action name="probe">{"method":"POST","path":"/api/realtime/x",'
+        '"body":{"data":{"body":"hi"}}}</omnia:action>'
     )
     assert a is not None and a.name == "probe" and a.path == "/api/realtime/x"
     assert a.args.get("method") == "POST"
@@ -87,6 +94,7 @@ def test_parse_none_and_unknown():
 
 # ── run_agent_build loop ─────────────────────────────────────────────────────
 
+
 def _scripted(replies):
     """A fake `complete` that returns each scripted reply in turn."""
     box = {"i": 0}
@@ -114,14 +122,21 @@ def _ok_executor(record):
 def test_loop_happy_path_reaches_done():
     record: list = []
     replies = [
-        '<omnia:action name="write_file">{"path":"src/app/page.tsx","content":"export default function P(){return null}"}</omnia:action>',
+        '<omnia:action name="write_file">{"path":"src/app/page.tsx",'
+        '"content":"export default function P(){return null}"}</omnia:action>',
         '<omnia:action name="build"></omnia:action>',
         '<omnia:action name="done">{"summary":"built the page"}</omnia:action>',
     ]
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="sys", user_prompt="build it", model="m",
-        execute=_ok_executor(record), complete=_scripted(replies), max_steps=8,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="sys",
+            user_prompt="build it",
+            model="m",
+            execute=_ok_executor(record),
+            complete=_scripted(replies),
+            max_steps=8,
+        )
+    )
     assert res.done is True
     assert res.stop_reason == "done"
     assert "src/app/page.tsx" in res.files
@@ -133,10 +148,16 @@ def test_loop_hits_step_budget():
     record: list = []
     # always asks to read — never done
     replies = ['<omnia:action name="read_file">{"path":"a.ts"}</omnia:action>']
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="sys", user_prompt="x", model="m",
-        execute=_ok_executor(record), complete=_scripted(replies), max_steps=4,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="sys",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor(record),
+            complete=_scripted(replies),
+            max_steps=4,
+        )
+    )
     assert res.done is False
     assert res.stop_reason == "max_steps"
     assert res.steps == 4
@@ -144,10 +165,16 @@ def test_loop_hits_step_budget():
 
 def test_loop_stalls_on_no_action():
     replies = ["I cannot do that.", "Still no action block here."]
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="sys", user_prompt="x", model="m",
-        execute=_ok_executor([]), complete=_scripted(replies), max_steps=8,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="sys",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor([]),
+            complete=_scripted(replies),
+            max_steps=8,
+        )
+    )
     assert res.done is False
     assert res.stop_reason == "stalled"
 
@@ -156,10 +183,16 @@ def test_loop_gateway_error_is_soft():
     async def _boom(convo, model, **kw):
         raise RuntimeError("gateway 502")
 
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="sys", user_prompt="x", model="m",
-        execute=_ok_executor([]), complete=_boom, max_steps=4,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="sys",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor([]),
+            complete=_boom,
+            max_steps=4,
+        )
+    )
     assert res.done is False
     assert res.stop_reason == "error"
     assert "gateway" in res.summary
@@ -180,10 +213,16 @@ def test_infra_failure_has_non_retryable_stop_reason():
             "infra_dead": True,
         }
 
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="sys", user_prompt="build it", model="m",
-        execute=_infra_dead, complete=_scripted(replies), max_steps=20,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="sys",
+            user_prompt="build it",
+            model="m",
+            execute=_infra_dead,
+            complete=_scripted(replies),
+            max_steps=20,
+        )
+    )
 
     assert res.done is False
     assert res.stop_reason == "infra_error"
@@ -207,10 +246,16 @@ def test_window_messages_caps_payload():
 def test_loop_breaks_on_repeated_action():
     # Model stuck re-issuing the same grep → circuit breaker stops it.
     replies = ['<omnia:action name="grep">{"pattern":"x","path":"src"}</omnia:action>']
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_ok_executor([]), complete=_scripted(replies), max_steps=30,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor([]),
+            complete=_scripted(replies),
+            max_steps=30,
+        )
+    )
     assert res.stop_reason == "looping"
     assert res.steps < 30
 
@@ -225,10 +270,16 @@ def test_failed_write_not_tracked():
         '<omnia:action name="write_file">{"path":"a.ts","content":"x"}</omnia:action>',
         '<omnia:action name="done">{"summary":"done"}</omnia:action>',
     ]
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="sys", user_prompt="x", model="m",
-        execute=_fail_exec, complete=_scripted(replies), max_steps=6,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="sys",
+            user_prompt="x",
+            model="m",
+            execute=_fail_exec,
+            complete=_scripted(replies),
+            max_steps=6,
+        )
+    )
     # write failed → file must NOT be in the committed set
     assert "a.ts" not in res.files
     assert res.done is True
@@ -236,8 +287,11 @@ def test_failed_write_not_tracked():
 
 # ── runtime-sight tools: read_logs + runtime_check ──────────────────────────
 
+
 def test_parse_new_observe_actions():
-    a = ab.parse_action('check it\n<omnia:action name="runtime_check">{"path":"/dashboard"}</omnia:action>')
+    a = ab.parse_action(
+        'check it\n<omnia:action name="runtime_check">{"path":"/dashboard"}</omnia:action>'
+    )
     assert a is not None and a.name == "runtime_check" and a.path == "/dashboard"
     b = ab.parse_action('<omnia:action name="read_logs">{}</omnia:action>')
     assert b is not None and b.name == "read_logs"
@@ -259,8 +313,11 @@ def test_runtime_debug_loop_recovers_then_done():
         if action.name == "read_logs":
             return {"ok": True, "detail": "TypeError: x is not a function at page.tsx:12"}
         if action.name == "runtime_check":
-            return ({"ok": False, "detail": "route / FAILED (HTTP 500)"}
-                    if state["crashed"] else {"ok": True, "detail": "route / renders OK"})
+            return (
+                {"ok": False, "detail": "route / FAILED (HTTP 500)"}
+                if state["crashed"]
+                else {"ok": True, "detail": "route / renders OK"}
+            )
         if action.name == "edit_file":
             state["crashed"] = False  # only the FIX (the edit) clears the crash
             return {"ok": True, "content": action.args.get("replace", "patched")}
@@ -273,16 +330,24 @@ def test_runtime_debug_loop_recovers_then_done():
         '<omnia:action name="build"></omnia:action>',
         '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
         '<omnia:action name="read_logs">{}</omnia:action>',
-        '<omnia:action name="edit_file">{"path":"src/app/page.tsx","search":"v1","replace":"v2"}</omnia:action>',
+        '<omnia:action name="edit_file">{"path":"src/app/page.tsx","search":"v1",'
+        '"replace":"v2"}</omnia:action>',
         '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
         '<omnia:action name="done">{"summary":"fixed runtime crash"}</omnia:action>',
     ]
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_exec, complete=_scripted(replies), max_steps=20,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_exec,
+            complete=_scripted(replies),
+            max_steps=20,
+        )
+    )
     assert res.done is True and res.stop_reason == "done"
-    # The SAME runtime_check ran twice (non-consecutive) WITHOUT a false looping abort.
+    # The SAME runtime_check ran twice (non-consecutive) WITHOUT a false
+    # looping abort.
     assert sum(1 for n, _ in record if n == "runtime_check") == 2
     assert ("read_logs", "") in record
 
@@ -296,14 +361,21 @@ def test_verify_actions_exempt_from_global_repeat_guard():
     replies = []
     for i in range(5):
         replies.append(
-            f'<omnia:action name="edit_file">{{"path":"a.ts","search":"v{i}","replace":"v{i+1}"}}</omnia:action>'
+            f'<omnia:action name="edit_file">{{"path":"a.ts","search":"v{i}",'
+            f'"replace":"v{i + 1}"}}</omnia:action>'
         )
         replies.append('<omnia:action name="build"></omnia:action>')
     replies.append('<omnia:action name="done">{"summary":"clean"}</omnia:action>')
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_ok_executor(record), complete=_scripted(replies), max_steps=30,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor(record),
+            complete=_scripted(replies),
+            max_steps=30,
+        )
+    )
     assert res.stop_reason == "done"
     assert record.count(("build", "")) == 5  # every build actually executed
 
@@ -314,16 +386,23 @@ def test_consecutive_build_spam_still_caught():
     The build must be RED here — a clean build is legitimately shipped by the
     ship-green-on-repeat rescue (see test_consecutive_green_build_ships), so the
     'looping' stop only applies when the repeated build keeps FAILING."""
+
     async def _red_build(action):
         if action.name == "build":
             return {"ok": False, "detail": "TS2304: Cannot find name 'x'"}
         return {"ok": True, "detail": "ok"}
 
     replies = ['<omnia:action name="build"></omnia:action>']
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_red_build, complete=_scripted(replies), max_steps=30,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_red_build,
+            complete=_scripted(replies),
+            max_steps=30,
+        )
+    )
     assert res.stop_reason == "looping"
     assert res.steps < 30
 
@@ -333,15 +412,22 @@ def test_consecutive_green_build_ships():
     as looping — the ship-green-on-repeat rescue finishes it (don't loop forever on
     a working app)."""
     replies = ['<omnia:action name="build"></omnia:action>']
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_ok_executor([]), complete=_scripted(replies), max_steps=30,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor([]),
+            complete=_scripted(replies),
+            max_steps=30,
+        )
+    )
     assert res.stop_reason == "done_on_green"
     assert res.steps < 30
 
 
 # ── vision tool: see ─────────────────────────────────────────────────────────
+
 
 def test_parse_see_action():
     a = ab.parse_action('look\n<omnia:action name="see">{"path":"/dashboard"}</omnia:action>')
@@ -359,9 +445,11 @@ def test_see_loop_fixes_then_done():
         if action.name == "build":
             return {"ok": True, "detail": "typecheck clean"}
         if action.name == "see":
-            return ({"ok": True, "detail": "verdict: generic (4/10)\n- hero too small"}
-                    if state["ugly"]
-                    else {"ok": True, "detail": "verdict: beautiful (9/10)\n(no concrete issues)"})
+            return (
+                {"ok": True, "detail": "verdict: generic (4/10)\n- hero too small"}
+                if state["ugly"]
+                else {"ok": True, "detail": "verdict: beautiful (9/10)\n(no concrete issues)"}
+            )
         if action.name == "edit_file":
             state["ugly"] = False
             return {"ok": True, "content": action.args.get("replace", "x")}
@@ -371,29 +459,41 @@ def test_see_loop_fixes_then_done():
         '<omnia:action name="write_file">{"path":"src/app/page.tsx","content":"v1"}</omnia:action>',
         '<omnia:action name="build"></omnia:action>',
         '<omnia:action name="see">{"path":"/"}</omnia:action>',
-        '<omnia:action name="edit_file">{"path":"src/app/page.tsx","search":"v1","replace":"v2"}</omnia:action>',
+        '<omnia:action name="edit_file">{"path":"src/app/page.tsx","search":"v1",'
+        '"replace":"v2"}</omnia:action>',
         '<omnia:action name="see">{"path":"/"}</omnia:action>',
         '<omnia:action name="done">{"summary":"made it pretty"}</omnia:action>',
     ]
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_exec, complete=_scripted(replies), max_steps=20,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_exec,
+            complete=_scripted(replies),
+            max_steps=20,
+        )
+    )
     assert res.done is True and res.stop_reason == "done"
     assert sum(1 for n, _ in record if n == "see") == 2  # ran twice, no false abort
 
 
 # ── green-gate: require_green_before_done ────────────────────────────────────
 
+
 def test_green_gate_off_by_default_allows_immediate_done():
     """Default (flag off): a `done` is honoured immediately — current behaviour,
     byte-identical to pre-Phase-2."""
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_ok_executor([]),
-        complete=_scripted(['<omnia:action name="done">{"summary":"x"}</omnia:action>']),
-        max_steps=8,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor([]),
+            complete=_scripted(['<omnia:action name="done">{"summary":"x"}</omnia:action>']),
+            max_steps=8,
+        )
+    )
     assert res.done is True and res.stop_reason == "done" and res.steps == 1
 
 
@@ -407,11 +507,17 @@ def test_green_gate_honors_done_when_verified():
         '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
         '<omnia:action name="done">{"summary":"verified"}</omnia:action>',
     ]
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_ok_executor(record), complete=_scripted(replies), max_steps=12,
-        require_green_before_done=True,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor(record),
+            complete=_scripted(replies),
+            max_steps=12,
+            require_green_before_done=True,
+        )
+    )
     assert res.done is True and res.stop_reason == "done"
     assert ("build", "") in record and ("runtime_check", "/") in record
     assert res.steps == 4
@@ -427,11 +533,17 @@ def test_green_gate_rejects_premature_done():
         '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
         '<omnia:action name="done">{"summary":"now verified"}</omnia:action>',
     ]
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_ok_executor(record), complete=_scripted(replies), max_steps=12,
-        require_green_before_done=True,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor(record),
+            complete=_scripted(replies),
+            max_steps=12,
+            require_green_before_done=True,
+        )
+    )
     # The step-0 `done` was rejected (else it would have ended at steps==1).
     assert res.done is True and res.steps == 4
     assert ("build", "") in record and ("runtime_check", "/") in record
@@ -441,16 +553,23 @@ def test_green_gate_cap_prevents_hang():
     """flag on but the app is never verifiable: after _DONE_REJECT_CAP rejections
     the `done` is honoured anyway (fail-soft — the server gate is the backstop)."""
     replies = ['<omnia:action name="done">{"summary":"insist"}</omnia:action>']
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_ok_executor([]), complete=_scripted(replies), max_steps=12,
-        require_green_before_done=True,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor([]),
+            complete=_scripted(replies),
+            max_steps=12,
+            require_green_before_done=True,
+        )
+    )
     assert res.done is True and res.stop_reason == "done"
     assert res.steps == ab._DONE_REJECT_CAP + 1  # rejected CAP times, then honoured
 
 
 # ── K1 knowledge layer: skills injection ─────────────────────────────────────
+
 
 def test_build_system_prompt_without_skills_is_unchanged():
     p = ab.build_system_prompt("STACK GUIDE")
@@ -480,6 +599,7 @@ def test_load_stack_skills_absent_or_none_is_none():
 
 
 # ── agentic builder canary gate ──────────────────────────────────────────────
+
 
 def test_agentic_global_on_enables_everyone():
     assert ab.is_agentic_enabled(True, "", "u1") is True
@@ -514,10 +634,16 @@ def test_green_explore_stall_nudges_done_not_write():
         '<omnia:action name="bash">{"cmd":"echo hi"}</omnia:action>',
         '<omnia:action name="done">{"summary":"crm built"}</omnia:action>',
     ]
-    res = asyncio.run(ab.run_agent_build(
-        system_prompt="s", user_prompt="x", model="m",
-        execute=_ok_executor(record), complete=_scripted(replies), max_steps=20,
-    ))
+    res = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=_ok_executor(record),
+            complete=_scripted(replies),
+            max_steps=20,
+        )
+    )
     assert res.done is True and res.stop_reason == "done"
     # the GREEN done-nudge was issued (not the write nudge)
     user_msgs = [m["content"] for m in res.transcript if m["role"] == "user"]
@@ -560,6 +686,7 @@ def test_css_import_non_css_untouched() -> None:
 if __name__ == "__main__":
     # Allow `python tests/test_agent_builder.py` without pytest.
     import sys
+
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
     for fn in fns:
@@ -569,7 +696,7 @@ if __name__ == "__main__":
         except AssertionError as e:
             failed += 1
             print(f"FAIL {fn.__name__}: {e}")
-        except Exception as e:  # noqa
+        except Exception as e:
             failed += 1
             print(f"ERROR {fn.__name__}: {type(e).__name__}: {e}")
     print(f"\n{len(fns) - failed}/{len(fns)} passed")

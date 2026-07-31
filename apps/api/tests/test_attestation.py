@@ -51,7 +51,10 @@ def test_all_gates_pass_is_proven() -> None:
 def test_one_gate_fails_blocks_overall() -> None:
     att = _att(
         [
-            ("isolation", _Verdict(False, [_Check("anon-leak", False, "collection served to anon")])),
+            (
+                "isolation",
+                _Verdict(False, [_Check("anon-leak", False, "collection served to anon")]),
+            ),
             ("security", _Verdict(True, [_Check("nosniff", True)])),
         ]
     )

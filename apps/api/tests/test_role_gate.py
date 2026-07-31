@@ -45,7 +45,7 @@ def test_matrix_passes_only_when_all_cells_pass() -> None:
     ]
     assert evaluate_matrix(results).passed is True
 
-    leaky = results + [(_exp("parent", "write", "deny"), 200)]  # a leak
+    leaky = [*results, (_exp("parent", "write", "deny"), 200)]  # a leak
     verdict = evaluate_matrix(leaky)
     assert verdict.passed is False
     assert "parent write Grade" in verdict.summary

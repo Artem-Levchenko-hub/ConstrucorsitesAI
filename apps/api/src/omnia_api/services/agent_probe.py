@@ -80,20 +80,25 @@ async def run_probe(
                 await page.goto(f"{base}/signin", wait_until="domcontentloaded")
                 # Register (idempotent: 409 = already exists) then log in.
                 await fg._api(
-                    page, "POST", "/api/auth/register",
+                    page,
+                    "POST",
+                    "/api/auth/register",
                     {"email": _PROBE_EMAIL, "password": _PROBE_PASSWORD},
                 )
                 try:
                     await fg._login(page, base, _PROBE_EMAIL, _PROBE_PASSWORD)
-                except Exception as exc:  # noqa: BLE001 — login is itself a finding
+                except Exception as exc:
                     return {
                         "ok": False,
-                        "error": f"probe: could not log in as the test user ({type(exc).__name__}: {exc})",
+                        "error": (
+                            "probe: could not log in as the test user "
+                            f"({type(exc).__name__}: {exc})"
+                        ),
                     }
                 res = await fg._api(page, m, path, body)
             finally:
                 await browser.close()
-    except Exception as exc:  # noqa: BLE001 — a probe error must not kill the loop
+    except Exception as exc:
         return {"ok": False, "error": f"probe failed: {type(exc).__name__}: {exc}"}
 
     status = int(res.get("status", 0))
@@ -108,7 +113,11 @@ async def run_probe(
         "detail": (
             f"probe {m} {path} -> HTTP {status} ({verdict})\n"
             f"response: {rendered}"
-            + ("" if ok else "\nThis is the REAL user-facing result — fix until this request is 2xx.")
+            + (
+                ""
+                if ok
+                else "\nThis is the REAL user-facing result — fix until this request is 2xx."
+            )
         ),
     }
 

@@ -23,8 +23,17 @@ import re
 
 # Common entry-point filenames, most-likely first.
 _PY_ENTRY_NAMES = (
-    "main.py", "app.py", "run.py", "game.py", "snake.py", "__main__.py",
-    "bot.py", "cli.py", "start.py", "server.py", "manage.py",
+    "main.py",
+    "app.py",
+    "run.py",
+    "game.py",
+    "snake.py",
+    "__main__.py",
+    "bot.py",
+    "cli.py",
+    "start.py",
+    "server.py",
+    "manage.py",
 )
 
 # A real run guard — not just the bare word in a comment/docstring.
@@ -37,9 +46,15 @@ _BUILDER_SIGNALS = re.compile(
 )
 
 # Filenames that are tooling even with an __main__ guard — never the run target.
-_PY_TOOLING_NAMES = frozenset({
-    "setup.py", "conftest.py", "noxfile.py", "tasks.py", "fabfile.py",
-})
+_PY_TOOLING_NAMES = frozenset(
+    {
+        "setup.py",
+        "conftest.py",
+        "noxfile.py",
+        "tasks.py",
+        "fabfile.py",
+    }
+)
 _PY_TOOLING_DIRS = frozenset({"tests", "test", "build", "dist", "scripts", "__pycache__"})
 
 

@@ -15,7 +15,6 @@ import pytest
 
 from omnia_api.services import director_polish
 
-
 # ─── Test helpers ───────────────────────────────────────────────────────
 
 

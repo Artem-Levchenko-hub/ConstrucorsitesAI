@@ -35,7 +35,7 @@ from omnia_api.sections.palettes import CuratedPalette
 
 log = logging.getLogger(__name__)
 
-__all__ = ["enforce_palette", "repair_html", "BANNED_HEXES"]
+__all__ = ["BANNED_HEXES", "enforce_palette", "repair_html"]
 
 # Training-default colours that scream "generic AI landing". Lowercased, 6-digit.
 # Mapped wholesale to the curated PRIMARY — the page's dominant brand colour.
@@ -286,7 +286,7 @@ def enforce_palette(
             continue
         try:
             new_content, changed = repair_html(content, palette)
-        except Exception as exc:  # noqa: BLE001 — a guard must never break the build
+        except Exception as exc:
             log.warning("palette_guard: skipped %s (%r)", path, exc)
             continue
         if changed:

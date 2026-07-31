@@ -137,20 +137,38 @@ def _full_page_payload() -> dict:
                 "type_variant": "pricing.v1",
                 "headline": "Pricing tiers",
                 "tiers": [
-                    {"name": "Free", "price": "0", "features": ["a", "b"],
-                     "cta": {"label": "Go", "href": "#"}},
-                    {"name": "Pro", "price": "990", "features": ["a", "b", "c"],
-                     "cta": {"label": "Buy", "href": "#"}, "featured": True},
+                    {
+                        "name": "Free",
+                        "price": "0",
+                        "features": ["a", "b"],
+                        "cta": {"label": "Go", "href": "#"},
+                    },
+                    {
+                        "name": "Pro",
+                        "price": "990",
+                        "features": ["a", "b", "c"],
+                        "cta": {"label": "Buy", "href": "#"},
+                        "featured": True,
+                    },
                 ],
             },
             {
                 "type_variant": "pricing.v2",
                 "headline": "Compare plans",
                 "tiers": [
-                    {"name": "Free", "price": "0", "features": ["a", "b"],
-                     "cta": {"label": "Go", "href": "#"}},
-                    {"name": "Pro", "price": "99", "features": ["a", "b", "c"],
-                     "cta": {"label": "Buy", "href": "#"}, "featured": True},
+                    {
+                        "name": "Free",
+                        "price": "0",
+                        "features": ["a", "b"],
+                        "cta": {"label": "Go", "href": "#"},
+                    },
+                    {
+                        "name": "Pro",
+                        "price": "99",
+                        "features": ["a", "b", "c"],
+                        "cta": {"label": "Buy", "href": "#"},
+                        "featured": True,
+                    },
                 ],
             },
             {
@@ -182,8 +200,7 @@ def _full_page_payload() -> dict:
             {
                 "type_variant": "footer.v1",
                 "brand": "Acme",
-                "columns": [{"heading": "Product",
-                             "links": [{"label": "Home", "href": "#"}]}],
+                "columns": [{"heading": "Product", "links": [{"label": "Home", "href": "#"}]}],
                 "copyright": "2026 Acme",
             },
         ],
@@ -211,7 +228,13 @@ def test_render_is_deterministic() -> None:
 def test_unknown_variant_rejected() -> None:
     payload = {
         "meta": {"title": "Test", "description": "Description for test page here"},
-        "sections": [{"type_variant": "hero.v99", "headline": "x", "primary_cta": {"label": "x", "href": "#"}}],
+        "sections": [
+            {
+                "type_variant": "hero.v99",
+                "headline": "x",
+                "primary_cta": {"label": "x", "href": "#"},
+            }
+        ],
     }
     with pytest.raises(ValidationError):
         PageIR.model_validate(payload)
@@ -221,8 +244,11 @@ def test_too_short_headline_rejected() -> None:
     payload = {
         "meta": {"title": "Test", "description": "Description for test page here"},
         "sections": [
-            {"type_variant": "hero.v1", "headline": "Hi",
-             "primary_cta": {"label": "Go", "href": "#"}},
+            {
+                "type_variant": "hero.v1",
+                "headline": "Hi",
+                "primary_cta": {"label": "Go", "href": "#"},
+            },
         ],
     }
     with pytest.raises(ValidationError):
@@ -233,9 +259,12 @@ def test_extra_field_forbidden() -> None:
     payload = {
         "meta": {"title": "Test", "description": "Description for test page here"},
         "sections": [
-            {"type_variant": "hero.v1", "headline": "Hello world",
-             "primary_cta": {"label": "Go", "href": "#"},
-             "rogue_field": "should-fail"},
+            {
+                "type_variant": "hero.v1",
+                "headline": "Hello world",
+                "primary_cta": {"label": "Go", "href": "#"},
+                "rogue_field": "should-fail",
+            },
         ],
     }
     with pytest.raises(ValidationError):

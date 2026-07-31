@@ -77,7 +77,7 @@ async def generate_clarify_questions(prompt: str, language: str = "ru") -> str:
         body = resp.json()
         text = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
         return (text or "").strip() or _DEFAULT
-    except Exception as exc:  # noqa: BLE001 — clarify must never break the flow
+    except Exception as exc:
         log.warning("clarify: gateway error (using default): %r", exc)
         return _DEFAULT
 

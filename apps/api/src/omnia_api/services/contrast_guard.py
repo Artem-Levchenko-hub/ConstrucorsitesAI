@@ -95,7 +95,7 @@ def _to_hex(token: str) -> str | None:
     m = _RGB_RE.match(t)
     if m:
         try:
-            r, g, b = (max(0, min(255, int(round(float(x))))) for x in m.groups())
+            r, g, b = (max(0, min(255, round(float(x)))) for x in m.groups())
             return f"#{r:02x}{g:02x}{b:02x}"
         except (ValueError, TypeError):
             return None
@@ -242,7 +242,7 @@ def enforce_contrast(files: dict[str, str]) -> dict[str, str]:
             continue
         try:
             new_content, changed = repair_html(content)
-        except Exception as exc:  # noqa: BLE001 — a guard must never break the build
+        except Exception as exc:
             log.warning("contrast_guard: skipped %s (%r)", path, exc)
             continue
         if changed:

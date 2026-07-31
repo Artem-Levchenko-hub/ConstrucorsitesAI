@@ -66,7 +66,7 @@ async def maybe_autoheal_on_open(project_id: UUID, slug: str) -> dict[str, Any]:
         )
         if not acquired:
             return {"healed": False, "reason": "debounced"}
-    except Exception as exc:  # noqa: BLE001 — a redis hiccup must not block open
+    except Exception as exc:
         log.info("autoheal.redis_skip", project_id=str(project_id), err=str(exc))
         # Fail-open on the debounce would risk a storm; fail-CLOSED (skip) is safer.
         return {"healed": False, "reason": "no-debounce-guard"}
@@ -74,7 +74,7 @@ async def maybe_autoheal_on_open(project_id: UUID, slug: str) -> dict[str, Any]:
     # Only heal a genuinely broken build.
     try:
         status = await orchestrator_client.compile_status(project_id, slug=slug)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"healed": False, "reason": f"status-error: {type(exc).__name__}"}
     if status.get("ok", True):
         return {"healed": False, "reason": "build-clean"}
@@ -95,7 +95,7 @@ async def maybe_autoheal_on_open(project_id: UUID, slug: str) -> dict[str, Any]:
             user_id=None,
             project_id=str(project_id),
         )
-    except Exception as exc:  # noqa: BLE001 — repair must never break open
+    except Exception as exc:
         log.warning("autoheal.failed", project_id=str(project_id), err=str(exc))
         return {"healed": False, "reason": f"repair-error: {type(exc).__name__}"}
 
@@ -104,7 +104,7 @@ async def maybe_autoheal_on_open(project_id: UUID, slug: str) -> dict[str, Any]:
     try:
         check = await orchestrator_client.compile_status(project_id, slug=slug)
         healed = bool(check.get("ok", False))
-    except Exception:  # noqa: BLE001
+    except Exception:
         healed = False
     log.info(
         "autoheal.done", project_id=str(project_id), healed=healed,
