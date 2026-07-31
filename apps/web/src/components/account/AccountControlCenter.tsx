@@ -26,6 +26,7 @@ import {
   deleteAccount,
   exportAccount,
   getSubscription,
+  manageSubscription,
   getPaymentConfig,
   listBillingPlans,
   listPayments,
@@ -63,6 +64,7 @@ export function AccountControlCenter({
   const router = useRouter();
   const queryClient = useQueryClient();
   const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [autoRenewConsent, setAutoRenewConsent] = useState(false);
   const sessions = useQuery({ queryKey: ["auth-sessions"], queryFn: listSessions });
   const payments = useQuery({ queryKey: ["payments"], queryFn: listPayments });
   const paymentConfig = useQuery({
@@ -91,13 +93,29 @@ export function AccountControlCenter({
       }),
   });
   const subscribe = useMutation({
-    mutationFn: createSubscriptionCheckout,
+    mutationFn: (planCode: "pro" | "business") =>
+      createSubscriptionCheckout(planCode, autoRenewConsent),
     onSuccess: (payment) => {
       queryClient.invalidateQueries({ queryKey: ["payments"] });
       if (payment.confirmation_url) window.location.assign(payment.confirmation_url);
     },
     onError: (error) =>
       toast.error("Не удалось начать покупку тарифа", {
+        description: error instanceof Error ? error.message : "Попробуйте позже",
+      }),
+  });
+  const managePlan = useMutation({
+    mutationFn: manageSubscription,
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["billing-subscription"], updated);
+      toast.success(
+        updated.cancel_at_period_end
+          ? "Автопродление отменено"
+          : "Автопродление восстановлено",
+      );
+    },
+    onError: (error) =>
+      toast.error("Не удалось изменить подписку", {
         description: error instanceof Error ? error.message : "Попробуйте позже",
       }),
   });
@@ -180,10 +198,73 @@ export function AccountControlCenter({
             </div>
             {subscription.data && (
               <span className="rounded-full bg-success/10 px-3 py-1 text-xs font-medium text-success">
-                {subscription.data.auto_renew ? "Продлевается" : "Без автопродления"}
+                {subscription.data.cancel_at_period_end
+                  ? "Отменится в конце периода"
+                  : subscription.data.auto_renew
+                    ? "Продлевается"
+                    : "Без автопродления"}
               </span>
             )}
           </div>
+
+          {subscription.data?.status === "past_due" && (
+            <p className="mt-5 rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">
+              Продление не прошло. Доступ сохранён до{" "}
+              {subscription.data.grace_period_ends_at
+                ? new Date(subscription.data.grace_period_ends_at).toLocaleDateString("ru-RU")
+                : "окончания льготного периода"}
+              , затем тариф безопасно перейдёт на Free.
+            </p>
+          )}
+
+          {subscription.data?.plan.code !== "free" && (
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              {subscription.data?.auto_renew && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11"
+                  disabled={managePlan.isPending}
+                  onClick={() => managePlan.mutate("cancel")}
+                >
+                  Отменить автопродление
+                </Button>
+              )}
+              {subscription.data?.can_restore && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11"
+                  disabled={managePlan.isPending}
+                  onClick={() => managePlan.mutate("restore")}
+                >
+                  Согласен и восстановить автопродление
+                </Button>
+              )}
+              {subscription.data?.next_charge_at && (
+                <span className="text-xs text-fg-tertiary">
+                  Следующее списание:{" "}
+                  {new Date(subscription.data.next_charge_at).toLocaleDateString("ru-RU")}
+                </span>
+              )}
+            </div>
+          )}
+
+          <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-[10px] border border-[#d8d4cb] bg-white p-4 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 accent-[#f15a38]"
+              checked={autoRenewConsent}
+              onChange={(event) => setAutoRenewConsent(event.target.checked)}
+            />
+            <span>
+              <span className="block font-medium">Включить автопродление при покупке</span>
+              <span className="mt-1 block text-xs leading-5 text-fg-tertiary">
+                Разрешаю ежемесячное списание стоимости тарифа с сохранённого
+                способа оплаты. Согласие можно отозвать здесь в любой момент.
+              </span>
+            </span>
+          </label>
 
           <div className="mt-6 grid gap-3 lg:grid-cols-3">
             {(plans.data ?? []).map((plan) => {

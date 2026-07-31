@@ -511,6 +511,9 @@ export type ApiErrorCode =
   | "subscription_already_active"
   | "subscription_checkout_in_progress"
   | "subscription_plan_not_purchasable"
+  | "subscription_consent_required"
+  | "subscription_management_unavailable"
+  | "subscription_entitlement_required"
   | "refund_unavailable"
   | "refund_balance_used";
 

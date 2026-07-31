@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     yookassa_secret_key: SecretStr | None = Field(default=None)
     yookassa_api_url: str = Field(default="https://api.yookassa.ru/v3")
     yookassa_vat_code: int = Field(default=1)
+    billing_lifecycle_poll_seconds: int = Field(default=60, ge=10)
+    billing_renewal_retry_hours: int = Field(default=12, ge=1)
+    billing_grace_days: int = Field(default=3, ge=1)
 
     # OAuth applications for customer-owned business integrations. When a
     # provider pair is absent, Integration Hub keeps the verified credential

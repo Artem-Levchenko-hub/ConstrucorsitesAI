@@ -58,6 +58,7 @@ async def create_payment(
     customer_email: str,
     idempotency_key: str,
     metadata: dict[str, str],
+    save_payment_method: bool = False,
 ) -> dict[str, Any]:
     settings = get_settings()
     return await _request(
@@ -67,7 +68,46 @@ async def create_payment(
         json={
             "amount": {"value": amount, "currency": "RUB"},
             "capture": True,
+            "save_payment_method": save_payment_method,
             "confirmation": {"type": "redirect", "return_url": return_url},
+            "description": description[:128],
+            "metadata": metadata,
+            "receipt": {
+                "customer": {"email": customer_email},
+                "items": [
+                    {
+                        "description": description[:128],
+                        "quantity": "1.00",
+                        "amount": {"value": amount, "currency": "RUB"},
+                        "vat_code": settings.yookassa_vat_code,
+                        "payment_mode": "full_payment",
+                        "payment_subject": "service",
+                    }
+                ],
+            },
+        },
+    )
+
+
+async def create_recurring_payment(
+    *,
+    amount: str,
+    description: str,
+    customer_email: str,
+    payment_method_id: str,
+    idempotency_key: str,
+    metadata: dict[str, str],
+) -> dict[str, Any]:
+    """Charge a provider-saved method without handling raw card data."""
+    settings = get_settings()
+    return await _request(
+        "POST",
+        "/payments",
+        idempotency_key=idempotency_key,
+        json={
+            "amount": {"value": amount, "currency": "RUB"},
+            "capture": True,
+            "payment_method_id": payment_method_id,
             "description": description[:128],
             "metadata": metadata,
             "receipt": {

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from calendar import monthrange
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -26,6 +25,7 @@ from omnia_api.schemas.payments import (
 )
 from omnia_api.services import yookassa
 from omnia_api.services.billing_accounts import resolve_billing_account
+from omnia_api.services.subscription_lifecycle import apply_subscription_provider_state
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
@@ -56,13 +56,6 @@ def _is_admin(user: User) -> bool:
     return is_admin_user(user)
 
 
-def _one_month_after(value: datetime) -> datetime:
-    year = value.year + (1 if value.month == 12 else 0)
-    month = 1 if value.month == 12 else value.month + 1
-    day = min(value.day, monthrange(year, month)[1])
-    return value.replace(year=year, month=month, day=day)
-
-
 async def _cancel_pending_subscription(
     session: SessionDep,
     payment: Payment,
@@ -85,6 +78,7 @@ async def _send_to_provider(
     current_user: User,
     title: str,
     return_path: str,
+    save_payment_method: bool = False,
 ) -> Payment:
     assert current_user.email is not None
     settings = get_settings()
@@ -101,6 +95,7 @@ async def _send_to_provider(
                 "user_id": str(current_user.id),
                 "purpose": payment.purpose,
             },
+            save_payment_method=save_payment_method,
         )
     except yookassa.YooKassaUnavailable as exc:
         payment.status = "failed"
@@ -247,6 +242,13 @@ async def create_subscription_checkout(
             "Подтвердите email перед оплатой",
             status.HTTP_403_FORBIDDEN,
         )
+    settings = get_settings()
+    if payload.auto_renew and payload.consent_version != settings.legal_document_version:
+        raise ApiError(
+            "subscription_consent_required",
+            "Подтвердите актуальные условия автопродления",
+            status.HTTP_409_CONFLICT,
+        )
     account = await resolve_billing_account(session, current_user.id)
     key = str(payload.idempotency_key)
     existing = (
@@ -314,7 +316,9 @@ async def create_subscription_checkout(
         user_id=current_user.id,
         plan_id=plan.id,
         status="pending_payment",
-        auto_renew=False,
+        auto_renew=payload.auto_renew,
+        renewal_consent_version=payload.consent_version if payload.auto_renew else None,
+        renewal_consented_at=datetime.now(UTC) if payload.auto_renew else None,
     )
     session.add(subscription)
     await session.flush()
@@ -346,95 +350,8 @@ async def create_subscription_checkout(
         current_user=current_user,
         title=f"Подписка Omnia {plan.name}, 1 месяц",
         return_path=f"/billing/plan?payment={payment.id}",
+        save_payment_method=payload.auto_renew,
     )
-
-
-async def _activate_subscription_payment(
-    session: SessionDep,
-    payment: Payment,
-) -> None:
-    if payment.subscription_id is None:
-        raise ApiError(
-            "invalid_webhook",
-            "subscription payment is not linked",
-            status.HTTP_400_BAD_REQUEST,
-        )
-    subscription = (
-        await session.execute(
-            select(Subscription)
-            .where(Subscription.id == payment.subscription_id)
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if (
-        subscription is None
-        or subscription.billing_account_id != payment.billing_account_id
-        or subscription.status != "pending_payment"
-    ):
-        raise ApiError(
-            "invalid_webhook",
-            "subscription is not awaiting payment",
-            status.HTTP_409_CONFLICT,
-        )
-    plan = await session.get(BillingPlan, subscription.plan_id)
-    if plan is None or plan.price_rub != payment.amount_rub:
-        raise ApiError(
-            "invalid_webhook",
-            "subscription plan mismatch",
-            status.HTTP_400_BAD_REQUEST,
-        )
-
-    live_subscriptions = list(
-        (
-            await session.execute(
-                select(Subscription)
-                .where(
-                    Subscription.billing_account_id == payment.billing_account_id,
-                    Subscription.id != subscription.id,
-                    Subscription.status.in_(("trialing", "active", "past_due", "paused")),
-                )
-                .with_for_update()
-            )
-        ).scalars()
-    )
-    now = datetime.now(UTC)
-    for live in live_subscriptions:
-        live.status = "expired"
-        live.auto_renew = False
-        live.cancel_at_period_end = False
-        live.next_charge_at = None
-        live.ended_at = now
-    await session.flush()
-
-    subscription.status = "active"
-    subscription.current_period_start = now
-    subscription.current_period_end = _one_month_after(now)
-    subscription.next_charge_at = None
-    subscription.grace_period_ends_at = None
-    subscription.canceled_at = None
-    subscription.ended_at = None
-
-    wallet = (
-        await session.execute(
-            select(Wallet)
-            .where(Wallet.billing_account_id == payment.billing_account_id)
-            .with_for_update()
-        )
-    ).scalar_one()
-    if payment.credit_rub > 0:
-        wallet.balance_rub += payment.credit_rub
-        session.add(
-            WalletCharge(
-                billing_account_id=payment.billing_account_id,
-                user_id=payment.user_id,
-                subscription_id=subscription.id,
-                entry_type="subscription_credit",
-                amount_rub=payment.credit_rub,
-                balance_after_rub=wallet.balance_rub,
-                external_ref=f"subscription-credit:{payment.id}",
-                description=f"Кредит тарифа {plan.name} v{plan.version}",
-            )
-        )
 
 
 async def _apply_provider_state(
@@ -442,6 +359,15 @@ async def _apply_provider_state(
     payment: Payment,
     provider: dict[str, object],
 ) -> None:
+    if payment.purpose in {"subscription_initial", "subscription_renewal"}:
+        provider_status = await apply_subscription_provider_state(
+            session,
+            payment,
+            provider,
+        )
+        if provider_status in {"cancelled", "failed"}:
+            await _cancel_pending_subscription(session, payment)
+        return
     provider_status = _provider_status(provider.get("status"))
     amount = provider.get("amount")
     if not isinstance(amount, dict):
@@ -451,9 +377,7 @@ async def _apply_provider_state(
 
     payment.provider_payload = provider
     if provider_status == "succeeded" and payment.status != "succeeded":
-        if payment.purpose == "subscription_initial":
-            await _activate_subscription_payment(session, payment)
-        elif payment.purpose == "wallet_topup":
+        if payment.purpose == "wallet_topup":
             wallet = (
                 await session.execute(
                     select(Wallet)
@@ -472,12 +396,6 @@ async def _apply_provider_state(
                     external_ref=f"payment:{payment.id}",
                     description=f"Пополнение через ЮKassa ({payment.package_code})",
                 )
-            )
-        else:
-            raise ApiError(
-                "invalid_webhook",
-                "unsupported payment purpose",
-                status.HTTP_400_BAD_REQUEST,
             )
         payment.status = "succeeded"
         payment.paid_at = datetime.now(UTC)

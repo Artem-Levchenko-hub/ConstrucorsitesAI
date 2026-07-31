@@ -29,7 +29,9 @@ from omnia_api.core.config import get_settings
 from omnia_api.core.crypto import decrypt_strong
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.models.account import BusinessMember
 from omnia_api.models.attestation import Attestation
+from omnia_api.models.billing import BillingAccount, BillingPlan, Subscription
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.max_integration import MaxIntegration
@@ -47,6 +49,7 @@ from omnia_api.schemas.runtime import (
 from omnia_api.services import autoheal as autoheal_svc
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.billing_accounts import resolve_billing_account
 
 log = structlog.get_logger(__name__)
 
@@ -68,6 +71,49 @@ async def _project_owned_by(session: AsyncSession, project_id: UUID, user_id: UU
     if project is None or project.owner_id != user_id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     return project
+
+
+async def _billing_plan_for_user(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    for_update_account: bool = False,
+) -> tuple[BillingAccount, BillingPlan]:
+    account = await resolve_billing_account(
+        session,
+        user_id,
+        for_update=for_update_account,
+    )
+    plan = (
+        await session.execute(
+            select(BillingPlan)
+            .join(Subscription, Subscription.plan_id == BillingPlan.id)
+            .where(
+                Subscription.billing_account_id == account.id,
+                Subscription.status.in_(("trialing", "active", "past_due", "paused")),
+            )
+        )
+    ).scalar_one()
+    return account, plan
+
+
+async def _billing_account_user_ids(
+    session: AsyncSession,
+    account: BillingAccount,
+) -> list[UUID]:
+    if account.personal_user_id is not None:
+        return [account.personal_user_id]
+    if account.business_id is None:
+        return []
+    return list(
+        (
+            await session.execute(
+                select(BusinessMember.user_id).where(
+                    BusinessMember.business_id == account.business_id
+                )
+            )
+        ).scalars()
+    )
 
 
 def _to_runtime_status(payload: dict[str, Any]) -> RuntimeStatus:
@@ -107,8 +153,16 @@ def _to_deploy_status(payload: dict[str, Any]) -> DeployStatus:
 async def get_runtime(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> RuntimeStatus:
-    await _project_owned_by(session, project_id, current_user.id)
+    project = await _project_owned_by(session, project_id, current_user.id)
     payload = await orchestrator_client.get_status(project_id)
+    if not project.keep_alive_enabled and payload.get("keep_alive"):
+        # Postgres is canonical. This also heals a stale orchestrator marker
+        # after a downgrade or an interrupted disable request.
+        try:
+            await orchestrator_client.set_keep_alive(project_id, enabled=False)
+        except Exception:
+            log.warning("runtime.keep_alive_reconcile_failed", project_id=str(project_id))
+        payload["keep_alive"] = False
     return _to_runtime_status(payload)
 
 
@@ -124,6 +178,7 @@ async def start_runtime(
     layer, so a sleeping preview self-revives on the first visitor hit.)
     """
     project = await _project_owned_by(session, project_id, current_user.id)
+    _, plan = await _billing_plan_for_user(session, current_user.id)
     # Map api-side `template` to the orchestrator's actual template dir.
     # Static V1 templates (blank/landing/portfolio/blog) have no orchestrator
     # image — they ship as plain HTML via /p/<slug>. We default those to
@@ -134,7 +189,7 @@ async def start_runtime(
         project_id=project_id,
         slug=project.slug,
         template=orch_template,
-        tier="free",
+        tier=plan.code if plan.code in {"free", "pro", "business"} else "free",
     )
 
     # E3 — "always works, never the silent starter". provision is idempotent and
@@ -275,16 +330,49 @@ async def set_runtime_keep_alive(
     current_user: CurrentUserDep,
 ) -> RuntimeStatus:
     """Keep the dev runtime hot across inactivity and orchestrator restarts."""
-    await _project_owned_by(session, project_id, current_user.id)
+    project = await _project_owned_by(session, project_id, current_user.id)
     if body.enabled:
+        account, plan = await _billing_plan_for_user(
+            session,
+            current_user.id,
+            for_update_account=True,
+        )
+        configured_slots = plan.entitlements.get("always_on_slots")
+        always_on_slots = configured_slots if isinstance(configured_slots, int) else 0
+        if always_on_slots < 1:
+            raise ApiError(
+                "subscription_entitlement_required",
+                "Постоянно запущенный runtime доступен на тарифе Business",
+                status.HTTP_402_PAYMENT_REQUIRED,
+            )
+        account_user_ids = await _billing_account_user_ids(session, account)
+        active_slots = (
+            await session.execute(
+                select(Project.id).where(
+                    Project.owner_id.in_(account_user_ids),
+                    Project.keep_alive_enabled.is_(True),
+                    Project.id != project_id,
+                )
+            )
+        ).scalars().all()
+        if len(active_slots) >= always_on_slots:
+            raise ApiError(
+                "subscription_entitlement_required",
+                "Все постоянные runtime-слоты тарифа уже заняты",
+                status.HTTP_409_CONFLICT,
+            )
         # Provision or wake first. Only persist the promise after a successful
         # start, so the UI never says "always running" for a runtime that could
         # not be created.
         runtime = await start_runtime(project_id, session, current_user)
         await orchestrator_client.set_keep_alive(project_id, enabled=True)
+        project.keep_alive_enabled = True
+        await session.commit()
         return runtime.model_copy(update={"keep_alive": True, "hibernate_after_seconds": None})
 
     await orchestrator_client.set_keep_alive(project_id, enabled=False)
+    project.keep_alive_enabled = False
+    await session.commit()
     payload = await orchestrator_client.get_status(project_id)
     return _to_runtime_status(payload)
 

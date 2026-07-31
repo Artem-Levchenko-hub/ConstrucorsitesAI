@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -29,7 +30,14 @@ class SubscriptionPublic(BaseModel):
     current_period_end: datetime | None
     next_charge_at: datetime | None
     grace_period_ends_at: datetime | None
+    renewal_consent_version: str | None
+    can_restore: bool
     canceled_at: datetime | None
     ended_at: datetime | None
     created_at: datetime
     plan: BillingPlanPublic
+
+
+class SubscriptionAction(BaseModel):
+    action: Literal["cancel", "restore"]
+    consent_version: str | None = None

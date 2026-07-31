@@ -175,6 +175,22 @@ async def export_account_data(
                     if subscription.current_period_end
                     else None
                 ),
+                "next_charge_at": (
+                    subscription.next_charge_at.isoformat()
+                    if subscription.next_charge_at
+                    else None
+                ),
+                "grace_period_ends_at": (
+                    subscription.grace_period_ends_at.isoformat()
+                    if subscription.grace_period_ends_at
+                    else None
+                ),
+                "renewal_consent_version": subscription.renewal_consent_version,
+                "renewal_consented_at": (
+                    subscription.renewal_consented_at.isoformat()
+                    if subscription.renewal_consented_at
+                    else None
+                ),
                 "created_at": subscription.created_at.isoformat(),
             }
             for subscription, plan in subscriptions

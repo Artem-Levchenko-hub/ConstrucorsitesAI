@@ -58,6 +58,12 @@ class Project(Base):
     image_gen_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true", default=True
     )
+    # Canonical entitlement state for the orchestrator keep-alive marker.
+    # Postgres ownership lets billing enforce slot limits and revoke the promise
+    # deterministically when a paid subscription ends.
+    keep_alive_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     # V4.9 — the beauty floor's verdict on this project's SHARED surface. TRUE
     # once a composition gate scored a render of it as floor-green (taste +
     # hierarchy, plus first-paint when the stranger-cold path measures it). A

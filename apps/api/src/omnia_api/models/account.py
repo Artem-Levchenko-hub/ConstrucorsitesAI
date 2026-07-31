@@ -238,4 +238,13 @@ class Payment(Base):
                 "AND status IN ('pending', 'waiting_for_capture')"
             ),
         ),
+        Index(
+            "uq_payments_subscription_pending_renewal",
+            "subscription_id",
+            unique=True,
+            postgresql_where=text(
+                "purpose = 'subscription_renewal' "
+                "AND status IN ('pending', 'waiting_for_capture')"
+            ),
+        ),
     )

@@ -136,13 +136,15 @@ export const mvpChecklist: MvpChecklistSection[] = [
         id: "renewal",
         title: "Продление и льготный период",
         detail: "Явное согласие, повторные попытки, уведомления и безопасное понижение после окончания периода.",
-        status: "todo",
+        status: "done",
+        completedAt: "31 июля 2026",
       },
       {
         id: "plan-management",
         title: "Управление подпиской",
         detail: "Текущий тариф, следующая дата, отмена, восстановление и смена плана доступны в кабинете.",
-        status: "todo",
+        status: "done",
+        completedAt: "31 июля 2026",
       },
       {
         id: "live-payment",

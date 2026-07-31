@@ -14,6 +14,8 @@ class PaymentCreate(BaseModel):
 class SubscriptionCheckoutCreate(BaseModel):
     plan_code: Literal["pro", "business"]
     idempotency_key: UUID
+    auto_renew: bool = False
+    consent_version: str | None = None
 
 
 class PaymentPublic(BaseModel):

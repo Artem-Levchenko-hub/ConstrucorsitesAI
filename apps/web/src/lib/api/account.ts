@@ -52,6 +52,8 @@ export type Subscription = {
   current_period_end: string | null;
   next_charge_at: string | null;
   grace_period_ends_at: string | null;
+  renewal_consent_version: string | null;
+  can_restore: boolean;
   canceled_at: string | null;
   ended_at: string | null;
   created_at: string;
@@ -94,12 +96,32 @@ export function getSubscription(): Promise<Subscription> {
 
 export function createSubscriptionCheckout(
   planCode: "pro" | "business",
+  autoRenew: boolean,
 ): Promise<Payment> {
   return apiFetch<Payment>("/api/payments/subscription", {
     method: "POST",
     json: {
       plan_code: planCode,
       idempotency_key: crypto.randomUUID(),
+      auto_renew: autoRenew,
+      consent_version: autoRenew
+        ? process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-07-30"
+        : null,
+    },
+  });
+}
+
+export function manageSubscription(
+  action: "cancel" | "restore",
+): Promise<Subscription> {
+  return apiFetch<Subscription>("/api/billing/subscription", {
+    method: "PATCH",
+    json: {
+      action,
+      consent_version:
+        action === "restore"
+          ? process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-07-30"
+          : null,
     },
   });
 }
