@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +22,8 @@ def _write_export(root: Path, timestamp: str, payload: bytes = b"encrypted-cms")
         f"{digest}  {export.name}\n",
         encoding="ascii",
     )
+    created_at = datetime.strptime(timestamp, "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
+    os.utime(export, (created_at.timestamp(), created_at.timestamp()))
     return export
 
 
@@ -98,3 +102,25 @@ async def test_missing_export_is_unavailable(
         await backups.offhost_backup_status()
 
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_latest_export_uses_absolute_mtime_not_timezone_affected_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    misleading = _write_export(tmp_path, "20260731-133907", b"old-local-time")
+    actual_latest = _write_export(tmp_path, "20260731-104500", b"new-utc-time")
+    old_epoch = datetime(2026, 7, 31, 10, 39, 7, tzinfo=UTC).timestamp()
+    latest_epoch = datetime(2026, 7, 31, 10, 45, tzinfo=UTC).timestamp()
+    os.utime(misleading, (old_epoch, old_epoch))
+    os.utime(actual_latest, (latest_epoch, latest_epoch))
+    monkeypatch.setattr(
+        backups,
+        "get_settings",
+        lambda: SimpleNamespace(backup_export_root=str(tmp_path)),
+    )
+
+    response = await backups.download_latest_offhost_backup()
+
+    assert Path(response.path) == actual_latest
+    assert response.headers["x-backup-created-at"] == "2026-07-31T10:45:00+00:00"

@@ -53,18 +53,23 @@ def _latest_export(root: Path) -> BackupExport:
     if not root.is_dir():
         raise HTTPException(status_code=503, detail="off-host backup is not available")
 
-    candidates: list[tuple[str, Path]] = []
+    candidates: list[tuple[int, Path]] = []
     for directory in root.iterdir():
-        if not directory.is_dir() or not _TIMESTAMP_RE.fullmatch(directory.name):
+        if (
+            directory.is_symlink()
+            or not directory.is_dir()
+            or not _TIMESTAMP_RE.fullmatch(directory.name)
+        ):
             continue
         expected = directory / f"omnia-backup-{directory.name}.cms"
-        if expected.is_file():
-            candidates.append((directory.name, expected))
+        if expected.is_file() and not expected.is_symlink():
+            candidates.append((expected.stat().st_mtime_ns, expected))
 
     if not candidates:
         raise HTTPException(status_code=503, detail="off-host backup is not available")
 
-    timestamp, path = max(candidates, key=lambda item: item[0])
+    _, path = max(candidates, key=lambda item: item[0])
+    timestamp = path.parent.name
     match = _CMS_RE.fullmatch(path.name)
     if match is None or match.group(1) != timestamp:
         raise HTTPException(status_code=503, detail="off-host backup metadata is invalid")
@@ -85,7 +90,9 @@ def _latest_export(root: Path) -> BackupExport:
 
     return BackupExport(
         path=path,
-        created_at=datetime.strptime(timestamp, "%Y%m%d-%H%M%S").replace(tzinfo=UTC),
+        # File mtime is an absolute instant. It remains correct for legacy
+        # directories named in the VPS local timezone and for all new UTC names.
+        created_at=datetime.fromtimestamp(path.stat().st_mtime, tz=UTC),
         size_bytes=path.stat().st_size,
         sha256=actual_hash,
     )

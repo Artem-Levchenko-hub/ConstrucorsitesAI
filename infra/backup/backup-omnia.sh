@@ -32,7 +32,9 @@ USERS_CTR="${USERS_CTR:-omnia-postgres-users}"
 USERS_USER="${USERS_USER:-omnia_root}"
 USERS_DB="${USERS_DB:-omnia_users}"
 
-ts="$(date +%Y%m%d-%H%M%S)"
+# UTC makes the directory name portable across the VPS, GitHub runners and a
+# future restore host in another timezone.
+ts="$(date -u +%Y%m%d-%H%M%S)"
 dir="${BACKUP_ROOT}/${ts}"
 bundle_tmp="${BACKUP_ROOT}/.omnia-backup-${ts}.tgz"
 mkdir -p "$dir"
