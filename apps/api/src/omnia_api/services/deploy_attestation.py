@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -11,7 +12,16 @@ from omnia_api.core.config import Settings
 from omnia_api.models.attestation import Attestation
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.services.attestation import ATTESTATION_VERSION, verify_digest
+from omnia_api.schemas.project import orchestrator_template
+from omnia_api.services import orchestrator_client
+from omnia_api.services import repo as repo_svc
+from omnia_api.services.attestation import (
+    ATTESTATION_VERSION,
+    build_attestation,
+    now_iso,
+    verify_digest,
+)
+from omnia_api.services.release_proof import run_release_proof
 
 
 @dataclass(frozen=True)
@@ -96,3 +106,62 @@ async def resolve_deploy_proof(
         commit_sha=target_sha,
         digest=attestation.digest,
     )
+
+
+async def ensure_current_release_proof(
+    session: AsyncSession,
+    project: Project,
+) -> DeployProof:
+    """Issue a fresh proof for the current canonical snapshot when one is absent.
+
+    MAX no-code configuration saves create real Git commits after generation.
+    Re-synchronising the full snapshot before the checks binds the new attestation
+    to the same tree that the launch workflow will publish.
+    """
+    current = await resolve_deploy_proof(session, project, None)
+    if current.passed or current.reason == "digest_invalid":
+        return current
+    if project.current_snapshot_id is None:
+        return DeployProof(False, "snapshot_missing")
+    snapshot = await session.get(Snapshot, project.current_snapshot_id)
+    if snapshot is None or snapshot.project_id != project.id:
+        return DeployProof(False, "snapshot_missing")
+
+    runtime = await orchestrator_client.get_status(project.id)
+    if runtime.get("state") != "running":
+        return DeployProof(False, "runtime_not_running", commit_sha=snapshot.commit_sha)
+
+    files = await asyncio.to_thread(repo_svc.read_files, project.id, snapshot.commit_sha)
+    if not files:
+        return DeployProof(False, "snapshot_empty", commit_sha=snapshot.commit_sha)
+    await orchestrator_client.hot_reload(
+        project_id=project.id,
+        slug=project.slug,
+        files=files,
+    )
+
+    verdict = await run_release_proof(project.id, project.slug)
+    issued_at = now_iso()
+    stack = orchestrator_template(project.template) or project.template
+    record = build_attestation(
+        gates=[("release", verdict)],
+        stack=stack,
+        project_id=str(project.id),
+        created_at=issued_at,
+        commit_sha=snapshot.commit_sha,
+    )
+    session.add(
+        Attestation(
+            project_id=project.id,
+            snapshot_id=snapshot.id,
+            commit_sha=snapshot.commit_sha,
+            stack=stack,
+            issued_at=issued_at,
+            overall_passed=bool(record["overall_passed"]),
+            digest=str(record["digest"]),
+            gates=record["gates"],
+        )
+    )
+    await session.commit()
+    await session.refresh(project)
+    return await resolve_deploy_proof(session, project, None)

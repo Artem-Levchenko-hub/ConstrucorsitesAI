@@ -14,7 +14,11 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.services.attestation import build_attestation
-from omnia_api.services.deploy_attestation import resolve_deploy_proof
+from omnia_api.services.deploy_attestation import (
+    ensure_current_release_proof,
+    resolve_deploy_proof,
+)
+from omnia_api.services.functional_gate import Check, FunctionalVerdict
 
 pytestmark = pytest.mark.asyncio
 
@@ -87,6 +91,74 @@ async def test_exact_current_commit_requires_digest_valid_proof(
     tampered = await resolve_deploy_proof(db_session, project, None)
     assert not tampered.passed
     assert tampered.reason == "digest_invalid"
+
+
+async def test_missing_current_proof_is_reissued_from_exact_live_tree(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, project, snapshot = await _project_with_snapshot(db_session)
+    synced: list[tuple[uuid.UUID, str, dict[str, str]]] = []
+
+    def read_files(project_id: uuid.UUID, commit_sha: str) -> dict[str, str]:
+        assert project_id == project.id
+        assert commit_sha == snapshot.commit_sha
+        return {"src/app/page.tsx": "export default function Page() { return null }"}
+
+    async def status(_project_id: uuid.UUID) -> dict[str, str]:
+        return {"state": "running"}
+
+    async def hot_reload(
+        *,
+        project_id: uuid.UUID,
+        slug: str,
+        files: dict[str, str],
+    ) -> dict[str, int]:
+        synced.append((project_id, slug, files))
+        return {"written": len(files)}
+
+    async def release_proof(
+        _project_id: uuid.UUID,
+        _slug: str,
+    ) -> FunctionalVerdict:
+        return FunctionalVerdict(
+            passed=True,
+            checks=[Check("typecheck", True, "clean")],
+            summary="passed",
+        )
+
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.repo_svc.read_files",
+        read_files,
+    )
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.orchestrator_client.get_status",
+        status,
+    )
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.orchestrator_client.hot_reload",
+        hot_reload,
+    )
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.run_release_proof",
+        release_proof,
+    )
+
+    proof = await ensure_current_release_proof(db_session, project)
+    assert proof.passed
+    assert proof.commit_sha == snapshot.commit_sha
+    assert synced == [
+        (
+            project.id,
+            project.slug,
+            {"src/app/page.tsx": "export default function Page() { return null }"},
+        )
+    ]
+
+    # A valid exact proof is idempotent and does not touch the runtime again.
+    repeated = await ensure_current_release_proof(db_session, project)
+    assert repeated.passed
+    assert len(synced) == 1
 
 
 async def test_production_deploy_blocks_unproven_and_allows_proven(

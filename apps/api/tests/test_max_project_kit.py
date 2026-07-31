@@ -140,9 +140,15 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     async def not_deployed(_project_id):
         return {"phase": "queued"}
 
+    proof_refreshes: list[str] = []
+
+    async def refresh_proof(_session, project):
+        proof_refreshes.append(str(project.current_snapshot_id))
+
     monkeypatch.setattr(max_studio.repo_svc, "commit_files", fake_commit)
     monkeypatch.setattr(max_studio.orchestrator_client, "get_status", stopped)
     monkeypatch.setattr(max_studio.orchestrator_client, "get_deploy", not_deployed)
+    monkeypatch.setattr(max_studio, "_refresh_release_proof", refresh_proof)
 
     first = await max_studio.put_max_config(project.id, _config(), db_session, user)
     second = await max_studio.put_max_config(project.id, _config(), db_session, user)
@@ -156,6 +162,10 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     assert saved.config["app_name"] == 'Кофе "Рядом"'
     assert saved.managed_kit_version == MAX_MANAGED_KIT_VERSION
     assert project.current_snapshot_id == saved.synced_snapshot_id
+    assert proof_refreshes == [
+        str(first.synced_snapshot_id),
+        str(first.synced_snapshot_id),
+    ]
 
     # A project carrying an older managed kit is upgraded once even when its
     # business config and current snapshot are otherwise unchanged.
@@ -171,6 +181,10 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     assert refreshed is not None
     assert refreshed.managed_kit_version == MAX_MANAGED_KIT_VERSION
     assert repeated_after_upgrade.synced_snapshot_id == upgraded.synced_snapshot_id
+    assert proof_refreshes[-2:] == [
+        str(upgraded.synced_snapshot_id),
+        str(upgraded.synced_snapshot_id),
+    ]
 
 
 async def test_url_confirmation_is_persisted_without_new_snapshot(db_session) -> None:

@@ -33,6 +33,7 @@ from omnia_api.schemas.max_studio import (
 )
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.deploy_attestation import ensure_current_release_proof
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
@@ -88,6 +89,25 @@ def _public(
         synced_snapshot_id=record.synced_snapshot_id,
         updated_at=record.updated_at,
     )
+
+
+async def _refresh_release_proof(session: SessionDep, project: Project) -> None:
+    """Best-effort proof refresh; a failed proof remains deploy-blocking."""
+    try:
+        proof = await ensure_current_release_proof(session, project)
+        log.info(
+            "max.release_proof_refreshed",
+            project_id=str(project.id),
+            commit_sha=proof.commit_sha,
+            passed=proof.passed,
+            reason=proof.reason,
+        )
+    except Exception:
+        log.warning(
+            "max.release_proof_refresh_failed",
+            project_id=str(project.id),
+            exc_info=True,
+        )
 
 
 def _preview_session_public(
@@ -258,6 +278,7 @@ async def put_max_config(
         and record.synced_snapshot_id == project.current_snapshot_id
         and record.managed_kit_version == MAX_MANAGED_KIT_VERSION
     ):
+        await _refresh_release_proof(session, project)
         return _public(project, record)
 
     files = render_max_managed_files(payload, project.id)
@@ -304,6 +325,7 @@ async def put_max_config(
             await orchestrator_client.hot_reload(project.id, project.slug, files)
     except Exception:
         log.warning("max_config_live_sync_failed", project_id=str(project.id), exc_info=True)
+    await _refresh_release_proof(session, project)
     return _public(project, record)
 
 

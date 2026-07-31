@@ -189,6 +189,11 @@
  "owner_actions": [
   {
    "date": "31.07",
+   "what": "Показал блокировку MAX-публикации после успешной сборки: текущая ревизия якобы не имела действительной проверки безопасности.",
+   "impact": "Production-форензика доказала рассинхронизацию SHA: генерация прошла release-proof, но последующие no-code сохранения MAX-конфигурации создали новые коммиты без новой аттестации. Исправление перевыпускает typecheck, HTTP- и transport-security proof для точного текущего snapshot; живая доставка проверяется."
+  },
+  {
+   "date": "31.07",
    "what": "Попросил начать доведение продукта до полного MVP и вести отдельную подстраницу с галочками по мере завершения каждого этапа.",
    "impact": "Добавлен публичный /mvp с 26 проверяемыми пунктами и критерием финиша. Первый новый закрытый этап — единый платёжный аккаунт бизнеса: кошелёк, ledger и подписка больше не дробятся между пользователями одной организации."
   },
@@ -2060,6 +2065,18 @@
    "evidence": "Revisions d24d7c60 и 8e8cf9c1 развёрнуты через production compose. Alembic показывает 0038_subscription_lifecycle; consent columns=2, canonical project keep-alive column=1, pending-renewal partial unique index=1. В production 96 живых подписок и 0 account-дублей; до включения магазина auto_renew=0, past_due=0, pending renewal=0. Worker пишет subscription.lifecycle_started с poll=60s, retry=12h и grace=3d; API/web healthy. Чистая БД прошла миграции 0001→0038. Локально API ruff/mypy и 21 целевой тест доказали consent+saved method, cancel/restore, одно успешное renewal и один ledger credit, provider failure→past_due→Free, отзыв keep-alive и лимит одного Business slot. Web typecheck/lint/102 теста/build зелёные. Browser QA: /mvp=18/26=69%, кабинет показывает отдельную галочку, на 390 px scrollWidth=390, consent label 300×158, purchase buttons 44 px, console errors=0.",
    "impact": "Кодовый контур подписки завершён от покупки до прекращения списаний: сетевой сбой не создаёт двойной платёж, пользователь сохраняет доступ во время grace, а после него данные не удаляются и платные runtime-права не протекают. До живой выручки остаётся внешний шаг — реквизиты и ключи магазина ЮKassa.",
    "next_vector": "V3"
+  },
+  {
+   "id": "H104",
+   "title": "MAX-конфигурация сохраняет проверяемую публикацию",
+   "status": "testing",
+   "score": null,
+   "category": "MAX / безопасность / публикация / надёжность",
+   "period": "31.07",
+   "description": "Каждый no-code коммит MAX Studio должен заново доказать typecheck, доступность и безопасные transport-заголовки для своего точного SHA, чтобы one-click публикация не блокировалась устаревшей аттестацией.",
+   "evidence": "Production-форензика проекта fitnessstat-31eba8: passing-аттестация относилась к f484823d, после неё три коммита Update MAX business configuration довели current snapshot до b77c45c без аттестации; deploy-гейт вернул attestation_missing. Локально общий release-proof вынесен в один модуль, MAX sync строго возвращает runtime к canonical snapshot и сохраняет новую digest-valid аттестацию. Целевые интеграционные тесты: 11 passed; API mypy: 218 модулей без ошибок; ruff src tests и diff-check зелёные. Полная API suite выполнялась 15 минут и была остановлена внешним таймаутом без финального результата.",
+   "impact": "Исправление сохраняет fail-closed безопасность и убирает ложный тупик после штатного редактирования MAX-настроек. Оценка будет выставлена после production-деплоя и повторной публикации реального проекта.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2524,6 +2541,10 @@
      true
     ],
     [
+     "Точная release-аттестация после no-code MAX-конфигурации и публикация без ложного attestation_missing",
+     false
+    ],
+    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2537,9 +2558,10 @@
     "H88",
     "H89",
     "H90",
-    "H92",
-    "H97",
-    "H100"
+     "H92",
+     "H97",
+     "H100",
+     "H104"
    ]
   }
  ],
