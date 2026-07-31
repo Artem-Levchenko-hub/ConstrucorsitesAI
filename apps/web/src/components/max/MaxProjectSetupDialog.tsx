@@ -732,7 +732,7 @@ export function MaxProjectSetupDialog({
               </div>
 
               <div
-                className="shrink-0 border-t border-white/10 bg-[#0f121f]/95 px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 backdrop-blur sm:px-7"
+                className="shrink-0 px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-7 sm:pt-4"
                 data-testid="max-settings-footer"
               >
                 <Button

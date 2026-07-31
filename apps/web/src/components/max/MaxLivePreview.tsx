@@ -2,7 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Loader2, Play, RefreshCw } from "lucide-react";
+import {
+  BatteryFull,
+  ExternalLink,
+  Loader2,
+  PanelRightClose,
+  Play,
+  RefreshCw,
+  Signal,
+  Wifi,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -12,14 +21,25 @@ import {
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import type { Project } from "@/lib/api/types";
 
-const DEVICE_WIDTH = 390;
-const DEVICE_HEIGHT = 844;
+const SCREEN_WIDTH = 390;
+const SCREEN_HEIGHT = 844;
+const STATUS_BAR_HEIGHT = 38;
+const DEVICE_BEZEL = 10;
+const DEVICE_WIDTH = SCREEN_WIDTH + DEVICE_BEZEL * 2;
+const DEVICE_HEIGHT = SCREEN_HEIGHT + STATUS_BAR_HEIGHT + DEVICE_BEZEL * 2;
 
-export function MaxLivePreview({ project }: { project: Project }) {
+export function MaxLivePreview({
+  project,
+  onClose,
+}: {
+  project: Project;
+  onClose?: () => void;
+}) {
   const queryClient = useQueryClient();
   const started = useRef(false);
   const deviceStage = useRef<HTMLDivElement>(null);
-  const [deviceScale, setDeviceScale] = useState(0.75);
+  const previewFrame = useRef<HTMLIFrameElement>(null);
+  const [deviceScale, setDeviceScale] = useState(0.72);
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
@@ -87,6 +107,24 @@ export function MaxLivePreview({ project }: { project: Project }) {
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    const syncPreviewChrome = (event: MessageEvent) => {
+      if (
+        event.source !== previewFrame.current?.contentWindow ||
+        event.data?.type !== "omnia:inspect:ready"
+      ) {
+        return;
+      }
+      previewFrame.current?.contentWindow?.postMessage(
+        { type: "omnia:preview:chrome", hideScrollbar: true },
+        "*",
+      );
+    };
+
+    window.addEventListener("message", syncPreviewChrome);
+    return () => window.removeEventListener("message", syncPreviewChrome);
+  }, []);
+
   // A relative same-origin fallback is both correct behind the production
   // reverse proxy and stable across SSR/hydration. Reading window.location
   // during render produced different href values on server and client.
@@ -146,10 +184,24 @@ export function MaxLivePreview({ project }: { project: Project }) {
           <p className="omnia-kicker text-[#8d887f]">Mobile WebView</p>
           <h2 className="mt-1 text-sm font-semibold">Живое превью</h2>
         </div>
-        <span className="inline-flex items-center gap-2 text-[10px] text-[#6d6962]">
-          <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#aaa59b]"}`} />
-          {connected ? "Подключено" : "Запускается"}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex items-center gap-2 text-[10px] text-[#6d6962]">
+            <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#aaa59b]"}`} />
+            {connected ? "Подключено" : "Запускается"}
+          </span>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid size-8 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716]"
+              aria-label="Скрыть панель превью"
+              title="Скрыть превью"
+              data-testid="max-desktop-preview-close"
+            >
+              <PanelRightClose className="size-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-3 flex min-h-0 flex-1 flex-col items-center">
@@ -166,7 +218,7 @@ export function MaxLivePreview({ project }: { project: Project }) {
             }}
           >
             <div
-              className="absolute left-0 top-0 overflow-hidden rounded-[52px] border-[9px] border-[#171716] bg-[#171716] shadow-[0_24px_70px_rgba(23,23,22,.18)]"
+              className="absolute left-0 top-0 rounded-[58px] bg-[#0b0b0b] p-[10px] shadow-[0_30px_80px_rgba(23,23,22,.22),0_3px_12px_rgba(23,23,22,.16),inset_0_0_0_1px_rgba(255,255,255,.16)]"
               data-testid="max-live-device"
               style={{
                 width: DEVICE_WIDTH,
@@ -175,62 +227,79 @@ export function MaxLivePreview({ project }: { project: Project }) {
                 transformOrigin: "top left",
               }}
             >
-              <div className="absolute inset-x-0 top-0 z-10 flex h-9 items-center justify-between bg-[#171716] px-4 text-[11px] font-semibold text-white">
-                <span>09:41</span>
-                <span aria-hidden="true">▮▮ ◉</span>
-              </div>
-              {previewUrl ? (
-                <iframe
-                  key={previewUrl}
-                  src={previewUrl}
-                  title={`Превью ${project.name}`}
-                  className="absolute inset-x-0 bottom-0 top-9 h-[calc(100%-2.25rem)] w-full border-0 bg-white"
-                  allow="clipboard-read; clipboard-write"
-                  referrerPolicy="no-referrer"
-                  data-testid="max-live-iframe"
-                />
-              ) : (
-                <div className="absolute inset-x-0 bottom-0 top-9 flex flex-col items-center justify-center bg-[#fcfbf7] px-10 text-center">
-                  {preparing ? (
-                    <Loader2 className="size-7 animate-spin text-[#f15a38]" />
+              <span className="absolute -left-[3px] top-[154px] h-[76px] w-[4px] rounded-l-full bg-[#30302f] shadow-[inset_1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
+              <span className="absolute -left-[3px] top-[242px] h-[46px] w-[4px] rounded-l-full bg-[#30302f] shadow-[inset_1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
+              <span className="absolute -right-[3px] top-[196px] h-[104px] w-[4px] rounded-r-full bg-[#30302f] shadow-[inset_-1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
+
+              <div className="relative h-full overflow-hidden rounded-[48px] bg-[#111] shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)]">
+                <div className="relative z-10 flex items-center justify-between bg-[#111] px-[19px] text-[11px] font-semibold text-white" style={{ height: STATUS_BAR_HEIGHT }}>
+                  <span className="min-w-[58px] tracking-[-0.02em]">09:41</span>
+                  <span className="absolute left-1/2 top-[8px] h-[22px] w-[82px] -translate-x-1/2 rounded-full bg-black shadow-[inset_0_0_0_1px_rgba(255,255,255,.03)]" aria-hidden="true" />
+                  <span className="flex min-w-[58px] items-center justify-end gap-1.5" aria-hidden="true">
+                    <Signal className="size-3" strokeWidth={2.5} />
+                    <Wifi className="size-3" strokeWidth={2.5} />
+                    <BatteryFull className="h-3 w-4" strokeWidth={2.25} />
+                  </span>
+                </div>
+                <div className="relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}>
+                  {previewUrl ? (
+                    <iframe
+                      ref={previewFrame}
+                      key={previewUrl}
+                      src={previewUrl}
+                      title={`Превью ${project.name}`}
+                      className="absolute inset-0 size-full border-0 bg-white"
+                      allow="clipboard-read; clipboard-write"
+                      referrerPolicy="no-referrer"
+                      data-testid="max-live-iframe"
+                      onLoad={(event) =>
+                        event.currentTarget.contentWindow?.postMessage(
+                          { type: "omnia:preview:chrome", hideScrollbar: true },
+                          "*",
+                        )
+                      }
+                    />
                   ) : (
-                    <Play className="size-7 text-[#f15a38]" />
-                  )}
-                  <p className="mt-5 text-[15px] font-medium text-[#171716]">
-                    {previewError
-                      ? "Не удалось открыть безопасное превью"
-                      : "Подготавливаем рабочую версию"}
-                  </p>
-                  <p className="mt-2 text-[12px] leading-5 text-[#8d887f]">
-                    {previewError
-                      ? "Данные приложения не открываются без защищённой preview-сессии."
-                      : "Синхронизируем приложение и запускаем изолированную preview-сессию."}
-                  </p>
-                  {!preparing && (
-                    <button
-                      type="button"
-                      onClick={retryPreview}
-                      className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[10px] border border-[#d8d4cb] px-4 text-[12px] font-medium text-[#171716]"
-                    >
-                      <RefreshCw className="size-4" />
-                      Повторить
-                    </button>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#fcfbf7] px-10 text-center">
+                      {preparing ? (
+                        <Loader2 className="size-7 animate-spin text-[#f15a38]" />
+                      ) : (
+                        <Play className="size-7 text-[#f15a38]" />
+                      )}
+                      <p className="mt-5 text-[15px] font-medium text-[#171716]">
+                        {previewError
+                          ? "Не удалось открыть безопасное превью"
+                          : "Подготавливаем рабочую версию"}
+                      </p>
+                      <p className="mt-2 text-[12px] leading-5 text-[#8d887f]">
+                        {previewError
+                          ? "Данные приложения не открываются без защищённой preview-сессии."
+                          : "Синхронизируем приложение и запускаем изолированную preview-сессию."}
+                      </p>
+                      {!preparing && (
+                        <button
+                          type="button"
+                          onClick={retryPreview}
+                          className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[10px] border border-[#d8d4cb] px-4 text-[12px] font-medium text-[#171716]"
+                        >
+                          <RefreshCw className="size-4" />
+                          Повторить
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+                <div className="pointer-events-none absolute inset-0 rounded-[48px] ring-1 ring-inset ring-white/10" aria-hidden="true" />
+              </div>
             </div>
           </div>
         </div>
         <div className="shrink-0 text-center">
-          <p className="mt-2 max-w-[320px] text-[10px] leading-4 text-[#8d887f]">
-            Реальный viewport 390 × 844. Превью обновляется после сохранённых
-            изменений агента.
-          </p>
           <button
             type="button"
             onClick={() => void openSeparatePreview()}
             disabled={!connected || separatePreview.isPending}
-            className="mt-1 inline-flex min-h-11 items-center gap-1.5 text-[11px] font-medium text-[#c84528] hover:underline disabled:cursor-not-allowed disabled:opacity-45"
+            className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[10px] font-medium text-[#8d887f] transition-colors hover:text-[#c84528] disabled:cursor-not-allowed disabled:opacity-45"
             data-testid="max-open-preview-separate"
             title={connected ? undefined : `Публичный адрес: ${publicUrl}`}
           >

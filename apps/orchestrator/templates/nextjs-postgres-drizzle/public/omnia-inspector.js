@@ -68,6 +68,28 @@
   var hoverLabelText = null;
   var overrideModel = { tokens: {}, elements: {}, fonts: {} };
   var overrideStyleEl = null;
+  var previewChromeStyleEl = null;
+
+  // The device mock keeps scrolling available while hiding the desktop browser
+  // scrollbar that would otherwise appear inside the phone bezel. This is
+  // opt-in from the embedding shell, so standalone/public apps are untouched.
+  function setPreviewChrome(options) {
+    var hideScrollbar = options && options.hideScrollbar === true;
+    if (!hideScrollbar) {
+      if (previewChromeStyleEl) previewChromeStyleEl.remove();
+      previewChromeStyleEl = null;
+      return;
+    }
+    if (!previewChromeStyleEl) {
+      previewChromeStyleEl = document.createElement("style");
+      previewChromeStyleEl.id = "omnia-preview-chrome";
+      previewChromeStyleEl.setAttribute("data-omnia-inspector", "preview-chrome");
+      previewChromeStyleEl.textContent =
+        "html{scrollbar-width:none!important;-ms-overflow-style:none!important}" +
+        "html::-webkit-scrollbar,body::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}";
+    }
+    (document.head || document.documentElement).appendChild(previewChromeStyleEl);
+  }
 
   // One-time CSS for the targeting-reticle hover box: a soft corner-bracket pulse
   // (camera-focus vibe), reduced-motion-safe. Injected into the previewed page.
@@ -744,6 +766,9 @@
       case "omnia:style:reset":
         resetStyle(d);
         break;
+      case "omnia:preview:chrome":
+        setPreviewChrome(d);
+        break;
     }
   });
 
@@ -872,5 +897,5 @@
 
   // Tell the parent we're ready so it can (re)send enable after a reload while
   // select-mode is still on.
-  post({ type: "omnia:inspect:ready", version: 3 });
+  post({ type: "omnia:inspect:ready", version: 4 });
 })();

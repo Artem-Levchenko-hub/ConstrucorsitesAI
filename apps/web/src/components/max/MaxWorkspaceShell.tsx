@@ -12,6 +12,9 @@ import {
   LayoutGrid,
   LogOut,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightOpen,
   Plug,
   Rocket,
   Settings,
@@ -25,6 +28,7 @@ import { BrandMark } from "@/components/marketing/BrandMark";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { listProjects } from "@/lib/api/projects";
 import type { Project } from "@/lib/api/types";
+import { cn } from "@/lib/utils";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
 
@@ -38,6 +42,8 @@ export function MaxWorkspaceShell({
   const [launchOpen, setLaunchOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [navigationVisible, setNavigationVisible] = useState(true);
+  const [previewPanelVisible, setPreviewPanelVisible] = useState(true);
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const maxProjects = useMemo(
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
@@ -45,17 +51,44 @@ export function MaxWorkspaceShell({
   );
 
   return (
-    <div data-light-shell className="grid h-dvh min-h-0 grid-cols-1 overflow-hidden bg-[#f5f3ee] text-[#171716] lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(420px,1fr)_380px] 2xl:grid-cols-[220px_minmax(480px,1fr)_420px]">
+    <div
+      data-light-shell
+      className={cn(
+        "grid h-dvh min-h-0 grid-cols-1 overflow-hidden bg-[#f5f3ee] text-[#171716] transition-[grid-template-columns] duration-200",
+        navigationVisible
+          ? "lg:grid-cols-[220px_minmax(0,1fr)]"
+          : "lg:grid-cols-[minmax(0,1fr)]",
+        navigationVisible && previewPanelVisible
+          ? "xl:grid-cols-[220px_minmax(420px,1fr)_380px] 2xl:grid-cols-[220px_minmax(480px,1fr)_420px]"
+          : navigationVisible
+            ? "xl:grid-cols-[220px_minmax(0,1fr)]"
+            : previewPanelVisible
+              ? "xl:grid-cols-[minmax(420px,1fr)_380px] 2xl:grid-cols-[minmax(480px,1fr)_420px]"
+              : "xl:grid-cols-[minmax(0,1fr)]",
+      )}
+    >
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col border-r border-[#d8d4cb] bg-[#fcfbf7] transition-transform lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col border-r border-[#d8d4cb] bg-[#fcfbf7] transition-transform lg:static lg:translate-x-0 ${navigationVisible ? "lg:flex" : "lg:hidden"} ${
           mobileNavOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <div className="flex h-16 items-center justify-between border-b border-[#d8d4cb] px-5">
           <BrandMark href="/max" />
-          <button type="button" onClick={() => setMobileNavOpen(false)} className="grid size-11 place-items-center rounded-[8px] text-[#8d887f] lg:hidden" aria-label="Закрыть меню">
-            <X className="size-4" />
-          </button>
+          <div className="flex items-center">
+            <button
+              type="button"
+              onClick={() => setNavigationVisible(false)}
+              className="hidden size-8 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716] lg:grid"
+              aria-label="Скрыть навигационную панель"
+              title="Скрыть навигацию"
+              data-testid="max-navigation-close"
+            >
+              <PanelLeftClose className="size-3.5" />
+            </button>
+            <button type="button" onClick={() => setMobileNavOpen(false)} className="grid size-11 place-items-center rounded-[8px] text-[#8d887f] lg:hidden" aria-label="Закрыть меню">
+              <X className="size-4" />
+            </button>
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -109,6 +142,18 @@ export function MaxWorkspaceShell({
         <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#d8d4cb] px-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-1 sm:gap-3">
             <button type="button" onClick={() => setMobileNavOpen(true)} className="grid size-11 shrink-0 place-items-center rounded-[8px] text-[#6d6962] lg:hidden" aria-label="Открыть меню"><Menu className="size-4" /></button>
+            {!navigationVisible && (
+              <button
+                type="button"
+                onClick={() => setNavigationVisible(true)}
+                className="hidden size-8 shrink-0 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716] lg:grid"
+                aria-label="Показать навигационную панель"
+                title="Показать навигацию"
+                data-testid="max-navigation-open"
+              >
+                <PanelLeftOpen className="size-3.5" />
+              </button>
+            )}
             <div className="min-w-0">
               <h1 className="truncate text-sm font-semibold">{project.name}</h1>
               <p className="mt-0.5 flex items-center gap-1.5 text-[9px] text-[#8d887f]"><span className="size-1.5 rounded-full bg-[#248a4b]" /> Состояние сохраняется на сервере</p>
@@ -125,6 +170,18 @@ export function MaxWorkspaceShell({
             >
               <Smartphone className="size-4" />
             </button>
+            {!previewPanelVisible && (
+              <button
+                type="button"
+                onClick={() => setPreviewPanelVisible(true)}
+                className="hidden size-8 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716] xl:grid"
+                aria-label="Показать панель превью"
+                title="Показать превью"
+                data-testid="max-desktop-preview-open"
+              >
+                <PanelRightOpen className="size-3.5" />
+              </button>
+            )}
             <button type="button" onClick={() => setLaunchOpen(true)} className="inline-flex h-11 items-center gap-1.5 rounded-[8px] bg-[#f15a38] px-3 text-xs font-semibold text-white hover:bg-[#d94929] sm:gap-2 sm:px-4">
               <span className="sm:hidden">Пуск</span>
               <span className="hidden sm:inline">Опубликовать</span>
@@ -144,9 +201,14 @@ export function MaxWorkspaceShell({
         </div>
       </section>
 
-      <div className="hidden min-h-0 bg-[#f5f3ee] xl:block">
-        <MaxLivePreview project={project} />
-      </div>
+      {previewPanelVisible && (
+        <div className="hidden min-h-0 bg-[#f5f3ee] xl:block">
+          <MaxLivePreview
+            project={project}
+            onClose={() => setPreviewPanelVisible(false)}
+          />
+        </div>
+      )}
 
       {mobileNavOpen && <button type="button" className="fixed inset-0 z-40 bg-[#171716]/55 lg:hidden" onClick={() => setMobileNavOpen(false)} aria-label="Закрыть меню" />}
 

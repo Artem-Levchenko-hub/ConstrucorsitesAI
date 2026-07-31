@@ -116,7 +116,7 @@ def test_inject_inspector_appends_when_no_body() -> None:
     assert _INSPECTOR_TAG in out
 
 
-# ── two-copy drift guard (R-04 DRY of knowledge) ─────────────────────────────
+# ── inspector drift guard (R-04 DRY of knowledge) ────────────────────────────
 
 
 def test_inspector_copies_stay_in_sync() -> None:
@@ -129,6 +129,7 @@ def test_inspector_copies_stay_in_sync() -> None:
         # + the manual style editor were dead on every messenger until it was added.
         # Pin it here so a new template can't silently drop it again.
         repo / "apps/orchestrator/templates/nextjs-realtime/public/omnia-inspector.js",
+        repo / "apps/orchestrator/templates/max-miniapp-nextjs/public/omnia-inspector.js",
     ]
     want = canonical.read_bytes()
     for copy in copies:
@@ -177,7 +178,9 @@ def test_inspector_has_precise_selector_and_cross_origin_guards() -> None:
     assert "composedPath" in src
     assert 'addEventListener("pointerdown", blockEarlyInteraction, true)' in src
     assert "trustedParentOrigin && e.origin !== trustedParentOrigin" in src
-    assert 'post({ type: "omnia:inspect:ready", version: 3 })' in src
+    assert 'case "omnia:preview:chrome"' in src
+    assert "scrollbar-width:none" in src
+    assert 'post({ type: "omnia:inspect:ready", version: 4 })' in src
 
 
 def test_vite_spa_loads_canonical_inspector_only_inside_workspace() -> None:
