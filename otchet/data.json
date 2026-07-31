@@ -190,7 +190,7 @@
   {
    "date": "31.07",
    "what": "Показал блокировку MAX-публикации после успешной сборки: текущая ревизия якобы не имела действительной проверки безопасности.",
-   "impact": "Production-форензика доказала рассинхронизацию SHA: генерация прошла release-proof, но последующие no-code сохранения MAX-конфигурации создали новые коммиты без новой аттестации. Исправление перевыпускает typecheck, HTTP- и transport-security proof для точного текущего snapshot; живая доставка проверяется."
+   "impact": "Production-форензика доказала рассинхронизацию SHA: генерация прошла release-proof, но последующие no-code сохранения MAX-конфигурации создали новые коммиты без новой аттестации. Исправление перевыпускает proof для точного snapshot; «ФитнессСтат» опубликован, отвечает 200 и имеет активный подтверждённый webhook MAX."
   },
   {
    "date": "31.07",
@@ -2069,13 +2069,13 @@
   {
    "id": "H104",
    "title": "MAX-конфигурация сохраняет проверяемую публикацию",
-   "status": "testing",
-   "score": null,
+   "status": "worked",
+   "score": 9,
    "category": "MAX / безопасность / публикация / надёжность",
    "period": "31.07",
    "description": "Каждый no-code коммит MAX Studio должен заново доказать typecheck, доступность и безопасные transport-заголовки для своего точного SHA, чтобы one-click публикация не блокировалась устаревшей аттестацией.",
-   "evidence": "Production-форензика проекта fitnessstat-31eba8: passing-аттестация относилась к f484823d, после неё три коммита Update MAX business configuration довели current snapshot до b77c45c без аттестации; deploy-гейт вернул attestation_missing. Revision 7709dd29 развернута: новый proof для точного b77c45c прошёл и получил digest a7b22415. Первый повторный deploy дошёл до production-контейнера и выявил второй независимый дефект: Drizzle FK ссылался на public.max_users, хотя hosted DB использует отдельный project search_path; контейнер не стал healthy и трафик не переключился. Migration-runner MAX и drizzle нормализован к активной изолированной схеме; дополнительная форензика второго deploy доказала, что старый dev-контейнер перезаписывал свежий platform runner через scripts-overlay, поэтому builder теперь восстанавливает platform-owned runner после overlay. Повторная доставка проверяется. Целевые API integration: 11 passed; mypy: 218 модулей без ошибок; ruff src tests и diff-check зелёные. Orchestrator: 457 passed, 15 xfailed и mypy clean. Полная API suite выполнялась 15 минут и была остановлена внешним таймаутом без финального результата.",
-   "impact": "Исправление сохраняет fail-closed безопасность и убирает ложный тупик после штатного редактирования MAX-настроек. Оценка будет выставлена после production-деплоя и повторной публикации реального проекта.",
+   "evidence": "Production-форензика fitnessstat-31eba8: passing-аттестация была на f484823d, три no-code config-коммита довели current snapshot до b77c45c без proof и вызвали attestation_missing. Revisions 7709dd29, 7c925f89 и f6b4a42f развернуты: MAX sync перевыпускает exact-SHA proof; Drizzle public.* нормализуется к project search_path; builder восстанавливает свежий platform runner после stale dev-overlay. Proof b77c45c прошёл с digest a7b22415. Production deploy run ce25e18e завершён done образом 1785523105; публичный HTTPS отвечает 200, MAX integration active, внешняя subscription подтверждена. Readiness: business/build/legal/bot/publish/webhook/max_url — 7/7 true, ready_to_launch=true. В proj_d00b4d10 существуют max_users, fs_analyses и __omnia_migrations; применены 0000_max_core, 0000_perfect_alice, 0001_business_core. Core-сервисы healthy, app running с 0 restart, API/app error scan=0. Проверки: API target integration 11 passed, mypy 218 modules, ruff src/tests; orchestrator 458 passed/15 xfailed, mypy 37 modules, regression 3/3.",
+   "impact": "Fail-closed безопасность сохранена, но штатные no-code изменения MAX больше не превращают публикацию в тупик. Реальный проект прошёл точную проверку, миграции в изолированной схеме, production-запуск и внешнюю активацию webhook одним завершённым контуром.",
    "next_vector": "V8"
   }
  ],
@@ -2542,7 +2542,7 @@
     ],
     [
      "Точная release-аттестация после no-code MAX-конфигурации и публикация без ложного attestation_missing",
-     false
+     true
     ],
     [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
