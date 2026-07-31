@@ -16,7 +16,15 @@ PLATFORM_SCRATCH_DB="omnia_restore_test_$$"
 USERS_SCRATCH_DB="omnia_users_restore_test_$$"
 extract_dir="$(mktemp -d "${TMPDIR:-/tmp}/omnia-restore-test.XXXXXX")"
 
-latest="$(ls -1d "${BACKUP_ROOT}"/20* 2>/dev/null | tail -1 || true)"
+# Choose by absolute modification time, not the directory text. This remains
+# correct across the one-time migration from legacy VPS-local names to UTC.
+latest="$(
+  find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '20*' \
+    -printf '%T@ %p\n' 2>/dev/null \
+    | sort -n \
+    | tail -1 \
+    | cut -d' ' -f2-
+)"
 [ -n "$latest" ] || { echo "[restore-test] no backup dir in $BACKUP_ROOT"; exit 1; }
 platform_dump="${latest}/platform-${PLATFORM_DB}.sql.gz"
 users_dump="${latest}/projects-${USERS_DB}.sql.gz"
