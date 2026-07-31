@@ -32,6 +32,7 @@ export function middleware(req: NextRequest) {
   const isGeneralAuthRoute = path === "/login" || path === "/register";
   const isPublicMaxRoute =
     path === "/max/product" ||
+    path === "/max/guide" ||
     path === "/max/register" ||
     path === "/max/verify-email";
 

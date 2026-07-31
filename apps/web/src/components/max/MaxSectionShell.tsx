@@ -60,7 +60,7 @@ export function MaxSectionShell({
         </div>
         <div className="mt-auto border-t border-[#d8d4cb] p-3">
           <Link href="/account" className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]"><Settings2 className="size-4" />Аккаунт</Link>
-          <Link href="/max/product" className="mt-1 flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]"><CircleHelp className="size-4" />Справка</Link>
+          <Link href="/max/guide" className="mt-1 flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]"><CircleHelp className="size-4" />Справка</Link>
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">

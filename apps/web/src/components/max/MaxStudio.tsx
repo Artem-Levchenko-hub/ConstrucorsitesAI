@@ -191,8 +191,8 @@ export function MaxStudio({ email }: { email: string }) {
             <p className="omnia-kicker text-[#8d887f]">MAX Studio</p>
           </div>
           <div className="flex items-center gap-2">
-            <Link href="/max/product" className="hidden rounded-[8px] px-3 py-2 text-xs text-[#6d6962] hover:bg-[#f5f3ee] sm:inline-flex">
-              <CircleHelp className="mr-2 size-3.5" /> Как это работает
+            <Link href="/max/guide" className="hidden rounded-[8px] px-3 py-2 text-xs text-[#6d6962] hover:bg-[#f5f3ee] sm:inline-flex">
+              <CircleHelp className="mr-2 size-3.5" /> Подробная справка
             </Link>
             <Button onClick={() => setDialogOpen(true)} className="bg-[#f15a38] text-white hover:bg-[#d94929]">
               <Plus className="size-4" /> Новый проект
