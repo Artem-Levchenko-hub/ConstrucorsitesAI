@@ -20,6 +20,7 @@ from omnia_api.routers import account as account_router
 from omnia_api.routers import admin as admin_router
 from omnia_api.routers import app_integrations as app_integrations_router
 from omnia_api.routers import auth as auth_router
+from omnia_api.routers import backups as backups_router
 from omnia_api.routers import billing as billing_router
 from omnia_api.routers import deploy_targets as deploy_targets_router
 from omnia_api.routers import design_presets as design_presets_router
@@ -86,6 +87,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, unhandled_error_handler)
 
     app.include_router(auth_router.router)
+    app.include_router(backups_router.router)
     app.include_router(billing_router.router)
     app.include_router(admin_router.router)
     app.include_router(account_router.router)

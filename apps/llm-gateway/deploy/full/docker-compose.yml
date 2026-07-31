@@ -170,6 +170,10 @@ services:
     # entities" bug. Read-only.
     volumes:
       - ../../../orchestrator/templates:/orchestrator/templates:ro
+      # Only CMS-encrypted exports are served by /api/backups/offhost. The
+      # application validates the timestamp, fixed filename and SHA-256 before
+      # returning a file; the mount stays read-only.
+      - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
     # Apply schema changes before accepting traffic.  This is deliberately part
     # of the API readiness barrier: the worker must never start against an older
     # schema (generation_runs is required by the single-flight generation path).
@@ -198,6 +202,7 @@ services:
       MINIO_BUCKET_PROJECTS: ${MINIO_BUCKET_PROJECTS:-projects}
       MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
       MINIO_BUCKET_PHOTOS: ${MINIO_BUCKET_PHOTOS:-omnia-photos}
+      BACKUP_EXPORT_ROOT: /opt/omnia-runtime/backups
       # Pexels stock-photo backgrounds (data-omnia-photo / hero.v6). PHOTO_SOURCE
       # =pexels + PEXELS_API_KEY in .env turn it on; off => tags stripped to mesh.
       PHOTO_SOURCE: ${PHOTO_SOURCE:-off}

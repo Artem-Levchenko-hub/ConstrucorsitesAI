@@ -1,33 +1,83 @@
 #!/usr/bin/env bash
-# Prove the latest backup is RESTORABLE. Loads the platform dump into a SCRATCH
-# database (NEVER the live `omnia`) and asserts it comes back with real tables,
-# then drops the scratch DB. An untested backup is a hope, not a backup.
+# Prove the latest backup is RESTORABLE. It verifies every payload checksum,
+# restores both PostgreSQL dumps into scratch databases, and extracts MinIO and
+# project archives into a temporary directory. Live databases/volumes are never
+# used as restore targets.
 set -euo pipefail
 
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/omnia-runtime/backups}"
 PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
 PLATFORM_DB="${PLATFORM_DB:-omnia}"
-SCRATCH_DB="omnia_restore_test_$$"
+USERS_CTR="${USERS_CTR:-omnia-postgres-users}"
+USERS_USER="${USERS_USER:-omnia_root}"
+USERS_DB="${USERS_DB:-omnia_users}"
+PLATFORM_SCRATCH_DB="omnia_restore_test_$$"
+USERS_SCRATCH_DB="omnia_users_restore_test_$$"
+extract_dir="$(mktemp -d "${TMPDIR:-/tmp}/omnia-restore-test.XXXXXX")"
 
 latest="$(ls -1d "${BACKUP_ROOT}"/20* 2>/dev/null | tail -1 || true)"
 [ -n "$latest" ] || { echo "[restore-test] no backup dir in $BACKUP_ROOT"; exit 1; }
-dump="${latest}/platform-${PLATFORM_DB}.sql.gz"
-[ -f "$dump" ] || { echo "[restore-test] no platform dump in $latest"; exit 1; }
-echo "[restore-test] source: $dump"
-echo "[restore-test] scratch DB: $SCRATCH_DB (live '${PLATFORM_DB}' is untouched)"
+platform_dump="${latest}/platform-${PLATFORM_DB}.sql.gz"
+users_dump="${latest}/projects-${USERS_DB}.sql.gz"
+encrypted="$(find "$latest" -maxdepth 1 -type f -name 'omnia-backup-*.cms' -print -quit)"
+for required in \
+  "$platform_dump" \
+  "$users_dump" \
+  "${latest}/projects-src.tgz" \
+  "${latest}/minio-data.tgz" \
+  "${latest}/SHA256SUMS" \
+  "${latest}/OFFHOST_SHA256" \
+  "$encrypted"; do
+  [ -f "$required" ] || { echo "[restore-test] missing required payload: $required"; exit 1; }
+done
+echo "[restore-test] source: $latest"
+echo "[restore-test] scratch DBs: $PLATFORM_SCRATCH_DB, $USERS_SCRATCH_DB (live DBs untouched)"
 
-cleanup(){ docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d postgres -c "DROP DATABASE IF EXISTS \"$SCRATCH_DB\";" >/dev/null 2>&1 || true; }
+cleanup(){
+  docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d postgres \
+    -c "DROP DATABASE IF EXISTS \"$PLATFORM_SCRATCH_DB\";" >/dev/null 2>&1 || true
+  docker exec "$USERS_CTR" psql -U "$USERS_USER" -d postgres \
+    -c "DROP DATABASE IF EXISTS \"$USERS_SCRATCH_DB\";" >/dev/null 2>&1 || true
+  rm -rf "$extract_dir"
+}
 trap cleanup EXIT
 
-docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d postgres -c "CREATE DATABASE \"$SCRATCH_DB\";" >/dev/null
-gunzip -c "$dump" | docker exec -i "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$SCRATCH_DB" -q >/tmp/omnia-restore-test.log 2>&1 || true
+echo "[restore-test] verifying checksums and encrypted envelope..."
+( cd "$latest" && sha256sum -c SHA256SUMS && sha256sum -c OFFHOST_SHA256 )
+openssl cms -cmsout -inform DER -in "$encrypted" -print >/dev/null
 
-tables=$(docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$SCRATCH_DB" -tAc \
+echo "[restore-test] extracting file/object archives to scratch..."
+tar -xzf "${latest}/projects-src.tgz" -C "$extract_dir"
+mkdir -p "${extract_dir}/minio"
+tar -xzf "${latest}/minio-data.tgz" -C "${extract_dir}/minio"
+source_files=$(find "$extract_dir" -type f | wc -l | tr -d '[:space:]')
+[ "${source_files:-0}" -ge 1 ] || { echo "[restore-test] archives restored 0 files"; exit 1; }
+
+docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d postgres \
+  -c "CREATE DATABASE \"$PLATFORM_SCRATCH_DB\";" >/dev/null
+gunzip -c "$platform_dump" | docker exec -i "$PLATFORM_CTR" psql \
+  -v ON_ERROR_STOP=1 -U "$PLATFORM_USER" -d "$PLATFORM_SCRATCH_DB" -q \
+  >/tmp/omnia-platform-restore-test.log 2>&1
+platform_tables=$(docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_SCRATCH_DB" -tAc \
   "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" | tr -d '[:space:]')
-echo "[restore-test] tables restored in public schema: ${tables:-0}"
-if [ "${tables:-0}" -ge 1 ]; then
-  echo "[restore-test] OK — backup is loadable."
-else
-  echo "[restore-test] FAIL — dump restored 0 tables (see /tmp/omnia-restore-test.log)"; exit 1
-fi
+
+docker exec "$USERS_CTR" psql -U "$USERS_USER" -d postgres \
+  -c "CREATE DATABASE \"$USERS_SCRATCH_DB\";" >/dev/null
+gunzip -c "$users_dump" | docker exec -i "$USERS_CTR" psql \
+  -v ON_ERROR_STOP=1 -U "$USERS_USER" -d "$USERS_SCRATCH_DB" -q \
+  >/tmp/omnia-users-restore-test.log 2>&1
+users_tables=$(docker exec "$USERS_CTR" psql -U "$USERS_USER" -d "$USERS_SCRATCH_DB" -tAc \
+  "SELECT count(*) FROM information_schema.tables
+   WHERE table_schema NOT IN ('pg_catalog', 'information_schema');" | tr -d '[:space:]')
+
+echo "[restore-test] platform tables: ${platform_tables:-0}"
+echo "[restore-test] project-schema tables: ${users_tables:-0}"
+echo "[restore-test] extracted files: ${source_files:-0}"
+[ "${platform_tables:-0}" -ge 1 ] || {
+  echo "[restore-test] FAIL — platform dump restored 0 tables"; exit 1;
+}
+[ "${users_tables:-0}" -ge 1 ] || {
+  echo "[restore-test] FAIL — project DB dump restored 0 tables"; exit 1;
+}
+echo "[restore-test] OK — databases, project sources and MinIO objects are restorable."

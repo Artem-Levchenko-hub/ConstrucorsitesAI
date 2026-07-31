@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # on first image upload — see services/image_resolver.py:_ensure_bucket().
     minio_bucket_images: str = Field(default="omnia-images")
     minio_public_url: str = Field(default="http://localhost:9000")
+    # Read-only directory containing encrypted backup exports. Production mounts
+    # the host backup root here; the public API never exposes raw dumps.
+    backup_export_root: str = Field(default="/opt/omnia-runtime/backups")
 
     # Stock photography for `<img data-omnia-photo="keywords">` tags — real
     # thematic photos, not AI-generated. "off" (default) leaves the feature
