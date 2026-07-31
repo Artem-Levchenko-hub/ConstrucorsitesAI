@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -130,8 +130,11 @@ from omnia_api.services.prompt_builder import (
     build_messages,
 )
 from omnia_api.services.queue import enqueue_entity_gate, enqueue_preview
+from omnia_api.services.ui_audit import (
+    AuditReport,
+    format_failures_for_retry,
+)
 from omnia_api.services.ui_audit import audit as ui_audit
-from omnia_api.services.ui_audit import format_failures_for_retry
 from omnia_api.services.vendor_profiles import vendor_directive
 from omnia_api.services.visual_enricher import (
     enrich_files as enrich_visual_files,
@@ -1497,7 +1500,7 @@ async def post_prompt(
             # of a flat page. Fail-soft (R-10) — a hiccup falls back to a static
             # build rather than dead-ending onboarding.
             if settings.use_auto_stack_routing:
-                _build_stack = discovery_result.stack
+                _build_stack: str | None = discovery_result.stack
                 # Real-time net on the FULL conversation intent, not just this turn's
                 # trigger. A skip-survey / "Постройте сейчас" build sends a trigger
                 # phrase with NO "мессенджер"/"чат" word, so discovery's stack pick
@@ -1525,7 +1528,7 @@ async def post_prompt(
                         "realtime full-intent inference failed: %r", _rt_exc
                     )
                 try:
-                    await stack_routing.switch_to_stack(session, project, _build_stack)
+                    await stack_routing.switch_to_stack(session, project, _build_stack or "")
                 except Exception as _sr_exc:
                     await session.rollback()
                     logging.getLogger(__name__).warning(
@@ -2641,7 +2644,7 @@ async def _craft_image_prompt(
             if "delta" in ev:
                 parts.append(str(ev["delta"]))
             elif "usage" in ev:
-                usage = ev["usage"]  # type: ignore[assignment]
+                usage = ev["usage"]
     except Exception as exc:
         print(f"[PP] craft_image_prompt failed {exc!r}", flush=True)
     prompt = " ".join("".join(parts).split()).strip().strip('"')[:600]
@@ -2751,7 +2754,7 @@ async def _process_prompt(
     # is the concatenation of every delta ever published for this message — so
     # the Redis buffer (used to resync a reconnecting client) must mirror THAT,
     # not the per-pass slice. `seq` is monotonic across the whole message life.
-    pub: dict[str, object] = {"seq": 0, "content": ""}
+    pub: dict[str, Any] = {"seq": 0, "content": ""}
     usage_data: dict[str, float | int] | None = None
     current_sha: str | None = None
     current_files: dict[str, str] = {}
@@ -3194,7 +3197,7 @@ async def _process_prompt(
                 from omnia_api.services import agent_native
 
                 _agent_res = await agent_native.run_native_build(
-                    system=agent_native.native_system_prompt(_stack_guide, _skills),
+                    system=agent_native.native_system_prompt(_stack_guide or "", _skills),
                     task=_agent_user,
                     execute=_agent_executor,
                     user_id=str(user_id),
@@ -3220,7 +3223,7 @@ async def _process_prompt(
                         pass
                     await asyncio.sleep(30)
                     _agent_res = await agent_native.run_native_build(
-                        system=agent_native.native_system_prompt(_stack_guide, _skills),
+                        system=agent_native.native_system_prompt(_stack_guide or "", _skills),
                         task=_agent_user,
                         execute=_agent_executor,
                         user_id=str(user_id),
@@ -3731,7 +3734,8 @@ async def _process_prompt(
                 _gate_touched = False
             # Gate verdicts captured at the gate-loop settle, for the DB attestation
             # persisted with this build's snapshot below (best-effort; None if no gate ran).
-            _att_capture = None
+            _att_capture: list[tuple[str, Any]] | None = None
+            _attestation_stack = _orch_name or project_template
             try:
                 if (
                     get_settings().use_runtime_gates
@@ -3753,14 +3757,20 @@ async def _process_prompt(
                                 run_functional_gate,
                             )
 
-                            _fv = await run_functional_gate(_base)
+                            _runtime_verdict: Any = await run_functional_gate(_base)
                         else:
                             from omnia_api.services import isolation_gate
 
-                            _fv = await isolation_gate.run_public_access_gate(
+                            _runtime_verdict = await isolation_gate.run_public_access_gate(
                                 project_id, project_slug, _base
                             )
-                        _fout = [_agf2.outcome_from_checks(_gate_kind, _fv.passed, _fv.checks)]
+                        _fout = [
+                            _agf2.outcome_from_checks(
+                                _gate_kind,
+                                _runtime_verdict.passed,
+                                _runtime_verdict.checks,
+                            )
+                        ]
                         # Transport-surface security (G005) — stack-agnostic, runs
                         # alongside the functional/isolation leg through the SAME
                         # blocking heal loop. Was built+unit-tested but UNWIRED
@@ -3771,10 +3781,14 @@ async def _process_prompt(
                         if get_settings().use_security_gate:
                             from omnia_api.services import security_gate as _secg
 
-                            _sv = await _secg.run_security_gate(_base)
-                            _att_sec = _sv
+                            _security_verdict = await _secg.run_security_gate(_base)
+                            _att_sec = _security_verdict
                             _fout.append(
-                                _agf2.outcome_from_checks("security", _sv.passed, _sv.checks)
+                                _agf2.outcome_from_checks(
+                                    "security",
+                                    _security_verdict.passed,
+                                    _security_verdict.checks,
+                                )
                             )
                         _fix = _agf2.build_fix_instruction(
                             _fout, _rg_attempt, _rg_max, stack=_orch_name
@@ -3789,12 +3803,14 @@ async def _process_prompt(
                                         attestation as _att,
                                     )
 
-                                    _att_gates = [(_gate_kind, _fv)]
+                                    _att_gates: list[tuple[str, Any]] = [
+                                        (_gate_kind, _runtime_verdict)
+                                    ]
                                     if _att_sec is not None:
                                         _att_gates.append(("security", _att_sec))
                                     _attn = _att.build_attestation(
                                         gates=_att_gates,
-                                        stack=_orch_name,
+                                        stack=_attestation_stack,
                                         project_id=str(project_id),
                                         created_at=_att.now_iso(),
                                     )
@@ -3805,7 +3821,7 @@ async def _process_prompt(
                                     _att_capture = _att_gates
                                 except Exception as _att_exc:  # never break a build
                                     print(f"[ATTEST] skipped: {_att_exc}", flush=True)
-                            if not _fv.passed:
+                            if not _runtime_verdict.passed:
                                 accumulated += (
                                     "\n\n⚠️ Проверка работоспособности/безопасности не "
                                     "прошла — открой превью и уточни запрос."
@@ -3888,7 +3904,7 @@ async def _process_prompt(
                     and not _build_plan.is_empty
                     and (not _is_edit or _cov_edit_touched)
                 )
-                if _cov_on:
+                if _cov_on and _build_plan is not None:
                     from omnia_api.services import agent_gate_feedback as _agf3
                     from omnia_api.services import app_errors as _app_errors
                     from omnia_api.services import coverage_gate as _covg
@@ -3900,7 +3916,7 @@ async def _process_prompt(
                         _cv = await _covg.run_coverage_gate(
                             project_id,
                             _build_plan,
-                            stack=_orch_name,
+                            stack=_orch_name or project_template,
                             known_routes=_known or None,
                         )
                         # A1: heal HARD gaps (route exists, wrong status) ALWAYS; a
@@ -4045,7 +4061,7 @@ async def _process_prompt(
 
                         _rec = _att.build_attestation(
                             gates=_att_capture,
-                            stack=_orch_name,
+                            stack=_orch_name or project_template,
                             project_id=str(project_id),
                             created_at=_att.now_iso(),
                             commit_sha=new_sha,
@@ -4056,7 +4072,7 @@ async def _process_prompt(
                                     project_id=project_id,
                                     snapshot_id=_agent_snap_id,
                                     commit_sha=new_sha,
-                                    stack=_orch_name,
+                                    stack=_attestation_stack,
                                     overall_passed=bool(_rec["overall_passed"]),
                                     digest=_rec["digest"],
                                     gates=_rec["gates"],
@@ -4173,7 +4189,7 @@ async def _process_prompt(
         print(f"[PP] gen_mode={_gen_mode}", flush=True)
         if pipeline_debug.enabled():
             try:
-                _s = get_settings()
+                _route_settings = get_settings()
                 pipeline_debug.dump(
                     project_id,
                     assistant_message_id,
@@ -4183,15 +4199,15 @@ async def _process_prompt(
                     f"model_id={model_id}\n"
                     f"template={project_template}\n"
                     f"image_gen_enabled={project_image_gen_enabled}\n"
-                    f"use_art_director_freeform={_s.use_art_director_freeform}\n"
-                    f"use_visual_enricher={_s.use_visual_enricher}\n"
-                    f"use_acceptance_gate={_s.use_acceptance_gate}\n"
-                    f"acceptance_score_only={_s.acceptance_score_only}\n"
-                    f"acceptance_min_score={_s.acceptance_min_score}\n"
-                    f"use_section_catalog={_s.use_section_catalog}\n"
-                    f"use_originality={_s.use_originality}\n"
-                    f"use_vision_audit={_s.use_vision_audit}\n"
-                    f"use_design_judge={_s.use_design_judge}\n",
+                    f"use_art_director_freeform={_route_settings.use_art_director_freeform}\n"
+                    f"use_visual_enricher={_route_settings.use_visual_enricher}\n"
+                    f"use_acceptance_gate={_route_settings.use_acceptance_gate}\n"
+                    f"acceptance_score_only={_route_settings.acceptance_score_only}\n"
+                    f"acceptance_min_score={_route_settings.acceptance_min_score}\n"
+                    f"use_section_catalog={_route_settings.use_section_catalog}\n"
+                    f"use_originality={_route_settings.use_originality}\n"
+                    f"use_vision_audit={_route_settings.use_vision_audit}\n"
+                    f"use_design_judge={_route_settings.use_design_judge}\n",
                 )
             except Exception as _rt_exc:
                 print(f"[PP] debug_route_failed {_rt_exc!r}", flush=True)
@@ -4203,7 +4219,7 @@ async def _process_prompt(
         # via the dict trick — Python doesn't let us rebind outer names
         # cleanly from a nested coroutine.
         # ──────────────────────────────────────────────────────────────
-        state: dict[str, object] = {
+        state: dict[str, Any] = {
             "accumulated": "",
             "usage": None,
             "error": None,
@@ -4590,7 +4606,7 @@ async def _process_prompt(
                     else "Генерирую новое изображение для выделенной зоны.\n"
                 ) + f'<edit path="index.html">\n{_blocks}</edit>\n'
                 if _gp_usage:
-                    usage_data = _gp_usage  # type: ignore[assignment]
+                    usage_data = _gp_usage
                 print(
                     f"[PP] direct_image edit built bg={_bg} pairs={len(_sr_pairs)} gp={_gp[:60]!r}",
                     flush=True,
@@ -4611,7 +4627,7 @@ async def _process_prompt(
         else:
             await _run_stream(model_id, force_all=force_model)
             accumulated = str(state["accumulated"])
-            usage_data = state["usage"]  # type: ignore[assignment]
+            usage_data = state["usage"]
             stream_error = state["error"]
 
         if stream_error:
@@ -4717,7 +4733,7 @@ async def _process_prompt(
 
                 try:
                     _retry_parts: list[str] = []
-                    _retry_usage: dict | None = None
+                    _retry_usage: dict[str, Any] | None = None
                     async for _rev in stream_chat_completion(
                         messages,
                         _model_for_role("director"),
@@ -4728,7 +4744,7 @@ async def _process_prompt(
                         if "delta" in _rev:
                             _retry_parts.append(str(_rev["delta"]))
                         elif "usage" in _rev:
-                            _retry_usage = _rev["usage"]  # type: ignore[assignment]
+                            _retry_usage = _rev["usage"]
                     _raw2 = "".join(_retry_parts).strip()
                     if _raw2.startswith("```"):
                         _raw2 = _raw2.split("\n", 1)[1] if "\n" in _raw2 else _raw2[3:]
@@ -4749,7 +4765,7 @@ async def _process_prompt(
                         f'<file path="{p}">\n{c}\n</file>' for p, c in _rendered2.items()
                     )
                     if _retry_usage:
-                        usage_data = _retry_usage  # type: ignore[assignment]
+                        usage_data = _retry_usage
                     print(
                         f"[PP] catalog_ir_recovered_via_director sections={len(_ir2.sections)}",
                         flush=True,
@@ -4814,7 +4830,7 @@ async def _process_prompt(
             if _retry_acc.strip():
                 accumulated = accumulated + "\n" + _retry_acc
                 if state["usage"] and isinstance(state["usage"], dict):
-                    usage_data = state["usage"]  # type: ignore[assignment]
+                    usage_data = state["usage"]
                 try:
                     files, _ = _extract_files_and_edits(_retry_acc, current_files)
                 except (UnsafePathError, ValueError):
@@ -4859,7 +4875,7 @@ async def _process_prompt(
                     files = {**files, **_cr_files}
                     accumulated = accumulated + "\n" + _cr_acc
                     if state["usage"] and isinstance(state["usage"], dict):
-                        usage_data = state["usage"]  # type: ignore[assignment]
+                        usage_data = state["usage"]
                     print(
                         f"[PP] surgical_conflict_retry applied files={list(files.keys())}",
                         flush=True,
@@ -4918,7 +4934,7 @@ async def _process_prompt(
                             # add a clean "Правка" chip once it lands.
                             _z_parts.append(str(_ev["delta"]))
                         elif "usage" in _ev:
-                            _z_usage = _ev["usage"]  # type: ignore[assignment]
+                            _z_usage = _ev["usage"]
                 except Exception as _ze_exc:
                     print(f"[PP] zone_edit stream_err {_ze_exc!r}", flush=True)
                 _z_acc = "".join(_z_parts)
@@ -4929,7 +4945,7 @@ async def _process_prompt(
                 if _new_block and (_old_root_id is None or _ze.root_id(_new_block) == _old_root_id):
                     files = {"index.html": _ze.splice(_old_index_src, _span, _new_block)}
                     if _z_usage:
-                        usage_data = _z_usage  # type: ignore[assignment]
+                        usage_data = _z_usage
                     # Clean chip in chat — never the raw <section>.
                     accumulated = accumulated + (
                         '\n<edit path="index.html">\n'
@@ -4995,7 +5011,7 @@ async def _process_prompt(
                             },
                         )
                     elif "usage" in _ev:
-                        _rw_usage = _ev["usage"]  # type: ignore[assignment]
+                        _rw_usage = _ev["usage"]
             except Exception as _rw_exc:
                 print(f"[PP] surgical_rewrite_fallback stream_err {_rw_exc!r}", flush=True)
             _rw_acc = "".join(_rw_parts)
@@ -5023,7 +5039,7 @@ async def _process_prompt(
             if _new_index and _ratio >= 0.6:
                 files = _rw_files
                 if _rw_usage:
-                    usage_data = _rw_usage  # type: ignore[assignment]
+                    usage_data = _rw_usage
                 print(
                     f"[PP] surgical_rewrite_fallback applied ratio={_ratio:.2f}",
                     flush=True,
@@ -5136,7 +5152,7 @@ async def _process_prompt(
                                 },
                             )
                         elif "usage" in _ev:
-                            _crc_usage = _ev["usage"]  # type: ignore[assignment]
+                            _crc_usage = _ev["usage"]
                 except Exception as _crc_exc:
                     print(
                         f"[PP] container_rewrite_fallback stream_err {_crc_exc!r}",
@@ -5153,18 +5169,18 @@ async def _process_prompt(
                 # replaces it. Code-heavy files (few visible words) bypass the
                 # ratio — there the word-overlap metric is noise.
                 _accepted: dict[str, str] = {}
-                for _p, _new in _crc_files.items():
+                for _p, _new_content in _crc_files.items():
                     if _p not in _targets:
                         continue
-                    _old = _targets[_p]
-                    _ratio = _text_preserved_ratio(_old, _new)
-                    _few_words = len(_visible_words(_old)) < 15
+                    _old_content = _targets[_p]
+                    _ratio = _text_preserved_ratio(_old_content, _new_content)
+                    _few_words = len(_visible_words(_old_content)) < 15
                     if (
-                        _new.strip()
-                        and len(_new) > 80
-                        and (_ratio >= 0.45 or _few_words or len(_old) < 400)
+                        _new_content.strip()
+                        and len(_new_content) > 80
+                        and (_ratio >= 0.45 or _few_words or len(_old_content) < 400)
                     ):
-                        _accepted[_p] = _new
+                        _accepted[_p] = _new_content
                         print(
                             f"[PP] container_rewrite accept {_p} ratio={_ratio:.2f}",
                             flush=True,
@@ -5172,13 +5188,13 @@ async def _process_prompt(
                     else:
                         print(
                             f"[PP] container_rewrite reject {_p} ratio={_ratio:.2f} "
-                            f"new_len={len(_new)}",
+                            f"new_len={len(_new_content)}",
                             flush=True,
                         )
                 if _accepted:
                     files = _accepted
                     if _crc_usage:
-                        usage_data = _crc_usage  # type: ignore[assignment]
+                        usage_data = _crc_usage
 
         # --- Pass 2..N: empty-content fallback ----------------------
         # If we got nothing usable back AND the primary model has known
@@ -5225,7 +5241,7 @@ async def _process_prompt(
                 mp_err = state["error"]
                 accumulated = accumulated + mp_acc
                 if mp_usage and isinstance(mp_usage, dict):
-                    usage_data = mp_usage  # type: ignore[assignment]
+                    usage_data = mp_usage
                 retried_models.append(f"{model_id}#multipass")
                 if mp_err:
                     print(
@@ -5270,7 +5286,7 @@ async def _process_prompt(
                 if fb_usage and isinstance(fb_usage, dict):
                     # Keep token counts of the successful model — that's the
                     # one actually billed (gateway charges per call).
-                    usage_data = fb_usage  # type: ignore[assignment]
+                    usage_data = fb_usage
                 retried_models.append(fb_model)
                 effective_model = fb_model
                 if fb_err:
@@ -5435,6 +5451,7 @@ async def _process_prompt(
         # indicator. NOT a re-generate trigger yet — measurement first,
         # feedback loop comes in Sprint 2 once we have a baseline score
         # distribution. Best-effort: any audit failure logs and continues.
+        report: AuditReport | None = None
         if files:
             try:
                 html_pool = {
@@ -5490,11 +5507,7 @@ async def _process_prompt(
         _RETRY_SCORE_THRESHOLD = 7  # max=10
         _retry_done = False
         try:
-            _last_report = None  # type: ignore[var-annotated]
-            try:
-                _last_report = report
-            except NameError:
-                _last_report = None
+            _last_report = report
             # B3 — deterministic rubric verdict, refined by the optional LLM
             # judge (role `audit`, Sonnet) ONLY in the borderline 6–7/10 band
             # where the rubric is least decisive. The judge can both *promote*
@@ -5511,7 +5524,7 @@ async def _process_prompt(
                 _judge_html = "\n".join(
                     c for p, c in files.items() if p.endswith(".html") or p.endswith(".htm")
                 )
-                _verdict = await _audit_judge_wants_retry(
+                _audit_retry_verdict = await _audit_judge_wants_retry(
                     html=_judge_html,
                     report=_last_report,
                     model=model_for_role("audit", override=force_model),
@@ -5519,14 +5532,15 @@ async def _process_prompt(
                     project_id=project_id,
                     message_id=assistant_message_id,
                 )
-                if _verdict is not None:
+                if _audit_retry_verdict is not None:
                     print(
-                        f"[PP] audit_judge verdict={'RETRY' if _verdict else 'PASS'} "
+                        f"[PP] audit_judge verdict="
+                        f"{'RETRY' if _audit_retry_verdict else 'PASS'} "
                         f"score={_score}",
                         flush=True,
                     )
-                    _wants_retry = _verdict
-            if _retry_eligible and _wants_retry:
+                    _wants_retry = _audit_retry_verdict
+            if _retry_eligible and _wants_retry and _last_report is not None:
                 retry_msg = format_failures_for_retry(_last_report)
                 if retry_msg:
                     print(
@@ -5890,7 +5904,7 @@ async def _process_prompt(
             # page (see acceptance_repair_floor docstring) — not on every
             # borderline vision score.
             _repair_floor = max(0, int(_acc_settings.acceptance_repair_floor))
-            _verdict = None
+            _acceptance_verdict: _acceptance.AcceptanceResult | None = None
             # Best-so-far guard: the design-judge repair can REGRESS (re-add dead
             # links → struct fails, or strip wow-features). Track the best-ranked
             # attempt and ship THAT — never a repair worse than what we had.
@@ -5902,7 +5916,7 @@ async def _process_prompt(
                     # model) must NEVER hang the build. On timeout → TimeoutError
                     # bubbles to the gate's except → we ship the current page and
                     # still reach commit (no lost work).
-                    _verdict = await asyncio.wait_for(
+                    _attempt_verdict = await asyncio.wait_for(
                         _acceptance.evaluate(
                             files,
                             project_id=str(project_id),
@@ -5926,31 +5940,38 @@ async def _process_prompt(
                         ),
                         timeout=90,
                     )
+                    _acceptance_verdict = _attempt_verdict
                     _rank = (
-                        1 if _verdict.structural_ok else 0,
-                        1 if _verdict.responsive_ok else 0,
-                        int(_verdict.score or 0),
+                        1 if _attempt_verdict.structural_ok else 0,
+                        1 if _attempt_verdict.responsive_ok else 0,
+                        int(_attempt_verdict.score or 0),
                     )
                     if _best_rank is None or _rank > _best_rank:
                         _best_rank, _best_files = _rank, files
                     print(
-                        f"[PP] acceptance attempt={_acc_attempt} passed={_verdict.passed} "
-                        f"verdict={_verdict.verdict} score={_verdict.score} "
-                        f"struct={_verdict.structural_ok} resp={_verdict.responsive_ok} "
-                        f"vision={_verdict.vision_ran}",
+                        f"[PP] acceptance attempt={_acc_attempt} "
+                        f"passed={_attempt_verdict.passed} "
+                        f"verdict={_attempt_verdict.verdict} "
+                        f"score={_attempt_verdict.score} "
+                        f"struct={_attempt_verdict.structural_ok} "
+                        f"resp={_attempt_verdict.responsive_ok} "
+                        f"vision={_attempt_verdict.vision_ran}",
                         flush=True,
                     )
                     pipeline_debug.dump(
                         project_id,
                         assistant_message_id,
                         f"04_vision_attempt{_acc_attempt}.md",
-                        f"verdict={_verdict.verdict} score={_verdict.score} "
-                        f"passed={_verdict.passed} struct={_verdict.structural_ok} "
-                        f"resp={_verdict.responsive_ok} vision_ran={_verdict.vision_ran}\n\n"
-                        f"ISSUES ({len(_verdict.issues)}):\n"
-                        + "\n".join(f"- {_i}" for _i in _verdict.issues)
+                        f"verdict={_attempt_verdict.verdict} "
+                        f"score={_attempt_verdict.score} "
+                        f"passed={_attempt_verdict.passed} "
+                        f"struct={_attempt_verdict.structural_ok} "
+                        f"resp={_attempt_verdict.responsive_ok} "
+                        f"vision_ran={_attempt_verdict.vision_ran}\n\n"
+                        f"ISSUES ({len(_attempt_verdict.issues)}):\n"
+                        + "\n".join(f"- {_i}" for _i in _attempt_verdict.issues)
                         + "\n\nFEEDBACK:\n"
-                        + (_verdict.feedback or "(none)"),
+                        + (_attempt_verdict.feedback or "(none)"),
                     )
                     await publish_event(
                         project_id,
@@ -5958,9 +5979,9 @@ async def _process_prompt(
                         {
                             "message_id": str(assistant_message_id),
                             "stage": "acceptance",
-                            "passed": _verdict.passed,
-                            "verdict": _verdict.verdict,
-                            "score": _verdict.score,
+                            "passed": _attempt_verdict.passed,
+                            "verdict": _attempt_verdict.verdict,
+                            "score": _attempt_verdict.score,
                         },
                     )
                     # Spend the repair re-roll ONLY on a genuinely deficient page:
@@ -5975,26 +5996,29 @@ async def _process_prompt(
                     # the vision issues as feedback. Default OFF → unchanged.
                     _taste_repair = (
                         _acc_settings.acceptance_taste_repair_on_generic
-                        and _verdict.vision_ran
-                        and _verdict.verdict == "generic"
+                        and _attempt_verdict.vision_ran
+                        and _attempt_verdict.verdict == "generic"
                     )
                     _repair_worthy = (
-                        not _verdict.structural_ok
-                        or not _verdict.responsive_ok
-                        or _verdict.verdict == "broken"
-                        or (_verdict.vision_ran and int(_verdict.score) < _repair_floor)
+                        not _attempt_verdict.structural_ok
+                        or not _attempt_verdict.responsive_ok
+                        or _attempt_verdict.verdict == "broken"
+                        or (
+                            _attempt_verdict.vision_ran
+                            and int(_attempt_verdict.score) < _repair_floor
+                        )
                         or _taste_repair
                     )
                     if (
-                        _verdict.passed
-                        or not _verdict.feedback
+                        _attempt_verdict.passed
+                        or not _attempt_verdict.feedback
                         or _acc_attempt >= _max_acc
                         or not _repair_worthy
                     ):
                         break
                     notice = (
                         f"\n\n*Приёмка {_acc_attempt + 1}/{_max_acc}: правлю вёрстку "
-                        f"({_verdict.verdict})…*\n\n"
+                        f"({_attempt_verdict.verdict})…*\n\n"
                     )
                     accumulated = accumulated + notice
                     await publish_event(
@@ -6003,7 +6027,7 @@ async def _process_prompt(
                         {"message_id": str(assistant_message_id), "delta": notice},
                     )
                     messages.append({"role": "assistant", "content": accumulated})
-                    messages.append({"role": "user", "content": _verdict.feedback})
+                    messages.append({"role": "user", "content": _attempt_verdict.feedback})
                     # Hard cap: a stuck repair re-roll must not hang the build —
                     # on timeout we ship the pre-repair page and reach commit.
                     await asyncio.wait_for(
@@ -6056,8 +6080,8 @@ async def _process_prompt(
 
                 # Remember an accepted freeform page's fingerprint (Sprint 4)
                 # so later generations can be nudged off near-duplicates.
-                if _verdict is not None and _verdict.passed:
-                    _acc_fingerprint = _verdict.fingerprint
+                if _acceptance_verdict is not None and _acceptance_verdict.passed:
+                    _acc_fingerprint = _acceptance_verdict.fingerprint
 
                 # Freeform exhausted its retries and still fails → regenerate
                 # once via the catalog/IR path (guaranteed valid page).
@@ -6069,13 +6093,13 @@ async def _process_prompt(
                 # share of structurally-fine freeform builds. With taste-repair on,
                 # the re-roll already ran (Loop A); catalog stays the last resort.
                 _vision_only_block = (
-                    _verdict is not None
-                    and getattr(_verdict, "vision_blocked", False)
+                    _acceptance_verdict is not None
+                    and getattr(_acceptance_verdict, "vision_blocked", False)
                     and not _acc_settings.acceptance_taste_repair_on_generic
                 )
                 if (
-                    _verdict is not None
-                    and not _verdict.passed
+                    _acceptance_verdict is not None
+                    and not _acceptance_verdict.passed
                     and not _vision_only_block
                     and _gen_mode == "freeform"
                     and _acc_settings.use_section_catalog
@@ -6219,10 +6243,12 @@ async def _process_prompt(
             try:
                 from omnia_api.services import overrides as _overrides
 
-                _old_index = current_files.get("index.html")
-                if _old_index and files.get("index.html"):
+                _current_index_with_overrides = current_files.get("index.html")
+                _generated_index_with_overrides = files.get("index.html")
+                if _current_index_with_overrides and _generated_index_with_overrides:
                     files["index.html"] = _overrides.carry_over_overrides(
-                        _old_index, files["index.html"]
+                        _current_index_with_overrides,
+                        _generated_index_with_overrides,
                     )
             except Exception as _co_exc:
                 print(f"[PP] overrides carry-over skipped err={_co_exc!r}", flush=True)
@@ -6444,7 +6470,10 @@ async def _process_prompt(
                                 factory,
                                 project_id,
                                 assistant_message_id,
-                                category=_sr_cat or "compile",
+                                category=cast(
+                                    app_errors.ErrorCategory,
+                                    _sr_cat or "compile",
+                                ),
                                 detail=str(
                                     _sr_err.get("error") or "Не удалось собрать приложение."
                                 ),
@@ -6582,7 +6611,7 @@ async def _process_prompt(
 
 
 async def _finalize_message(
-    factory,
+    factory: async_sessionmaker[AsyncSession],
     message_id: UUID,
     content: str,
     usage_data: dict[str, float | int] | None,

@@ -139,9 +139,10 @@ async def run_hero_media_render(render_id: UUID) -> None:
             poster_asset = primary_asset
 
         if settings.hero_media_stub_mode:
-            if poster_asset is None and primary_asset is None:
-                raise RuntimeError("stub render needs at least one uploaded source asset")
-            poster_asset = poster_asset or primary_asset
+            if poster_asset is None:
+                if primary_asset is None:
+                    raise RuntimeError("stub render needs at least one uploaded source asset")
+                poster_asset = primary_asset
             _append_progress(
                 render,
                 status="assembling",
@@ -166,8 +167,7 @@ async def run_hero_media_render(render_id: UUID) -> None:
                 render,
                 status="completed",
                 detail=(
-                    "Stub-mode hero готов: preview/apply path реальный, "
-                    "media provider симулирован"
+                    "Stub-mode hero готов: preview/apply path реальный, media provider симулирован"
                 ),
             )
             render.finished_at = _now()
