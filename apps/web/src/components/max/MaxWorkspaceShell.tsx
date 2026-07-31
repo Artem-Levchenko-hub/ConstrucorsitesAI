@@ -138,7 +138,7 @@ export function MaxWorkspaceShell({
         </div>
       </aside>
 
-      <section className="flex min-h-0 min-w-0 flex-col border-r border-[#d8d4cb] bg-[#fcfbf7]">
+      <section className="flex min-h-0 min-w-0 flex-col bg-[#fcfbf7]">
         <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#d8d4cb] px-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-1 sm:gap-3">
             <button type="button" onClick={() => setMobileNavOpen(true)} className="grid size-11 shrink-0 place-items-center rounded-[8px] text-[#6d6962] lg:hidden" aria-label="Открыть меню"><Menu className="size-4" /></button>
@@ -202,7 +202,7 @@ export function MaxWorkspaceShell({
       </section>
 
       {previewPanelVisible && (
-        <div className="hidden min-h-0 bg-[#f5f3ee] xl:block">
+        <div className="hidden min-h-0 bg-[#fcfbf7] xl:block">
           <MaxLivePreview
             project={project}
             onClose={() => setPreviewPanelVisible(false)}
@@ -221,7 +221,7 @@ export function MaxWorkspaceShell({
             aria-label="Закрыть живое превью"
           />
           <section
-            className="relative flex h-full w-full max-w-[460px] flex-col bg-[#f5f3ee] shadow-[-30px_0_80px_rgba(0,0,0,.16)]"
+            className="relative flex h-full w-full max-w-[460px] flex-col bg-[#fcfbf7] shadow-[-30px_0_80px_rgba(0,0,0,.16)]"
             aria-label="Живое превью приложения"
             data-testid="max-mobile-preview"
           >

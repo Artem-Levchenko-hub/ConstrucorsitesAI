@@ -176,10 +176,10 @@ export function MaxLivePreview({
 
   return (
     <aside
-      className="flex h-full min-h-0 flex-col bg-[#f5f3ee] px-3 py-3 sm:px-5 sm:py-4"
+      className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
       data-testid="max-live-preview"
     >
-      <div className="flex shrink-0 items-center justify-between gap-3">
+      <div className="flex shrink-0 items-center justify-between gap-3 px-3 sm:px-5">
         <div>
           <p className="omnia-kicker text-[#8d887f]">Mobile WebView</p>
           <h2 className="mt-1 text-sm font-semibold">Живое превью</h2>
@@ -207,7 +207,7 @@ export function MaxLivePreview({
       <div className="mt-3 flex min-h-0 flex-1 flex-col items-center">
         <div
           ref={deviceStage}
-          className="flex min-h-[340px] w-full flex-1 items-center justify-center overflow-hidden"
+          className="flex min-h-[340px] w-full flex-1 items-center justify-center overflow-hidden px-1.5 sm:px-2"
           data-testid="max-live-device-stage"
         >
           <div
