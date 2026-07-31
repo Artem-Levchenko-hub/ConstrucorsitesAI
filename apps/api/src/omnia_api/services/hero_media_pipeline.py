@@ -26,11 +26,13 @@ def _now() -> datetime:
 
 
 def _storage_key_from_url(url: str, bucket: str) -> str | None:
-    path = urlparse(url).path.strip("/")
-    prefix = f"{bucket}/"
-    if path.startswith(prefix):
-        return path[len(prefix) :]
-    return None
+    parts = [part for part in urlparse(url).path.split("/") if part]
+    try:
+        bucket_index = parts.index(bucket)
+    except ValueError:
+        return None
+    key = "/".join(parts[bucket_index + 1 :])
+    return key or None
 
 
 def _guess_mime(url: str, fallback: str) -> str:

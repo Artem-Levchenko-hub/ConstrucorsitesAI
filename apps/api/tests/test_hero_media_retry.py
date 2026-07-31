@@ -2,7 +2,7 @@ from uuid import uuid4
 
 from omnia_api.models.hero_media_render import HeroMediaRender
 from omnia_api.routers.hero_media import _prepare_render_retry
-from omnia_api.services.hero_media_pipeline import _locked_media_plan
+from omnia_api.services.hero_media_pipeline import _locked_media_plan, _storage_key_from_url
 
 
 def _render(*, media_plan: str = "motion") -> HeroMediaRender:
@@ -48,3 +48,21 @@ def test_prepare_retry_resets_terminal_output_and_counts_user_retry() -> None:
     assert render.finished_at is None
     assert render.retry_count == 3
     assert render.progress_log[-1]["status"] == "queued"
+
+
+def test_storage_key_supports_nginx_prefixed_public_media_url() -> None:
+    url = "https://constructor.example/minio/omnia-videos/project/video.mp4"
+
+    assert _storage_key_from_url(url, "omnia-videos") == "project/video.mp4"
+
+
+def test_storage_key_supports_direct_bucket_url() -> None:
+    url = "https://minio.example/omnia-images/uploads/project/poster.webp"
+
+    assert _storage_key_from_url(url, "omnia-images") == "uploads/project/poster.webp"
+
+
+def test_storage_key_rejects_another_bucket() -> None:
+    url = "https://constructor.example/minio/omnia-videos/project/video.mp4"
+
+    assert _storage_key_from_url(url, "omnia-images") is None
