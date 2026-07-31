@@ -605,6 +605,12 @@ async def run_subscription_lifecycle_forever() -> None:
     settings = get_settings()
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    log.info(
+        "subscription.lifecycle_started",
+        poll_seconds=settings.billing_lifecycle_poll_seconds,
+        retry_hours=settings.billing_renewal_retry_hours,
+        grace_days=settings.billing_grace_days,
+    )
     try:
         while True:
             try:
