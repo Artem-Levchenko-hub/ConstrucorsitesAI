@@ -128,8 +128,9 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "subscription-purchase",
         title: "Покупка и активация тарифа",
-        detail: "Успешное подтверждение провайдера атомарно активирует тариф и выдаёт права.",
-        status: "todo",
+        detail: "Успешное подтверждение провайдера атомарно активирует купленную версию и начисляет включённый кредит.",
+        status: "done",
+        completedAt: "31 июля 2026",
       },
       {
         id: "renewal",

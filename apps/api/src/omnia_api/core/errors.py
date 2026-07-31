@@ -114,6 +114,9 @@ ErrorCode = Literal[
     "payments_unavailable",
     "payment_provider_unavailable",
     "invalid_webhook",
+    "subscription_already_active",
+    "subscription_checkout_in_progress",
+    "subscription_plan_not_purchasable",
     "refund_unavailable",
     "refund_balance_used",
 ]

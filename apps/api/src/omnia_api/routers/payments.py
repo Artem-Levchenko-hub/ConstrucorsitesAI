@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from omnia_api.core.admin import is_admin_user
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.account import Payment
+from omnia_api.models.billing import BillingPlan, Subscription
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
-from omnia_api.schemas.payments import PaymentConfigPublic, PaymentCreate, PaymentPublic
+from omnia_api.schemas.payments import (
+    PaymentConfigPublic,
+    PaymentCreate,
+    PaymentPublic,
+    SubscriptionCheckoutCreate,
+)
 from omnia_api.services import yookassa
 from omnia_api.services.billing_accounts import resolve_billing_account
 
@@ -46,6 +54,88 @@ def _configured() -> bool:
 
 def _is_admin(user: User) -> bool:
     return is_admin_user(user)
+
+
+def _one_month_after(value: datetime) -> datetime:
+    year = value.year + (1 if value.month == 12 else 0)
+    month = 1 if value.month == 12 else value.month + 1
+    day = min(value.day, monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
+
+
+async def _cancel_pending_subscription(
+    session: SessionDep,
+    payment: Payment,
+) -> None:
+    if payment.purpose != "subscription_initial" or payment.subscription_id is None:
+        return
+    subscription = await session.get(Subscription, payment.subscription_id)
+    if subscription is None or subscription.status != "pending_payment":
+        return
+    now = datetime.now(UTC)
+    subscription.status = "canceled"
+    subscription.canceled_at = now
+    subscription.ended_at = now
+
+
+async def _send_to_provider(
+    *,
+    session: SessionDep,
+    payment: Payment,
+    current_user: User,
+    title: str,
+    return_path: str,
+) -> Payment:
+    assert current_user.email is not None
+    settings = get_settings()
+    try:
+        provider = await yookassa.create_payment(
+            amount=f"{payment.amount_rub:.2f}",
+            description=title,
+            return_url=f"{settings.web_base_url.rstrip('/')}{return_path}",
+            customer_email=str(current_user.email),
+            idempotency_key=payment.idempotency_key,
+            metadata={
+                "payment_id": str(payment.id),
+                "billing_account_id": str(payment.billing_account_id),
+                "user_id": str(current_user.id),
+                "purpose": payment.purpose,
+            },
+        )
+    except yookassa.YooKassaUnavailable as exc:
+        payment.status = "failed"
+        await _cancel_pending_subscription(session, payment)
+        await session.commit()
+        raise ApiError(
+            "payment_provider_unavailable",
+            "ЮKassa временно недоступна",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    provider_payment_id = str(provider.get("id") or "")
+    if not provider_payment_id:
+        payment.status = "failed"
+        await _cancel_pending_subscription(session, payment)
+        await session.commit()
+        raise ApiError(
+            "payment_provider_unavailable",
+            "ЮKassa вернула неполный ответ",
+            status.HTTP_502_BAD_GATEWAY,
+        )
+    payment.provider_payment_id = provider_payment_id
+    confirmation = provider.get("confirmation")
+    if isinstance(confirmation, dict):
+        payment.confirmation_url = str(confirmation.get("confirmation_url") or "") or None
+    provider_status = _provider_status(provider.get("status"))
+    if provider_status == "succeeded":
+        await _apply_provider_state(session, payment, provider)
+    else:
+        payment.status = provider_status
+        payment.provider_payload = provider
+    if provider_status in {"cancelled", "failed"}:
+        await _cancel_pending_subscription(session, payment)
+    await session.commit()
+    await session.refresh(payment)
+    return payment
 
 
 @router.get("/config", response_model=PaymentConfigPublic)
@@ -126,46 +216,225 @@ async def create_payment(
     session.add(payment)
     await session.commit()
     await session.refresh(payment)
-    settings = get_settings()
-    try:
-        provider = await yookassa.create_payment(
-            amount=f"{price:.2f}",
-            description=title,
-            return_url=f"{settings.web_base_url.rstrip('/')}/account?payment={payment.id}",
-            customer_email=str(current_user.email),
-            idempotency_key=key,
-            metadata={
-                "payment_id": str(payment.id),
-                "billing_account_id": str(account.id),
-                "user_id": str(current_user.id),
-            },
-        )
-    except yookassa.YooKassaUnavailable as exc:
-        payment.status = "failed"
-        await session.commit()
+    return await _send_to_provider(
+        session=session,
+        payment=payment,
+        current_user=current_user,
+        title=title,
+        return_path=f"/account?payment={payment.id}",
+    )
+
+
+@router.post(
+    "/subscription",
+    response_model=PaymentPublic,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_subscription_checkout(
+    payload: SubscriptionCheckoutCreate,
+    current_user: CurrentUserDep,
+    session: SessionDep,
+) -> Payment:
+    if not _configured():
         raise ApiError(
-            "payment_provider_unavailable",
-            "ЮKassa временно недоступна",
+            "payments_unavailable",
+            "Платежи ещё не подключены",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
-    provider_payment_id = str(provider.get("id") or "")
-    if not provider_payment_id:
-        payment.status = "failed"
-        await session.commit()
-        raise ApiError(
-            "payment_provider_unavailable",
-            "ЮKassa вернула неполный ответ",
-            status.HTTP_502_BAD_GATEWAY,
         )
-    payment.provider_payment_id = provider_payment_id
-    payment.status = _provider_status(provider.get("status"))
-    confirmation = provider.get("confirmation")
-    if isinstance(confirmation, dict):
-        payment.confirmation_url = str(confirmation.get("confirmation_url") or "") or None
-    payment.provider_payload = provider
-    await session.commit()
+    if current_user.email is None or current_user.email_verified_at is None:
+        raise ApiError(
+            "email_verification_required",
+            "Подтвердите email перед оплатой",
+            status.HTTP_403_FORBIDDEN,
+        )
+    account = await resolve_billing_account(session, current_user.id)
+    key = str(payload.idempotency_key)
+    existing = (
+        await session.execute(select(Payment).where(Payment.idempotency_key == key))
+    ).scalar_one_or_none()
+    if existing is not None:
+        if (
+            existing.billing_account_id != account.id
+            or existing.purpose != "subscription_initial"
+        ):
+            raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT)
+        return existing
+
+    pending_payment = (
+        await session.execute(
+            select(Payment)
+            .where(
+                Payment.billing_account_id == account.id,
+                Payment.purpose == "subscription_initial",
+                Payment.status.in_(("pending", "waiting_for_capture")),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if pending_payment is not None:
+        raise ApiError(
+            "subscription_checkout_in_progress",
+            "Оплата другого тарифа уже ожидает завершения",
+            status.HTTP_409_CONFLICT,
+        )
+
+    plan = (
+        await session.execute(
+            select(BillingPlan).where(
+                BillingPlan.code == payload.plan_code,
+                BillingPlan.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if plan is None or plan.price_rub <= 0:
+        raise ApiError(
+            "subscription_plan_not_purchasable",
+            "Тариф недоступен для покупки",
+            status.HTTP_409_CONFLICT,
+        )
+    current = (
+        await session.execute(
+            select(Subscription)
+            .where(
+                Subscription.billing_account_id == account.id,
+                Subscription.status.in_(("trialing", "active", "past_due", "paused")),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if current is not None and current.plan_id == plan.id and current.status == "active":
+        raise ApiError(
+            "subscription_already_active",
+            "Этот тариф уже активен",
+            status.HTTP_409_CONFLICT,
+        )
+
+    subscription = Subscription(
+        billing_account_id=account.id,
+        user_id=current_user.id,
+        plan_id=plan.id,
+        status="pending_payment",
+        auto_renew=False,
+    )
+    session.add(subscription)
+    await session.flush()
+    payment = Payment(
+        billing_account_id=account.id,
+        user_id=current_user.id,
+        idempotency_key=key,
+        purpose="subscription_initial",
+        subscription_id=subscription.id,
+        package_code=f"subscription:{plan.code}:v{plan.version}",
+        amount_rub=plan.price_rub,
+        credit_rub=plan.included_credit_rub,
+        status="pending",
+    )
+    session.add(payment)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise ApiError(
+            "subscription_checkout_in_progress",
+            "Оплата другого тарифа уже ожидает завершения",
+            status.HTTP_409_CONFLICT,
+        ) from exc
     await session.refresh(payment)
-    return payment
+    return await _send_to_provider(
+        session=session,
+        payment=payment,
+        current_user=current_user,
+        title=f"Подписка Omnia {plan.name}, 1 месяц",
+        return_path=f"/billing/plan?payment={payment.id}",
+    )
+
+
+async def _activate_subscription_payment(
+    session: SessionDep,
+    payment: Payment,
+) -> None:
+    if payment.subscription_id is None:
+        raise ApiError(
+            "invalid_webhook",
+            "subscription payment is not linked",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    subscription = (
+        await session.execute(
+            select(Subscription)
+            .where(Subscription.id == payment.subscription_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if (
+        subscription is None
+        or subscription.billing_account_id != payment.billing_account_id
+        or subscription.status != "pending_payment"
+    ):
+        raise ApiError(
+            "invalid_webhook",
+            "subscription is not awaiting payment",
+            status.HTTP_409_CONFLICT,
+        )
+    plan = await session.get(BillingPlan, subscription.plan_id)
+    if plan is None or plan.price_rub != payment.amount_rub:
+        raise ApiError(
+            "invalid_webhook",
+            "subscription plan mismatch",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    live_subscriptions = list(
+        (
+            await session.execute(
+                select(Subscription)
+                .where(
+                    Subscription.billing_account_id == payment.billing_account_id,
+                    Subscription.id != subscription.id,
+                    Subscription.status.in_(("trialing", "active", "past_due", "paused")),
+                )
+                .with_for_update()
+            )
+        ).scalars()
+    )
+    now = datetime.now(UTC)
+    for live in live_subscriptions:
+        live.status = "expired"
+        live.auto_renew = False
+        live.cancel_at_period_end = False
+        live.next_charge_at = None
+        live.ended_at = now
+    await session.flush()
+
+    subscription.status = "active"
+    subscription.current_period_start = now
+    subscription.current_period_end = _one_month_after(now)
+    subscription.next_charge_at = None
+    subscription.grace_period_ends_at = None
+    subscription.canceled_at = None
+    subscription.ended_at = None
+
+    wallet = (
+        await session.execute(
+            select(Wallet)
+            .where(Wallet.billing_account_id == payment.billing_account_id)
+            .with_for_update()
+        )
+    ).scalar_one()
+    if payment.credit_rub > 0:
+        wallet.balance_rub += payment.credit_rub
+        session.add(
+            WalletCharge(
+                billing_account_id=payment.billing_account_id,
+                user_id=payment.user_id,
+                subscription_id=subscription.id,
+                entry_type="subscription_credit",
+                amount_rub=payment.credit_rub,
+                balance_after_rub=wallet.balance_rub,
+                external_ref=f"subscription-credit:{payment.id}",
+                description=f"Кредит тарифа {plan.name} v{plan.version}",
+            )
+        )
 
 
 async def _apply_provider_state(
@@ -182,32 +451,45 @@ async def _apply_provider_state(
 
     payment.provider_payload = provider
     if provider_status == "succeeded" and payment.status != "succeeded":
-        wallet = (
-            await session.execute(
-                select(Wallet)
-                .where(Wallet.billing_account_id == payment.billing_account_id)
-                .with_for_update()
+        if payment.purpose == "subscription_initial":
+            await _activate_subscription_payment(session, payment)
+        elif payment.purpose == "wallet_topup":
+            wallet = (
+                await session.execute(
+                    select(Wallet)
+                    .where(Wallet.billing_account_id == payment.billing_account_id)
+                    .with_for_update()
+                )
+            ).scalar_one()
+            wallet.balance_rub += payment.credit_rub
+            session.add(
+                WalletCharge(
+                    billing_account_id=payment.billing_account_id,
+                    user_id=payment.user_id,
+                    entry_type="payment",
+                    amount_rub=payment.credit_rub,
+                    balance_after_rub=wallet.balance_rub,
+                    external_ref=f"payment:{payment.id}",
+                    description=f"Пополнение через ЮKassa ({payment.package_code})",
+                )
             )
-        ).scalar_one()
-        wallet.balance_rub += payment.credit_rub
+        else:
+            raise ApiError(
+                "invalid_webhook",
+                "unsupported payment purpose",
+                status.HTTP_400_BAD_REQUEST,
+            )
         payment.status = "succeeded"
         payment.paid_at = datetime.now(UTC)
-        session.add(
-            WalletCharge(
-                billing_account_id=payment.billing_account_id,
-                user_id=payment.user_id,
-                entry_type="payment",
-                amount_rub=payment.credit_rub,
-                balance_after_rub=wallet.balance_rub,
-                external_ref=f"payment:{payment.id}",
-                description=f"Пополнение через ЮKassa ({payment.package_code})",
-            )
-        )
     elif provider_status == "cancelled" and payment.status not in {"succeeded", "refunded"}:
         payment.status = "cancelled"
         payment.cancelled_at = datetime.now(UTC)
+        await _cancel_pending_subscription(session, payment)
     elif provider_status == "waiting_for_capture":
         payment.status = "waiting_for_capture"
+    elif provider_status == "failed" and payment.status not in {"succeeded", "refunded"}:
+        payment.status = "failed"
+        await _cancel_pending_subscription(session, payment)
 
 
 @router.post("/yookassa/webhook", status_code=status.HTTP_204_NO_CONTENT)

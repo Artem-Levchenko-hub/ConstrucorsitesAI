@@ -11,6 +11,11 @@ class PaymentCreate(BaseModel):
     idempotency_key: UUID
 
 
+class SubscriptionCheckoutCreate(BaseModel):
+    plan_code: Literal["pro", "business"]
+    idempotency_key: UUID
+
+
 class PaymentPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

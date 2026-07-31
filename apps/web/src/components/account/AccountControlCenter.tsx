@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Building2,
   CheckCircle2,
+  CreditCard,
   Download,
   Laptop,
   Loader2,
@@ -21,9 +22,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   createPayment,
+  createSubscriptionCheckout,
   deleteAccount,
   exportAccount,
+  getSubscription,
   getPaymentConfig,
+  listBillingPlans,
   listPayments,
   listSessions,
   revokeSession,
@@ -65,6 +69,11 @@ export function AccountControlCenter({
     queryKey: ["payment-config"],
     queryFn: getPaymentConfig,
   });
+  const plans = useQuery({ queryKey: ["billing-plans"], queryFn: listBillingPlans });
+  const subscription = useQuery({
+    queryKey: ["billing-subscription"],
+    queryFn: getSubscription,
+  });
   const maxAccess = useQuery({ queryKey: ["max-access"], queryFn: getMaxAccess });
 
   const revoke = useMutation({
@@ -78,6 +87,17 @@ export function AccountControlCenter({
     },
     onError: (error) =>
       toast.error("Не удалось начать оплату", {
+        description: error instanceof Error ? error.message : "Попробуйте позже",
+      }),
+  });
+  const subscribe = useMutation({
+    mutationFn: createSubscriptionCheckout,
+    onSuccess: (payment) => {
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      if (payment.confirmation_url) window.location.assign(payment.confirmation_url);
+    },
+    onError: (error) =>
+      toast.error("Не удалось начать покупку тарифа", {
         description: error instanceof Error ? error.message : "Попробуйте позже",
       }),
   });
@@ -138,6 +158,110 @@ export function AccountControlCenter({
           </Button>
         </div>
       </section>}
+
+      {(view === "all" || view === "plan") && (
+        <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+          <div className="flex items-start gap-4">
+            <div className="rounded-xl bg-accent/10 p-3 text-accent">
+              <CreditCard className="size-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="omnia-kicker text-[#f15a38]">Текущий тариф</p>
+              <h2 className="mt-2 text-2xl font-semibold">
+                {subscription.data?.plan.name ?? "Загрузка…"}
+              </h2>
+              <p className="mt-1 text-sm text-fg-tertiary">
+                {subscription.data?.current_period_end
+                  ? `Оплачен до ${new Date(
+                      subscription.data.current_period_end,
+                    ).toLocaleDateString("ru-RU")}`
+                  : "Бесплатный режим без автоматических списаний"}
+              </p>
+            </div>
+            {subscription.data && (
+              <span className="rounded-full bg-success/10 px-3 py-1 text-xs font-medium text-success">
+                {subscription.data.auto_renew ? "Продлевается" : "Без автопродления"}
+              </span>
+            )}
+          </div>
+
+          <div className="mt-6 grid gap-3 lg:grid-cols-3">
+            {(plans.data ?? []).map((plan) => {
+              const isCurrent = subscription.data?.plan.id === plan.id;
+              const purchasable = plan.code === "pro" || plan.code === "business";
+              return (
+                <article
+                  key={plan.id}
+                  className={`rounded-[12px] border p-5 ${
+                    isCurrent
+                      ? "border-[#f15a38] bg-[#fff8f5]"
+                      : "border-[#d8d4cb] bg-white"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold">{plan.name}</h3>
+                      <p className="mt-1 text-xs text-fg-tertiary">
+                        версия {plan.version}
+                      </p>
+                    </div>
+                    {isCurrent && (
+                      <span className="text-[10px] font-semibold uppercase tracking-[.12em] text-[#248a4b]">
+                        Активен
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-5 text-2xl font-semibold">
+                    {Number(plan.price_rub).toLocaleString("ru-RU")} ₽
+                    <span className="ml-1 text-xs font-normal text-fg-tertiary">
+                      / месяц
+                    </span>
+                  </p>
+                  <div className="mt-4 space-y-2 text-xs text-fg-secondary">
+                    <p>
+                      Проектов: {String(plan.entitlements.max_projects ?? "—")}
+                    </p>
+                    <p>
+                      Мест в команде:{" "}
+                      {String(plan.entitlements.team_seats ?? "—")}
+                    </p>
+                    <p>
+                      Кредит: {Number(plan.included_credit_rub).toLocaleString("ru-RU")} ₽
+                    </p>
+                  </div>
+                  {purchasable && (
+                    <Button
+                      type="button"
+                      className="mt-5 min-h-11 w-full"
+                      variant={isCurrent ? "outline" : "primary"}
+                      disabled={
+                        isCurrent ||
+                        !paymentConfig.data?.enabled ||
+                        subscribe.isPending
+                      }
+                      onClick={() => {
+                        if (plan.code !== "free") subscribe.mutate(plan.code);
+                      }}
+                    >
+                      {isCurrent ? "Текущий тариф" : `Выбрать ${plan.name}`}
+                    </Button>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+          <p className="mt-4 text-xs leading-5 text-fg-tertiary">
+            Первая покупка активирует тариф на месяц и начисляет включённый
+            кредит только после подтверждения ЮKassa. Автопродление не включается
+            без отдельного согласия.
+          </p>
+          {!paymentConfig.data?.enabled && (
+            <p className="mt-4 rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">
+              {paymentConfig.data?.reason ?? "Платёжный контур пока недоступен"}
+            </p>
+          )}
+        </section>
+      )}
 
       {(view === "all" || view === "billing" || view === "transactions" || view === "plan") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
         <div className="flex items-start gap-4">

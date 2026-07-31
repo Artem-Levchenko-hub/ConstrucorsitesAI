@@ -180,7 +180,7 @@ CHECK разрешает ровно одного владельца област
 | `user_id` | uuid | Пользователь, создавший подписку; FK → `users(id)` |
 | `plan_id` | uuid | FK → `billing_plans(id)` ON DELETE RESTRICT |
 | `payment_method_id` | uuid | NULL, FK → `billing_payment_methods(id)` |
-| `status` | text | `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired` |
+| `status` | text | `pending_payment`, `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired` |
 | `auto_renew` | boolean | По умолчанию `false` до реализации рекуррентных списаний |
 | `cancel_at_period_end` | boolean | Отмена в конце текущего периода |
 | `current_period_start/end` | timestamptz | NULL для бессрочного Free |
@@ -190,7 +190,12 @@ CHECK разрешает ровно одного владельца област
 
 Partial unique index по `billing_account_id` разрешает не более одной живой подписки
 (`trialing`, `active`, `past_due`, `paused`). При регистрации создаётся Free;
-анонимные технические пользователи подписку не получают.
+анонимные технические пользователи подписку не получают. Первая покупка создаёт
+отдельную `pending_payment`, которая не выдаёт прав до подтверждения провайдера.
+На один account допускается только один незавершённый `subscription_initial`
+payment. Успешная проверка суммы одной транзакцией завершает прежнюю живую
+подписку, активирует новую на календарный месяц и пишет уникальный
+`subscription_credit:<payment_id>` в ledger.
 
 ### `billing_payment_methods`
 
@@ -363,6 +368,7 @@ COMMENT ON COLUMN usage.purpose IS
 | `0030` | ЮKassa payments, юридические согласия, бизнес-профили и отдельный legacy ledger | Codex |
 | `0035` | единый `wallet_charges`, версии тарифов, подписки и токены способов оплаты | Codex |
 | `0036` | `billing_accounts`; кошелёк, журнал, платежи и подписка переведены на business-aware владельца | Codex |
+| `0037` | `pending_payment` и partial unique guard для одной незавершённой покупки тарифа на account | Codex |
 
 ## Trigger для `updated_at`
 
@@ -386,6 +392,7 @@ CREATE TRIGGER projects_updated_at BEFORE UPDATE ON projects
 - Любое движение кошелька = одна транзакция: блокировка/условное обновление `wallets` + `INSERT wallet_charges`; расход модели дополнительно пишет `usage`. Если средств не хватает — вся транзакция откатывается.
 - Успешный webhook провайдера и refund используют уникальный `external_ref`, поэтому повторное событие не меняет баланс второй раз.
 - У платёжного аккаунта не может быть двух живых подписок одновременно; подписка всегда указывает на конкретную версию тарифа.
+- Оплаченный тариф активируется и получает включённый кредит в одной транзакции; `pending_payment` не выдаёт прав.
 - `current_snapshot_id` всегда указывает на последний валидный snapshot этого проекта.
 
 ## ER-диаграмма (для головы)

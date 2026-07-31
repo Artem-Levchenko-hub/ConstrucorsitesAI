@@ -261,8 +261,9 @@ class BillingPaymentMethod(Base):
 class Subscription(Base):
     """Subscription state machine.
 
-    Renewal payments are intentionally not implemented here yet. The model
-    supports them without making the current one-time payment flow recurring.
+    A paid plan starts as ``pending_payment`` and becomes live only in the same
+    database transaction that applies the verified provider payment. Renewal
+    remains opt-in and is implemented separately from the first purchase.
     """
 
     __tablename__ = "subscriptions"
@@ -314,7 +315,8 @@ class Subscription(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('trialing', 'active', 'past_due', 'paused', 'canceled', 'expired')",
+            "status IN ('pending_payment', 'trialing', 'active', 'past_due', "
+            "'paused', 'canceled', 'expired')",
             name="ck_subscriptions_status",
         ),
         CheckConstraint(
