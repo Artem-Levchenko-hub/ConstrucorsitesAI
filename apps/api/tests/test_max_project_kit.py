@@ -53,6 +53,9 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     files = render_max_managed_files(_config(), project_id)
 
     assert set(files) == {
+        "src/components/MaxAppProvider.tsx",
+        "src/lib/max/validate-init-data.ts",
+        "src/app/api/max/session/route.ts",
         "src/lib/max/session.ts",
         "src/app/api/omnia/preview-session/route.ts",
         "src/lib/omnia/max-config.ts",
@@ -76,6 +79,15 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert 'headers: { Location: "/" }' in preview_route
     assert 'NextResponse.redirect(new URL("/", request.url))' not in preview_route
     assert "options: { maxAge?: number } = {}" in files["src/lib/max/session.ts"]
+    provider = files["src/components/MaxAppProvider.tsx"]
+    assert 'state.mode === "loading" || state.mode === "error"' in provider
+    assert "<AuthScreen" in provider
+    validator = files["src/lib/max/validate-init-data.ts"]
+    assert 'typeof value.id === "string"' in validator
+    assert "timingSafeEqual" in validator
+    session_route = files["src/app/api/max/session/route.ts"]
+    assert 'console.warn("[max-auth] rejected launch data"' in session_route
+    assert "length: initData.length" in session_route
 
 
 def test_template_lookup_does_not_depend_on_repository_depth() -> None:

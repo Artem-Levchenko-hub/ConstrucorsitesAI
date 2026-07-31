@@ -69,7 +69,9 @@ def _validate_init_data(init_data: str, bot_token: str) -> int:
         raise ValueError("expired MAX initData")
     user = json.loads(values.get("user", ""))
     user_id = user.get("id") if isinstance(user, dict) else None
-    if not isinstance(user_id, int):
+    if isinstance(user_id, str) and user_id.isdecimal():
+        user_id = int(user_id)
+    if not isinstance(user_id, int) or isinstance(user_id, bool):
         raise ValueError("invalid MAX user")
     return user_id
 

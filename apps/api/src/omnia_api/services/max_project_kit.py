@@ -13,7 +13,7 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 4
+MAX_MANAGED_KIT_VERSION = 5
 
 
 def _template_candidates(
@@ -54,6 +54,9 @@ def render_max_managed_files(
     data = _json(config)
     project_literal = json.dumps(str(project_id) if project_id else "")
     return {
+        "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
+        "src/lib/max/validate-init-data.ts": _template_file("src/lib/max/validate-init-data.ts"),
+        "src/app/api/max/session/route.ts": _template_file("src/app/api/max/session/route.ts"),
         "src/lib/max/session.ts": _template_file("src/lib/max/session.ts"),
         "src/app/api/omnia/preview-session/route.ts": _template_file(
             "src/app/api/omnia/preview-session/route.ts"

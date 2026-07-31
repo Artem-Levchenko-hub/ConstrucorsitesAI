@@ -240,7 +240,7 @@ def test_provider_values_are_split_and_unknown_fields_rejected() -> None:
         )
 
 
-def _max_init_data(token: str, user_id: int = 42) -> str:
+def _max_init_data(token: str, user_id: int | str = 42) -> str:
     values = {
         "auth_date": str(int(time.time())),
         "query_id": "runtime-test",
@@ -293,6 +293,12 @@ async def test_bound_integration_is_available_to_signed_max_runtime(
     assert runtime.status_code == 200
     assert runtime.json()["providers"] == ["yookassa"]
     assert "Оплата" in runtime.json()["capabilities"]
+
+    string_user = await client.get(
+        f"/api/runtime/projects/{project_id}/integrations",
+        headers={"X-MAX-Init-Data": _max_init_data(token, "42")},
+    )
+    assert string_user.status_code == 200
 
     tampered = await client.get(
         f"/api/runtime/projects/{project_id}/integrations",

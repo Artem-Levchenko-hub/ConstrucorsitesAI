@@ -8,6 +8,7 @@ import {
   type MaxSessionUser,
 } from "@/lib/max/session";
 import {
+  MaxInitDataError,
   type ValidatedMaxInitData,
   validateMaxInitData,
 } from "@/lib/max/validate-init-data";
@@ -27,11 +28,22 @@ export async function POST(request: Request) {
   let launch: ValidatedMaxInitData;
   try {
     launch = validateMaxInitData(initData, token);
-  } catch {
-    return NextResponse.json({ error: "MAX authentication failed" }, { status: 401 });
+  } catch (error) {
+    const code = error instanceof MaxInitDataError ? error.code : "malformed";
+    console.warn("[max-auth] rejected launch data", {
+      code,
+      length: initData.length,
+    });
+    return NextResponse.json(
+      {
+        error: "Не удалось подтвердить запуск приложения из MAX",
+        code: `max_auth_${code}`,
+      },
+      { status: 401 },
+    );
   }
   const user: MaxSessionUser = {
-    id: String(launch.user.id),
+    id: launch.user.id,
     firstName: launch.user.first_name,
     lastName: launch.user.last_name || null,
     username: launch.user.username || null,
@@ -74,7 +86,10 @@ export async function POST(request: Request) {
       maxAge: session.maxAge,
     });
     return response;
-  } catch {
+  } catch (error) {
+    console.error("[max-auth] session persistence failed", {
+      name: error instanceof Error ? error.name : "unknown",
+    });
     return NextResponse.json({ error: "Temporary session failure" }, { status: 503 });
   }
 }

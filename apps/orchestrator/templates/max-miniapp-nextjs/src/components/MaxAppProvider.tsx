@@ -1,7 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import { configureMaxShell, getMaxWebApp } from "@/lib/max/bridge";
 import type { MaxSessionUser } from "@/lib/max/session";
@@ -37,6 +44,80 @@ export function useMaxApp() {
   return useContext(MaxContext);
 }
 
+function AuthScreen({
+  error,
+  onRetry,
+}: {
+  error: string | null;
+  onRetry: () => void;
+}) {
+  return (
+    <main
+      style={{
+        minHeight: "100dvh",
+        display: "grid",
+        placeItems: "center",
+        padding: "calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom))",
+        background: "var(--maxui-background, #ffffff)",
+        color: "var(--maxui-text-primary, #171717)",
+        textAlign: "center",
+      }}
+    >
+      <section style={{ width: "min(100%, 360px)" }} role={error ? "alert" : "status"}>
+        <div
+          aria-hidden="true"
+          style={{
+            width: 48,
+            height: 48,
+            margin: "0 auto 18px",
+            borderRadius: 16,
+            display: "grid",
+            placeItems: "center",
+            background: error ? "#fff0ed" : "#f2f3f5",
+            color: error ? "#d94932" : "#6d7278",
+            fontSize: 24,
+            fontWeight: 700,
+          }}
+        >
+          {error ? "!" : "…"}
+        </div>
+        <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.25 }}>
+          {error ? "Не удалось войти через MAX" : "Подключаем приложение"}
+        </h1>
+        <p
+          style={{
+            margin: "10px 0 0",
+            color: "var(--maxui-text-secondary, #777b80)",
+            fontSize: 15,
+            lineHeight: 1.5,
+          }}
+        >
+          {error || "Проверяем безопасный запуск и загружаем ваши данные."}
+        </p>
+        {error ? (
+          <button
+            type="button"
+            onClick={onRetry}
+            style={{
+              width: "100%",
+              minHeight: 48,
+              marginTop: 22,
+              border: 0,
+              borderRadius: 14,
+              background: "#ff5c35",
+              color: "#ffffff",
+              font: "inherit",
+              fontWeight: 700,
+            }}
+          >
+            Повторить
+          </button>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
 export function MaxAppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<MaxContextValue>({
     mode: "loading",
@@ -48,10 +129,24 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
     colorScheme: "light" | "dark";
   }>({ platform: "android", colorScheme: "light" });
 
-  useEffect(() => {
+  const authenticate = useCallback(async () => {
+    setState({ mode: "loading", user: null, error: null });
     const webApp = getMaxWebApp();
     if (!webApp?.initData) {
-      setState({ mode: "preview", user: previewUser, error: null });
+      const host = window.location.hostname;
+      const isPreview =
+        host === "localhost" ||
+        host === "127.0.0.1" ||
+        host.includes("-dev.preview.");
+      setState(
+        isPreview
+          ? { mode: "preview", user: previewUser, error: null }
+          : {
+              mode: "error",
+              user: null,
+              error: "Откройте приложение из чата с ботом в MAX.",
+            },
+      );
       return;
     }
     configureMaxShell(webApp);
@@ -59,32 +154,59 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
       platform: webApp.platform === "ios" ? "ios" : "android",
       colorScheme: webApp.colorScheme === "dark" ? "dark" : "light",
     });
-    void fetch("/api/max/session", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData: webApp.initData }),
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("MAX не подтвердил сессию");
-        return response.json() as Promise<{ user: MaxSessionUser }>;
-      })
-      .then(({ user }) => setState({ mode: "max", user, error: null }))
-      .catch((error: unknown) =>
-        setState({
-          mode: "error",
-          user: null,
-          error: error instanceof Error ? error.message : "Ошибка входа через MAX",
-        }),
-      );
+    try {
+      const response = await fetch("/api/max/session", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: webApp.initData }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        user?: MaxSessionUser;
+        code?: string;
+      };
+      if (!response.ok || !body.user) {
+        if (response.status === 401) {
+          console.warn("[max-auth] launch rejected", body.code || "unknown");
+          throw new Error(
+            "Закройте приложение и откройте его снова из чата с ботом. Если ошибка повторится, напишите в поддержку.",
+          );
+        }
+        if (response.status >= 500) {
+          throw new Error("Сервис временно недоступен. Подождите немного и повторите.");
+        }
+        throw new Error("Не удалось завершить безопасный вход. Попробуйте ещё раз.");
+      }
+      setState({ mode: "max", user: body.user, error: null });
+    } catch (error) {
+      setState({
+        mode: "error",
+        user: null,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Проверьте соединение и попробуйте ещё раз.",
+      });
+    }
   }, []);
+
+  useEffect(() => {
+    void authenticate();
+  }, [authenticate]);
 
   const value = useMemo(() => state, [state]);
   return (
     <MaxUI platform={appearance.platform} colorScheme={appearance.colorScheme}>
       <MaxContext.Provider value={value}>
-        {children}
-        <OmniaCompliance />
+        {state.mode === "loading" || state.mode === "error" ? (
+          <AuthScreen error={state.error} onRetry={() => void authenticate()} />
+        ) : (
+          <>
+            {children}
+            <OmniaCompliance />
+          </>
+        )}
       </MaxContext.Provider>
     </MaxUI>
   );
