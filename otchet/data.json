@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-07-31",
-  "version": 6,
+  "version": 7,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Зашифрованный off-host backup восстановлен; путь до MVP — 21 из 26",
-  "subtitle": "Полный снимок двух PostgreSQL-контуров, исходников проектов и MinIO хранится вне VPS, а обратная загрузка, расшифровка и scratch-восстановление доказаны на реальных production-данных.",
+  "title": "Внутренние ключи ротированы; путь до MVP — 22 из 26",
+  "subtitle": "JWT/NextAuth, master encryption key, internal token, оба PostgreSQL-пароля и MinIO root заменены без потери зашифрованных интеграций; свежий post-rotation backup уже хранится вне VPS.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Ротация секретов не потеряла пользовательские интеграции",
+    "d": "Семь Omnia-owned ключей заменены за одну контролируемую операцию. Два GitHub-токена, три SSH-секрета, два MAX bot token и два webhook secret сначала расшифрованы старым ключом, транзакционно перешифрованы новым и повторно проверены после restart. API, Web, worker, обе БД, MinIO, orchestrator, MAX-canary и webhook boundary остались зелёными."
+   },
    {
     "s": "worked",
     "t": "Полный backup переживает потерю production VPS",
@@ -169,7 +174,7 @@
     "d": "Pop-up теперь расположен выше затемняющего слоя: окно остаётся чётким, а blur применяется только к фону. Галочка бота обновляется сразу, а активация недоступна до появления HTTPS."
    }
   ],
-  "progress_note": "Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, полный encrypted backup — revisions 2b2c98d4, 139e39d1 и c1075999. Production работает на 0039_attestation_integrity; /api/health подтверждает database, redis, worker, deploy_control_plane и preview_storage=ok. Monitoring run 30623623645 и backup run 30624559111 завершились success; artifact 8790907201 размером 404 546 641 байт хранится вне VPS до 7 августа. Server scratch-restore вернул 33 platform-таблицы, 983 project-таблицы и 19 659 файлов; скачанный artifact расшифрован локальным offline key, все четыре payload checksum=OK. /mvp показывает 21/26 = 81%. API ruff/mypy и 5 backup-тестов зелёные."
+  "progress_note": "Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00. Production health подтверждает database, redis, worker, deploy_control_plane и preview_storage=ok. Backup workflow run 30624559111 attempt 4 завершился success; post-rotation artifact 8791711518 хранится вне VPS до 7 августа. Scratch-restore вернул 33 platform-таблицы, 983 project-таблицы, runtime-конфиг и 19 614 файлов. Все 7 внутренних значений отличаются от pre-rotation snapshot; 9 DB-токенов читаются новым keyring. Аудит текущего дерева и всей git-истории по fingerprints 16 production-секретов не нашёл ни одного tracked value. /mvp показывает 22/26 = 85%."
  },
  "owner_actions": [
   {
