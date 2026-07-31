@@ -225,7 +225,7 @@ export default function HomePage() {
         <div className="mx-auto max-w-[1320px]">
           <div className="flex flex-col gap-5 border-b border-[#d8d4cb] pb-7 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <p className="omnia-kicker text-[#f15a38]">30 июля 2026</p>
+              <p className="omnia-kicker text-[#f15a38]">31 июля 2026</p>
               <h2 className="mt-3 text-[32px] font-semibold tracking-[-.04em] sm:text-[42px]">
                 Что сделано сегодня
               </h2>
