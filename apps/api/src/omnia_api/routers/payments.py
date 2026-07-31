@@ -17,6 +17,7 @@ from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.schemas.payments import PaymentConfigPublic, PaymentCreate, PaymentPublic
 from omnia_api.services import yookassa
+from omnia_api.services.billing_accounts import resolve_billing_account
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
@@ -70,11 +71,12 @@ async def list_payments(
     current_user: CurrentUserDep,
     session: SessionDep,
 ) -> list[Payment]:
+    account = await resolve_billing_account(session, current_user.id)
     return list(
         (
             await session.execute(
                 select(Payment)
-                .where(Payment.user_id == current_user.id)
+                .where(Payment.billing_account_id == account.id)
                 .order_by(Payment.created_at.desc())
                 .limit(100)
             )
@@ -100,17 +102,19 @@ async def create_payment(
             "Подтвердите email перед оплатой",
             status.HTTP_403_FORBIDDEN,
         )
+    account = await resolve_billing_account(session, current_user.id)
     key = str(payload.idempotency_key)
     existing = (
         await session.execute(select(Payment).where(Payment.idempotency_key == key))
     ).scalar_one_or_none()
     if existing is not None:
-        if existing.user_id != current_user.id:
+        if existing.billing_account_id != account.id:
             raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT)
         return existing
 
     price, credit, title = PACKAGES[payload.package_code]
     payment = Payment(
+        billing_account_id=account.id,
         user_id=current_user.id,
         idempotency_key=key,
         purpose="wallet_topup",
@@ -130,7 +134,11 @@ async def create_payment(
             return_url=f"{settings.web_base_url.rstrip('/')}/account?payment={payment.id}",
             customer_email=str(current_user.email),
             idempotency_key=key,
-            metadata={"payment_id": str(payment.id), "user_id": str(current_user.id)},
+            metadata={
+                "payment_id": str(payment.id),
+                "billing_account_id": str(account.id),
+                "user_id": str(current_user.id),
+            },
         )
     except yookassa.YooKassaUnavailable as exc:
         payment.status = "failed"
@@ -176,7 +184,9 @@ async def _apply_provider_state(
     if provider_status == "succeeded" and payment.status != "succeeded":
         wallet = (
             await session.execute(
-                select(Wallet).where(Wallet.user_id == payment.user_id).with_for_update()
+                select(Wallet)
+                .where(Wallet.billing_account_id == payment.billing_account_id)
+                .with_for_update()
             )
         ).scalar_one()
         wallet.balance_rub += payment.credit_rub
@@ -184,6 +194,7 @@ async def _apply_provider_state(
         payment.paid_at = datetime.now(UTC)
         session.add(
             WalletCharge(
+                billing_account_id=payment.billing_account_id,
                 user_id=payment.user_id,
                 entry_type="payment",
                 amount_rub=payment.credit_rub,
@@ -236,11 +247,12 @@ async def reconcile_payment(
     current_user: CurrentUserDep,
     session: SessionDep,
 ) -> Payment:
+    account = await resolve_billing_account(session, current_user.id)
     payment = (
         await session.execute(select(Payment).where(Payment.id == payment_id).with_for_update())
     ).scalar_one_or_none()
     if payment is None or (
-        payment.user_id != current_user.id and not _is_admin(current_user)
+        payment.billing_account_id != account.id and not _is_admin(current_user)
     ):
         raise ApiError("not_found", "payment not found", status.HTTP_404_NOT_FOUND)
     if not payment.provider_payment_id:
@@ -276,7 +288,9 @@ async def refund_payment(
         raise ApiError("refund_unavailable", "payment cannot be refunded", status.HTTP_409_CONFLICT)
     wallet = (
         await session.execute(
-            select(Wallet).where(Wallet.user_id == payment.user_id).with_for_update()
+            select(Wallet)
+            .where(Wallet.billing_account_id == payment.billing_account_id)
+            .with_for_update()
         )
     ).scalar_one()
     if wallet.balance_rub < payment.credit_rub:
@@ -302,6 +316,7 @@ async def refund_payment(
     payment.refunded_at = datetime.now(UTC)
     session.add(
         WalletCharge(
+            billing_account_id=payment.billing_account_id,
             user_id=payment.user_id,
             entry_type="refund",
             amount_rub=-payment.credit_rub,

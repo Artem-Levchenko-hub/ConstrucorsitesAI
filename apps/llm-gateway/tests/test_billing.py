@@ -25,14 +25,22 @@ class _AsyncContext:
 class _FakeConnection:
     def __init__(self, balance_after: Decimal | None) -> None:
         self.balance_after = balance_after
+        self.billing_account_id = uuid4()
         self.statements: list[tuple[str, tuple[object, ...]]] = []
 
     def transaction(self) -> _AsyncContext:
         return _AsyncContext()
 
-    async def fetchval(self, query: str, *args: object) -> Decimal | None:
+    async def fetchrow(
+        self, query: str, *args: object
+    ) -> dict[str, object] | None:
         self.statements.append((query, args))
-        return self.balance_after
+        if self.balance_after is None:
+            return None
+        return {
+            "balance_rub": self.balance_after,
+            "billing_account_id": self.billing_account_id,
+        }
 
     async def execute(self, query: str, *args: object) -> str:
         self.statements.append((query, args))
@@ -70,11 +78,12 @@ async def test_charge_records_balance_and_usage_reference(
     wallet_sql, wallet_args = connection.statements[0]
     ledger_sql, ledger_args = connection.statements[1]
     usage_sql, usage_args = connection.statements[2]
-    assert "RETURNING balance_rub" in wallet_sql
-    assert wallet_args == (Decimal("12.5000"), user_id)
+    assert "RETURNING w.balance_rub, w.billing_account_id" in wallet_sql
+    assert wallet_args == (user_id, Decimal("12.5000"))
     assert "balance_after_rub" in ledger_sql
-    assert ledger_args[4] == Decimal("87.5000")
-    assert ledger_args[5] == f"usage:{usage_args[0]}"
+    assert ledger_args[1] == connection.billing_account_id
+    assert ledger_args[5] == Decimal("87.5000")
+    assert ledger_args[6] == f"usage:{usage_args[0]}"
 
 
 async def test_charge_does_not_write_when_conditional_debit_fails(

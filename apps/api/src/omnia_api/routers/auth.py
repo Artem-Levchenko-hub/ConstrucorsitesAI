@@ -27,7 +27,7 @@ from omnia_api.core.security import (
     verify_password,
 )
 from omnia_api.models.account import AuthSession, AuthToken, LegalAcceptance
-from omnia_api.models.billing import FREE_PLAN_ID, Subscription
+from omnia_api.models.billing import FREE_PLAN_ID, BillingAccount, Subscription
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.user import (
@@ -164,12 +164,23 @@ async def register(
         # accounts must prove control of the address before creating a project.
         email_verified_at=datetime.now(UTC) if payload.product == "general" else None,
     )
-    user.wallet = Wallet(balance_rub=Decimal(str(settings.initial_wallet_balance_rub)))
     session.add(user)
     try:
         await session.flush()
+        billing_account = BillingAccount(
+            scope="personal",
+            personal_user_id=user.id,
+            created_by_user_id=user.id,
+        )
+        session.add(billing_account)
+        await session.flush()
+        user.wallet = Wallet(
+            billing_account_id=billing_account.id,
+            balance_rub=Decimal(str(settings.initial_wallet_balance_rub)),
+        )
         session.add(
             Subscription(
+                billing_account_id=billing_account.id,
                 user_id=user.id,
                 plan_id=FREE_PLAN_ID,
                 status="active",

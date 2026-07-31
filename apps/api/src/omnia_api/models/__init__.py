@@ -16,7 +16,12 @@ from omnia_api.models.app_integration import (
 )
 from omnia_api.models.attestation import Attestation
 from omnia_api.models.base import Base
-from omnia_api.models.billing import BillingPaymentMethod, BillingPlan, Subscription
+from omnia_api.models.billing import (
+    BillingAccount,
+    BillingPaymentMethod,
+    BillingPlan,
+    Subscription,
+)
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.generation_run import GenerationRun
@@ -41,6 +46,7 @@ __all__ = [
     "AuthSession",
     "AuthToken",
     "Base",
+    "BillingAccount",
     "BillingPaymentMethod",
     "BillingPlan",
     "BusinessEntitlement",

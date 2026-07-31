@@ -502,6 +502,7 @@ export type ApiErrorCode =
   | "legal_acceptance_required"
   | "legal_version_outdated"
   | "account_unavailable"
+  | "billing_account_not_found"
   | "email_delivery_unavailable"
   | "token_invalid"
   | "payments_unavailable"

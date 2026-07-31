@@ -172,6 +172,11 @@ class Payment(Base):
     __tablename__ = "payments"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -221,5 +226,6 @@ class Payment(Base):
             name="ck_payments_status",
         ),
         Index("ix_payments_subscription_created", "subscription_id", "created_at"),
+        Index("ix_payments_account_created", "billing_account_id", "created_at"),
         Index("ix_payments_user_created", "user_id", "created_at"),
     )

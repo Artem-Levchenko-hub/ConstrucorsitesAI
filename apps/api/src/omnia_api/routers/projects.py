@@ -24,6 +24,7 @@ from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import get_exe_object, preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.core.security import create_access_token
+from omnia_api.models.billing import BillingAccount
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.lead import Lead
@@ -65,8 +66,19 @@ async def _ensure_anon_user(session: SessionDep, response: Response) -> User:
     zero-balance wallet (no free funds given away to a throwaway principal).
     """
     anon = User(email=None, password_hash=None, is_anon=True)
-    anon.wallet = Wallet(balance_rub=Decimal("0"))
     session.add(anon)
+    await session.flush()
+    billing_account = BillingAccount(
+        scope="personal",
+        personal_user_id=anon.id,
+        created_by_user_id=anon.id,
+    )
+    session.add(billing_account)
+    await session.flush()
+    anon.wallet = Wallet(
+        billing_account_id=billing_account.id,
+        balance_rub=Decimal("0"),
+    )
     await session.flush()
     set_session_cookie(response, create_access_token(anon.id))
     return anon

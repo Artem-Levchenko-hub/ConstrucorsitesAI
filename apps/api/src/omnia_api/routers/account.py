@@ -16,6 +16,7 @@ from omnia_api.models.billing import BillingPlan, Subscription
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.project import Project
 from omnia_api.models.wallet_charge import WalletCharge
+from omnia_api.services.billing_accounts import resolve_billing_account
 from omnia_api.services.max_access import get_user_business
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -46,6 +47,7 @@ async def export_account_data(
     session: SessionDep,
 ) -> dict[str, object]:
     business = await get_user_business(session, current_user.id)
+    billing_account = await resolve_billing_account(session, current_user.id)
     projects = list(
         (
             await session.execute(
@@ -68,7 +70,7 @@ async def export_account_data(
         (
             await session.execute(
                 select(Payment)
-                .where(Payment.user_id == current_user.id)
+                .where(Payment.billing_account_id == billing_account.id)
                 .order_by(Payment.created_at)
             )
         ).scalars()
@@ -78,7 +80,7 @@ async def export_account_data(
             await session.execute(
                 select(Subscription, BillingPlan)
                 .join(BillingPlan, BillingPlan.id == Subscription.plan_id)
-                .where(Subscription.user_id == current_user.id)
+                .where(Subscription.billing_account_id == billing_account.id)
                 .order_by(Subscription.created_at)
             )
         ).all()
@@ -87,7 +89,7 @@ async def export_account_data(
         (
             await session.execute(
                 select(WalletCharge)
-                .where(WalletCharge.user_id == current_user.id)
+                .where(WalletCharge.billing_account_id == billing_account.id)
                 .order_by(WalletCharge.created_at)
             )
         ).scalars()

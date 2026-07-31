@@ -13,6 +13,11 @@ class WalletCharge(Base):
     __tablename__ = "wallet_charges"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -44,6 +49,11 @@ class WalletCharge(Base):
             "entry_type IN "
             "('usage', 'topup', 'payment', 'refund', 'subscription_credit', 'adjustment')",
             name="ck_wallet_charges_entry_type",
+        ),
+        Index(
+            "ix_wallet_charges_account_created_at",
+            "billing_account_id",
+            "created_at",
         ),
         Index("ix_wallet_charges_user_id_created_at", "user_id", "created_at"),
         Index("ix_wallet_charges_subscription_id", "subscription_id"),

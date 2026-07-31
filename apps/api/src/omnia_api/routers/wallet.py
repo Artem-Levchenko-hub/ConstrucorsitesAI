@@ -15,18 +15,24 @@ from omnia_api.schemas.wallet import (
     WalletPublic,
 )
 from omnia_api.services.billing import topup as topup_svc
+from omnia_api.services.billing_accounts import resolve_billing_account
 
 router = APIRouter(prefix="/api/wallet", tags=["wallet"])
 
 
 @router.get("", response_model=WalletPublic)
 async def get_wallet(session: SessionDep, current_user: CurrentUserDep) -> WalletPublic:
-    wallet = await session.get(Wallet, current_user.id)
+    account = await resolve_billing_account(session, current_user.id)
+    wallet = (
+        await session.execute(
+            select(Wallet).where(Wallet.billing_account_id == account.id)
+        )
+    ).scalar_one_or_none()
     if wallet is None:
         raise ApiError("not_found", "wallet not initialized", 404)
     res = await session.execute(
         select(WalletCharge)
-        .where(WalletCharge.user_id == current_user.id)
+        .where(WalletCharge.billing_account_id == account.id)
         .order_by(WalletCharge.created_at.desc())
         .limit(20)
     )

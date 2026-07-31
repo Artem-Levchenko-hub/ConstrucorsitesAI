@@ -12,6 +12,7 @@ from omnia_api.core.errors import ApiError
 from omnia_api.models.usage import Usage
 from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
+from omnia_api.services.billing_accounts import resolve_billing_account
 
 
 async def charge_for_message(
@@ -25,8 +26,11 @@ async def charge_for_message(
     cost_rub: Decimal,
     description: str,
 ) -> Decimal:
+    account = await resolve_billing_account(session, user_id)
     res = await session.execute(
-        select(Wallet).where(Wallet.user_id == user_id).with_for_update()
+        select(Wallet)
+        .where(Wallet.billing_account_id == account.id)
+        .with_for_update()
     )
     wallet = res.scalar_one()
     new_balance = wallet.balance_rub - cost_rub
@@ -49,6 +53,7 @@ async def charge_for_message(
     )
     session.add(
         WalletCharge(
+            billing_account_id=account.id,
             user_id=user_id,
             message_id=message_id,
             entry_type="usage",
@@ -64,8 +69,11 @@ async def charge_for_message(
 async def topup(
     session: AsyncSession, user_id: UUID, amount_rub: Decimal, description: str
 ) -> Decimal:
+    account = await resolve_billing_account(session, user_id)
     res = await session.execute(
-        select(Wallet).where(Wallet.user_id == user_id).with_for_update()
+        select(Wallet)
+        .where(Wallet.billing_account_id == account.id)
+        .with_for_update()
     )
     wallet = res.scalar_one()
     wallet.balance_rub = wallet.balance_rub + amount_rub
@@ -73,6 +81,7 @@ async def topup(
     session.add(
         WalletCharge(
             id=topup_id,
+            billing_account_id=account.id,
             user_id=user_id,
             message_id=None,
             entry_type="topup",

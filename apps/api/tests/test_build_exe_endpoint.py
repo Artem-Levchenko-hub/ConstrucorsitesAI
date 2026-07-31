@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import get_current_user
 from omnia_api.main import app
+from omnia_api.models.billing import BillingAccount
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
@@ -37,8 +38,19 @@ pytestmark = pytest.mark.asyncio
 
 async def _make_user(session: AsyncSession, email: str) -> User:
     user = User(email=email, password_hash="x")
-    user.wallet = Wallet(balance_rub=Decimal("0"))
     session.add(user)
+    await session.flush()
+    billing_account = BillingAccount(
+        scope="personal",
+        personal_user_id=user.id,
+        created_by_user_id=user.id,
+    )
+    session.add(billing_account)
+    await session.flush()
+    user.wallet = Wallet(
+        billing_account_id=billing_account.id,
+        balance_rub=Decimal("0"),
+    )
     await session.flush()
     return user
 

@@ -96,18 +96,44 @@ Durable-идентичность и жизненный цикл одного п�
 - При старте единственного API-процесса оставшиеся активными строки завершаются
   как `failed`: process-local coroutine не может пережить рестарт.
 
+### `billing_accounts`
+
+Канонический владелец кошелька, журнала и подписки. Новый пользователь получает
+личный аккаунт; MAX-онбординг переводит ту же строку в область бизнеса, поэтому
+переезда средств и истории не происходит.
+
+| Поле | Тип | Constraints |
+|---|---|---|
+| `id` | uuid | PK |
+| `scope` | text | `personal` или `business` |
+| `personal_user_id` | uuid | Для `personal`: FK → `users(id)`, UNIQUE |
+| `business_id` | uuid | Для `business`: FK → `business_profiles(id)`, UNIQUE |
+| `created_by_user_id` | uuid | Аудит создателя, FK → `users(id)` ON DELETE SET NULL |
+| `currency` | text | Только `RUB` |
+| `created_at`, `updated_at` | timestamptz | Аудит |
+
+CHECK разрешает ровно одного владельца области: либо пользователя, либо бизнес.
+Участник MAX-бизнеса сначала разрешается в `business_id`; пользователь без
+бизнеса — в `personal_user_id`.
+
 ### `wallets`
 | Поле | Тип | Constraints |
 |---|---|---|
 | `user_id` | uuid | PK, FK → `users(id)` ON DELETE CASCADE |
+| `billing_account_id` | uuid | UNIQUE NOT NULL, FK → `billing_accounts(id)` ON DELETE RESTRICT |
 | `balance_rub` | numeric(12, 4) | NOT NULL DEFAULT 100.0000 (стартовый баланс 100₽ для MVP) |
 | `updated_at` | timestamptz | NOT NULL DEFAULT now() |
+
+`user_id` временно сохраняется как обратная совместимость и аудит создателя
+кошелька. Все чтения и изменения баланса выполняются через
+`billing_account_id`.
 
 ### `wallet_charges`
 | Поле | Тип | Constraints |
 |---|---|---|
 | `id` | uuid | PK |
-| `user_id` | uuid | FK → `users(id)` ON DELETE CASCADE |
+| `billing_account_id` | uuid | FK → `billing_accounts(id)` ON DELETE RESTRICT |
+| `user_id` | uuid | Актор операции, FK → `users(id)` ON DELETE CASCADE |
 | `message_id` | uuid | FK → `messages(id)` NULL (null для topup) |
 | `subscription_id` | uuid | NULL, FK → `subscriptions(id)` ON DELETE SET NULL |
 | `entry_type` | text | `usage`, `topup`, `payment`, `refund`, `subscription_credit`, `adjustment` |
@@ -117,7 +143,8 @@ Durable-идентичность и жизненный цикл одного п�
 | `description` | text | NOT NULL |
 | `created_at` | timestamptz | NOT NULL DEFAULT now() |
 
-**Индексы:** `(user_id, created_at DESC)`, `(subscription_id)`.
+**Индексы:** `(billing_account_id, created_at DESC)`,
+`(user_id, created_at DESC)`, `(subscription_id)`.
 
 `wallet_charges` — единственный финансовый журнал кошелька. Старая
 `wallet_ledger_entries` удалена миграцией `0035`, а её записи перенесены сюда.
@@ -149,7 +176,8 @@ Durable-идентичность и жизненный цикл одного п�
 | Поле | Тип | Constraints |
 |---|---|---|
 | `id` | uuid | PK |
-| `user_id` | uuid | FK → `users(id)` ON DELETE RESTRICT |
+| `billing_account_id` | uuid | FK → `billing_accounts(id)` ON DELETE RESTRICT |
+| `user_id` | uuid | Пользователь, создавший подписку; FK → `users(id)` |
 | `plan_id` | uuid | FK → `billing_plans(id)` ON DELETE RESTRICT |
 | `payment_method_id` | uuid | NULL, FK → `billing_payment_methods(id)` |
 | `status` | text | `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired` |
@@ -160,14 +188,15 @@ Durable-идентичность и жизненный цикл одного п�
 | `grace_period_ends_at` | timestamptz | Конец льготного периода после ошибки оплаты |
 | `canceled_at`, `ended_at` | timestamptz | Аудит завершения |
 
-Partial unique index по `user_id` разрешает не более одной живой подписки
+Partial unique index по `billing_account_id` разрешает не более одной живой подписки
 (`trialing`, `active`, `past_due`, `paused`). При регистрации создаётся Free;
 анонимные технические пользователи подписку не получают.
 
 ### `billing_payment_methods`
 
-Хранит только токен платёжного провайдера, статус и зафиксированное согласие на
-повторные списания. Данные карты в Omnia не попадают. Таблица подготовлена для
+Хранит `billing_account_id`, пользователя-плательщика, только идентификатор
+способа у платёжного провайдера, статус и зафиксированное согласие на повторные
+списания. Данные карты в Omnia не попадают. Таблица подготовлена для
 автопродления, но сам процесс продления ещё не включён.
 
 ### `usage` (детальный лог токенов)
@@ -333,6 +362,7 @@ COMMENT ON COLUMN usage.purpose IS
 | `0025` | `generation_runs`: idempotency + single-flight + cancellation lifecycle | Codex |
 | `0030` | ЮKassa payments, юридические согласия, бизнес-профили и отдельный legacy ledger | Codex |
 | `0035` | единый `wallet_charges`, версии тарифов, подписки и токены способов оплаты | Codex |
+| `0036` | `billing_accounts`; кошелёк, журнал, платежи и подписка переведены на business-aware владельца | Codex |
 
 ## Trigger для `updated_at`
 
@@ -355,7 +385,7 @@ CREATE TRIGGER projects_updated_at BEFORE UPDATE ON projects
 - Создание проекта = транзакция: `INSERT projects` → инициализация bare repo в MinIO → первый `INSERT snapshots` (initial commit с шаблоном) → `UPDATE projects.current_snapshot_id`. Если любой шаг падает — откат всего.
 - Любое движение кошелька = одна транзакция: блокировка/условное обновление `wallets` + `INSERT wallet_charges`; расход модели дополнительно пишет `usage`. Если средств не хватает — вся транзакция откатывается.
 - Успешный webhook провайдера и refund используют уникальный `external_ref`, поэтому повторное событие не меняет баланс второй раз.
-- У пользователя не может быть двух живых подписок одновременно; подписка всегда указывает на конкретную версию тарифа.
+- У платёжного аккаунта не может быть двух живых подписок одновременно; подписка всегда указывает на конкретную версию тарифа.
 - `current_snapshot_id` всегда указывает на последний валидный snapshot этого проекта.
 
 ## ER-диаграмма (для головы)
@@ -366,8 +396,10 @@ users ─┬─< projects ─< snapshots ─┐ (parent_id, само-FK)
        ├─< messages ──────────────┘
        ├─< generation_runs ───────┘ (assistant_message_id)
        │
-       ├─ wallets (1:1)
-       ├─< subscriptions >─ billing_plans
-       │          └─ billing_payment_methods
-       └─< wallet_charges, usage, payments
+       ├─ billing_accounts >─ business_profiles
+       │          ├─ wallets (1:1)
+       │          ├─< subscriptions >─ billing_plans
+       │          │          └─ billing_payment_methods
+       │          └─< wallet_charges, payments
+       └─< usage
 ```

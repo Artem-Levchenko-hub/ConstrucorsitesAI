@@ -65,6 +65,7 @@ from omnia_api.services.art_director_writer import (
     art_director_writer_generate,
     supports_app_brief,
 )
+from omnia_api.services.billing_accounts import resolve_billing_account
 from omnia_api.services.chip_pixel_gate import spec_from_discovery, spec_preview
 from omnia_api.services.clarify import generate_clarify_questions
 from omnia_api.services.contrast_guard import enforce_contrast
@@ -1296,7 +1297,12 @@ async def post_prompt(
             (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
         )
     if not is_free:
-        wallet = await session.get(Wallet, current_user.id)
+        account = await resolve_billing_account(session, current_user.id)
+        wallet = (
+            await session.execute(
+                select(Wallet).where(Wallet.billing_account_id == account.id)
+            )
+        ).scalar_one_or_none()
         if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
             raise ApiError("wallet_empty", "insufficient balance", 402)
 

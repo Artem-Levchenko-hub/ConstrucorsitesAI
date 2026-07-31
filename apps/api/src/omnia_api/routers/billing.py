@@ -5,6 +5,7 @@ from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.billing import BillingPlan, Subscription
 from omnia_api.schemas.billing import BillingPlanPublic, SubscriptionPublic
+from omnia_api.services.billing_accounts import resolve_billing_account
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
@@ -29,12 +30,13 @@ async def get_subscription(
     current_user: CurrentUserDep,
     session: SessionDep,
 ) -> SubscriptionPublic:
+    account = await resolve_billing_account(session, current_user.id)
     row = (
         await session.execute(
             select(Subscription, BillingPlan)
             .join(BillingPlan, BillingPlan.id == Subscription.plan_id)
             .where(
-                Subscription.user_id == current_user.id,
+                Subscription.billing_account_id == account.id,
                 Subscription.status.in_(LIVE_SUBSCRIPTION_STATUSES),
             )
         )

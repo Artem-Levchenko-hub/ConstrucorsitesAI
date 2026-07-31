@@ -21,12 +21,33 @@ from omnia_gateway.core.errors import WalletEmptyError
 
 log = structlog.get_logger(__name__)
 
+_RESOLVED_ACCOUNT = """
+    SELECT ba.id
+      FROM billing_accounts ba
+      LEFT JOIN business_members bm
+        ON ba.scope = 'business'
+       AND bm.business_id = ba.business_id
+       AND bm.user_id = $1
+     WHERE (ba.scope = 'business' AND bm.user_id IS NOT NULL)
+        OR (ba.scope = 'personal' AND ba.personal_user_id = $1)
+     ORDER BY CASE WHEN ba.scope = 'business' THEN 0 ELSE 1 END
+     LIMIT 1
+"""
+
 
 async def get_balance(user_id: UUID) -> Decimal:
-    """Return current wallet balance for `user_id` (0 if no wallet row)."""
+    """Return the shared account balance visible to `user_id`."""
     pool = get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT balance_rub FROM wallets WHERE user_id = $1", user_id)
+        row = await conn.fetchrow(
+            f"""
+            SELECT w.balance_rub
+              FROM wallets w
+              JOIN ({_RESOLVED_ACCOUNT}) account
+                ON account.id = w.billing_account_id
+            """,
+            user_id,
+        )
     return Decimal(row["balance_rub"]) if row else Decimal("0")
 
 
@@ -78,31 +99,37 @@ async def charge(
     usage_id = uuid4()
     async with pool.acquire() as conn, conn.transaction():
         if not free:
-            balance_after = await conn.fetchval(
-                """
-                UPDATE wallets
-                   SET balance_rub = balance_rub - $1,
+            debit = await conn.fetchrow(
+                f"""
+                WITH account AS ({_RESOLVED_ACCOUNT})
+                UPDATE wallets w
+                   SET balance_rub = balance_rub - $2,
                        updated_at = now()
-                 WHERE user_id = $2 AND balance_rub >= $1
-                RETURNING balance_rub
+                  FROM account
+                 WHERE w.billing_account_id = account.id
+                   AND w.balance_rub >= $2
+                RETURNING w.balance_rub, w.billing_account_id
                 """,
-                cost_rub,
                 user_id,
+                cost_rub,
             )
-            if balance_after is None:
+            if debit is None:
                 raise WalletEmptyError(
                     "Wallet balance went negative mid-charge",
                     details={"user_id": str(user_id), "cost_rub": str(cost_rub)},
                 )
+            balance_after = Decimal(debit["balance_rub"])
+            billing_account_id = debit["billing_account_id"]
 
             await conn.execute(
                 """
                 INSERT INTO wallet_charges
-                    (id, user_id, message_id, entry_type, amount_rub,
-                     balance_after_rub, external_ref, description)
-                VALUES ($1, $2, $3, 'usage', $4, $5, $6, $7)
+                    (id, billing_account_id, user_id, message_id, entry_type,
+                     amount_rub, balance_after_rub, external_ref, description)
+                VALUES ($1, $2, $3, $4, 'usage', $5, $6, $7, $8)
                 """,
                 charge_id,
+                billing_account_id,
                 user_id,
                 message_id,
                 -cost_rub,  # negative = debit per data-model.md convention

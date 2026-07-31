@@ -24,6 +24,7 @@ from omnia_api.schemas.max_account import (
     BusinessReviewPublic,
     MaxAccessPublic,
 )
+from omnia_api.services.billing_accounts import promote_personal_account_to_business
 from omnia_api.services.max_access import get_user_business
 
 router = APIRouter(prefix="/api/max/account", tags=["max-account"])
@@ -185,6 +186,11 @@ async def put_business(
                 )
             )
             session.add(BusinessEntitlement(business_id=profile.id))
+            await promote_personal_account_to_business(
+                session,
+                user_id=current_user.id,
+                business_id=profile.id,
+            )
             await session.commit()
         except IntegrityError as exc:
             await session.rollback()
@@ -204,6 +210,11 @@ async def put_business(
         existing.verification_data = verification_data
         existing.verified_at = datetime.now(UTC) if profile_status == "verified" else None
         try:
+            await promote_personal_account_to_business(
+                session,
+                user_id=current_user.id,
+                business_id=existing.id,
+            )
             await session.commit()
         except IntegrityError as exc:
             await session.rollback()

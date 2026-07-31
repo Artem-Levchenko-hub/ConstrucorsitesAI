@@ -91,6 +91,70 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
 )
 
 
+class BillingAccount(Base):
+    """Canonical owner of a wallet, ledger and subscription.
+
+    A new user starts with a personal account. MAX onboarding promotes that
+    same account to business scope, so the existing balance and history stay
+    attached while every member of the business resolves one shared account.
+    """
+
+    __tablename__ = "billing_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    scope: Mapped[str] = mapped_column(
+        Text, nullable=False, default="personal", server_default="personal"
+    )
+    personal_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    business_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("business_profiles.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    currency: Mapped[str] = mapped_column(
+        Text, nullable=False, default="RUB", server_default="RUB"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope IN ('personal', 'business')", name="ck_billing_accounts_scope"),
+        CheckConstraint(
+            "(scope = 'personal' AND personal_user_id IS NOT NULL AND business_id IS NULL) "
+            "OR (scope = 'business' AND personal_user_id IS NULL AND business_id IS NOT NULL)",
+            name="ck_billing_accounts_owner",
+        ),
+        CheckConstraint("currency = 'RUB'", name="ck_billing_accounts_currency"),
+        Index(
+            "uq_billing_accounts_personal_user",
+            "personal_user_id",
+            unique=True,
+            postgresql_where=text("personal_user_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_billing_accounts_business",
+            "business_id",
+            unique=True,
+            postgresql_where=text("business_id IS NOT NULL"),
+        ),
+    )
+
+
 class BillingPlan(Base):
     """Immutable commercial terms.
 
@@ -148,6 +212,11 @@ class BillingPaymentMethod(Base):
     __tablename__ = "billing_payment_methods"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -180,6 +249,11 @@ class BillingPaymentMethod(Base):
             "provider_payment_method_id",
             name="uq_billing_payment_methods_provider_id",
         ),
+        Index(
+            "ix_billing_payment_methods_account_status",
+            "billing_account_id",
+            "status",
+        ),
         Index("ix_billing_payment_methods_user_status", "user_id", "status"),
     )
 
@@ -194,6 +268,11 @@ class Subscription(Base):
     __tablename__ = "subscriptions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -244,8 +323,8 @@ class Subscription(Base):
             name="ck_subscriptions_period_order",
         ),
         Index(
-            "uq_subscriptions_user_live",
-            "user_id",
+            "uq_subscriptions_account_live",
+            "billing_account_id",
             unique=True,
             postgresql_where=text(
                 "status IN ('trialing', 'active', 'past_due', 'paused')"
