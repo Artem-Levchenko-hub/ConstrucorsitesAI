@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from omnia_gateway.main import create_app
 
-_MODEL = "claude-opus-4-8"
+_MODEL = "gemini-3.1-pro-preview-customtools"
 
 
 async def _fake_astream(

@@ -13,7 +13,7 @@ import pytest
 from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
 from omnia_gateway.providers import llmgw
 
-_MODEL = "claude-opus-4-8"
+_MODEL = "gemini-3.1-pro-preview-customtools"
 
 
 def test_is_llmgw_model() -> None:
@@ -27,11 +27,11 @@ def test_is_llmgw_model() -> None:
 
 def test_slug_mapping_round_trip() -> None:
     # Omnia id → canonical llmgw catalog slug.
-    assert llmgw.native_slug(_MODEL) == "anthropic/claude-opus-4.8"
+    assert llmgw.native_slug(_MODEL) == "google/gemini-3.1-pro-preview-customtools"
     assert llmgw.native_slug("unknown-model") == "unknown-model"
     # Upstream response `model` → Omnia id (both surfaces' spellings).
-    assert llmgw.slug_to_omnia("claude-opus-4.8") == _MODEL
-    assert llmgw.slug_to_omnia("anthropic/claude-opus-4.8") == _MODEL
+    assert llmgw.slug_to_omnia("gemini-3.1-pro-preview-customtools") == _MODEL
+    assert llmgw.slug_to_omnia("google/gemini-3.1-pro-preview-customtools") == _MODEL
     assert llmgw.slug_to_omnia("gpt-5") is None
 
 

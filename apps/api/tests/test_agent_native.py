@@ -16,11 +16,11 @@ from omnia_api.services import agent_native
 from omnia_api.services.agent_native import _module_not_found_hint
 
 
-def test_native_agent_and_autoheal_use_opus_model() -> None:
+def test_native_agent_and_autoheal_use_gemini_custom_tools_model() -> None:
     from omnia_api.services import autoheal
 
-    assert agent_native._MODEL == "claude-opus-4-8"
-    assert autoheal._HEAL_MODEL == "claude-opus-4-8"
+    assert agent_native._MODEL == "gemini-3.1-pro-preview-customtools"
+    assert autoheal._HEAL_MODEL == "gemini-3.1-pro-preview-customtools"
 
 
 def test_hint_none_on_clean_or_unrelated_error() -> None:
@@ -28,9 +28,7 @@ def test_hint_none_on_clean_or_unrelated_error() -> None:
     assert _module_not_found_hint("Build succeeded, 0 errors") is None
     # a real error that is NOT a missing @/ module → no hint (don't over-fire)
     assert (
-        _module_not_found_hint(
-            "src/app/page.tsx(3,10): error TS2345: Argument of type 'string'"
-        )
+        _module_not_found_hint("src/app/page.tsx(3,10): error TS2345: Argument of type 'string'")
         is None
     )
     # a bare package (not an @/ alias) is a dependency problem, not the
@@ -52,8 +50,7 @@ def test_hint_fires_on_ts2307_internal_alias() -> None:
 
 def test_hint_dedupes_and_caps_modules() -> None:
     blob = "\n".join(
-        f"src/a{i}.ts: error TS2307: Cannot find module '@/lib/m{i}'"
-        for i in range(8)
+        f"src/a{i}.ts: error TS2307: Cannot find module '@/lib/m{i}'" for i in range(8)
     )
     blob += "\nsrc/z.ts: error TS2307: Cannot find module '@/lib/m0'"  # repeat
     out = _module_not_found_hint(blob)
@@ -95,7 +92,10 @@ async def test_native_infra_breaker_aborts_after_dead_turns(
         return {"ok": False, "error": "infra: Orchestrator returned 500", "infra_dead": True}
 
     res = await agent_native.run_native_build(
-        system="s", task="t", execute=execute, max_steps=40,
+        system="s",
+        task="t",
+        execute=execute,
+        max_steps=40,
     )
     assert res.stop_reason == "infra_error"
     assert "unreachable" in res.summary
@@ -118,7 +118,10 @@ async def test_native_no_write_guard_nudges_then_aborts(
         return {"ok": True, "content": "file body"}
 
     res = await agent_native.run_native_build(
-        system="s", task="t", execute=execute, max_steps=40,
+        system="s",
+        task="t",
+        execute=execute,
+        max_steps=40,
     )
     assert res.stop_reason == "exploring"
     assert res.steps == agent_native._NO_WRITE_ABORT_AT
@@ -145,7 +148,10 @@ async def test_native_write_resets_no_write_streak(
         return {"ok": True, "content": "body"}
 
     res = await agent_native.run_native_build(
-        system="s", task="t", execute=execute, max_steps=15,
+        system="s",
+        task="t",
+        execute=execute,
+        max_steps=15,
     )
     assert res.stop_reason == "max_steps"  # never tripped the exploring abort
     assert len(res.files) == 3  # the three successful writes were tracked
@@ -173,7 +179,10 @@ async def test_native_edit_file_counts_as_write_and_lands_in_files(
         return {"ok": True, "content": "body"}
 
     res = await agent_native.run_native_build(
-        system="s", task="t", execute=execute, max_steps=5,
+        system="s",
+        task="t",
+        execute=execute,
+        max_steps=5,
     )
     assert res.stop_reason == "max_steps"
     assert res.files == {"e.ts": "post-edit content"}
@@ -186,9 +195,7 @@ async def test_native_tool_call_emits_chat_progress(
     """Every executed native tool remains visible through the agent.step WS path."""
     calls = {"n": 0}
 
-    async def fake_call(
-        client: Any, url: str, convo: Any, system: str
-    ) -> dict[str, Any]:
+    async def fake_call(client: Any, url: str, convo: Any, system: str) -> dict[str, Any]:
         calls["n"] += 1
         if calls["n"] == 1:
             return _turn(("write_file", {"path": "src/app.ts", "content": "ok"}))
@@ -205,7 +212,11 @@ async def test_native_tool_call_emits_chat_progress(
         events.append((event_type, data))
 
     await agent_native.run_native_build(
-        system="s", task="t", execute=execute, emit=emit, max_steps=5,
+        system="s",
+        task="t",
+        execute=execute,
+        emit=emit,
+        max_steps=5,
     )
 
     progress = [data for event_type, data in events if event_type == "agent.step"]
@@ -233,7 +244,10 @@ async def test_native_proseless_done_gets_human_summary(
         return {"ok": True}
 
     res = await agent_native.run_native_build(
-        system="s", task="t", execute=execute, max_steps=5,
+        system="s",
+        task="t",
+        execute=execute,
+        max_steps=5,
     )
     assert res.done is True
     assert res.stop_reason == "no_tool"
@@ -313,9 +327,7 @@ def test_generate_media_returns_url_in_model_visible_field() -> None:
     orig = agent_media.image_resolver.generate_and_store_image
     agent_media.image_resolver.generate_and_store_image = _fake_gen  # type: ignore[assignment]
     try:
-        res = asyncio.run(
-            agent_media.generate_media("p", kind="image", prompt="cinematic hero")
-        )
+        res = asyncio.run(agent_media.generate_media("p", kind="image", prompt="cinematic hero"))
     finally:
         agent_media.image_resolver.generate_and_store_image = orig  # type: ignore[assignment]
 

@@ -25,14 +25,14 @@ from uuid import UUID
 
 import structlog
 
-from omnia_api.core.config import get_settings
+from omnia_api.core.config import PRIMARY_LLM_MODEL, get_settings
 from omnia_api.core.redis import get_redis
 from omnia_api.services import agent_builder, orchestrator_client
 
 log = structlog.get_logger(__name__)
 
 # Keep repair runs on the same model as the cinematic build agent.
-_HEAL_MODEL = "claude-opus-4-8"
+_HEAL_MODEL = PRIMARY_LLM_MODEL
 _HEAL_MAX_STEPS = 24
 
 
@@ -107,7 +107,9 @@ async def maybe_autoheal_on_open(project_id: UUID, slug: str) -> dict[str, Any]:
     except Exception:
         healed = False
     log.info(
-        "autoheal.done", project_id=str(project_id), healed=healed,
+        "autoheal.done",
+        project_id=str(project_id),
+        healed=healed,
         files=len(getattr(result, "files", {}) or {}),
     )
     return {"healed": healed, "files": len(getattr(result, "files", {}) or {})}

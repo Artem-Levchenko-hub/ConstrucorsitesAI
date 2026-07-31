@@ -1188,7 +1188,7 @@ def get_settings() -> Settings:
 MODEL_TIER_MAP: dict[str, str] = {
     # Premium — full single-shot prompt, no decomposition.
     "claude-opus-4-7": "premium",
-    "claude-opus-4-8": "premium",
+    "gemini-3.1-pro-preview-customtools": "premium",
     "gemini-3.5-flash-high": "premium",  # orchestrator (art_director)
     "deepseek-v4-pro-thinking": "premium",  # orchestrator (owner 06-02)
     "deepseek-v4-pro": "premium",  # coder (non-thinking, owner 06-02)
@@ -1281,49 +1281,46 @@ def generation_mode(model_id: str | None, project_id: str | None = None) -> Gene
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Phase M — role→model orchestration map ("topmix-v1").
+# Phase M — role→model orchestration map.
 #
 # The user no longer picks a model. Each task/pass in the generation pipeline
-# has a ROLE, and each role is assigned the cheapest model that reliably does
-# that job (Prompt Engineering for LLMs, ch. 9: "tasks don't have to all use
-# the same LLM"). Hard structural reasoning → Opus; bulk Russian copy →
-# DeepSeek; trivial mechanical steps → Haiku; final HTML assembly → no LLM
-# (deterministic Jinja). Retune per-role at runtime via Settings.role_models
+# has a ROLE. Retune per-role at runtime via Settings.role_models
 # (env ROLE_MODELS) without a code change.
 # ──────────────────────────────────────────────────────────────────────────
 
+PRIMARY_LLM_MODEL = "gemini-3.1-pro-preview-customtools"
+
 ROLE_MODEL_MAP: dict[str, str] = {
-    # Owner directive (2026-07-27): restore the proven cinematic orchestration
-    # from b8f4db5/e2747c6. One multimodal Opus 4.8 drives the whole chain:
+    # Owner directive (2026-07-31): Gemini 3.1 Pro Preview Custom Tools drives
     # classify → art direction → implementation → visual audit → repair. Flux
     # image generation and Seedance video generation remain separate media tools.
-    "classify": "claude-opus-4-8",  # pick 1 of N presets
-    "director": "claude-opus-4-8",  # catalog orchestrator — structure
-    "polish": "claude-opus-4-8",  # writes the real PageIR content (RU copy)
-    "audit": "claude-opus-4-8",  # acceptance-gate screenshot judge
-    "audit_retry": "claude-opus-4-8",  # escalation re-roll judge
-    "skeleton": "claude-opus-4-8",  # multipass fallback — structure
-    "content": "claude-opus-4-8",  # multipass fallback — copy
-    "visual": "claude-opus-4-8",  # multipass fallback — style tokens
-    "link_repair": "claude-opus-4-8",  # rewrite dead hrefs
-    "image_prompt": "claude-opus-4-8",  # writes TEXT prompt for Flux
-    "single_shot": "claude-opus-4-8",  # non-catalog freeform fallback path
-    "art_director": "claude-opus-4-8",
-    "freeform_writer": "claude-opus-4-8",
-    "edit": "claude-opus-4-8",  # targeted edit
-    "edit_escalation": "claude-opus-4-8",  # edit retry escalation
-    "agent": "claude-opus-4-8",
-    "agent_escalation": "claude-opus-4-8",  # one-shot escalation on a stuck loop
-    "discovery_plan": "claude-opus-4-8",
-    "result_type": "claude-opus-4-8",
-    "planner": "claude-opus-4-8",
-    "exe_doctor": "claude-opus-4-8",  # self-heal failed executable builds
-    "app_doctor": "claude-opus-4-8",  # app self-repair (verify->fix)
+    "classify": PRIMARY_LLM_MODEL,  # pick 1 of N presets
+    "director": PRIMARY_LLM_MODEL,  # catalog orchestrator — structure
+    "polish": PRIMARY_LLM_MODEL,  # writes the real PageIR content (RU copy)
+    "audit": PRIMARY_LLM_MODEL,  # acceptance-gate screenshot judge
+    "audit_retry": PRIMARY_LLM_MODEL,  # escalation re-roll judge
+    "skeleton": PRIMARY_LLM_MODEL,  # multipass fallback — structure
+    "content": PRIMARY_LLM_MODEL,  # multipass fallback — copy
+    "visual": PRIMARY_LLM_MODEL,  # multipass fallback — style tokens
+    "link_repair": PRIMARY_LLM_MODEL,  # rewrite dead hrefs
+    "image_prompt": PRIMARY_LLM_MODEL,  # writes TEXT prompt for Flux
+    "single_shot": PRIMARY_LLM_MODEL,  # non-catalog freeform fallback path
+    "art_director": PRIMARY_LLM_MODEL,
+    "freeform_writer": PRIMARY_LLM_MODEL,
+    "edit": PRIMARY_LLM_MODEL,  # targeted edit
+    "edit_escalation": PRIMARY_LLM_MODEL,  # edit retry escalation
+    "agent": PRIMARY_LLM_MODEL,
+    "agent_escalation": PRIMARY_LLM_MODEL,  # one-shot escalation on a stuck loop
+    "discovery_plan": PRIMARY_LLM_MODEL,
+    "result_type": PRIMARY_LLM_MODEL,
+    "planner": PRIMARY_LLM_MODEL,
+    "exe_doctor": PRIMARY_LLM_MODEL,  # self-heal failed executable builds
+    "app_doctor": PRIMARY_LLM_MODEL,  # app self-repair (verify->fix)
 }
 
 # Any role not in the map (or pointing at a later-retired model) resolves here.
 # The safe bottom follows the same one-model orchestration.
-DEFAULT_ROLE_MODEL = "claude-opus-4-8"
+DEFAULT_ROLE_MODEL = PRIMARY_LLM_MODEL
 
 # First-N free "wow-effect" generations per user before wallet billing starts.
 # Counter lives on User.free_generations_used; the gate is in routers/messages.py

@@ -23,10 +23,10 @@ class ModelPrice:
 
 
 PRICE_TABLE: Mapping[str, ModelPrice] = {
-    # Opus 4.8 drives every orchestration role. Image generation
+    # Gemini 3.1 Pro Preview Custom Tools drives every orchestration role. Image generation
     # (routers/images.py), video, and whisper
     # transcription (routers/audio.py) bill via their own paths, not this table.
-    "claude-opus-4-8": ModelPrice(Decimal("1.50"), Decimal("7.50")),
+    "gemini-3.1-pro-preview-customtools": ModelPrice(Decimal("1.50"), Decimal("7.50")),
 }
 
 _PER_1K = Decimal("1000")
@@ -76,13 +76,18 @@ def calculate_cost_rub(
 @dataclass(frozen=True, slots=True)
 class _ModelMeta:
     display_name: str
-    provider: str  # 'anthropic' | 'openai' | 'yandex' | 'alibaba' | 'sber'
+    provider: str
     context_window: int
     recommended_for: tuple[str, ...]
 
 
 _MODEL_META: Mapping[str, _ModelMeta] = {
-    "claude-opus-4-8": _ModelMeta("Claude Opus 4.8", "anthropic", 200_000, ("quality",)),
+    "gemini-3.1-pro-preview-customtools": _ModelMeta(
+        "Gemini 3.1 Pro Preview Custom Tools",
+        "google",
+        1_048_576,
+        ("agentic", "coding", "multimodal"),
+    ),
 }
 
 

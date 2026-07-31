@@ -98,7 +98,7 @@ def test_anthropic_response_preserves_tool_id_and_arguments() -> None:
         },
     }
 
-    adapted = messages_native._anthropic_response(upstream, "claude-opus-4-8")
+    adapted = messages_native._anthropic_response(upstream, "gemini-3.1-pro-preview-customtools")
 
     assert adapted["stop_reason"] == "tool_use"
     assert adapted["content"][0] == {
@@ -162,7 +162,7 @@ def test_native_endpoint_uses_llmgw_chat_tools(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "claude-opus-4-8",
+            "model": "gemini-3.1-pro-preview-customtools",
             "max_tokens": 128,
             "system": "Build",
             "messages": [{"role": "user", "content": "Finish"}],
@@ -183,7 +183,7 @@ def test_native_endpoint_uses_llmgw_chat_tools(
 
     assert response.status_code == 200
     assert captured["url"] == "https://api.llmgw.ru/v1/chat/completions"
-    assert captured["json"]["model"] == "anthropic/claude-opus-4.8"
+    assert captured["json"]["model"] == "google/gemini-3.1-pro-preview-customtools"
     assert captured["json"]["tools"][0]["function"]["name"] == "done"
     assert response.json()["content"][0] == {
         "type": "tool_use",

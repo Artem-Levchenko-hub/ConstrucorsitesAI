@@ -266,7 +266,7 @@ services:
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
       # Per-role model orchestration overrides. Empty = code ROLE_MODEL_MAP
-      # (director=Opus, workers=DeepSeek). ROLE_MODELS = CSV of role=model_id
+      # (all roles use Gemini Custom Tools by default). ROLE_MODELS = CSV of role=model_id
       # (e.g. "audit=deepseek-v4-flash-thinking"); FORCE_MODEL pins one model on
       # every role. Lets ops retune the mix without a code deploy.
       ROLE_MODELS: ${ROLE_MODELS:-}
@@ -277,8 +277,8 @@ services:
       USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
       USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
       USE_DESIGN_JUDGE: ${USE_DESIGN_JUDGE:-false}
-      # Native tool-use agent (server-side «Claude Code»): one Opus end-to-end via
-      # native Anthropic tools + preserved thinking, fact-gates only. Flip in .env.
+      # Native tool-use agent: one Gemini Custom Tools pass end-to-end with
+      # structured tools and fact gates. Flip in .env.
       USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
@@ -339,9 +339,9 @@ services:
       GATE_HIERARCHY_MIN_SCORE: ${GATE_HIERARCHY_MIN_SCORE:-2}
       ORIGINALITY_SHADOW: ${ORIGINALITY_SHADOW:-false}
       ACCEPTANCE_GATE_REPAIR_PASSES: ${ACCEPTANCE_GATE_REPAIR_PASSES:-0}
-      # App self-repair loop (Claude-Code verify→fix). 0 = OFF (card-only, today);
+      # App self-repair loop (verify→fix). 0 = OFF (card-only, today);
       # N>0 = probe live container for a real compile/runtime error → app_doctor
-      # (DeepSeek) fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
+      # Gemini fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
       APP_SELF_REPAIR_PASSES: ${APP_SELF_REPAIR_PASSES:-0}
       # Feature scaffolding for container apps: "add a section/form/entity" gets the
       # entity-JSON + CrudResource + nav-wiring contract so DeepSeek ships a complete,
@@ -458,8 +458,8 @@ services:
       USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
       USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
       USE_DESIGN_JUDGE: ${USE_DESIGN_JUDGE:-false}
-      # Native tool-use agent (server-side «Claude Code»): one Opus end-to-end via
-      # native Anthropic tools + preserved thinking, fact-gates only. Flip in .env.
+      # Native tool-use agent: one Gemini Custom Tools pass end-to-end with
+      # structured tools and fact gates. Flip in .env.
       USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
@@ -524,9 +524,9 @@ services:
       GATE_HIERARCHY_MIN_SCORE: ${GATE_HIERARCHY_MIN_SCORE:-2}
       ORIGINALITY_SHADOW: ${ORIGINALITY_SHADOW:-false}
       ACCEPTANCE_GATE_REPAIR_PASSES: ${ACCEPTANCE_GATE_REPAIR_PASSES:-0}
-      # App self-repair loop (Claude-Code verify→fix). 0 = OFF (card-only, today);
+      # App self-repair loop (verify→fix). 0 = OFF (card-only, today);
       # N>0 = probe live container for a real compile/runtime error → app_doctor
-      # (DeepSeek) fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
+      # Gemini fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
       APP_SELF_REPAIR_PASSES: ${APP_SELF_REPAIR_PASSES:-0}
       # Feature scaffolding for container apps: "add a section/form/entity" gets the
       # entity-JSON + CrudResource + nav-wiring contract so DeepSeek ships a complete,

@@ -189,6 +189,11 @@
  "owner_actions": [
   {
    "date": "31.07",
+   "what": "Поручил заменить Claude Opus 4.8 во всём активном LLM-контуре на Google Gemini 3.1 Pro Preview Custom Tools как основную модель для разработки MAX.",
+   "impact": "Миграция охватывает все роли API, native-agent, autoheal, единственный gateway-каталог, vendor-slug, vision и тесты. До production-smoke гипотеза отмечена как проверяемая."
+  },
+  {
+   "date": "31.07",
    "what": "Показал блокировку MAX-публикации после успешной сборки: текущая ревизия якобы не имела действительной проверки безопасности.",
    "impact": "Production-форензика доказала рассинхронизацию SHA: генерация прошла release-proof, но последующие no-code сохранения MAX-конфигурации создали новые коммиты без новой аттестации. Исправление перевыпускает proof для точного snapshot; «ФитнессСтат» опубликован, отвечает 200 и имеет активный подтверждённый webhook MAX."
   },
@@ -2077,6 +2082,18 @@
    "evidence": "Production-форензика fitnessstat-31eba8: passing-аттестация была на f484823d, три no-code config-коммита довели current snapshot до b77c45c без proof и вызвали attestation_missing. Revisions 7709dd29, 7c925f89 и f6b4a42f развернуты: MAX sync перевыпускает exact-SHA proof; Drizzle public.* нормализуется к project search_path; builder восстанавливает свежий platform runner после stale dev-overlay. Proof b77c45c прошёл с digest a7b22415. Production deploy run ce25e18e завершён done образом 1785523105; публичный HTTPS отвечает 200, MAX integration active, внешняя subscription подтверждена. Readiness: business/build/legal/bot/publish/webhook/max_url — 7/7 true, ready_to_launch=true. В proj_d00b4d10 существуют max_users, fs_analyses и __omnia_migrations; применены 0000_max_core, 0000_perfect_alice, 0001_business_core. Core-сервисы healthy, app running с 0 restart, API/app error scan=0. Проверки: API target integration 11 passed, mypy 218 modules, ruff src/tests; orchestrator 458 passed/15 xfailed, mypy 37 modules, regression 3/3.",
    "impact": "Fail-closed безопасность сохранена, но штатные no-code изменения MAX больше не превращают публикацию в тупик. Реальный проект прошёл точную проверку, миграции в изолированной схеме, production-запуск и внешнюю активацию webhook одним завершённым контуром.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H105",
+   "title": "Gemini Custom Tools становится единственной LLM-моделью конструктора",
+   "status": "testing",
+   "score": null,
+   "category": "LLM / MAX / агент / vision / инструменты",
+   "period": "31.07",
+   "description": "Заменить Claude Opus 4.8 во всех активных ролях, native-agent, autoheal и gateway-каталоге на Gemini 3.1 Pro Preview Custom Tools, сохранив обычные ответы, мультимодальный аудит и структурированные tool calls.",
+   "evidence": "Официальный API ID подтверждён как gemini-3.1-pro-preview-customtools; production-каталог LLMGW содержит точный upstream slug google/gemini-3.1-pro-preview-customtools. Прямой preflight upstream вернул HTTP 200 и finish_reason=tool_calls. Локально gateway: 58 passed, ruff и mypy зелёные; API: 20 целевых тестов, ruff и mypy зелёные; 22 из 22 ролей резолвятся в новый Gemini ID. Ожидается production deploy и live smoke обычного chat, vision и native tools.",
+   "impact": "После живой проверки следующий запрос MAX будет проходить через специализированную Custom Tools-версию Gemini без скрытого fallback на Opus.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2545,6 +2562,10 @@
      true
     ],
     [
+     "Все LLM-роли, native-agent, autoheal и vision переведены на Gemini 3.1 Pro Preview Custom Tools",
+     false
+    ],
+    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2561,7 +2582,8 @@
      "H92",
      "H97",
      "H100",
-     "H104"
+     "H104",
+     "H105"
    ]
   }
  ],

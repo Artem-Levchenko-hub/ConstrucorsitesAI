@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 3600
     min_balance_rub: float = 5.0
 
-    # Read timeout for one completion. A thinking-heavy Opus pass can spend tens of
+    # Read timeout for one long agentic pass, which can spend tens of
     # seconds; 240s tolerates the spike while staying under the api llm_client's
     # 300s read timeout so a genuine hang still surfaces cleanly.
     # Env: REQUEST_TIMEOUT_SECONDS.

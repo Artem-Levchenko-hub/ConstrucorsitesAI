@@ -1,17 +1,15 @@
-"""Native Anthropic tool-use build loop — the Claude-Code-grade agent (DARK).
+"""Native structured tool-use build loop for executable app generation.
 
 Supersedes the text-``<omnia:action>`` protocol (``agent_builder.run_agent_build``)
-with **native Anthropic tool-use**: Opus 4.8 drives the whole build
-end-to-end via real tool calls, with extended thinking PRESERVED across tool turns
-(thinking blocks are echoed back verbatim — Anthropic 400s otherwise, and stripping
-them is exactly what derailed the text loop). The only "gate" is FACT-based: the
-``build`` tool returns the real compiler errors as a ``tool_result`` and the model
-fixes them itself (do → check → fix), like Claude Code — no taste/vision judges here.
+with native structured tool calls. Gemini 3.1 Pro Preview Custom Tools drives the
+whole build end-to-end. The only "gate" is FACT-based: the ``build`` tool returns
+real compiler errors as a ``tool_result`` and the model fixes them itself
+(do → check → fix), with no taste/vision judges here.
 
 Owns ONLY the loop + protocol. Reuses ``agent_builder.make_container_executor`` for
 the actual file/container ops, and calls the gateway's native ``/v1/messages``
-passthrough (``routers/messages_native.py``) so the thinking-block signatures survive
-the round-trip.
+adapter (``routers/messages_native.py``), which preserves the Anthropic-shaped
+tool-use contract while the gateway maps it to the selected upstream.
 
 Behind ``settings.use_native_agent`` (default OFF): the existing ``run_agent_build``
 stays the prod default until this is verified on real builds and billing is wired.
@@ -26,12 +24,12 @@ from typing import Any
 import httpx
 import structlog
 
-from omnia_api.core.config import get_settings
+from omnia_api.core.config import PRIMARY_LLM_MODEL, get_settings
 from omnia_api.services.agent_builder import Action, AgentResult
 
 log = structlog.get_logger(__name__)
 
-_MODEL = "claude-opus-4-8"
+_MODEL = PRIMARY_LLM_MODEL
 # Providers can pre-reserve the full max_tokens × output price on every call and 402
 # if the key balance is below that reserve — so an over-large ceiling caps how many
 # calls fit the balance (an oversized reserve can 402 mid-build,
@@ -42,14 +40,14 @@ _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
-_CALL_RETRIES = 8  # oneprovider: 429 concurrency cap + sustained 502/504 flake bursts
+_CALL_RETRIES = 8  # upstream concurrency caps + sustained 502/504 flake bursts
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
 # text-protocol ACTIONS). Native counts assistant TURNS instead — one turn often
 # bundles several parallel tool calls, and the native flow legitimately spends
 # its first turns surveying the big template — so the nudge fires later (6 turns
-# ≈ 8-15 read calls) and the abort at 12 turns still saves 28 slow Opus steps.
+# ≈ 8-15 read calls) and the abort at 12 turns still bounds a stalled build.
 _NO_WRITE_NUDGE_AT = 6
 _NO_WRITE_ABORT_AT = 12
 

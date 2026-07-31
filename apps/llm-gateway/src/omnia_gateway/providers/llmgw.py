@@ -2,8 +2,8 @@
 
 The public API lives under ``https://api.llmgw.ru/v1`` and uses
 ``Authorization: Bearer <LLMGW_API_KEY>``. The provider requires canonical
-vendor-prefixed model ids (``anthropic/claude-opus-4.8``), while Omnia keeps its
-stable public id (``claude-opus-4-8``).
+vendor-prefixed model ids (``google/gemini-3.1-pro-preview-customtools``), while
+Omnia keeps a stable public id without the vendor prefix.
 
 Why a sync ``httpx.Client`` on a worker thread instead of ``AsyncClient``: the
 gateway container may carry an ``HTTPS_PROXY`` (a UK egress used only to
@@ -32,7 +32,6 @@ import httpx
 
 from omnia_gateway.core.config import get_settings
 from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
-from omnia_gateway.services.prompt_cache import apply_anthropic_cache
 
 # Transient transport faults worth one retry (a TLS handshake to a reseller edge
 # can intermittently stall inside a long-lived process).
@@ -45,18 +44,18 @@ _TRANSIENT = (
 
 # Omnia model ID → the exact llmgw catalog id sent as the OpenAI `model` field.
 _MODEL_SLUG: dict[str, str] = {
-    "claude-opus-4-8": "anthropic/claude-opus-4.8",
+    "gemini-3.1-pro-preview-customtools": "google/gemini-3.1-pro-preview-customtools",
 }
 
 # The native Messages response may add the provider prefix; accept both forms.
 _SLUG_TO_OMNIA: dict[str, str] = {
-    "claude-opus-4.8": "claude-opus-4-8",
-    "anthropic/claude-opus-4.8": "claude-opus-4-8",
+    "gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview-customtools",
+    "google/gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview-customtools",
 }
 
 # Natively multimodal models — keep OpenAI image_url blocks instead of flattening
 # them (the acceptance/vision judge + the agent `see` tool send screenshots).
-_MULTIMODAL: frozenset[str] = frozenset({"claude-opus-4-8"})
+_MULTIMODAL: frozenset[str] = frozenset({"gemini-3.1-pro-preview-customtools"})
 
 _DEFAULT_MAX_TOKENS = 32768
 # Long art-director / writer passes run ~150s non-streaming. 240s clears them while
@@ -168,9 +167,6 @@ async def astream(
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
     key, url = _key_and_url()
 
-    # Anthropic prompt caching: wrap the stable system prefix in `cache_control:
-    # ephemeral`. _is_vision keeps the resulting block array intact for claude.
-    messages = apply_anthropic_cache(model, messages)
     payload: dict[str, Any] = {
         "model": slug,
         "messages": _to_messages(messages, vision=_is_vision(model)),
@@ -289,7 +285,6 @@ async def acompletion(
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
     key, url = _key_and_url()
 
-    messages = apply_anthropic_cache(model, messages)
     payload: dict[str, Any] = {
         "model": slug,
         "messages": _to_messages(messages, vision=_is_vision(model)),
