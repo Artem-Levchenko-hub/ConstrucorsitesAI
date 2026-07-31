@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-07-31",
-  "version": 5,
+  "version": 6,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Off-host мониторинг работает; путь до MVP — 20 из 26",
-  "subtitle": "GitHub каждые пять минут независимо проверяет platform, control plane, deployed MAX-canary и webhook auth boundary, а падение превращает в один дедуплицированный incident.",
+  "title": "Зашифрованный off-host backup восстановлен; путь до MVP — 21 из 26",
+  "subtitle": "Полный снимок двух PostgreSQL-контуров, исходников проектов и MinIO хранится вне VPS, а обратная загрузка, расшифровка и scratch-восстановление доказаны на реальных production-данных.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Полный backup переживает потерю production VPS",
+    "d": "Ночной сценарий сохраняет platform DB, все 983 таблицы проектных схем, исходники и MinIO, проверяет SHA-256 и создаёт 404,5 МБ CMS-конверт AES-256/RSA. GitHub Actions artifact 8790907201 хранит ciphertext вне сервера 7 дней; скачанный artifact совпал с digest, расшифровался офлайн-ключом, а scratch-restore вернул 33 platform-таблицы, 983 project-таблицы и 19 659 файлов."
+   },
    {
     "s": "worked",
     "t": "Мониторинг действительно работает вне production VPS",
@@ -21,7 +26,7 @@
    {
     "s": "worked",
     "t": "Сервисы получили внешне проверяемую готовность",
-    "d": "Публичный /web-health проверяет процесс Next.js, а /api/health — API, Postgres, Redis и TTL-heartbeat фонового worker. На production оба отвечают status=ok; внешний off-host планировщик оповещений остаётся следующим шагом и поэтому чек мониторинга ещё не закрыт."
+    "d": "Публичный /web-health проверяет процесс Next.js, а /api/health — API, Postgres, Redis и TTL-heartbeat фонового worker. На production оба отвечают status=ok; независимый GitHub-планировщик каждые пять минут проверяет их извне и автоматически ведёт incident."
    },
    {
     "s": "worked",
@@ -164,7 +169,7 @@
     "d": "Pop-up теперь расположен выше затемняющего слоя: окно остаётся чётким, а blur применяется только к фону. Галочка бота обновляется сразу, а активация недоступна до появления HTTPS."
    }
   ],
-  "progress_note": "Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609. Production работает на 0039_attestation_integrity; DEPLOY_ATTESTATION_BLOCKING, USE_AGENTIC_BUILDER, USE_RUNTIME_GATES и AGENT_REQUIRE_GREEN_BEFORE_DONE=true. Публичный /api/health подтверждает database, redis, worker, deploy_control_plane и preview_storage=ok; /web-health и deployed MAX-canary также ok. GitHub Actions run 30623623645 завершился success, открытых incident issues 0. /mvp показывает 20/26 = 77%. Чистая миграция 0001→0039, API ruff/mypy и 17 monitoring-тестов, Web typecheck/lint/102 теста/build зелёные."
+  "progress_note": "Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, полный encrypted backup — revisions 2b2c98d4, 139e39d1 и c1075999. Production работает на 0039_attestation_integrity; /api/health подтверждает database, redis, worker, deploy_control_plane и preview_storage=ok. Monitoring run 30623623645 и backup run 30624559111 завершились success; artifact 8790907201 размером 404 546 641 байт хранится вне VPS до 7 августа. Server scratch-restore вернул 33 platform-таблицы, 983 project-таблицы и 19 659 файлов; скачанный artifact расшифрован локальным offline key, все четыре payload checksum=OK. /mvp показывает 21/26 = 81%. API ruff/mypy и 5 backup-тестов зелёные."
  },
  "owner_actions": [
   {
