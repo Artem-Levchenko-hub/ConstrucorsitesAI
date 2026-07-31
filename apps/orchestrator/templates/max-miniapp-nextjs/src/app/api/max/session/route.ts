@@ -81,7 +81,10 @@ export async function POST(request: Request) {
     response.cookies.set(MAX_SESSION_COOKIE, session.value, {
       httpOnly: true,
       secure: true,
-      sameSite: "none",
+      // The mini app and its APIs share one origin. Lax keeps that first-party
+      // session compatible with iOS MAX WebViews that reject SameSite=None
+      // cookies, while still preventing cross-site subrequests from using it.
+      sameSite: "lax",
       path: "/",
       maxAge: session.maxAge,
     });

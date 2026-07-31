@@ -88,6 +88,8 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     session_route = files["src/app/api/max/session/route.ts"]
     assert 'console.warn("[max-auth] rejected launch data"' in session_route
     assert "length: initData.length" in session_route
+    assert 'sameSite: "lax"' in session_route
+    assert 'sameSite: "none"' not in session_route
 
 
 def test_template_lookup_does_not_depend_on_repository_depth() -> None:
