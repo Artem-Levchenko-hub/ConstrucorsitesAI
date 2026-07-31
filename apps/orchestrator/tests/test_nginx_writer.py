@@ -126,6 +126,16 @@ def test_proxy_location_carries_websocket_upgrade() -> None:
     assert "proxy_hide_header X-Frame-Options" in block
 
 
+def test_proxy_location_disables_html_cache_only() -> None:
+    """A deployed app shell must refresh while hashed assets keep their policy."""
+    block = nginx_writer._proxy_location(3200)
+    assert "proxy_hide_header Cache-Control" in block
+    assert "set $omnia_cache_control $upstream_http_cache_control" in block
+    assert 'if ($upstream_http_content_type ~* "^text/html")' in block
+    assert 'set $omnia_cache_control "no-store"' in block
+    assert "add_header Cache-Control $omnia_cache_control always" in block
+
+
 def test_dev_vhost_injects_platform_inspector_for_old_projects() -> None:
     """The proxy—not project source—must deliver the picker to every dev HTML."""
     block = nginx_writer._https_block(
