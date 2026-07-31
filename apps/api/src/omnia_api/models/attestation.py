@@ -39,6 +39,10 @@ class Attestation(Base):
     )
     commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
     stack: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Exact timestamp embedded in the canonical attestation body. ``created_at``
+    # is assigned independently by Postgres and therefore cannot be used to
+    # recompute the content digest byte-for-byte.
+    issued_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     overall_passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     digest: Mapped[str] = mapped_column(Text, nullable=False)
     gates: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

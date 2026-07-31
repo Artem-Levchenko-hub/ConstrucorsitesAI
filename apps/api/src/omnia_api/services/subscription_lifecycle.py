@@ -602,9 +602,12 @@ async def process_subscription_cycle(
 
 
 async def run_subscription_lifecycle_forever() -> None:
+    from omnia_api.services.readiness import write_worker_heartbeat
+
     settings = get_settings()
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    heartbeat_ttl = max(settings.billing_lifecycle_poll_seconds * 3, 30)
     log.info(
         "subscription.lifecycle_started",
         poll_seconds=settings.billing_lifecycle_poll_seconds,
@@ -614,8 +617,10 @@ async def run_subscription_lifecycle_forever() -> None:
     try:
         while True:
             try:
+                await write_worker_heartbeat(heartbeat_ttl)
                 async with factory() as session:
                     processed = await process_subscription_cycle(session)
+                await write_worker_heartbeat(heartbeat_ttl)
                 if processed:
                     log.info("subscription.lifecycle_cycle", processed=processed)
             except Exception:

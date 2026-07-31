@@ -465,12 +465,10 @@ class Settings(BaseSettings):
     use_build_attestation: bool = Field(default=True)
 
     # Deploy-attestation gate (fresh-plan Step 3 — "deploy ↔ proven"). At deploy the
-    # api looks up the build's saved attestation and LOGS whether it's proven
-    # ("[DEPLOY-GATE] … proven=…") — ADVISORY by default so we measure the real
-    # pass-rate before blocking. `deploy_attestation_blocking` then makes an
-    # unproven build REFUSE to deploy (409). Safe rollout: keep blocking OFF, watch
-    # the log, flip DEPLOY_ATTESTATION_BLOCKING=true when ready. NB projects built
-    # before attestations have none → count as "not proven" once blocking is on.
+    # api looks up the exact build's saved attestation and verifies its digest.
+    # Dev stays advisory by default; production is always fail-closed even if an
+    # operator accidentally sets DEPLOY_ATTESTATION_BLOCKING=false. Projects built
+    # before digest inputs were persisted must be rebuilt before their next deploy.
     # Env: USE_DEPLOY_ATTESTATION_GATE / DEPLOY_ATTESTATION_BLOCKING.
     use_deploy_attestation_gate: bool = Field(default=True)
     deploy_attestation_blocking: bool = Field(default=False)

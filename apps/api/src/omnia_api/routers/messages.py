@@ -4027,6 +4027,92 @@ async def _process_prompt(
             except Exception as _cov_exc:  # a gate must never crash the build
                 print(f"[PP] coverage_gate skipped: {_cov_exc!r}", flush=True)
 
+            # Universal release proof. The specialised realtime/isolation gates
+            # above cover only two stacks; every container build (including MAX)
+            # must still prove that its FINAL live tree typechecks, serves and has
+            # safe transport headers before its exact commit can be deployed.
+            if files and get_settings().use_build_attestation:
+                from omnia_api.services.functional_gate import Check as _ProofCheck
+                from omnia_api.services.functional_gate import summarize as _proof_summary
+
+                _proof_checks: list[_ProofCheck] = []
+                try:
+                    _final_tc = await orchestrator_client.agent_build(
+                        project_id, project_slug
+                    )
+                    _final_tc_ok = bool(_final_tc.get("ok", False))
+                    _proof_checks.append(
+                        _ProofCheck(
+                            "typecheck",
+                            _final_tc_ok,
+                            str(_final_tc.get("detail") or "")[:240],
+                        )
+                    )
+                except Exception as _proof_tc_exc:
+                    _proof_checks.append(
+                        _ProofCheck("typecheck", False, f"probe failed: {_proof_tc_exc!r}")
+                    )
+
+                _proof_base: str | None = None
+                try:
+                    _final_rt = await orchestrator_client.runtime_status(
+                        project_id, slug=project_slug, path="/"
+                    )
+                    _final_rt_ok = bool(_final_rt.get("ok", False))
+                    _proof_checks.append(
+                        _ProofCheck(
+                            "runtime",
+                            _final_rt_ok,
+                            str(
+                                _final_rt.get("error")
+                                or _final_rt.get("status_code")
+                                or "HTTP ok"
+                            )[:240],
+                        )
+                    )
+                    _final_status = await orchestrator_client.get_status(project_id)
+                    _proof_base_raw = (
+                        _final_status.get("dev_url")
+                        if isinstance(_final_status, dict)
+                        else None
+                    )
+                    _proof_base = str(_proof_base_raw) if _proof_base_raw else None
+                except Exception as _proof_rt_exc:
+                    _proof_checks.append(
+                        _ProofCheck("runtime", False, f"probe failed: {_proof_rt_exc!r}")
+                    )
+
+                if get_settings().use_security_gate:
+                    try:
+                        if not _proof_base:
+                            raise RuntimeError("dev_url missing")
+                        from omnia_api.services import security_gate as _release_security
+
+                        _release_security_verdict = (
+                            await _release_security.run_security_gate(_proof_base)
+                        )
+                        _proof_checks.extend(
+                            _ProofCheck(check.name, check.ok, check.detail)
+                            for check in _release_security_verdict.checks
+                        )
+                    except Exception as _proof_sec_exc:
+                        _proof_checks.append(
+                            _ProofCheck(
+                                "transport_security",
+                                False,
+                                f"probe failed: {_proof_sec_exc!r}",
+                            )
+                        )
+
+                _release_verdict = _proof_summary(_proof_checks)
+                if _att_capture is None:
+                    _att_capture = []
+                _att_capture.append(("release", _release_verdict))
+                print(
+                    f"[ATTEST] universal release proof passed={_release_verdict.passed}",
+                    flush=True,
+                )
+
             if files:
                 new_sha = await asyncio.to_thread(
                     repo_svc.commit_files,
@@ -4079,6 +4165,7 @@ async def _process_prompt(
                                     snapshot_id=_agent_snap_id,
                                     commit_sha=new_sha,
                                     stack=_attestation_stack,
+                                    issued_at=str(_rec["created_at"]),
                                     overall_passed=bool(_rec["overall_passed"]),
                                     digest=_rec["digest"],
                                     gates=_rec["gates"],

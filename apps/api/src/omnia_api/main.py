@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.db import dispose_engine, get_engine
@@ -43,6 +44,7 @@ from omnia_api.routers import transcribe as transcribe_router
 from omnia_api.routers import uploads as uploads_router
 from omnia_api.routers import wallet as wallet_router
 from omnia_api.routers import ws as ws_router
+from omnia_api.services import readiness
 from omnia_api.services.generation_runs import recover_interrupted_generation_runs
 from omnia_api.services.ws_hub import hub
 
@@ -117,6 +119,19 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/health", tags=["meta"])
+    async def readiness_health() -> JSONResponse:
+        checks = await readiness.probe_readiness()
+        healthy = all(value == "ok" for value in checks.values())
+        return JSONResponse(
+            status_code=200 if healthy else 503,
+            content={
+                "status": "ok" if healthy else "degraded",
+                "service": "api",
+                "checks": checks,
+            },
+        )
 
     return app
 

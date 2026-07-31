@@ -30,7 +30,6 @@ from omnia_api.core.crypto import decrypt_strong
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.account import BusinessMember
-from omnia_api.models.attestation import Attestation
 from omnia_api.models.billing import BillingAccount, BillingPlan, Subscription
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
@@ -50,6 +49,7 @@ from omnia_api.services import autoheal as autoheal_svc
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.billing_accounts import resolve_billing_account
+from omnia_api.services.deploy_attestation import blocking_required, resolve_deploy_proof
 
 log = structlog.get_logger(__name__)
 
@@ -442,38 +442,37 @@ async def trigger_deploy(
                 .all()
             )
             domains = list(rows) or None
-    # Deploy-attestation gate (Step 3, deploy ↔ proven): look up the build's saved
-    # attestation, log its verdict, and refuse an unproven deploy only when blocking
-    # is enabled. Advisory by default; lookup errors are advisory-safe (a DB hiccup
-    # must never break a deploy).
-    if get_settings().use_deploy_attestation_gate:
-        _proven: bool | None = None
-        _digest: str | None = None
+    # Production release proof is fail-closed: the exact commit must have a
+    # passing, digest-valid attestation. Dev can keep the gate advisory.
+    settings = get_settings()
+    gate_blocking = blocking_required(settings)
+    if settings.use_deploy_attestation_gate or gate_blocking:
         try:
-            _stmt = select(Attestation).where(Attestation.project_id == project_id)
-            if sha:
-                _stmt = _stmt.where(Attestation.commit_sha == sha)
-            _att = (
-                (await session.execute(_stmt.order_by(Attestation.created_at.desc()).limit(1)))
-                .scalars()
-                .first()
-            )
-            _proven = bool(_att and _att.overall_passed)
-            _digest = _att.digest if _att else None
-        except Exception as _ge:
-            print(f"[DEPLOY-GATE] lookup skipped: {_ge}", flush=True)
-        if _proven is not None:
+            proof = await resolve_deploy_proof(session, project, sha)
             print(
-                f"[DEPLOY-GATE] project={project_id} sha={sha} proven={_proven} digest={_digest}",
+                f"[DEPLOY-GATE] project={project_id} sha={proof.commit_sha} "
+                f"proven={proof.passed} reason={proof.reason} digest={proof.digest}",
                 flush=True,
             )
-            if get_settings().deploy_attestation_blocking and not _proven:
+            if gate_blocking and not proof.passed:
                 raise ApiError(
                     "deploy_not_proven",
-                    "Деплой заблокирован: сборка не прошла проверку изоляции/"
-                    "безопасности. Уточни запрос и пересобери.",
+                    "Деплой заблокирован: текущая сборка не имеет действительной "
+                    "проверки безопасности. Пересобери проект и повтори публикацию.",
                     status.HTTP_409_CONFLICT,
+                    details={"reason": proof.reason},
                 )
+        except ApiError:
+            raise
+        except Exception as exc:
+            log.exception("deploy.attestation_lookup_failed", project_id=str(project_id))
+            if gate_blocking:
+                raise ApiError(
+                    "deploy_not_proven",
+                    "Деплой временно заблокирован: проверку безопасности нельзя подтвердить.",
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    details={"reason": "proof_unavailable"},
+                ) from exc
     payload = await orchestrator_client.deploy(
         project_id,
         commit_sha=sha,

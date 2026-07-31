@@ -1,16 +1,11 @@
-"""Deploy-attestation gate defaults + wiring — pure, no DB.
-
-Safe-rollout invariant: the gate is ADVISORY by default (logs the build's verdict
-at deploy) and does NOT block. Blocking must be an explicit opt-in — a regression
-that defaults it on would refuse every deploy of a project built before
-attestations existed.
-"""
+"""Deploy-attestation gate defaults + production fail-closed wiring."""
 
 from __future__ import annotations
 
 import inspect
 
 from omnia_api.core.config import Settings
+from omnia_api.services.deploy_attestation import blocking_required
 
 
 def test_deploy_gate_advisory_by_default() -> None:
@@ -21,12 +16,27 @@ def test_deploy_gate_does_not_block_by_default() -> None:
     assert Settings.model_fields["deploy_attestation_blocking"].default is False
 
 
+def test_deploy_gate_is_always_blocking_in_production() -> None:
+    settings = Settings.model_construct(env="prod", deploy_attestation_blocking=False)
+    assert blocking_required(settings)
+
+
 def test_trigger_deploy_consults_the_attestation() -> None:
-    # Guard the wiring: the deploy handler must look up the attestation + honour the
-    # blocking flag (defence against a refactor that drops the gate).
     from omnia_api.routers import runtime
 
     src = inspect.getsource(runtime.trigger_deploy)
-    assert "Attestation" in src
-    assert "deploy_attestation_blocking" in src
+    assert "resolve_deploy_proof" in src
+    assert "blocking_required" in src
     assert "DEPLOY-GATE" in src
+
+
+def test_production_compose_enables_blocking_by_default() -> None:
+    from pathlib import Path
+
+    compose = (
+        Path(__file__).parents[2] / "llm-gateway/deploy/full/docker-compose.yml"
+    ).read_text()
+    assert "DEPLOY_ATTESTATION_BLOCKING: ${DEPLOY_ATTESTATION_BLOCKING:-true}" in compose
+    assert "USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-true}" in compose
+    assert "USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-true}" in compose
+    assert "AGENT_REQUIRE_GREEN_BEFORE_DONE: ${AGENT_REQUIRE_GREEN_BEFORE_DONE:-true}" in compose

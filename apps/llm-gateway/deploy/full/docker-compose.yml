@@ -345,23 +345,23 @@ services:
       # Agentic builder (Phase 0): container first-builds run a real
       # plan→act→observe→verify agent loop (file tools + typecheck) instead of
       # one-shot generation. false = today's pipeline (byte-identical).
-      USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-false}
+      USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-true}
       AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
       # Per-user canary: run the agent loop for these user ids even when the
       # global flag is off (safe prod dogfood, no change for anyone else).
       AGENTIC_BUILDER_CANARY_USERS: ${AGENTIC_BUILDER_CANARY_USERS:-}
       # Green-gate: agent can't call done until build clean + runtime re-checked.
-      AGENT_REQUIRE_GREEN_BEFORE_DONE: ${AGENT_REQUIRE_GREEN_BEFORE_DONE:-false}
+      AGENT_REQUIRE_GREEN_BEFORE_DONE: ${AGENT_REQUIRE_GREEN_BEFORE_DONE:-true}
       # Runtime functional gate (realtime only): drive the live preview, verify
       # create/live-delivery/no-leak, feed red verdicts back so the agent self-heals.
-      USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-false}
+      USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-true}
       # Wallet self-top-up stub (POST /api/wallet/topup credits own wallet, no pay).
       # CLOSED by default on every public deployment. Enable only in an isolated,
       # access-controlled test environment.
       ALLOW_STUB_TOPUP: ${ALLOW_STUB_TOPUP:-false}
-      # Deploy-attestation gate (Step 3). Advisory-logs the build's verdict at deploy;
-      # flip to true to REFUSE an unproven deploy (watch "[DEPLOY-GATE] proven=" first).
-      DEPLOY_ATTESTATION_BLOCKING: ${DEPLOY_ATTESTATION_BLOCKING:-false}
+      # Production release gate. The api also forces fail-closed for ENV=prod, so
+      # a bad override cannot silently publish an unproven build.
+      DEPLOY_ATTESTATION_BLOCKING: ${DEPLOY_ATTESTATION_BLOCKING:-true}
       # Host-resolver map so the gate browser (runs in api) reaches the app's
       # canonical public preview host from inside docker (e.g.
       # "MAP *.preview.lead-generator.ru 172.21.0.1" → host nginx bridge gateway).

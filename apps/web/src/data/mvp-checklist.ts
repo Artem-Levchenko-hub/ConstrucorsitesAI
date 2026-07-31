@@ -204,14 +204,15 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "release-gate",
         title: "Блокирующая проверка релиза",
-        detail: "Непроверенная сборка не может попасть в production.",
-        status: "todo",
+        detail: "Exact commit проходит typecheck, runtime и transport-security proof; отсутствие или повреждение attestation блокирует production.",
+        status: "done",
+        completedAt: "31 июля 2026",
       },
       {
         id: "monitoring",
         title: "Внешний мониторинг и оповещения",
-        detail: "Web, API, preview, deploy и webhook проверяются независимо от основного сервера.",
-        status: "todo",
+        detail: "Публичные пробы web/API/Postgres/Redis/worker готовы; осталось подключить off-host расписание и канал оповещений.",
+        status: "in_progress",
       },
       {
         id: "offhost-backup",

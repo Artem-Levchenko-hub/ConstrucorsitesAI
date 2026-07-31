@@ -121,3 +121,34 @@ async def test_health_endpoint_is_public(client: httpx.AsyncClient) -> None:
     r = await client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
+
+
+async def test_readiness_endpoint_reports_component_state(
+    client: httpx.AsyncClient,
+    monkeypatch,
+) -> None:
+    async def healthy() -> dict[str, str]:
+        return {"database": "ok", "redis": "ok", "worker": "ok"}
+
+    monkeypatch.setattr("omnia_api.services.readiness.probe_readiness", healthy)
+    response = await client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "service": "api",
+        "checks": {"database": "ok", "redis": "ok", "worker": "ok"},
+    }
+
+
+async def test_readiness_endpoint_fails_when_worker_heartbeat_is_missing(
+    client: httpx.AsyncClient,
+    monkeypatch,
+) -> None:
+    async def degraded() -> dict[str, str]:
+        return {"database": "ok", "redis": "ok", "worker": "failed"}
+
+    monkeypatch.setattr("omnia_api.services.readiness.probe_readiness", degraded)
+    response = await client.get("/api/health")
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+    assert response.json()["checks"]["worker"] == "failed"
