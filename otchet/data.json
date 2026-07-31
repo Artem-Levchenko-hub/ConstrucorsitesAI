@@ -5,9 +5,39 @@
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "MAX Studio получила real preview, полный responsive и понятный запуск",
-  "subtitle": "Приложение открывается в защищённой dev-сессии, настройки покрывают весь управляемый контракт, а публикация ведёт обычного пользователя по одному текущему шагу на desktop, tablet и mobile.",
+  "title": "Hero-media прошла real planner → render → preview → apply",
+  "subtitle": "Флагманский planner действительно оценил фото, пользователь подтвердил video-план, Seedance собрала MP4, а пятишаговый responsive UX применил hero только после явного действия.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Planner работает по real model path",
+    "d": "На dev подтверждены USE_HERO_MEDIA_MVP=true, HERO_MEDIA_STUB_MODE=false и MOCK_LLM=false. Мультимодальный planner получил реальный WebP-источник, вернул структурированный план и потребовал подтверждение до render."
+   },
+   {
+    "s": "worked",
+   "t": "Seedance собрала настоящий 5-секундный hero-клип",
+   "d": "Один запланированный video render завершился через seedance-2.0-fast: внешний MP4 отвечает HTTP 200, имеет video/mp4 и размер 832 296 байт. В крупном preview видео достигло readyState=4 и воспроизводилось; узкий режим показал poster fallback."
+   },
+   {
+    "s": "worked",
+    "t": "Media metadata и cleanup больше не теряют object key",
+    "d": "Parser теперь извлекает storage key как из прямого MinIO URL, так и из nginx-prefixed /minio/<bucket>/… URL. Одноразовый E2E-проект очищен полностью: source WebP и video MP4 удалены из MinIO, project/assets/renders равны нулю, тестовый аккаунт отозван."
+   },
+   {
+    "s": "worked",
+    "t": "Фото → задача → план → preview → apply стали отдельными шагами",
+    "d": "Панель показывает шаг 1–5 с aria-current, раздельные экраны фото и брифа, явное подтверждение варианта, preview и Apply. Race «поставить согласие и сразу выбрать файл» устранён: upload передаёт снимок подтверждения, а не запаздывающий React-state."
+   },
+   {
+    "s": "worked",
+    "t": "Retry больше не меняет согласованный формат",
+    "d": "Controlled failure обнаружил две гонки: UI не обновлял cache-key активного render, а pipeline перечитывал mutable brief и мог превратить motion retry в новый video-вызов. Исправление фиксирует render.media_plan, сбрасывает старый terminal state и обновляет точный query cache. Повторная проверка завершилась plan=motion; video_model=none, без Apply и без нового snapshot."
+   },
+   {
+    "s": "worked",
+    "t": "Визуальный аудит подтверждён живыми взаимодействиями",
+    "d": "Для Hero сохранены реальные screenshots загрузки, брифа, applied video, controlled failure и retry. В панели нет page/panel overflow, при редактировании скрыт старый render, видимые кнопки не меньше 44 px. Общий MAX-аудит дополнительно покрывает 1440/768/390 px."
+   },
    {
     "s": "worked",
     "t": "Превью показывает реальный MAX dev-контейнер",
@@ -64,9 +94,14 @@
     "d": "Pop-up теперь расположен выше затемняющего слоя: окно остаётся чётким, а blur применяется только к фону. Галочка бота обновляется сразу, а активация недоступна до появления HTTPS."
    }
   ],
-  "progress_note": "H97 доставлена на dev в 8b89da54 + container-path fix 05957263. Linux Docker build зелёный: typecheck, 42/42 страницы и standalone image; 16 API-тестов preview/managed-kit и 7 orchestrator security-тестов прошли. api/web/orchestrator healthy, внешние /, /max/product и /otchet/ отвечают 200, свежих traceback/error в логах нет. Browser QA проверил real preview, пошаговую публикацию, копирование ссылки, полный диалог настроек, Integration Hub и post-launch на 1440/768/390 px. Обязательный остаток сохранён в docs/plans/2026-07-30-builder-continuation.md: controlled real hero-media render и путь фото → план → подтверждение → preview → apply."
+  "progress_note": "H98 доставлена на dev четырьмя чистыми этапами: 5b6d376c (upload + 5-step UX), 050e728d (touch-safe responsive polish), 5fe5d9d4 (immutable retry plan + exact cache refresh) и 2fe72aff (storage key для direct/nginx media URL). Локально зелёные web typecheck/ESLint/102 теста и API ruff/11 hero-media тестов; те же 11 тестов прошли в Linux production image. Реальный dev E2E создал plan=video, MP4 и applied snapshot с OMNIA_HERO_MEDIA_START. Controlled retry после фикса дал plan=motion; video_model=none, retry_count=1, video_asset_id=null, applied_snapshot_id=null; snapshot count остался 2. Важная честная оговорка: до фикса mutable-plan дефект вызвал один непреднамеренный второй video provider call во время retry-проверки. После фикса одноразовые MinIO objects, project/assets/renders удалены, тестовый аккаунт отозван. Пользовательское приложение в production не публиковалось."
  },
  "owner_actions": [
+  {
+   "date": "31.07",
+   "what": "Потребовал обязательно доделать БИЛДЕР, не терять задачу при сжатии контекста и закончить real Hero-media путь с проверенной доставкой.",
+   "impact": "Объём закреплён в постоянном checkpoint и долговременной памяти. Real planner, render, preview, apply, controlled failure/retry и browser evidence доведены до проверенного dev-состояния без production-публикации пользовательского приложения."
+  },
   {
    "date": "30.07",
    "what": "Показал неадаптивный MAX-кабинет с лишними прокрутками, попросил автоматически копировать ссылку при открытии кабинета, сделать публикацию пошаговой и дать настройкам максимум возможностей.",
@@ -561,6 +596,12 @@
    "date": "2026-07-30",
    "title": "MAX Studio стала адаптивным пошаговым продуктом",
    "description": "Real dev preview получил короткоживущую HMAC-сессию, публикация — явные шаги и автокопирование URL, настройки — полный набор управляемых полей. Browser QA на 1440/768/390 px закрыл page-level overflow, обрезанные tablet-фильтры, мобильные панели, модалки и touch targets.",
+   "kind": "milestone"
+  },
+  {
+   "date": "2026-07-31",
+   "title": "Hero-media доказана реальным planner и Seedance render",
+   "description": "Мультимодальный planner предложил video-план по загруженному фото, пользователь подтвердил его, Seedance собрала 5-секундный MP4, preview показал video/mobile fallback, а Apply создал новый snapshot. Controlled retry обнаружил mutable-plan и cache race; после фикса motion-повтор завершился без video provider и без автоматического применения.",
    "kind": "milestone"
   }
  ],
@@ -1836,6 +1877,18 @@
    "evidence": "Orchestrator выдаёт preview URL с TTL 120 секунд и HMAC SHA-256 только для running dev-контейнера шаблона max-miniapp-nextjs; API проверяет проект, HTTPS-host, path и форму подписи. Найден и исправлен межсервисный дефект: Python подписывал буквальные \\n, а Next.js проверял реальные переводы строк; добавлен общий тест-вектор. MAX Studio показывает real viewport 390×844, mobile drawer preview и пошаговую readiness с aria-current/progressbar. Открытие кабинета MAX копирует app_url и показывает toast. Настройки теперь выводят все поля контракта: функции, стиль, каталог, CTA, видимость, SLA и политики данных. Browser QA реальными кликами на 1440/768/390 px проверил редактор, preview, публикацию, настройки, Integration Hub и post-launch; document scrollWidth равен clientWidth, видимые touch targets ≥44 px, чистый tab после рестарта — 0 console warning/error.",
    "impact": "Пользователь видит приложение в реалистичном мобильном устройстве, понимает один следующий шаг и может подготовить весь продукт без скрытых полей или ручного поиска URL. Интерфейс больше не выглядит desktop-макетом, ужатым в телефон.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H98",
+   "title": "Real planner и управляемый Hero-media render",
+   "status": "worked",
+   "score": 9,
+   "category": "продукт / Hero-media / model orchestration / UX / responsive",
+   "period": "30–31.07",
+   "description": "Доказать, что Hero-media использует настоящую planner-модель и media provider, но запускает render только после понятного подтверждения и применяет результат только отдельным действием владельца.",
+   "evidence": "На живом dev подтверждены real flags: MVP включён, stub/mock выключены, video generation разрешена. UI E2E зарегистрировал одноразовый аккаунт, создал landing, загрузил PNG через consent-gate, получил real planner JSON, выбрал video, подтвердил, запустил render без retry и применил результат. Render 4a9a41d1 завершился provider_summary plan=video; video_model=seedance-2.0-fast; MP4 длительностью 5000ms отвечает HTTP 200, video/mp4, 832 296 байт; preview marker и новый snapshot подтверждены. Browser QA проверил five-step journey, page/panel overflow=0 и кнопки ≥44 px. Controlled failure выявил, что retry-кэш не обновлял конкретный render, а pipeline перечитывал mutable brief вместо immutable render.media_plan; до фикса это вызвало один непреднамеренный второй video provider call. После 5fe5d9d4 повтор той же motion-строки дал plan=motion; video_model=none, retry_count=1, null video/apply и неизменные 2 snapshot. 2fe72aff исправил storage_key для /minio/<bucket>/… URL и добавил три regression-теста. API ruff и 11 тестов зелёные локально и в Linux image; web typecheck/ESLint и 102 теста зелёные. Cleanup удалил оба уникальных MinIO object, проект и связанные assets/renders; тестовый аккаунт отозван.",
+   "impact": "Пользователь проходит базовый путь «фото → задача → план → preview → apply», видит реальный результат и контролирует затраты. Повтор не меняет согласованный тип медиа, не запускает video неожиданно и не применяет результат без отдельного клика.",
+   "next_vector": "V6"
   }
  ],
  "vectors": [
@@ -2105,6 +2158,10 @@
      true
     ],
     [
+     "Hero-media: real planner → подтверждение → Seedance preview → явный apply; immutable motion retry без второго provider (31.07)",
+     true
+    ],
+    [
      "Режимы «Править с ИИ» и «Править вручную»: ack/retry + обратная совместимость с inspector уже созданных проектов (29.07)",
      false
     ],
@@ -2132,7 +2189,8 @@
       "H79",
       "H83",
       "H84",
-      "H85"
+      "H85",
+      "H98"
     ]
   },
   {
