@@ -218,7 +218,7 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "offhost-backup",
         title: "Резервная копия вне сервера",
-        detail: "PostgreSQL, исходники и MinIO ежедневно шифруются офлайн-ключом и хранятся в GitHub Artifact; обратная загрузка, расшифровка и восстановление обеих БД проверены.",
+        detail: "PostgreSQL, runtime-конфиг, исходники и MinIO ежедневно шифруются офлайн-ключом и хранятся в GitHub Artifact; обратная загрузка, расшифровка и восстановление проверены.",
         status: "done",
         completedAt: "31 июля 2026",
       },

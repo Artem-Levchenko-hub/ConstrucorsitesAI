@@ -11,7 +11,7 @@
    {
     "s": "worked",
     "t": "Полный backup переживает потерю production VPS",
-    "d": "Ночной сценарий сохраняет platform DB, все 983 таблицы проектных схем, исходники и MinIO, проверяет SHA-256 и создаёт 404,5 МБ CMS-конверт AES-256/RSA. GitHub Actions artifact 8790907201 хранит ciphertext вне сервера 7 дней; скачанный artifact совпал с digest, расшифровался офлайн-ключом, а scratch-restore вернул 33 platform-таблицы, 983 project-таблицы и 19 659 файлов."
+    "d": "Ночной сценарий сохраняет platform DB, все 983 таблицы проектных схем, актуальный runtime-конфиг, исходники и MinIO, проверяет SHA-256 и создаёт CMS-конверт AES-256/RSA. GitHub Actions хранит только ciphertext вне сервера 7 дней; скачанный artifact сверяется с digest, расшифровывается офлайн-ключом и проходит scratch-restore."
    },
    {
     "s": "worked",

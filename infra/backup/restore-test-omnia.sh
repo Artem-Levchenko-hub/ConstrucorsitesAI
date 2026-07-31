@@ -26,6 +26,7 @@ for required in \
   "$users_dump" \
   "${latest}/projects-src.tgz" \
   "${latest}/minio-data.tgz" \
+  "${latest}/runtime-config.tgz" \
   "${latest}/SHA256SUMS" \
   "${latest}/OFFHOST_SHA256" \
   "$encrypted"; do
@@ -51,6 +52,14 @@ echo "[restore-test] extracting file/object archives to scratch..."
 tar -xzf "${latest}/projects-src.tgz" -C "$extract_dir"
 mkdir -p "${extract_dir}/minio"
 tar -xzf "${latest}/minio-data.tgz" -C "${extract_dir}/minio"
+mkdir -p "${extract_dir}/config"
+tar -xzf "${latest}/runtime-config.tgz" -C "${extract_dir}/config"
+for config in \
+  "${extract_dir}/config/opt/omnia-runtime/.env" \
+  "${extract_dir}/config/opt/omnia-runtime/.env.orchestrator" \
+  "${extract_dir}/config/opt/omnia/apps/llm-gateway/deploy/full/.env"; do
+  [ -s "$config" ] || { echo "[restore-test] missing restored runtime config"; exit 1; }
+done
 source_files=$(find "$extract_dir" -type f | wc -l | tr -d '[:space:]')
 [ "${source_files:-0}" -ge 1 ] || { echo "[restore-test] archives restored 0 files"; exit 1; }
 
@@ -80,4 +89,4 @@ echo "[restore-test] extracted files: ${source_files:-0}"
 [ "${users_tables:-0}" -ge 1 ] || {
   echo "[restore-test] FAIL — project DB dump restored 0 tables"; exit 1;
 }
-echo "[restore-test] OK — databases, project sources and MinIO objects are restorable."
+echo "[restore-test] OK — databases, runtime config, project sources and MinIO objects are restorable."

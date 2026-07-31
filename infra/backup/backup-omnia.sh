@@ -6,6 +6,7 @@
 #   2. Per-project DBs  — omnia-postgres-users / db `omnia_users` (ALL generated-app schemas, one dump)
 #   3. Project sources  — /opt/omnia-runtime/projects (generated source + snapshots)
 #   4. MinIO objects    — photos, generated media, uploads and preview artefacts
+#   5. Runtime config   — current production env files needed to boot a new host
 #
 # pg_dump is a consistent, read-only snapshot: it does NOT lock or interrupt the
 # running apps. The complete bundle is checksummed and CMS-encrypted before it is
@@ -24,6 +25,9 @@ OFFHOST_DEST="${BACKUP_OFFHOST_DEST:-}" # optional second encrypted copy via rsy
 PUBLIC_CERT="${BACKUP_PUBLIC_CERT:-/opt/omnia/infra/backup/offhost-backup-cert.pem}"
 MINIO_VOLUME="${MINIO_VOLUME:-full_minio-data}"
 MINIO_BACKUP_IMAGE="${MINIO_BACKUP_IMAGE:-omnia-api:prod}"
+RUNTIME_ENV="${RUNTIME_ENV:-/opt/omnia-runtime/.env}"
+ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia-runtime/.env.orchestrator}"
+FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 
 PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
@@ -63,7 +67,21 @@ log "tarring project sources (${PROJECTS_DIR})..."
 tar -czf "${dir}/projects-src.tgz" -C "$(dirname "$PROJECTS_DIR")" "$(basename "$PROJECTS_DIR")" \
   || fail "projects tar failed"
 
-# 4. MinIO objects. A short-lived helper container reads the named volume
+# 4. Current runtime config. It is intentionally included in the encrypted
+#    bundle so a total VPS loss is recoverable. Raw local copy remains mode 0600
+#    on the already-secret-bearing production disk and is never exported.
+for config in "$RUNTIME_ENV" "$ORCHESTRATOR_ENV" "$FULLSTACK_ENV"; do
+  [ -r "$config" ] || fail "required runtime config is not readable: ${config}"
+done
+log "tarring current runtime configuration..."
+tar -czf "${dir}/runtime-config.tgz" -C / \
+  "${RUNTIME_ENV#/}" \
+  "${ORCHESTRATOR_ENV#/}" \
+  "${FULLSTACK_ENV#/}" \
+  || fail "runtime configuration archive failed"
+chmod 0600 "${dir}/runtime-config.tgz"
+
+# 5. MinIO objects. A short-lived helper container reads the named volume
 #    read-only; it never pauses or mutates the live object store.
 docker volume inspect "$MINIO_VOLUME" >/dev/null 2>&1 || fail "MinIO volume missing: ${MINIO_VOLUME}"
 log "tarring MinIO volume ${MINIO_VOLUME}..."
@@ -74,13 +92,13 @@ docker run --rm \
   tar -czf /backup/minio-data.tgz -C /source . \
   || fail "MinIO archive failed"
 
-# 5. Integrity: refuse a backup whose payloads are suspiciously empty (a silent
+# 6. Integrity: refuse a backup whose payloads are suspiciously empty (a silent
 #    pg_dump failure that still exits 0 would otherwise ship a useless backup).
 for f in "${dir}/platform-${PLATFORM_DB}.sql.gz" "${dir}/projects-${USERS_DB}.sql.gz"; do
   sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
   [ "$sz" -ge 200 ] || fail "dump ${f} is only ${sz} bytes — aborting (treat as failure)"
 done
-for f in "${dir}/projects-src.tgz" "${dir}/minio-data.tgz"; do
+for f in "${dir}/projects-src.tgz" "${dir}/minio-data.tgz" "${dir}/runtime-config.tgz"; do
   sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
   [ "$sz" -ge 200 ] || fail "archive ${f} is only ${sz} bytes — aborting"
 done
@@ -91,14 +109,16 @@ done
     "projects-${USERS_DB}.sql.gz" \
     projects-src.tgz \
     minio-data.tgz > SHA256SUMS
+  sha256sum runtime-config.tgz >> SHA256SUMS
 )
 du -sh \
   "${dir}/platform-${PLATFORM_DB}.sql.gz" \
   "${dir}/projects-${USERS_DB}.sql.gz" \
   "${dir}/projects-src.tgz" \
-  "${dir}/minio-data.tgz" | tee "${dir}/MANIFEST.txt"
+  "${dir}/minio-data.tgz" \
+  "${dir}/runtime-config.tgz" | tee "${dir}/MANIFEST.txt"
 
-# 6. Build one portable payload and encrypt it with AES-256 + the offline RSA
+# 7. Build one portable payload and encrypt it with AES-256 + the offline RSA
 #    recipient certificate. The unencrypted temporary bundle is always removed.
 log "building encrypted off-host bundle..."
 tar -czf "$bundle_tmp" -C "$dir" \
@@ -106,6 +126,7 @@ tar -czf "$bundle_tmp" -C "$dir" \
   "projects-${USERS_DB}.sql.gz" \
   projects-src.tgz \
   minio-data.tgz \
+  runtime-config.tgz \
   SHA256SUMS \
   MANIFEST.txt \
   || fail "portable backup bundle failed"
@@ -125,7 +146,7 @@ openssl cms -cmsout -inform DER -in "$encrypted" -print >/dev/null \
   || fail "encrypted CMS envelope validation failed"
 log "backup complete: ${dir}"
 
-# 7. Optional second off-host destination. Only encrypted material is copied;
+# 8. Optional second off-host destination. Only encrypted material is copied;
 #    raw dumps never leave the server through this path.
 if [ -n "$OFFHOST_DEST" ]; then
   log "copying encrypted bundle off-host -> ${OFFHOST_DEST}..."
@@ -138,6 +159,6 @@ if [ -n "$OFFHOST_DEST" ]; then
   fi
 fi
 
-# 8. Retention — prune local backups older than RETENTION_DAYS.
+# 9. Retention — prune local backups older than RETENTION_DAYS.
 find "$BACKUP_ROOT" -maxdepth 1 -type d -name '20*' -mtime "+${RETENTION_DAYS}" -exec rm -rf {} + 2>/dev/null || true
 log "retained local backups from the last ${RETENTION_DAYS} days."
