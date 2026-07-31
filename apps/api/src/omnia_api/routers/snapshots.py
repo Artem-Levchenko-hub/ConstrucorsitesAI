@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/projects", tags=["snapshots"])
 
 
 async def _project_owned_by(
-    session: Any, project_id: UUID, user_id: UUID
+    session: AsyncSession, project_id: UUID, user_id: UUID
 ) -> Project:
     project = await session.get(Project, project_id)
     if project is None or project.owner_id != user_id:

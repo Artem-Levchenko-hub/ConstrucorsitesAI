@@ -7,14 +7,15 @@ import hashlib
 import json
 import re
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 import redis.asyncio as aioredis
 from minio import Minio
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import Page, ViewportSize, async_playwright
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -26,7 +27,7 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.services import dev_container
 from omnia_api.services import repo as repo_svc
 
-VIEWPORT = {"width": 1280, "height": 800}
+VIEWPORT: ViewportSize = {"width": 1280, "height": 800}
 GOTO_TIMEOUT_MS = 15_000
 
 # Container-backed templates render from a live dev container, not from repo
@@ -73,7 +74,7 @@ class CaptureResult:
 _IMAGE_WAIT_MS = 3000
 
 
-async def _await_paint(page) -> None:
+async def _await_paint(page: Page) -> None:
     """Settle a freshly-loaded page before the screenshot: web-fonts ready,
     remote images painted (bounded by ``_IMAGE_WAIT_MS``), then a short
     Tailwind-JIT / paint beat. Every step is best-effort — a failure (or a slow
@@ -108,7 +109,7 @@ async def _await_paint(page) -> None:
 _CONTENT_READY_MS = 6000
 
 
-async def _await_content(page) -> None:
+async def _await_content(page: Page) -> None:
     """Best-effort: hold the shot until the loading skeleton is GONE and real
     content painted, so the vision judge never grades a not-yet-loaded page.
 
@@ -557,7 +558,8 @@ async def _render_async(snapshot_id: str) -> None:
             f"{settings.minio_public_url.rstrip('/')}/"
             f"{settings.minio_bucket_previews}/{preview_key}"
         )
-        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        from_url = cast(Callable[..., aioredis.Redis], aioredis.from_url)
+        r = from_url(settings.redis_url, decode_responses=True)
         try:
             payload = json.dumps(
                 {

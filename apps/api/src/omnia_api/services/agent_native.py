@@ -472,7 +472,10 @@ async def _call_messages(
                 last = RuntimeError(f"429 concurrency (attempt {attempt + 1})")
                 continue
             r.raise_for_status()
-            return r.json()
+            body = r.json()
+            if not isinstance(body, dict):
+                raise RuntimeError("messages API returned a non-object payload")
+            return body
         except httpx.HTTPError as exc:
             # oneprovider flakes in SUSTAINED bursts (observed live: series of
             # 502s + 504s over several minutes killed builds mid-run). Linear

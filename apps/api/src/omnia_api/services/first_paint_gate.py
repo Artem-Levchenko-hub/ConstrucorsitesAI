@@ -53,7 +53,7 @@ from . import data_gate
 from .render_settle import FIRST_PAINT_BUDGET_MS, goto_and_settle
 
 if TYPE_CHECKING:
-    from playwright.async_api import Page
+    from playwright.async_api import Page, StorageState
 
 log = logging.getLogger(__name__)
 
@@ -330,7 +330,7 @@ async def audit_url(
     *,
     width: int = GATE_WIDTH,
     timeout_ms: int = 15_000,
-    storage_state: dict | None = None,
+    storage_state: StorageState | None = None,
 ) -> FirstPaintReport:
     """Audit a LIVE share link as a cold incognito stranger (0 cookies) at ``width``.
 

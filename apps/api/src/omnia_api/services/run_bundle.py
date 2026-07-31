@@ -210,7 +210,7 @@ def _node_run_cmd(files: dict[str, str]) -> str:
             return "npm start"
         if "dev" in scripts:
             return "npm run dev"
-        return "npm run " + next(iter(scripts))
+        return "npm run " + str(next(iter(scripts)))
     main = data.get("main") if isinstance(data, dict) else None
     if isinstance(main, str) and main.strip():
         return f'node "{main.strip()}"'

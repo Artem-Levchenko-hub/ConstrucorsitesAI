@@ -24,7 +24,10 @@ import base64
 import hashlib
 import hmac
 import logging
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from playwright.async_api import StorageState
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +62,7 @@ def derive_seed_password(auth_secret: str) -> str:
 
 async def establish_session(
     base_url: str, email: str, auth_secret: str, *, timeout_ms: int = 15_000
-) -> dict[str, Any] | None:
+) -> StorageState | None:
     """Log the seed operator in and return a storage_state dict, or ``None``.
 
     Drives ``/api/auth/csrf`` then POST ``/api/auth/callback/credentials``,

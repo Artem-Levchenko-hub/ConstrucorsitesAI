@@ -1298,7 +1298,12 @@ async def classify_result_type(
                     rt = str(parsed.get("type") or "").strip().lower()
                     if rt in RESULT_TYPES:
                         try:
-                            conf = float(parsed.get("confidence") or 0.0)
+                            raw_confidence = parsed.get("confidence")
+                            conf = (
+                                float(raw_confidence)
+                                if isinstance(raw_confidence, (int, float, str))
+                                else 0.0
+                            )
                         except (TypeError, ValueError):
                             conf = 0.0
                         return rt, max(0.0, min(1.0, conf))

@@ -30,7 +30,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-
 # ─── Vibes (closed enum, one row per vibe — pre-baked design decisions) ──
 
 _VIBE_TOKENS = """\
@@ -167,7 +166,7 @@ variant_id и наполнить их реальным контентом.
 def build_lean_system_prompt(
     *,
     preset_id: str | None,
-    skill_brief: dict[str, Any] | None,
+    skill_brief: str | None,
     user_prompt: str | None = None,
     discovery_spec: dict[str, Any] | None = None,
 ) -> str:
@@ -212,14 +211,14 @@ def build_lean_system_prompt(
 
     if preset_id and preset_id in PRESETS:
         try:
-            parts.append("<preset>\n" + format_preset_block(PRESETS[preset_id]) + "\n</preset>")
+            parts.append(
+                "<preset>\n" + format_preset_block(preset_id) + "\n</preset>"
+            )
         except Exception:  # noqa: BLE001 — preset formatting must never block the lean prompt
             pass
 
     if skill_brief:
-        brief_text = skill_brief.get("brief_text") if isinstance(skill_brief, dict) else None
-        if brief_text:
-            parts.append(f"<ux_brief>\n{brief_text}\n</ux_brief>")
+        parts.append(f"<ux_brief>\n{skill_brief}\n</ux_brief>")
 
     # Phase L5 — inject one top-ranked awwwards reference from the curated
     # corpus, scored by token overlap with the user prompt. Adds 200-400

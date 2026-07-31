@@ -156,7 +156,9 @@ def _existing_anchors(ir: PageIR) -> set[str]:
 # ─── Rule implementations ────────────────────────────────────────────────
 
 
-def _rule_palette(ir_dict: dict, preset_id: str | None, log_buf: list[str]) -> None:
+def _rule_palette(
+    ir_dict: dict[str, Any], preset_id: str | None, log_buf: list[str]
+) -> None:
     """Two-layer palette completion.
 
     Layer 1 (Phase L8): if `primary`/`accent` are still the schema
@@ -218,7 +220,9 @@ def _rule_palette(ir_dict: dict, preset_id: str | None, log_buf: list[str]) -> N
     ir_dict["theme"] = theme
 
 
-def _rule_favicon(ir_dict: dict, preset_id: str | None, log_buf: list[str]) -> None:
+def _rule_favicon(
+    ir_dict: dict[str, Any], preset_id: str | None, log_buf: list[str]
+) -> None:
     if not preset_id:
         return
     meta = ir_dict.get("meta") or {}
@@ -230,12 +234,16 @@ def _rule_favicon(ir_dict: dict, preset_id: str | None, log_buf: list[str]) -> N
     ir_dict["meta"] = meta
 
 
-def _rule_cta_anchoring(ir: PageIR, ir_dict: dict, log_buf: list[str]) -> None:
+def _rule_cta_anchoring(
+    ir: PageIR, ir_dict: dict[str, Any], log_buf: list[str]
+) -> None:
     fallback = _find_conversion_anchor(ir)
     valid_anchors = _existing_anchors(ir)
     sections = ir_dict.get("sections") or []
 
-    def _fix_cta(cta_dict: dict, section_idx: int, cta_label: str) -> None:
+    def _fix_cta(
+        cta_dict: dict[str, Any], section_idx: int, cta_label: str
+    ) -> None:
         href = cta_dict.get("href") or ""
         if _is_dead_href(href):
             cta_dict["href"] = fallback
@@ -262,7 +270,7 @@ def _rule_cta_anchoring(ir: PageIR, ir_dict: dict, log_buf: list[str]) -> None:
                 _fix_cta(tcta, idx, "tier.cta")
 
 
-def _rule_pricing_featured(ir_dict: dict, log_buf: list[str]) -> None:
+def _rule_pricing_featured(ir_dict: dict[str, Any], log_buf: list[str]) -> None:
     for idx, sec in enumerate(ir_dict.get("sections") or []):
         if sec.get("type_variant") not in {"pricing.v1", "pricing.v2"}:
             continue
@@ -277,7 +285,7 @@ def _rule_pricing_featured(ir_dict: dict, log_buf: list[str]) -> None:
         log_buf.append(f"pricing_featured→tier[{target_idx}] (section[{idx}])")
 
 
-def _rule_footer_copyright(ir_dict: dict, log_buf: list[str]) -> None:
+def _rule_footer_copyright(ir_dict: dict[str, Any], log_buf: list[str]) -> None:
     # `datetime.utcnow()` is deprecated in 3.12+; use timezone-aware UTC.
     year = _dt.datetime.now(_dt.UTC).year
     for idx, sec in enumerate(ir_dict.get("sections") or []):
@@ -294,7 +302,7 @@ def _rule_footer_copyright(ir_dict: dict, log_buf: list[str]) -> None:
             log_buf.append(f"footer_copyright→filled (section[{idx}])")
 
 
-def _rule_dark_mode_coercion(ir_dict: dict, log_buf: list[str]) -> None:
+def _rule_dark_mode_coercion(ir_dict: dict[str, Any], log_buf: list[str]) -> None:
     sections = ir_dict.get("sections") or []
     theme = ir_dict.get("theme") or {}
     has_dark_hero = any(
@@ -313,7 +321,7 @@ def _rule_dark_mode_coercion(ir_dict: dict, log_buf: list[str]) -> None:
     ir_dict["theme"] = theme
 
 
-def _rule_anchor_uniqueness(ir_dict: dict, log_buf: list[str]) -> None:
+def _rule_anchor_uniqueness(ir_dict: dict[str, Any], log_buf: list[str]) -> None:
     sections = ir_dict.get("sections") or []
     seen: dict[str, int] = {}
     for idx, sec in enumerate(sections):

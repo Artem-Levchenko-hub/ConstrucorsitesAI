@@ -31,7 +31,7 @@ import re
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # apps/api/
 _SKILL_DATA = _REPO_ROOT / "skills" / "ui-ux-pro-max" / "data"
@@ -672,7 +672,7 @@ def _usability_score_for_pattern(name: str, vibe_tags: str, summary: str) -> int
 
 def lookup_design_patterns(
     *keywords: str, limit: int = 3
-) -> tuple[dict, ...]:
+) -> tuple[dict[str, Any], ...]:
     """Return up to `limit` design styles scored by keyword overlap.
 
     Matches keywords against `name + vibe_tags + summary + use_cases`. The
@@ -704,13 +704,13 @@ def lookup_design_patterns(
         for dp in _design_patterns()
     ]
     scored.sort(key=lambda t: t[0], reverse=True)
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     for score, dp in scored[:limit]:
         if score <= 0:
             continue
         # Phase J — derive usability_score and merge into a plain dict
         # (we can't extend a TypedDict in-place; return a wider mapping).
-        enriched: dict = dict(dp)
+        enriched: dict[str, Any] = dict(dp)
         enriched["usability_score"] = _usability_score_for_pattern(
             dp["name"], dp["vibe_tags"], dp["summary"]
         )
@@ -931,7 +931,7 @@ def derive_gradient_pair(primary_hex: str) -> tuple[str, str]:
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def derive_shadow_tint(primary_hex: str) -> dict:
+def derive_shadow_tint(primary_hex: str) -> dict[str, Any]:
     """Return Malewicz Ch9 box-shadow params for a primary brand color.
 
     Output dict carries:
@@ -1033,9 +1033,9 @@ def format_design_brief(
     style_preset: StylePreset | None = None,
     icon_family: IconRow | None = None,
     chart_types: Sequence[ChartType] = (),
-    design_patterns: Sequence[dict] = (),
+    design_patterns: Sequence[dict[str, Any]] = (),
     gradient_pair: tuple[str, str] | None = None,
-    shadow_tint: dict | None = None,
+    shadow_tint: dict[str, Any] | None = None,
     micro_copy: dict[str, dict[str, str]] | None = None,
     nav_style: str | None = None,
 ) -> str:
@@ -1193,7 +1193,7 @@ def format_design_brief(
 
 
 @lru_cache(maxsize=1)
-def _load_awwwards_corpus() -> list[dict]:
+def _load_awwwards_corpus() -> list[dict[str, Any]]:
     """Read ``apps/api/data/awwwards_corpus.json``. Lazy + cached so import
     cost stays zero when the corpus isn't queried.
 
@@ -1201,16 +1201,17 @@ def _load_awwwards_corpus() -> list[dict]:
     treats a missing file as "no matches" instead of crashing.
     """
     try:
-        return json.loads(
+        raw = json.loads(
             (_DATA_DIR / "awwwards_corpus.json").read_text(encoding="utf-8")
         )
+        return [entry for entry in raw if isinstance(entry, dict)]
     except FileNotFoundError:
         return []
 
 
 def lookup_awwwards_reference(
     *tokens: str, region: str | None = None, limit: int = 3
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Surface up-to-`limit` awwwards-tier reference entries matching the
     prompt tokens (industry_tags + style_id substring match).
 
@@ -1238,7 +1239,7 @@ def lookup_awwwards_reference(
 
     lowered = [t.lower() for t in tokens]
 
-    def _score(entry: dict) -> int:
+    def _score(entry: dict[str, Any]) -> int:
         # Match tokens against industry_tags + style_id. Each tag-token
         # substring hit = +1; style_id hit = +1.
         hay = " ".join(entry.get("industry_tags", []) + [entry.get("style_id", "")]).lower()
@@ -1254,23 +1255,24 @@ def lookup_awwwards_reference(
 
 
 @lru_cache(maxsize=1)
-def _load_design_patterns() -> list[dict]:
+def _load_design_patterns() -> list[dict[str, Any]]:
     """Read ``apps/api/data/design_patterns.json``. Lazy + cached.
 
     Returns an empty list on FileNotFoundError so callers treat missing
     data as "no patterns available" instead of crashing.
     """
     try:
-        return json.loads(
+        raw = json.loads(
             (_DATA_DIR / "design_patterns.json").read_text(encoding="utf-8")
         )
+        return [entry for entry in raw if isinstance(entry, dict)]
     except FileNotFoundError:
         return []
 
 
 def lookup_design_pattern_snippets(
     section_type: str, style_id: str | None = None, limit: int = 3
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Return up-to-`limit` snippet patterns for the given ``section_type``,
     optionally filtered by ``style_id``.
 

@@ -54,6 +54,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from math import gcd
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Public dataclasses
@@ -257,7 +258,7 @@ class _Collector(HTMLParser):
 # ---------------------------------------------------------------------------
 
 
-def parse_styles(html: str, css: str = "") -> dict:
+def parse_styles(html: str, css: str = "") -> dict[str, Any]:
     """Extract structural style data from html + optional standalone css.
 
     Returns a dict with the keys documented in the module docstring. Be
@@ -460,7 +461,9 @@ def parse_styles(html: str, css: str = "") -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _check_typography_count(parsed: dict, html_files: dict) -> Failure | None:
+def _check_typography_count(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     fams = parsed["font_families"]
     sizes = parsed["font_sizes"]
     weights = parsed["font_weights"]
@@ -487,7 +490,7 @@ def _check_typography_count(parsed: dict, html_files: dict) -> Failure | None:
     return None
 
 
-def _heights_in_px(parsed: dict) -> list[int]:
+def _heights_in_px(parsed: dict[str, Any]) -> list[int]:
     """Collect button/input heights in px from h-N and py-N classes.
 
     Tailwind v4 default: 1 unit = 4 px. h-10 = 40 px. We add py-N values as
@@ -525,7 +528,9 @@ def _heights_in_px(parsed: dict) -> list[int]:
     return out
 
 
-def _check_interactive_sizes_consistency(parsed: dict, html_files: dict) -> Failure | None:
+def _check_interactive_sizes_consistency(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     heights = _heights_in_px(parsed)
     if not heights:
         # No interactive elements measured — vacuously pass. (A page with no
@@ -555,7 +560,9 @@ def _check_interactive_sizes_consistency(parsed: dict, html_files: dict) -> Fail
     return None
 
 
-def _check_grid_alignment(parsed: dict, html_files: dict) -> Failure | None:
+def _check_grid_alignment(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     spacings = parsed["section_spacings"]
     if len(spacings) < 3:
         # Too little signal — skip (pass).
@@ -584,7 +591,9 @@ def _check_grid_alignment(parsed: dict, html_files: dict) -> Failure | None:
     )
 
 
-def _check_color_count(parsed: dict, html_files: dict) -> Failure | None:
+def _check_color_count(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     colors = parsed["colors"]
     if len(colors) > 8:
         return Failure(
@@ -639,7 +648,9 @@ def _temperature_of_hex(hex_val: str) -> str:
     return "cool"
 
 
-def _check_gradient_discipline(parsed: dict, html_files: dict) -> Failure | None:
+def _check_gradient_discipline(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     gradients = parsed["gradients"]
     if not gradients:
         return None
@@ -667,7 +678,9 @@ def _check_gradient_discipline(parsed: dict, html_files: dict) -> Failure | None
     return None
 
 
-def _check_button_rules(parsed: dict, html_files: dict) -> Failure | None:
+def _check_button_rules(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     btns = parsed["_buttons"] + parsed["_anchors_btn"]
     if not btns:
         # No buttons => vacuously pass. Pages without CTAs get flagged by
@@ -728,7 +741,9 @@ def _check_button_rules(parsed: dict, html_files: dict) -> Failure | None:
     return None
 
 
-def _check_icon_family_discipline(parsed: dict, html_files: dict) -> Failure | None:
+def _check_icon_family_discipline(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     families = parsed["icon_families"]
     svgs = parsed["_svgs"]
 
@@ -769,7 +784,9 @@ def _check_icon_family_discipline(parsed: dict, html_files: dict) -> Failure | N
     return None
 
 
-def _check_accessibility(parsed: dict, html_files: dict) -> Failure | None:
+def _check_accessibility(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     # TODO(phase-h+): wcag contrast — needs color-conversion library.
     problems: list[str] = []
 
@@ -815,7 +832,9 @@ def _check_accessibility(parsed: dict, html_files: dict) -> Failure | None:
     return None
 
 
-def _check_no_lorem_ipsum(parsed: dict, html_files: dict) -> Failure | None:
+def _check_no_lorem_ipsum(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     for path, content in html_files.items():
         # Strip tags for a cleaner text scan
         stripped = re.sub(r'<[^>]+>', ' ', content)
@@ -833,7 +852,9 @@ def _check_no_lorem_ipsum(parsed: dict, html_files: dict) -> Failure | None:
     return None
 
 
-def _check_no_dark_patterns(parsed: dict, html_files: dict) -> Failure | None:
+def _check_no_dark_patterns(
+    parsed: dict[str, Any], html_files: dict[str, str]
+) -> Failure | None:
     if parsed["toggles_optout"]:
         return Failure(
             check_id="no_dark_patterns",
@@ -852,7 +873,7 @@ def _check_no_dark_patterns(parsed: dict, html_files: dict) -> Failure | None:
 # ---------------------------------------------------------------------------
 
 
-_CheckFunc = Callable[[dict, dict[str, str]], "Failure | None"]
+_CheckFunc = Callable[[dict[str, Any], dict[str, str]], "Failure | None"]
 
 _CHECK_FUNCS: tuple[tuple[str, _CheckFunc], ...] = (
     ("typography_count", _check_typography_count),
@@ -922,7 +943,7 @@ def audit(html_files: dict[str, str]) -> AuditReport:
         result = func(parsed, html_files)
         passed = result is None
         per_check[check_id] = passed
-        if not passed:
+        if result is not None:
             failures.append(result)
 
     score = sum(1 for v in per_check.values() if v)

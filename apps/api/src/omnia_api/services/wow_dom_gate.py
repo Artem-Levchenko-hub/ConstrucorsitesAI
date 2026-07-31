@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING, Any
 from .render_settle import goto_and_settle
 
 if TYPE_CHECKING:
-    from playwright.async_api import Page
+    from playwright.async_api import Page, StorageState
 
 log = logging.getLogger(__name__)
 
@@ -538,7 +538,7 @@ async def audit_url(
     *,
     width: int = GATE_WIDTH,
     timeout_ms: int = 15_000,
-    storage_state: dict | None = None,
+    storage_state: StorageState | None = None,
 ) -> WowDomReport:
     """Audit a LIVE url (a running container app / prod ``/p/<slug>``) at ``width``.
 

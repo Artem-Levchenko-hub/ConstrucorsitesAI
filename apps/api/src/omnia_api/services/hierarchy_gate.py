@@ -79,7 +79,7 @@ from .render_settle import goto_and_settle
 from .surface_class import is_login_surface
 
 if TYPE_CHECKING:
-    from playwright.async_api import Page
+    from playwright.async_api import Page, StorageState
 
 log = logging.getLogger(__name__)
 
@@ -518,7 +518,7 @@ async def audit_url(
     *,
     width: int = GATE_WIDTH,
     timeout_ms: int = 15_000,
-    storage_state: dict | None = None,
+    storage_state: StorageState | None = None,
 ) -> HierarchyReport:
     """Audit a LIVE url (a running container app / prod ``/p/<slug>``) at ``width``.
 

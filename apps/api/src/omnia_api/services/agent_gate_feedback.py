@@ -15,6 +15,7 @@ testable without a container.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 
@@ -106,7 +107,8 @@ def outcome_from_checks(name: str, passed: bool, checks: object) -> GateOutcome:
     (functional_gate.Check, role_gate.RoleCheck) — so the same self-heal loop
     consumes functional, role and guardrail results uniformly."""
     failures: list[str] = []
-    for c in checks or []:  # type: ignore[union-attr]
+    iterable = checks if isinstance(checks, Iterable) else ()
+    for c in iterable:
         if getattr(c, "ok", True):
             continue
         cname = getattr(c, "name", "check")

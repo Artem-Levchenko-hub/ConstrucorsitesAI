@@ -12,9 +12,10 @@ from __future__ import annotations
 import shutil
 import tarfile
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, cast
 from uuid import UUID
 
 import pygit2
@@ -92,7 +93,9 @@ def init_repo(project_id: UUID, template_dir: Path, template_name: str) -> str:
                 continue
             rel = path.relative_to(workdir).as_posix()
             blob_oid = repo.create_blob(path.read_bytes())
-            index.add(pygit2.IndexEntry(rel, blob_oid, pygit2.GIT_FILEMODE_BLOB))
+            index.add(
+                pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB)
+            )
         index.write()
         tree_oid = index.write_tree()
         commit_oid = repo.create_commit(
@@ -120,7 +123,9 @@ def init_from_files(project_id: UUID, files: dict[str, str], message: str) -> st
         index = repo.index
         for rel, content in sorted(files.items()):
             blob_oid = repo.create_blob(content.encode("utf-8"))
-            index.add(pygit2.IndexEntry(rel, blob_oid, pygit2.GIT_FILEMODE_BLOB))
+            index.add(
+                pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB)
+            )
         index.write()
         tree_oid = index.write_tree()
         commit_oid = repo.create_commit(
@@ -197,14 +202,21 @@ def commit_files(
             full.parent.mkdir(parents=True, exist_ok=True)
             full.write_text(content, encoding="utf-8")
             blob_oid = repo.create_blob(content.encode("utf-8"))
-            index.add(pygit2.IndexEntry(path, blob_oid, pygit2.GIT_FILEMODE_BLOB))
+            index.add(
+                pygit2.IndexEntry(path, blob_oid, pygit2.enums.FileMode.BLOB)
+            )
         index.write()
         tree_oid = index.write_tree()
         sig = _signature()
         if parent_sha:
             parents = [pygit2.Oid(hex=parent_sha)]
         elif not repo.is_empty:
-            parents = [repo.head.target]
+            head_target = repo.head.target
+            parents = [
+                head_target
+                if isinstance(head_target, pygit2.Oid)
+                else pygit2.Oid(hex=head_target)
+            ]
         else:
             parents = []
         # ref=None creates a detached commit object without moving HEAD. The
@@ -222,7 +234,7 @@ def read_files(project_id: UUID, commit_sha: str) -> dict[str, str]:
     with _open_workdir(project_id, must_exist=True) as workdir:
         repo = pygit2.Repository(str(workdir))
         commit = repo.get(commit_sha)
-        if commit is None:
+        if not isinstance(commit, pygit2.Commit):
             raise ValueError(f"commit {commit_sha} not found")
         out: dict[str, str] = {}
         _walk(repo, commit.tree, "", out)
@@ -236,13 +248,15 @@ def read_file(project_id: UUID, commit_sha: str, path: str) -> bytes | None:
     with _open_workdir(project_id, must_exist=True) as workdir:
         repo = pygit2.Repository(str(workdir))
         commit = repo.get(commit_sha)
-        if commit is None:
+        if not isinstance(commit, pygit2.Commit):
             return None
         try:
             entry = commit.tree[path]
         except KeyError:
             return None
         blob = repo[entry.id]
+        if not isinstance(blob, pygit2.Blob):
+            return None
         return bytes(blob.data)
 
 
@@ -252,7 +266,7 @@ def checkout(project_id: UUID, target_commit_sha: str) -> str:
     with _open_workdir(project_id, must_exist=True) as workdir:
         repo = pygit2.Repository(str(workdir))
         target = repo.get(target_commit_sha)
-        if target is None:
+        if not isinstance(target, pygit2.Commit):
             raise ValueError(f"commit {target_commit_sha} not found")
         sig = _signature()
         parents = [repo.head.target] if not repo.is_empty else []
@@ -265,20 +279,32 @@ def checkout(project_id: UUID, target_commit_sha: str) -> str:
             parents,
         )
         # Synchronize working tree с новым HEAD, чтобы в архив попала актуальная версия.
-        repo.checkout_tree(repo.get(commit_oid).tree, strategy=pygit2.GIT_CHECKOUT_FORCE)
+        created = repo.get(commit_oid)
+        if not isinstance(created, pygit2.Commit):
+            raise RuntimeError(f"created commit {commit_oid} cannot be loaded")
+        checkout_tree = cast(Callable[..., Any], repo.checkout_tree)
+        checkout_tree(
+            created.tree, strategy=pygit2.enums.CheckoutStrategy.FORCE
+        )
         _upload(project_id, workdir)
         return str(commit_oid)
 
 
 def _walk(repo: pygit2.Repository, tree: pygit2.Tree, prefix: str, out: dict[str, str]) -> None:
     for entry in tree:
+        if entry.name is None:
+            continue
         path = f"{prefix}{entry.name}" if prefix else entry.name
         if entry.type_str == "tree":
-            _walk(repo, repo[entry.id], f"{path}/", out)
+            child = repo[entry.id]
+            if isinstance(child, pygit2.Tree):
+                _walk(repo, child, f"{path}/", out)
             continue
         if entry.type_str != "blob":
             continue
         blob = repo[entry.id]
+        if not isinstance(blob, pygit2.Blob):
+            continue
         try:
             out[path] = blob.data.decode("utf-8")
         except UnicodeDecodeError:

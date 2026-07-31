@@ -3089,7 +3089,7 @@ def _compute_skill_brief(
 
     # Charts only when prompt actually mentions data viz.
     lowered = user_prompt.lower()
-    chart_types: tuple = ()
+    chart_types: tuple[skill_library.ChartType, ...] = ()
     if any(sig in lowered for sig in _CHART_SIGNAL_TOKENS):
         chart_types = skill_library.lookup_chart_types(*tokens, limit=2)
 
@@ -3937,7 +3937,7 @@ PRIMARY и ACCENT возьми из дизайн-брифа выше; если �
 
 def _build_catalog_system_prompt(
     preset_id: str | None,
-    skill_brief: dict[str, Any] | None,
+    skill_brief: str | None,
 ) -> str:
     """Lean system prompt for catalog/IR mode.
 
@@ -3952,13 +3952,11 @@ def _build_catalog_system_prompt(
     header = ""
     if preset_id and preset_id in PRESETS:
         try:
-            header += format_preset_block(PRESETS[preset_id]) + "\n\n"
+            header += format_preset_block(preset_id) + "\n\n"
         except Exception:
             pass
     if skill_brief:
-        brief_text = skill_brief.get("brief_text") if isinstance(skill_brief, dict) else None
-        if brief_text:
-            header += f"UX-BRIEF:\n{brief_text}\n\n"
+        header += f"UX-BRIEF:\n{skill_brief}\n\n"
 
     return header + _CATALOG_SYSTEM_PROMPT.format(catalog_blurb=CATALOG_BLURB)
 

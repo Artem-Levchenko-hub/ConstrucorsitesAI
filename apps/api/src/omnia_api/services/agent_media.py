@@ -39,6 +39,7 @@ from io import BytesIO
 from pathlib import Path
 
 import httpx
+from minio import Minio
 from minio.error import S3Error
 
 from omnia_api.core.config import get_settings
@@ -76,7 +77,7 @@ def _public_read_policy(bucket: str) -> str:
     )
 
 
-def _ensure_video_bucket(client, bucket: str) -> bool:
+def _ensure_video_bucket(client: Minio, bucket: str) -> bool:
     """Make ``bucket`` if absent and (RE)ASSERT its public-read policy EVERY call.
 
     Re-asserting on every upload (not only at creation) self-heals a bucket that

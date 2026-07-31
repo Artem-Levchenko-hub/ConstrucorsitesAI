@@ -75,7 +75,7 @@ def _section_id(section: Any, seen: dict[str, int]) -> str:
     on collision so the page validates as having unique ids."""
 
     if section.id:
-        return section.id
+        return str(section.id)
     base = section.type_variant.replace(".", "-")
     seen[base] = seen.get(base, 0) + 1
     count = seen[base]

@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import defaultdict
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import WebSocket
@@ -86,7 +87,8 @@ class WebSocketHub:
             try:
                 await pubsub.punsubscribe()
             finally:
-                await pubsub.aclose()
+                close = cast(Callable[[], Awaitable[None]], pubsub.aclose)
+                await close()
 
 
 hub = WebSocketHub()

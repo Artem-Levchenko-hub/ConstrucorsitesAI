@@ -53,7 +53,12 @@ async def _resolve_library_id(client: httpx.AsyncClient, library: str) -> str | 
     first = items[0]
     if not isinstance(first, dict):
         return None
-    return first.get("id") or first.get("libraryId") or first.get("settings", {}).get("project")
+    value = (
+        first.get("id")
+        or first.get("libraryId")
+        or first.get("settings", {}).get("project")
+    )
+    return value if isinstance(value, str) else None
 
 
 async def fetch_docs(library: str, query: str) -> str:

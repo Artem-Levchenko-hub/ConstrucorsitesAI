@@ -469,7 +469,9 @@ async def perform_fork(
 
 
 @router.get("", response_model=list[ProjectPublic])
-async def list_projects(session: SessionDep, current_user: CurrentUserDep) -> list[Project]:
+async def list_projects(
+    session: SessionDep, current_user: CurrentUserDep
+) -> list[ProjectPublic]:
     res = await session.execute(
         select(Project)
         .where(Project.owner_id == current_user.id)
@@ -486,31 +488,50 @@ async def list_projects(session: SessionDep, current_user: CurrentUserDep) -> li
             select(Snapshot.id, Snapshot.preview_key).where(Snapshot.id.in_(snap_ids))
         )
         previews = {sid: preview_public_url(key) for sid, key in rows.all()}
-    for p in projects:
-        p.preview_url = previews.get(p.current_snapshot_id)
-    return projects
+    public_projects: list[ProjectPublic] = []
+    for project in projects:
+        preview = (
+            previews.get(project.current_snapshot_id)
+            if project.current_snapshot_id is not None
+            else None
+        )
+        public_projects.append(
+            ProjectPublic.model_validate(project).model_copy(
+                update={"preview_url": preview}
+            )
+        )
+    return public_projects
 
 
 @router.get("/{project_id}", response_model=ProjectPublic)
 async def get_project(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
-) -> Project:
+) -> ProjectPublic:
     project = await session.get(Project, project_id)
     if project is None or project.owner_id != current_user.id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    preview_url: str | None = None
     if project.current_snapshot_id:
         snap = await session.get(Snapshot, project.current_snapshot_id)
-        project.preview_url = preview_public_url(snap.preview_key) if snap else None
+        preview_url = preview_public_url(snap.preview_key) if snap else None
     # Transitive remix lineage (V4 #3): resolve the source's name + slug so the
     # workspace remix badge can attribute it ("ремикс <name>") and link to
     # /p/<slug>. A deleted source leaves both None → the badge degrades to a
     # link-less attribution instead of a broken link.
+    forked_from_name: str | None = None
+    forked_from_slug: str | None = None
     if project.forked_from:
         source = await session.get(Project, project.forked_from)
         if source is not None:
-            project.forked_from_name = source.name
-            project.forked_from_slug = source.slug
-    return project
+            forked_from_name = source.name
+            forked_from_slug = source.slug
+    return ProjectPublic.model_validate(project).model_copy(
+        update={
+            "preview_url": preview_url,
+            "forked_from_name": forked_from_name,
+            "forked_from_slug": forked_from_slug,
+        }
+    )
 
 
 @router.get("/{project_id}/leads")
@@ -567,16 +588,19 @@ async def download_project(
     snap = await session.get(Snapshot, project.current_snapshot_id)
     if snap is None:
         raise ApiError("not_found", "snapshot missing", status.HTTP_404_NOT_FOUND)
-    files = await asyncio.to_thread(repo_svc.read_files, project_id, snap.commit_sha)
-    if not files:
+    text_files = await asyncio.to_thread(
+        repo_svc.read_files, project_id, snap.commit_sha
+    )
+    if not text_files:
         raise ApiError("not_found", "no files to download", status.HTTP_404_NOT_FOUND)
     # One-click run bundle (owner 2026-06-19 — «скачал → уже играешь»): add a
     # double-click launcher (run.bat/run.sh/run.command + RU instructions) that
     # creates a venv, installs deps and runs the entry point, so a Python/Node
     # project goes from download → running in one more click. `setdefault` so we
     # never clobber a launcher the project already ships. No-op for plain websites.
-    for name, content in build_launchers(files).items():
-        files.setdefault(name, content)
+    for name, launcher_content in build_launchers(text_files).items():
+        text_files.setdefault(name, launcher_content)
+    files: dict[str, str | bytes] = dict(text_files)
     # Full runnable export (P5): for a CONTAINER stack the git snapshot is only the
     # generated files — overlay the skeleton template UNDER them so the zip is a
     # runnable repo (skeleton + your code + README), generated files winning. Gated
@@ -769,7 +793,7 @@ async def build_exe_endpoint(
     project_id: UUID,
     session: SessionDep,
     current_user: CurrentUserDep,
-) -> dict:
+) -> dict[str, str]:
     """Enqueue a Windows .exe + NSIS installer build from the project's current snapshot.
 
     Owner-scoped (404 for missing / foreign projects). Requires at least one ``.py``

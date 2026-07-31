@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from typing import Any
+
 import structlog
 
 from omnia_api.core.config import get_settings
@@ -65,7 +67,7 @@ async def _run(
     )
 
     # Retry loop: up to MAX_HEAL + 1 attempts (1 initial + MAX_HEAL self-healed).
-    res: dict = {}
+    res: dict[str, Any] = {}
     for attempt in range(MAX_HEAL + 1):
         rendered = exe_build.render(spec)
 

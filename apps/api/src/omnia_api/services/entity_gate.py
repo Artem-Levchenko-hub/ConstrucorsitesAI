@@ -26,12 +26,16 @@ math or gate logic), R-10 (fail-soft: unreachable / disabled / render error →
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from omnia_api.core.config import get_settings
 from omnia_api.services import accept_gauntlet
 from omnia_api.services.accept_gauntlet import GauntletVerdict
 from omnia_api.services.dev_container import resolve_live_url
+
+if TYPE_CHECKING:
+    from playwright.async_api import StorageState
 
 
 def _merge_verdicts(desktop: GauntletVerdict, mobile: GauntletVerdict) -> GauntletVerdict:
@@ -54,7 +58,7 @@ async def gate_live_app(
     slug: str,
     route: str = "/",
     *,
-    storage_state: dict | None = None,
+    storage_state: StorageState | None = None,
     public_base: str | None = None,
 ) -> GauntletVerdict | None:
     """Run the composition legs (taste + hierarchy) against the live entity
@@ -87,6 +91,7 @@ async def gate_live_app(
     if not get_settings().acceptance_entity_composition_gate:
         return None
     authed = storage_state is not None
+    url: str | None
     if authed and public_base:
         # Render the cabinet on the canonical https origin the session is bound to.
         url = public_base.rstrip("/") + (route if route.startswith("/") else "/" + route)

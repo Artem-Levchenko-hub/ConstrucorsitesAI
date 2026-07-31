@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 from uuid import UUID
 
 import redis.asyncio as aioredis
@@ -15,7 +16,8 @@ def get_redis() -> aioredis.Redis:
     global _client
     if _client is None:
         s = get_settings()
-        _client = aioredis.from_url(s.redis_url, decode_responses=True)
+        from_url = cast(Callable[..., aioredis.Redis], aioredis.from_url)
+        _client = from_url(s.redis_url, decode_responses=True)
     return _client
 
 

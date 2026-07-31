@@ -13,7 +13,9 @@ fingerprint and no penalty, so generation never breaks on this signal.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable
 from io import BytesIO
+from typing import Any, cast
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +65,9 @@ async def nearest_cross_project_distance(project_id: str, fp: int) -> int:
     try:
         from omnia_api.core.redis import get_redis
 
-        entries = await get_redis().lrange(_POOL_KEY, 0, _POOL_CAP)
+        entries = await cast(
+            Awaitable[list[Any]], get_redis().lrange(_POOL_KEY, 0, _POOL_CAP)
+        )
     except Exception as exc:
         log.warning("originality: pool read failed (fail-soft): %r", exc)
         return _HASH_BITS
@@ -92,8 +96,8 @@ async def remember(project_id: str, fp: int) -> None:
         from omnia_api.core.redis import get_redis
 
         r = get_redis()
-        await r.lpush(_POOL_KEY, f"{project_id}:{fp}")
-        await r.ltrim(_POOL_KEY, 0, _POOL_CAP - 1)
+        await cast(Awaitable[int], r.lpush(_POOL_KEY, f"{project_id}:{fp}"))
+        await cast(Awaitable[str], r.ltrim(_POOL_KEY, 0, _POOL_CAP - 1))
     except Exception as exc:
         log.warning("originality: remember failed (ignored): %r", exc)
 

@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import Any, cast
+
+from playwright.async_api import Page
 
 # A member must see a peer's message within this budget — the whole point of
 # realtime is sub-second delivery, so a slow path is a functional failure.
@@ -68,7 +71,7 @@ def summarize(checks: list[Check]) -> FunctionalVerdict:
 # ── Browser-side helpers (run fetch/EventSource INSIDE the page) ─────────────
 
 
-async def _login(page: object, base_url: str, email: str, password: str) -> None:
+async def _login(page: Page, base_url: str, email: str, password: str) -> None:
     """Sign a user in via the NextAuth credentials endpoint (CSRF token + callback),
     not the /signin UI form, then confirm the session cookie actually landed.
 
@@ -79,80 +82,94 @@ async def _login(page: object, base_url: str, email: str, password: str) -> None
     (mirrors :func:`auth_session.establish_session`) and is markup-independent —
     verified live against a generated messenger. Requires the gate browser to reach
     the app's canonical auth origin (see :func:`preview_resolver_args`)."""
-    await page.goto(f"{base_url}/signin", wait_until="domcontentloaded")  # type: ignore[attr-defined]
-    result = await page.evaluate(  # type: ignore[attr-defined]
-        """async ([email, password]) => {
-            const c = await fetch('/api/auth/csrf', { credentials: 'include' });
-            const { csrfToken } = await c.json();
-            const body = new URLSearchParams({
-                csrfToken, email, password, callbackUrl: '/',
-            });
-            const r = await fetch('/api/auth/callback/credentials', {
-                method: 'POST',
-                headers: { 'content-type': 'application/x-www-form-urlencoded' },
-                body: body.toString(),
-                credentials: 'include',
-            });
-            // Confirm the session cookie took — a credentials failure still 200s
-            // (NextAuth redirects to /signin?error=…), so trust /session, not status.
-            const s = await fetch('/api/auth/session', { credentials: 'include' });
-            let user = null;
-            try { user = (await s.json()).user || null; } catch (_) {}
-            return { status: r.status, authed: !!user };
-        }""",
-        [email, password],
+    await page.goto(f"{base_url}/signin", wait_until="domcontentloaded")
+    result = cast(
+        dict[str, Any],
+        await page.evaluate(
+            """async ([email, password]) => {
+                const c = await fetch('/api/auth/csrf', { credentials: 'include' });
+                const { csrfToken } = await c.json();
+                const body = new URLSearchParams({
+                    csrfToken, email, password, callbackUrl: '/',
+                });
+                const r = await fetch('/api/auth/callback/credentials', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+                    body: body.toString(),
+                    credentials: 'include',
+                });
+                // Confirm the session cookie took — a credentials failure still 200s
+                // (NextAuth redirects to /signin?error=…), so trust /session, not status.
+                const s = await fetch('/api/auth/session', { credentials: 'include' });
+                let user = null;
+                try { user = (await s.json()).user || null; } catch (_) {}
+                return { status: r.status, authed: !!user };
+            }""",
+            [email, password],
+        ),
     )
     if not result.get("authed"):
         raise RuntimeError(f"login failed for {email}: {result}")
 
 
 async def _api(
-    page: object, method: str, path: str, body: object | None = None
-) -> dict:
+    page: Page, method: str, path: str, body: object | None = None
+) -> dict[str, Any]:
     """Run `fetch` inside the page (browser network + cookies) and return
     ``{status, json}``. Used for every API assertion so the gate exercises the
     exact path a logged-in user's browser would."""
-    return await page.evaluate(  # type: ignore[attr-defined]
-        """async ([method, path, body]) => {
-            const res = await fetch(path, {
-                method,
-                headers: body ? { 'Content-Type': 'application/json' } : undefined,
-                body: body ? JSON.stringify(body) : undefined,
-                credentials: 'include',
-            });
-            let json = null;
-            try { json = await res.json(); } catch (_) {}
-            return { status: res.status, json };
-        }""",
-        [method, path, body],
+    return cast(
+        dict[str, Any],
+        await page.evaluate(
+            """async ([method, path, body]) => {
+                const res = await fetch(path, {
+                    method,
+                    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                    body: body ? JSON.stringify(body) : undefined,
+                    credentials: 'include',
+                });
+                let json = null;
+                try { json = await res.json(); } catch (_) {}
+                return { status: res.status, json };
+            }""",
+            [method, path, body],
+        ),
     )
 
 
 async def _await_sse_message(
-    page: object, channel: str, match_text: str, timeout_ms: int
+    page: Page, channel: str, match_text: str, timeout_ms: int
 ) -> bool:
     """Open an EventSource on `channel` inside the page and resolve True iff a
     `message` event whose body contains `match_text` arrives within the budget.
     This is the live-delivery proof — it would never pass on a polling-only app."""
-    return await page.evaluate(  # type: ignore[attr-defined]
-        """async ([channel, matchText, timeoutMs]) => {
-            const url = `/api/realtime/${encodeURIComponent(channel)}/stream`;
-            return await new Promise((resolve) => {
-                const es = new EventSource(url, { withCredentials: true });
-                const timer = setTimeout(() => { es.close(); resolve(false); }, timeoutMs);
-                es.onmessage = (ev) => {
-                    try {
-                        const e = JSON.parse(ev.data);
-                        const body = e && e.data && (e.data.body ?? '');
-                        if (e.type === 'message' && String(body).includes(matchText)) {
-                            clearTimeout(timer); es.close(); resolve(true);
-                        }
-                    } catch (_) {}
-                };
-                es.onerror = () => {};  // transient reconnects are fine within the budget
-            });
-        }""",
-        [channel, match_text, timeout_ms],
+    return bool(
+        await page.evaluate(
+            """async ([channel, matchText, timeoutMs]) => {
+                const url = `/api/realtime/${encodeURIComponent(channel)}/stream`;
+                return await new Promise((resolve) => {
+                    const es = new EventSource(url, { withCredentials: true });
+                    const timer = setTimeout(() => {
+                        es.close();
+                        resolve(false);
+                    }, timeoutMs);
+                    es.onmessage = (ev) => {
+                        try {
+                            const e = JSON.parse(ev.data);
+                            const body = e && e.data && (e.data.body ?? '');
+                            if (e.type === 'message' && String(body).includes(matchText)) {
+                                clearTimeout(timer);
+                                es.close();
+                                resolve(true);
+                            }
+                        } catch (_) {}
+                    };
+                    // Transient reconnects are fine within the delivery budget.
+                    es.onerror = () => {};
+                });
+            }""",
+            [channel, match_text, timeout_ms],
+        )
     )
 
 

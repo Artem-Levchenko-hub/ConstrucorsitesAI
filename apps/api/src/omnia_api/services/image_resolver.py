@@ -27,8 +27,10 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
+from typing import Any
 
 import httpx
+from minio import Minio
 from minio.error import S3Error
 
 from omnia_api.core.config import get_settings, model_for_role
@@ -319,7 +321,7 @@ async def _enrich_prompt(prompt: str) -> str:
         return prompt
 
 
-def _ensure_bucket(client, bucket: str) -> bool:
+def _ensure_bucket(client: Minio, bucket: str) -> bool:
     """Idempotent bucket creation. Returns True on success or already-exists,
     False on permission/transport error (we then skip uploads gracefully)."""
     try:
@@ -353,12 +355,14 @@ def _optimize_image_bytes(data: bytes) -> tuple[bytes, str]:
     except Exception:  # noqa: BLE001 — no Pillow → ship the PNG unchanged
         return data, "image/png"
     try:
-        im = Image.open(BytesIO(data))
+        im: Image.Image = Image.open(BytesIO(data))
         im.load()
         w, h = im.size
         if w > _IMAGE_MAX_WIDTH:
-            im = im.resize((_IMAGE_MAX_WIDTH, round(h * _IMAGE_MAX_WIDTH / w)),
-                           Image.LANCZOS)
+            im = im.resize(
+                (_IMAGE_MAX_WIDTH, round(h * _IMAGE_MAX_WIDTH / w)),
+                Image.Resampling.LANCZOS,
+            )
         if im.mode in ("RGBA", "P", "LA"):
             im = im.convert("RGB")
         buf = BytesIO()
@@ -462,12 +466,12 @@ def _extract_photo_tags(files: dict[str, str]) -> list[ImgTag]:
     return out
 
 
-def _pexels_client_kwargs() -> dict:
+def _pexels_client_kwargs() -> dict[str, Any]:
     """httpx.AsyncClient kwargs for Pexels calls — routes through the egress
     proxy when ``settings.pexels_proxy`` is set (pexels.com is unreliable from
     the RU prod egress). Pexels only; the gpt-image path (``_fetch_one``) is
     untouched. httpx 0.28 uses the singular ``proxy=`` argument."""
-    kw: dict = {"timeout": _REQUEST_TIMEOUT}
+    kw: dict[str, Any] = {"timeout": _REQUEST_TIMEOUT}
     proxy = get_settings().pexels_proxy
     if proxy:
         kw["proxy"] = proxy
@@ -484,7 +488,11 @@ async def _fetch_photo(keywords: str, project_id: str) -> bytes | None:
     if settings.photo_source != "pexels" or key is None:
         return None
     headers = {"Authorization": key.get_secret_value()}
-    params = {"query": keywords, "per_page": _PEXELS_PER_PAGE, "orientation": "landscape"}
+    params: dict[str, str | int] = {
+        "query": keywords,
+        "per_page": _PEXELS_PER_PAGE,
+        "orientation": "landscape",
+    }
     try:
         async with httpx.AsyncClient(**_pexels_client_kwargs()) as client:
             resp = await client.get(_PEXELS_SEARCH_URL, params=params, headers=headers)
@@ -529,11 +537,23 @@ async def _openverse_token() -> str | None:
     secret = settings.openverse_client_secret
     if not cid or secret is None:
         return None
-    if _ov_token["value"] and time.monotonic() < float(_ov_token["expires_at"]):
-        return _ov_token["value"]  # type: ignore[return-value]
+    value = _ov_token["value"]
+    expires_at = _ov_token["expires_at"]
+    if (
+        isinstance(value, str)
+        and isinstance(expires_at, (int, float))
+        and time.monotonic() < expires_at
+    ):
+        return value
     async with _ov_token_lock:
-        if _ov_token["value"] and time.monotonic() < float(_ov_token["expires_at"]):
-            return _ov_token["value"]  # type: ignore[return-value]
+        value = _ov_token["value"]
+        expires_at = _ov_token["expires_at"]
+        if (
+            isinstance(value, str)
+            and isinstance(expires_at, (int, float))
+            and time.monotonic() < expires_at
+        ):
+            return value
         data = {
             "grant_type": "client_credentials",
             "client_id": cid,
@@ -550,8 +570,11 @@ async def _openverse_token() -> str | None:
             log.warning("image_resolver: openverse token err=%r", exc)
             return None
         token = body.get("access_token")
-        ttl = float(body.get("expires_in") or 0)
-        if not token:
+        raw_ttl = body.get("expires_in")
+        ttl = (
+            float(raw_ttl) if isinstance(raw_ttl, (int, float, str)) else 0.0
+        )
+        if not isinstance(token, str) or not token:
             return None
         _ov_token["value"] = token
         _ov_token["expires_at"] = time.monotonic() + max(0.0, ttl - 60)
@@ -587,7 +610,7 @@ _OV_STOPWORDS = frozenset({
 })
 
 
-def _ov_relevance(item: dict, query_words: set[str]) -> int:
+def _ov_relevance(item: dict[str, Any], query_words: set[str]) -> int:
     """How many distinct query words appear in the item's title/tags. Openverse
     sorts by its own relevance, but the CC0 pool is thin enough that result #0 is
     often only loosely related — re-ranking against the ACTUAL keywords stops a
@@ -622,8 +645,10 @@ async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None
         if len(w) > 2 and w not in _OV_STOPWORDS
     }
 
-    async def _search(client: httpx.AsyncClient, query: str) -> list[dict]:
-        params = {
+    async def _search(
+        client: httpx.AsyncClient, query: str
+    ) -> list[dict[str, Any]]:
+        params: dict[str, str | int] = {
             "q": query,
             "license": settings.openverse_license,
             "category": "photograph",  # exclude paintings / illustrations / clipart
@@ -641,12 +666,15 @@ async def _fetch_photo_openverse(keywords: str, project_id: str) -> bytes | None
             log.warning("image_resolver: openverse %d q=%.40s", resp.status_code, query)
             return []
         try:
-            return resp.json().get("results") or []
+            raw_results = resp.json().get("results") or []
+            return [
+                item for item in raw_results if isinstance(item, dict)
+            ]
         except ValueError:
             return []
 
     # Collect candidates across broadening steps, keep the most ON-THEME one.
-    best: dict | None = None
+    best: dict[str, Any] | None = None
     best_score = 0
     async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
         for query in _openverse_query_variants(keywords):

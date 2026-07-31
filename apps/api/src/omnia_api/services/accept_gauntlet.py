@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from omnia_api.core.config import get_settings
 from omnia_api.services import (
@@ -48,6 +48,9 @@ from omnia_api.services import (
     wow_dom_gate,
 )
 from omnia_api.services.chip_pixel_gate import FidelitySpec
+
+if TYPE_CHECKING:
+    from playwright.async_api import StorageState
 
 log = logging.getLogger(__name__)
 
@@ -511,7 +514,7 @@ async def _audit_one(
     composition_width: int,
     reference_enforce_score: bool = False,
     reference_tolerance: int = 0,
-    storage_state: dict | None = None,
+    storage_state: StorageState | None = None,
 ) -> Any:
     """Render one rendered gate against the live target (url first, else files).
 
@@ -606,7 +609,7 @@ async def run(
     reference_tolerance: int = 0,
     catalog: bool = False,
     cabinet: bool = False,
-    storage_state: dict | None = None,
+    storage_state: StorageState | None = None,
     viral: bool = False,
     viral_context: viral_registry.ViralContext | None = None,
     onboarding: bool = False,

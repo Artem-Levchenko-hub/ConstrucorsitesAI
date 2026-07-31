@@ -105,7 +105,7 @@ def _pick_dead_link_target(ids: set[str], content: str) -> str:
         return commercial
     for anchor in _NAV_ANCHOR.findall(content):
         if anchor in ids:
-            return anchor
+            return str(anchor)
     return _UNIVERSAL_FALLBACK_TARGET
 
 
@@ -146,10 +146,12 @@ def repair_dead_links_inline(files: dict[str, str]) -> dict[str, str]:
         ids = set(_ID.findall(content))
         target = _pick_dead_link_target(ids, content)
 
-        def _replace(m: re.Match[str]) -> str:
+        def _replace(
+            m: re.Match[str], replacement_target: str = target
+        ) -> str:
             href = m.group(2).strip()
             if href.lower() in _DEAD_HREFS:
-                return f"{m.group(1)}#{target}{m.group(3)}"
+                return f"{m.group(1)}#{replacement_target}{m.group(3)}"
             return m.group(0)
 
         out[path] = _DEAD_HREF_REGEX.sub(_replace, content)
@@ -180,7 +182,7 @@ def repair_orphaned_anchors_inline(
         old_ids = set(_ID.findall(old_files.get(path, "")))
         new_ids = set(_ID.findall(content))
         # ids the edit removed — anchors pointing here were valid before, dead now.
-        orphaned = old_ids - new_ids
+        orphaned = frozenset(old_ids - new_ids)
         if not orphaned:
             out[path] = content
             continue
@@ -188,11 +190,16 @@ def repair_orphaned_anchors_inline(
         if target is None or target in orphaned:
             out[path] = content
             continue
+        replacement_target = target
 
-        def _replace(m: re.Match[str]) -> str:
+        def _replace(
+            m: re.Match[str],
+            orphaned_ids: frozenset[str] = orphaned,
+            target_id: str = replacement_target,
+        ) -> str:
             href = m.group(2).strip()
-            if href.startswith("#") and href[1:] in orphaned:
-                return f"{m.group(1)}#{target}{m.group(3)}"
+            if href.startswith("#") and href[1:] in orphaned_ids:
+                return f"{m.group(1)}#{target_id}{m.group(3)}"
             return m.group(0)
 
         out[path] = _DEAD_HREF_REGEX.sub(_replace, content)

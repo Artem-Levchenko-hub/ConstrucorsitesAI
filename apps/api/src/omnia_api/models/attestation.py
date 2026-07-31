@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -40,7 +41,7 @@ class Attestation(Base):
     stack: Mapped[str | None] = mapped_column(Text, nullable=True)
     overall_passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     digest: Mapped[str] = mapped_column(Text, nullable=False)
-    gates: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    gates: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

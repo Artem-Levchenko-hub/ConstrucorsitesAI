@@ -249,7 +249,7 @@ def _stub_plan(
     else:
         plan_kind = "motion" if asset_urls else "static"
     return HeroMediaDecision(
-        plan_kind=plan_kind,  # type: ignore[arg-type]
+        plan_kind=plan_kind,
         confidence=0.66,
         explanation=(
             "Локальный stub-planner рекомендует этот тип подачи по правилам продукта: "
