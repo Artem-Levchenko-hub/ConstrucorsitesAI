@@ -1,0 +1,86 @@
+name: Off-host encrypted backup
+
+on:
+  schedule:
+    # Production cron creates the snapshot at 03:15 UTC. Leave enough time for
+    # PostgreSQL, project sources and MinIO to be archived and encrypted.
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/offhost-backup.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offhost-encrypted-backup
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download and verify encrypted snapshot
+        id: backup
+        env:
+          BACKUP_BASE_URL: https://constructor.lead-generator.ru/api/backups/offhost
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 4 --retry-all-errors \
+            "${BACKUP_BASE_URL}/status" \
+            --output status.json
+
+          created_at="$(jq -er '.created_at' status.json)"
+          expected_size="$(jq -er '.size_bytes' status.json)"
+          expected_sha="$(jq -er '.sha256' status.json)"
+          created_epoch="$(date -u -d "${created_at}" +%s)"
+          now_epoch="$(date -u +%s)"
+          age_seconds="$((now_epoch - created_epoch))"
+
+          if (( age_seconds < -300 || age_seconds > 108000 )); then
+            echo "::error::Backup age is outside the allowed 30-hour window: ${age_seconds}s"
+            exit 1
+          fi
+          if (( expected_size < 10485760 )); then
+            echo "::error::Backup is suspiciously small: ${expected_size} bytes"
+            exit 1
+          fi
+          if [[ ! "${expected_sha}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Backup status returned an invalid SHA-256"
+            exit 1
+          fi
+
+          curl --fail --silent --show-error --retry 4 --retry-all-errors \
+            "${BACKUP_BASE_URL}/latest" \
+            --output omnia-backup.cms
+
+          actual_size="$(stat -c%s omnia-backup.cms)"
+          actual_sha="$(sha256sum omnia-backup.cms | cut -d' ' -f1)"
+          [[ "${actual_size}" == "${expected_size}" ]] || {
+            echo "::error::Size mismatch: expected ${expected_size}, got ${actual_size}"
+            exit 1
+          }
+          [[ "${actual_sha}" == "${expected_sha}" ]] || {
+            echo "::error::SHA-256 mismatch"
+            exit 1
+          }
+          openssl cms -cmsout -inform DER -in omnia-backup.cms -print >/dev/null
+
+          printf '%s  %s\n' "${actual_sha}" "omnia-backup.cms" > omnia-backup.cms.sha256
+          timestamp="$(date -u -d "${created_at}" +%Y%m%d-%H%M%S)"
+          echo "timestamp=${timestamp}" >> "${GITHUB_OUTPUT}"
+          echo "Verified encrypted backup ${timestamp}: ${actual_size} bytes, SHA-256 ${actual_sha}"
+
+      - name: Store encrypted copy outside production
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnia-offhost-backup-${{ steps.backup.outputs.timestamp }}
+          path: |
+            omnia-backup.cms
+            omnia-backup.cms.sha256
+            status.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
