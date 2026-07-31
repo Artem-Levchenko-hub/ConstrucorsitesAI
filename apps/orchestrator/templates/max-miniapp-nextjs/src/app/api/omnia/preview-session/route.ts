@@ -77,7 +77,13 @@ export async function GET(request: Request) {
     const session = createMaxSession(PREVIEW_USER, {
       maxAge: PREVIEW_SESSION_MAX_AGE_SECONDS,
     });
-    const response = NextResponse.redirect(new URL("/", request.url));
+    // Keep the redirect relative to the public preview origin. Next.js exposes
+    // its container listen address in request.url behind nginx, which would
+    // otherwise send the browser to https://0.0.0.0:3000/.
+    const response = new NextResponse(null, {
+      status: 307,
+      headers: { Location: "/" },
+    });
     response.headers.set("Cache-Control", "no-store");
     response.headers.set("Referrer-Policy", "no-referrer");
     response.cookies.set(MAX_SESSION_COOKIE, session.value, {

@@ -13,7 +13,7 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 3
+MAX_MANAGED_KIT_VERSION = 4
 
 
 def _template_candidates(

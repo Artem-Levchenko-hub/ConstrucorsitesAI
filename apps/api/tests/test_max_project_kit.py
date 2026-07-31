@@ -73,6 +73,8 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert 'process.env.NODE_ENV !== "development"' in preview_route
     assert "partitioned: true" in preview_route
     assert "PREVIEW_SESSION_MAX_AGE_SECONDS" in preview_route
+    assert 'headers: { Location: "/" }' in preview_route
+    assert 'NextResponse.redirect(new URL("/", request.url))' not in preview_route
     assert "options: { maxAge?: number } = {}" in files["src/lib/max/session.ts"]
 
 
