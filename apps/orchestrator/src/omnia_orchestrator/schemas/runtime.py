@@ -42,6 +42,7 @@ class MaxPreviewSessionResponse(BaseModel):
     It expires quickly and is validated inside the project container.
     """
 
+    project_id: UUID
     bootstrap_url: str
     expires_at: str  # ISO8601 UTC
 

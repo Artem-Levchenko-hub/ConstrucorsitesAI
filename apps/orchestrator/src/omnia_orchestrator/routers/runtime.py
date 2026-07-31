@@ -211,6 +211,7 @@ async def create_max_preview_session(
     query = urlencode({"expires": expires, "signature": signature})
     bootstrap_url = f"{origin}{_MAX_PREVIEW_BOOTSTRAP_PATH}?{query}"
     return MaxPreviewSessionResponse(
+        project_id=project_id,
         bootstrap_url=bootstrap_url,
         expires_at=expires_at.isoformat().replace("+00:00", "Z"),
     )
