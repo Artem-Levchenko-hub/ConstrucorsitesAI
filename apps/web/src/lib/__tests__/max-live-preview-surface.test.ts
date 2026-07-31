@@ -18,14 +18,19 @@ describe("MAX live preview surface", () => {
       'className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"',
     );
     expect(livePreview).not.toContain('bg-[#f5f3ee]');
+    expect(livePreview).not.toContain("0_30px_80px");
+    expect(livePreview).toContain("0_12px_28px");
   });
 
-  it("uses the workspace surface behind desktop and mobile phone previews", () => {
+  it("does not paint a separate desktop preview column", () => {
     expect(workspaceShell).toContain(
-      'className="hidden min-h-0 bg-[#fcfbf7] xl:block"',
+      'className="hidden min-h-0 bg-transparent xl:block"',
     );
     expect(workspaceShell).toContain(
       'className="relative flex h-full w-full max-w-[460px] flex-col bg-[#fcfbf7]',
+    );
+    expect(workspaceShell).toContain(
+      'overflow-hidden bg-[#fcfbf7] text-[#171716]',
     );
     expect(workspaceShell).not.toContain(
       '<section className="flex min-h-0 min-w-0 flex-col border-r',

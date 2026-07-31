@@ -218,7 +218,7 @@ export function MaxLivePreview({
             }}
           >
             <div
-              className="absolute left-0 top-0 rounded-[58px] bg-[#0b0b0b] p-[10px] shadow-[0_30px_80px_rgba(23,23,22,.22),0_3px_12px_rgba(23,23,22,.16),inset_0_0_0_1px_rgba(255,255,255,.16)]"
+              className="absolute left-0 top-0 rounded-[58px] bg-[#0b0b0b] p-[10px] shadow-[0_12px_28px_rgba(23,23,22,.14),0_2px_7px_rgba(23,23,22,.12),inset_0_0_0_1px_rgba(255,255,255,.16)]"
               data-testid="max-live-device"
               style={{
                 width: DEVICE_WIDTH,

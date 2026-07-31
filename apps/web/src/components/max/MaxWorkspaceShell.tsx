@@ -54,7 +54,7 @@ export function MaxWorkspaceShell({
     <div
       data-light-shell
       className={cn(
-        "grid h-dvh min-h-0 grid-cols-1 overflow-hidden bg-[#f5f3ee] text-[#171716] transition-[grid-template-columns] duration-200",
+        "grid h-dvh min-h-0 grid-cols-1 overflow-hidden bg-[#fcfbf7] text-[#171716] transition-[grid-template-columns] duration-200",
         navigationVisible
           ? "lg:grid-cols-[220px_minmax(0,1fr)]"
           : "lg:grid-cols-[minmax(0,1fr)]",
@@ -202,7 +202,7 @@ export function MaxWorkspaceShell({
       </section>
 
       {previewPanelVisible && (
-        <div className="hidden min-h-0 bg-[#fcfbf7] xl:block">
+        <div className="hidden min-h-0 bg-transparent xl:block">
           <MaxLivePreview
             project={project}
             onClose={() => setPreviewPanelVisible(false)}
