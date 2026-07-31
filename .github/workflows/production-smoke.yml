@@ -43,9 +43,12 @@ jobs:
             test "$(jq -r --arg key "$component" '.checks[$key]' <<<"$api")" = "ok"
           done
 
-          curl --fail --silent --show-error \
-            --connect-timeout 10 --max-time 20 --retry 2 \
-            "$PLATFORM_URL/mvp" | grep -q "Путь до полностью рабочего MVP"
+          mvp="$(
+            curl --fail --silent --show-error \
+              --connect-timeout 10 --max-time 20 --retry 2 \
+              "$PLATFORM_URL/mvp"
+          )"
+          grep -q "Путь до полностью рабочего MVP" <<<"$mvp"
 
           canary="$(curl_json "$MAX_CANARY_URL/api/health")"
           test "$(jq -r '.status' <<<"$canary")" = "ok"
