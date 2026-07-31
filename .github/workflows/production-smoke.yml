@@ -1,0 +1,119 @@
+name: Production smoke
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: production-smoke
+  cancel-in-progress: true
+
+env:
+  PLATFORM_URL: https://constructor.lead-generator.ru
+  MAX_CANARY_URL: https://fitnessstat-a379d4.preview.lead-generator.ru
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Probe platform and MAX canary
+        id: smoke
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl_json() {
+            curl --fail --silent --show-error \
+              --connect-timeout 10 --max-time 20 --retry 2 "$1"
+          }
+
+          web="$(curl_json "$PLATFORM_URL/web-health")"
+          test "$(jq -r '.status' <<<"$web")" = "ok"
+          test "$(jq -r '.service' <<<"$web")" = "web"
+
+          api="$(curl_json "$PLATFORM_URL/api/health")"
+          test "$(jq -r '.status' <<<"$api")" = "ok"
+          for component in database redis worker deploy_control_plane preview_storage; do
+            test "$(jq -r --arg key "$component" '.checks[$key]' <<<"$api")" = "ok"
+          done
+
+          curl --fail --silent --show-error \
+            --connect-timeout 10 --max-time 20 --retry 2 \
+            "$PLATFORM_URL/mvp" | grep -q "Путь до полностью рабочего MVP"
+
+          canary="$(curl_json "$MAX_CANARY_URL/api/health")"
+          test "$(jq -r '.status' <<<"$canary")" = "ok"
+          test "$(jq -r '.platform' <<<"$canary")" = "max-miniapp"
+
+          webhook_status="$(
+            curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --connect-timeout 10 --max-time 20 --retry 2 \
+              --request POST --header 'content-type: application/json' \
+              --data '{}' "$MAX_CANARY_URL/api/max/webhook"
+          )"
+          test "$webhook_status" = "401"
+
+      - name: Open one incident issue
+        if: steps.smoke.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = "[monitor] Omnia production smoke failed";
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              per_page: 100,
+            });
+            if (!issues.some((issue) => issue.title === title && !issue.pull_request)) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body: [
+                  "Off-host smoke detected a production failure.",
+                  "",
+                  `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                  "",
+                  "The monitor checks web, API, Postgres, Redis, worker heartbeat, deploy control plane, preview storage, a deployed MAX canary, and the webhook auth boundary.",
+                ].join("\n"),
+              });
+            }
+
+      - name: Close incident after recovery
+        if: steps.smoke.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = "[monitor] Omnia production smoke failed";
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              per_page: 100,
+            });
+            for (const issue of issues) {
+              if (issue.title !== title || issue.pull_request) continue;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Recovered in run ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: "closed",
+              });
+            }
+
+      - name: Mark failed smoke red
+        if: steps.smoke.outcome == 'failure'
+        run: exit 1
