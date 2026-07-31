@@ -31,6 +31,42 @@ const MaxContext = createContext<MaxContextValue>({
   error: null,
 });
 
+const MAX_INIT_DATA_HEADER = "X-Omnia-MAX-Init-Data";
+let nativeFetch: typeof window.fetch | null = null;
+let activeInitData = "";
+
+function installAuthenticatedFetch(initData: string) {
+  activeInitData = initData;
+  if (nativeFetch) return;
+  nativeFetch = window.fetch.bind(window);
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl =
+      input instanceof Request
+        ? new URL(input.url)
+        : new URL(String(input), window.location.href);
+    if (
+      !activeInitData ||
+      requestUrl.origin !== window.location.origin ||
+      !requestUrl.pathname.startsWith("/api/")
+    ) {
+      return nativeFetch!(input, init);
+    }
+
+    const requestHeaders = new Headers(
+      input instanceof Request ? input.headers : undefined,
+    );
+    new Headers(init?.headers).forEach((value, key) => {
+      requestHeaders.set(key, value);
+    });
+    requestHeaders.set(MAX_INIT_DATA_HEADER, activeInitData);
+
+    if (input instanceof Request) {
+      return nativeFetch!(new Request(input, { ...init, headers: requestHeaders }));
+    }
+    return nativeFetch!(input, { ...init, headers: requestHeaders });
+  }) as typeof window.fetch;
+}
+
 const previewUser: MaxSessionUser = {
   id: "preview",
   firstName: "Пользователь",
@@ -150,6 +186,10 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     configureMaxShell(webApp);
+    // Some iOS MAX WebViews do not persist Set-Cookie from a fetch response.
+    // Keep the signed MAX launch data in memory and attach it only to same-origin
+    // API requests, so protected routes can authenticate without browser storage.
+    installAuthenticatedFetch(webApp.initData);
     setAppearance({
       platform: webApp.platform === "ios" ? "ios" : "android",
       colorScheme: webApp.colorScheme === "dark" ? "dark" : "light",

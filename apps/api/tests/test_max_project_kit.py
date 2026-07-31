@@ -79,9 +79,17 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert 'headers: { Location: "/" }' in preview_route
     assert 'NextResponse.redirect(new URL("/", request.url))' not in preview_route
     assert "options: { maxAge?: number } = {}" in files["src/lib/max/session.ts"]
+    session = files["src/lib/max/session.ts"]
+    assert 'const MAX_INIT_DATA_HEADER = "x-omnia-max-init-data"' in session
+    assert "validateMaxInitData(initData, token)" in session
+    assert "if (cookieUser) return cookieUser" in session
     provider = files["src/components/MaxAppProvider.tsx"]
     assert 'state.mode === "loading" || state.mode === "error"' in provider
     assert "<AuthScreen" in provider
+    assert 'const MAX_INIT_DATA_HEADER = "X-Omnia-MAX-Init-Data"' in provider
+    assert "installAuthenticatedFetch(webApp.initData)" in provider
+    assert 'requestUrl.origin !== window.location.origin' in provider
+    assert '!requestUrl.pathname.startsWith("/api/")' in provider
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
     assert "timingSafeEqual" in validator

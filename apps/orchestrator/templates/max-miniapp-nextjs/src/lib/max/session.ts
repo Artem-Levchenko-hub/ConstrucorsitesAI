@@ -1,7 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
+
+import { validateMaxInitData } from "@/lib/max/validate-init-data";
 
 export const MAX_SESSION_COOKIE = "__Host-max_session";
+const MAX_INIT_DATA_HEADER = "x-omnia-max-init-data";
 const SESSION_AGE_SECONDS = 24 * 60 * 60;
 
 export type MaxSessionUser = {
@@ -66,7 +69,27 @@ export function readMaxSession(value: string | undefined): MaxSessionUser | null
 }
 
 export async function getMaxUser(): Promise<MaxSessionUser | null> {
-  return readMaxSession((await cookies()).get(MAX_SESSION_COOKIE)?.value);
+  const cookieUser = readMaxSession(
+    (await cookies()).get(MAX_SESSION_COOKIE)?.value,
+  );
+  if (cookieUser) return cookieUser;
+
+  const token = process.env.MAX_BOT_TOKEN;
+  const initData = (await headers()).get(MAX_INIT_DATA_HEADER);
+  if (!token || !initData) return null;
+  try {
+    const launch = validateMaxInitData(initData, token);
+    return {
+      id: launch.user.id,
+      firstName: launch.user.first_name,
+      lastName: launch.user.last_name || null,
+      username: launch.user.username || null,
+      languageCode: launch.user.language_code || null,
+      photoUrl: launch.user.photo_url || null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function requireMaxUser(): Promise<MaxSessionUser> {
