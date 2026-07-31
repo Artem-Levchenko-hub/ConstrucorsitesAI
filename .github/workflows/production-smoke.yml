@@ -3,6 +3,10 @@ name: Production smoke
 on:
   schedule:
     - cron: "*/5 * * * *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/production-smoke.yml"
   workflow_dispatch:
 
 permissions:
