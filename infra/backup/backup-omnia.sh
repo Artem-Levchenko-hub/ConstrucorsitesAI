@@ -26,7 +26,9 @@ PUBLIC_CERT="${BACKUP_PUBLIC_CERT:-/opt/omnia/infra/backup/offhost-backup-cert.p
 MINIO_VOLUME="${MINIO_VOLUME:-full_minio-data}"
 MINIO_BACKUP_IMAGE="${MINIO_BACKUP_IMAGE:-omnia-api:prod}"
 RUNTIME_ENV="${RUNTIME_ENV:-/opt/omnia-runtime/.env}"
-ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia-runtime/.env.orchestrator}"
+# This is the EnvironmentFile loaded by omnia-orchestrator.service. Backing up
+# a legacy mirror would produce a bundle that cannot faithfully boot the daemon.
+ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
 FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 
 PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"

@@ -24,7 +24,10 @@ from pathlib import Path
 
 RUNTIME_ROOT = Path("/opt/omnia-runtime")
 RUNTIME_ENV = RUNTIME_ROOT / ".env"
-ORCHESTRATOR_ENV = RUNTIME_ROOT / ".env.orchestrator"
+# Must match EnvironmentFile in infra/systemd/omnia-orchestrator.service.
+# Rotating a detached mirror leaves the running daemon on the old internal
+# token and makes every new provision/deploy request fail with HTTP 401.
+ORCHESTRATOR_ENV = Path("/opt/omnia/apps/orchestrator/.env")
 FULLSTACK_ROOT = Path("/opt/omnia/apps/llm-gateway/deploy/full")
 FULLSTACK_ENV = FULLSTACK_ROOT / ".env"
 PROJECT_POSTGRES_COMPOSE = RUNTIME_ROOT / "postgres-compose.yml"
@@ -191,7 +194,7 @@ def recreate_services() -> None:
     )
 
 
-def wait_for_validation() -> dict[str, object]:
+def wait_for_validation(orchestrator_token: str) -> dict[str, object]:
     last_error = ""
     for _ in range(36):
         try:
@@ -218,6 +221,31 @@ def wait_for_validation() -> dict[str, object]:
     else:
         raise RuntimeError(f"production readiness failed after rotation: {last_error}")
 
+    # `/api/health` only checks the orchestrator's public health route. Exercise
+    # an authenticated route too, otherwise a stale systemd EnvironmentFile can
+    # look healthy while every provision/deploy call fails with HTTP 401.
+    probe_id = "00000000-0000-4000-8000-000000000099"
+    orchestrator_error = ""
+    for _ in range(12):
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:8003/internal/projects/{probe_id}/status",
+                headers={"X-Internal-Token": orchestrator_token},
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = json.loads(response.read())
+            if payload.get("project_id") == probe_id:
+                break
+            orchestrator_error = "unexpected authenticated probe response"
+        except Exception as exc:
+            orchestrator_error = type(exc).__name__
+        time.sleep(2)
+    else:
+        raise RuntimeError(
+            "orchestrator authenticated readiness failed after rotation: "
+            f"{orchestrator_error}"
+        )
+
     verified = run(
         [
             "docker",
@@ -231,6 +259,7 @@ def wait_for_validation() -> dict[str, object]:
     )
     return {
         "readiness": "ok",
+        "orchestrator_authenticated": "ok",
         "stored_tokens": json.loads(verified.stdout or "{}"),
     }
 
@@ -354,7 +383,7 @@ def main() -> None:
                 },
             )
             recreate_services()
-            evidence = wait_for_validation()
+            evidence = wait_for_validation(new["ORCHESTRATOR_INTERNAL_TOKEN"])
         except Exception:
             print("rotation failed; starting automatic rollback", flush=True)
             if tokens_rotated:

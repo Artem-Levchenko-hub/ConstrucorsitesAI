@@ -33,6 +33,9 @@ sudo systemctl restart omnia-orchestrator
 
 - User `i48ptgvnis` exists, owns `/opt/omnia/` and `/opt/omnia-runtime/`, and
   is in the `docker` group (so the Docker socket works without sudo).
+- `/opt/omnia/apps/orchestrator/.env` exists with mode `0600`. This exact
+  `EnvironmentFile` is the canonical orchestrator configuration used by secret
+  rotation and disaster-recovery backup; do not maintain a detached env mirror.
 - `uv` installed at `/home/i48ptgvnis/.local/bin/uv` (per the user's PATH).
 - Sudoers rules for `nginx -t`, `systemctl reload nginx`, and `acme.sh` live
   in `/etc/sudoers.d/omnia-orchestrator` (see `docs/08-vps-setup.md`).

@@ -35,9 +35,8 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "email-verification",
         title: "Подтверждение email",
-        detail: "MAX-проект нельзя создать или оплатить до подтверждения рабочего адреса.",
-        status: "done",
-        completedAt: "30 июля 2026",
+        detail: "Механика и блокировки готовы, но production SMTP ещё не подключён: письмо с одноразовой ссылкой сейчас не доставляется.",
+        status: "external",
       },
       {
         id: "business-profile",
@@ -232,8 +231,8 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "golden-path",
         title: "Финальный путь нового пользователя",
-        detail: "Регистрация → оплата → генерация → публикация → запуск в MAX → отмена продления.",
-        status: "todo",
+        detail: "Внутренний production-прогон доказал регистрацию, business onboarding, атомарную активацию Pro и ledger, real generation, safe preview, exact-commit deploy и отмену продления. Для финальной галочки остаются настоящие email, платёж ЮKassa и запуск двух пользователей через промодерированный MAX-бот.",
+        status: "in_progress",
       },
     ],
   },

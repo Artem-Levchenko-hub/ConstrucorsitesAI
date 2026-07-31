@@ -80,7 +80,7 @@ class Settings(BaseSettings):
 
     # V2 orchestrator (apps/orchestrator on :8003). Internal-only API behind
     # a shared-secret header — token MUST match the one in the orchestrator's
-    # /opt/omnia-runtime/.env.orchestrator file.
+    # /opt/omnia/apps/orchestrator/.env file.
     orchestrator_url: str = Field(default="http://localhost:8003")
     orchestrator_internal_token: SecretStr | None = Field(default=None)
 

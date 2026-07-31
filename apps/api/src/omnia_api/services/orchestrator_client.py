@@ -61,7 +61,7 @@ async def _request_raw(
 
     Note: orchestrator routes are all under `/internal/...` and require the
     `X-Internal-Token` header. The shared secret comes from settings — same
-    string sits in /opt/omnia-runtime/.env.orchestrator on prod.
+    string sits in /opt/omnia/apps/orchestrator/.env on prod.
 
     `timeout` defaults to 30s for normal requests. Long-running jobs (e.g.
     /build-exe which invokes PyInstaller + NSIS) should pass a higher value —

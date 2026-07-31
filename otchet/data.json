@@ -1,13 +1,23 @@
 {
  "meta": {
   "updated": "2026-07-31",
-  "version": 7,
+  "version": 8,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Внутренние ключи ротированы; путь до MVP — 22 из 26",
-  "subtitle": "JWT/NextAuth, master encryption key, internal token, оба PostgreSQL-пароля и MinIO root заменены без потери зашифрованных интеграций; свежий post-rotation backup уже хранится вне VPS.",
+  "title": "Внутренний golden path пройден; честный путь до MVP — 21 из 26",
+  "subtitle": "Production доказал регистрацию, business onboarding, Pro + ledger, real generation, safe preview, exact-commit deploy и отмену продления. Финальная галочка ждёт SMTP, живую ЮKassa и запуск двух пользователей через промодерированный MAX-бот.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Production golden path дошёл от нового аккаунта до отмены продления",
+    "d": "Изолированный новый аккаунт создал business billing-account, атомарно активировал Pro и получил ровно одну ledger-проводку +500 ₽. Реальный агент собрал MAX Mini App, safe preview открыл подписанную сессию, PostgreSQL health ответил 200, тестовая запись создалась с 201, exact commit прошёл release proof и развернулся по HTTPS. Публичный API отмены выключил auto_renew, поставил cancel_at_period_end и очистил next_charge_at."
+   },
+   {
+    "s": "worked",
+    "t": "Golden path поймал и устранил рассинхронизацию internal token",
+    "d": "Первая генерация честно упала на 401 между API и orchestrator: ротация обновляла устаревшее зеркало env, а systemd читал другой файл. Production-конфиг синхронизирован, новая генерация завершилась; rotation и disaster-recovery теперь используют реальный EnvironmentFile, а post-rotation validation вызывает защищённый endpoint и больше не может принять ложный green health."
+   },
    {
     "s": "worked",
     "t": "Ротация секретов не потеряла пользовательские интеграции",
@@ -174,7 +184,7 @@
     "d": "Pop-up теперь расположен выше затемняющего слоя: окно остаётся чётким, а blur применяется только к фону. Галочка бота обновляется сразу, а активация недоступна до появления HTTPS."
    }
   ],
-  "progress_note": "Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00. Production health подтверждает database, redis, worker, deploy_control_plane и preview_storage=ok. Backup workflow run 30624559111 attempt 4 завершился success; post-rotation artifact 8791711518 хранится вне VPS до 7 августа. Scratch-restore вернул 33 platform-таблицы, 983 project-таблицы, runtime-конфиг и 19 614 файлов. Все 7 внутренних значений отличаются от pre-rotation snapshot; 9 DB-токенов читаются новым keyring. Аудит текущего дерева и всей git-истории по fingerprints 16 production-секретов не нашёл ни одного tracked value. /mvp показывает 22/26 = 85%."
+  "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
   {

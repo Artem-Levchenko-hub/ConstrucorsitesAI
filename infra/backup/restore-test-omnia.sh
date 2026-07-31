@@ -64,7 +64,7 @@ mkdir -p "${extract_dir}/config"
 tar -xzf "${latest}/runtime-config.tgz" -C "${extract_dir}/config"
 for config in \
   "${extract_dir}/config/opt/omnia-runtime/.env" \
-  "${extract_dir}/config/opt/omnia-runtime/.env.orchestrator" \
+  "${extract_dir}/config/opt/omnia/apps/orchestrator/.env" \
   "${extract_dir}/config/opt/omnia/apps/llm-gateway/deploy/full/.env"; do
   [ -s "$config" ] || { echo "[restore-test] missing restored runtime config"; exit 1; }
 done
