@@ -23,7 +23,11 @@ try {
     if (done.rowCount) continue;
     const sql = fs
       .readFileSync(path.join(dir, name), "utf8")
-      .replaceAll("--> statement-breakpoint", "");
+      .replaceAll("--> statement-breakpoint", "")
+      // Drizzle emits FK targets as "public"."table". Hosted apps run in a
+      // per-project search_path, so that qualifier escapes the isolated schema
+      // and makes a valid migration fail with relation public.<table> missing.
+      .replaceAll('"public".', "");
     const client = await pool.connect();
     try {
       await client.query("BEGIN");

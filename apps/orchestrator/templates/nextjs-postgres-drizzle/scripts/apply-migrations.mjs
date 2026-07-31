@@ -21,7 +21,13 @@ try {
   for (const name of files) {
     const done = await pool.query("SELECT 1 FROM __omnia_migrations WHERE name=$1", [name]);
     if (done.rowCount) continue;
-    const sql = fs.readFileSync(path.join(dir, name), "utf8").replaceAll("--> statement-breakpoint", "");
+    const sql = fs
+      .readFileSync(path.join(dir, name), "utf8")
+      .replaceAll("--> statement-breakpoint", "")
+      // Drizzle emits FK targets as "public"."table". Hosted apps run in a
+      // per-project search_path, so that qualifier escapes the isolated schema
+      // and makes a valid migration fail with relation public.<table> missing.
+      .replaceAll('"public".', "");
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
