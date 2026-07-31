@@ -211,8 +211,9 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "monitoring",
         title: "Внешний мониторинг и оповещения",
-        detail: "Публичные пробы web/API/Postgres/Redis/worker готовы; осталось подключить off-host расписание и канал оповещений.",
-        status: "in_progress",
+        detail: "GitHub каждые 5 минут проверяет web, API, БД, Redis, worker, deploy/preview control plane, MAX-canary и webhook; incident дедуплицируется и закрывается после recovery.",
+        status: "done",
+        completedAt: "31 июля 2026",
       },
       {
         id: "offhost-backup",

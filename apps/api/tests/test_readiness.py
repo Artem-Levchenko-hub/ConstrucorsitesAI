@@ -19,3 +19,25 @@ async def test_worker_heartbeat_has_a_bounded_ttl(monkeypatch: pytest.MonkeyPatc
     assert calls[0][0] == readiness.WORKER_HEARTBEAT_KEY
     assert calls[0][1].endswith("+00:00")
     assert calls[0][2] == 180
+
+
+async def test_readiness_names_independent_control_plane_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def yes() -> bool:
+        return True
+
+    async def redis_and_worker() -> tuple[bool, bool]:
+        return True, True
+
+    monkeypatch.setattr(readiness, "_database_ok", yes)
+    monkeypatch.setattr(readiness, "_redis_and_worker", redis_and_worker)
+    monkeypatch.setattr(readiness, "_deploy_control_plane_ok", yes)
+    monkeypatch.setattr(readiness, "_preview_storage_ok", yes)
+    assert await readiness.probe_readiness() == {
+        "database": "ok",
+        "redis": "ok",
+        "worker": "ok",
+        "deploy_control_plane": "ok",
+        "preview_storage": "ok",
+    }
