@@ -69,6 +69,22 @@ _OVERLAY_PATHS = [
     "scripts",
 ]
 
+# These production boot files are platform-owned. A long-running dev container
+# can carry an older copy, and overlaying its whole scripts/ directory must not
+# downgrade the runner that executes against the production database.
+_TEMPLATE_OWNED_PROD_PATHS = ("scripts/apply-migrations.mjs",)
+
+
+def _restore_template_owned_prod_files(template_dir: Path, build_dir: Path) -> None:
+    for relative in _TEMPLATE_OWNED_PROD_PATHS:
+        source = template_dir / relative
+        if not source.is_file():
+            continue
+        destination = build_dir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
 # Build-time placeholder. `next build` collects route data and imports the db
 # module — without DATABASE_URL the import throws. The `output: standalone`
 # runtime never reads `.env.production`, so this string never reaches a live
@@ -421,6 +437,7 @@ async def _run(
         await docker_client.unpause_container(dev_name)
         for rel in _OVERLAY_PATHS:
             await docker_client.copy_path_from_container(dev_name, f"/app/{rel}", str(build_dir))
+        _restore_template_owned_prod_files(template_dir, build_dir)
 
         # 2b. Force a prod-safe next.config (tolerate AI type/lint errors +
         # standalone output). Overwrites any config the overlay brought in.
