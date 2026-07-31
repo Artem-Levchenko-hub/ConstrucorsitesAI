@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-07-31",
-  "version": 4,
+  "version": 5,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Непроверенный релиз больше не проходит; путь до MVP — 19 из 26",
-  "subtitle": "Production deploy теперь требует digest-valid attestation точного commit, а публичная readiness-проба отдельно подтверждает web, API, Postgres, Redis и heartbeat worker.",
+  "title": "Off-host мониторинг работает; путь до MVP — 20 из 26",
+  "subtitle": "GitHub каждые пять минут независимо проверяет platform, control plane, deployed MAX-canary и webhook auth boundary, а падение превращает в один дедуплицированный incident.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Мониторинг действительно работает вне production VPS",
+    "d": "Scheduled GitHub workflow проверяет web, API, Postgres, Redis, worker heartbeat, orchestrator, preview storage, /mvp, живой MAX-canary и ответ 401 webhook без секрета. Первый run 30623623645 завершился success; при сбое создаётся один incident issue, после recovery он закрывается автоматически."
+   },
    {
     "s": "worked",
     "t": "Release gate стал блокирующим и fail-closed",
@@ -159,7 +164,7 @@
     "d": "Pop-up теперь расположен выше затемняющего слоя: окно остаётся чётким, а blur применяется только к фону. Галочка бота обновляется сразу, а активация недоступна до появления HTTPS."
    }
   ],
-  "progress_note": "Release gate доставлен revision cfb67a26. Production работает на 0039_attestation_integrity; DEPLOY_ATTESTATION_BLOCKING, USE_AGENTIC_BUILDER, USE_RUNTIME_GATES и AGENT_REQUIRE_GREEN_BEFORE_DONE=true. 23 старые attestation остаются без issued_at и требуют свежей сборки перед следующим deploy; это сознательный fail-closed переход. API/web healthy, worker heartbeat TTL=147s, публичные /web-health и /api/health отвечают status=ok, /mvp показывает 19/26 = 73%. Чистая миграция 0001→0039 прошла. API ruff/mypy и 36 целевых тестов, Web typecheck/lint/102 теста/build зелёные."
+  "progress_note": "Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609. Production работает на 0039_attestation_integrity; DEPLOY_ATTESTATION_BLOCKING, USE_AGENTIC_BUILDER, USE_RUNTIME_GATES и AGENT_REQUIRE_GREEN_BEFORE_DONE=true. Публичный /api/health подтверждает database, redis, worker, deploy_control_plane и preview_storage=ok; /web-health и deployed MAX-canary также ok. GitHub Actions run 30623623645 завершился success, открытых incident issues 0. /mvp показывает 20/26 = 77%. Чистая миграция 0001→0039, API ruff/mypy и 17 monitoring-тестов, Web typecheck/lint/102 теста/build зелёные."
  },
  "owner_actions": [
   {
