@@ -373,6 +373,28 @@ def upgrade() -> None:
     )
     op.execute(
         """
+        CREATE FUNCTION fill_wallet_charge_balance_after() RETURNS TRIGGER AS $$
+        BEGIN
+            IF NEW.balance_after_rub IS NULL THEN
+                SELECT balance_rub
+                INTO NEW.balance_after_rub
+                FROM wallets
+                WHERE user_id = NEW.user_id;
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER wallet_charges_fill_balance_after
+        BEFORE INSERT ON wallet_charges
+        FOR EACH ROW EXECUTE FUNCTION fill_wallet_charge_balance_after()
+        """
+    )
+    op.execute(
+        """
         UPDATE wallet_charges
         SET entry_type = CASE
             WHEN amount_rub < 0 THEN 'usage'
@@ -502,6 +524,8 @@ def downgrade() -> None:
         type_="foreignkey",
     )
     op.drop_constraint("ck_wallet_charges_entry_type", "wallet_charges", type_="check")
+    op.execute("DROP TRIGGER wallet_charges_fill_balance_after ON wallet_charges")
+    op.execute("DROP FUNCTION fill_wallet_charge_balance_after()")
     op.drop_column("wallet_charges", "subscription_id")
     op.drop_column("wallet_charges", "external_ref")
     op.drop_column("wallet_charges", "balance_after_rub")
