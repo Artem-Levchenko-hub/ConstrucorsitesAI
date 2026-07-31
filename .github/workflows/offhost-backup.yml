@@ -9,6 +9,7 @@ on:
   push:
     paths:
       - ".github/workflows/offhost-backup.yml"
+      - "infra/backup/**"
 
 permissions:
   contents: read
