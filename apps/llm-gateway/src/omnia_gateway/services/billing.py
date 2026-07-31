@@ -78,19 +78,18 @@ async def charge(
     usage_id = uuid4()
     async with pool.acquire() as conn, conn.transaction():
         if not free:
-            updated = await conn.execute(
+            balance_after = await conn.fetchval(
                 """
                 UPDATE wallets
                    SET balance_rub = balance_rub - $1,
                        updated_at = now()
                  WHERE user_id = $2 AND balance_rub >= $1
+                RETURNING balance_rub
                 """,
                 cost_rub,
                 user_id,
             )
-            # asyncpg returns "UPDATE N" — extract N.
-            affected = int(updated.rsplit(" ", 1)[-1]) if updated else 0
-            if affected == 0:
+            if balance_after is None:
                 raise WalletEmptyError(
                     "Wallet balance went negative mid-charge",
                     details={"user_id": str(user_id), "cost_rub": str(cost_rub)},
@@ -99,13 +98,16 @@ async def charge(
             await conn.execute(
                 """
                 INSERT INTO wallet_charges
-                    (id, user_id, message_id, amount_rub, description)
-                VALUES ($1, $2, $3, $4, $5)
+                    (id, user_id, message_id, entry_type, amount_rub,
+                     balance_after_rub, external_ref, description)
+                VALUES ($1, $2, $3, 'usage', $4, $5, $6, $7)
                 """,
                 charge_id,
                 user_id,
                 message_id,
                 -cost_rub,  # negative = debit per data-model.md convention
+                balance_after,
+                f"usage:{usage_id}",
                 description,
             )
         await conn.execute(

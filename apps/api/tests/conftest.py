@@ -2,13 +2,14 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.db import get_session
 from omnia_api.main import app
 from omnia_api.models.base import Base
+from omnia_api.models.billing import DEFAULT_BILLING_PLANS, BillingPlan
 
 
 def _resolve_test_database_url() -> str:
@@ -54,6 +55,7 @@ async def test_engine():
         await conn.execute(text(SET_UPDATED_AT_FN))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(insert(BillingPlan), list(DEFAULT_BILLING_PLANS))
 
     yield engine
     await engine.dispose()

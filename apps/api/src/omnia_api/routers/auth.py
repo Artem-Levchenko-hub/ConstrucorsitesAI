@@ -27,6 +27,7 @@ from omnia_api.core.security import (
     verify_password,
 )
 from omnia_api.models.account import AuthSession, AuthToken, LegalAcceptance
+from omnia_api.models.billing import FREE_PLAN_ID, Subscription
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.user import (
@@ -167,6 +168,13 @@ async def register(
     session.add(user)
     try:
         await session.flush()
+        session.add(
+            Subscription(
+                user_id=user.id,
+                plan_id=FREE_PLAN_ID,
+                status="active",
+            )
+        )
         if payload.product == "max":
             for document_type in ("terms", "privacy", "personal_data"):
                 session.add(

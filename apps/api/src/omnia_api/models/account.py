@@ -178,6 +178,14 @@ class Payment(Base):
     provider: Mapped[str] = mapped_column(Text, nullable=False, server_default="yookassa")
     provider_payment_id: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    purpose: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="wallet_topup", default="wallet_topup"
+    )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     package_code: Mapped[str] = mapped_column(Text, nullable=False)
     amount_rub: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     credit_rub: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
@@ -198,34 +206,20 @@ class Payment(Base):
 
     __table_args__ = (
         CheckConstraint(
+            "purpose IN ('wallet_topup', 'subscription_initial', 'subscription_renewal')",
+            name="ck_payments_purpose",
+        ),
+        CheckConstraint(
+            "(purpose = 'wallet_topup' AND subscription_id IS NULL) OR "
+            "(purpose IN ('subscription_initial', 'subscription_renewal') "
+            "AND subscription_id IS NOT NULL)",
+            name="ck_payments_subscription_link",
+        ),
+        CheckConstraint(
             "status IN ('pending', 'waiting_for_capture', 'succeeded', 'cancelled', "
             "'refunded', 'failed')",
             name="ck_payments_status",
         ),
+        Index("ix_payments_subscription_created", "subscription_id", "created_at"),
         Index("ix_payments_user_created", "user_id", "created_at"),
-    )
-
-
-class WalletLedgerEntry(Base):
-    __tablename__ = "wallet_ledger_entries"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
-    )
-    entry_type: Mapped[str] = mapped_column(Text, nullable=False)
-    amount_rub: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
-    balance_after_rub: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
-    external_ref: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-    __table_args__ = (
-        CheckConstraint(
-            "entry_type IN ('payment', 'refund', 'usage', 'adjustment')",
-            name="ck_wallet_ledger_entry_type",
-        ),
-        Index("ix_wallet_ledger_user_created", "user_id", "created_at"),
     )

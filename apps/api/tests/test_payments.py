@@ -60,6 +60,7 @@ async def test_payment_webhook_credits_wallet_exactly_once(
     payments = await client.get("/api/payments")
     assert payments.status_code == 200
     assert payments.json()[0]["status"] == "succeeded"
+    assert payments.json()[0]["purpose"] == "wallet_topup"
 
 
 async def test_payment_endpoint_is_closed_without_provider_configuration(

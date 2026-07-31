@@ -50,12 +50,19 @@ CREATE TABLE IF NOT EXISTS wallets (
 );
 
 CREATE TABLE IF NOT EXISTS wallet_charges (
-    id          uuid          PRIMARY KEY,
-    user_id     uuid          NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    message_id  uuid          NULL REFERENCES messages(id) ON DELETE SET NULL,
-    amount_rub  numeric(12,4) NOT NULL,
-    description text          NOT NULL,
-    created_at  timestamptz   NOT NULL DEFAULT now()
+    id                uuid          PRIMARY KEY,
+    user_id           uuid          NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id        uuid          NULL REFERENCES messages(id) ON DELETE SET NULL,
+    subscription_id   uuid          NULL,
+    entry_type        text          NOT NULL DEFAULT 'usage'
+        CHECK (entry_type IN (
+            'usage','topup','payment','refund','subscription_credit','adjustment'
+        )),
+    amount_rub        numeric(12,4) NOT NULL,
+    balance_after_rub numeric(12,4) NOT NULL,
+    external_ref      text          UNIQUE NULL,
+    description       text          NOT NULL,
+    created_at        timestamptz   NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS wallet_charges_user_created_idx
     ON wallet_charges(user_id, created_at DESC);

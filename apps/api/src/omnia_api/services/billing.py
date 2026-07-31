@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,8 +34,10 @@ async def charge_for_message(
         raise ApiError("wallet_empty", "insufficient balance", 402)
     wallet.balance_rub = new_balance
 
+    usage_id = uuid4()
     session.add(
         Usage(
+            id=usage_id,
             user_id=user_id,
             project_id=project_id,
             message_id=message_id,
@@ -49,7 +51,10 @@ async def charge_for_message(
         WalletCharge(
             user_id=user_id,
             message_id=message_id,
+            entry_type="usage",
             amount_rub=-cost_rub,
+            balance_after_rub=new_balance,
+            external_ref=f"usage:{usage_id}",
             description=description,
         )
     )
@@ -64,11 +69,16 @@ async def topup(
     )
     wallet = res.scalar_one()
     wallet.balance_rub = wallet.balance_rub + amount_rub
+    topup_id = uuid4()
     session.add(
         WalletCharge(
+            id=topup_id,
             user_id=user_id,
             message_id=None,
+            entry_type="topup",
             amount_rub=amount_rub,
+            balance_after_rub=wallet.balance_rub,
+            external_ref=f"topup:{topup_id}",
             description=description,
         )
     )

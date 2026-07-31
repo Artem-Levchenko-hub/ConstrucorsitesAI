@@ -11,10 +11,11 @@ from omnia_api.models.account import (
     AuthSession,
     LegalAcceptance,
     Payment,
-    WalletLedgerEntry,
 )
+from omnia_api.models.billing import BillingPlan, Subscription
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.project import Project
+from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.services.max_access import get_user_business
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -72,12 +73,22 @@ async def export_account_data(
             )
         ).scalars()
     )
+    subscriptions = list(
+        (
+            await session.execute(
+                select(Subscription, BillingPlan)
+                .join(BillingPlan, BillingPlan.id == Subscription.plan_id)
+                .where(Subscription.user_id == current_user.id)
+                .order_by(Subscription.created_at)
+            )
+        ).all()
+    )
     ledger = list(
         (
             await session.execute(
-                select(WalletLedgerEntry)
-                .where(WalletLedgerEntry.user_id == current_user.id)
-                .order_by(WalletLedgerEntry.created_at)
+                select(WalletCharge)
+                .where(WalletCharge.user_id == current_user.id)
+                .order_by(WalletCharge.created_at)
             )
         ).scalars()
     )
@@ -127,6 +138,10 @@ async def export_account_data(
         "payments": [
             {
                 "id": str(item.id),
+                "purpose": item.purpose,
+                "subscription_id": (
+                    str(item.subscription_id) if item.subscription_id else None
+                ),
                 "package_code": item.package_code,
                 "amount_rub": str(item.amount_rub),
                 "status": item.status,
@@ -134,11 +149,43 @@ async def export_account_data(
             }
             for item in payments
         ],
+        "subscriptions": [
+            {
+                "id": str(subscription.id),
+                "status": subscription.status,
+                "plan": {
+                    "code": plan.code,
+                    "version": plan.version,
+                    "price_rub": str(plan.price_rub),
+                    "billing_interval": plan.billing_interval,
+                    "included_credit_rub": str(plan.included_credit_rub),
+                    "entitlements": plan.entitlements,
+                },
+                "auto_renew": subscription.auto_renew,
+                "cancel_at_period_end": subscription.cancel_at_period_end,
+                "current_period_start": (
+                    subscription.current_period_start.isoformat()
+                    if subscription.current_period_start
+                    else None
+                ),
+                "current_period_end": (
+                    subscription.current_period_end.isoformat()
+                    if subscription.current_period_end
+                    else None
+                ),
+                "created_at": subscription.created_at.isoformat(),
+            }
+            for subscription, plan in subscriptions
+        ],
         "wallet_ledger": [
             {
                 "type": item.entry_type,
                 "amount_rub": str(item.amount_rub),
                 "balance_after_rub": str(item.balance_after_rub),
+                "external_ref": item.external_ref,
+                "subscription_id": (
+                    str(item.subscription_id) if item.subscription_id else None
+                ),
                 "description": item.description,
                 "created_at": item.created_at.isoformat(),
             }

@@ -11,9 +11,10 @@ from omnia_api.core.admin import is_admin_user
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.models.account import Payment, WalletLedgerEntry
+from omnia_api.models.account import Payment
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
+from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.schemas.payments import PaymentConfigPublic, PaymentCreate, PaymentPublic
 from omnia_api.services import yookassa
 
@@ -112,6 +113,7 @@ async def create_payment(
     payment = Payment(
         user_id=current_user.id,
         idempotency_key=key,
+        purpose="wallet_topup",
         package_code=payload.package_code,
         amount_rub=price,
         credit_rub=credit,
@@ -181,7 +183,7 @@ async def _apply_provider_state(
         payment.status = "succeeded"
         payment.paid_at = datetime.now(UTC)
         session.add(
-            WalletLedgerEntry(
+            WalletCharge(
                 user_id=payment.user_id,
                 entry_type="payment",
                 amount_rub=payment.credit_rub,
@@ -299,7 +301,7 @@ async def refund_payment(
     payment.status = "refunded"
     payment.refunded_at = datetime.now(UTC)
     session.add(
-        WalletLedgerEntry(
+        WalletCharge(
             user_id=payment.user_id,
             entry_type="refund",
             amount_rub=-payment.credit_rub,

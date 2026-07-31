@@ -109,11 +109,64 @@ Durable-идентичность и жизненный цикл одного п�
 | `id` | uuid | PK |
 | `user_id` | uuid | FK → `users(id)` ON DELETE CASCADE |
 | `message_id` | uuid | FK → `messages(id)` NULL (null для topup) |
+| `subscription_id` | uuid | NULL, FK → `subscriptions(id)` ON DELETE SET NULL |
+| `entry_type` | text | `usage`, `topup`, `payment`, `refund`, `subscription_credit`, `adjustment` |
 | `amount_rub` | numeric(12, 4) | NOT NULL — отрицательное = списание, положительное = пополнение |
+| `balance_after_rub` | numeric(12, 4) | NOT NULL — баланс сразу после операции |
+| `external_ref` | text | NULL, UNIQUE — идемпотентная ссылка вида `usage:<uuid>` или `payment:<uuid>` |
 | `description` | text | NOT NULL |
 | `created_at` | timestamptz | NOT NULL DEFAULT now() |
 
-**Индексы:** `(user_id, created_at DESC)`.
+**Индексы:** `(user_id, created_at DESC)`, `(subscription_id)`.
+
+`wallet_charges` — единственный финансовый журнал кошелька. Старая
+`wallet_ledger_entries` удалена миграцией `0035`, а её записи перенесены сюда.
+Текущий баланс остаётся в `wallets` для быстрого чтения; журнал нужен для
+аудита, экспорта и восстановления последовательности операций.
+
+### `billing_plans`
+
+| Поле | Тип | Constraints |
+|---|---|---|
+| `id` | uuid | PK |
+| `code` | text | Логический тариф: `free`, `pro`, `business` |
+| `version` | integer | Версия коммерческих условий |
+| `price_rub` | numeric(12, 2) | Цена периода |
+| `billing_interval` | text | Сейчас только `month` |
+| `included_credit_rub` | numeric(12, 4) | Кредит кошелька на период |
+| `entitlements` | jsonb | Лимиты проектов, публикаций, команд и интеграций |
+| `is_active` | boolean | Только одна активная версия на `code` |
+
+`UNIQUE(code, version)` сохраняет историю условий. Цена или лимиты не
+перезаписываются: создаётся новая версия, а действующие подписки остаются на
+старой. Триггер БД разрешает у существующего тарифа изменить только
+`is_active`; попытка переписать цену, лимиты или номер версии отклоняется.
+
+### `subscriptions`
+
+| Поле | Тип | Constraints |
+|---|---|---|
+| `id` | uuid | PK |
+| `user_id` | uuid | FK → `users(id)` ON DELETE RESTRICT |
+| `plan_id` | uuid | FK → `billing_plans(id)` ON DELETE RESTRICT |
+| `payment_method_id` | uuid | NULL, FK → `billing_payment_methods(id)` |
+| `status` | text | `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired` |
+| `auto_renew` | boolean | По умолчанию `false` до реализации рекуррентных списаний |
+| `cancel_at_period_end` | boolean | Отмена в конце текущего периода |
+| `current_period_start/end` | timestamptz | NULL для бессрочного Free |
+| `next_charge_at` | timestamptz | Следующая попытка продления |
+| `grace_period_ends_at` | timestamptz | Конец льготного периода после ошибки оплаты |
+| `canceled_at`, `ended_at` | timestamptz | Аудит завершения |
+
+Partial unique index по `user_id` разрешает не более одной живой подписки
+(`trialing`, `active`, `past_due`, `paused`). При регистрации создаётся Free;
+анонимные технические пользователи подписку не получают.
+
+### `billing_payment_methods`
+
+Хранит только токен платёжного провайдера, статус и зафиксированное согласие на
+повторные списания. Данные карты в Omnia не попадают. Таблица подготовлена для
+автопродления, но сам процесс продления ещё не включён.
 
 ### `usage` (детальный лог токенов)
 | Поле | Тип | Constraints |
@@ -276,6 +329,8 @@ COMMENT ON COLUMN usage.purpose IS
 | `0002` | `projects`, `snapshots`, `messages` | агент B (M1) |
 | `0003` | `wallet_charges`, `usage` + индексы | агент B (M2) |
 | `0025` | `generation_runs`: idempotency + single-flight + cancellation lifecycle | Codex |
+| `0030` | ЮKassa payments, юридические согласия, бизнес-профили и отдельный legacy ledger | Codex |
+| `0035` | единый `wallet_charges`, версии тарифов, подписки и токены способов оплаты | Codex |
 
 ## Trigger для `updated_at`
 
@@ -296,7 +351,9 @@ CREATE TRIGGER projects_updated_at BEFORE UPDATE ON projects
 ## Правила целостности
 
 - Создание проекта = транзакция: `INSERT projects` → инициализация bare repo в MinIO → первый `INSERT snapshots` (initial commit с шаблоном) → `UPDATE projects.current_snapshot_id`. Если любой шаг падает — откат всего.
-- Списание за токены = транзакция: `INSERT usage` + `UPDATE wallets.balance_rub` + `INSERT wallet_charges`. Если `balance_rub < 0` — откат и ответ клиенту `wallet_empty`.
+- Любое движение кошелька = одна транзакция: блокировка/условное обновление `wallets` + `INSERT wallet_charges`; расход модели дополнительно пишет `usage`. Если средств не хватает — вся транзакция откатывается.
+- Успешный webhook провайдера и refund используют уникальный `external_ref`, поэтому повторное событие не меняет баланс второй раз.
+- У пользователя не может быть двух живых подписок одновременно; подписка всегда указывает на конкретную версию тарифа.
 - `current_snapshot_id` всегда указывает на последний валидный snapshot этого проекта.
 
 ## ER-диаграмма (для головы)
@@ -308,5 +365,7 @@ users ─┬─< projects ─< snapshots ─┐ (parent_id, само-FK)
        ├─< generation_runs ───────┘ (assistant_message_id)
        │
        ├─ wallets (1:1)
-       └─< wallet_charges, usage
+       ├─< subscriptions >─ billing_plans
+       │          └─ billing_payment_methods
+       └─< wallet_charges, usage, payments
 ```

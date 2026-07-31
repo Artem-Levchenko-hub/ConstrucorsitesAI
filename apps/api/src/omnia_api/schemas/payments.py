@@ -15,6 +15,8 @@ class PaymentPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    purpose: str
+    subscription_id: UUID | None
     package_code: str
     amount_rub: Decimal
     credit_rub: Decimal

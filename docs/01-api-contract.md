@@ -75,12 +75,21 @@ Stop — серверная операция: `/generation/cancel` записы�
 закрывает WebSocket в браузере. После рестарта API незавершённые process-local
 запуски переводятся в `failed`, чтобы проект не оставался навечно заблокирован.
 
-### Wallet (MVP — без реальной оплаты)
+### Тарифы, подписка и кошелёк
 
 | Метод | Path | Тело | Ответ |
 |---|---|---|---|
-| `GET` | `/api/wallet` | — | `{balance_rub: number, recent_charges: Charge[]}` |
-| `POST` | `/api/wallet/topup` | `{amount_rub}` | `{balance_rub}` (MVP-stub: всегда успех) |
+| `GET` | `/api/billing/plans` | — | Активные версии тарифов `Free`, `Pro`, `Business` |
+| `GET` | `/api/billing/subscription` | — | Текущая подписка пользователя вместе с зафиксированной версией тарифа |
+| `GET` | `/api/wallet` | — | `{balance_rub, recent_charges}`; каждая операция содержит `entry_type`, `balance_after_rub`, `external_ref` |
+| `POST` | `/api/wallet/topup` | `{amount_rub}` | `{balance_rub}`; тестовый маршрут закрыт по умолчанию |
+| `GET` | `/api/payments` | — | Последние платежи пользователя |
+| `POST` | `/api/payments` | `{package_code, idempotency_key}` | Разовое пополнение через ЮKassa; недоступно без реквизитов магазина |
+
+Регистрация создаёт одну активную Free-подписку. Каталог тарифов версионируется:
+существующая подписка продолжает ссылаться на купленную ревизию, а изменение
+цены или лимитов создаёт новую строку тарифа. Автопродление и смена тарифа
+на этом этапе намеренно не включены.
 
 ### Models (для селектора в UI)
 

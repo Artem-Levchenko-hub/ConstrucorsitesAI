@@ -10,7 +10,11 @@ class ChargePublic(BaseModel):
 
     id: UUID
     message_id: UUID | None = None
+    subscription_id: UUID | None = None
+    entry_type: str
     amount_rub: Decimal
+    balance_after_rub: Decimal
+    external_ref: str | None
     description: str
     created_at: datetime
 
