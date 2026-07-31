@@ -1,13 +1,23 @@
 {
  "meta": {
   "updated": "2026-07-31",
-  "version": 3,
+  "version": 4,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Lifecycle подписки завершён; путь до MVP — 18 из 26",
-  "subtitle": "Явное согласие, сохранённый provider token, отмена и восстановление, идемпотентное продление, grace-период и безопасный переход на Free работают как один наблюдаемый контур.",
+  "title": "Непроверенный релиз больше не проходит; путь до MVP — 19 из 26",
+  "subtitle": "Production deploy теперь требует digest-valid attestation точного commit, а публичная readiness-проба отдельно подтверждает web, API, Postgres, Redis и heartbeat worker.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Release gate стал блокирующим и fail-closed",
+    "d": "Каждая финальная container-сборка, включая MAX, получает proof после реального typecheck, runtime probe и transport-security проверки. Production сверяет digest и commit; отсутствие записи, повреждение payload или недоступность proof-store блокируют deploy."
+   },
+   {
+    "s": "worked",
+    "t": "Сервисы получили внешне проверяемую готовность",
+    "d": "Публичный /web-health проверяет процесс Next.js, а /api/health — API, Postgres, Redis и TTL-heartbeat фонового worker. На production оба отвечают status=ok; внешний off-host планировщик оповещений остаётся следующим шагом и поэтому чек мониторинга ещё не закрыт."
+   },
    {
     "s": "worked",
     "t": "Автопродление нельзя включить скрыто",
@@ -149,7 +159,7 @@
     "d": "Pop-up теперь расположен выше затемняющего слоя: окно остаётся чётким, а blur применяется только к фону. Галочка бота обновляется сразу, а активация недоступна до появления HTTPS."
    }
   ],
-  "progress_note": "H103 доставлена revisions d24d7c60 и 8e8cf9c1. Production работает на 0038_subscription_lifecycle: consent columns=2, project keep-alive column=1, pending-renewal guard=1; живых подписок 96, дублей 0, auto_renew/past_due/pending renewal=0. API и web healthy, worker наблюдаемо стартовал с poll=60s, retry=12h, grace=3d. /mvp отвечает 200 и показывает 18/26 = 69%; payment config остаётся enabled=false до реквизитов магазина. Чистая миграция 0001→0038 прошла. API ruff/mypy и 21 целевой тест, Web typecheck/lint/102 теста/build зелёные. Browser QA подтвердил кабинет и /mvp без console errors; кабинет на 390 px имеет scrollWidth=390, consent hit-area 300×158 и кнопки покупки 44 px."
+  "progress_note": "Release gate доставлен revision cfb67a26. Production работает на 0039_attestation_integrity; DEPLOY_ATTESTATION_BLOCKING, USE_AGENTIC_BUILDER, USE_RUNTIME_GATES и AGENT_REQUIRE_GREEN_BEFORE_DONE=true. 23 старые attestation остаются без issued_at и требуют свежей сборки перед следующим deploy; это сознательный fail-closed переход. API/web healthy, worker heartbeat TTL=147s, публичные /web-health и /api/health отвечают status=ok, /mvp показывает 19/26 = 73%. Чистая миграция 0001→0039 прошла. API ruff/mypy и 36 целевых тестов, Web typecheck/lint/102 теста/build зелёные."
  },
  "owner_actions": [
   {
