@@ -14,6 +14,7 @@ import {
   getRuntime,
   startRuntime,
 } from "@/lib/api/runtime";
+import { runMaxLaunchSingleFlight } from "@/lib/max-launch-single-flight";
 
 const ACTIVE_PHASES = new Set(["building", "pushing", "swapping", "cancelling"]);
 
@@ -58,7 +59,7 @@ async function finishLaunch(projectId: string) {
 
 export function MaxLaunchButton({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
-  const resumed = useRef(false);
+  const launchRequested = useRef(false);
   const readiness = useQuery({
     queryKey: ["max-readiness", projectId],
     queryFn: () => getMaxReadiness(projectId),
@@ -69,7 +70,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
     (item) => required.has(item.id) && !item.done,
   );
   const launch = useMutation({
-    mutationFn: () => finishLaunch(projectId),
+    mutationFn: () => runMaxLaunchSingleFlight(projectId, () => finishLaunch(projectId)),
     onMutate: () => {
       const key = `omnia:max:launch:${projectId}`;
       if (!window.localStorage.getItem(key)) window.localStorage.setItem(key, "new");
@@ -80,27 +81,38 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       void qc.invalidateQueries({ queryKey: ["deploy", projectId] });
       toast.success("Приложение опубликовано и подключено к MAX", {
+        id: `max-launch-success:${projectId}`,
         description: "Осталось вставить HTTPS-адрес в кабинете MAX и подтвердить шаг.",
       });
     },
     onError: (error: unknown) => {
       window.localStorage.removeItem(`omnia:max:launch:${projectId}`);
       toast.error("Автозапуск не завершён", {
+        id: `max-launch-error:${projectId}`,
         description: error instanceof Error ? error.message : "Повторите запуск",
       });
+    },
+    onSettled: () => {
+      launchRequested.current = false;
     },
   });
 
   useEffect(() => {
     if (
-      !resumed.current &&
+      !launchRequested.current &&
       blockers.length === 0 &&
       window.localStorage.getItem(`omnia:max:launch:${projectId}`) !== null
     ) {
-      resumed.current = true;
+      launchRequested.current = true;
       launch.mutate();
     }
   }, [blockers.length, launch, projectId]);
+
+  function startLaunch() {
+    if (launchRequested.current || launch.isPending) return;
+    launchRequested.current = true;
+    launch.mutate();
+  }
 
   if (readiness.data?.ready_to_launch) {
     return (
@@ -128,7 +140,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
     <Button
       className="h-11 w-full gap-2 rounded-xl"
       disabled={readiness.isLoading || blockers.length > 0 || launch.isPending}
-      onClick={() => launch.mutate()}
+      onClick={startLaunch}
       title={
         blockers.length
           ? `Сначала: ${blockers.map((item) => item.label).join(", ")}`

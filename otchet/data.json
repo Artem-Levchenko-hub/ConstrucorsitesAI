@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-01",
-  "version": 13,
+  "version": 14,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2134,6 +2134,18 @@
    "description": "Не показывать старый успешный деплой как публикацию текущей версии после сохранения политик, данных или других изменений, создающих новый snapshot.",
    "evidence": "Найдено два расходящихся источника: большая карточка публикации доверяла phase=done последнего исторического деплоя, а серверная readiness-галочка сверяла finished_at деплоя с created_at текущего snapshot. Реализован единый frontend-контракт: статус published разрешён только серверным readiness item publish; старый done при снятой галочке получает отдельное состояние outdated и предложение повторной публикации по тому же URL. Regression-набор: 20 файлов, 120 тестов; lint, typecheck и production build на 46 страниц зелёные. Revision 190262c2 отправлена в origin/main и развёрнута production compose; web и API healthy, публичные /api/health, /web-health, /max/start и /otchet/ отвечают 200.",
    "impact": "Пользователь больше не увидит одновременно зелёную надпись «Версия опубликована» и незавершённый шаг публикации после изменения проекта.",
+   "next_vector": "V8"
+  },
+  {
+   "id": "H109",
+   "title": "Одна публикация MAX создаёт один launch-flow и одно уведомление",
+   "status": "testing",
+   "score": 8,
+   "category": "MAX / UX / публикация / idempotency / надёжность",
+   "period": "01.08",
+   "description": "Исключить повторный запуск и два одинаковых success-toast после одного нажатия на публикацию.",
+   "evidence": "Root cause локализован в MaxLaunchButton: ручной onMutate записывал durable launch-флаг, после чего useEffect в том же mount принимал его за восстановление прерванного процесса и вызывал mutation повторно. Добавлены синхронный ref-guard ручного старта, module-level single-flight по project_id и стабильные toast id. Проверка и production-деплой выполняются.",
+   "impact": "Один клик больше не должен запускать второй параллельный deploy/activation и показывать два одинаковых сообщения.",
    "next_vector": "V8"
   }
  ],
