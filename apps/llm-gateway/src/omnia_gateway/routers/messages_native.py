@@ -86,6 +86,34 @@ def _openai_text_content(content: Any) -> str | list[dict[str, Any]]:
     return "\n".join(str(block["text"]) for block in blocks)
 
 
+_HISTORICAL_TOOL_RESULT_CHARS = 1_600
+_HISTORICAL_TOOL_ARGUMENT_CHARS = 600
+
+
+def _compact_tool_arguments(name: str, raw: Any) -> dict[str, Any]:
+    """Bound already-executed file mutations in the provider transcript.
+
+    Native responses carry complete ``write_file`` bodies as tool arguments.
+    Replaying a 20 KB page on every later model turn adds no information: the
+    authoritative source is in the container and remains available via
+    ``read_file``. Keep paths and small patches verbatim, replacing only large
+    mutation bodies with an explicit history marker.
+    """
+
+    args = dict(raw) if isinstance(raw, dict) else {}
+    fields = ("content",) if name == "write_file" else ("search", "replace")
+    if name not in {"write_file", "edit_file"}:
+        return args
+    for field in fields:
+        value = args.get(field)
+        if isinstance(value, str) and len(value) > _HISTORICAL_TOOL_ARGUMENT_CHARS:
+            args[field] = (
+                f"[OMITTED FROM HISTORY: {len(value)} characters already applied; "
+                "use read_file for current source]"
+            )
+    return args
+
+
 def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     system = _openai_text_content(body.get("system"))
@@ -96,7 +124,7 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(raw_messages, list):
         raise ValueError("messages must be an array")
 
-    for message in raw_messages:
+    for message_index, message in enumerate(raw_messages):
         if not isinstance(message, dict):
             raise ValueError("each message must be an object")
         role = message.get("role")
@@ -116,7 +144,11 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
                             "function": {
                                 "name": str(block.get("name") or ""),
                                 "arguments": json.dumps(
-                                    block.get("input") or {}, ensure_ascii=False
+                                    _compact_tool_arguments(
+                                        str(block.get("name") or ""),
+                                        block.get("input") or {},
+                                    ),
+                                    ensure_ascii=False,
                                 ),
                             },
                         }
@@ -145,10 +177,23 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue
+            result_content = _text(block.get("content")) or str(block.get("content") or "")
+            # The newest observation is the model's working set and stays exact.
+            # Older long reads/build logs are recoverable from the live project;
+            # carrying every copy forever caused prompt growth from 6K to 40K
+            # tokens in a single 14-turn MAX build.
+            if (
+                message_index < len(raw_messages) - 1
+                and len(result_content) > _HISTORICAL_TOOL_RESULT_CHARS
+            ):
+                result_content = (
+                    f"[OLDER TOOL RESULT OMITTED: {len(result_content)} characters; "
+                    "rerun the tool if this evidence is still needed]"
+                )
             tool_result: dict[str, Any] = {
                 "role": "tool",
                 "tool_call_id": str(block.get("tool_use_id") or ""),
-                "content": _text(block.get("content")) or str(block.get("content") or ""),
+                "content": result_content,
             }
             # The native loop puts its moving prefix breakpoint on the last
             # tool_result. LiteLLM understands cache_control at message level,

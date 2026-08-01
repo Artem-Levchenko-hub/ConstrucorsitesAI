@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock
@@ -71,6 +72,59 @@ def test_openai_messages_preserve_tool_turns() -> None:
         "tool_call_id": "toolu_1",
         "content": "export default App",
     }
+
+
+def test_openai_messages_compact_completed_large_file_history() -> None:
+    large_source = "export const feature = true;\n" * 1_500
+    large_read = "line from an old read\n" * 1_500
+    latest_error = "src/app/page.tsx(1,1): error TS1005"
+    body = {
+        "messages": [
+            {"role": "user", "content": "Build the complete app"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "write_1",
+                        "name": "write_file",
+                        "input": {"path": "src/app/page.tsx", "content": large_source},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "write_1", "content": large_read}
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "build_1", "name": "build", "input": {}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "build_1",
+                        "content": latest_error,
+                        "is_error": True,
+                    }
+                ],
+            },
+        ]
+    }
+
+    adapted = messages_native._openai_messages(body)
+    encoded = json.dumps(adapted, ensure_ascii=False)
+
+    assert large_source not in encoded
+    assert large_read not in encoded
+    assert "OMITTED FROM HISTORY" in encoded
+    assert "OLDER TOOL RESULT OMITTED" in encoded
+    assert latest_error in encoded
+    assert len(encoded) < 3_000
 
 
 def test_openai_adapter_preserves_prompt_cache_breakpoints() -> None:

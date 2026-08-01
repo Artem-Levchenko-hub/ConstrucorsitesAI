@@ -231,9 +231,32 @@ def _tool_use_to_action(block: dict[str, Any]) -> Action:
     return Action(name=str(block.get("name", "")), args=dict(inp), raw="")
 
 
-def _obs_to_tool_result(tool_use_id: str, obs: dict[str, Any]) -> dict[str, Any]:
+def _obs_to_tool_result(
+    tool_use_id: str,
+    obs: dict[str, Any],
+    *,
+    tool_name: str = "",
+) -> dict[str, Any]:
     ok = bool(obs.get("ok"))
-    body = obs.get("content") or obs.get("detail") or obs.get("error") or ("ok" if ok else "error")
+    # The executor returns the whole post-edit file in ``content`` so the API can
+    # track the exact snapshot. Echoing that same 20–40 KB file back to the model
+    # is both unnecessary (the file is already in the container) and extremely
+    # expensive: every later turn resends it in the conversation. Keep the
+    # immediate observation factual but compact; the model can call read_file if
+    # it genuinely needs to inspect the resulting source again.
+    if ok and tool_name in {"write_file", "edit_file"}:
+        content = obs.get("content")
+        size = len(content) if isinstance(content, str) else None
+        verb = "written" if tool_name == "write_file" else "edited"
+        body = (
+            f"File {verb} successfully"
+            + (f" ({size} characters now in the container)" if size is not None else "")
+            + ". Run build next; use read_file only if the compiler points back to it."
+        )
+    else:
+        body = (
+            obs.get("content") or obs.get("detail") or obs.get("error") or ("ok" if ok else "error")
+        )
     text = str(body)[:_MAX_TOOL_RESULT_CHARS]
     block: dict[str, Any] = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text}
     if not ok:
@@ -876,7 +899,7 @@ async def run_native_build(
                     successful_tools[name] = successful_tools.get(name, 0) + 1
                     if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
                         proof_after_write.add(name)
-                _tr = _obs_to_tool_result(tu_id, obs)
+                _tr = _obs_to_tool_result(tu_id, obs, tool_name=name)
                 if name == "build" and not obs.get("ok"):
                     _hint = _build_error_hint(str(_tr.get("content") or ""))
                     if _hint:
@@ -893,6 +916,31 @@ async def run_native_build(
                     steps=step + 1,
                     transcript=convo,
                     stop_reason="done",
+                )
+
+            # A product-specific acceptance contract is stronger evidence than
+            # one more provider turn whose only purpose is to call ``done``. Once
+            # the final write has a clean build and every required proof is green,
+            # finish locally. This preserves the complete app and avoids resending
+            # the now-large transcript for a ceremonial final response.
+            if (
+                completion_check is not None
+                and last_build_ok is True
+                and not wrote_since_build
+                and _completion_gap() is None
+            ):
+                if emit:
+                    await emit("agent.done", {"step": step, "files": len(written)})
+                return AgentResult(
+                    done=True,
+                    summary=(
+                        "Готово — приложение полностью собрано и прошло обязательные "
+                        "проверки без дополнительного запроса к модели."
+                    ),
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="contract_green",
                 )
             # Infra circuit breaker: a turn where EVERY executed op died on
             # infra means the container/orchestrator is gone — the model can't

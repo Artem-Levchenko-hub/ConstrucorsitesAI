@@ -327,7 +327,8 @@ async def test_native_completion_check_rejects_thin_done_and_keeps_building(
     )
 
     assert res.done is True
-    assert res.summary == "complete"
+    assert res.stop_reason == "contract_green"
+    assert "обязательные проверки" in res.summary
     assert set(res.files) == {"src/app/page.tsx", "src/components/Feature.tsx"}
     assert "Need a real feature component" in str(res.transcript)
 
@@ -600,3 +601,58 @@ def test_generate_media_returns_url_in_model_visible_field() -> None:
     assert res["url"] in str(res["content"])
     body = agent_native._obs_to_tool_result("tu_1", res)["content"]
     assert res["url"] in body  # end-to-end: model truly receives the URL
+
+
+def test_successful_file_mutation_observation_does_not_echo_whole_source() -> None:
+    source = "export const value = 1;\n" * 2_000
+
+    result = agent_native._obs_to_tool_result(
+        "tu_write",
+        {"ok": True, "content": source},
+        tool_name="edit_file",
+    )
+
+    assert len(str(result["content"])) < 300
+    assert str(len(source)) in str(result["content"])
+    assert "export const" not in str(result["content"])
+
+
+@pytest.mark.asyncio
+async def test_completion_contract_finishes_without_ceremonial_provider_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"})),
+            _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+        ]
+    )
+    calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system="s",
+        task="t",
+        execute=execute,
+        completion_check=complete,
+        max_steps=10,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert calls == 2
