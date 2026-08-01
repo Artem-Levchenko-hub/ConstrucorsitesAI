@@ -665,6 +665,24 @@ export type MaxPreviewSession = {
   expires_at: IsoDateTime;
 };
 
+export type MaxUsage = {
+  total_cost_rub: number;
+  run_cost_rub: number;
+  run_id: Uuid | null;
+  run_status: string | null;
+  stages: {
+    id: string;
+    label: string;
+    cost_rub: number;
+    calls: number;
+    tokens_in: number;
+    tokens_out: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    retries: number;
+  }[];
+};
+
 // === GitHub OAuth + Push (apps/api/src/omnia_api/schemas/github.py) ===
 
 export type GithubStatus = {

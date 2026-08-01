@@ -4,6 +4,7 @@ import type {
   MaxProjectConfigPayload,
   MaxPreviewSession,
   MaxReadiness,
+  MaxUsage,
   Uuid,
 } from "./types";
 
@@ -51,4 +52,8 @@ export function createMaxPreviewSession(
   return apiFetch<MaxPreviewSession>(`${path(projectId)}/preview-session`, {
     method: "POST",
   });
+}
+
+export function getMaxUsage(projectId: Uuid): Promise<MaxUsage> {
+  return apiFetch<MaxUsage>(`${path(projectId)}/usage`);
 }

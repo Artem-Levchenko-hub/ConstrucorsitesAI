@@ -64,7 +64,7 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
       active="publish"
       eyebrow="Этап 5 из 6"
       title="Публикация"
-      lead="Выберите размещение, запустите проверяемый production-деплой и получите постоянный HTTPS-адрес. Прогресс хранится на сервере и не сбрасывается после обновления страницы."
+      lead="Публикация заменяет версию за тем же постоянным HTTPS-адресом: Studio фиксирует зелёный snapshot, собирает production-образ и только потом переключает трафик."
     >
       {!inProgress && !complete && (
         <>
@@ -75,7 +75,7 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
                 <span className="rounded-full bg-[#f15a38]/10 px-3 py-1 text-[10px] font-semibold text-[#c84528]">Рекомендуется</span>
               </div>
               <h2 className="mt-8 text-2xl font-semibold">Хостинг Omnia</h2>
-              <p className="mt-3 text-sm leading-6 text-[#6d6962]">Постоянный HTTPS, автоматические обновления, backup, health-check и управляемый контейнер.</p>
+              <p className="mt-3 text-sm leading-6 text-[#6d6962]">Адрес не меняется: новый зелёный образ атомарно подменяет предыдущую production-версию.</p>
               <div className="mt-6 space-y-3 text-xs text-[#6d6962]">
                 {["Не нужно настраивать сервер", "Контейнер можно оставить активным всегда", "Версии и откат доступны из кабинета"].map((item) => <p key={item} className="flex items-center gap-2"><Check className="size-3.5 text-[#248a4b]" />{item}</p>)}
               </div>
@@ -144,7 +144,7 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
             <span className="grid size-12 place-items-center rounded-full bg-[#248a4b] text-white"><Check className="size-6" /></span>
             <p className="omnia-kicker mt-6 text-[#248a4b]">Deployment complete</p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-.035em]">Версия опубликована</h2>
-            <p className="mt-3 max-w-[650px] text-sm leading-6 text-[#6d6962]">Production-контейнер запущен, health-check пройден. URL можно открыть отдельно или добавить к кнопке запуска в кабинете MAX.</p>
+            <p className="mt-3 max-w-[650px] text-sm leading-6 text-[#6d6962]">Production-контейнер запущен, health-check пройден. Тот же URL теперь открывает новую версию; повторно менять ссылку в MAX Partner не нужно.</p>
             {deploy.data?.prod_url && (
               <a href={deploy.data.prod_url} target="_blank" rel="noreferrer" className="mt-6 flex max-w-[620px] items-center justify-between rounded-[10px] border border-[#d8d4cb] bg-white px-4 py-3 font-mono text-xs">
                 <span className="truncate">{deploy.data.prod_url}</span><ExternalLink className="size-4 shrink-0 text-[#f15a38]" />

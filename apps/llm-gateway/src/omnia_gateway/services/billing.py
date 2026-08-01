@@ -80,6 +80,13 @@ async def charge(
     cost_rub: Decimal,
     description: str,
     free: bool = False,
+    run_id: UUID | None = None,
+    stage: str | None = None,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    retry_count: int = 0,
+    provider_request_id: str | None = None,
+    provider_cost_usd: Decimal | None = None,
 ) -> UUID:
     """Atomic debit + audit trail.
 
@@ -140,18 +147,28 @@ async def charge(
         await conn.execute(
             """
             INSERT INTO usage
-                (id, user_id, project_id, message_id, model_id,
-                 tokens_in, tokens_out, cost_rub)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (id, user_id, project_id, message_id, run_id, model_id,
+                 tokens_in, tokens_out, cost_rub, stage, cache_read_tokens,
+                 cache_write_tokens, retry_count, provider_request_id,
+                 provider_cost_usd)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                    $13, $14, $15)
             """,
             usage_id,
             user_id,
             project_id,
             message_id,
+            run_id,
             model_id,
             tokens_in,
             tokens_out,
             cost_rub,
+            stage,
+            max(0, cache_read_tokens),
+            max(0, cache_write_tokens),
+            max(0, retry_count),
+            provider_request_id,
+            provider_cost_usd,
         )
 
     log.info(
@@ -162,6 +179,11 @@ async def charge(
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         cost_rub=str(cost_rub),
+        run_id=str(run_id) if run_id else None,
+        stage=stage,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        retry_count=retry_count,
         free=free,
     )
     return charge_id

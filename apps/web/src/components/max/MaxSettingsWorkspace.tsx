@@ -153,7 +153,11 @@ export function MaxSettingsWorkspace({
               <div>
                 <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]"><Bot className="size-5" /></span>
                 <h2 className="mt-6 text-2xl font-semibold">Подключение MAX-бота</h2>
-                <p className="mt-3 max-w-[580px] text-sm leading-6 text-[#6d6962]">Бот создаётся и проходит модерацию в платформе MAX для партнёров. Токен нужен для проверки API, webhook и сервисных сообщений.</p>
+                <p className="mt-3 max-w-[580px] text-sm leading-6 text-[#6d6962]">
+                  В само мини-приложение токен не попадает. Он нужен только
+                  backend Omnia для Bot API, webhook и сообщений от имени бота. Если
+                  это не нужно, можно просто вставить production URL в MAX Partner вручную.
+                </p>
               </div>
               <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${integration.data?.connected ? "bg-[#248a4b]/10 text-[#248a4b]" : "bg-[#e8c547]/15 text-[#745f16]"}`}>
                 {integration.data?.connected ? "Подключён" : "Не подключён"}
@@ -167,7 +171,7 @@ export function MaxSettingsWorkspace({
             <aside className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
             <p className="omnia-kicker text-[#8d887f]">Что проверить</p>
             <ol className="mt-5 space-y-4 text-sm">
-              {["Бот создан владельцем бизнеса", "Бот прошёл модерацию MAX", "Токен скопирован без пробелов", "API отвечает из production"].map((item, index) => (
+              {["Бот создан владельцем бизнеса", "Бот прошёл модерацию MAX", "Токен скопирован без пробелов", "Backend Bot API отвечает из production"].map((item, index) => (
                 <li key={item} className="flex gap-3"><span className="grid size-6 shrink-0 place-items-center rounded-full border border-[#d8d4cb] font-mono text-[9px] text-[#8d887f]">{index + 1}</span><span className="pt-0.5 text-[#6d6962]">{item}</span></li>
               ))}
             </ol>

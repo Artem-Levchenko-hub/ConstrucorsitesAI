@@ -40,6 +40,7 @@ _QUANT = Decimal("0.0001")  # 4 decimals — matches NUMERIC(12,4) in Postgres
 # the big stable system prompt once it is cached. `cached_tokens` defaults to 0,
 # so every existing caller is byte-for-byte unchanged.
 _CACHE_HIT_RATE = Decimal("0.1")
+_CACHE_WRITE_RATE = Decimal("1.25")
 
 
 def calculate_cost_rub(
@@ -47,6 +48,7 @@ def calculate_cost_rub(
     tokens_in: int,
     tokens_out: int,
     cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> Decimal:
     """RUB cost for a request, quantized to 4 decimal places.
 
@@ -54,7 +56,7 @@ def calculate_cost_rub(
     from its context cache; they bill at ``_CACHE_HIT_RATE`` of the input rate.
     Default 0 → identical to the pre-cache behaviour.
     """
-    if tokens_in < 0 or tokens_out < 0 or cached_tokens < 0:
+    if tokens_in < 0 or tokens_out < 0 or cached_tokens < 0 or cache_write_tokens < 0:
         raise ValueError("token counts must be non-negative")
     try:
         price = PRICE_TABLE[model_id]
@@ -64,10 +66,12 @@ def calculate_cost_rub(
     # A cache hit is a subset of the prompt; never let a bad upstream count make
     # cached exceed the total in (which would underbill into negatives).
     cached = min(cached_tokens, tokens_in)
-    fresh_in = tokens_in - cached
+    cache_write = min(cache_write_tokens, tokens_in - cached)
+    fresh_in = tokens_in - cached - cache_write
     cost = (
         Decimal(fresh_in) * price.rub_per_1k_in
         + Decimal(cached) * price.rub_per_1k_in * _CACHE_HIT_RATE
+        + Decimal(cache_write) * price.rub_per_1k_in * _CACHE_WRITE_RATE
         + Decimal(tokens_out) * price.rub_per_1k_out
     ) / _PER_1K
     return cost.quantize(_QUANT)

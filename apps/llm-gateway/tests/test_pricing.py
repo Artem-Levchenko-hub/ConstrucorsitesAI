@@ -68,6 +68,17 @@ def test_cached_tokens_default_zero_is_unchanged() -> None:
     ) == calculate_cost_rub("gemini-3.1-pro-preview-customtools", 5000, 500, cached_tokens=0)
 
 
+def test_cache_creation_is_billed_separately() -> None:
+    # 4K fresh + 6K cache write at 1.25x + 1K output.
+    cost = calculate_cost_rub(
+        "gemini-3.1-pro-preview-customtools",
+        10_000,
+        1_000,
+        cache_write_tokens=6_000,
+    )
+    assert cost == Decimal("24.7500")
+
+
 def test_cached_tokens_capped_at_prompt() -> None:
     # A bogus upstream count (cached > prompt) must clamp, never underbill negative.
     capped = calculate_cost_rub(

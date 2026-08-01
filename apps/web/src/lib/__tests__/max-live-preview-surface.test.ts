@@ -11,6 +11,10 @@ const workspaceShell = readFileSync(
   resolve(process.cwd(), "src/components/max/MaxWorkspaceShell.tsx"),
   "utf8",
 );
+const usageBreakdown = readFileSync(
+  resolve(process.cwd(), "src/components/max/MaxUsageBreakdown.tsx"),
+  "utf8",
+);
 
 describe("MAX live preview surface", () => {
   it("keeps the phone on a transparent stage without a grey framing card", () => {
@@ -45,5 +49,13 @@ describe("MAX live preview surface", () => {
       "const showPreviewError = Boolean(previewError) && !preparing",
     );
     expect(livePreview).toContain("{showPreviewError && (");
+  });
+
+  it("shows live gateway-ledger spend by generation stage", () => {
+    expect(workspaceShell).toContain("<MaxUsageBreakdown projectId={project.id}");
+    expect(usageBreakdown).toContain('queryKey: ["max-usage", projectId]');
+    expect(usageBreakdown).toContain("refetchInterval: 5_000");
+    expect(usageBreakdown).toContain("cache_read_tokens");
+    expect(usageBreakdown).toContain("stage.retries");
   });
 });

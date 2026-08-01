@@ -82,7 +82,9 @@ async def test_native_infra_breaker_aborts_after_dead_turns(
     (the 2026-07-08 regression: it used to grind the whole step budget)."""
     calls = {"n": 0}
 
-    async def fake_call(client: Any, url: str, convo: Any, system: str) -> dict[str, Any]:
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
         calls["n"] += 1
         return _turn(("read_file", {"path": "a.ts"}), ("list_dir", {"path": "."}))
 
@@ -109,7 +111,9 @@ async def test_native_no_write_guard_nudges_then_aborts(
     """Endless successful READS (no writes) → nudge from turn 6, abort at 12 as
     'exploring' — messages.py's honest-result branches consume that."""
 
-    async def fake_call(client: Any, url: str, convo: Any, system: str) -> dict[str, Any]:
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
         return _turn(("read_file", {"path": "a.ts"}))
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
@@ -136,7 +140,9 @@ async def test_native_write_resets_no_write_streak(
     the guard must not fire on a normally-working build."""
     counter = {"n": 0}
 
-    async def fake_call(client: Any, url: str, convo: Any, system: str) -> dict[str, Any]:
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
         counter["n"] += 1
         if counter["n"] % 5 == 0:
             return _turn(("write_file", {"path": f"f{counter['n']}.ts", "content": "x"}))
@@ -153,7 +159,7 @@ async def test_native_write_resets_no_write_streak(
         execute=execute,
         max_steps=15,
     )
-    assert res.stop_reason == "max_steps"  # never tripped the exploring abort
+    assert res.stop_reason == "max_steps_green"  # never tripped the exploring abort
     assert len(res.files) == 3  # the three successful writes were tracked
 
 
@@ -165,7 +171,9 @@ async def test_native_edit_file_counts_as_write_and_lands_in_files(
     (closes the gap where only write_file dirtied the done fact-gate)."""
     counter = {"n": 0}
 
-    async def fake_call(client: Any, url: str, convo: Any, system: str) -> dict[str, Any]:
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
         counter["n"] += 1
         if counter["n"] == 1:
             return _turn(("edit_file", {"path": "e.ts", "search": "a", "replace": "b"}))
@@ -184,7 +192,7 @@ async def test_native_edit_file_counts_as_write_and_lands_in_files(
         execute=execute,
         max_steps=5,
     )
-    assert res.stop_reason == "max_steps"
+    assert res.stop_reason == "max_steps_green"
     assert res.files == {"e.ts": "post-edit content"}
 
 
@@ -195,7 +203,9 @@ async def test_native_tool_call_emits_chat_progress(
     """Every executed native tool remains visible through the agent.step WS path."""
     calls = {"n": 0}
 
-    async def fake_call(client: Any, url: str, convo: Any, system: str) -> dict[str, Any]:
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
         calls["n"] += 1
         if calls["n"] == 1:
             return _turn(("write_file", {"path": "src/app.ts", "content": "ok"}))
@@ -204,7 +214,11 @@ async def test_native_tool_call_emits_chat_progress(
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
 
     async def execute(action: Any) -> dict[str, Any]:
-        return {"ok": True, "content": action.args["content"], "detail": "written"}
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "written" if action.name != "build" else "clean",
+        }
 
     events: list[tuple[str, dict[str, Any]]] = []
 
@@ -220,7 +234,7 @@ async def test_native_tool_call_emits_chat_progress(
     )
 
     progress = [data for event_type, data in events if event_type == "agent.step"]
-    assert len(progress) == 1
+    assert len(progress) == 2
     assert progress[0]["step"] == 0
     assert progress[0]["action"] == "write_file"
     assert progress[0]["path"] == "src/app.ts"
@@ -235,12 +249,14 @@ async def test_native_proseless_done_gets_human_summary(
     """end_turn with NO text must not leak "(no tool call)" into the chat —
     the summary becomes the user-visible assistant message (observed live)."""
 
-    async def fake_call(client: Any, url: str, convo: Any, system: str) -> dict[str, Any]:
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
         return {"stop_reason": "end_turn", "content": []}  # prose-less finish
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
 
-    async def execute(action: Any) -> dict[str, Any]:  # never reached
+    async def execute(action: Any) -> dict[str, Any]:
         return {"ok": True}
 
     res = await agent_native.run_native_build(
@@ -250,9 +266,73 @@ async def test_native_proseless_done_gets_human_summary(
         max_steps=5,
     )
     assert res.done is True
-    assert res.stop_reason == "no_tool"
+    assert res.stop_reason == "max_steps_green"
     assert "(no tool call)" not in res.summary
     assert "Готово" in res.summary
+
+
+@pytest.mark.asyncio
+async def test_native_hard_clamps_legacy_limit_and_forwards_trace_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append(kwargs)
+        number = len(calls)
+        if number % 5 == 0:
+            return _turn(("write_file", {"path": f"f{number}.ts", "content": "ok"}))
+        return _turn(("read_file", {"path": "src/app.ts"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system="s",
+        task="t",
+        execute=execute,
+        user_id="11111111-1111-1111-1111-111111111111",
+        project_id="22222222-2222-2222-2222-222222222222",
+        run_id="33333333-3333-3333-3333-333333333333",
+        message_id="44444444-4444-4444-4444-444444444444",
+        max_steps=120,
+    )
+
+    assert len(calls) == agent_native._HARD_MAX_STEPS == 30
+    assert res.stop_reason == "max_steps_green"
+    assert calls[0]["stage"] == "build_plan"
+    assert all(call["project_id"] == "22222222-2222-2222-2222-222222222222" for call in calls)
+    assert all(call["run_id"] == "33333333-3333-3333-3333-333333333333" for call in calls)
+    assert all(call["user_id"] == "11111111-1111-1111-1111-111111111111" for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_provider_limit_stops_immediately_and_keeps_green_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"n": 0}
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls["n"] += 1
+        raise RuntimeError("PAYMENT_REQUIRED")
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        assert action.name == "build"
+        return {"ok": True, "detail": "clean"}
+
+    res = await agent_native.run_native_build(system="s", task="t", execute=execute, max_steps=120)
+
+    assert calls["n"] == 1
+    assert res.done is True
+    assert res.stop_reason == "provider_stopped_green"
 
 
 def test_native_agent_has_eyes_and_taste() -> None:

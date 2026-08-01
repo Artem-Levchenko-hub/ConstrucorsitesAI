@@ -19,6 +19,7 @@ from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.models.usage import Usage
 from omnia_api.schemas.max_studio import (
     MaxLegal,
     MaxOperator,
@@ -30,6 +31,8 @@ from omnia_api.schemas.max_studio import (
     MaxReadinessPublic,
     MaxSupport,
     MaxUrlAttachedPayload,
+    MaxUsagePublic,
+    MaxUsageStagePublic,
 )
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
@@ -73,9 +76,7 @@ def _default_config(project: Project) -> MaxProjectConfigPayload:
     )
 
 
-def _public(
-    project: Project, record: MaxProjectConfig | None
-) -> MaxProjectConfigPublic:
+def _public(project: Project, record: MaxProjectConfig | None) -> MaxProjectConfigPublic:
     if record is None:
         return MaxProjectConfigPublic(
             project_id=project.id,
@@ -110,9 +111,7 @@ async def _refresh_release_proof(session: SessionDep, project: Project) -> None:
         )
 
 
-def _preview_session_public(
-    project: Project, payload: object
-) -> MaxPreviewSessionPublic:
+def _preview_session_public(project: Project, payload: object) -> MaxPreviewSessionPublic:
     """Accept only signed preview URLs for this project's dev hostname."""
     try:
         session = MaxPreviewSessionUpstream.model_validate(payload)
@@ -354,9 +353,7 @@ async def get_max_readiness(
     record = await session.get(MaxProjectConfig, project_id)
     config = MaxProjectConfigPayload.model_validate(record.config) if record else None
     integration = (
-        await session.execute(
-            select(MaxIntegration).where(MaxIntegration.project_id == project.id)
-        )
+        await session.execute(select(MaxIntegration).where(MaxIntegration.project_id == project.id))
     ).scalar_one_or_none()
     generated_count = int(
         (
@@ -448,4 +445,99 @@ async def get_max_readiness(
         ready_to_launch=done == len(items),
         progress=round(done / len(items) * 100),
         items=items,
+    )
+
+
+_USAGE_STAGE_LABELS = {
+    "template": "Проверенный MAX-шаблон",
+    "native_agent": "Точечная AI-доработка",
+    "build_plan": "План приложения",
+    "verification": "Проверка сборки",
+    "media": "Изображения и видео",
+    "other": "Прочие AI-операции",
+}
+_USAGE_STAGE_ORDER = tuple(_USAGE_STAGE_LABELS)
+
+
+@router.get("/{project_id}/max/usage", response_model=MaxUsagePublic)
+async def get_max_usage(
+    project_id: UUID, session: SessionDep, current_user: CurrentUserDep
+) -> MaxUsagePublic:
+    """Actual gateway ledger grouped into Studio-friendly generation stages."""
+    await _owned_max_project(session, project_id, current_user.id)
+    latest_run = (
+        await session.execute(
+            select(GenerationRun)
+            .where(GenerationRun.project_id == project_id)
+            .order_by(GenerationRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    rows = list(
+        (
+            await session.execute(
+                select(Usage).where(Usage.project_id == project_id).order_by(Usage.created_at.asc())
+            )
+        ).scalars()
+    )
+    run_rows = [row for row in rows if latest_run is not None and row.run_id == latest_run.id]
+    visible_rows = run_rows if latest_run is not None else rows
+    grouped: dict[str, dict[str, int | float]] = {}
+    for row in visible_rows:
+        stage = row.stage if row.stage in _USAGE_STAGE_LABELS else "other"
+        bucket = grouped.setdefault(
+            stage,
+            {
+                "cost_rub": 0.0,
+                "calls": 0,
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "retries": 0,
+            },
+        )
+        bucket["cost_rub"] = float(bucket["cost_rub"]) + float(row.cost_rub)
+        bucket["calls"] = int(bucket["calls"]) + 1
+        bucket["tokens_in"] = int(bucket["tokens_in"]) + row.tokens_in
+        bucket["tokens_out"] = int(bucket["tokens_out"]) + row.tokens_out
+        bucket["cache_read_tokens"] = int(bucket["cache_read_tokens"]) + row.cache_read_tokens
+        bucket["cache_write_tokens"] = int(bucket["cache_write_tokens"]) + row.cache_write_tokens
+        bucket["retries"] = int(bucket["retries"]) + row.retry_count
+
+    # The deterministic base is intentionally visible even though it has no LLM
+    # ledger row: users can see that this stage adds zero provider usage.
+    grouped.setdefault(
+        "template",
+        {
+            "cost_rub": 0.0,
+            "calls": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "retries": 0,
+        },
+    )
+    stages = [
+        MaxUsageStagePublic(
+            id=stage,
+            label=_USAGE_STAGE_LABELS[stage],
+            cost_rub=float(grouped[stage]["cost_rub"]),
+            calls=int(grouped[stage]["calls"]),
+            tokens_in=int(grouped[stage]["tokens_in"]),
+            tokens_out=int(grouped[stage]["tokens_out"]),
+            cache_read_tokens=int(grouped[stage]["cache_read_tokens"]),
+            cache_write_tokens=int(grouped[stage]["cache_write_tokens"]),
+            retries=int(grouped[stage]["retries"]),
+        )
+        for stage in _USAGE_STAGE_ORDER
+        if stage in grouped
+    ]
+    return MaxUsagePublic(
+        total_cost_rub=round(sum(float(row.cost_rub) for row in rows), 4),
+        run_cost_rub=round(sum(float(row.cost_rub) for row in run_rows), 4),
+        run_id=latest_run.id if latest_run else None,
+        run_status=latest_run.status if latest_run else None,
+        stages=stages,
     )

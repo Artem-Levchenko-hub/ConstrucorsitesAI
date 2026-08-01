@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
 
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.models.usage import Usage
 from omnia_api.models.user import User
 from omnia_api.routers import max_studio
 from omnia_api.schemas.max_studio import (
@@ -21,6 +24,7 @@ from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     _template_candidates,
     render_max_managed_files,
+    render_max_starter_files,
 )
 
 
@@ -72,7 +76,8 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     config = files["src/lib/omnia/max-config.ts"]
     assert '"app_name": "Кофе \\"Рядом\\""' in config
     assert '"price": "290 ₽"' in config
-    assert "as const" in config
+    assert "export type OmniaMaxConfig" in config
+    assert "omniaMaxConfig: OmniaMaxConfig" in config
     assert "max_url_attached" not in config
     assert str(project_id) in files["src/app/api/omnia/integrations/[...path]/route.ts"]
     preview_route = files["src/app/api/omnia/preview-session/route.ts"]
@@ -95,13 +100,11 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "<AuthScreen" in provider
     assert 'const MAX_INIT_DATA_HEADER = "X-Omnia-MAX-Init-Data"' in provider
     assert "installAuthenticatedFetch(webApp.initData)" in provider
-    assert 'requestUrl.origin !== window.location.origin' in provider
+    assert "requestUrl.origin !== window.location.origin" in provider
     assert '!requestUrl.pathname.startsWith("/api/")' in provider
     assert 'from "@/components/OmniaCompliance"' in provider
     assert "src/components/OmniaCompliance.tsx" in files
-    assert 'from "@/lib/omnia/max-config"' in files[
-        "src/components/OmniaCompliance.tsx"
-    ]
+    assert 'from "@/lib/omnia/max-config"' in files["src/components/OmniaCompliance.tsx"]
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
     assert "timingSafeEqual" in validator
@@ -145,6 +148,21 @@ def test_managed_kit_never_contains_model_or_generation_calls() -> None:
     assert "llmgw" not in combined
     assert "/chat/completions" not in combined
     assert "generate(" not in combined
+
+
+def test_starter_kit_is_a_complete_config_driven_application() -> None:
+    files = render_max_starter_files(_config(), uuid4())
+
+    assert "src/app/page.tsx" in files
+    assert "src/app/globals.css" in files
+    assert "src/app/layout.tsx" in files
+    page = files["src/app/page.tsx"]
+    assert "omniaMaxConfig as app" in page
+    assert "app.features" in page
+    assert "app.content" in page
+    assert "app.primary_action" in page
+    assert "max-primary-action" in page
+    assert "TODO" not in "\n".join(files.values())
 
 
 async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) -> None:
@@ -290,3 +308,67 @@ async def test_url_confirmation_is_persisted_without_new_snapshot(db_session) ->
     assert saved.synced_snapshot_id is None
     assert project.current_snapshot_id == initial.id
     assert before == after == 1
+
+
+async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) -> None:
+    user = User(email=f"max-usage-{uuid4()}@example.ru")
+    db_session.add(user)
+    await db_session.flush()
+    project = Project(
+        owner_id=user.id,
+        name="MAX Usage",
+        slug=f"max-usage-{uuid4().hex[:8]}",
+        template="max_miniapp",
+    )
+    db_session.add(project)
+    await db_session.flush()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=user.id,
+        idempotency_key=str(uuid4()),
+        prompt_hash="a" * 64,
+        status="running",
+    )
+    db_session.add(run)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            Usage(
+                user_id=user.id,
+                project_id=project.id,
+                run_id=run.id,
+                model_id="gemini-3.1-pro-preview-customtools",
+                tokens_in=1_000,
+                tokens_out=100,
+                cost_rub=Decimal("2.5000"),
+                stage="build_plan",
+                cache_read_tokens=600,
+                cache_write_tokens=200,
+                retry_count=1,
+            ),
+            Usage(
+                user_id=user.id,
+                project_id=project.id,
+                run_id=run.id,
+                model_id="gemini-3.1-pro-preview-customtools",
+                tokens_in=2_000,
+                tokens_out=200,
+                cost_rub=Decimal("5.2500"),
+                stage="native_agent",
+                cache_read_tokens=1_500,
+                retry_count=2,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    result = await max_studio.get_max_usage(project.id, db_session, user)
+
+    assert result.run_id == run.id
+    assert result.run_status == "running"
+    assert result.run_cost_rub == result.total_cost_rub == 7.75
+    stages = {stage.id: stage for stage in result.stages}
+    assert stages["template"].cost_rub == 0
+    assert stages["build_plan"].cache_read_tokens == 600
+    assert stages["native_agent"].calls == 1
+    assert stages["native_agent"].retries == 2

@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
 import { MaxProjectNav } from "./MaxProjectNav";
+import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
 
 export function MaxWorkspaceShell({
   project,
@@ -158,6 +159,7 @@ export function MaxWorkspaceShell({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <MaxUsageBreakdown projectId={project.id} />
             <Link href={`/max/${project.id}/integrations`} className="hidden h-11 items-center rounded-[8px] border border-[#d8d4cb] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee] md:inline-flex">Интеграции</Link>
             <button
               type="button"

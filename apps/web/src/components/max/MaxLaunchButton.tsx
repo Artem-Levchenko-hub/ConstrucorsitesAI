@@ -132,7 +132,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
       title={
         blockers.length
           ? `Сначала: ${blockers.map((item) => item.label).join(", ")}`
-          : "Запустить контейнер, опубликовать HTTPS и активировать webhook"
+          : "Зафиксировать зелёную версию и переключить на неё постоянный URL"
       }
       data-testid="max-one-click-launch"
     >
@@ -141,7 +141,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
       ) : (
         <Rocket className="h-4 w-4" />
       )}
-      {launch.isPending ? "Публикуем и подключаем…" : "Опубликовать и подключить MAX"}
+      {launch.isPending ? "Публикуем и подключаем…" : "Опубликовать новую версию"}
     </Button>
   );
 }
