@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-01",
-  "version": 11,
+  "version": 12,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -1851,8 +1851,8 @@
   {
    "id": "H85",
    "title": "Универсальный инспектор на границе preview",
-   "status": "testing",
-   "score": null,
+   "status": "worked",
+   "score": 9,
    "category": "продукт / редактор / инфра / безопасность",
    "period": "29.07",
    "description": "Доставлять точный выбор элементов самой платформой во все живые preview-контейнеры, включая старые проекты без inspector-скрипта, не меняя и не перегенерируя их исходники.",
@@ -2120,7 +2120,7 @@
    "category": "MAX / LLM / ledger / кеш / UX / надёжность",
    "period": "01.08",
    "description": "Сократить скрытый агентный цикл со 120 до 20–30 вызовов, не оставлять красную версию при исчерпании лимита, учитывать каждый native-вызов по пользователю, проекту и run, вернуть provider cache и показать разбивку расхода в Studio.",
-   "evidence": "Кодовый контур ограничивает native-agent 30 вызовами с default=24 и одним сегментом; 402 не повторяется, а любая остановка по лимиту откатывает весь edit к последнему зелёному SHA даже при чистом typecheck. Новый MAX старт собирается без модели из типизированного config-driven шаблона; его tsc и Next production build прошли, создано 15 маршрутов. Alembic 0001→0040→0039→0040 прошёл на чистой PostgreSQL; usage хранит run_id, stage, cache read/write, retries и provider request/cost. Gateway: 62 теста, ruff и mypy; целевые API-наборы и mypy изменённых модулей зелёные; Web: 116 тестов, lint, typecheck и production build на 46 страниц. В UX прямо пояснено, что токен бота остаётся на backend, а публикация атомарно заменяет версию за тем же URL. Production-проверка ещё не выполнена.",
+   "evidence": "Кодовый контур ограничивает native-agent 30 вызовами с default=24 и одним сегментом; 402 не повторяется, а любая остановка по лимиту откатывает весь edit к последнему зелёному SHA даже при чистом typecheck. Новый MAX старт собирается без модели из типизированного config-driven шаблона; его tsc и Next production build прошли, создано 15 маршрутов. Alembic 0001→0040→0039→0040 прошёл на чистой PostgreSQL; usage хранит run_id, stage, cache read/write, retries и provider request/cost. Gateway: 62 теста, ruff и mypy; целевые API-наборы и mypy изменёных модулей зелёные; Web: 116 тестов, lint, typecheck и production build на 46 страниц. В UX прямо пояснено, что токен бота остаётся на backend, а публикация атомарно заменяет версию за тем же URL. Revision 34651162 развёрнута в production compose: api, gateway и web healthy, worker running без ошибок; Alembic на 0040, public /api/health, /max/start и /otchet/ отвечают 200, env снижен со 120 до 24. Два live native-cache canary вернули 200, provider reported 4240 cache-read tokens и provider cost USD в metadata на каждом вызове.",
    "impact": "Первичная MAX-сборка больше не должна оплачивать многократное переписывание уже готовой платформенной основы. При любой незавершённой попытке пользователь сохраняет рабочее приложение, а Studio получает проверяемую по этапам картину фактического использования вместо приблизительного общего списания.",
    "next_vector": "V8"
   }
