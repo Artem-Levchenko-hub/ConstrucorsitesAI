@@ -1076,6 +1076,46 @@ def load_stack_skills(orch_template: str | None) -> str | None:
         return None
 
 
+def load_stack_skill_index(orch_template: str | None) -> str | None:
+    """Read only a stack's on-demand skill catalog.
+
+    Unlike :func:`load_stack_skills`, this keeps the invariant system prompt
+    compact. A capable native agent can then pull one relevant capability pack
+    with ``read_skill`` instead of paying for every domain guide on every turn.
+    Fail-soft for stacks that do not ship a catalog.
+    """
+    if not orch_template:
+        return None
+    path = _TEMPLATES_DIR / orch_template / ".omnia" / "skills" / "INDEX.md"
+    try:
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+    except Exception:
+        return None
+
+
+_SKILL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+def load_stack_skill(orch_template: str | None, skill_id: str) -> tuple[str, str] | None:
+    """Return ``(relative_path, body)`` for one allow-listed stack skill.
+
+    Skill ids are slugs rather than paths, so the model cannot traverse outside
+    the mounted, read-only capability library. ``INDEX`` is intentionally not a
+    valid id: it is already present in the system prompt.
+    """
+    normalized = (skill_id or "").strip().lower()
+    if not orch_template or normalized == "index" or not _SKILL_ID_RE.fullmatch(normalized):
+        return None
+    path = _TEMPLATES_DIR / orch_template / ".omnia" / "skills" / f"{normalized}.md"
+    try:
+        if not path.is_file():
+            return None
+        relative = f".omnia/skills/{normalized}.md"
+        return relative, path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+
 # ── Locked-primitive contract card (harness-hardening) ──────────────────────
 #
 # The nextjs-realtime template ships a frozen set of "FIXED template file"

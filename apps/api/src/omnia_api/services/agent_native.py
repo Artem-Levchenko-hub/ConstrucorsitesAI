@@ -200,7 +200,17 @@ _TOOLS_CACHED: list[dict[str, Any]] = [
 # harness (probe/isolation). Gemini otherwise spends turns discovering the
 # rejection even though the MAX prompt already says not to call them.
 _MAX_UNAVAILABLE_TOOLS = frozenset({"bash", "probe", "verify_isolation"})
-_MAX_TOOLS = [tool for tool in _TOOLS if tool["name"] not in _MAX_UNAVAILABLE_TOOLS]
+_MAX_READ_SKILL_TOOL = _tool(
+    "read_skill",
+    "Load one optional MAX capability pack by exact catalog slug. Use it to gain "
+    "specialist product, motion, data, AI UX, accessibility, media or MAX-platform "
+    "knowledge on demand. Load only packs relevant to the current brief; packs are "
+    "principles and evidence, never mandatory visual templates.",
+    {"skill": _STR, "reason": _STR},
+    ["skill", "reason"],
+)
+_MAX_BASE_TOOLS = [tool for tool in _TOOLS if tool["name"] not in _MAX_UNAVAILABLE_TOOLS]
+_MAX_TOOLS = [*_MAX_BASE_TOOLS[:-1], _MAX_READ_SKILL_TOOL, _MAX_BASE_TOOLS[-1]]
 _MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     *_MAX_TOOLS[:-1],
     {**_MAX_TOOLS[-1], "cache_control": _CACHE},
@@ -526,6 +536,12 @@ _MAX_NATIVE_PREAMBLE = (
     "прежде всего transform/opacity; не строй UX на hover, не запускай бесконечный декор, "
     "не анимируй всё одновременно и обязательно уважай `prefers-reduced-motion`. Каждая "
     "анимация должна объяснять действие, изменение состояния или навигационный контекст.\n\n"
+    "УСИЛЕНИЕ НАВЫКАМИ, НЕ ШАБЛОНАМИ. В system prompt есть короткий MAX "
+    "CAPABILITY CATALOG. На свежей сборке определи 1–3 реальных пробела в своих "
+    "знаниях и вызови read_skill только для полезных packs. На точечной правке "
+    "не трать ход на skill, если уже знаешь решение. Навык — это оптика, эвристики и "
+    "сырьё для мышления: он не меняет бриф, не выбирает за тебя арт-дирекцию и не "
+    "обязывает к конкретной компоновке. Не загружай всё подряд.\n\n"
     "ДОКАЗАТЕЛЬСТВО КАЧЕСТВА. Цикл: реализуй целиком → build до чистоты → "
     "runtime_check после последней записи → see через подписанную MAX-сессию. Если see "
     "возвращает broken/generic или конкретные проблемы, не объявляй done: примени "

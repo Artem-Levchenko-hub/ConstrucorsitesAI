@@ -537,6 +537,7 @@ _STEP_VERB: dict[str, str] = {
     "build": "Проверяю сборку",
     "bash": "Выполняю команду",
     "docs": "Читаю документацию",
+    "read_skill": "Подключаю экспертный навык",
     "runtime_check": "Открываю страницу",
     "probe": "Проверяю действие",
     "verify_isolation": "Проверяю безопасность данных",
@@ -3151,6 +3152,14 @@ async def _process_prompt(
                 from omnia_api.services.secret_safety import max_model_write_rejection
 
                 async def _agent_executor(action: agent_builder.Action) -> dict[str, Any]:
+                    if action.name == "read_skill":
+                        from omnia_api.services.max_agent_skills import read_max_skill
+
+                        return read_max_skill(
+                            str(action.args.get("skill") or ""),
+                            prompt=prompt_text,
+                            project_id=str(project_id),
+                        )
                     if action.name == "see":
                         # MAX previews authenticate through signed initData/session,
                         # not the generic email login. Bootstrap a short-lived
@@ -3316,11 +3325,13 @@ async def _process_prompt(
                 _stack_guide = f"{_stack_guide or ''}\n\n{MAX_MODEL_DIRECTIVE}".strip()
             # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
             # perf canons aligned with the gates) when enabled. None → unchanged.
-            _skills = (
-                agent_builder.load_stack_skills(_orch_name)
-                if get_settings().use_skill_injection
-                else None
-            )
+            _skills = None
+            if get_settings().use_skill_injection:
+                _skills = (
+                    agent_builder.load_stack_skill_index(_orch_name)
+                    if project_template == "max_miniapp"
+                    else agent_builder.load_stack_skills(_orch_name)
+                )
             _stack_system = (
                 agent_builder.build_system_prompt(_stack_guide, skills=_skills)
                 if _stack_guide

@@ -42,8 +42,11 @@ re-publish externally without verifying terms.
 - **Vendored** — files are in the repo, deploy artefacts include them.
 - **Loader live** — `skill_library.lookup_palette`, `lookup_font_pairing`,
   `random_ux_guidelines`, `format_design_brief` ready to call.
-- **Prompt-builder wiring** — NOT YET. Upstream `services/prompt_builder.py`
-  has a rich `_DESIGN_KIT` + `_STYLE_KIT` + preset system already. Plugging
-  the larger ui-ux-pro-max library in requires extending the preset flow
-  rather than replacing it. See `format_design_brief` for the suggested
-  injection shape; a follow-up PR should hook it in.
+- **Web prompt-builder wiring** — `services/prompt_builder.py` can derive compact
+  project briefs from this library for the legacy web pipeline.
+- **MAX native-agent wiring** — `read_skill("ui-ux-pro-max")` returns an
+  on-demand, project-matched slice of colour, typography, visual-language,
+  compatible-icon, chart and high-severity UX evidence. Only the capability
+  index is permanent system context; the full slice is loaded when Gemini asks
+  for it. Results are explicitly non-prescriptive and never supply a landing
+  structure or mandatory visual preset.

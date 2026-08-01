@@ -35,12 +35,15 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     assert "ТРИ действительно разных направления" in prompt
     assert "360–390px" in prompt
     assert "prefers-reduced-motion" in prompt
+    assert "read_skill" in prompt
+    assert "Не загружай всё подряд" in prompt
     assert "скролл-скраб" not in prompt
     assert "Awwwards" not in prompt
 
     max_names = {tool["name"] for tool in agent_native._MAX_TOOLS_CACHED}
-    assert {"build", "runtime_check", "see", "write_file", "done"} <= max_names
+    assert {"build", "runtime_check", "see", "write_file", "read_skill", "done"} <= max_names
     assert not ({"bash", "probe", "verify_isolation"} & max_names)
+    assert "read_skill" not in {tool["name"] for tool in agent_native._TOOLS_CACHED}
     assert agent_native._MAX_TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
 
 
@@ -75,6 +78,8 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert 'product_kind="max_miniapp"' in source
     assert '".omnia/max-design-spec.json"' in source
     assert "EXISTING MAX ART DIRECTION" in source
+    assert "load_stack_skill_index" in source
+    assert "read_max_skill" in source
 
 
 def test_failed_max_resume_recovers_the_original_brief() -> None:
