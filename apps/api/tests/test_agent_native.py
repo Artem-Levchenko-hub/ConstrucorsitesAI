@@ -1,9 +1,8 @@
 """Tests for the native tool-use build loop (services/agent_native).
 
-Covers: `_module_not_found_hint` (anti-hallucination recovery), the
-EXPLORE-STALL no-write guard (nudge → abort as 'exploring'), and the infra
-circuit breaker (container/orchestrator dead → abort as 'infra_error' instead of
-grinding the step budget — the 2026-07-08 hibernate-mid-build incident).
+Covers: `_module_not_found_hint` (anti-hallucination recovery), bounded generic
+builds, and the unbounded MAX lifecycle which keeps repairing until its factual
+completion contract is green or the user cancels the parent task.
 """
 
 from __future__ import annotations
@@ -51,11 +50,9 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "build_max_product_contract" in source
     assert "max_completion_gap" in source
     assert "completion_check=_completion_check" in source
-    assert "_agent_steps = 30" in source
-    assert '"autonomous_recovery"' in source
-    assert "max_source_completion_gap" in source
-    assert "_seg < 2" in source
-    assert "_seg < 3" not in source
+    assert 'max_steps=(None if project_template == "max_miniapp" else _agent_steps)' in source
+    assert '"autonomous_recovery"' not in source
+    assert "_seg <" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
     assert '_bounded_stop and project_template != "max_miniapp"' in source
@@ -461,7 +458,7 @@ async def test_native_proseless_done_gets_human_summary(
 
 
 @pytest.mark.asyncio
-async def test_native_hard_clamps_legacy_limit_and_forwards_trace_ids(
+async def test_generic_native_honours_configured_limit_and_forwards_trace_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -488,15 +485,188 @@ async def test_native_hard_clamps_legacy_limit_and_forwards_trace_ids(
         project_id="22222222-2222-2222-2222-222222222222",
         run_id="33333333-3333-3333-3333-333333333333",
         message_id="44444444-4444-4444-4444-444444444444",
-        max_steps=120,
+        max_steps=35,
     )
 
-    assert len(calls) == agent_native._HARD_MAX_STEPS == 30
+    assert len(calls) == 35
     assert res.stop_reason == "max_steps_green"
     assert calls[0]["stage"] == "build_plan"
     assert all(call["project_id"] == "22222222-2222-2222-2222-222222222222" for call in calls)
     assert all(call["run_id"] == "33333333-3333-3333-3333-333333333333" for call in calls)
     assert all(call["user_id"] == "11111111-1111-1111-1111-111111111111" for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_max_runtime_continues_past_turn_30_until_contract_is_green(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls <= 31:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/app/page.tsx",
+                        "content": (
+                            '"use client"; export default function Page() '
+                            f"{{ return <main>{calls}</main>; }}"
+                        ),
+                    },
+                )
+            )
+        return _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "clean",
+            "needs_fix": False,
+        }
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="build the complete app",
+        execute=execute,
+        completion_check=complete,
+        max_steps=1,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert calls == 32
+    assert result.steps == 32
+
+
+@pytest.mark.asyncio
+async def test_max_runtime_recovers_provider_and_long_exploration_without_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary provider outage")
+        if calls <= agent_native._NO_WRITE_ABORT_AT + 2:
+            return _turn(("read_file", {"path": "src/app/page.tsx"}))
+        if calls == agent_native._NO_WRITE_ABORT_AT + 3:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/app/page.tsx",
+                        "content": (
+                            '"use client"; export default function Page() '
+                            "{ return <main>ready</main>; }"
+                        ),
+                    },
+                )
+            )
+        return _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "content": action.args.get("content", "source"),
+            "detail": "clean",
+            "needs_fix": False,
+        }
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="build the complete app",
+        execute=execute,
+        completion_check=complete,
+        max_steps=1,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert calls == agent_native._NO_WRITE_ABORT_AT + 4
+    assert "[LOOP GUARD]" in str(result.transcript)
+
+
+@pytest.mark.asyncio
+async def test_max_runtime_waits_for_infrastructure_instead_of_aborting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls <= agent_native._INFRA_DEAD_ABORT_AT:
+            return _turn(("read_file", {"path": "src/app/page.tsx"}))
+        if calls == agent_native._INFRA_DEAD_ABORT_AT + 1:
+            return _turn(
+                (
+                    "write_file",
+                    {"path": "src/app/page.tsx", "content": "restored product source"},
+                )
+            )
+        return _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if calls <= agent_native._INFRA_DEAD_ABORT_AT:
+            return {"ok": False, "error": "orchestrator restarting", "infra_dead": True}
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "clean",
+            "needs_fix": False,
+        }
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="build the complete app",
+        execute=execute,
+        completion_check=complete,
+        max_steps=1,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert calls == agent_native._INFRA_DEAD_ABORT_AT + 2
 
 
 @pytest.mark.asyncio

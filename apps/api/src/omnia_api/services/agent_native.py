@@ -17,8 +17,10 @@ stays the prod default until this is verified on real builds and billing is wire
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from itertools import count
 from typing import Any
 
 import httpx
@@ -40,8 +42,7 @@ _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
-_CALL_RETRIES = 3  # bounded transport retry inside one turn; never restart a whole run
-_HARD_MAX_STEPS = 30
+_CALL_RETRIES = 3  # one connection cycle; MAX retries whole cycles until user cancellation
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
@@ -54,9 +55,9 @@ _NO_WRITE_ABORT_AT = 12
 
 # Infra circuit breaker: consecutive turns where EVERY executed tool op died on
 # infra (container/orchestrator unreachable — executor tags obs["infra_dead"]).
-# 3 turns tolerates a transient orchestrator restart; a truly dead container
-# aborts in ~3 turns instead of grinding the whole step budget (2026-07-08:
-# hibernate stopped a container mid-build → 40 min of doomed 500 bursts).
+# 3 turns tolerates a transient orchestrator restart. Generic builds still abort
+# at that point; MAX waits and keeps recovering because its lifecycle has no
+# internal stop limit and remains cancellable by the durable parent task.
 _INFRA_DEAD_ABORT_AT = 3
 
 # Native tool schemas — mirror the action set of make_container_executor._execute.
@@ -548,8 +549,6 @@ async def _call_messages(
 ) -> dict[str, Any]:
     """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
     Anthropic response dict, or raises the last error."""
-    import asyncio
-
     payload: dict[str, Any] = {
         "model": _MODEL,
         "max_tokens": _MAX_TOKENS,
@@ -617,10 +616,12 @@ async def run_native_build(
     free: bool = False,
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
-    max_steps: int = 24,
+    max_steps: int | None = 24,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
-    build) or the step budget is hit. Returns the written files + transcript.
+    build) or a bounded generic build reaches ``max_steps``. MAX builds deliberately
+    ignore ``max_steps`` and continue until the factual completion contract is green
+    or the durable parent task is cancelled by the user.
 
     ``system`` is the stack/system prompt (reuse ``agent_builder.build_system_prompt``);
     ``task`` is the user's request. One model, full transcript (thinking preserved),
@@ -642,8 +643,10 @@ async def run_native_build(
     visual_feedback_step: int | None = None
     visual_repair_attempted = False
 
-    effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
+    effective_max_steps = (
+        None if max_runtime else max(1, int(24 if max_steps is None else max_steps))
+    )
 
     def _evidence() -> dict[str, int]:
         result = dict(successful_tools)
@@ -754,7 +757,8 @@ async def run_native_build(
         )
 
     async with httpx.AsyncClient() as client:
-        for step in range(effective_max_steps):
+        step_numbers = count() if effective_max_steps is None else range(effective_max_steps)
+        for step in step_numbers:
             call_stage = (
                 "build_plan"
                 if step == 0
@@ -777,6 +781,28 @@ async def run_native_build(
                     tools=_MAX_TOOLS_CACHED if max_runtime else _TOOLS_CACHED,
                 )
             except Exception as exc:
+                if max_runtime:
+                    log.warning(
+                        "agent_native.max_provider_reconnecting",
+                        step=step,
+                        error=type(exc).__name__,
+                    )
+                    if emit:
+                        await emit(
+                            "agent.step",
+                            {
+                                "step": step,
+                                "action": "provider_retry",
+                                "path": "",
+                                "detail": (
+                                    "Связь с Google AI временно прервалась; сборка "
+                                    "не остановлена и продолжится автоматически."
+                                ),
+                                "ok": False,
+                            },
+                        )
+                    await asyncio.sleep(15.0)
+                    continue
                 return await _finish_without_provider(
                     steps=step,
                     reason="provider_stopped",
@@ -785,6 +811,10 @@ async def run_native_build(
 
             content = resp.get("content")
             if not isinstance(content, list):
+                if max_runtime:
+                    log.warning("agent_native.max_malformed_provider_retry", step=step)
+                    await asyncio.sleep(5.0)
+                    continue
                 return AgentResult(
                     done=False,
                     summary="malformed upstream (no content list)",
@@ -809,7 +839,7 @@ async def run_native_build(
             if not tool_uses:
                 _done = resp.get("stop_reason") == "end_turn"
                 _text = _text_of(content)
-                # Prose is not proof. Keep the turn inside the same hard budget
+                # Prose is not proof. Keep the turn inside the same lifecycle
                 # until a real clean build exists; never ship a broken app because
                 # the model happened to finish speaking.
                 gap = _completion_gap() if _done and last_build_ok is True else None
@@ -845,7 +875,7 @@ async def run_native_build(
                 tu_id = tu.get("id", "")
                 if name == "done":
                     # Fact-gate: refuse a premature done if the model wrote files but
-                    # never confirmed a CLEAN build afterwards. Bounded (R-10).
+                    # never confirmed a CLEAN build afterwards.
                     premature = wrote_since_build or last_build_ok is not True
                     if premature:
                         results.append(
@@ -966,10 +996,9 @@ async def run_native_build(
                     transcript=convo,
                     stop_reason="contract_green",
                 )
-            # Infra circuit breaker: a turn where EVERY executed op died on
-            # infra means the container/orchestrator is gone — the model can't
-            # fix that. Abort after a few such turns instead of grinding the
-            # whole step budget against a corpse (2026-07-08 incident).
+            # Infra circuit breaker: generic builds retain the historical abort.
+            # MAX instead waits and keeps the same durable generation alive; a
+            # container/orchestrator restart must never discard completed source.
             if ops_this_turn and infra_this_turn == ops_this_turn:
                 infra_dead_turns += 1
             else:
@@ -984,7 +1013,9 @@ async def run_native_build(
                 no_write_turns = 0
             else:
                 no_write_turns += 1
-                if _NO_WRITE_NUDGE_AT <= no_write_turns < _NO_WRITE_ABORT_AT:
+                if _NO_WRITE_NUDGE_AT <= no_write_turns and (
+                    max_runtime or no_write_turns < _NO_WRITE_ABORT_AT
+                ):
                     results.append(
                         {
                             "type": "text",
@@ -1002,7 +1033,7 @@ async def run_native_build(
                     if emit:
                         await emit("agent.stalled", {"step": step})
             convo.append({"role": "user", "content": results})
-            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT:
+            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT and not max_runtime:
                 log.warning("agent_native.infra_dead_abort", step=step)
                 return AgentResult(
                     done=False,
@@ -1012,7 +1043,10 @@ async def run_native_build(
                     transcript=convo,
                     stop_reason="infra_error",
                 )
-            if no_write_turns >= _NO_WRITE_ABORT_AT:
+            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT and max_runtime:
+                log.warning("agent_native.max_infra_reconnecting", step=step)
+                await asyncio.sleep(15.0)
+            if no_write_turns >= _NO_WRITE_ABORT_AT and not max_runtime:
                 return AgentResult(
                     done=False,
                     summary="stuck exploring (reading/verifying) without writing any file",
@@ -1022,8 +1056,9 @@ async def run_native_build(
                     stop_reason="exploring",
                 )
 
-    # Hard stop means no more provider calls. A local build decides whether the
-    # tree can ship; otherwise the caller restores the last green snapshot.
+    # Only bounded generic builds can exhaust this iterator. MAX uses count(),
+    # so it exits solely through a green return or parent-task cancellation.
+    assert effective_max_steps is not None
     return await _finish_without_provider(
         steps=effective_max_steps,
         reason="max_steps",

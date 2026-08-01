@@ -3409,8 +3409,6 @@ async def _process_prompt(
                     f"\n\nДоп. пожелание пользователя: {prompt_text}{_seed_block}"
                 )
                 _agent_system = _stack_system
-                # A manual resume is a full completion pass, not a short edit.
-                # Keep the same ceiling as the initial MAX product build.
                 _agent_steps = 30
             elif _is_edit:
                 _sel_block = ""
@@ -3432,9 +3430,6 @@ async def _process_prompt(
                     f"реальный исходник в src/ по симптому. Не пересобирай работающее."
                 )
                 _agent_system = agent_builder.build_edit_system_prompt(_stack_guide)
-                # Budget above the no-write/stall thresholds so the loop's
-                # escalate-to-stronger-model actually fires before max_steps when a
-                # cheap model explores without writing (the "Починить" did nothing bug).
                 _agent_steps = 18
             else:
                 if project_template == "max_miniapp":
@@ -3454,9 +3449,8 @@ async def _process_prompt(
                         "управляемые Studio-файлы. Не зашивай секреты пользователя в код.\n\n"
                         f"{_max_product_contract}"
                     )
-                    # Full MAX products need enough turns for implementation,
-                    # browser proof and a visual fix pass. The native engine still
-                    # enforces its hard 30-turn ceiling.
+                    # This compatibility value is ignored by the MAX native call
+                    # below, which explicitly receives max_steps=None.
                     _agent_steps = 30
                 else:
                     _agent_user = (
@@ -3478,7 +3472,7 @@ async def _process_prompt(
             _agent_res = None
             _max_seed_files: dict[str, str] = {}
             # A new MAX project starts from the verified platform CORE with no
-            # product page, then ALWAYS continues through the bounded native Google
+            # product page, then ALWAYS continues through the durable native Google
             # agent below. There is no product UI template to recolour or mistake
             # for a completed application.
             if (
@@ -3547,7 +3541,7 @@ async def _process_prompt(
                         )
                     else:
                         print(
-                            "[PP] MAX starter build red; handing to bounded Google agent",
+                            "[PP] MAX starter build red; handing to durable Google agent",
                             flush=True,
                         )
                 except Exception as _starter_exc:
@@ -3629,7 +3623,7 @@ async def _process_prompt(
                     free=is_free,
                     emit=_agent_emit,
                     completion_check=_completion_check,
-                    max_steps=_agent_steps,
+                    max_steps=(None if project_template == "max_miniapp" else _agent_steps),
                 )
             elif _agent_res is None:
                 _agent_res = await agent_builder.run_agent_build(
@@ -3680,117 +3674,9 @@ async def _process_prompt(
                     transcript=_agent_res.transcript,
                     stop_reason="no_ai_write",
                 )
-            # One strong Google segment is the normal MAX generation path.  A
-            # single recovery segment is allowed only when the deterministic
-            # SOURCE contract still reports missing product work.  Generic MAX
-            # preview/probe failures are infrastructure evidence, not permission
-            # to spend on another model loop.
-            _seg = 1
-            if (
-                project_template == "max_miniapp"
-                and not _is_edit
-                and get_settings().use_native_agent
-            ):
-                _max_segment_files = dict(_agent_res.files)
-                _max_segment_steps = int(_agent_res.steps)
-                _max_segment_transcript = list(_agent_res.transcript)
-                _retryable_max_stops = {
-                    "max_steps",
-                    "max_steps_red",
-                    "exploring",
-                    "no_ai_write",
-                }
-                from omnia_api.services.max_generation_contract import (
-                    max_source_completion_gap,
-                )
-
-                def _remaining_max_source_gap() -> str | None:
-                    return max_source_completion_gap(
-                        prompt_text,
-                        {
-                            **_max_baseline_files,
-                            **_max_seed_files,
-                            **_max_segment_files,
-                        },
-                    )
-
-                while (
-                    not _agent_res.done
-                    and _agent_res.stop_reason in _retryable_max_stops
-                    and _remaining_max_source_gap() is not None
-                    and _seg < 2
-                ):
-                    _seg += 1
-                    await _agent_emit(
-                        "agent.step",
-                        {
-                            "step": _max_segment_steps,
-                            "action": "autonomous_recovery",
-                            "human": f"Сам продолжаю сборку — этап {_seg}/2",
-                            "path": "",
-                            "detail": (
-                                "Лимит внутреннего этапа достигнут; рабочие файлы "
-                                "сохранены в контейнере, запускаю следующий ремонтный "
-                                "проход без действия пользователя."
-                            ),
-                            "ok": True,
-                        },
-                    )
-                    _segment_base = {
-                        **_max_baseline_files,
-                        **_max_seed_files,
-                        **_max_segment_files,
-                    }
-
-                    def _segment_completion_check(
-                        written: Mapping[str, str],
-                        evidence: Mapping[str, int],
-                        *,
-                        _base: Mapping[str, str] = _segment_base,
-                    ) -> str | None:
-                        from omnia_api.services.max_generation_contract import (
-                            max_completion_gap,
-                        )
-
-                        return max_completion_gap(prompt_text, {**_base, **written}, evidence)
-
-                    _segment_task = (
-                        "АВТОНОМНОЕ ВОССТАНОВЛЕНИЕ MAX-СБОРКИ. Пользователь не должен "
-                        "нажимать «Продолжить». Частичный продукт уже находится в контейнере. "
-                        "Сначала вызови build, исправь конкретную текущую ошибку, затем доведи "
-                        "ВСЕ требования исходного брифа и acceptance contract до конца. Не "
-                        "создавай параллельные DB/API-маршруты: используй createMaxAction, "
-                        "getMaxActions и точный вызов `const { answer } = await "
-                        "requestOmniaAI({ message, instructions, context })`. После кода "
-                        "выполни clean build, runtime_check, один see через подписанную MAX "
-                        "preview-session и done. Не вызывай generic probe/verify_isolation.\n\n"
-                        f"Текущий незакрытый результат: {_agent_res.summary}\n\n"
-                        f"Исходное задание:\n{_agent_user}"
-                    )
-                    _cont_res = await agent_native.run_native_build(
-                        system=agent_native.native_system_prompt(_stack_guide or "", _skills),
-                        task=_segment_task,
-                        execute=_agent_executor,
-                        user_id=str(user_id),
-                        project_id=str(project_id),
-                        run_id=str(run_id),
-                        message_id=str(assistant_message_id),
-                        free=is_free,
-                        emit=_agent_emit,
-                        completion_check=_segment_completion_check,
-                        max_steps=30,
-                    )
-                    _max_segment_files.update(_cont_res.files)
-                    _max_segment_steps += int(_cont_res.steps)
-                    _max_segment_transcript.extend(_cont_res.transcript)
-                    _agent_res = agent_builder.AgentResult(
-                        done=_cont_res.done,
-                        summary=_cont_res.summary,
-                        files=dict(_max_segment_files),
-                        steps=_max_segment_steps,
-                        transcript=list(_max_segment_transcript),
-                        stop_reason=_cont_res.stop_reason,
-                    )
+            # MAX no longer needs a second bounded "recovery segment". The same
+            # cached native conversation remains alive across every repair turn,
+            # provider reconnect and temporary infra outage until it is green.
             # A stopped run is never committed as a partially implemented edit,
             # even when its local typecheck happens to be green. Restore every
             # touched path from the last snapshot, remove newly-created files,
@@ -4158,7 +4044,7 @@ async def _process_prompt(
             # (the "hit step budget without calling done" leak). See helper.
             accumulated = _agent_result_message(_agent_res, is_edit=_is_edit)
             print(
-                f"[PP] agentic_build done={_agent_res.done} segs={_seg} "
+                f"[PP] agentic_build done={_agent_res.done} "
                 f"total_steps={_total_steps} files={len(files)} stop={_agent_res.stop_reason}",
                 flush=True,
             )
@@ -4345,10 +4231,10 @@ async def _process_prompt(
                     )
             # ──────────────────────────────────────────────────────────────────
 
-            # Final green-tree invariant. A bounded native run may stop for a
-            # budget/provider reason, but Studio must never keep its red tree. The
-            # earlier rollback covers a non-done AgentResult; this guard covers a
-            # model that said `done` while the independent verification disagreed.
+            # Final green-tree invariant. Generic bounded runs may stop early;
+            # MAX reaches this point only after its unbounded native completion
+            # contract is green. This independent verification still prevents a
+            # stale dev-server response from being published.
             if get_settings().use_native_agent and (not _runtime_ok or not _typecheck_ok):
                 _verification_error = _tc_error or _rt_error or "final verification failed"
                 _verification_rolled_back = False

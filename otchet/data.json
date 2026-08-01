@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-01",
-  "version": 22,
+  "version": 23,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2258,6 +2258,18 @@
    "evidence": "Форензика production-run 2be34aee-c463-4380-930a-afc02306051f доказала, что Gemini создал полноценный page.tsx примерно на 21 КБ, исправил SDK и типы, получил чистый typecheck, runtime HTTP 200 и успешный signed see. Платформа всё равно отвергла результат исключительно из-за введённого позднее условия minimum_files=4, запустила лишний сегмент, исчерпала hard limit и откатила готовую страницу до технического ядра с 404. Другой run 3df5b12a выявил сопутствующее трение: модель угадывала отсутствующие useWebApp/useMaxUser, snake_case поля, недоступный bash и Tailwind v3 utilities. Исправление убирает file-count gate, не позволяет managed MAX core подменять продуктовое покрытие, документирует точный API useMaxApp и integration-client, скрывает только реально недоступные MAX tools и допускает ровно одну управляемую visual-repair итерацию. Существующее сжатие длинных tool-results и стабильный provider-prefix cache сохранены. Локально зелёные 89 agent/MAX regression tests и 7 gateway cache/compaction tests, Ruff, format, strict mypy и diff-check. Runtime revision 38396724 развёрнута production compose: API healthy, worker слушает очередь, встроенный contract-smoke подтвердил новый список tools и отсутствие minimum_files; публичные /api/health и /web-health отвечают 200, /max после ожидаемого auth redirect — 200. Платный browser-run оставлен владельцу.",
    "impact": "Один большой, но законченный продуктовый файл больше не отправляет Gemini в бессмысленный второй цикл. Тонкое техническое ядро всё ещё не может пройти semantic acceptance, ошибки сборки и runtime продолжают блокировать публикацию, а визуальная критика может вызвать одну реальную правку без бесконечной петли.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H118",
+   "title": "MAX-агент больше не обрывается по шагам или сегментам",
+   "status": "testing",
+   "score": null,
+   "category": "MAX / Gemini / автономность / lifecycle / надёжность",
+   "period": "01.08",
+   "description": "Убрать внутренние потолки длительности MAX-сборки: Google AI должен продолжать тот же кэшируемый диалог, пока приложение не прошло source, build, runtime и signed-preview contract либо пока владелец явно не нажал Stop.",
+   "evidence": "Первый production-run после H117, 5db70737-cb95-4489-9551-01bcbb25ed84 (fitness-c48e93), подтвердил новый независимый дефект. Агент создал полноценную многокомпонентную структуру, на шагах 26–30 последовательно находил runtime-ошибки Client Component и добавлял use client, но был принудительно остановлен ровно на native turn 30, пока оставался следующий такой же исправимый компонент. После этого единственный recovery-сегмент не запустился, потому что source contract уже был полон, и платформа откатила 114 записанных UI-событий до технического ядра. Исправление полностью удаляет глобальный HARD_MAX_STEPS и двухсегментный MAX recovery, передаёт MAX max_steps=None и использует один непрерывный cache-friendly native transcript. Для MAX временный provider error, malformed response, длинная разведка и серия infra_dead больше не возвращают failed AgentResult: цикл ждёт и продолжает автоматически; пользовательская durable cancellation остаётся рабочей. Добавлены точные regression-сценарии: зелёное завершение на turn 32 при переданном max_steps=1, восстановление после provider outage и чтения длиннее прежнего no-write abort, восстановление после прежнего infra abort threshold. Локально зелёные 104 agent/MAX tests, Ruff, format и strict mypy по 220 файлам; платный browser-run оставлен владельцу.",
+   "impact": "Счётчик шагов, количество внутренних проходов и временные сбои больше не могут уничтожить незавершённую MAX-сборку. Агент сохраняет контекст и чинит приложение столько, сколько необходимо; публикация по-прежнему возможна только после фактических зелёных проверок, а остановить процесс может сам пользователь.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2762,6 +2774,10 @@
      true
     ],
     [
+     "Безлимитный MAX lifecycle: нет turn/segment ceiling, provider/infra reconnect не откатывает код, завершение только по green contract или Stop владельца",
+     true
+    ],
+    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2789,7 +2805,8 @@
     "H114",
     "H115",
     "H116",
-    "H117"
+    "H117",
+    "H118"
    ]
   }
  ],
