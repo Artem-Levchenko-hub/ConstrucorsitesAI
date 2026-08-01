@@ -44,6 +44,19 @@ def test_first_max_build_cannot_finish_at_the_template_stage() -> None:
     assert '_bounded_stop and project_template != "max_miniapp"' in source
     assert "if path not in MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
+    assert "_recover_max_resume_prompt" in source
+
+
+def test_failed_max_resume_recovers_the_original_brief() -> None:
+    from omnia_api.routers.messages import _recover_max_resume_prompt
+
+    assert (
+        _recover_max_resume_prompt(
+            ["продолжи", "Продолжай сборку", "Собери фитнес-тренера с ИИ и статистикой"]
+        )
+        == "Собери фитнес-тренера с ИИ и статистикой"
+    )
+    assert _recover_max_resume_prompt(["продолжи", "доделай"]) is None
 
 
 def test_seeded_max_files_are_committed_with_agent_customisations() -> None:

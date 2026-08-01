@@ -688,6 +688,20 @@ def _is_continue_request(prompt: str) -> bool:
     return any(k in t for k in _CONTINUE_KEYWORDS)
 
 
+def _recover_max_resume_prompt(candidates: Sequence[str]) -> str | None:
+    """Return the latest real brief behind one or more failed MAX resumes.
+
+    A service/config snapshot can exist before the first product snapshot. In
+    that state the UI's ``продолжи`` is not a new brief and must not replace the
+    original request sent to the Google agent. Candidates are newest-first.
+    """
+    for candidate in candidates:
+        value = (candidate or "").strip()
+        if value and not _is_continue_request(value):
+            return value
+    return None
+
+
 def _spawn_process_prompt(*, run_id: UUID, **kwargs: object) -> None:
     """Fire-and-forget _process_prompt with a guaranteed strong reference.
 
@@ -3011,6 +3025,32 @@ async def _process_prompt(
                             )
                         )
                     )
+                    if _is_continue and not _max_has_generated_snapshot:
+                        _prior_max_prompts = list(
+                            (
+                                await _max_history_session.scalars(
+                                    select(Message.content)
+                                    .where(
+                                        Message.project_id == project_id,
+                                        Message.role == "user",
+                                        Message.id != user_message_id,
+                                    )
+                                    .order_by(Message.created_at.desc())
+                                    .limit(20)
+                                )
+                            ).all()
+                        )
+                        _recovered_max_prompt = _recover_max_resume_prompt(
+                            _prior_max_prompts
+                        )
+                        if _recovered_max_prompt:
+                            prompt_text = _recovered_max_prompt
+                            _is_continue = False
+                            _is_edit = False
+                            print(
+                                "[PP] MAX resume recovered original brief from history",
+                                flush=True,
+                            )
 
             async def _agent_emit(event: str, data: dict[str, Any]) -> None:
                 # Surface each agent step as a STRUCTURED transcript event so the
@@ -3364,7 +3404,6 @@ async def _process_prompt(
             if (
                 project_template == "max_miniapp"
                 and orchestrate
-                and not _is_continue
                 and not _max_has_generated_snapshot
             ):
                 try:
