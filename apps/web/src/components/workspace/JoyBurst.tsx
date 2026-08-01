@@ -25,7 +25,13 @@ import {
  * вспышка несёт палитру, которую юзер только что увидел рождаться. Оверлей не
  * перехватывает клики (`pointer-events-none`), живёт поверх preview-полотна.
  */
-export function JoyBurst({ projectId }: { projectId: string }) {
+export function JoyBurst({
+  projectId,
+  label = "Готово — сайт собран",
+}: {
+  projectId: string;
+  label?: string;
+}) {
   const reduced = useReducedMotion();
   const { data: trigger } = useQuery<JoyTrigger | null>({
     queryKey: ["joy", projectId],
@@ -77,7 +83,7 @@ export function JoyBurst({ projectId }: { projectId: string }) {
             >
               <Sparkles className="h-3 w-3" />
             </motion.span>
-            Готово — сайт собран
+            {label}
           </motion.div>
         )}
       </AnimatePresence>

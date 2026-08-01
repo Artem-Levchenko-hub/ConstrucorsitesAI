@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { JoyBurst } from "@/components/workspace/JoyBurst";
 import {
   createMaxPreviewSession,
   syncMaxManagedKit,
@@ -197,9 +198,10 @@ export function MaxLivePreview({
 
   return (
     <aside
-      className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
+      className="relative flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
       data-testid="max-live-preview"
     >
+      <JoyBurst projectId={project.id} label="Готово — приложение ожило" />
       <div className="flex shrink-0 items-center justify-between gap-3 px-3 sm:px-5">
         <div>
           <p className="omnia-kicker text-[#8d887f]">Mobile WebView</p>

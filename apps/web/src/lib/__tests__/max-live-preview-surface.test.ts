@@ -19,11 +19,16 @@ const usageBreakdown = readFileSync(
 describe("MAX live preview surface", () => {
   it("keeps the phone on a transparent stage without a grey framing card", () => {
     expect(livePreview).toContain(
-      'className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"',
+      'className="relative flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"',
     );
     expect(livePreview).not.toContain('bg-[#f5f3ee]');
     expect(livePreview).not.toContain("0_30px_80px");
     expect(livePreview).toContain("0_12px_28px");
+  });
+
+  it("celebrates a completed MAX build inside the live preview", () => {
+    expect(livePreview).toContain("<JoyBurst projectId={project.id}");
+    expect(livePreview).toContain("Готово — приложение ожило");
   });
 
   it("does not paint a separate desktop preview column", () => {

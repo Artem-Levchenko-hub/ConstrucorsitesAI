@@ -20,9 +20,18 @@ import {
   Sparkles,
   Film,
   CircleAlert,
+  Compass,
+  Eye,
+  ListChecks,
+  Plug,
+  ShieldCheck,
 } from "lucide-react";
 import type { AgentStep, GenerationRunStatus } from "@/lib/api/types";
 import { agentElapsedSeconds } from "@/lib/agent-elapsed";
+import {
+  creativeNarration,
+  creativePhaseStates,
+} from "@/lib/agent-experience";
 import { agentTranscriptTitle } from "@/lib/agent-transcript";
 import { cn } from "@/lib/utils";
 import { EASE_OUT } from "@/lib/motion";
@@ -39,7 +48,15 @@ const ACTION_ICON: Record<string, typeof FileCode2> = {
   bash: Terminal,
   read_logs: ScrollText,
   runtime_check: Globe,
+  probe: Globe,
+  verify_isolation: ShieldCheck,
   generate_media: Film,
+  plan_task: Compass,
+  update_plan: ListChecks,
+  discover_capabilities: Plug,
+  call_capability: Zap,
+  read_skill: ScrollText,
+  see: Eye,
   done: CheckCircle2,
 };
 
@@ -54,7 +71,15 @@ const ACTION_LABEL: Record<string, string> = {
   bash: "Команда",
   read_logs: "Читаю логи",
   runtime_check: "Проверяю запуск",
+  probe: "Проверяю сценарий",
+  verify_isolation: "Проверяю защиту",
   generate_media: "Генерирую медиа",
+  plan_task: "Собираю замысел",
+  update_plan: "Фиксирую прогресс",
+  discover_capabilities: "Ищу возможности",
+  call_capability: "Изучаю актуальные данные",
+  read_skill: "Подключаю экспертизу",
+  see: "Полирую визуал",
   done: "Готово",
 };
 
@@ -96,6 +121,7 @@ export function AgentTranscript({
   startedAt,
   finishedAt,
   generationStatus,
+  studio = false,
 }: {
   projectId?: string;
   messageId: string;
@@ -104,6 +130,7 @@ export function AgentTranscript({
   startedAt?: string | null;
   finishedAt?: string | null;
   generationStatus?: GenerationRunStatus | null;
+  studio?: boolean;
 }) {
   const qc = useQueryClient();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -158,15 +185,28 @@ export function AgentTranscript({
   const incomplete =
     !streaming &&
     (generationStatus === "failed" || generationStatus === "cancelled" || steps.at(-1)?.ok === false);
+  const phases = creativePhaseStates(steps, Boolean(streaming));
+  const narration = creativeNarration(steps, Boolean(streaming));
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60">
+    <div
+      data-testid="agent-creative-session"
+      className={cn(
+        "overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60",
+        studio &&
+          "rounded-[14px] border-[#d8d4cb] bg-[linear-gradient(145deg,#fffefa_0%,#f8f4ec_100%)] shadow-[0_12px_32px_-26px_rgba(23,23,22,.45)]",
+      )}
+    >
       <button
         type="button"
+        aria-expanded={open}
         onClick={() => {
           if (!streaming) setDetailsOpen((value) => !value);
         }}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 transition-colors hover:bg-surface-overlay/60"
+        className={cn(
+          "flex min-h-12 w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-overlay/60",
+          studio && "hover:bg-[#f5efe5]/75",
+        )}
       >
         <ChevronRight
           className={cn(
@@ -174,24 +214,48 @@ export function AgentTranscript({
             open && "rotate-90",
           )}
         />
-        {streaming ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
-        ) : incomplete ? (
-          <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-500" />
-        ) : (
-          <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
-        )}
-        <span className={cn("text-xs font-medium", incomplete ? "text-red-600" : "text-fg-primary")}>
-          {agentTranscriptTitle(Boolean(streaming), generationStatus, steps.at(-1)?.ok === false)}
+        <span
+          className={cn(
+            "grid size-7 shrink-0 place-items-center rounded-full border border-border-subtle bg-surface-base text-accent",
+            studio && "border-[#f15a38]/18 bg-[#f15a38]/8 text-[#e85232]",
+            incomplete && "border-red-500/20 bg-red-500/8 text-red-500",
+          )}
+        >
+          {streaming ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : incomplete ? (
+            <CircleAlert className="h-3.5 w-3.5" />
+          ) : (
+            <Sparkles className="h-3.5 w-3.5" />
+          )}
         </span>
-        <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
+        <span className="min-w-0 flex-1">
+          <span
+            className={cn(
+              "block text-[9px] font-semibold uppercase tracking-[0.13em] text-fg-tertiary",
+              incomplete && "text-red-500",
+            )}
+          >
+            {agentTranscriptTitle(Boolean(streaming), generationStatus, steps.at(-1)?.ok === false)}
+          </span>
+          <span
+            className={cn(
+              "mt-0.5 block truncate text-xs font-medium text-fg-primary",
+              incomplete && "text-red-600",
+              studio && "text-[#24221f]",
+            )}
+          >
+            {narration}
+          </span>
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 font-mono text-[10px] tabular-nums text-fg-tertiary">
           {(streaming || elapsed > 0) && (
             <span className={cn(streaming && "text-accent")}>
               {streaming ? "" : "за "}
-              {formatElapsed(elapsed)} ·
+              {formatElapsed(elapsed)}
             </span>
           )}
-          <span>{steps.length} шаг. · детали</span>
+          <span className="hidden sm:inline">· {steps.length} шаг.</span>
         </span>
       </button>
 
@@ -204,6 +268,38 @@ export function AgentTranscript({
             transition={{ duration: 0.2, ease: EASE_OUT }}
             className="overflow-hidden border-t border-border-subtle"
           >
+            <div
+              className={cn(
+                "grid grid-cols-4 gap-1.5 border-b border-border-subtle px-3 py-2.5",
+                studio && "border-[#ded8ce] bg-white/35",
+              )}
+              aria-label="Фазы творческой сборки"
+            >
+              {phases.map((phase) => (
+                <div key={phase.id} className="min-w-0" title={phase.description}>
+                  <span
+                    className={cn(
+                      "block h-1 rounded-full bg-border-subtle transition-[background-color,box-shadow] duration-300",
+                      phase.status === "complete" && "bg-emerald-500/55",
+                      phase.status === "active" &&
+                        "bg-accent shadow-[0_0_12px_rgba(241,90,56,.32)]",
+                      phase.status === "issue" && "bg-red-500",
+                    )}
+                  />
+                  <span
+                    className={cn(
+                      "mt-1.5 block truncate text-[9px] font-medium text-fg-tertiary",
+                      phase.status === "active" && "text-fg-primary",
+                      phase.status === "complete" && "text-emerald-700",
+                      phase.status === "issue" && "text-red-600",
+                      studio && phase.status === "active" && "text-[#24221f]",
+                    )}
+                  >
+                    {phase.label}
+                  </span>
+                </div>
+              ))}
+            </div>
             <ol className="space-y-0.5 p-1.5">
               {steps.map((s, i) => {
                 const Icon = stepIcon(s);

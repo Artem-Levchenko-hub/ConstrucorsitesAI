@@ -16,6 +16,7 @@ def test_max_system_gets_only_compact_capability_catalog() -> None:
     prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT", index)
     assert "MAX capability catalog" in prompt
     assert "`product-strategy`" in prompt
+    assert "read_skill(`ui-ux-pro-max`)" in prompt
 
 
 def test_stack_skill_loader_is_slug_allowlisted() -> None:
@@ -57,6 +58,9 @@ def test_ui_ux_pro_skill_is_project_matched_evidence_not_preset() -> None:
     assert "not a visual prescription" in content
     assert "Data-viz candidates" in content
     assert "High-severity UX evidence" in content
+    assert "creative virtuoso lens" in content
+    assert "Build a delight map" in content
+    assert "three-direction exploration" in content
     assert "LANDING PATTERN" not in content
     assert "Phosphor" not in content  # not installed in the pinned MAX starter
 

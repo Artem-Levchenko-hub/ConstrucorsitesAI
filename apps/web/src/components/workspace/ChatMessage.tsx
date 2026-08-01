@@ -143,6 +143,7 @@ export function ChatMessage({
               }
               finishedAt={message.generation_finished_at}
               generationStatus={message.generation_status}
+              studio={studio}
             />
           )}
 

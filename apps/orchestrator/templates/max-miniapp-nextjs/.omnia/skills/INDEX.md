@@ -19,9 +19,10 @@ surgical edit, skip skill loading unless the change crosses a specialist domain.
   structure, contrast, focus, localization and resilient edge states.
 - `media-art-direction` — decide when generated imagery materially improves a
   product and direct it as one coherent visual system.
-- `ui-ux-pro-max` — query Omnia's vendored ui-ux-pro-max knowledge for
-  project-matched colour, typography, visual-language, icon, chart and UX
-  evidence. The returned candidates are raw material, never a chosen preset.
+- `ui-ux-pro-max` — the mandatory first-build creative-virtuoso lens: product
+  emotion, three-direction art exploration, signature interaction, delight map,
+  mobile craft and project-matched colour/type/pattern evidence. It expands
+  creative range without choosing a preset or reusable visual skeleton.
 
 Skill packs may disagree. Reconcile them against the user's primary action and
 the selected art direction; the brief always wins.
