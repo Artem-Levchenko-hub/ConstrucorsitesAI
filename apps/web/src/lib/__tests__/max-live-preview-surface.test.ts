@@ -28,7 +28,7 @@ describe("MAX live preview surface", () => {
 
   it("does not paint a separate desktop preview column", () => {
     expect(workspaceShell).toContain(
-      'className="hidden min-h-0 bg-transparent xl:block"',
+      'className="hidden h-full max-h-full min-h-0 overflow-hidden bg-transparent xl:block"',
     );
     expect(workspaceShell).toContain(
       'className="relative flex h-full w-full max-w-[460px] flex-col bg-[#fcfbf7]',

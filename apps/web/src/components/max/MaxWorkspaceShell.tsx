@@ -64,7 +64,7 @@ export function MaxWorkspaceShell({
     <div
       data-light-shell
       className={cn(
-        "grid h-dvh min-h-0 grid-cols-1 overflow-hidden bg-[#fcfbf7] text-[#171716] transition-[grid-template-columns] duration-200",
+        "relative isolate grid h-full max-h-full min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden bg-[#fcfbf7] text-[#171716] transition-[grid-template-columns] duration-200",
         navigationVisible
           ? "lg:grid-cols-[220px_minmax(0,1fr)]"
           : "lg:grid-cols-[minmax(0,1fr)]",
@@ -78,11 +78,11 @@ export function MaxWorkspaceShell({
       )}
     >
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col border-r border-[#d8d4cb] bg-[#fcfbf7] transition-transform lg:static lg:translate-x-0 ${navigationVisible ? "lg:flex" : "lg:hidden"} ${
+        className={`fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh min-h-0 w-[220px] flex-col overflow-hidden border-r border-[#d8d4cb] bg-[#fcfbf7] transition-transform lg:static lg:h-full lg:max-h-full lg:translate-x-0 ${navigationVisible ? "lg:flex" : "lg:hidden"} ${
           mobileNavOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="flex h-16 items-center justify-between border-b border-[#d8d4cb] px-5">
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-[#d8d4cb] px-5">
           <BrandMark href="/max" />
           <div className="flex items-center">
             <button
@@ -101,7 +101,10 @@ export function MaxWorkspaceShell({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3"
+          data-testid="max-navigation-scroll"
+        >
           <Link href="/max" className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
             <LayoutGrid className="size-4" /> Все проекты
           </Link>
@@ -125,7 +128,7 @@ export function MaxWorkspaceShell({
           </div>
         </div>
 
-        <div className="border-t border-[#d8d4cb] p-3">
+        <div className="shrink-0 border-t border-[#d8d4cb] p-3">
           <Link href="/account" className="flex min-h-11 min-w-0 items-center gap-2.5 rounded-[8px] p-2 hover:bg-[#f5f3ee]">
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#171716] text-[11px] font-semibold text-white">{email.slice(0, 1).toUpperCase()}</span>
             <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{email.split("@")[0]}</span><span className="block truncate text-[9px] text-[#8d887f]">{email}</span></span>
@@ -137,7 +140,7 @@ export function MaxWorkspaceShell({
         </div>
       </aside>
 
-      <section className="flex min-h-0 min-w-0 flex-col bg-[#fcfbf7]">
+      <section className="flex h-full max-h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#fcfbf7]">
         <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#d8d4cb] px-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-1 sm:gap-3">
             <button type="button" onClick={() => setMobileNavOpen(true)} className="grid size-11 shrink-0 place-items-center rounded-[8px] text-[#6d6962] lg:hidden" aria-label="Открыть меню"><Menu className="size-4" /></button>
@@ -221,7 +224,7 @@ export function MaxWorkspaceShell({
           <ChevronDown className="size-3.5 shrink-0 -rotate-90 text-[#8d887f]" />
         </button>
 
-        <div className="min-h-0 flex-1 max-studio-chat">
+        <div className="max-studio-chat min-h-0 flex-1 overflow-hidden">
           <ChatPanel
             projectId={project.id}
             projectSlug={project.slug}
@@ -233,7 +236,7 @@ export function MaxWorkspaceShell({
       </section>
 
       {previewPanelVisible && (
-        <div className="hidden min-h-0 bg-transparent xl:block">
+        <div className="hidden h-full max-h-full min-h-0 overflow-hidden bg-transparent xl:block">
           <MaxLivePreview
             project={project}
             onClose={() => setPreviewPanelVisible(false)}
