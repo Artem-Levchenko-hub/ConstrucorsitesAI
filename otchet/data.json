@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-01",
-  "version": 18,
+  "version": 19,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2195,6 +2195,18 @@
    "evidence": "Production-run f769dc88 прошёл clean build и runtime 200 после записи Dashboard, AddWorkout, History, Profile и Nutrition. Затем generic verify_isolation/probe получили HTML login вместо JSON, see не получил screenshot, после чего контур запустил ещё два сегмента и откатил зелёный продукт к canvas. В исправлении MAX блокирует source-contract + clean build + runtime_check + один see через подписанную preview-session; generic probe/verify_isolation исключены, а недоступная visual-QA становится advisory и не перезапускает модель. Обычный путь ограничен одним 30-step проходом; один recovery разрешён только при оставшемся source-gap. Добавлены блокировка .env/ключей до записи в repo, redirect в Integration Hub без запуска модели и отдельный failed-заголовок в плашке шагов. Локально: 32 API tests, ruff, strict mypy, 127 Web tests, typecheck и lint зелёные. Production ревизии 8fb66788: Linux Docker собрал 46/46 Next-страниц, api/web healthy, worker running; runtime подтвердил native-agent=true, green-before-done=true и gemini-3.1-pro-preview-customtools. Для fitness-c3394b чистая MAX-основа проходит build/runtime 200, подписанный preview возвращает 200 и HttpOnly-сессию; репозиторий, 6 snapshot, история чата и live-контейнер очищены от засвеченного ключа (0 secret hits, 0 secret files). Платный browser-run оставлен владельцу.",
    "impact": "Чисто собранное MAX-приложение больше не должно откатываться из-за чужой схемы авторизации проверок. Если же откат реально произошёл, чат и плашка шагов честно покажут «Сборка не завершена»; секрет не попадёт в git даже при прямой команде модели.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H114",
+   "title": "MAX начинает генерацию без продуктового шаблона и canvas",
+   "status": "testing",
+   "score": null,
+   "category": "MAX / Gemini / генерация / качество / надёжность",
+   "period": "01.08",
+   "description": "Полностью убрать готовую продуктовую страницу из первого MAX-запуска: модель должна сама создать page.tsx, стили, навигацию, экраны и сценарии, а техническое ядро не может считаться приложением или показываться как успешная генерация.",
+   "evidence": "Сравнение с рабочей revision 451fd117 показало, что прежний быстрый результат опирался на детерминированный готовый product starter; позднее его заменили на нейтральный canvas, но canvas всё равно оставался настоящим src/app/page.tsx и переживал snapshot/rollback. В kit 13 удалён сам page.tsx, canvas-CSS заменён минимальным техническим reset, а prompt и semantic done-gate требуют создать продукт с нуля. Перед первым Google-run API принудительно удаляет legacy page; если чистое ядро подготовить не удалось, вызов Gemini не запускается. Rollback теперь сохраняет только MAX core без продуктовой страницы и честно помечает сборку незавершённой. Локально зелёные 36 целевых API-тестов, 38 orchestrator-тестов, ruff, strict mypy и MAX TypeScript typecheck; Linux production собрал API/worker и отдельный omnia-template-max-miniapp-nextjs:dev без page/canvas. Revision fe9dcaed развёрнута production compose, API/Web/Gateway healthy, публичные /api/health, /web-health и /max отвечают 200. Проблемный fitness-c3394b переведён на kit 13: все 6 snapshot указывают на 52d94eb2, repo и live-контейнер не содержат page/canvas, typecheck clean; новых GenerationRun и вызовов модели при миграции не было. Платный browser-canary оставлен владельцу.",
+   "impact": "Новая MAX-генерация больше не может выдать универсальную заготовку или пустой canvas за приложение. Google-агент получает полную свободу над продуктовым UI, но обязан реально создать домашнюю страницу и покрыть бриф; при инфраструктурной ошибке запуск останавливается до обращения к модели.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2675,11 +2687,11 @@
      true
     ],
     [
-     "Первый MAX-запуск: безопасный starter → обязательный Gemini Custom Tools agent → snapshot с реальными AI-правками; elapsed сохраняется после F5",
+     "Первый MAX-запуск: безопасный platform core без UI → обязательный Gemini Custom Tools agent → snapshot с реальными AI-правками; elapsed сохраняется после F5",
      true
     ],
     [
-     "Первый MAX-запуск без продуктового UI-шаблона: пустой canvas → brief-aware Gemini → semantic acceptance → real managed AI runtime",
+     "Первый MAX-запуск без product page/canvas: platform core → brief-aware Gemini → semantic acceptance → real managed AI runtime",
      true
     ],
     [
@@ -2710,7 +2722,8 @@
      "H110",
      "H111",
     "H112",
-    "H113"
+    "H113",
+    "H114"
    ]
   }
  ],
