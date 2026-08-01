@@ -18,6 +18,7 @@ stays the prod default until this is verified on real builds and billing is wire
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from itertools import count
@@ -64,6 +65,7 @@ _INFRA_DEAD_ABORT_AT = 3
 # `done` ends the loop. Kept intentionally minimal (fact tools only): the model
 # decides everything else itself, like Claude Code.
 _STR: dict[str, Any] = {"type": "string"}
+_STR_ARRAY: dict[str, Any] = {"type": "array", "items": _STR}
 
 
 def _tool(
@@ -169,6 +171,56 @@ _TOOLS: list[dict[str, Any]] = [
         ["create"],
     ),
     _tool(
+        "plan_task",
+        "Create or refine the observable execution plan. Store only objective, concrete "
+        "steps and acceptance criteria — never hidden reasoning. Call once near the start "
+        "of a substantial build; do not spend a separate turn on ceremonial planning.",
+        {
+            "objective": _STR,
+            "steps": _STR_ARRAY,
+            "acceptance_criteria": _STR_ARRAY,
+        },
+        ["objective", "steps", "acceptance_criteria"],
+    ),
+    _tool(
+        "update_plan",
+        "Persist a durable checkpoint after a meaningful milestone. Evidence must be an "
+        "observable tool result (file, clean build, runtime status or visual verdict), not "
+        "private reasoning.",
+        {
+            "step_id": _STR,
+            "status": {
+                "type": "string",
+                "enum": ["pending", "in_progress", "completed", "blocked"],
+            },
+            "summary": _STR,
+            "evidence": _STR_ARRAY,
+            "artifacts": _STR_ARRAY,
+            "next_action": _STR,
+        },
+        ["step_id", "status", "summary"],
+    ),
+    _tool(
+        "discover_capabilities",
+        "Discover operator-approved read-only tools from real MCP servers. Use only when "
+        "fresh external evidence can materially improve the current build; native file, "
+        "build and visual tools remain the primary path.",
+        {"server": _STR},
+    ),
+    _tool(
+        "call_capability",
+        "Call one exact read-only MCP capability returned by discover_capabilities. Never "
+        "invent a server/tool name, never use it for project mutation, and do not repeat an "
+        "identical call after receiving sufficient evidence.",
+        {
+            "server": _STR,
+            "tool": _STR,
+            "arguments": {"type": "object", "additionalProperties": True},
+            "reason": _STR,
+        },
+        ["server", "tool", "arguments"],
+    ),
+    _tool(
         "done",
         "Finish — the requested app is built AND the last build is clean. "
         "`summary` = structured RU markdown for the user (bold one-line result, then "
@@ -272,15 +324,52 @@ def _obs_to_tool_result(
         verb = "written" if tool_name == "write_file" else "edited"
         body = (
             f"File {verb} successfully"
-            + (f" ({size} characters now in the container)" if size is not None else "")
-            + ". Run build next; use read_file only if the compiler points back to it."
+            + (f" ({size} characters)" if size is not None else "")
+            + ". Current source is in the container."
         )
     else:
         body = (
             obs.get("content") or obs.get("detail") or obs.get("error") or ("ok" if ok else "error")
         )
-    text = str(body)[:_MAX_TOOL_RESULT_CHARS]
-    block: dict[str, Any] = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text}
+    text = str(body)[: _MAX_TOOL_RESULT_CHARS // 2]
+    status = str(obs.get("status") or ("success" if ok else "error"))
+    raw_next_actions = obs.get("next_actions")
+    next_actions = (
+        [str(item)[:500] for item in raw_next_actions[:6]]
+        if isinstance(raw_next_actions, list)
+        else []
+    )
+    if not next_actions:
+        if ok and tool_name in {"write_file", "edit_file"}:
+            next_actions = ["Run build and fix the exact compiler output if it fails."]
+        elif ok and tool_name == "build":
+            next_actions = ["Run the remaining runtime and visual proof after the last write."]
+        elif not ok:
+            next_actions = [
+                "Use the root-cause hint once; stop repeating the identical failing call."
+            ]
+    raw_artifacts = obs.get("artifacts")
+    artifacts = (
+        [str(item)[:500] for item in raw_artifacts[:20]]
+        if isinstance(raw_artifacts, list)
+        else []
+    )
+    if tool_name in {"write_file", "edit_file"} and ok:
+        artifacts = list(dict.fromkeys([*artifacts, str(obs.get("path") or "")]))
+        artifacts = [item for item in artifacts if item]
+    payload = {
+        "status": status,
+        "summary": str(obs.get("summary") or text)[:1000],
+        "next_actions": next_actions,
+        "artifacts": artifacts,
+        "data": "" if ok and tool_name in {"write_file", "edit_file"} else text,
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    block: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": serialized,
+    }
     if not ok:
         block["is_error"] = True
     return block
@@ -403,7 +492,11 @@ _NATIVE_PREAMBLE = (
     "ИМЕНИ залогиненного юзера, verify_isolation — доказать отсутствие утечки данных "
     "между юзерами, docs — свежая дока библиотек. Думай сколько нужно. Цикл: пиши "
     "код → build → чини РЕАЛЬНЫЕ ошибки до чистоты → ДОКАЖИ что работает → done. Пиши "
-    "полноценно, без заглушек и TODO.\n\n"
+    "полноценно, без заглушек и TODO. Для большой задачи вызови plan_task один раз "
+    "вместе с первыми полезными действиями, затем update_plan только после реальных "
+    "milestones; это наблюдаемый checkpoint, не пересказ скрытых рассуждений. Внешние "
+    "MCP-возможности сначала найди через discover_capabilities и вызывай только когда "
+    "они дают необходимые свежие факты.\n\n"
     "ДОКАЖИ перед done — чистый build это НЕ доказательство работы: "
     "(1) runtime_check главные роуты (чистый typecheck всё равно может 5xx на рендере); "
     "(2) для интерактива (создать/сохранить/отправить/удалить) — probe РЕАЛЬНЫМ запросом "
@@ -507,7 +600,12 @@ _MAX_NATIVE_PREAMBLE = (
     "напрямую: read_file/list_dir/grep — понять защищённое ядро, write_file/edit_file — "
     "писать продуктовые файлы, build — компиляция, runtime_check — живой роут, see — "
     "скриншоты и независимая mobile/MAX-критика. Пиши полноценно, без TODO, заглушек, "
-    "декоративных кнопок и симулированного успеха.\n\n"
+    "декоративных кнопок и симулированного успеха. В начале существенной сборки уточни "
+    "наблюдаемый план через plan_task, затем фиксируй реальные milestones инструментом "
+    "update_plan. Не записывай скрытые рассуждения. Для свежей внешней документации и "
+    "исследований доступны разрешённые read-only MCP capabilities: сначала "
+    "discover_capabilities, затем один точный call_capability; не подменяй ими работу "
+    "с живым проектом и не зацикливайся на внешнем сервере.\n\n"
     "АРТ-ДИРЕКЦИЯ ДО КОДА. Внутренне сформируй ТРИ действительно разных направления "
     "для этого брифа — они должны различаться композицией, плотностью, типографическим "
     "голосом, формой и хореографией движения, а не только цветом. Выбери одно по "

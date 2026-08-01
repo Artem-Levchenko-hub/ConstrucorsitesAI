@@ -113,7 +113,9 @@ from omnia_api.services.file_extractor import (
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     finalize_generation_run,
+    latest_failed_agent_state,
     reserve_generation_run,
+    save_generation_agent_state,
     set_generation_run_status,
 )
 from omnia_api.services.image_resolver import resolve_images
@@ -538,6 +540,10 @@ _STEP_VERB: dict[str, str] = {
     "bash": "Выполняю команду",
     "docs": "Читаю документацию",
     "read_skill": "Подключаю экспертный навык",
+    "plan_task": "Уточняю план сборки",
+    "update_plan": "Сохраняю контрольную точку",
+    "discover_capabilities": "Ищу внешние возможности",
+    "call_capability": "Использую MCP-инструмент",
     "runtime_check": "Открываю страницу",
     "probe": "Проверяю действие",
     "verify_isolation": "Проверяю безопасность данных",
@@ -3060,6 +3066,7 @@ async def _process_prompt(
             # NB: `is_first_build` lives in the POST handler (post_prompt), NOT in
             # this worker fn — use the in-scope `current_snapshot_id` (None on a
             # brand-new project's first build) so this never NameErrors.
+            _user_requested_continue = _is_continue_request(prompt_text)
             _has_prior_build = current_snapshot_id is not None
             _is_continue = _has_prior_build and _is_continue_request(prompt_text)
             _is_edit = (not orchestrate) and not _is_continue
@@ -3099,6 +3106,30 @@ async def _process_prompt(
                                 "[PP] MAX resume recovered original brief from history",
                                 flush=True,
                             )
+
+            # Durable observable plan. A retry inherits the last failed run's
+            # checkpoint, while a fresh request starts from a small deterministic
+            # lifecycle and lets Gemini refine it through plan_task. This stores
+            # no hidden reasoning — only objective, statuses, evidence and paths.
+            from omnia_api.services import agent_plan
+
+            _recovered_agent_state: dict[str, object] | None = None
+            if _user_requested_continue:
+                async with factory() as _checkpoint_session:
+                    _recovered_agent_state = await latest_failed_agent_state(
+                        _checkpoint_session,
+                        project_id=project_id,
+                        exclude_run_id=run_id,
+                    )
+            _agent_state: dict[str, Any] = (
+                dict(_recovered_agent_state)
+                if _recovered_agent_state
+                else agent_plan.initial_plan(
+                    prompt_text,
+                    max_product=project_template == "max_miniapp",
+                )
+            )
+            await save_generation_agent_state(run_id, _agent_state)
 
             async def _agent_emit(event: str, data: dict[str, Any]) -> None:
                 # Surface each agent step as a STRUCTURED transcript event so the
@@ -3244,6 +3275,133 @@ async def _process_prompt(
                     return await _base_agent_executor(action)
             else:
                 _agent_executor = _base_agent_executor
+
+            # MCP + planning are harness tools, not container operations. Keep
+            # them around the project executor so MAX safety/locked-file rules
+            # remain authoritative and every real observation updates the
+            # durable checkpoint automatically.
+            _project_agent_executor = _agent_executor
+            _mcp_broker: Any = None
+
+            async def _agent_executor(action: agent_builder.Action) -> dict[str, Any]:
+                nonlocal _agent_state, _mcp_broker
+                if action.name == "plan_task":
+                    try:
+                        _agent_state = agent_plan.make_plan(
+                            objective=action.args.get("objective"),
+                            steps=action.args.get("steps"),
+                            acceptance_criteria=action.args.get("acceptance_criteria"),
+                            previous=_agent_state,
+                        )
+                    except ValueError as exc:
+                        return {
+                            "ok": False,
+                            "status": "error",
+                            "error": str(exc),
+                            "summary": str(exc),
+                            "next_actions": [
+                                "Fix the plan arguments once; keep it concrete and under 12 steps."
+                            ],
+                            "artifacts": [],
+                        }
+                    await save_generation_agent_state(run_id, _agent_state)
+                    return agent_plan.observation(_agent_state, "Execution plan persisted.")
+                if action.name == "update_plan":
+                    try:
+                        _agent_state = agent_plan.update_plan(
+                            _agent_state,
+                            step_id=action.args.get("step_id"),
+                            status=action.args.get("status"),
+                            summary=action.args.get("summary"),
+                            evidence=action.args.get("evidence"),
+                            artifacts=action.args.get("artifacts"),
+                            next_action=action.args.get("next_action"),
+                        )
+                    except ValueError as exc:
+                        return {
+                            "ok": False,
+                            "status": "error",
+                            "error": str(exc),
+                            "summary": str(exc),
+                            "next_actions": [
+                                "Use an exact step_id returned by plan_task and factual evidence."
+                            ],
+                            "artifacts": [],
+                        }
+                    await save_generation_agent_state(run_id, _agent_state)
+                    return agent_plan.observation(_agent_state, "Execution checkpoint persisted.")
+                if action.name in {"discover_capabilities", "call_capability"}:
+                    from omnia_api.services.mcp_broker import McpBroker
+
+                    obs: dict[str, Any]
+                    try:
+                        _mcp_broker = _mcp_broker or McpBroker()
+                        if action.name == "discover_capabilities":
+                            obs = await _mcp_broker.discover(
+                                str(action.args.get("server") or "").strip()
+                            )
+                        else:
+                            raw_arguments = action.args.get("arguments")
+                            arguments = raw_arguments if isinstance(raw_arguments, Mapping) else {}
+                            obs = await _mcp_broker.call(
+                                server=str(action.args.get("server") or "").strip(),
+                                tool=str(action.args.get("tool") or "").strip(),
+                                arguments=arguments,
+                            )
+                    except Exception as exc:
+                        obs = {
+                            "ok": False,
+                            "status": "error",
+                            "error": f"MCP broker configuration failed: {type(exc).__name__}",
+                            "summary": "MCP broker is unavailable for this generation.",
+                            "next_actions": [
+                                "Continue with native project tools; do not retry this MCP call."
+                            ],
+                            "artifacts": [],
+                        }
+                    _agent_state = agent_plan.record_tool_evidence(
+                        _agent_state,
+                        tool=action.name,
+                        ok=bool(obs.get("ok")),
+                        summary=str(obs.get("summary") or obs.get("error") or "MCP call finished"),
+                    )
+                    await save_generation_agent_state(run_id, _agent_state)
+                    return obs
+
+                obs = await _project_agent_executor(action)
+                obs.setdefault("path", action.path)
+                if action.name in {
+                    "write_file",
+                    "edit_file",
+                    "build",
+                    "runtime_check",
+                    "see",
+                    "probe",
+                    "verify_isolation",
+                    "generate_media",
+                }:
+                    if action.name in {"write_file", "edit_file"}:
+                        summary = (
+                            f"{action.name} {'succeeded' if obs.get('ok') else 'failed'}: "
+                            f"{action.path}"
+                        )
+                    else:
+                        summary = str(
+                            obs.get("summary")
+                            or obs.get("detail")
+                            or obs.get("error")
+                            or f"{action.name} completed"
+                        )[:1000]
+                    artifact = action.path if action.name in {"write_file", "edit_file"} else ""
+                    _agent_state = agent_plan.record_tool_evidence(
+                        _agent_state,
+                        tool=action.name,
+                        ok=bool(obs.get("ok")),
+                        summary=summary,
+                        artifact=artifact,
+                    )
+                    await save_generation_agent_state(run_id, _agent_state)
+                return obs
             # Seed the agent with the project layout + the CrudResource component
             # up-front so it does NOT burn steps re-discovering the fixed template
             # (the #1 latency sink observed in the first live runs). Fail-soft.
@@ -3488,6 +3646,9 @@ async def _process_prompt(
                     )
                 _agent_system = _stack_system
                 _agent_steps = min(30, max(1, int(get_settings().agent_builder_max_steps)))
+            _checkpoint_context = agent_plan.recovery_context(_recovered_agent_state)
+            if _checkpoint_context:
+                _agent_user = f"{_agent_user}\n\n{_checkpoint_context}"
             # The historical cinematic pipeline uses one strong Opus model for
             # planning, implementation, visual review, and recovery. Operators
             # can still retune a role through ROLE_MODELS without a code deploy.

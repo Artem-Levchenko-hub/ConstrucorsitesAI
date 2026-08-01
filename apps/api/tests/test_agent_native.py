@@ -8,6 +8,7 @@ completion contract is green or the user cancels the parent task.
 from __future__ import annotations
 
 import inspect
+import json
 from typing import Any
 
 import pytest
@@ -41,7 +42,18 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     assert "Awwwards" not in prompt
 
     max_names = {tool["name"] for tool in agent_native._MAX_TOOLS_CACHED}
-    assert {"build", "runtime_check", "see", "write_file", "read_skill", "done"} <= max_names
+    assert {
+        "build",
+        "runtime_check",
+        "see",
+        "write_file",
+        "read_skill",
+        "plan_task",
+        "update_plan",
+        "discover_capabilities",
+        "call_capability",
+        "done",
+    } <= max_names
     assert not ({"bash", "probe", "verify_isolation"} & max_names)
     assert "read_skill" not in {tool["name"] for tool in agent_native._TOOLS_CACHED}
     assert agent_native._MAX_TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
@@ -806,6 +818,26 @@ def test_successful_file_mutation_observation_does_not_echo_whole_source() -> No
     assert len(str(result["content"])) < 300
     assert str(len(source)) in str(result["content"])
     assert "export const" not in str(result["content"])
+
+
+def test_native_observation_has_stable_harness_shape() -> None:
+    result = agent_native._obs_to_tool_result(
+        "tu_build",
+        {"ok": False, "error": "TS2307 missing module"},
+        tool_name="build",
+    )
+    payload = json.loads(result["content"])
+
+    assert result["is_error"] is True
+    assert payload == {
+        "status": "error",
+        "summary": "TS2307 missing module",
+        "next_actions": [
+            "Use the root-cause hint once; stop repeating the identical failing call."
+        ],
+        "artifacts": [],
+        "data": "TS2307 missing module",
+    }
 
 
 @pytest.mark.asyncio

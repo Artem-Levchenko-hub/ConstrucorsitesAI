@@ -19,9 +19,11 @@ from omnia_api.models.user import User
 from omnia_api.routers import messages
 from omnia_api.services.generation_runs import (
     finalize_generation_run,
+    latest_failed_agent_state,
     reconcile_completed_build_runs,
     recover_interrupted_generation_runs,
     reserve_generation_run,
+    save_generation_agent_state,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -489,3 +491,35 @@ async def test_startup_recovery_releases_interrupted_run(
     )
     assert replayed is False
     assert replacement.id != run.id
+
+
+async def test_failed_run_keeps_observable_checkpoint_for_retry(
+    db_session: AsyncSession,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key="checkpoint-recovery",
+        prompt_hash="hash",
+        status="running",
+    )
+    db_session.add(run)
+    await db_session.commit()
+
+    state: dict[str, object] = {
+        "objective": "Собрать MAX-приложение",
+        "steps": [{"id": "step-1", "title": "Собрать экран", "status": "completed"}],
+        "last_tool": "build",
+        "last_summary": "Build clean",
+        "next_action": "Проверить runtime",
+    }
+    await save_generation_agent_state(run.id, state, db_session)
+    assert await recover_interrupted_generation_runs(db_session) == 1
+
+    recovered = await latest_failed_agent_state(
+        db_session,
+        project_id=project.id,
+    )
+
+    assert recovered == state

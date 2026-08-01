@@ -78,6 +78,16 @@ class Settings(BaseSettings):
     llm_gateway_url: str = Field(default="http://localhost:8001")
     mock_llm: bool = Field(default=True)
 
+    # MCP capability broker. External servers are never connected from the
+    # browser and never handed project credentials directly. The API exposes a
+    # small, read-only meta-tool surface to the native agent and resolves only
+    # operator-controlled servers from this allow-list.
+    mcp_capabilities_enabled: bool = Field(default=True)
+    mcp_context7_enabled: bool = Field(default=True)
+    mcp_servers_json: str = Field(default="")
+    mcp_catalog_ttl_seconds: int = Field(default=900, ge=30, le=86400)
+    mcp_max_result_chars: int = Field(default=12000, ge=1000, le=50000)
+
     # V2 orchestrator (apps/orchestrator on :8003). Internal-only API behind
     # a shared-secret header — token MUST match the one in the orchestrator's
     # /opt/omnia/apps/orchestrator/.env file.

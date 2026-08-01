@@ -192,6 +192,57 @@ async def set_generation_run_status(
         await session.commit()
 
 
+async def save_generation_agent_state(
+    run_id: UUID,
+    state: dict[str, object],
+    session: AsyncSession | None = None,
+) -> None:
+    """Persist a bounded, observable agent checkpoint from the background task."""
+
+    if session is not None:
+        run = await session.get(GenerationRun, run_id)
+        if run is None:
+            return
+        run.agent_state = state
+        await session.commit()
+        return
+
+    from omnia_api.core.db import get_engine
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        run = await session.get(GenerationRun, run_id)
+        if run is None:
+            return
+        run.agent_state = state
+        await session.commit()
+
+
+async def latest_failed_agent_state(
+    session: AsyncSession,
+    *,
+    project_id: UUID,
+    exclude_run_id: UUID | None = None,
+) -> dict[str, object] | None:
+    """Return the newest failed checkpoint that a user retry can continue."""
+
+    statement = (
+        select(GenerationRun)
+        .where(
+            GenerationRun.project_id == project_id,
+            GenerationRun.status == "failed",
+        )
+        .order_by(GenerationRun.created_at.desc())
+        .limit(1)
+    )
+    if exclude_run_id is not None:
+        statement = statement.where(GenerationRun.id != exclude_run_id)
+    run = (await session.execute(statement)).scalar_one_or_none()
+    if run is None or not run.agent_state:
+        return None
+    return dict(run.agent_state)
+
+
 async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
     run = await session.get(GenerationRun, run_id)
     if run is None:
