@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getLastDeploy, getRuntime } from "@/lib/api/runtime";
 import { getMaxJourney } from "@/lib/max-journey";
+import { getMaxPublicationState } from "@/lib/max-publication-state";
 
 const activePhases = new Set(["queued", "building", "pushing", "swapping", "cancelling"]);
 
@@ -52,7 +53,10 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
 
   const phase = deploy.data?.phase;
   const inProgress = activePhases.has(phase ?? "");
-  const complete = phase === "done";
+  const publicationState = getMaxPublicationState(readiness.data, phase);
+  const complete = publicationState === "published";
+  const outdated = publicationState === "outdated";
+  const checkingPublication = phase === "done" && readiness.isLoading;
   const failed = phase === "failed";
   const currentIndex = Math.max(0, phaseSteps.findIndex(([id]) => id === phase));
   const journey = getMaxJourney(projectId, readiness.data?.items ?? []);
@@ -66,8 +70,29 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
       title="Публикация"
       lead="Публикация заменяет версию за тем же постоянным HTTPS-адресом: Studio фиксирует зелёный snapshot, собирает production-образ и только потом переключает трафик."
     >
-      {!inProgress && !complete && (
+      {checkingPublication && (
+        <section className="mt-8 flex items-center gap-4 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+          <Loader2 className="size-5 shrink-0 animate-spin text-[#f15a38]" />
+          <div>
+            <h2 className="font-semibold">Проверяем актуальность публикации</h2>
+            <p className="mt-1 text-sm text-[#6d6962]">Сверяем последний деплой с текущей версией проекта.</p>
+          </div>
+        </section>
+      )}
+
+      {!inProgress && !complete && !checkingPublication && (
         <>
+          {outdated && (
+            <section className="mt-8 flex items-start gap-4 rounded-[12px] border border-[#e8a127]/40 bg-[#fffaf0] p-6">
+              <CircleAlert className="mt-0.5 size-5 shrink-0 text-[#c47b12]" />
+              <div>
+                <h2 className="font-semibold">Текущая версия не опубликована</h2>
+                <p className="mt-2 max-w-[760px] text-sm leading-6 text-[#6d6962]">
+                  В истории остался предыдущий успешный деплой, но после изменений текущая версия проекта отличается от него. Опубликуйте её снова — постоянный HTTPS-адрес останется тем же.
+                </p>
+              </div>
+            </section>
+          )}
           <section className="mt-8 grid gap-4 lg:grid-cols-2">
             <article className="rounded-[12px] border-2 border-[#f15a38] bg-[#fcfbf7] p-6 sm:p-8">
               <div className="flex items-start justify-between">
