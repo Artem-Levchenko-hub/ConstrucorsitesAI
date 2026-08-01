@@ -134,12 +134,19 @@ export function MaxLivePreview({
     : `/p/${project.slug}`;
   const previewUrl = previewSession.data?.url ?? null;
   const connected = Boolean(previewUrl);
+  // A cold provision can outlive an earlier start request. Once polling sees
+  // the runtime running, that old mutation error is no longer relevant and
+  // must not replace the active "preparing" state with a false failure.
   const previewError =
-    managedKit.error ?? previewSession.error ?? start.error ?? runtime.error;
+    (managedKit.isError ? managedKit.error : null) ??
+    (previewSession.isError ? previewSession.error : null) ??
+    (!runtimeRunning && start.isError ? start.error : null) ??
+    (runtime.isError ? runtime.error : null);
   const preparing =
     runtime.isLoading ||
     start.isPending ||
     (runtimeRunning && (managedKit.isLoading || previewSession.isLoading));
+  const showPreviewError = Boolean(previewError) && !preparing;
 
   async function openSeparatePreview() {
     const popup = window.open("about:blank", "_blank");
@@ -267,16 +274,16 @@ export function MaxLivePreview({
                         <Play className="size-7 text-[#f15a38]" />
                       )}
                       <p className="mt-5 text-[15px] font-medium text-[#171716]">
-                        {previewError
+                        {showPreviewError
                           ? "Не удалось открыть безопасное превью"
                           : "Подготавливаем рабочую версию"}
                       </p>
                       <p className="mt-2 text-[12px] leading-5 text-[#8d887f]">
-                        {previewError
+                        {showPreviewError
                           ? "Данные приложения не открываются без защищённой preview-сессии."
                           : "Синхронизируем приложение и запускаем изолированную preview-сессию."}
                       </p>
-                      {!preparing && (
+                      {showPreviewError && (
                         <button
                           type="button"
                           onClick={retryPreview}

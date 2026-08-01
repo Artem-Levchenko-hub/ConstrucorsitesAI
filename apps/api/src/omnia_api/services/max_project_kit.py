@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from uuid import UUID
 
@@ -13,7 +14,10 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 7
+MAX_MANAGED_KIT_VERSION = 8
+_MANAGED_COMPONENT_IMPORT_RE = re.compile(
+    r'''from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']'''
+)
 
 
 def _template_candidates(
@@ -47,14 +51,34 @@ def _json(config: MaxProjectConfigPayload) -> str:
     )
 
 
+def _validate_managed_component_graph(files: dict[str, str]) -> None:
+    """Refuse an incomplete platform kit before it reaches a project snapshot.
+
+    Omnia-prefixed components are owned by the platform, so every such import
+    must travel in the same atomic managed-file set. This keeps a future kit
+    edit from turning a valid user app into a runtime `Module not found` error.
+    """
+    required = {
+        f"src/components/{component}.tsx"
+        for content in files.values()
+        for component in _MANAGED_COMPONENT_IMPORT_RE.findall(content)
+    }
+    missing = sorted(required.difference(files))
+    if missing:
+        raise RuntimeError(f"MAX managed kit is missing imported files: {', '.join(missing)}")
+
+
 def render_max_managed_files(
     config: MaxProjectConfigPayload, project_id: UUID | str | None = None
 ) -> dict[str, str]:
     """Files safe to apply to both a starter and an already-generated app."""
     data = _json(config)
     project_literal = json.dumps(str(project_id) if project_id else "")
-    return {
+    files = {
         "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
+        "src/components/OmniaCompliance.tsx": _template_file(
+            "src/components/OmniaCompliance.tsx"
+        ),
         "src/lib/max/validate-init-data.ts": _template_file("src/lib/max/validate-init-data.ts"),
         "src/app/api/max/session/route.ts": _template_file("src/app/api/max/session/route.ts"),
         "src/lib/max/session.ts": _template_file("src/lib/max/session.ts"),
@@ -338,3 +362,5 @@ export default function SupportPage() {
 }
 """,
     }
+    _validate_managed_component_graph(files)
+    return files

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import func, select
 
 from omnia_api.models.max_project_config import MaxProjectConfig
@@ -15,6 +16,7 @@ from omnia_api.schemas.max_studio import (
     MaxProjectConfigPayload,
     MaxUrlAttachedPayload,
 )
+from omnia_api.services import max_project_kit as max_project_kit_svc
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     _template_candidates,
@@ -54,6 +56,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
 
     assert set(files) == {
         "src/components/MaxAppProvider.tsx",
+        "src/components/OmniaCompliance.tsx",
         "src/lib/max/validate-init-data.ts",
         "src/app/api/max/session/route.ts",
         "src/lib/max/session.ts",
@@ -90,6 +93,11 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "installAuthenticatedFetch(webApp.initData)" in provider
     assert 'requestUrl.origin !== window.location.origin' in provider
     assert '!requestUrl.pathname.startsWith("/api/")' in provider
+    assert 'from "@/components/OmniaCompliance"' in provider
+    assert "src/components/OmniaCompliance.tsx" in files
+    assert 'from "@/lib/omnia/max-config"' in files[
+        "src/components/OmniaCompliance.tsx"
+    ]
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
     assert "timingSafeEqual" in validator
@@ -98,6 +106,20 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "length: initData.length" in session_route
     assert 'sameSite: "lax"' in session_route
     assert 'sameSite: "none"' not in session_route
+
+
+def test_managed_kit_refuses_a_missing_platform_component(monkeypatch) -> None:
+    original = max_project_kit_svc._template_file
+
+    def provider_with_missing_component(relative_path: str) -> str:
+        if relative_path == "src/components/MaxAppProvider.tsx":
+            return 'import { OmniaMissing } from "@/components/OmniaMissing";'
+        return original(relative_path)
+
+    monkeypatch.setattr(max_project_kit_svc, "_template_file", provider_with_missing_component)
+
+    with pytest.raises(RuntimeError, match=r"src/components/OmniaMissing\.tsx"):
+        render_max_managed_files(_config())
 
 
 def test_template_lookup_does_not_depend_on_repository_depth() -> None:

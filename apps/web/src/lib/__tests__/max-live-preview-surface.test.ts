@@ -36,4 +36,14 @@ describe("MAX live preview surface", () => {
       '<section className="flex min-h-0 min-w-0 flex-col border-r',
     );
   });
+
+  it("does not surface a stale start error while the runtime is recovering", () => {
+    expect(livePreview).toContain(
+      "(!runtimeRunning && start.isError ? start.error : null)",
+    );
+    expect(livePreview).toContain(
+      "const showPreviewError = Boolean(previewError) && !preparing",
+    );
+    expect(livePreview).toContain("{showPreviewError && (");
+  });
 });
