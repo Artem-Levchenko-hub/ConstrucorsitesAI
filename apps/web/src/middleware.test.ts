@@ -40,6 +40,13 @@ describe("auth middleware", () => {
     expect(response.headers.get("x-middleware-next")).toBe("1");
   });
 
+  it("keeps the MAX quick start public without a session", () => {
+    const response = middleware(request("/max/start"));
+
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
+
   it("still sends unauthenticated protected routes to login", () => {
     const response = middleware(request("/projects?filter=recent"));
 

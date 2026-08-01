@@ -19,6 +19,7 @@ export function middleware(req: NextRequest) {
   const isPublicMaxRoute =
     path === "/max/product" ||
     path === "/max/guide" ||
+    path === "/max/start" ||
     path === "/max/register" ||
     path === "/max/verify-email";
 
