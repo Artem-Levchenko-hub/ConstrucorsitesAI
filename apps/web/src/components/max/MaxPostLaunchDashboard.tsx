@@ -36,7 +36,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
       projectId={projectId}
       projectName={projectName}
       active="dashboard"
-      eyebrow="09 / Post-launch management"
+      eyebrow="Приложение запущено"
       title="После запуска"
       lead="Production-состояние, URL, контейнер, MAX webhook и история версий. Данные обновляются с сервера — этот экран не имитирует готовность локальными флагами."
     >

@@ -190,7 +190,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       projectId={projectId}
       projectName={projectName}
       active="integrations"
-      eyebrow="06 / Integrations"
+      eyebrow="Дополнительный шаг"
       title="Интеграции"
       lead="Авторизуйте сервис один раз для бизнеса. Секреты хранятся отдельно от исходного кода, а приложение получает только безопасные функции."
     >

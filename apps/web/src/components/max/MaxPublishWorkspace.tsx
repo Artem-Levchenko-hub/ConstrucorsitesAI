@@ -20,6 +20,7 @@ import { RuntimeButton } from "@/components/workspace/RuntimeButton";
 import { Button } from "@/components/ui/button";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getLastDeploy, getRuntime } from "@/lib/api/runtime";
+import { getMaxJourney } from "@/lib/max-journey";
 
 const activePhases = new Set(["queued", "building", "pushing", "swapping", "cancelling"]);
 
@@ -54,13 +55,14 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
   const complete = phase === "done";
   const failed = phase === "failed";
   const currentIndex = Math.max(0, phaseSteps.findIndex(([id]) => id === phase));
+  const journey = getMaxJourney(projectId, readiness.data?.items ?? []);
 
   return (
     <MaxSectionShell
       projectId={projectId}
       projectName={projectName}
       active="publish"
-      eyebrow="08 / Publishing and deployment"
+      eyebrow="Этап 5 из 6"
       title="Публикация"
       lead="Выберите размещение, запустите проверяемый production-деплой и получите постоянный HTTPS-адрес. Прогресс хранится на сервере и не сбрасывается после обновления страницы."
     >
@@ -163,11 +165,11 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
         </section>
       )}
 
-      <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {(readiness.data?.items ?? []).map((item) => (
-          <div key={item.id} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4">
-            <span className={`grid size-6 place-items-center rounded-full border ${item.done ? "border-[#248a4b] text-[#248a4b]" : "border-[#d8d4cb] text-[#aaa59b]"}`}>{item.done ? <Check className="size-3.5" /> : <ShieldCheck className="size-3" />}</span>
-            <p className="mt-3 text-xs font-medium">{item.label}</p>
+      <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {journey.stages.map((stage) => (
+          <div key={stage.id} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4">
+            <span className={`grid size-6 place-items-center rounded-full border ${stage.done ? "border-[#248a4b] text-[#248a4b]" : "border-[#d8d4cb] text-[#aaa59b]"}`}>{stage.done ? <Check className="size-3.5" /> : <ShieldCheck className="size-3" />}</span>
+            <p className="mt-3 text-xs font-medium">{stage.shortLabel}</p>
           </div>
         ))}
       </section>

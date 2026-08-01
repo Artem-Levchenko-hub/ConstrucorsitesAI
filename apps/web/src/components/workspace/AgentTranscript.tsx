@@ -97,7 +97,8 @@ export function AgentTranscript({
   initialSteps?: AgentStep[] | null;
 }) {
   const qc = useQueryClient();
-  const [open, setOpen] = useState(true);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const open = Boolean(streaming) || detailsOpen;
   // Which step rows are drilled-open (by index) — click a step to see inside it.
   const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
   // Live elapsed timer: a real "работает Nс" counter beats a fake ETA (ETA raises
@@ -137,7 +138,9 @@ export function AgentTranscript({
     <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          if (!streaming) setDetailsOpen((value) => !value);
+        }}
         className="flex w-full items-center gap-2 px-2.5 py-1.5 transition-colors hover:bg-surface-overlay/60"
       >
         <ChevronRight
@@ -152,7 +155,7 @@ export function AgentTranscript({
           <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
         )}
         <span className="text-xs font-medium text-fg-primary">
-          {streaming ? "Агент работает" : "Агент построил"}
+          {streaming ? "Собираю приложение" : "Изменения готовы"}
         </span>
         <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
           {(streaming || elapsed > 0) && (
@@ -161,7 +164,7 @@ export function AgentTranscript({
               {formatElapsed(elapsed)} ·
             </span>
           )}
-          <span>{steps.length} шаг.</span>
+          <span>{steps.length} шаг. · детали</span>
         </span>
       </button>
 

@@ -3,20 +3,13 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ArrowUpRight,
-  BarChart3,
-  Bot,
   ChevronDown,
-  CircleHelp,
-  CreditCard,
   LayoutGrid,
   LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightOpen,
-  Plug,
-  Rocket,
   Settings,
   Smartphone,
   X,
@@ -27,10 +20,13 @@ import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { listProjects } from "@/lib/api/projects";
+import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project } from "@/lib/api/types";
+import { getMaxJourney } from "@/lib/max-journey";
 import { cn } from "@/lib/utils";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
+import { MaxProjectNav } from "./MaxProjectNav";
 
 export function MaxWorkspaceShell({
   project,
@@ -45,6 +41,19 @@ export function MaxWorkspaceShell({
   const [navigationVisible, setNavigationVisible] = useState(true);
   const [previewPanelVisible, setPreviewPanelVisible] = useState(true);
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+  const readiness = useQuery({
+    queryKey: ["max-readiness", project.id],
+    queryFn: () => getMaxReadiness(project.id),
+    retry: false,
+    refetchInterval: 10_000,
+  });
+  const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
+  const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
+  const launchLabel = readiness.isLoading
+    ? "Проверяем…"
+    : nextStage
+      ? `Продолжить · ${journey.completedCount}/${journey.total}`
+      : "Проверить запуск";
   const maxProjects = useMemo(
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
     [projects.data],
@@ -110,20 +119,9 @@ export function MaxWorkspaceShell({
           </nav>
 
           <p className="omnia-kicker mt-7 px-3 text-[#aaa59b]">Проект</p>
-          <nav className="mt-2 space-y-1">
-            <Link href={`/max/${project.id}/integrations`} className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
-              <Plug className="size-4" /> Интеграции
-            </Link>
-            <Link href={`/max/${project.id}/settings`} className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
-              <Bot className="size-4" /> MAX и приложение
-            </Link>
-            <Link href={`/max/${project.id}/publish`} className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
-              <Rocket className="size-4" /> Публикация
-            </Link>
-            <Link href={`/max/${project.id}/dashboard`} className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
-              <BarChart3 className="size-4" /> После запуска
-            </Link>
-          </nav>
+          <div className="mt-2">
+            <MaxProjectNav projectId={project.id} active="editor" />
+          </div>
         </div>
 
         <div className="border-t border-[#d8d4cb] p-3">
@@ -183,12 +181,43 @@ export function MaxWorkspaceShell({
               </button>
             )}
             <button type="button" onClick={() => setLaunchOpen(true)} className="inline-flex h-11 items-center gap-1.5 rounded-[8px] bg-[#f15a38] px-3 text-xs font-semibold text-white hover:bg-[#d94929] sm:gap-2 sm:px-4">
-              <span className="sm:hidden">Пуск</span>
-              <span className="hidden sm:inline">Опубликовать</span>
+              <span className="sm:hidden">Дальше</span>
+              <span className="hidden sm:inline">{launchLabel}</span>
               <ChevronDown className="size-3.5" />
             </button>
           </div>
         </header>
+
+        <button
+          type="button"
+          onClick={() => setLaunchOpen(true)}
+          className="flex min-h-14 shrink-0 items-center gap-3 border-b border-[#d8d4cb] bg-[#f5f3ee] px-4 text-left transition-colors hover:bg-[#ece8df] sm:px-5"
+          data-testid="max-next-action-bar"
+        >
+          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#f15a38] text-[10px] font-semibold text-white">
+            {readiness.isSuccess
+              ? nextStage?.position ?? journey.total
+              : "…"}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[9px] font-medium uppercase tracking-[0.12em] text-[#8d887f]">
+              {nextStage ? "Следующий шаг" : "Путь до запуска"}
+            </span>
+            <span className="mt-0.5 block truncate text-xs font-semibold text-[#171716]">
+              {readiness.isError
+                ? "Не удалось проверить готовность — откройте панель для повтора"
+                : readiness.isLoading
+                  ? "Проверяем состояние проекта…"
+                  : nextStage?.label ?? "Все обязательные этапы пройдены"}
+            </span>
+          </span>
+          <span className="hidden shrink-0 text-[10px] text-[#8d887f] sm:block">
+            {readiness.isSuccess
+              ? `${journey.completedCount} из ${journey.total}`
+              : "Статус обновляется"}
+          </span>
+          <ChevronDown className="size-3.5 shrink-0 -rotate-90 text-[#8d887f]" />
+        </button>
 
         <div className="min-h-0 flex-1 max-studio-chat">
           <ChatPanel
