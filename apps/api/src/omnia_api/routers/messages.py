@@ -3007,6 +3007,7 @@ async def _process_prompt(
                             select(func.count(Snapshot.id)).where(
                                 Snapshot.project_id == project_id,
                                 Snapshot.prompt_text.is_not(None),
+                                func.length(func.trim(Snapshot.prompt_text)) > 0,
                             )
                         )
                     )
@@ -3083,6 +3084,33 @@ async def _process_prompt(
                                 "new feature-specific component instead."
                             ),
                         }
+                    if action.name in {"write_file", "edit_file"}:
+                        _candidate = str(
+                            action.args.get("content")
+                            or action.args.get("replace")
+                            or ""
+                        )
+                        if "@/lib/db" in _candidate or "drizzle-orm" in _candidate:
+                            return {
+                                "ok": False,
+                                "error": (
+                                    "Direct DB access is forbidden in MAX product files. "
+                                    "Use createMaxAction/getMaxActions from "
+                                    "@/lib/omnia/integration-client."
+                                ),
+                            }
+                        if (
+                            action.path.startswith("src/app/api/max/")
+                            or action.path.startswith("src/app/api/omnia/")
+                        ):
+                            return {
+                                "ok": False,
+                                "error": (
+                                    "MAX Studio owns /api/max and /api/omnia. "
+                                    "Call the managed integration client instead of "
+                                    "creating a parallel route."
+                                ),
+                            }
                     return await _base_agent_executor(action)
             else:
                 _agent_executor = _base_agent_executor
@@ -3261,7 +3289,9 @@ async def _process_prompt(
                     f"\n\nДоп. пожелание пользователя: {prompt_text}{_seed_block}"
                 )
                 _agent_system = _stack_system
-                _agent_steps = min(30, max(1, int(get_settings().agent_builder_max_steps)))
+                # A manual resume is a full completion pass, not a short edit.
+                # Keep the same ceiling as the initial MAX product build.
+                _agent_steps = 30
             elif _is_edit:
                 _sel_block = ""
                 try:
@@ -3490,19 +3520,126 @@ async def _process_prompt(
                     transcript=_agent_res.transcript,
                     stop_reason="no_ai_write",
                 )
+            # Full MAX generation is autonomous: reaching one provider segment's
+            # turn boundary is an internal recovery event, never a terminal card
+            # asking the user to click «Продолжить». Re-enter the same native
+            # Google agent against the live partial tree with a fresh bounded
+            # context. The semantic product contract is carried forward over all
+            # files written by earlier segments.
+            _seg = 1
+            if (
+                project_template == "max_miniapp"
+                and not _is_edit
+                and get_settings().use_native_agent
+            ):
+                _max_segment_files = dict(_agent_res.files)
+                _max_segment_steps = int(_agent_res.steps)
+                _max_segment_transcript = list(_agent_res.transcript)
+                _retryable_max_stops = {
+                    "max_steps",
+                    "max_steps_red",
+                    "exploring",
+                    "no_ai_write",
+                }
+                while (
+                    not _agent_res.done
+                    and _agent_res.stop_reason in _retryable_max_stops
+                    and _seg < 3
+                ):
+                    _seg += 1
+                    await _agent_emit(
+                        "agent.step",
+                        {
+                            "step": _max_segment_steps,
+                            "action": "autonomous_recovery",
+                            "human": f"Сам продолжаю сборку — этап {_seg}/3",
+                            "path": "",
+                            "detail": (
+                                "Лимит внутреннего этапа достигнут; рабочие файлы "
+                                "сохранены в контейнере, запускаю следующий ремонтный "
+                                "проход без действия пользователя."
+                            ),
+                            "ok": True,
+                        },
+                    )
+                    _segment_base = {
+                        **_max_baseline_files,
+                        **_max_seed_files,
+                        **_max_segment_files,
+                    }
+
+                    def _segment_completion_check(
+                        written: Mapping[str, str],
+                        evidence: Mapping[str, int],
+                        *,
+                        _base: Mapping[str, str] = _segment_base,
+                    ) -> str | None:
+                        from omnia_api.services.max_generation_contract import (
+                            max_completion_gap,
+                        )
+
+                        return max_completion_gap(prompt_text, {**_base, **written}, evidence)
+
+                    _segment_task = (
+                        "АВТОНОМНОЕ ВОССТАНОВЛЕНИЕ MAX-СБОРКИ. Пользователь не должен "
+                        "нажимать «Продолжить». Частичный продукт уже находится в контейнере. "
+                        "Сначала вызови build, исправь конкретную текущую ошибку, затем доведи "
+                        "ВСЕ требования исходного брифа и acceptance contract до конца. Не "
+                        "создавай параллельные DB/API-маршруты: используй createMaxAction, "
+                        "getMaxActions и точный вызов `const { answer } = await "
+                        "requestOmniaAI({ message, instructions, context })`. После кода "
+                        "выполни runtime_check/probe/see и done.\n\n"
+                        f"Текущий незакрытый результат: {_agent_res.summary}\n\n"
+                        f"Исходное задание:\n{_agent_user}"
+                    )
+                    _cont_res = await agent_native.run_native_build(
+                        system=agent_native.native_system_prompt(_stack_guide or "", _skills),
+                        task=_segment_task,
+                        execute=_agent_executor,
+                        user_id=str(user_id),
+                        project_id=str(project_id),
+                        run_id=str(run_id),
+                        message_id=str(assistant_message_id),
+                        free=is_free,
+                        emit=_agent_emit,
+                        completion_check=_segment_completion_check,
+                        max_steps=30,
+                    )
+                    _max_segment_files.update(_cont_res.files)
+                    _max_segment_steps += int(_cont_res.steps)
+                    _max_segment_transcript.extend(_cont_res.transcript)
+                    _agent_res = agent_builder.AgentResult(
+                        done=_cont_res.done,
+                        summary=_cont_res.summary,
+                        files=dict(_max_segment_files),
+                        steps=_max_segment_steps,
+                        transcript=list(_max_segment_transcript),
+                        stop_reason=_cont_res.stop_reason,
+                    )
             # A stopped run is never committed as a partially implemented edit,
             # even when its local typecheck happens to be green. Restore every
             # touched path from the last snapshot, remove newly-created files,
             # and verify the known-good application deterministically. This is
             # what makes "stop at wallet/step limit" compatible with the promise
             # that Studio always leaves a complete application behind.
-            _must_restore_previous = not _agent_res.done or _agent_res.stop_reason in {
+            _bounded_stop = _agent_res.stop_reason in {
                 "max_steps_green",
                 "max_steps_red",
                 "provider_stopped_green",
                 "provider_stopped_red",
             }
-            if _must_restore_previous and current_sha:
+            # For MAX, a green bounded stop has already passed both the source
+            # build and the brief-aware completion contract (including local
+            # proof recovery above). Shipping it is safer than discarding a
+            # complete product merely because the provider turn ended. Other
+            # stacks preserve the historical conservative rollback policy.
+            _must_restore_previous = not _agent_res.done or (
+                _bounded_stop and project_template != "max_miniapp"
+            )
+            _first_max_without_product = (
+                project_template == "max_miniapp" and not _max_has_generated_snapshot
+            )
+            if _must_restore_previous and current_sha and not _first_max_without_product:
                 try:
                     import shlex as _shlex
 
@@ -3562,54 +3699,84 @@ async def _process_prompt(
                         )
                 except Exception as _rollback_exc:
                     print(f"[PP] hard-limit rollback failed: {_rollback_exc!r}", flush=True)
+            elif _must_restore_previous and _first_max_without_product:
+                # Config sync creates a legitimate snapshot before the first AI
+                # build, but that snapshot may contain only managed files and no
+                # product page. It is not a rollback target. Restore the complete
+                # buildable starter atomically, clear generated route validators,
+                # and commit that green tree so Studio never ends with no page.
+                try:
+                    import shlex as _shlex
+
+                    from omnia_api.models.max_project_config import MaxProjectConfig
+                    from omnia_api.schemas.max_studio import MaxProjectConfigPayload
+                    from omnia_api.services.max_project_kit import render_max_starter_files
+
+                    async with factory() as _max_session:
+                        _max_record = await _max_session.get(MaxProjectConfig, project_id)
+                    _max_config = (
+                        MaxProjectConfigPayload.model_validate(_max_record.config)
+                        if _max_record is not None
+                        else MaxProjectConfigPayload(
+                            app_name=project_name or "MAX Mini App",
+                            app_type="custom",
+                            summary=prompt_text[:1000] or "Сервис внутри MAX",
+                        )
+                    )
+                    _safe_files = render_max_starter_files(_max_config, project_id)
+                    _new_paths = [
+                        path for path in _agent_res.files if path not in _safe_files
+                    ]
+                    await orchestrator_client.hot_reload(project_id, project_slug, _safe_files)
+                    if _new_paths:
+                        _rm = "rm -f -- " + " ".join(
+                            _shlex.quote(path) for path in _new_paths
+                        )
+                        await orchestrator_client.agent_exec(project_id, project_slug, _rm)
+                    _rollback_build = await orchestrator_client.agent_build(
+                        project_id, project_slug
+                    )
+                    if _rollback_build.get("ok"):
+                        _max_seed_files = {}
+                        _agent_res = agent_builder.AgentResult(
+                            done=True,
+                            summary=(
+                                "Автовосстановление сохранило рабочую MAX-основу; "
+                                "красные частичные файлы не опубликованы."
+                            ),
+                            files=_safe_files,
+                            steps=_agent_res.steps,
+                            transcript=_agent_res.transcript,
+                            stop_reason="safe_starter_rolled_back",
+                        )
+                        await _agent_emit(
+                            "agent.step",
+                            {
+                                "step": _agent_res.steps,
+                                "action": "rollback",
+                                "human": "Автоматически возвращаю рабочую основу",
+                                "path": "",
+                                "detail": (
+                                    "Все частичные красные файлы отброшены; MAX core "
+                                    "снова проходит независимую проверку."
+                                ),
+                                "ok": True,
+                            },
+                        )
+                    else:
+                        print(
+                            "[PP] first-MAX safe fallback build red: "
+                            f"{_rollback_build.get('detail') or _rollback_build.get('error')}",
+                            flush=True,
+                        )
+                except Exception as _rollback_exc:
+                    print(
+                        f"[PP] first-MAX safe fallback failed: {_rollback_exc!r}",
+                        flush=True,
+                    )
 
             _all_files = _merge_seeded_agent_files(_max_seed_files, _agent_res.files)
             _total_steps = _agent_res.steps
-            # One prompt = one bounded provider run. A clean final build is accepted;
-            # a red MAX tree is replaced below by the deterministic starter. Never
-            # turn a 24-step limit into multiple hidden provider segments.
-            _max_segments = 1
-            _seg = 1
-            while (
-                not _is_edit
-                and not _agent_res.done
-                and _agent_res.stop_reason == "max_steps"
-                and _seg < _max_segments
-            ):
-                await _agent_emit(
-                    "agent.step",
-                    {
-                        "step": _total_steps,
-                        "action": f"продолжаю сборку (этап {_seg + 1})",
-                        "path": "",
-                    },
-                )
-                _cont_res = await agent_builder.run_agent_build(
-                    system_prompt=_stack_system,
-                    user_prompt=(
-                        "Приложение уже ЧАСТИЧНО собрано в этом проекте (часть файлов "
-                        "уже на месте в контейнере). Доведи сборку ДО КОНЦА: запусти "
-                        "build, посмотри текущие файлы, допиши недостающие "
-                        "entities/<Name>.json и страницы (включая dashboard/page.tsx), "
-                        "почини ошибки до чистоты, затем done. НЕ начинай с нуля и НЕ "
-                        f"переписывай работающее.{_seed_block}"
-                    ),
-                    model=_agent_model,
-                    execute=_agent_executor,
-                    max_steps=_agent_steps,
-                    emit=_agent_emit,
-                    user_id=str(user_id),
-                    project_id=str(project_id),
-                    require_green_before_done=get_settings().agent_require_green_before_done,
-                )
-                _seg += 1
-                _total_steps += _cont_res.steps
-                _new = {p: c for p, c in _cont_res.files.items() if _all_files.get(p) != c}
-                _all_files.update(_cont_res.files)
-                _agent_res = _cont_res
-                if not _new and not _cont_res.done:
-                    print(f"[PP] agentic_build auto-continue stuck seg={_seg}", flush=True)
-                    break
 
             files = _all_files
 
@@ -3693,6 +3860,17 @@ async def _process_prompt(
                     check_backend as _check_backend,
                 )
 
+                def _guard_view() -> dict[str, str]:
+                    if project_template != "max_miniapp":
+                        return files
+                    from omnia_api.services.max_project_kit import MAX_MODEL_LOCKED_FILES
+
+                    return {
+                        path: content
+                        for path, content in files.items()
+                        if path not in MAX_MODEL_LOCKED_FILES
+                    }
+
                 _guard_attempt = 0
                 _guard_max = max(0, int(get_settings().agent_gate_max_attempts))
                 while (
@@ -3700,7 +3878,7 @@ async def _process_prompt(
                     and not get_settings().use_native_agent
                     and not _is_edit
                 ):
-                    _gv = _check_backend(files)
+                    _gv = _check_backend(_guard_view())
                     _outcomes = [
                         _agf.GateOutcome(
                             name="backend_guardrail",
@@ -3713,7 +3891,7 @@ async def _process_prompt(
                     if get_settings().use_sast_gate:
                         from omnia_api.services.sast_gate import check_sast as _check_sast
 
-                        _sv = _check_sast(files)
+                        _sv = _check_sast(_guard_view())
                         _outcomes.append(
                             _agf.GateOutcome(
                                 name="sast",
@@ -3744,7 +3922,7 @@ async def _process_prompt(
                     files.update(_heal.files)
                 # Advisory log regardless of the heal flag — operators SEE a raw-DB
                 # escape even when self-heal is off (the silent-failure guard).
-                _final_guard = _check_backend(files)
+                _final_guard = _check_backend(_guard_view())
                 if not _final_guard.safe:
                     print(
                         f"[PP] backend_guardrail VIOLATIONS: {_final_guard.summary}",
@@ -3755,7 +3933,7 @@ async def _process_prompt(
                 if get_settings().use_sast_gate:
                     from omnia_api.services.sast_gate import check_sast as _check_sast2
 
-                    _final_sast = _check_sast2(files)
+                    _final_sast = _check_sast2(_guard_view())
                     if not _final_sast.safe:
                         print(
                             f"[PP] sast_gate FINDINGS: {_final_sast.summary}",
@@ -3957,7 +4135,7 @@ async def _process_prompt(
                 try:
                     import shlex as _shlex
 
-                    if current_sha:
+                    if current_sha and not _first_max_without_product:
                         _baseline_files = await asyncio.to_thread(
                             repo_svc.read_files, project_id, current_sha
                         )
@@ -4007,7 +4185,7 @@ async def _process_prompt(
                         if _verification_rolled_back:
                             files = _safe_files
                     if _verification_rolled_back:
-                        if current_sha:
+                        if current_sha and not _first_max_without_product:
                             files = {}
                         _runtime_ok = True
                         _typecheck_ok = True

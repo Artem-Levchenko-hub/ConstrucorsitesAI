@@ -624,6 +624,49 @@ async def run_native_build(
             successful_tools["build"] = successful_tools.get("build", 0) + 1
             proof_after_write.add("build")
             gap = _completion_gap()
+            # A provider turn limit must not turn forgotten verification clicks
+            # into a user-visible failed build. When the source is already green
+            # and the remaining product-contract gap asks only for deterministic
+            # proof, run those read-only checks locally. Functional/source gaps
+            # still return to the caller's autonomous repair segment.
+            local_proofs = 0
+            while gap and local_proofs < 4:
+                action: Action | None = None
+                if "runtime_check" in gap:
+                    evidence = _evidence()
+                    if evidence.get("runtime_check_after_write", 0) < 1:
+                        action = Action("runtime_check", {"path": "/"}, "")
+                if action is None and "probe" in gap:
+                    action = Action(
+                        "probe",
+                        {"method": "GET", "path": "/api/omnia/actions"},
+                        "",
+                    )
+                if action is None and "see" in gap:
+                    action = Action("see", {"path": "/"}, "")
+                if action is None:
+                    break
+                try:
+                    proof = await execute(action)
+                except Exception as exc:
+                    proof = {"ok": False, "error": f"local proof crashed: {exc}"}
+                local_proofs += 1
+                if emit:
+                    await emit(
+                        "agent.step",
+                        {
+                            "step": steps,
+                            "action": action.name,
+                            "path": action.path,
+                            "detail": _step_detail(action.name, action, proof),
+                            "ok": bool(proof.get("ok")),
+                        },
+                    )
+                if not proof.get("ok"):
+                    break
+                successful_tools[action.name] = successful_tools.get(action.name, 0) + 1
+                proof_after_write.add(action.name)
+                gap = _completion_gap()
             if gap:
                 return AgentResult(
                     done=False,

@@ -2171,6 +2171,18 @@
    "evidence": "Browser QA последнего fitness-25a64d против предыдущего fitnessstat-31eba8 показал точный регресс: новый результат свёл бриф к трём декоративным вкладкам, пустому графику и setTimeout-имитации анализа, тогда как предыдущий имел 6 экранов, persisted CRUD, поиск/фильтры и уведомления, но тоже подменял AI детерминированной формулой. Root cause найден в MAX_MODEL_DIRECTIVE: модель получала утверждение, что приложение уже complete, прямой совет предпочитать только page.tsx/globals.css и отсутствие semantic done-gate; build plan и coverage gate для MAX были выключены. Реализованы пустой generation canvas вместо карточного product UI, 30-turn full-build, brief-aware acceptance contract по явным функциям, обязательные runtime_check/probe и два see для сложного продукта, запрет fake-AI и managed requestOmniaAI → подписанный MAX runtime → gemini-3.1-pro-preview-customtools с owner/team billing и rate limits. Локально: 38 целевых API-тестов на чистой PostgreSQL, отдельный pure-набор 29 тестов, ruff, strict mypy по 219 модулям, MAX TypeScript typecheck зелёные; Next production compile/static generation зелёные. Production revision 0b5abc6bd976 развёрнута документированным compose: Linux API image собран полностью, api healthy, worker слушает очередь, gateway/web healthy, orchestrator active; публичные /api/health, /web-health, /max/start и /max отвечают 200. В runtime подтверждены MAX-kit 11, semantic completion gate, модель gemini-3.1-pro-preview-customtools и опубликованный /api/runtime/projects/{project_id}/ai. Новый браузерный canary не запускался по решению пользователя.",
    "impact": "Google-агент больше не сможет завершить сложный MAX-бриф после перекраски одного файла: он обязан построить продуктовые экраны и реальные сценарии, покрыть явно названные функции, проверить интерактив и исправить визуальный результат. ИИ-функции приложения вызывают управляемую модель на сервере вместо таймера или утечки пользовательского ключа.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H112",
+   "title": "MAX сам доводит генерацию до рабочего состояния без платного ручного «Продолжить»",
+   "status": "testing",
+   "score": null,
+   "category": "MAX / Gemini / recovery / стоимость / надёжность",
+   "period": "01.08",
+   "description": "Устранить повторные обрывы полного MAX-build: внутренний предел одного агентного контекста должен запускать автономный ремонтный проход, а любая неустранимая красная версия должна атомарно заменяться рабочей основой, а не оставлять проект без страницы.",
+   "evidence": "Production-диагностика двух последовательных GenerationRun проекта fitnessstat-a00c0b (a62e593b и 7a6bece3) показала одинаковый финал build finished without a committed snapshot. В первом проходе агент создал несовместимый вызов requestOmniaAI({prompt})/.text, прямые DB-маршруты и импорт отсутствующего lucide-react; во втором — отсутствующий getActionHistory и те же недостающие пакеты. Оба дошли до внутреннего предела native-agent, после чего финальный typecheck дополнительно падал на устаревшем .next/types/app/page.ts. Главная скрытая причина: config snapshot с пустым prompt_text ошибочно считался ранее сгенерированным продуктом, поэтому безопасный first-build recovery не запускался. Исправлены критерий продуктового snapshot, MAX kit 12 с закреплёнными UI/Tailwind-зависимостями и совместимым managed client, запрет прямого DB/API bypass до выполнения записи, очистка только устаревших Next route validators, локальное добирание deterministic proof, до трёх автономных bounded-сегментов в одном запуске и зелёный starter fallback вместо незавершённой публикации. Локально зелёные 31 целевой API-тест, 11 orchestrator-тестов и MAX TypeScript typecheck; production browser-canary оставлен пользователю.",
+   "impact": "Один пользовательский запуск получает достаточно пространства для реализации и ремонта без повторной кнопки и повторной оплаты; частичный красный код не публикуется, а проект не остаётся без рабочей страницы даже при внешнем stop или исчерпании внутреннего лимита.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2680,7 +2692,8 @@
      "H106",
      "H107",
      "H110",
-     "H111"
+     "H111",
+     "H112"
    ]
   }
  ],

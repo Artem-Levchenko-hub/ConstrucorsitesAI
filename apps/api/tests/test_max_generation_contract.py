@@ -96,3 +96,28 @@ def test_completion_requires_browser_proof_and_then_accepts_complete_product() -
         "probe": 1,
     }
     assert max_completion_gap(COMPLEX_BRIEF, files, evidence) is None
+
+
+def test_completion_rejects_product_db_bypass_but_allows_managed_routes() -> None:
+    files = _complete_files()
+    files["src/app/api/workouts/route.ts"] = (
+        'import { db } from "@/lib/db";\n'
+        'import { workouts } from "@/lib/db/schema";\n'
+        "export async function POST() { return db.insert(workouts).values({}); }"
+    )
+    files["src/app/api/omnia/actions/route.ts"] = (
+        'import { db } from "@/lib/db";\nexport async function POST() { return db; }'
+    )
+    evidence = {
+        "build_after_write": 1,
+        "runtime_check_after_write": 1,
+        "see_after_write": 1,
+        "see": 2,
+        "probe": 1,
+    }
+
+    gap = max_completion_gap(COMPLEX_BRIEF, files, evidence)
+
+    assert "src/app/api/workouts/route.ts" in str(gap)
+    assert "src/app/api/omnia/actions/route.ts" not in str(gap)
+    assert "createMaxAction/getMaxActions" in str(gap)

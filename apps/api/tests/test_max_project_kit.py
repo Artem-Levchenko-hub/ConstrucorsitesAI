@@ -59,13 +59,26 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     files = render_max_managed_files(_config(), project_id)
 
     assert set(files) == {
+        "package.json",
+        "pnpm-lock.yaml",
+        "postcss.config.mjs",
+        "src/app/layout.tsx",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
+        "src/lib/db/index.ts",
+        "src/lib/db/schema.ts",
+        "src/lib/max/bot-api.ts",
+        "src/lib/max/bridge.ts",
         "src/lib/max/validate-init-data.ts",
         "src/app/api/max/session/route.ts",
+        "src/app/api/max/webhook/route.ts",
         "src/lib/max/session.ts",
         "src/app/api/omnia/preview-session/route.ts",
+        "src/app/api/omnia/actions/route.ts",
+        "src/app/api/omnia/consents/route.ts",
+        "src/app/api/omnia/events/route.ts",
         "src/lib/omnia/max-config.ts",
+        "src/lib/omnia/client.ts",
         "src/app/api/omnia/config/route.ts",
         "src/lib/omnia/integration-client.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
@@ -171,7 +184,12 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     proxy = files["src/app/api/omnia/integrations/[...path]/route.ts"]
 
     assert "requestOmniaAI" in client
-    assert 'return invoke("ai", input)' in client
+    assert "input.message || input.prompt" in client
+    assert "text: result.answer" in client
+    assert "createMaxAction" in client
+    assert "getMaxActions" in client
+    assert '"lucide-react": "^0.469.0"' in files["package.json"]
+    assert '"tailwindcss": "^4.0.0"' in files["package.json"]
     assert '"catalog", "ai"' in proxy
     assert "/api/runtime/projects/${PROJECT_ID}/ai" in proxy
     assert "api_key" not in client.lower()

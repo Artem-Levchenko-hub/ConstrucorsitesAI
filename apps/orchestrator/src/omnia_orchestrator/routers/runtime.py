@@ -644,6 +644,27 @@ async def agent_build(
     await record_activity(project_id)
     container_name = f"omnia-dev-{slug}"
     dep_note = await _run_dep_doctor(container_name)
+    # Next dev writes route validators for the source tree that existed at the
+    # time of its last successful compile. Agent writes/rollback can replace or
+    # remove a page faster than HMR refreshes those generated imports, which made
+    # a valid restored tree fail on a ghost `.next/types/app/page.ts` reference.
+    # Remove only regenerable route validators before the independent source
+    # typecheck; keep routes.d.ts because next-env.d.ts references it directly.
+    try:
+        await exec_cmd(
+            container_name,
+            cmd=[
+                "rm",
+                "-rf",
+                "--",
+                "/app/.next/types/app",
+                "/app/.next/types/validator.ts",
+            ],
+            workdir="/app",
+            max_output=1_024,
+        )
+    except OrchestratorError:
+        pass
     try:
         result = await exec_cmd(
             container_name,

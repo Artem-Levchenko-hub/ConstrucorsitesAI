@@ -37,6 +37,13 @@ def test_first_max_build_cannot_finish_at_the_template_stage() -> None:
     assert "max_completion_gap" in source
     assert "completion_check=_completion_check" in source
     assert "_agent_steps = 30" in source
+    assert '"autonomous_recovery"' in source
+    assert "_seg < 3" in source
+    assert "_first_max_without_product" in source
+    assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
+    assert '_bounded_stop and project_template != "max_miniapp"' in source
+    assert "if path not in MAX_MODEL_LOCKED_FILES" in source
+    assert "Direct DB access is forbidden in MAX product files." in source
 
 
 def test_seeded_max_files_are_committed_with_agent_customisations() -> None:
@@ -278,6 +285,52 @@ async def test_native_completion_check_rejects_thin_done_and_keeps_building(
     assert res.summary == "complete"
     assert set(res.files) == {"src/app/page.tsx", "src/components/Feature.tsx"}
     assert "Need a real feature component" in str(res.transcript)
+
+
+@pytest.mark.asyncio
+async def test_native_hard_stop_runs_missing_local_proofs_before_shipping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A green tree must not fail only because the provider turn ended before
+    deterministic runtime, persistence and visual proof tool calls."""
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    actions: list[str] = []
+
+    async def execute(action: Any) -> dict[str, Any]:
+        actions.append(action.name)
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "green",
+        }
+
+    def check(files: Any, evidence: Any) -> str | None:
+        assert "src/app/page.tsx" in files
+        if evidence.get("runtime_check_after_write", 0) < 1:
+            return "Run runtime_check after the last source write."
+        if evidence.get("probe_after_write", 0) < 1:
+            return "Run probe after the last source write."
+        if evidence.get("see", 0) < 2:
+            return "Run a second see after the visual fix."
+        return None
+
+    res = await agent_native.run_native_build(
+        system="s",
+        task="t",
+        execute=execute,
+        completion_check=check,
+        max_steps=1,
+    )
+
+    assert res.done is True
+    assert res.stop_reason == "max_steps_green"
+    assert actions == ["write_file", "build", "runtime_check", "probe", "see", "see"]
 
 
 @pytest.mark.asyncio

@@ -114,6 +114,16 @@ _NON_PRODUCT_PATHS = {
     "src/components/OmniaCompliance.tsx",
     "src/lib/omnia/integration-client.ts",
 }
+_MANAGED_DB_PATHS = {
+    "src/lib/db/index.ts",
+    "src/lib/db/schema.ts",
+    "src/app/api/max/session/route.ts",
+    "src/app/api/max/webhook/route.ts",
+    "src/app/api/omnia/actions/route.ts",
+    "src/app/api/omnia/consents/route.ts",
+    "src/app/api/omnia/events/route.ts",
+    "src/app/api/omnia/preview-session/route.ts",
+}
 
 
 def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, ...]]]:
@@ -140,9 +150,13 @@ def build_max_product_contract(prompt: str) -> str:
         "controls, fake timers, TODOs, simulated success or claimed integrations.",
         "- Use createMaxAction for persisted MAX user activity. Never store a provider key "
         "in source code or expose it to the browser.",
+        "- Never import @/lib/db or drizzle-orm and never create parallel /api/max or "
+        "/api/omnia routes. Use the managed integration client for tenant-safe reads, "
+        "writes, AI, consent and events.",
         "- If the brief asks for AI, call requestOmniaAI from "
         "@/lib/omnia/integration-client. It reaches the managed Google model server-side; "
-        "setTimeout/random/static text is not AI.",
+        "the exact shape is `const { answer } = await requestOmniaAI({ message, "
+        "instructions, context })`. setTimeout/random/static text is not AI.",
         "- After implementation: clean build, runtime_check key routes, probe persisted "
         "actions, then see the main screen at desktop+mobile. Apply the visual findings and "
         "run see again before done.",
@@ -180,6 +194,20 @@ def max_completion_gap(
         for path, content in files.items()
         if path.startswith("src/") and path.endswith(_PRODUCT_SUFFIXES)
     )
+    unsafe_product_db_paths = [
+        path
+        for path, content in files.items()
+        if path.startswith("src/")
+        and path.endswith((".ts", ".tsx"))
+        and path not in _MANAGED_DB_PATHS
+        and ("@/lib/db" in content or "drizzle-orm" in content)
+    ]
+    if unsafe_product_db_paths:
+        return (
+            "Product files bypass the managed MAX persistence boundary: "
+            + ", ".join(sorted(unsafe_product_db_paths))
+            + ". Remove direct DB imports and use createMaxAction/getMaxActions."
+        )
     missing = [
         label
         for _key, label, needles in capabilities
