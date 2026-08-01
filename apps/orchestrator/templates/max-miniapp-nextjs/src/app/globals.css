@@ -1,118 +1,17 @@
+@import "tailwindcss";
+
 :root {
   color-scheme: light;
-  --canvas-bg: #f4f3ef;
-  --canvas-ink: #171714;
-  --canvas-muted: #6f6e68;
-  --canvas-line: rgba(23, 23, 20, 0.12);
-  --canvas-accent: #ff5c35;
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
 html,
 body {
-  width: 100%;
   min-height: 100%;
   margin: 0;
-  overflow-x: clip;
-  background: var(--canvas-bg);
-  color: var(--canvas-ink);
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-a {
-  color: inherit;
-}
-
-.generation-canvas {
-  display: grid;
-  width: min(100%, 560px);
-  min-height: 100dvh;
-  margin: 0 auto;
-  padding: max(28px, env(safe-area-inset-top)) 20px
-    max(32px, env(safe-area-inset-bottom));
-  align-content: space-between;
-}
-
-.canvas-status {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--canvas-muted);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.canvas-status p {
-  margin: 0;
-}
-
-.canvas-mark {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: var(--canvas-accent);
-  box-shadow: 0 0 0 6px rgba(255, 92, 53, 0.12);
-}
-
-.canvas-copy {
-  padding: 12vh 0;
-}
-
-.canvas-eyebrow {
-  margin: 0 0 18px;
-  color: var(--canvas-accent);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-}
-
-.canvas-copy h1 {
-  max-width: 480px;
-  margin: 0;
-  font-size: clamp(42px, 12vw, 68px);
-  line-height: 0.96;
-  letter-spacing: -0.06em;
-}
-
-.canvas-copy > p:last-child {
-  max-width: 430px;
-  margin: 24px 0 0;
-  color: var(--canvas-muted);
-  font-size: 16px;
-  line-height: 1.6;
-}
-
-.canvas-progress {
-  height: 3px;
-  overflow: hidden;
-  border-radius: 99px;
-  background: var(--canvas-line);
-}
-
-.canvas-progress span {
-  display: block;
-  width: 38%;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--canvas-accent);
-  animation: canvas-progress 1.8s ease-in-out infinite alternate;
-}
-
-@keyframes canvas-progress {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(164%);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .canvas-progress span {
-    width: 100%;
-    animation: none;
-  }
 }

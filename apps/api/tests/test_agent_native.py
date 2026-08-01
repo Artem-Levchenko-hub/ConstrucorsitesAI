@@ -33,8 +33,8 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     assert "signed MAX preview session" in prompt
 
 
-def test_first_max_build_cannot_finish_at_the_template_stage() -> None:
-    """The verified starter is a seed, never a replacement for the Google agent."""
+def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> None:
+    """The verified core is a seed, never a replacement for the Google agent."""
     from omnia_api.routers import messages
 
     source = inspect.getsource(messages._process_prompt)
@@ -58,6 +58,8 @@ def test_first_max_build_cannot_finish_at_the_template_stage() -> None:
     assert "max_model_write_rejection" in source
     assert "create_max_preview_session" in source
     assert "_recover_max_resume_prompt" in source
+    assert '"rm -f -- src/app/page.tsx"' in source
+    assert "{} if not _max_has_generated_snapshot else dict(current_files)" in source
 
 
 def test_failed_max_resume_recovers_the_original_brief() -> None:
@@ -81,7 +83,7 @@ def test_rolled_back_max_generation_is_never_reported_as_done() -> None:
         summary="Первая генерация не завершена; оставлена безопасная основа.",
         files={},
         steps=30,
-        stop_reason="safe_starter_rolled_back",
+        stop_reason="core_only_rolled_back",
     )
 
     assert _agent_result_message(result, is_edit=False).startswith("Первая генерация не завершена")

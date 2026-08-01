@@ -144,8 +144,8 @@ def build_max_product_contract(prompt: str) -> str:
     capabilities = requested_max_capabilities(prompt)
     lines = [
         "MAX PRODUCT ACCEPTANCE CONTRACT (done is rejected until this is true):",
-        "- The loaded home screen is an EMPTY GENERATION CANVAS, not a product template. "
-        "Replace it completely; do not merely recolour or rename it.",
+        "- No product home page or visual template exists initially. Create "
+        "src/app/page.tsx, product styling, screens and navigation from scratch.",
         "- Build a coherent mobile product with domain components/routes and real actions. "
         "For a multi-feature brief, one giant page.tsx with decorative tabs is insufficient.",
         "- Every button must execute a real state change or persisted request. No decorative "
@@ -183,9 +183,14 @@ def max_source_completion_gap(
     """
 
     page = files.get("src/app/page.tsx", "")
-    if not page or "max-generation-canvas" in page:
+    if not page:
         return (
-            "MAX product is still the empty generation canvas. Replace "
+            "MAX product has no home page. Create src/app/page.tsx with the actual "
+            "requested product before done."
+        )
+    if "max-generation-canvas" in page:
+        return (
+            "MAX product still contains the retired generation canvas. Replace "
             "src/app/page.tsx with the actual requested product before done."
         )
 

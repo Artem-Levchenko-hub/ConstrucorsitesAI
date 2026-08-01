@@ -52,8 +52,10 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
 
 
 def test_completion_rejects_untouched_canvas_and_thin_cosmetic_page() -> None:
+    assert "no home page" in str(max_completion_gap(COMPLEX_BRIEF, {}, {})).lower()
+
     canvas = {"src/app/page.tsx": '<main data-testid="max-generation-canvas">Фитнес</main>'}
-    assert "empty generation canvas" in str(max_completion_gap(COMPLEX_BRIEF, canvas, {}))
+    assert "retired generation canvas" in str(max_completion_gap(COMPLEX_BRIEF, canvas, {}))
 
     thin = {
         "src/app/page.tsx": (

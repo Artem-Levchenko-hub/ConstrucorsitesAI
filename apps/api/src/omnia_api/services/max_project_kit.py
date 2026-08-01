@@ -14,7 +14,7 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 12
+MAX_MANAGED_KIT_VERSION = 13
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 
@@ -495,10 +495,10 @@ Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
 and integration clients, webhook security and generated business config. Do not
 rewrite platform-owned files.
 
-On a FULL BUILD, replace the empty generation canvas completely. Own the product
-architecture and create the domain screens, components and API behaviour required
-by the brief. A renamed/recoloured page, decorative tabs, static demo response or
-fake timer is not a finished application. Persist user actions with
+On a FULL BUILD, there is deliberately no product home page or visual template.
+Create src/app/page.tsx, the product styling, domain screens, components and API
+behaviour required by the brief from scratch. A thin shell, decorative tabs,
+static demo response or fake timer is not a finished application. Persist user actions with
 `createMaxAction` and read them with `getMaxActions`, both from
 `@/lib/omnia/integration-client`. Never import `@/lib/db`/`drizzle-orm` or create
 parallel API routes: MAX Studio owns auth, tenant filtering and persistence.
@@ -518,15 +518,13 @@ edit_file/write_file so Omnia can attribute and safely roll them back.
 def render_max_starter_files(
     config: MaxProjectConfigPayload, project_id: UUID | str | None = None
 ) -> dict[str, str]:
-    """Buildable MAX platform core plus an intentionally empty UI canvas.
+    """Buildable MAX platform core with no generated product UI.
 
     Security/session/legal primitives stay deterministic.  Product design and
-    feature architecture do not: the Google agent must replace the canvas rather
-    than inherit a generic card layout that looks deceptively finished.
+    feature architecture do not: the Google agent must create the home page and
+    product styling from scratch instead of inheriting a deceptively finished UI.
     """
     return {
         **render_max_managed_files(config, project_id),
-        "src/app/page.tsx": _template_file("src/app/page.tsx"),
         "src/app/globals.css": _template_file("src/app/globals.css"),
-        "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
     }

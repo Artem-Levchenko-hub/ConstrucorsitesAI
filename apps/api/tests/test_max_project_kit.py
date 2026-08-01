@@ -164,18 +164,17 @@ def test_managed_kit_never_contains_model_or_generation_calls() -> None:
     assert "generate(" not in combined
 
 
-def test_starter_kit_is_a_neutral_generation_canvas_not_a_product_template() -> None:
+def test_starter_kit_has_no_product_page_or_visual_template() -> None:
     files = render_max_starter_files(_config(), uuid4())
 
-    assert "src/app/page.tsx" in files
+    assert "src/app/page.tsx" not in files
     assert "src/app/globals.css" in files
     assert "src/app/layout.tsx" in files
-    page = files["src/app/page.tsx"]
-    assert "omniaMaxConfig as app" in page
-    assert "max-generation-canvas" in page
-    assert "готового продуктового шаблона здесь нет" in page.lower()
-    assert "app.features" not in page
-    assert "feature-grid" not in files["src/app/globals.css"]
+    css = files["src/app/globals.css"]
+    assert '@import "tailwindcss"' in css
+    assert "generation-canvas" not in css
+    assert "canvas-" not in css
+    assert "feature-grid" not in css
     assert "TODO" not in "\n".join(files.values())
 
 

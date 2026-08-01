@@ -650,6 +650,8 @@ def _agent_result_message(res: Any, *, is_edit: bool) -> str:
         "provider_stopped_rolled_back",
         "unsafe_changes_rolled_back",
         "safe_starter_rolled_back",
+        "core_only_rolled_back",
+        "core_preparation_failed",
         "verification_rolled_back",
     }:
         return (getattr(res, "summary", "") or "").strip() or "Сборка не завершена."
@@ -3444,10 +3446,10 @@ async def _process_prompt(
                     _agent_user = (
                         "Построй полноценный MAX Mini App под ПОЛНЫЙ запрос "
                         f"пользователя:\n\n{prompt_text}\n\n{_seed_block}\n\n"
-                        "В контейнере уже есть только защищённое платформенное ядро и пустой "
-                        "экран-канвас. Это НЕ продуктовый UI и НЕ шаблон для косметической "
-                        "правки: полностью замени канвас своей архитектурой, экранами, "
-                        "компонентами и рабочими сценариями из задания. Сохрани MAX Bridge, "
+                        "В контейнере уже есть только защищённое платформенное ядро. "
+                        "Продуктовой страницы, визуального шаблона и готовой навигации нет: "
+                        "создай src/app/page.tsx, стили, архитектуру, экраны, компоненты и "
+                        "рабочие сценарии с нуля. Сохрани MAX Bridge, "
                         "серверную проверку initData, профиль пользователя, webhook и "
                         "управляемые Studio-файлы. Не зашивай секреты пользователя в код.\n\n"
                         f"{_max_product_contract}"
@@ -3475,10 +3477,10 @@ async def _process_prompt(
             _escalate_model = model_for_role("agent_escalation", override=force_model)
             _agent_res = None
             _max_seed_files: dict[str, str] = {}
-            # A new MAX project starts from the verified platform CORE and an
-            # intentionally empty generation canvas, then ALWAYS continues through
-            # the bounded native Google agent below. There is no product UI template
-            # for the model to recolour and prematurely call complete.
+            # A new MAX project starts from the verified platform CORE with no
+            # product page, then ALWAYS continues through the bounded native Google
+            # agent below. There is no product UI template to recolour or mistake
+            # for a completed application.
             if (
                 project_template == "max_miniapp"
                 and orchestrate
@@ -3509,12 +3511,22 @@ async def _process_prompt(
                             "human": "Подготавливаю защищённое ядро MAX",
                             "path": "",
                             "detail": (
-                                f"Готовлю {len(_starter_files)} файлов безопасности и "
-                                "пустой UI-канвас; затем Google AI-агент построит продукт."
+                                f"Готовлю {len(_starter_files)} инфраструктурных файлов без "
+                                "продуктовой страницы; затем Google AI-агент построит продукт."
                             ),
                             "ok": True,
                         },
                     )
+                    # Kit v12 and older left a real root page in the container.
+                    # Remove it before seeding v13 so a legacy canvas can neither
+                    # enter model context nor survive a failed first generation.
+                    _legacy_page_removal = await orchestrator_client.agent_exec(
+                        project_id, project_slug, "rm -f -- src/app/page.tsx"
+                    )
+                    if not _legacy_page_removal.get("ok"):
+                        raise RuntimeError(
+                            "legacy MAX product page could not be removed before generation"
+                        )
                     await orchestrator_client.hot_reload(project_id, project_slug, _starter_files)
                     _max_seed_files = _starter_files
                     _starter_build = await orchestrator_client.agent_build(project_id, project_slug)
@@ -3540,6 +3552,33 @@ async def _process_prompt(
                         )
                 except Exception as _starter_exc:
                     print(f"[PP] MAX starter preparation skipped: {_starter_exc!r}", flush=True)
+                    # Never spend a model call against an unverified or legacy UI
+                    # base. The user can retry after infrastructure recovery without
+                    # paying for a generation that was unsafe before turn one.
+                    _agent_res = agent_builder.AgentResult(
+                        done=False,
+                        summary=(
+                            "Генерация не запускалась: не удалось подготовить чистое ядро "
+                            "MAX без продуктового шаблона. Деньги за вызов модели не списаны."
+                        ),
+                        files={},
+                        steps=0,
+                        stop_reason="core_preparation_failed",
+                    )
+                    await _agent_emit(
+                        "agent.step",
+                        {
+                            "step": 0,
+                            "action": "platform_core",
+                            "human": "Не удалось подготовить чистое ядро MAX",
+                            "path": "",
+                            "detail": (
+                                "Google AI-агент не запущен, чтобы не тратить деньги на "
+                                "генерацию поверх старого шаблона."
+                            ),
+                            "ok": False,
+                        },
+                    )
 
             if _agent_res is None and get_settings().use_native_agent:
                 # Native tool-use path (owner «как Claude Code, только на сервере»): ONE
@@ -3560,7 +3599,12 @@ async def _process_prompt(
                         max_completion_gap,
                     )
 
-                    _max_baseline_files = dict(current_files)
+                    # A service/config snapshot may predate the first real product
+                    # and can contain the retired UI canvas. It is not product input
+                    # and must never satisfy the completion contract.
+                    _max_baseline_files = (
+                        {} if not _max_has_generated_snapshot else dict(current_files)
+                    )
 
                     def _max_completion_check(
                         written: Mapping[str, str], evidence: Mapping[str, int]
@@ -3833,9 +3877,9 @@ async def _process_prompt(
             elif _must_restore_previous and _first_max_without_product:
                 # Config sync creates a legitimate snapshot before the first AI
                 # build, but that snapshot may contain only managed files and no
-                # product page. It is not a rollback target. Restore the complete
-                # buildable starter atomically and clear generated route validators,
-                # but do not commit it as the user's successful generation.
+                # product page. It is not a rollback target. Restore only the
+                # buildable platform core, remove every generated product path,
+                # and do not publish the core as a successful application.
                 try:
                     import shlex as _shlex
 
@@ -3855,7 +3899,10 @@ async def _process_prompt(
                         )
                     )
                     _safe_files = render_max_starter_files(_max_config, project_id)
-                    _new_paths = [path for path in _agent_res.files if path not in _safe_files]
+                    _new_paths = sorted(
+                        {path for path in _agent_res.files if path not in _safe_files}
+                        | {"src/app/page.tsx"}
+                    )
                     await orchestrator_client.hot_reload(project_id, project_slug, _safe_files)
                     if _new_paths:
                         _rm = "rm -f -- " + " ".join(_shlex.quote(path) for path in _new_paths)
@@ -3869,23 +3916,23 @@ async def _process_prompt(
                             done=False,
                             summary=(
                                 "Первая генерация не завершена. Частичные файлы отброшены; "
-                                "в превью оставлена только безопасная MAX-основа."
+                                "сохранено только безопасное ядро MAX без продуктовой страницы."
                             ),
                             files={},
                             steps=_agent_res.steps,
                             transcript=_agent_res.transcript,
-                            stop_reason="safe_starter_rolled_back",
+                            stop_reason="core_only_rolled_back",
                         )
                         await _agent_emit(
                             "agent.step",
                             {
                                 "step": _agent_res.steps,
                                 "action": "rollback",
-                                "human": "Генерация не завершена — возвращаю безопасную основу",
+                                "human": "Генерация не завершена — сохраняю только ядро MAX",
                                 "path": "",
                                 "detail": (
-                                    "Все частичные красные файлы отброшены; MAX core "
-                                    "снова проходит независимую проверку."
+                                    "Все частичные красные файлы отброшены; MAX core без "
+                                    "продуктовой страницы снова проходит проверку."
                                 ),
                                 "ok": False,
                             },
@@ -4282,8 +4329,8 @@ async def _process_prompt(
                         )
                         _verification_rolled_back = bool(_rollback_build.get("ok"))
                     elif project_template == "max_miniapp":
-                        # A brand-new MAX project has no snapshot yet. Its safe
-                        # fallback is the same versioned zero-LLM starter.
+                        # A brand-new MAX project has no product snapshot yet. Its
+                        # safe fallback is the versioned core without a product page.
                         from omnia_api.models.max_project_config import MaxProjectConfig
                         from omnia_api.schemas.max_studio import MaxProjectConfigPayload
                         from omnia_api.services.max_project_kit import render_max_starter_files
@@ -4300,7 +4347,10 @@ async def _process_prompt(
                             )
                         )
                         _safe_files = render_max_starter_files(_max_config, project_id)
-                        _new_paths = [path for path in files if path not in _safe_files]
+                        _new_paths = sorted(
+                            {path for path in files if path not in _safe_files}
+                            | {"src/app/page.tsx"}
+                        )
                         await orchestrator_client.hot_reload(project_id, project_slug, _safe_files)
                         if _new_paths:
                             _rm = "rm -f -- " + " ".join(_shlex.quote(path) for path in _new_paths)

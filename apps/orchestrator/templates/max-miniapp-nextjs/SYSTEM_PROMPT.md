@@ -1,8 +1,8 @@
 # MAX Mini App generation contract
 
-- The initial home page is an empty generation canvas, not a product template.
-  Replace it completely on a full build; do not recolour/rename it or treat a
-  clean starter build as completion.
+- The platform core deliberately has no product home page or visual template.
+  On a full build create `src/app/page.tsx`, product styling, navigation, screens
+  and workflows from scratch. A clean core build is never product completion.
 
 - Keep React at 18.3.1 because the official MAX UI peer contract requires it.
 - Use `window.WebApp` only through `src/lib/max/bridge.ts`.
