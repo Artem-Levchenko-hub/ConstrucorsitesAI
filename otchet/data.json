@@ -2139,12 +2139,12 @@
   {
    "id": "H109",
    "title": "Одна публикация MAX создаёт один launch-flow и одно уведомление",
-   "status": "testing",
-   "score": 8,
+   "status": "worked",
+   "score": 9,
    "category": "MAX / UX / публикация / idempotency / надёжность",
    "period": "01.08",
    "description": "Исключить повторный запуск и два одинаковых success-toast после одного нажатия на публикацию.",
-   "evidence": "Root cause локализован в MaxLaunchButton: ручной onMutate записывал durable launch-флаг, после чего useEffect в том же mount принимал его за восстановление прерванного процесса и вызывал mutation повторно. Добавлены синхронный ref-guard ручного старта, module-level single-flight по project_id и стабильные toast id. Проверка и production-деплой выполняются.",
+   "evidence": "Root cause локализован в MaxLaunchButton: ручной onMutate записывал durable launch-флаг, после чего useEffect в том же mount принимал его за восстановление прерванного процесса и вызывал mutation повторно. Добавлены синхронный ref-guard ручного старта, module-level single-flight по project_id и стабильные toast id. Локально: 21 test file, 122 tests, lint, typecheck и production build на 46 страниц зелёные. Revision 168e414d отправлена в origin/main и развёрнута production compose; собранный bundle содержит новый toast-id guard, web и API healthy, публичные health endpoints и /max/start отвечают 200.",
    "impact": "Один клик больше не должен запускать второй параллельный deploy/activation и показывать два одинаковых сообщения.",
    "next_vector": "V8"
   }
