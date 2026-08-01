@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-01",
-  "version": 15,
+  "version": 16,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2151,12 +2151,12 @@
   {
    "id": "H110",
    "title": "Первый MAX-запуск снова выполняет реальную AI-генерацию",
-   "status": "testing",
-   "score": null,
+   "status": "worked",
+   "score": 9,
    "category": "MAX / Gemini / агент / генерация / UX / надёжность",
    "period": "01.08",
    "description": "Сохранить безопасную config-driven основу и новые лимиты цикла, но исключить ложное завершение первой MAX-сборки на одном шаблоне: после подготовки основы обязательно запустить Gemini Custom Tools, применить его UI-правки и восстановить таймер работы после F5.",
-   "evidence": "Root cause локализован в revision 34651162: первая MAX-сборка создавала AgentResult(stop_reason=deterministic_template) сразу после clean build 16 starter-файлов и не доходила до agent_native.run_native_build. Исправленный контур использует starter как seed/rollback, затем вызывает native-agent gemini-3.1-pro-preview-customtools; snapshot объединяет полный seed с файлами агента, а нулевая AI-правка не засчитывается как готовая генерация. Message history теперь проецирует started_at/finished_at durable GenerationRun, поэтому текущий и завершённый elapsed восстанавливаются после перезагрузки. Локально: 37 целевых API-тестов, ruff и strict mypy по 218 модулям; Web lint/typecheck, 22 файла и 125 тестов зелёные. Next собрал код, типы и все 46 страниц; локальная Windows-среда остановилась только на финальном создании standalone symlink с EPERM. Production-проверка ожидается после доставки revision.",
+   "evidence": "Root cause локализован в revision 34651162: первая MAX-сборка создавала AgentResult(stop_reason=deterministic_template) сразу после clean build 16 starter-файлов и не доходила до agent_native.run_native_build. Исправленный контур использует starter как seed/rollback, затем вызывает native-agent gemini-3.1-pro-preview-customtools; snapshot объединяет полный seed с файлами агента, а нулевая AI-правка не засчитывается как готовая генерация. Message history теперь проецирует started_at/finished_at durable GenerationRun, поэтому текущий и завершённый elapsed восстанавливаются после перезагрузки. Локально: 37 целевых API-тестов, ruff и strict mypy по 218 модулям; Web lint/typecheck, 22 файла и 125 тестов зелёные. Production revision e3aa80cd развёрнута документированным compose с полной Linux-сборкой API/Web; api и web healthy, worker слушает очередь, публичные /api/health, /web-health, /max/start и /max отвечают 200. Runtime подтвердил use_agentic_builder=true, use_native_agent=true, лимит 24 шага и модель gemini-3.1-pro-preview-customtools. Реальный canary через production /v1/messages получил HTTP 200 от этой модели со stop_reason=end_turn и usage-метаданными; свежие логи после рестарта чистые.",
    "impact": "Пользовательский бриф снова должен превращаться в реальные изменения экранов и функций, а не в мгновенную выдачу универсального шаблона. Новые ограничения, single-flight и rollback сохраняются; перезагрузка страницы больше не обнуляет видимое время работы агента.",
    "next_vector": "V8"
   }
