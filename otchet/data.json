@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-08-01",
-  "version": 19,
+  "version": 20,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "Внутренний golden path пройден; честный путь до MVP — 21 из 26",
   "subtitle": "Production доказал регистрацию, business onboarding, Pro + ledger, real generation, safe preview, exact-commit deploy и отмену продления. Финальная галочка ждёт SMTP, живую ЮKassa и запуск двух пользователей через промодерированный MAX-бот.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Template-free MAX-результат восстановлен, а причина обрыва устранена в production",
+    "d": "Живой Google-run создал полноценный продукт, но поздний Google Fonts @import падал только в Turbopack после успешного tsc, а первый HMR-probe видел старый зелёный граф. Страница восстановлена без повторного вызова модели, сохранена отдельным snapshot и прошла typecheck, два runtime-probe, release-proof и подписанный MAX bootstrap."
+   },
    {
     "s": "worked",
     "t": "Production golden path дошёл от нового аккаунта до отмены продления",
@@ -2199,13 +2204,25 @@
   {
    "id": "H114",
    "title": "MAX начинает генерацию без продуктового шаблона и canvas",
-   "status": "testing",
-   "score": null,
+   "status": "worked",
+   "score": 9,
    "category": "MAX / Gemini / генерация / качество / надёжность",
    "period": "01.08",
    "description": "Полностью убрать готовую продуктовую страницу из первого MAX-запуска: модель должна сама создать page.tsx, стили, навигацию, экраны и сценарии, а техническое ядро не может считаться приложением или показываться как успешная генерация.",
-   "evidence": "Сравнение с рабочей revision 451fd117 показало, что прежний быстрый результат опирался на детерминированный готовый product starter; позднее его заменили на нейтральный canvas, но canvas всё равно оставался настоящим src/app/page.tsx и переживал snapshot/rollback. В kit 13 удалён сам page.tsx, canvas-CSS заменён минимальным техническим reset, а prompt и semantic done-gate требуют создать продукт с нуля. Перед первым Google-run API принудительно удаляет legacy page; если чистое ядро подготовить не удалось, вызов Gemini не запускается. Rollback теперь сохраняет только MAX core без продуктовой страницы и честно помечает сборку незавершённой. Локально зелёные 36 целевых API-тестов, 38 orchestrator-тестов, ruff, strict mypy и MAX TypeScript typecheck; Linux production собрал API/worker и отдельный omnia-template-max-miniapp-nextjs:dev без page/canvas. Revision fe9dcaed развёрнута production compose, API/Web/Gateway healthy, публичные /api/health, /web-health и /max отвечают 200. Проблемный fitness-c3394b переведён на kit 13: все 6 snapshot указывают на 52d94eb2, repo и live-контейнер не содержат page/canvas, typecheck clean; новых GenerationRun и вызовов модели при миграции не было. Платный browser-canary оставлен владельцу.",
+   "evidence": "Сравнение с рабочей revision 451fd117 показало, что прежний быстрый результат опирался на детерминированный готовый product starter; позднее его заменили на нейтральный canvas, но canvas всё равно оставался настоящим src/app/page.tsx и переживал snapshot/rollback. В kit 13 удалён сам page.tsx, canvas-CSS заменён минимальным техническим reset, а prompt и semantic done-gate требуют создать продукт с нуля. Перед первым Google-run API принудительно удаляет legacy page; если чистое ядро подготовить не удалось, вызов Gemini не запускается. Rollback теперь сохраняет только MAX core без продуктовой страницы и честно помечает сборку незавершённой. Локально зелёные 36 целевых API-тестов, 38 orchestrator-тестов, ruff, strict mypy и MAX TypeScript typecheck; Linux production собрал API/worker и отдельный omnia-template-max-miniapp-nextjs:dev без page/canvas. Revision fe9dcaed развёрнута production compose, API/Web/Gateway healthy, публичные /api/health, /web-health и /max отвечают 200. Проблемный fitness-c3394b переведён на kit 13: все 6 snapshot указывают на 52d94eb2, repo и live-контейнер не содержат page/canvas, typecheck clean; новых GenerationRun и вызовов модели при миграции не было. Живой run 8b9c6568 на новом проекте fitness-c751af подтвердил главное: Google Gemini самостоятельно создал отсутствующий src/app/page.tsx объёмом 22 461 символ, продуктовые экраны, реальные createMaxAction/getMaxActions и requestOmniaAI; готового product page до вызова не существовало. Результат сохранён snapshot 94dcc4de с commit 887428d0 и проходит подписанный MAX preview 200.",
    "impact": "Новая MAX-генерация больше не может выдать универсальную заготовку или пустой canvas за приложение. Google-агент получает полную свободу над продуктовым UI, но обязан реально создать домашнюю страницу и покрыть бриф; при инфраструктурной ошибке запуск останавливается до обращения к модели.",
+   "next_vector": "V8"
+  },
+  {
+   "id": "H115",
+   "title": "MAX не теряет готовую Google-сборку и не пересылает весь код на каждом ходе",
+   "status": "testing",
+   "score": null,
+   "category": "MAX / Gemini / runtime / HMR / стоимость / надёжность",
+   "period": "01.08",
+   "description": "Устранить одновременно ложный финальный rollback и раздувание стоимости: готовый продукт должен публиковаться только после устойчивой runtime-проверки, а уже записанные большие файлы не должны повторно входить в каждый следующий provider-call.",
+   "evidence": "Форензика production-run 8b9c6568 доказала, что Google-агент закончил source-product за один 14-turn сегмент: финальный typecheck был clean и первый runtime_check вернул 200. Падение создала платформа: globals.css ставил @import tailwindcss перед Google Fonts; после expansion Turbopack видел внешний @import на строке 891 и отдавал 500, тогда как tsc CSS не проверяет, а первый probe попал в старый HMR-граф. Revision 964dff9b детерминированно переносит внешние imports перед Tailwind и требует второй зелёный runtime-probe через две секунды. Полный page.tsx извлечён из Turbopack sourcemap, CSS исправлен без нового модельного вызова; run переведён в completed, создан snapshot 94dcc4de/commit 887428d0, сохранена release-аттестация, preview_key готов, typecheck, два runtime 200 и signed bootstrap 200. Сравнение с рабочей дорогой revision 4cb0ee18 и ledger этого запуска выявило cost-root-cause: 14 вызовов отправили 311 303 input tokens; provider кэшировал лишь постоянные 5 190 токенов на ход, а prompt рос с 6 475 до 39 973 из-за повторной передачи полного write_file/page.tsx и post-edit content. Revision db32e045 сохраняет последнюю observation полностью, но заменяет старые большие tool-results и уже выполненные write/edit arguments на проверяемые маркеры с возможностью read_file; после зелёного semantic contract завершение происходит локально без отдельного платного done-turn. Зелёные: 34 целевых API-теста, 63 gateway-теста, 461 orchestrator test, Ruff, format и strict mypy. Production HEAD db32e045: gateway/API healthy, worker running, функции compaction присутствуют в обоих образах, восстановленный проект после restart остаётся completed и отвечает 200.",
+   "impact": "Полнота остаётся у сильного Google-агента и 30-step ceiling не урезан, но стоимость больше не растёт квадратично от размера уже записанного приложения. CSS-класс ошибки закрывается до финального proof, stale HMR не может дать ложный green, а готовый результат не оплачивает отдельный церемониальный done-вызов. Свежий платный browser-run после db32e045 оставлен владельцу.",
    "next_vector": "V8"
   }
  ],
@@ -2699,6 +2716,10 @@
      true
     ],
     [
+     "HMR-устойчивая финализация и bounded native-history: CSS imports нормализуются до proof, runtime подтверждается дважды, большие write/edit/read артефакты не пересылаются на каждом Google-ходе",
+     true
+    ],
+    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2723,7 +2744,8 @@
      "H111",
     "H112",
     "H113",
-    "H114"
+    "H114",
+    "H115"
    ]
   }
  ],
