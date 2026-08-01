@@ -1,7 +1,7 @@
 {
  "meta": {
-  "updated": "2026-07-31",
-  "version": 9,
+  "updated": "2026-08-01",
+  "version": 10,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -187,6 +187,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "01.08",
+   "what": "Поручил полностью упростить UX MAX Studio: оставить один понятный путь от проекта до запуска, показывать пользователю следующее действие и убрать конкурирующие чек-листы и технический шум.",
+   "impact": "Весь MAX-контур сведён к шести проверяемым этапам с общей навигацией, прогрессом и одной основной кнопкой. Настройки разделены по смыслу, MAX URL получил отдельную честную проверку, preview сохраняет последнюю рабочую версию, а публичный быстрый старт объясняет полный путь до запуска без чтения длинного руководства."
+  },
   {
    "date": "31.07",
    "what": "Поручил заменить Claude Opus 4.8 во всём активном LLM-контуре на Google Gemini 3.1 Pro Preview Custom Tools как основную модель для разработки MAX.",
@@ -2094,6 +2099,18 @@
    "evidence": "Revision a194d110 отправлена в origin/main и развёрнута production compose для gateway, API и worker. HEAD production=a194d110033a; gateway и API health=200, контейнеры healthy, worker запущен, omnia-orchestrator active, fatal log matches=0. Runtime API: default и все 22 роли имеют единственный ID gemini-3.1-pro-preview-customtools. /v1/models содержит только этот доступный Google-каталог. Живой gateway chat вернул HTTP 200, actual_model_used=gemini-3.1-pro-preview-customtools и GEMINI_OK_731; image input вернул HTTP 200 и VISION_OK; /v1/messages вернул HTTP 200, stop_reason=tool_use и done({summary: GEMINI_TOOL_OK}). Локально gateway: 58 passed, ruff и mypy; API: 20 целевых тестов, ruff и mypy. Публичные constructor, API health, /otchet и fitnessstat-31eba8 отвечают 200; MAX integration active, webhook_present=true, last_error=null.",
    "impact": "Следующие генерации и правки MAX проходят через специализированную Custom Tools-версию Gemini. Один и тот же подтверждённый маршрут покрывает планирование, код, autoheal, визуальный аудит и реальные tool calls без скрытого fallback на Opus.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H106",
+   "title": "Единый шестишаговый путь MAX Studio",
+   "status": "worked",
+   "score": 9,
+   "category": "MAX / UX / onboarding / публикация / надёжность",
+   "period": "01.08",
+   "description": "Заменить разрозненные меню, чек-листы и технические состояния MAX Studio одним project-scoped маршрутом: создать проект, проверить сборку, заполнить данные, подключить MAX, опубликовать и подтвердить запуск.",
+   "evidence": "Revision 8b662c60 отправлена в origin/main и развёрнута production compose. В web добавлен единый max-journey на 6 этапов, общая навигация проекта, динамическая кнопка следующего действия, прогресс на карточках, отдельный /max/start, секционные настройки и MAX URL handoff. Preview сохраняет последнюю рабочую версию во время подготовки новой сессии; технический transcript после завершения сворачивается. Полный web-набор: 19 test files, 114 tests passed; lint, typecheck и production build зелёные. Production build сгенерировал 46 страниц, omnia-prod-web и omnia-prod-api healthy. /api/health, /max/start, /max/product, /login?next=/max и /max отвечают HTTP 200. Живой browser DOM подтвердил все 6 этапов и их deep links; MAX login показывает отдельный контекст и ведёт на /max/register.",
+   "impact": "Пользователь больше не должен угадывать, какой из нескольких чек-листов главный и куда идти после текущего экрана. Studio сама показывает одно следующее действие, но сохраняет доступ к остальным разделам; внутренние технические детали перестали перекрывать основной сценарий.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2566,6 +2583,10 @@
      true
     ],
     [
+     "Единый UX-путь MAX Studio: 6 этапов, общая навигация, одно следующее действие и проверяемый MAX URL handoff",
+     true
+    ],
+    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2583,7 +2604,8 @@
      "H97",
      "H100",
      "H104",
-     "H105"
+     "H105",
+     "H106"
    ]
   }
  ],
