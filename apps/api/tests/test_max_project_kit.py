@@ -77,6 +77,10 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert str(project_id) in files["src/app/api/omnia/integrations/[...path]/route.ts"]
     preview_route = files["src/app/api/omnia/preview-session/route.ts"]
     assert 'process.env.NODE_ENV !== "development"' in preview_route
+    assert f'const MANAGED_PROJECT_ID: string = "{project_id}"' in preview_route
+    assert 'MANAGED_PROJECT_ID === "__OMNIA_PROJECT_ID__"' in preview_route
+    assert "bootstrapMessage(projectId, expires)" in preview_route
+    assert "bootstrapMessage(process.env.OMNIA_PROJECT_ID, expires)" not in preview_route
     assert "partitioned: true" in preview_route
     assert "PREVIEW_SESSION_MAX_AGE_SECONDS" in preview_route
     assert 'headers: { Location: "/" }' in preview_route

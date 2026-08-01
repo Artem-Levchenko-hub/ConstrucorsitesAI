@@ -6,6 +6,10 @@ import { createMaxSession, MAX_SESSION_COOKIE, type MaxSessionUser } from "@/lib
 
 const BOOTSTRAP_TTL_SECONDS = 120;
 const PREVIEW_SESSION_MAX_AGE_SECONDS = 15 * 60;
+// MAX Studio replaces this sentinel with the canonical project UUID when it
+// syncs an existing app. The env fallback keeps the starter template usable
+// before that first managed-kit sync.
+const MANAGED_PROJECT_ID: string = "__OMNIA_PROJECT_ID__";
 const PREVIEW_USER: MaxSessionUser = {
   id: "preview",
   firstName: "Preview",
@@ -30,7 +34,11 @@ function validSignature(provided: string, expected: string): boolean {
 }
 
 export async function GET(request: Request) {
-  if (process.env.NODE_ENV !== "development" || !process.env.OMNIA_PROJECT_ID) {
+  const projectId =
+    (MANAGED_PROJECT_ID === "__OMNIA_PROJECT_ID__" ? "" : MANAGED_PROJECT_ID) ||
+    process.env.OMNIA_PROJECT_ID ||
+    "";
+  if (process.env.NODE_ENV !== "development" || !projectId) {
     return unavailable();
   }
 
@@ -48,7 +56,7 @@ export async function GET(request: Request) {
     return unavailable();
   }
   const expectedSignature = createHmac("sha256", secret)
-    .update(bootstrapMessage(process.env.OMNIA_PROJECT_ID, expires), "utf8")
+    .update(bootstrapMessage(projectId, expires), "utf8")
     .digest("base64url");
   if (!validSignature(providedSignature, expectedSignature)) return unavailable();
 
