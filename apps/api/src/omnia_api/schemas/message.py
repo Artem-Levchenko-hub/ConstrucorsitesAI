@@ -38,6 +38,12 @@ class MessagePublic(BaseModel):
     # step list after a reload. NULL for non-agent replies. Loose dicts — the
     # frontend AgentStep type validates the shape.
     agent_steps: list[dict[str, Any]] | None = None
+    # Durable generation lifecycle timestamps. They are projected from the
+    # associated GenerationRun by the history endpoint rather than duplicated on
+    # the message row. The workspace uses them to restore the elapsed timer after
+    # a reload and to keep a completed duration frozen.
+    generation_started_at: datetime | None = None
+    generation_finished_at: datetime | None = None
     created_at: datetime
 
     @field_validator("agent_steps", mode="before")

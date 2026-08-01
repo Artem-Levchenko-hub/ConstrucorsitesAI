@@ -2028,7 +2028,7 @@ async def list_messages(
     session: SessionDep,
     current_user: CurrentUserDep,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-) -> Sequence[Message]:
+) -> Sequence[MessagePublic]:
     await _ensure_owner(session, project_id, current_user.id)
     res = await session.execute(
         select(Message)
@@ -2036,7 +2036,39 @@ async def list_messages(
         .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(limit)
     )
-    return list(reversed(list(res.scalars().all())))
+    rows = list(reversed(list(res.scalars().all())))
+    assistant_ids = [row.id for row in rows if row.role == "assistant"]
+    runs_by_message: dict[UUID, GenerationRun] = {}
+    if assistant_ids:
+        run_rows = await session.execute(
+            select(GenerationRun)
+            .where(GenerationRun.assistant_message_id.in_(assistant_ids))
+            .order_by(GenerationRun.created_at.desc())
+        )
+        # A message should have exactly one run, but newest-wins keeps history
+        # deterministic for any legacy duplicate produced before single-flight.
+        for generation_run in run_rows.scalars():
+            if generation_run.assistant_message_id is not None:
+                runs_by_message.setdefault(
+                    generation_run.assistant_message_id, generation_run
+                )
+
+    payload: list[MessagePublic] = []
+    for row in rows:
+        message_run = runs_by_message.get(row.id)
+        payload.append(
+            MessagePublic.model_validate(row).model_copy(
+                update={
+                    "generation_started_at": (
+                        message_run.started_at if message_run is not None else None
+                    ),
+                    "generation_finished_at": (
+                        message_run.finished_at if message_run is not None else None
+                    ),
+                }
+            )
+        )
+    return payload
 
 
 # Fallback chain when the primary model returns junk (empty / <50 chars /
@@ -2164,6 +2196,19 @@ _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 # it's container-backed and file-extracted, so it belongs to this group, not the
 # freeform-HTML path. (tgbot/api are backend-only and handled elsewhere.)
 CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
+
+
+def _merge_seeded_agent_files(
+    seeded_files: dict[str, str], generated_files: dict[str, str]
+) -> dict[str, str]:
+    """Keep the complete verified MAX base while preferring AI customisations.
+
+    The starter is hot-reloaded before the native agent runs. The agent result
+    only contains paths it actually wrote, so committing that result alone would
+    lose untouched platform files on a brand-new project.
+    """
+
+    return {**seeded_files, **generated_files}
 
 
 # A6a — managed auth columns the AI must never drop when it rewrites
@@ -3242,14 +3287,30 @@ async def _process_prompt(
                 # cheap model explores without writing (the "Починить" did nothing bug).
                 _agent_steps = 18
             else:
-                _agent_user = (
-                    f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
-                    f"Тип проекта: {project_template}.{_seed_block}\n\n"
-                    f"Действуй: объяви нужные entities/<Name>.json, напиши страницы "
-                    f"(включая обязательный dashboard/page.tsx индекс), затем build и "
-                    f"чини ошибки до чистоты, затем done. Минимизируй разведку — "
-                    f"раскладка выше уже дана."
-                )
+                if project_template == "max_miniapp":
+                    _agent_user = (
+                        "Доработай проверенную основу MAX Mini App под ПОЛНЫЙ запрос "
+                        f"пользователя:\n\n{prompt_text}\n\n{_seed_block}\n\n"
+                        "Основа уже загружена в контейнер. Обязательно прочитай "
+                        "src/app/page.tsx, src/app/globals.css и доступный MAX-конфиг; "
+                        "затем реально измени незапертые UI-файлы и/или создай компоненты, "
+                        "чтобы реализовать все запрошенные экраны, состояния, русские "
+                        "тексты и действия. Сохрани MAX Bridge, серверную проверку initData, "
+                        "профиль пользователя и webhook-интеграцию из управляемой основы; "
+                        "запертые Studio-файлы не переписывай. После изменений запусти "
+                        "build, исправь ошибки до чистоты и только затем вызови done. "
+                        "Нельзя завершать работу одной проверкой готового шаблона: первый "
+                        "MAX-запуск обязан содержать хотя бы одну осмысленную AI-правку."
+                    )
+                else:
+                    _agent_user = (
+                        f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
+                        f"Тип проекта: {project_template}.{_seed_block}\n\n"
+                        f"Действуй: объяви нужные entities/<Name>.json, напиши страницы "
+                        f"(включая обязательный dashboard/page.tsx индекс), затем build и "
+                        f"чини ошибки до чистоты, затем done. Минимизируй разведку — "
+                        f"раскладка выше уже дана."
+                    )
                 _agent_system = _stack_system
                 _agent_steps = min(30, max(1, int(get_settings().agent_builder_max_steps)))
             # The historical cinematic pipeline uses one strong Opus model for
@@ -3259,9 +3320,11 @@ async def _process_prompt(
             # Stall recovery resolves through the same role registry.
             _escalate_model = model_for_role("agent_escalation", override=force_model)
             _agent_res = None
-            # A new MAX project is a complete application assembled from the
-            # verified platform template and the Studio config. No model call is
-            # needed for the common path; later custom prompts stay surgical.
+            _max_seed_files: dict[str, str] = {}
+            # A new MAX project starts from the verified platform template and
+            # Studio config, then ALWAYS continues through the bounded native AI
+            # agent below. The template is a safe base/rollback target, never the
+            # final implementation of the user's custom prompt.
             if (
                 project_template == "max_miniapp"
                 and orchestrate
@@ -3293,33 +3356,37 @@ async def _process_prompt(
                             "human": "Собираю приложение из проверенного MAX-шаблона",
                             "path": "",
                             "detail": (
-                                f"Готовлю {len(_starter_files)} проверенных файлов "
-                                "без генерации кода."
+                                f"Готовлю {len(_starter_files)} проверенных файлов основы; "
+                                "после проверки передам их Google AI-агенту."
                             ),
                             "ok": True,
                         },
                     )
                     await orchestrator_client.hot_reload(project_id, project_slug, _starter_files)
+                    _max_seed_files = _starter_files
                     _starter_build = await orchestrator_client.agent_build(project_id, project_slug)
                     if _starter_build.get("ok"):
-                        _agent_res = agent_builder.AgentResult(
-                            done=True,
-                            summary=(
-                                "Готово — приложение собрано из проверенного MAX-шаблона "
-                                "и персонализировано настройками Studio."
-                            ),
-                            files=_starter_files,
-                            steps=0,
-                            transcript=[],
-                            stop_reason="deterministic_template",
+                        await _agent_emit(
+                            "agent.step",
+                            {
+                                "step": 0,
+                                "action": "build",
+                                "human": "Основа готова — запускаю Google AI-агента",
+                                "path": "",
+                                "detail": (
+                                    "Проверенный MAX-шаблон собирается чисто; теперь агент "
+                                    "реализует требования пользователя поверх него."
+                                ),
+                                "ok": True,
+                            },
                         )
                     else:
                         print(
-                            "[PP] deterministic MAX template build red; handing to bounded agent",
+                            "[PP] MAX starter build red; handing to bounded Google agent",
                             flush=True,
                         )
                 except Exception as _starter_exc:
-                    print(f"[PP] deterministic MAX template skipped: {_starter_exc!r}", flush=True)
+                    print(f"[PP] MAX starter preparation skipped: {_starter_exc!r}", flush=True)
 
             if _agent_res is None and get_settings().use_native_agent:
                 # Native tool-use path (owner «как Claude Code, только на сервере»): ONE
@@ -3362,6 +3429,38 @@ async def _process_prompt(
                     edit_mode=_is_edit,
                     bare_mode=_bare_stack,
                 )
+            # A green starter is not proof that the user's request was generated.
+            # Native `done` may otherwise succeed after only reading/building the
+            # template. Require at least one attributable model write on a seeded
+            # first MAX build; without it, keep the run incomplete instead of
+            # committing the untouched starter as a successful generation.
+            if _max_seed_files and not _agent_res.files:
+                await _agent_emit(
+                    "agent.stalled",
+                    {
+                        "step": _agent_res.steps,
+                        "action": "no_ai_write",
+                        "human": "AI-агент не внёс изменения — сборка не засчитана",
+                        "path": "",
+                        "detail": (
+                            "Проверенный шаблон остался без осмысленной AI-правки; "
+                            "он не будет выдан как готовый результат."
+                        ),
+                        "ok": False,
+                    },
+                )
+                _max_seed_files = {}
+                _agent_res = agent_builder.AgentResult(
+                    done=False,
+                    summary=(
+                        "Google AI-агент не внёс ни одного изменения в MAX-приложение; "
+                        "неизменённый шаблон не засчитан как готовая генерация."
+                    ),
+                    files={},
+                    steps=_agent_res.steps,
+                    transcript=_agent_res.transcript,
+                    stop_reason="no_ai_write",
+                )
             # A stopped run is never committed as a partially implemented edit,
             # even when its local typecheck happens to be green. Restore every
             # touched path from the last snapshot, remove newly-created files,
@@ -3399,6 +3498,7 @@ async def _process_prompt(
                         project_id, project_slug
                     )
                     if _rollback_build.get("ok"):
+                        _max_seed_files = {}
                         _agent_res = agent_builder.AgentResult(
                             done=True,
                             summary=(
@@ -3434,7 +3534,7 @@ async def _process_prompt(
                 except Exception as _rollback_exc:
                     print(f"[PP] hard-limit rollback failed: {_rollback_exc!r}", flush=True)
 
-            _all_files = dict(_agent_res.files)
+            _all_files = _merge_seeded_agent_files(_max_seed_files, _agent_res.files)
             _total_steps = _agent_res.steps
             # One prompt = one bounded provider run. A clean final build is accepted;
             # a red MAX tree is replaced below by the deterministic starter. Never
@@ -3499,7 +3599,6 @@ async def _process_prompt(
                 and not get_settings().use_native_agent
                 and _agent_res.stop_reason
                 not in {
-                    "deterministic_template",
                     "max_steps_green",
                     "max_steps_rolled_back",
                     "provider_stopped_green",

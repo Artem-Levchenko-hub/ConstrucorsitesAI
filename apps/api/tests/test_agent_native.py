@@ -8,6 +8,7 @@ grinding the step budget — the 2026-07-08 hibernate-mid-build incident).
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pytest
@@ -21,6 +22,33 @@ def test_native_agent_and_autoheal_use_gemini_custom_tools_model() -> None:
 
     assert agent_native._MODEL == "gemini-3.1-pro-preview-customtools"
     assert autoheal._HEAL_MODEL == "gemini-3.1-pro-preview-customtools"
+
+
+def test_first_max_build_cannot_finish_at_the_template_stage() -> None:
+    """The verified starter is a seed, never a replacement for the Google agent."""
+    from omnia_api.routers import messages
+
+    source = inspect.getsource(messages._process_prompt)
+
+    assert 'stop_reason="deterministic_template"' not in source
+    assert "_merge_seeded_agent_files" in source
+    assert "agent_native.run_native_build" in source
+
+
+def test_seeded_max_files_are_committed_with_agent_customisations() -> None:
+    from omnia_api.routers.messages import _merge_seeded_agent_files
+
+    starter = {"src/app/page.tsx": "starter", "src/app/globals.css": "safe css"}
+    generated = {"src/app/page.tsx": "google agent result", "src/components/Profile.tsx": "ui"}
+
+    merged = _merge_seeded_agent_files(starter, generated)
+
+    assert merged == {
+        "src/app/page.tsx": "google agent result",
+        "src/app/globals.css": "safe css",
+        "src/components/Profile.tsx": "ui",
+    }
+    assert starter["src/app/page.tsx"] == "starter"
 
 
 def test_hint_none_on_clean_or_unrelated_error() -> None:

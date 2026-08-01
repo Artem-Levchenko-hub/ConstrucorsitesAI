@@ -140,6 +140,9 @@ export type Message = {
   /** Persisted agentic transcript — hydrated into the ["agent-steps",…] cache on
    *  history load so AgentTranscript re-renders after a reload. */
   agent_steps?: AgentStep[] | null;
+  /** Durable run timestamps projected by message history for the elapsed timer. */
+  generation_started_at?: IsoDateTime | null;
+  generation_finished_at?: IsoDateTime | null;
   created_at: IsoDateTime;
 };
 

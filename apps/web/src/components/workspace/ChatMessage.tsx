@@ -137,6 +137,11 @@ export function ChatMessage({
               messageId={message.id}
               streaming={!!streaming}
               initialSteps={message.agent_steps}
+              startedAt={
+                message.generation_started_at ??
+                (streaming ? message.created_at : null)
+              }
+              finishedAt={message.generation_finished_at}
             />
           )}
 

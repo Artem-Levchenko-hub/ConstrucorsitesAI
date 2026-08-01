@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-01",
-  "version": 14,
+  "version": 15,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2147,6 +2147,18 @@
    "evidence": "Root cause локализован в MaxLaunchButton: ручной onMutate записывал durable launch-флаг, после чего useEffect в том же mount принимал его за восстановление прерванного процесса и вызывал mutation повторно. Добавлены синхронный ref-guard ручного старта, module-level single-flight по project_id и стабильные toast id. Локально: 21 test file, 122 tests, lint, typecheck и production build на 46 страниц зелёные. Revision 168e414d отправлена в origin/main и развёрнута production compose; собранный bundle содержит новый toast-id guard, web и API healthy, публичные health endpoints и /max/start отвечают 200.",
    "impact": "Один клик больше не должен запускать второй параллельный deploy/activation и показывать два одинаковых сообщения.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H110",
+   "title": "Первый MAX-запуск снова выполняет реальную AI-генерацию",
+   "status": "testing",
+   "score": null,
+   "category": "MAX / Gemini / агент / генерация / UX / надёжность",
+   "period": "01.08",
+   "description": "Сохранить безопасную config-driven основу и новые лимиты цикла, но исключить ложное завершение первой MAX-сборки на одном шаблоне: после подготовки основы обязательно запустить Gemini Custom Tools, применить его UI-правки и восстановить таймер работы после F5.",
+   "evidence": "Root cause локализован в revision 34651162: первая MAX-сборка создавала AgentResult(stop_reason=deterministic_template) сразу после clean build 16 starter-файлов и не доходила до agent_native.run_native_build. Исправленный контур использует starter как seed/rollback, затем вызывает native-agent gemini-3.1-pro-preview-customtools; snapshot объединяет полный seed с файлами агента, а нулевая AI-правка не засчитывается как готовая генерация. Message history теперь проецирует started_at/finished_at durable GenerationRun, поэтому текущий и завершённый elapsed восстанавливаются после перезагрузки. Локально: 37 целевых API-тестов, ruff и strict mypy по 218 модулям; Web lint/typecheck, 22 файла и 125 тестов зелёные. Next собрал код, типы и все 46 страниц; локальная Windows-среда остановилась только на финальном создании standalone symlink с EPERM. Production-проверка ожидается после доставки revision.",
+   "impact": "Пользовательский бриф снова должен превращаться в реальные изменения экранов и функций, а не в мгновенную выдачу универсального шаблона. Новые ограничения, single-flight и rollback сохраняются; перезагрузка страницы больше не обнуляет видимое время работы агента.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2627,6 +2639,10 @@
      true
     ],
     [
+     "Первый MAX-запуск: безопасный starter → обязательный Gemini Custom Tools agent → snapshot с реальными AI-правками; elapsed сохраняется после F5",
+     true
+    ],
+    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2646,7 +2662,8 @@
      "H104",
      "H105",
      "H106",
-     "H107"
+     "H107",
+     "H110"
    ]
   }
  ],

@@ -21,6 +21,7 @@ import {
   Film,
 } from "lucide-react";
 import type { AgentStep } from "@/lib/api/types";
+import { agentElapsedSeconds } from "@/lib/agent-elapsed";
 import { cn } from "@/lib/utils";
 import { EASE_OUT } from "@/lib/motion";
 
@@ -90,34 +91,51 @@ export function AgentTranscript({
   messageId,
   streaming,
   initialSteps,
+  startedAt,
+  finishedAt,
 }: {
   projectId?: string;
   messageId: string;
   streaming?: boolean;
   initialSteps?: AgentStep[] | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 }) {
   const qc = useQueryClient();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const open = Boolean(streaming) || detailsOpen;
   // Which step rows are drilled-open (by index) — click a step to see inside it.
   const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
-  // Live elapsed timer: a real "работает Nс" counter beats a fake ETA (ETA raises
-  // frustration when it slips — CHI-2026). Starts on the first streaming frame,
-  // ticks each second, and freezes on its last value once the build finishes.
-  const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef<number | null>(null);
+  // The durable GenerationRun timestamps survive F5. A newly-submitted optimistic
+  // row temporarily falls back to its client creation time, then the persisted
+  // started_at takes over when history is refreshed.
+  const [liveElapsed, setLiveElapsed] = useState(() =>
+    agentElapsedSeconds(startedAt, finishedAt),
+  );
+  const elapsed =
+    !streaming && startedAt && finishedAt
+      ? agentElapsedSeconds(startedAt, finishedAt)
+      : liveElapsed;
+  const transientStartRef = useRef<number | null>(null);
   useEffect(() => {
     if (!streaming) {
-      startRef.current = null;
+      transientStartRef.current = null;
       return;
     }
-    if (startRef.current === null) startRef.current = Date.now();
-    const tick = () =>
-      setElapsed(Math.floor((Date.now() - (startRef.current ?? Date.now())) / 1000));
+    const persistedStart = startedAt ? Date.parse(startedAt) : Number.NaN;
+    if (Number.isFinite(persistedStart)) {
+      transientStartRef.current = persistedStart;
+    } else if (transientStartRef.current === null) {
+      transientStartRef.current = Date.now();
+    }
+    const tick = () => {
+      const startMs = transientStartRef.current ?? Date.now();
+      setLiveElapsed(Math.max(0, Math.floor((Date.now() - startMs) / 1000)));
+    };
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [streaming]);
+  }, [finishedAt, startedAt, streaming]);
   const { data: steps } = useQuery<AgentStep[]>({
     queryKey: ["agent-steps", projectId, messageId],
     // Data is pushed via setQueryData from usePromptStream's `agent.step`
