@@ -19,9 +19,11 @@ import {
   Loader2,
   Sparkles,
   Film,
+  CircleAlert,
 } from "lucide-react";
-import type { AgentStep } from "@/lib/api/types";
+import type { AgentStep, GenerationRunStatus } from "@/lib/api/types";
 import { agentElapsedSeconds } from "@/lib/agent-elapsed";
+import { agentTranscriptTitle } from "@/lib/agent-transcript";
 import { cn } from "@/lib/utils";
 import { EASE_OUT } from "@/lib/motion";
 
@@ -93,6 +95,7 @@ export function AgentTranscript({
   initialSteps,
   startedAt,
   finishedAt,
+  generationStatus,
 }: {
   projectId?: string;
   messageId: string;
@@ -100,6 +103,7 @@ export function AgentTranscript({
   initialSteps?: AgentStep[] | null;
   startedAt?: string | null;
   finishedAt?: string | null;
+  generationStatus?: GenerationRunStatus | null;
 }) {
   const qc = useQueryClient();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -151,6 +155,9 @@ export function AgentTranscript({
   });
 
   if (!projectId || !steps || steps.length === 0) return null;
+  const incomplete =
+    !streaming &&
+    (generationStatus === "failed" || generationStatus === "cancelled" || steps.at(-1)?.ok === false);
 
   return (
     <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60">
@@ -169,11 +176,13 @@ export function AgentTranscript({
         />
         {streaming ? (
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
+        ) : incomplete ? (
+          <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-500" />
         ) : (
           <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
         )}
-        <span className="text-xs font-medium text-fg-primary">
-          {streaming ? "Собираю приложение" : "Изменения готовы"}
+        <span className={cn("text-xs font-medium", incomplete ? "text-red-600" : "text-fg-primary")}>
+          {agentTranscriptTitle(Boolean(streaming), generationStatus, steps.at(-1)?.ok === false)}
         </span>
         <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
           {(streaming || elapsed > 0) && (

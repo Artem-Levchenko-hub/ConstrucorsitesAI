@@ -645,6 +645,14 @@ def _agent_result_message(res: Any, *, is_edit: bool) -> str:
             if is_edit
             else "Собрал приложение не полностью за отведённые шаги — часть уже на месте."
         )
+    if getattr(res, "stop_reason", "") in {
+        "max_steps_rolled_back",
+        "provider_stopped_rolled_back",
+        "unsafe_changes_rolled_back",
+        "safe_starter_rolled_back",
+        "verification_rolled_back",
+    }:
+        return (getattr(res, "summary", "") or "").strip() or "Сборка не завершена."
     return (
         "Не удалось завершить правку" if is_edit else "Сборка прервана"
     ) + ". Попробуй ещё раз или нажми «Починить»."
@@ -1294,6 +1302,18 @@ async def post_prompt(
             details={"active_run_id": str(generation_run.id)},
         )
 
+    # A credential pasted into MAX chat is configuration, not a code-generation
+    # request.  Redirect it before wallet checks/model dispatch and redact the
+    # chat row; generated repositories must never become a secret store.
+    from omnia_api.services.secret_safety import (
+        contains_provider_secret,
+        redact_provider_secrets,
+    )
+
+    credential_redirect = project.template == "max_miniapp" and contains_provider_secret(
+        payload.prompt
+    )
+
     # Free-tier gate: regular projects keep the historical per-user allowance.
     # MAX projects spend the allowance attached to the verified business instead,
     # so creating another user account cannot mint another set of free builds for
@@ -1324,7 +1344,7 @@ async def post_prompt(
         is_free = get_settings().unlimited_generations or (
             (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
         )
-    if not is_free:
+    if not is_free and not credential_redirect:
         account = await resolve_billing_account(session, current_user.id)
         wallet = (
             await session.execute(select(Wallet).where(Wallet.billing_account_id == account.id))
@@ -1463,7 +1483,12 @@ async def post_prompt(
     async_onboarding = False
     do_clarify = False
     effective_prompt = payload.prompt
-    interview_eligible = is_first_build and not payload.skip_clarify and not selected_dump
+    interview_eligible = (
+        is_first_build
+        and not payload.skip_clarify
+        and not selected_dump
+        and not credential_redirect
+    )
     if interview_eligible and settings.use_progressive_discovery:
         # Gather the prior conversation (questions already asked + answers) to
         # drive the next discovery turn. The newest message (payload.prompt) is
@@ -1605,6 +1630,7 @@ async def post_prompt(
     # PROPOSAL P-H1). Fail-soft (R-10): a hiccup falls back to a static build.
     if (
         is_first_build
+        and not credential_redirect
         and discovery_result is None
         and not discovery_ask
         and not do_clarify
@@ -1727,7 +1753,7 @@ async def post_prompt(
         # App-ification triage rule (P-H1), flag-gated so it's a no-op until enabled.
         appify_enabled=settings.use_followup_appification,
     )
-    orchestrate = intent == ORCHESTRATE
+    orchestrate = intent == ORCHESTRATE and not credential_redirect
 
     # Model choice is server-side — the user never picks. `force_model` is the
     # hidden admin override (env FORCE_MODEL). Otherwise the triage decides:
@@ -1745,7 +1771,9 @@ async def post_prompt(
     user_msg = Message(
         project_id=project_id,
         role="user",
-        content=payload.prompt,
+        content=(
+            redact_provider_secrets(payload.prompt) if credential_redirect else payload.prompt
+        ),
         model_id=None,  # user turns have no model
         selected_elements=selected_dump,
         created_at=_now,
@@ -1787,7 +1815,15 @@ async def post_prompt(
     # request sees the active-run guard and cannot start in parallel.
     turn_mode: Literal["build", "edit", "clarify"] = (
         "clarify"
-        if (discovery_ask or async_onboarding or do_clarify or run_intent or run_ask or run_decline)
+        if (
+            credential_redirect
+            or discovery_ask
+            or async_onboarding
+            or do_clarify
+            or run_intent
+            or run_ask
+            or run_decline
+        )
         else ("build" if orchestrate else "edit")
     )
     await session.flush()
@@ -1797,7 +1833,19 @@ async def post_prompt(
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
 
-    if async_onboarding:
+    if credential_redirect:
+        _spawn_text_turn(
+            project_id,
+            assistant_msg.id,
+            (
+                "Ключ не сохранён и не передан агенту. Подключите провайдера через "
+                "«Интеграции» — там секрет хранится зашифрованно и не попадает в код "
+                "или историю проекта. Если ключ уже был отправлен в чат, отзовите его "
+                "у провайдера и создайте новый."
+            ),
+            run_id=generation_run.id,
+        )
+    elif async_onboarding:
         # Deferred first-turn onboarding: no gateway call ran in-request. Plan the
         # question batch out of band (Opus ~60-70s) and deliver the survey over WS
         # so POST already returned inside the client's 30s budget.
@@ -2063,9 +2111,7 @@ async def list_messages(
         # deterministic for any legacy duplicate produced before single-flight.
         for generation_run in run_rows.scalars():
             if generation_run.assistant_message_id is not None:
-                runs_by_message.setdefault(
-                    generation_run.assistant_message_id, generation_run
-                )
+                runs_by_message.setdefault(generation_run.assistant_message_id, generation_run)
 
     payload: list[MessagePublic] = []
     for row in rows:
@@ -2079,6 +2125,7 @@ async def list_messages(
                     "generation_finished_at": (
                         message_run.finished_at if message_run is not None else None
                     ),
+                    "generation_status": (message_run.status if message_run is not None else None),
                 }
             )
         )
@@ -3040,9 +3087,7 @@ async def _process_prompt(
                                 )
                             ).all()
                         )
-                        _recovered_max_prompt = _recover_max_resume_prompt(
-                            _prior_max_prompts
-                        )
+                        _recovered_max_prompt = _recover_max_resume_prompt(_prior_max_prompts)
                         if _recovered_max_prompt:
                             prompt_text = _recovered_max_prompt
                             _is_continue = False
@@ -3101,8 +3146,41 @@ async def _process_prompt(
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
             if project_template == "max_miniapp":
                 from omnia_api.services.max_project_kit import MAX_MODEL_LOCKED_FILES
+                from omnia_api.services.secret_safety import max_model_write_rejection
 
                 async def _agent_executor(action: agent_builder.Action) -> dict[str, Any]:
+                    if action.name == "see":
+                        # MAX previews authenticate through signed initData/session,
+                        # not the generic email login. Bootstrap a short-lived
+                        # preview identity before Playwright captures the product.
+                        from omnia_api.services import agent_vision
+
+                        try:
+                            _preview_session = await orchestrator_client.create_max_preview_session(
+                                project_id
+                            )
+                            _bootstrap_url = str(_preview_session.get("bootstrap_url") or "")
+                            _visual = await agent_vision.see_page(
+                                project_id,
+                                path=action.path or "/",
+                                prompt_context=prompt_text,
+                                bootstrap_url=_bootstrap_url,
+                            )
+                        except Exception as _see_exc:
+                            _visual = {
+                                "ok": False,
+                                "error": f"MAX visual QA unavailable: {type(_see_exc).__name__}",
+                            }
+                        if not _visual.get("ok"):
+                            # A QA-infrastructure miss is advisory. The independent
+                            # build/runtime gates still block real product failures,
+                            # and the model must not loop or roll back green code.
+                            return {
+                                "ok": True,
+                                "detail": str(_visual.get("error") or "MAX visual QA unavailable"),
+                                "proof_unavailable": True,
+                            }
+                        return _visual
                     if action.name == "bash":
                         return {
                             "ok": False,
@@ -3126,10 +3204,11 @@ async def _process_prompt(
                         }
                     if action.name in {"write_file", "edit_file"}:
                         _candidate = str(
-                            action.args.get("content")
-                            or action.args.get("replace")
-                            or ""
+                            action.args.get("content") or action.args.get("replace") or ""
                         )
+                        _secret_rejection = max_model_write_rejection(action.path, _candidate)
+                        if _secret_rejection:
+                            return {"ok": False, "error": _secret_rejection}
                         if "@/lib/db" in _candidate or "drizzle-orm" in _candidate:
                             return {
                                 "ok": False,
@@ -3139,9 +3218,8 @@ async def _process_prompt(
                                     "@/lib/omnia/integration-client."
                                 ),
                             }
-                        if (
-                            action.path.startswith("src/app/api/max/")
-                            or action.path.startswith("src/app/api/omnia/")
+                        if action.path.startswith("src/app/api/max/") or action.path.startswith(
+                            "src/app/api/omnia/"
                         ):
                             return {
                                 "ok": False,
@@ -3547,7 +3625,6 @@ async def _process_prompt(
                         "ok": False,
                     },
                 )
-                _max_seed_files = {}
                 _agent_res = agent_builder.AgentResult(
                     done=False,
                     summary=(
@@ -3559,12 +3636,11 @@ async def _process_prompt(
                     transcript=_agent_res.transcript,
                     stop_reason="no_ai_write",
                 )
-            # Full MAX generation is autonomous: reaching one provider segment's
-            # turn boundary is an internal recovery event, never a terminal card
-            # asking the user to click «Продолжить». Re-enter the same native
-            # Google agent against the live partial tree with a fresh bounded
-            # context. The semantic product contract is carried forward over all
-            # files written by earlier segments.
+            # One strong Google segment is the normal MAX generation path.  A
+            # single recovery segment is allowed only when the deterministic
+            # SOURCE contract still reports missing product work.  Generic MAX
+            # preview/probe failures are infrastructure evidence, not permission
+            # to spend on another model loop.
             _seg = 1
             if (
                 project_template == "max_miniapp"
@@ -3580,10 +3656,25 @@ async def _process_prompt(
                     "exploring",
                     "no_ai_write",
                 }
+                from omnia_api.services.max_generation_contract import (
+                    max_source_completion_gap,
+                )
+
+                def _remaining_max_source_gap() -> str | None:
+                    return max_source_completion_gap(
+                        prompt_text,
+                        {
+                            **_max_baseline_files,
+                            **_max_seed_files,
+                            **_max_segment_files,
+                        },
+                    )
+
                 while (
                     not _agent_res.done
                     and _agent_res.stop_reason in _retryable_max_stops
-                    and _seg < 3
+                    and _remaining_max_source_gap() is not None
+                    and _seg < 2
                 ):
                     _seg += 1
                     await _agent_emit(
@@ -3591,7 +3682,7 @@ async def _process_prompt(
                         {
                             "step": _max_segment_steps,
                             "action": "autonomous_recovery",
-                            "human": f"Сам продолжаю сборку — этап {_seg}/3",
+                            "human": f"Сам продолжаю сборку — этап {_seg}/2",
                             "path": "",
                             "detail": (
                                 "Лимит внутреннего этапа достигнут; рабочие файлы "
@@ -3627,7 +3718,8 @@ async def _process_prompt(
                         "создавай параллельные DB/API-маршруты: используй createMaxAction, "
                         "getMaxActions и точный вызов `const { answer } = await "
                         "requestOmniaAI({ message, instructions, context })`. После кода "
-                        "выполни runtime_check/probe/see и done.\n\n"
+                        "выполни clean build, runtime_check, один see через подписанную MAX "
+                        "preview-session и done. Не вызывай generic probe/verify_isolation.\n\n"
                         f"Текущий незакрытый результат: {_agent_res.summary}\n\n"
                         f"Исходное задание:\n{_agent_user}"
                     )
@@ -3705,10 +3797,10 @@ async def _process_prompt(
                     if _rollback_build.get("ok"):
                         _max_seed_files = {}
                         _agent_res = agent_builder.AgentResult(
-                            done=True,
+                            done=False,
                             summary=(
-                                "Лимит достигнут. Незавершённые изменения не опубликованы; "
-                                "в Studio оставлена последняя полностью рабочая версия приложения."
+                                "Сборка не завершена. Незавершённые изменения не опубликованы; "
+                                "в Studio оставлена последняя рабочая версия приложения."
                             ),
                             files={},
                             steps=_agent_res.steps,
@@ -3728,12 +3820,12 @@ async def _process_prompt(
                             {
                                 "step": _agent_res.steps,
                                 "action": "rollback",
-                                "human": "Возвращаю последнюю рабочую версию",
+                                "human": "Сборка не завершена — сохраняю рабочую версию",
                                 "path": "",
                                 "detail": (
                                     "Лимит исчерпан; красные файлы отброшены, сборка снова чистая."
                                 ),
-                                "ok": True,
+                                "ok": False,
                             },
                         )
                 except Exception as _rollback_exc:
@@ -3742,8 +3834,8 @@ async def _process_prompt(
                 # Config sync creates a legitimate snapshot before the first AI
                 # build, but that snapshot may contain only managed files and no
                 # product page. It is not a rollback target. Restore the complete
-                # buildable starter atomically, clear generated route validators,
-                # and commit that green tree so Studio never ends with no page.
+                # buildable starter atomically and clear generated route validators,
+                # but do not commit it as the user's successful generation.
                 try:
                     import shlex as _shlex
 
@@ -3763,14 +3855,10 @@ async def _process_prompt(
                         )
                     )
                     _safe_files = render_max_starter_files(_max_config, project_id)
-                    _new_paths = [
-                        path for path in _agent_res.files if path not in _safe_files
-                    ]
+                    _new_paths = [path for path in _agent_res.files if path not in _safe_files]
                     await orchestrator_client.hot_reload(project_id, project_slug, _safe_files)
                     if _new_paths:
-                        _rm = "rm -f -- " + " ".join(
-                            _shlex.quote(path) for path in _new_paths
-                        )
+                        _rm = "rm -f -- " + " ".join(_shlex.quote(path) for path in _new_paths)
                         await orchestrator_client.agent_exec(project_id, project_slug, _rm)
                     _rollback_build = await orchestrator_client.agent_build(
                         project_id, project_slug
@@ -3778,12 +3866,12 @@ async def _process_prompt(
                     if _rollback_build.get("ok"):
                         _max_seed_files = {}
                         _agent_res = agent_builder.AgentResult(
-                            done=True,
+                            done=False,
                             summary=(
-                                "Автовосстановление сохранило рабочую MAX-основу; "
-                                "красные частичные файлы не опубликованы."
+                                "Первая генерация не завершена. Частичные файлы отброшены; "
+                                "в превью оставлена только безопасная MAX-основа."
                             ),
-                            files=_safe_files,
+                            files={},
                             steps=_agent_res.steps,
                             transcript=_agent_res.transcript,
                             stop_reason="safe_starter_rolled_back",
@@ -3793,13 +3881,13 @@ async def _process_prompt(
                             {
                                 "step": _agent_res.steps,
                                 "action": "rollback",
-                                "human": "Автоматически возвращаю рабочую основу",
+                                "human": "Генерация не завершена — возвращаю безопасную основу",
                                 "path": "",
                                 "detail": (
                                     "Все частичные красные файлы отброшены; MAX core "
                                     "снова проходит независимую проверку."
                                 ),
-                                "ok": True,
+                                "ok": False,
                             },
                         )
                     else:
@@ -4228,11 +4316,12 @@ async def _process_prompt(
                             files = {}
                         _runtime_ok = True
                         _typecheck_ok = True
+                        files = {}
                         _agent_res = agent_builder.AgentResult(
-                            done=True,
+                            done=False,
                             summary=(
-                                "Финальная проверка не прошла. Незавершённые "
-                                "изменения отброшены; оставлена рабочая версия."
+                                "Сборка не завершена: финальная проверка не прошла. "
+                                "Незавершённые изменения отброшены; оставлена рабочая версия."
                             ),
                             files=files,
                             steps=_agent_res.steps,
@@ -4245,13 +4334,13 @@ async def _process_prompt(
                             {
                                 "step": _agent_res.steps,
                                 "action": "rollback",
-                                "human": "Сохраняю рабочую версию",
+                                "human": "Сборка не завершена — сохраняю рабочую версию",
                                 "path": "",
                                 "detail": (
                                     "Финальная проверка красная; небезопасные "
                                     "изменения не публикуются."
                                 ),
-                                "ok": True,
+                                "ok": False,
                             },
                         )
                         print(

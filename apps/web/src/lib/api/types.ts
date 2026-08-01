@@ -143,6 +143,8 @@ export type Message = {
   /** Durable run timestamps projected by message history for the elapsed timer. */
   generation_started_at?: IsoDateTime | null;
   generation_finished_at?: IsoDateTime | null;
+  /** Durable outcome; prevents a rolled-back run from being labelled "ready". */
+  generation_status?: GenerationRunStatus | null;
   created_at: IsoDateTime;
 };
 

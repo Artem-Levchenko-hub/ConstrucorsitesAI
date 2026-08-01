@@ -332,6 +332,7 @@ async def capture_live_url(
     height: int = 900,
     settle_container: bool = True,
     full_page: bool = False,
+    bootstrap_url: str | None = None,
 ) -> dict[int, bytes]:
     """Screenshot a LIVE running URL (the dev container's preview) at each width.
 
@@ -356,6 +357,12 @@ async def capture_live_url(
                 try:
                     await _block_external_fonts(page)
                     await _route_media_internal(page)
+                    if bootstrap_url:
+                        await page.goto(
+                            bootstrap_url,
+                            wait_until="domcontentloaded",
+                            timeout=GOTO_TIMEOUT_MS,
+                        )
                     await page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS)
                     if settle_container:
                         await _await_container_ready(page)
@@ -375,7 +382,10 @@ async def capture_live_url(
 
 
 async def capture_diagnostics(
-    url: str, *, timeout_ms: int = GOTO_TIMEOUT_MS
+    url: str,
+    *,
+    timeout_ms: int = GOTO_TIMEOUT_MS,
+    bootstrap_url: str | None = None,
 ) -> dict[str, list[str]]:
     """Load a live URL once and collect BROWSER-side signals a screenshot can't
     show: console errors/warnings, uncaught page errors, and failed (>=400) network
@@ -414,6 +424,12 @@ async def capture_diagnostics(
             page.on("response", _on_response)
             page.on("pageerror", _on_pageerror)
             try:
+                if bootstrap_url:
+                    await page.goto(
+                        bootstrap_url,
+                        wait_until="domcontentloaded",
+                        timeout=timeout_ms,
+                    )
                 await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 await _await_container_ready(page)
                 await _await_paint(page)

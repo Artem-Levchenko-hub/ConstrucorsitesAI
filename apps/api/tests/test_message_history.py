@@ -89,10 +89,9 @@ async def test_message_history_returns_latest_rows_with_persisted_steps(
     payload = response.json()
     assert [message["content"] for message in payload] == ["reply-3", "reply-4"]
     assert payload[-1]["agent_steps"][0]["action"] == "Проверяю проект"
-    assert payload[-1]["generation_started_at"] == run_started_at.isoformat().replace(
-        "+00:00", "Z"
-    )
+    assert payload[-1]["generation_started_at"] == run_started_at.isoformat().replace("+00:00", "Z")
     assert payload[-1]["generation_finished_at"] == run_finished_at.isoformat().replace(
         "+00:00", "Z"
     )
+    assert payload[-1]["generation_status"] == "completed"
     assert payload[0]["generation_started_at"] is None

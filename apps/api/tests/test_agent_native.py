@@ -24,6 +24,15 @@ def test_native_agent_and_autoheal_use_gemini_custom_tools_model() -> None:
     assert autoheal._HEAL_MODEL == "gemini-3.1-pro-preview-customtools"
 
 
+def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
+    prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT\nBuild the app")
+
+    assert "takes precedence" in prompt
+    assert "Do NOT call or retry probe/verify_isolation" in prompt
+    assert "run runtime_check after the final write" in prompt
+    assert "signed MAX preview session" in prompt
+
+
 def test_first_max_build_cannot_finish_at_the_template_stage() -> None:
     """The verified starter is a seed, never a replacement for the Google agent."""
     from omnia_api.routers import messages
@@ -38,12 +47,16 @@ def test_first_max_build_cannot_finish_at_the_template_stage() -> None:
     assert "completion_check=_completion_check" in source
     assert "_agent_steps = 30" in source
     assert '"autonomous_recovery"' in source
-    assert "_seg < 3" in source
+    assert "max_source_completion_gap" in source
+    assert "_seg < 2" in source
+    assert "_seg < 3" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
     assert '_bounded_stop and project_template != "max_miniapp"' in source
     assert "if path not in MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
+    assert "max_model_write_rejection" in source
+    assert "create_max_preview_session" in source
     assert "_recover_max_resume_prompt" in source
 
 
@@ -57,6 +70,21 @@ def test_failed_max_resume_recovers_the_original_brief() -> None:
         == "Собери фитнес-тренера с ИИ и статистикой"
     )
     assert _recover_max_resume_prompt(["продолжи", "доделай"]) is None
+
+
+def test_rolled_back_max_generation_is_never_reported_as_done() -> None:
+    from omnia_api.routers.messages import _agent_result_message
+    from omnia_api.services.agent_builder import AgentResult
+
+    result = AgentResult(
+        done=False,
+        summary="Первая генерация не завершена; оставлена безопасная основа.",
+        files={},
+        steps=30,
+        stop_reason="safe_starter_rolled_back",
+    )
+
+    assert _agent_result_message(result, is_edit=False).startswith("Первая генерация не завершена")
 
 
 def test_seeded_max_files_are_committed_with_agent_customisations() -> None:

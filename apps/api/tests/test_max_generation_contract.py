@@ -3,6 +3,7 @@ from __future__ import annotations
 from omnia_api.services.max_generation_contract import (
     build_max_product_contract,
     max_completion_gap,
+    max_source_completion_gap,
     requested_max_capabilities,
 )
 
@@ -82,9 +83,9 @@ def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
     assert "requestOmniaAI" in gap
 
 
-def test_completion_requires_browser_proof_and_then_accepts_complete_product() -> None:
+def test_completion_requires_only_max_compatible_runtime_proof() -> None:
     files = _complete_files()
-    gap = max_completion_gap(COMPLEX_BRIEF, files, {"probe": 1})
+    gap = max_completion_gap(COMPLEX_BRIEF, files, {})
     assert gap is not None
     assert "runtime_check" in gap
 
@@ -92,10 +93,27 @@ def test_completion_requires_browser_proof_and_then_accepts_complete_product() -
         "build_after_write": 1,
         "runtime_check_after_write": 1,
         "see_after_write": 1,
-        "see": 2,
-        "probe": 1,
     }
     assert max_completion_gap(COMPLEX_BRIEF, files, evidence) is None
+
+
+def test_source_gap_is_independent_from_broken_max_preview_tooling() -> None:
+    files = _complete_files()
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+    assert (
+        max_completion_gap(
+            COMPLEX_BRIEF,
+            files,
+            {
+                "runtime_check_after_write": 1,
+                "see_after_write": 1,
+                "probe_failed": 3,
+                "see_failed": 3,
+            },
+        )
+        is None
+    )
 
 
 def test_completion_rejects_product_db_bypass_but_allows_managed_routes() -> None:

@@ -19,6 +19,7 @@ that could kill the loop.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 # Viewports handed to the vision judge — one wide + one narrow is enough to judge
@@ -31,6 +32,7 @@ async def see_page(
     *,
     path: str = "/",
     prompt_context: str = "",
+    bootstrap_url: str | None = None,
 ) -> dict[str, Any]:
     """Screenshot the live dev container's ``path`` and return a vision critique.
 
@@ -51,17 +53,27 @@ async def see_page(
     except (TypeError, ValueError):
         return {"ok": False, "error": "bad project id"}
 
-    base = await dev_container.resolve_live_url(pid)
-    if not base:
-        return {
-            "ok": False,
-            "error": "preview not running — build or start the app first, then see",
-        }
     rel = path if path.startswith("/") else "/" + path
-    url = base.rstrip("/") + rel
+    if bootstrap_url:
+        parsed = urlsplit(bootstrap_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return {"ok": False, "error": "invalid preview bootstrap URL"}
+        url = f"{parsed.scheme}://{parsed.netloc}{rel}"
+    else:
+        base = await dev_container.resolve_live_url(pid)
+        if not base:
+            return {
+                "ok": False,
+                "error": "preview not running — build or start the app first, then see",
+            }
+        url = base.rstrip("/") + rel
 
     try:
-        shots = await preview.capture_live_url(url, _SEE_WIDTHS)
+        shots = await preview.capture_live_url(
+            url,
+            _SEE_WIDTHS,
+            bootstrap_url=bootstrap_url,
+        )
     except Exception as exc:
         return {"ok": False, "error": f"could not render {rel}: {type(exc).__name__}"}
     if not shots:
@@ -83,7 +95,7 @@ async def see_page(
     diag_text = ""
     has_failed = False
     try:
-        diag = await preview.capture_diagnostics(url)
+        diag = await preview.capture_diagnostics(url, bootstrap_url=bootstrap_url)
         failed = diag.get("failed_requests") or []
         cons = diag.get("console_errors") or []
         has_failed = bool(failed)
@@ -95,9 +107,7 @@ async def see_page(
                     + "\n".join(f"  - {x}" for x in failed)
                 )
             if cons:
-                blocks.append(
-                    "Console / page errors:\n" + "\n".join(f"  - {x}" for x in cons)
-                )
+                blocks.append("Console / page errors:\n" + "\n".join(f"  - {x}" for x in cons))
             diag_text = "\n\nBROWSER SIGNALS:\n" + "\n\n".join(blocks)
     except Exception:
         pass

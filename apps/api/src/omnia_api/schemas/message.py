@@ -44,6 +44,17 @@ class MessagePublic(BaseModel):
     # a reload and to keep a completed duration frozen.
     generation_started_at: datetime | None = None
     generation_finished_at: datetime | None = None
+    generation_status: (
+        Literal[
+            "pending",
+            "running",
+            "cancel_requested",
+            "cancelled",
+            "completed",
+            "failed",
+        ]
+        | None
+    ) = None
     created_at: datetime
 
     @field_validator("agent_steps", mode="before")

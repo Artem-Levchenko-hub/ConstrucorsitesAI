@@ -7,8 +7,10 @@ turns the user's explicit brief into a small deterministic acceptance checklist
 that the native agent must satisfy before ``done`` is accepted.
 
 The checks intentionally stay source/evidence based.  They do not judge taste
-or invent requirements: they look only for capabilities the user named and for
-real browser/tool evidence gathered by the same agent loop.
+or invent requirements: they look only for capabilities the user named.  MAX
+preview authentication is different from the generic web-app harness. Visual
+review receives a signed MAX preview session; generic persistence/isolation
+tools stay advisory and must never turn a clean product into another model loop.
 """
 
 from __future__ import annotations
@@ -157,9 +159,9 @@ def build_max_product_contract(prompt: str) -> str:
         "@/lib/omnia/integration-client. It reaches the managed Google model server-side; "
         "the exact shape is `const { answer } = await requestOmniaAI({ message, "
         "instructions, context })`. setTimeout/random/static text is not AI.",
-        "- After implementation: clean build, runtime_check key routes, probe persisted "
-        "actions, then see the main screen at desktop+mobile. Apply the visual findings and "
-        "run see again before done.",
+        "- After implementation: run a clean build, runtime_check the finished home screen "
+        "and see it once through the signed MAX preview. Apply concrete visual findings, but "
+        "do not retry unavailable QA infrastructure or generic probe/verify_isolation.",
     ]
     if capabilities:
         lines.append("- Explicit brief coverage (each needs visible UI and behaviour):")
@@ -169,16 +171,15 @@ def build_max_product_contract(prompt: str) -> str:
     return "\n".join(lines)
 
 
-def max_completion_gap(
+def max_source_completion_gap(
     prompt: str,
     files: Mapping[str, str],
-    evidence: Mapping[str, int],
 ) -> str | None:
-    """Return a concrete rejection message, or ``None`` when the build is complete.
+    """Return a source/product gap independently of runtime proof infrastructure.
 
-    ``files`` is the effective source tree (baseline/seed plus model writes).
-    ``evidence`` contains successful native-tool counts and ``*_after_write``
-    markers maintained by the loop.
+    Keeping this separate lets the caller decide whether another model segment
+    could materially improve the product.  A failed screenshot/login harness is
+    not a source gap and therefore never authorises another paid segment.
     """
 
     page = files.get("src/app/page.tsx", "")
@@ -270,22 +271,35 @@ def max_completion_gap(
         if absent_states:
             return "Named async states are missing from the UI: " + ", ".join(absent_states) + "."
 
+    return None
+
+
+def max_completion_gap(
+    prompt: str,
+    files: Mapping[str, str],
+    evidence: Mapping[str, int],
+) -> str | None:
+    """Return the actionable product/runtime gap for the native MAX agent.
+
+    A clean build is still enforced by the native loop's fact gate. The MAX-safe
+    evidence is ``runtime_check`` plus one ``see`` using a signed preview session.
+    Generic ``probe`` and ``verify_isolation`` require a normal web login and are
+    intentionally not blocking for MAX.
+    """
+
+    source_gap = max_source_completion_gap(prompt, files)
+    if source_gap:
+        return source_gap
     if evidence.get("runtime_check_after_write", 0) < 1:
         return "Run runtime_check on the finished product after the last source write."
     if evidence.get("see_after_write", 0) < 1:
-        return "Run see on the finished product after the last source write."
-    if len(capabilities) >= 4 and evidence.get("see", 0) < 2:
-        return (
-            "This is a multi-feature product: run a second see after applying the first "
-            "desktop/mobile visual critique."
-        )
-    if _PERSISTENCE_PROMPT_RE.search(prompt) and evidence.get("probe", 0) < 1:
-        return "Prove at least one persisted user action end-to-end with probe before done."
+        return "Run see once through the signed MAX preview after the last source write."
     return None
 
 
 __all__ = [
     "build_max_product_contract",
     "max_completion_gap",
+    "max_source_completion_gap",
     "requested_max_capabilities",
 ]

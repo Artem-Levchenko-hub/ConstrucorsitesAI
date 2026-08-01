@@ -467,15 +467,34 @@ _DONE_WHEN_GREEN_NUDGE = (
     "(runtime_check main routes, probe interactive actions, verify_isolation "
     "owned resources) and call done NOW."
 )
+_MAX_DONE_WHEN_GREEN_NUDGE = (
+    "[LOOP GUARD] The MAX build is clean. Run runtime_check once after the final write "
+    "and run see once through the signed MAX preview, then call done NOW. Do not call "
+    "generic probe or verify_isolation."
+)
+
+_MAX_NATIVE_VERIFICATION_OVERRIDE = (
+    "MAX VERIFICATION OVERRIDE (takes precedence over the generic web-app rules above): "
+    "MAX uses signed initData and an authenticated preview session. The generic probe, "
+    "verify_isolation and see tools currently authenticate as a normal web user and cannot "
+    "prove this runtime. Do NOT call or retry probe/verify_isolation in a MAX build. Finish "
+    "the complete source product, run build until clean, run runtime_check after the final "
+    "write, then call see ONCE; the executor supplies a signed MAX preview session. Apply a "
+    "concrete visual fix if returned, rebuild/runtime_check/see once more, then call done. If "
+    "visual QA reports unavailable, do not retry it."
+)
 
 
 def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     """Native-tools system prompt: a short tool-loop preamble + the stack guide (+
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
-    parts = [_NATIVE_PREAMBLE, (stack_guide or "").strip()]
+    guide = (stack_guide or "").strip()
+    parts = [_NATIVE_PREAMBLE, guide]
     if skills and skills.strip():
         parts.append(skills.strip())
+    if "MAX PLATFORM CORE CONTRACT" in guide:
+        parts.append(_MAX_NATIVE_VERIFICATION_OVERRIDE)
     return "\n\n".join(p for p in parts if p)
 
 
@@ -587,6 +606,7 @@ async def run_native_build(
     proof_after_write: set[str] = set()
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
+    max_runtime = "MAX VERIFICATION OVERRIDE" in system
 
     def _evidence() -> dict[str, int]:
         result = dict(successful_tools)
@@ -897,7 +917,11 @@ async def run_native_build(
                         {
                             "type": "text",
                             "text": (
-                                _DONE_WHEN_GREEN_NUDGE
+                                (
+                                    _MAX_DONE_WHEN_GREEN_NUDGE
+                                    if max_runtime
+                                    else _DONE_WHEN_GREEN_NUDGE
+                                )
                                 if last_build_ok is True and not wrote_since_build
                                 else _EXPLORE_STALL_NUDGE
                             ),

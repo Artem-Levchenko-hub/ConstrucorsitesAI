@@ -142,6 +142,7 @@ export function ChatMessage({
                 (streaming ? message.created_at : null)
               }
               finishedAt={message.generation_finished_at}
+              generationStatus={message.generation_status}
             />
           )}
 
