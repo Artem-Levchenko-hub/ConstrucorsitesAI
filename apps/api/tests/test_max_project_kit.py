@@ -150,7 +150,7 @@ def test_managed_kit_never_contains_model_or_generation_calls() -> None:
     assert "generate(" not in combined
 
 
-def test_starter_kit_is_a_complete_config_driven_application() -> None:
+def test_starter_kit_is_a_neutral_generation_canvas_not_a_product_template() -> None:
     files = render_max_starter_files(_config(), uuid4())
 
     assert "src/app/page.tsx" in files
@@ -158,11 +158,23 @@ def test_starter_kit_is_a_complete_config_driven_application() -> None:
     assert "src/app/layout.tsx" in files
     page = files["src/app/page.tsx"]
     assert "omniaMaxConfig as app" in page
-    assert "app.features" in page
-    assert "app.content" in page
-    assert "app.primary_action" in page
-    assert "max-primary-action" in page
+    assert "max-generation-canvas" in page
+    assert "готового продуктового шаблона здесь нет" in page.lower()
+    assert "app.features" not in page
+    assert "feature-grid" not in files["src/app/globals.css"]
     assert "TODO" not in "\n".join(files.values())
+
+
+def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
+    files = render_max_managed_files(_config(), uuid4())
+    client = files["src/lib/omnia/integration-client.ts"]
+    proxy = files["src/app/api/omnia/integrations/[...path]/route.ts"]
+
+    assert "requestOmniaAI" in client
+    assert 'return invoke("ai", input)' in client
+    assert '"catalog", "ai"' in proxy
+    assert "/api/runtime/projects/${PROJECT_ID}/ai" in proxy
+    assert "api_key" not in client.lower()
 
 
 async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) -> None:

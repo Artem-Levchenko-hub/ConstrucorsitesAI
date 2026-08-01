@@ -1,5 +1,9 @@
 # MAX Mini App generation contract
 
+- The initial home page is an empty generation canvas, not a product template.
+  Replace it completely on a full build; do not recolour/rename it or treat a
+  clean starter build as completion.
+
 - Keep React at 18.3.1 because the official MAX UI peer contract requires it.
 - Use `window.WebApp` only through `src/lib/max/bridge.ts`.
 - Never trust `initDataUnsafe` for authorization. Server data access starts
@@ -22,6 +26,11 @@
   changes it in MAX Studio without another model call.
 - Every primary CTA must perform a real persisted operation through
   `/api/omnia/actions`; never ship decorative buttons or fake success states.
+- When the brief asks for AI, import `requestOmniaAI` from
+  `@/lib/omnia/integration-client`. It invokes the managed Google model through a
+  signed MAX server route and charges the owner's personal/team billing account.
+  Never embed a user/provider key, simulate inference with a timer/random/static
+  text, or expose model credentials to the browser.
 - Persist explicit consent through `/api/omnia/consents` before marketing
   notifications, contacts, payments or other optional personal-data use.
 - Track key funnel events through `/api/omnia/events`; do not send personal data

@@ -14,7 +14,7 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 10
+MAX_MANAGED_KIT_VERSION = 11
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 
@@ -137,7 +137,7 @@ export function GET() {
 import { getMaxWebApp } from "@/lib/max/bridge";
 
 async function invoke<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "catalog",
+  path: "status" | "payments" | "payment-status" | "leads" | "catalog" | "ai",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
@@ -211,6 +211,14 @@ export function getOmniaCatalog(): Promise<{
   return invoke("catalog");
 }
 
+export function requestOmniaAI(input: {
+  message: string;
+  instructions?: string;
+  context?: Record<string, unknown>;
+}): Promise<{ answer: string; model: string }> {
+  return invoke("ai", input);
+}
+
 export async function trackOmniaGoal(
   goal: string,
   parameters: Record<string, unknown> = {},
@@ -256,7 +264,7 @@ export async function POST(request: NextRequest, context: Context) {{
   }}
   const {{ path }} = await context.params;
   const operation = path.join("/");
-  if (!["status", "payments", "payment-status", "leads", "catalog"].includes(operation)) {{
+  if (!["status", "payments", "payment-status", "leads", "catalog", "ai"].includes(operation)) {{
     return NextResponse.json({{ error: {{ message: "Unknown capability" }} }}, {{ status: 404 }});
   }}
   const body = await request.json().catch(() => ({{}})) as {{
@@ -275,6 +283,8 @@ export async function POST(request: NextRequest, context: Context) {{
       ? `/api/runtime/projects/${{PROJECT_ID}}/integrations`
       : operation === "catalog"
         ? `/api/runtime/projects/${{PROJECT_ID}}/catalog`
+      : operation === "ai"
+        ? `/api/runtime/projects/${{PROJECT_ID}}/ai`
       : operation === "payment-status"
         ? `/api/runtime/projects/${{PROJECT_ID}}/payments/status`
         : `/api/runtime/projects/${{PROJECT_ID}}/${{operation}}`;
@@ -416,26 +426,34 @@ MAX_MODEL_LOCKED_FILES = frozenset(
 )
 
 MAX_MODEL_DIRECTIVE = """
-MAX TEMPLATE CONTRACT
-The application is already complete and buildable from the deterministic MAX
-template. Preserve the MAX bridge, authenticated session, legal/support routes,
-integration client and generated business config. Do not rewrite platform-owned
-files. For a user edit, inspect only the relevant screen/component and change the
-smallest necessary file set; prefer src/app/page.tsx and src/app/globals.css.
-Create another route/component only when the requested behaviour truly requires it.
-The bash tool is disabled for MAX: all source changes must use edit_file/write_file
-so Omnia can attribute and safely roll them back.
+MAX PLATFORM CORE CONTRACT
+The existing MAX files are a secure runtime substrate, not a product UI template.
+Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
+and integration clients, webhook security and generated business config. Do not
+rewrite platform-owned files.
+
+On a FULL BUILD, replace the empty generation canvas completely. Own the product
+architecture and create the domain screens, components and API behaviour required
+by the brief. A renamed/recoloured page, decorative tabs, static demo response or
+fake timer is not a finished application. Persist user actions with
+`createMaxAction`; when the brief requests AI, call `requestOmniaAI` from
+`@/lib/omnia/integration-client` so the managed Google model runs server-side.
+Never embed a provider key in source or expose one to the browser.
+
+On a later surgical edit, preserve working behaviour and change only the relevant
+product files. The bash tool is disabled for MAX: all source changes must use
+edit_file/write_file so Omnia can attribute and safely roll them back.
 """.strip()
 
 
 def render_max_starter_files(
     config: MaxProjectConfigPayload, project_id: UUID | str | None = None
 ) -> dict[str, str]:
-    """Complete, buildable MAX app assembled without a model.
+    """Buildable MAX platform core plus an intentionally empty UI canvas.
 
-    The dynamic home screen reads the business config, so loyalty, catalog,
-    booking, event and education projects all start as a personalised working
-    application. A model is reserved for later, genuinely custom edits.
+    Security/session/legal primitives stay deterministic.  Product design and
+    feature architecture do not: the Google agent must replace the canvas rather
+    than inherit a generic card layout that looks deceptively finished.
     """
     return {
         **render_max_managed_files(config, project_id),

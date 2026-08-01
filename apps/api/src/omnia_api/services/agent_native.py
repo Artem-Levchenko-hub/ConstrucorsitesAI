@@ -18,7 +18,7 @@ stays the prod default until this is verified on real builds and billing is wire
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import httpx
@@ -562,6 +562,7 @@ async def run_native_build(
     message_id: Any = None,
     free: bool = False,
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
     max_steps: int = 24,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
@@ -582,8 +583,25 @@ async def run_native_build(
     wrote_since_build = False
     no_write_turns = 0  # consecutive assistant turns with no successful write
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
+    successful_tools: dict[str, int] = {}
+    proof_after_write: set[str] = set()
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
+
+    def _evidence() -> dict[str, int]:
+        result = dict(successful_tools)
+        for tool in proof_after_write:
+            result[f"{tool}_after_write"] = 1
+        return result
+
+    def _completion_gap() -> str | None:
+        if completion_check is None:
+            return None
+        try:
+            return completion_check(written, _evidence())
+        except Exception as exc:
+            log.exception("agent_native.completion_check_failed")
+            return f"Product acceptance check failed: {type(exc).__name__}."
 
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic and prove the tree with one local build only."""
@@ -603,6 +621,18 @@ async def run_native_build(
                 },
             )
         if final_build.get("ok"):
+            successful_tools["build"] = successful_tools.get("build", 0) + 1
+            proof_after_write.add("build")
+            gap = _completion_gap()
+            if gap:
+                return AgentResult(
+                    done=False,
+                    summary=gap,
+                    files=written,
+                    steps=steps,
+                    transcript=convo,
+                    stop_reason="max_steps" if reason == "max_steps" else f"{reason}_red",
+                )
             return AgentResult(
                 done=True,
                 summary=(
@@ -681,7 +711,8 @@ async def run_native_build(
                 # Prose is not proof. Keep the turn inside the same hard budget
                 # until a real clean build exists; never ship a broken app because
                 # the model happened to finish speaking.
-                if _done and last_build_ok is True and not wrote_since_build:
+                gap = _completion_gap() if _done and last_build_ok is True else None
+                if _done and last_build_ok is True and not wrote_since_build and not gap:
                     return AgentResult(
                         done=True,
                         summary=_text or "Готово — приложение собрано и проверено.",
@@ -694,8 +725,10 @@ async def run_native_build(
                     {
                         "role": "user",
                         "content": (
-                            "Перед завершением обязательно вызови build. Если он красный — "
-                            "почини ошибки; если чистый — сразу вызови done."
+                            (gap + " " if gap else "")
+                            + "Перед завершением обязательно вызови build. Если он красный — "
+                            "почини ошибки; если чистый — устрани остаток acceptance contract "
+                            "и вызови done."
                         ),
                     }
                 )
@@ -721,6 +754,17 @@ async def run_native_build(
                                 "is_error": True,
                                 "content": "Not done yet: run the `build` tool and make it "
                                 "CLEAN (fix any errors) before calling done.",
+                            }
+                        )
+                        continue
+                    gap = _completion_gap()
+                    if gap:
+                        results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tu_id,
+                                "is_error": True,
+                                "content": "Not done yet: " + gap,
                             }
                         )
                         continue
@@ -761,9 +805,14 @@ async def run_native_build(
                         written[action.path] = obs["content"]
                     wrote_since_build = True
                     wrote_this_turn = True
+                    proof_after_write.clear()
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
                     wrote_since_build = False
+                if obs.get("ok"):
+                    successful_tools[name] = successful_tools.get(name, 0) + 1
+                    if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
+                        proof_after_write.add(name)
                 _tr = _obs_to_tool_result(tu_id, obs)
                 if name == "build" and not obs.get("ok"):
                     _hint = _build_error_hint(str(_tr.get("content") or ""))

@@ -33,6 +33,10 @@ def test_first_max_build_cannot_finish_at_the_template_stage() -> None:
     assert 'stop_reason="deterministic_template"' not in source
     assert "_merge_seeded_agent_files" in source
     assert "agent_native.run_native_build" in source
+    assert "build_max_product_contract" in source
+    assert "max_completion_gap" in source
+    assert "completion_check=_completion_check" in source
+    assert "_agent_steps = 30" in source
 
 
 def test_seeded_max_files_are_committed_with_agent_customisations() -> None:
@@ -222,6 +226,58 @@ async def test_native_edit_file_counts_as_write_and_lands_in_files(
     )
     assert res.stop_reason == "max_steps_green"
     assert res.files == {"e.ts": "post-edit content"}
+
+
+@pytest.mark.asyncio
+async def test_native_completion_check_rejects_thin_done_and_keeps_building(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clean compiler result cannot bypass a product-specific fidelity gate."""
+    turns = iter(
+        [
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"})),
+            _turn(("build", {})),
+            _turn(("done", {"summary": "too early"})),
+            _turn(
+                (
+                    "write_file",
+                    {"path": "src/components/Feature.tsx", "content": "feature"},
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("done", {"summary": "complete"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "clean",
+        }
+
+    def check(files: Any, evidence: Any) -> str | None:
+        return None if len(files) >= 2 else "Need a real feature component."
+
+    res = await agent_native.run_native_build(
+        system="s",
+        task="t",
+        execute=execute,
+        completion_check=check,
+        max_steps=8,
+    )
+
+    assert res.done is True
+    assert res.summary == "complete"
+    assert set(res.files) == {"src/app/page.tsx", "src/components/Feature.tsx"}
+    assert "Need a real feature component" in str(res.transcript)
 
 
 @pytest.mark.asyncio

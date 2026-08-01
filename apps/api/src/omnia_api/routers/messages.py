@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -3288,20 +3288,26 @@ async def _process_prompt(
                 _agent_steps = 18
             else:
                 if project_template == "max_miniapp":
-                    _agent_user = (
-                        "Доработай проверенную основу MAX Mini App под ПОЛНЫЙ запрос "
-                        f"пользователя:\n\n{prompt_text}\n\n{_seed_block}\n\n"
-                        "Основа уже загружена в контейнер. Обязательно прочитай "
-                        "src/app/page.tsx, src/app/globals.css и доступный MAX-конфиг; "
-                        "затем реально измени незапертые UI-файлы и/или создай компоненты, "
-                        "чтобы реализовать все запрошенные экраны, состояния, русские "
-                        "тексты и действия. Сохрани MAX Bridge, серверную проверку initData, "
-                        "профиль пользователя и webhook-интеграцию из управляемой основы; "
-                        "запертые Studio-файлы не переписывай. После изменений запусти "
-                        "build, исправь ошибки до чистоты и только затем вызови done. "
-                        "Нельзя завершать работу одной проверкой готового шаблона: первый "
-                        "MAX-запуск обязан содержать хотя бы одну осмысленную AI-правку."
+                    from omnia_api.services.max_generation_contract import (
+                        build_max_product_contract,
                     )
+
+                    _max_product_contract = build_max_product_contract(prompt_text)
+                    _agent_user = (
+                        "Построй полноценный MAX Mini App под ПОЛНЫЙ запрос "
+                        f"пользователя:\n\n{prompt_text}\n\n{_seed_block}\n\n"
+                        "В контейнере уже есть только защищённое платформенное ядро и пустой "
+                        "экран-канвас. Это НЕ продуктовый UI и НЕ шаблон для косметической "
+                        "правки: полностью замени канвас своей архитектурой, экранами, "
+                        "компонентами и рабочими сценариями из задания. Сохрани MAX Bridge, "
+                        "серверную проверку initData, профиль пользователя, webhook и "
+                        "управляемые Studio-файлы. Не зашивай секреты пользователя в код.\n\n"
+                        f"{_max_product_contract}"
+                    )
+                    # Full MAX products need enough turns for implementation,
+                    # browser proof and a visual fix pass. The native engine still
+                    # enforces its hard 30-turn ceiling.
+                    _agent_steps = 30
                 else:
                     _agent_user = (
                         f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
@@ -3321,10 +3327,10 @@ async def _process_prompt(
             _escalate_model = model_for_role("agent_escalation", override=force_model)
             _agent_res = None
             _max_seed_files: dict[str, str] = {}
-            # A new MAX project starts from the verified platform template and
-            # Studio config, then ALWAYS continues through the bounded native AI
-            # agent below. The template is a safe base/rollback target, never the
-            # final implementation of the user's custom prompt.
+            # A new MAX project starts from the verified platform CORE and an
+            # intentionally empty generation canvas, then ALWAYS continues through
+            # the bounded native Google agent below. There is no product UI template
+            # for the model to recolour and prematurely call complete.
             if (
                 project_template == "max_miniapp"
                 and orchestrate
@@ -3352,12 +3358,12 @@ async def _process_prompt(
                         "agent.step",
                         {
                             "step": 0,
-                            "action": "template",
-                            "human": "Собираю приложение из проверенного MAX-шаблона",
+                            "action": "platform_core",
+                            "human": "Подготавливаю защищённое ядро MAX",
                             "path": "",
                             "detail": (
-                                f"Готовлю {len(_starter_files)} проверенных файлов основы; "
-                                "после проверки передам их Google AI-агенту."
+                                f"Готовлю {len(_starter_files)} файлов безопасности и "
+                                "пустой UI-канвас; затем Google AI-агент построит продукт."
                             ),
                             "ok": True,
                         },
@@ -3374,8 +3380,8 @@ async def _process_prompt(
                                 "human": "Основа готова — запускаю Google AI-агента",
                                 "path": "",
                                 "detail": (
-                                    "Проверенный MAX-шаблон собирается чисто; теперь агент "
-                                    "реализует требования пользователя поверх него."
+                                    "Ядро MAX собирается чисто; теперь Google AI-агент "
+                                    "проектирует продукт без готового UI-шаблона."
                                 ),
                                 "ok": True,
                             },
@@ -3399,6 +3405,28 @@ async def _process_prompt(
                 # see agent_native._NO_WRITE_*/_INFRA_DEAD_ABORT_AT.
                 from omnia_api.services import agent_native
 
+                _completion_check: (
+                    Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None
+                ) = None
+                if project_template == "max_miniapp" and not _is_edit:
+                    from omnia_api.services.max_generation_contract import (
+                        max_completion_gap,
+                    )
+
+                    _max_baseline_files = dict(current_files)
+
+                    def _max_completion_check(
+                        written: Mapping[str, str], evidence: Mapping[str, int]
+                    ) -> str | None:
+                        effective_files = {
+                            **_max_baseline_files,
+                            **_max_seed_files,
+                            **written,
+                        }
+                        return max_completion_gap(prompt_text, effective_files, evidence)
+
+                    _completion_check = _max_completion_check
+
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(_stack_guide or "", _skills),
                     task=_agent_user,
@@ -3409,6 +3437,7 @@ async def _process_prompt(
                     message_id=str(assistant_message_id),
                     free=is_free,
                     emit=_agent_emit,
+                    completion_check=_completion_check,
                     max_steps=_agent_steps,
                 )
             elif _agent_res is None:

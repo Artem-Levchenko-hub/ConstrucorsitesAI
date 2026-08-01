@@ -18,15 +18,20 @@ from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Header, status
 from sqlalchemy import select
 
+from omnia_api.core.config import PRIMARY_LLM_MODEL
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
 from omnia_api.core.deps import SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.core.redis import get_redis
 from omnia_api.models.app_integration import (
     BusinessIntegration,
     ProjectIntegrationBinding,
 )
 from omnia_api.models.max_integration import MaxIntegration
+from omnia_api.models.project import Project
 from omnia_api.schemas.integration_runtime import (
+    RuntimeAIPublic,
+    RuntimeAIRequest,
     RuntimeCatalogItem,
     RuntimeCatalogPublic,
     RuntimeIntegrationStatus,
@@ -36,7 +41,7 @@ from omnia_api.schemas.integration_runtime import (
     RuntimePaymentRequest,
     RuntimePaymentStatusRequest,
 )
-from omnia_api.services import integration_oauth, integration_providers
+from omnia_api.services import integration_oauth, integration_providers, llm_client
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
@@ -202,7 +207,8 @@ async def runtime_integration_status(
     return RuntimeIntegrationStatus(
         providers=sorted(connections),
         capabilities=sorted(
-            {
+            {"Управляемый Google AI"}
+            | {
                 capability
                 for connection in connections.values()
                 for capability in (connection.capabilities or [])
@@ -214,6 +220,92 @@ async def runtime_integration_status(
             else None
         ),
     )
+
+
+async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None:
+    """Bound owner-funded inference even when a bot user scripts the endpoint."""
+
+    buckets = (
+        (f"omnia:runtime-ai:minute:{project_id}:{max_user_id}", 8, 60),
+        (f"omnia:runtime-ai:day:{project_id}:{max_user_id}", 120, 86_400),
+        (f"omnia:runtime-ai:project-day:{project_id}", 2_000, 86_400),
+    )
+    try:
+        redis = get_redis()
+        for key, limit, ttl in buckets:
+            count = int(await redis.incr(key))
+            if count == 1:
+                await redis.expire(key, ttl)
+            if count > limit:
+                raise ApiError(
+                    "rate_limited",
+                    "Лимит ИИ-запросов временно исчерпан. Попробуйте позже.",
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+    except ApiError:
+        raise
+    except Exception:
+        # Billing still fails closed at the gateway wallet. A transient Redis
+        # outage must not take every generated MAX product offline.
+        return
+
+
+@router.post("/{project_id}/ai", response_model=RuntimeAIPublic)
+async def request_runtime_ai(
+    project_id: UUID,
+    payload: RuntimeAIRequest,
+    session: SessionDep,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+) -> RuntimeAIPublic:
+    """Run real owner-funded Gemini inference without exposing provider keys."""
+
+    context = await _runtime_context(session, project_id, x_max_init_data)
+    await _enforce_runtime_ai_limits(project_id, context.max_user_id)
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise ApiError("not_found", "Приложение не найдено", status.HTTP_404_NOT_FOUND)
+
+    system_prompt = (
+        "Ты — ИИ-функция внутри MAX Mini App. Отвечай на русском языке, кратко и "
+        "по существу. Используй только переданный контекст, не выдумывай измерения "
+        "или действия, которых не было. Для медицинских, юридических и финансовых "
+        "тем явно обозначай ограничения и не выдавай ответ за профессиональный диагноз."
+    )
+    if payload.instructions:
+        system_prompt += "\n\nЗадача продукта:\n" + payload.instructions
+    user_message = payload.message
+    if payload.context:
+        user_message += "\n\nКонтекст продукта (JSON):\n" + json.dumps(
+            payload.context,
+            ensure_ascii=False,
+            default=str,
+        )
+    try:
+        answer = await llm_client.complete_chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            PRIMARY_LLM_MODEL,
+            user_id=str(project.owner_id),
+            project_id=str(project.id),
+            max_tokens=1_600,
+            temperature=0.35,
+            stage="runtime_ai",
+        )
+    except llm_client.LLMError as exc:
+        raise ApiError(
+            "integration_provider_unavailable",
+            "ИИ временно недоступен. Попробуйте ещё раз.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    if not answer.strip():
+        raise ApiError(
+            "integration_provider_unavailable",
+            "ИИ не вернул ответ. Попробуйте ещё раз.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return RuntimeAIPublic(answer=answer.strip(), model=PRIMARY_LLM_MODEL)
 
 
 @router.post("/{project_id}/payments", response_model=RuntimePaymentPublic)

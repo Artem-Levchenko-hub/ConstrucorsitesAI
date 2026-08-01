@@ -2159,6 +2159,18 @@
    "evidence": "Root cause локализован в revision 34651162: первая MAX-сборка создавала AgentResult(stop_reason=deterministic_template) сразу после clean build 16 starter-файлов и не доходила до agent_native.run_native_build. Исправленный контур использует starter как seed/rollback, затем вызывает native-agent gemini-3.1-pro-preview-customtools; snapshot объединяет полный seed с файлами агента, а нулевая AI-правка не засчитывается как готовая генерация. Message history теперь проецирует started_at/finished_at durable GenerationRun, поэтому текущий и завершённый elapsed восстанавливаются после перезагрузки. Локально: 37 целевых API-тестов, ruff и strict mypy по 218 модулям; Web lint/typecheck, 22 файла и 125 тестов зелёные. Production revision e3aa80cd развёрнута документированным compose с полной Linux-сборкой API/Web; api и web healthy, worker слушает очередь, публичные /api/health, /web-health, /max/start и /max отвечают 200. Runtime подтвердил use_agentic_builder=true, use_native_agent=true, лимит 24 шага и модель gemini-3.1-pro-preview-customtools. Реальный canary через production /v1/messages получил HTTP 200 от этой модели со stop_reason=end_turn и usage-метаданными; свежие логи после рестарта чистые.",
    "impact": "Пользовательский бриф снова должен превращаться в реальные изменения экранов и функций, а не в мгновенную выдачу универсального шаблона. Новые ограничения, single-flight и rollback сохраняются; перезагрузка страницы больше не обнуляет видимое время работы агента.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H111",
+   "title": "MAX строится от продуктового брифа, а не от готового UI-шаблона",
+   "status": "testing",
+   "score": 9,
+   "category": "MAX / Gemini / продуктовая полнота / дизайн / runtime AI",
+   "period": "01.08",
+   "description": "Убрать визуальный и архитектурный якорь универсального MAX-шаблона, не принимать одностраничную косметическую правку как готовый продукт и дать сгенерированным приложениям безопасный реальный вызов Google AI без ключа в клиентском коде.",
+   "evidence": "Browser QA последнего fitness-25a64d против предыдущего fitnessstat-31eba8 показал точный регресс: новый результат свёл бриф к трём декоративным вкладкам, пустому графику и setTimeout-имитации анализа, тогда как предыдущий имел 6 экранов, persisted CRUD, поиск/фильтры и уведомления, но тоже подменял AI детерминированной формулой. Root cause найден в MAX_MODEL_DIRECTIVE: модель получала утверждение, что приложение уже complete, прямой совет предпочитать только page.tsx/globals.css и отсутствие semantic done-gate; build plan и coverage gate для MAX были выключены. Реализованы пустой generation canvas вместо карточного product UI, 30-turn full-build, brief-aware acceptance contract по явным функциям, обязательные runtime_check/probe и два see для сложного продукта, запрет fake-AI и managed requestOmniaAI → подписанный MAX runtime → gemini-3.1-pro-preview-customtools с owner/team billing и rate limits. Локально: 38 целевых API-тестов на чистой PostgreSQL, отдельный pure-набор 29 тестов, ruff, strict mypy по 219 модулям, MAX TypeScript typecheck зелёные; Next production compile/static generation зелёные, финальный standalone-copy локально остановился только на Windows EPERM symlink и будет окончательно доказан Linux production build.",
+   "impact": "Google-агент больше не сможет завершить сложный MAX-бриф после перекраски одного файла: он обязан построить продуктовые экраны и реальные сценарии, покрыть явно названные функции, проверить интерактив и исправить визуальный результат. ИИ-функции приложения вызывают управляемую модель на сервере вместо таймера или утечки пользовательского ключа.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2643,6 +2655,10 @@
      true
     ],
     [
+     "Первый MAX-запуск без продуктового UI-шаблона: пустой canvas → brief-aware Gemini → semantic acceptance → real managed AI runtime",
+     true
+    ],
+    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2663,7 +2679,8 @@
      "H105",
      "H106",
      "H107",
-     "H110"
+     "H110",
+     "H111"
    ]
   }
  ],
