@@ -114,6 +114,12 @@ async def see_page(
 
     return {
         "ok": not has_failed,
+        "verdict": verdict.verdict,
+        "score": verdict.score,
+        # One actionable visual repair is enough for the native loop. It must
+        # not finish before the model has seen and applied the first concrete
+        # critique, but it must also never chase an aesthetic score forever.
+        "needs_fix": bool(verdict.issues) and verdict.verdict in {"broken", "generic"},
         "detail": (
             f"LOOKED at {rel} — verdict: {verdict.verdict} ({verdict.score}/10)\n"
             f"Apply these concrete fixes:\n{issues}{diag_text}"

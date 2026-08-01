@@ -194,6 +194,17 @@ _TOOLS_CACHED: list[dict[str, Any]] = [
     {**_TOOLS[-1], "cache_control": _CACHE},
 ]
 
+# MAX has a narrower executor contract. Do not advertise operations which the
+# server will always reject (bash) or which authenticate through the generic web
+# harness (probe/isolation). Gemini otherwise spends turns discovering the
+# rejection even though the MAX prompt already says not to call them.
+_MAX_UNAVAILABLE_TOOLS = frozenset({"bash", "probe", "verify_isolation"})
+_MAX_TOOLS = [tool for tool in _TOOLS if tool["name"] not in _MAX_UNAVAILABLE_TOOLS]
+_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_MAX_TOOLS[:-1],
+    {**_MAX_TOOLS[-1], "cache_control": _CACHE},
+]
+
 
 def _system_blocks(system: str) -> list[dict[str, Any]]:
     """System prompt as a single cache-marked text block (Anthropic's `system`
@@ -498,9 +509,9 @@ _MAX_DONE_WHEN_GREEN_NUDGE = (
 
 _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "MAX VERIFICATION OVERRIDE (takes precedence over the generic web-app rules above): "
-    "MAX uses signed initData and an authenticated preview session. The generic probe, "
-    "verify_isolation and see tools currently authenticate as a normal web user and cannot "
-    "prove this runtime. Do NOT call or retry probe/verify_isolation in a MAX build. Finish "
+    "MAX uses signed initData and an authenticated preview session. The generic probe and "
+    "verify_isolation tools cannot prove this runtime and are not available in a MAX build. "
+    "The see tool DOES receive a signed MAX preview session. Finish "
     "the complete source product, run build until clean, run runtime_check after the final "
     "write, then call see ONCE; the executor supplies a signed MAX preview session. Apply a "
     "concrete visual fix if returned, rebuild/runtime_check/see once more, then call done. If "
@@ -533,6 +544,7 @@ async def _call_messages(
     message_id: str | None = None,
     free: bool = False,
     stage: str = "native_agent",
+    tools: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
     Anthropic response dict, or raises the last error."""
@@ -545,7 +557,7 @@ async def _call_messages(
         # Prompt caching: cache the stable system prompt + tool schemas, and a
         # moving breakpoint on the transcript tail (see _with_incremental_cache).
         "system": _system_blocks(system),
-        "tools": _TOOLS_CACHED,
+        "tools": tools if tools is not None else _TOOLS_CACHED,
         "tool_choice": {"type": "auto"},
         "messages": _with_incremental_cache(convo),
     }
@@ -627,6 +639,8 @@ async def run_native_build(
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
     successful_tools: dict[str, int] = {}
     proof_after_write: set[str] = set()
+    visual_feedback_step: int | None = None
+    visual_repair_attempted = False
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
@@ -760,6 +774,7 @@ async def run_native_build(
                     message_id=str(message_id) if message_id else None,
                     free=free,
                     stage=call_stage,
+                    tools=_MAX_TOOLS_CACHED if max_runtime else _TOOLS_CACHED,
                 )
             except Exception as exc:
                 return await _finish_without_provider(
@@ -891,6 +906,12 @@ async def run_native_build(
                         written[action.path] = obs["content"]
                     wrote_since_build = True
                     wrote_this_turn = True
+                    # Tool calls in one assistant response are planned before
+                    # any result is returned. Only a write from a LATER turn can
+                    # have applied the visual critique.
+                    if visual_feedback_step is not None and step > visual_feedback_step:
+                        visual_repair_attempted = True
+                        visual_feedback_step = None
                     proof_after_write.clear()
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
@@ -898,7 +919,10 @@ async def run_native_build(
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
                     if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
-                        proof_after_write.add(name)
+                        if name == "see" and obs.get("needs_fix") and not visual_repair_attempted:
+                            visual_feedback_step = step
+                        else:
+                            proof_after_write.add(name)
                 _tr = _obs_to_tool_result(tu_id, obs, tool_name=name)
                 if name == "build" and not obs.get("ok"):
                     _hint = _build_error_hint(str(_tr.get("content") or ""))

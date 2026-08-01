@@ -114,6 +114,7 @@ _NON_PRODUCT_PATHS = {
     "src/lib/omnia/max-config.ts",
     "src/components/MaxAppProvider.tsx",
     "src/components/OmniaCompliance.tsx",
+    "src/lib/omnia/client.ts",
     "src/lib/omnia/integration-client.ts",
 }
 _MANAGED_DB_PATHS = {
@@ -126,6 +127,27 @@ _MANAGED_DB_PATHS = {
     "src/app/api/omnia/events/route.ts",
     "src/app/api/omnia/preview-session/route.ts",
 }
+
+
+def _is_product_source(path: str) -> bool:
+    """Return whether a file is model-owned product UI/behaviour.
+
+    Managed MAX files contain onboarding copy, loading/error strings and SDK
+    names. Including them in the product corpus can therefore satisfy semantic
+    checks before the model has built the requested product.
+    """
+
+    return (
+        path.startswith("src/")
+        and path.endswith(_PRODUCT_SUFFIXES)
+        and path not in _NON_PRODUCT_PATHS
+        and path not in _MANAGED_DB_PATHS
+        and not path.startswith("src/lib/max/")
+        and not path.startswith("src/app/api/max/")
+        and not path.startswith("src/app/api/omnia/")
+        and "/legal/" not in path
+        and "/support/" not in path
+    )
 
 
 def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, ...]]]:
@@ -146,8 +168,9 @@ def build_max_product_contract(prompt: str) -> str:
         "MAX PRODUCT ACCEPTANCE CONTRACT (done is rejected until this is true):",
         "- No product home page or visual template exists initially. Create "
         "src/app/page.tsx, product styling, screens and navigation from scratch.",
-        "- Build a coherent mobile product with domain components/routes and real actions. "
-        "For a multi-feature brief, one giant page.tsx with decorative tabs is insufficient.",
+        "- Build a coherent mobile product with real screens/views and actions. Organise "
+        "the source however best fits the product: completion is judged by behaviour and "
+        "brief coverage, never by an arbitrary number of files. Decorative tabs are not screens.",
         "- Every button must execute a real state change or persisted request. No decorative "
         "controls, fake timers, TODOs, simulated success or claimed integrations.",
         "- Use createMaxAction for persisted MAX user activity. Never store a provider key "
@@ -249,11 +272,8 @@ def max_source_completion_gap(
         )
 
     capabilities = requested_max_capabilities(prompt)
-    corpus = "\n".join(
-        content.lower()
-        for path, content in files.items()
-        if path.startswith("src/") and path.endswith(_PRODUCT_SUFFIXES)
-    )
+    product_sources = [content for path, content in files.items() if _is_product_source(path)]
+    corpus = "\n".join(content.lower() for content in product_sources)
     unsafe_product_db_paths = [
         path
         for path, content in files.items()
@@ -268,6 +288,16 @@ def max_source_completion_gap(
             + ", ".join(sorted(unsafe_product_db_paths))
             + ". Remove direct DB imports and use createMaxAction/getMaxActions."
         )
+
+    # Reject a renamed starter or a one-line feature list, but never prescribe
+    # source architecture. A complete product may legitimately live in one
+    # substantial page component; the former file-count rule rejected exactly
+    # that shape after build + runtime + visual proof had already passed.
+    if len(corpus.strip()) < 900:
+        return (
+            "The product implementation is still too thin. Build the actual mobile UI, "
+            "navigation/views, interactions and states from the brief before done."
+        )
     missing = [
         label
         for _key, label, needles in capabilities
@@ -275,27 +305,6 @@ def max_source_completion_gap(
     ]
     if missing:
         return "Explicit brief capabilities are still missing: " + ", ".join(missing) + "."
-
-    product_files = [
-        path
-        for path, content in files.items()
-        if path.startswith("src/")
-        and path.endswith((".ts", ".tsx"))
-        and path not in _NON_PRODUCT_PATHS
-        and not path.startswith("src/lib/max/")
-        and not path.startswith("src/app/api/max/")
-        and not path.startswith("src/app/api/omnia/")
-        and "/legal/" not in path
-        and "/support/" not in path
-        and len(content.strip()) >= 180
-    ]
-    minimum_files = 4 if len(capabilities) >= 4 else 2
-    if len(product_files) < minimum_files:
-        return (
-            f"Product breadth is too thin ({len(product_files)}/{minimum_files} meaningful "
-            "product files). Split the domain into real screens/components/API behaviour; "
-            "do not ship a cosmetic single-page patch."
-        )
 
     if _AI_PROMPT_RE.search(prompt):
         if "requestomniaai" not in corpus:

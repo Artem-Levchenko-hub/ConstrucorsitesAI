@@ -23,6 +23,7 @@ from omnia_api.schemas.max_studio import (
 from omnia_api.services import max_project_kit as max_project_kit_svc
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
+    MAX_MODEL_DIRECTIVE,
     _template_candidates,
     render_max_managed_files,
     render_max_starter_files,
@@ -193,6 +194,16 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     assert '"catalog", "ai"' in proxy
     assert "/api/runtime/projects/${PROJECT_ID}/ai" in proxy
     assert "api_key" not in client.lower()
+
+
+def test_model_directive_matches_locked_max_runtime_api() -> None:
+    assert 'useMaxApp } from "@/components/MaxAppProvider"' in MAX_MODEL_DIRECTIVE
+    assert "firstName" in MAX_MODEL_DIRECTIVE
+    assert "languageCode" in MAX_MODEL_DIRECTIVE
+    assert "There is no `useWebApp`, `useMaxUser`" in MAX_MODEL_DIRECTIVE
+    assert "requestOmniaAI({ message, instructions, context })" in MAX_MODEL_DIRECTIVE
+    assert "Tailwind v4" in MAX_MODEL_DIRECTIVE
+    assert "Recharts are not installed" in MAX_MODEL_DIRECTIVE
 
 
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:

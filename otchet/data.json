@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-01",
-  "version": 21,
+  "version": 22,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2246,6 +2246,18 @@
    "evidence": "В MaxWorkspaceShell корневая grid-строка заменена на minmax(0,1fr), все три grid-колонки получили h-full/max-h-full/min-h-0/overflow-hidden, а sidebar — собственную h-dvh-границу, scroll-контейнер и несжимаемые header/footer. App layout дополнительно ограничен max-h-dvh. Добавлен regression-контракт max-workspace-height.test.ts. Локально зелёные typecheck, ESLint и 130 Vitest-тестов. Browser-QA на viewport 2048×1022 с 31 элементом подтвердил scrollY=0, document height=viewport, navScrollHeight=2000 при clientHeight=557 и полностью видимый prompt у нижней границы. Revision 51987ec7 доставлена в production: Linux Docker полностью собрал Next, проверил типы и сгенерировал 46/46 страниц; web и API healthy, worker/gateway работают, публичные /web-health, /api/health и /max отвечают 200.",
    "impact": "Количество проектов больше не меняет высоту рабочего стола. Пользователь всегда видит форму чата и нижнюю часть интерфейса, а прокручивается только список проектов и история сообщений.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H117",
+   "title": "MAX принимает готовую Google-сборку по фактам, а не по числу файлов",
+   "status": "testing",
+   "score": null,
+   "category": "MAX / Gemini / completion / кэш / качество",
+   "period": "01.08",
+   "description": "Вернуть надёжное завершение template-free генерации: полноценное приложение из одного или нескольких файлов должно приниматься по покрытию брифа, чистой сборке, runtime и подписанному preview, а не по произвольному количеству исходников.",
+   "evidence": "Форензика production-run 2be34aee-c463-4380-930a-afc02306051f доказала, что Gemini создал полноценный page.tsx примерно на 21 КБ, исправил SDK и типы, получил чистый typecheck, runtime HTTP 200 и успешный signed see. Платформа всё равно отвергла результат исключительно из-за введённого позднее условия minimum_files=4, запустила лишний сегмент, исчерпала hard limit и откатила готовую страницу до технического ядра с 404. Другой run 3df5b12a выявил сопутствующее трение: модель угадывала отсутствующие useWebApp/useMaxUser, snake_case поля, недоступный bash и Tailwind v3 utilities. Исправление убирает file-count gate, не позволяет managed MAX core подменять продуктовое покрытие, документирует точный API useMaxApp и integration-client, скрывает только реально недоступные MAX tools и допускает ровно одну управляемую visual-repair итерацию. Существующее сжатие длинных tool-results и стабильный provider-prefix cache сохранены. Локально зелёные 89 agent/MAX regression tests и 7 gateway cache/compaction tests, Ruff, format, strict mypy и diff-check; платный browser-run оставлен владельцу.",
+   "impact": "Один большой, но законченный продуктовый файл больше не отправляет Gemini в бессмысленный второй цикл. Тонкое техническое ядро всё ещё не может пройти semantic acceptance, ошибки сборки и runtime продолжают блокировать публикацию, а визуальная критика может вызвать одну реальную правку без бесконечной петли.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2746,6 +2758,10 @@
      true
     ],
     [
+     "Факт-ориентированное завершение Gemini: полноценный один файл допустим, managed core не подменяет покрытие, недоступные tools скрыты, одна visual-repair итерация, cache/compaction сохранены",
+     true
+    ],
+    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2772,7 +2788,8 @@
     "H113",
     "H114",
     "H115",
-    "H116"
+    "H116",
+    "H117"
    ]
   }
  ],

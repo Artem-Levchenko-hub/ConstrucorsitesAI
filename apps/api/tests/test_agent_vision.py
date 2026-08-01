@@ -48,3 +48,39 @@ async def test_max_see_rejects_invalid_bootstrap_origin() -> None:
     result = await agent_vision.see_page(uuid4(), bootstrap_url="javascript:bad")
 
     assert result == {"ok": False, "error": "invalid preview bootstrap URL"}
+
+
+@pytest.mark.asyncio
+async def test_see_exposes_actionable_visual_repair_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import vision_audit
+    from omnia_api.workers import preview
+
+    async def fake_capture(*args: Any, **kwargs: Any) -> dict[int, bytes]:
+        return {1440: b"png", 360: b"png"}
+
+    async def fake_diagnostics(*args: Any, **kwargs: Any) -> dict[str, list[str]]:
+        return {"failed_requests": [], "console_errors": []}
+
+    async def fake_audit(*args: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(
+            skipped=False,
+            verdict="generic",
+            score=6,
+            issues=("Hero: enlarge the title",),
+        )
+
+    monkeypatch.setattr(preview, "capture_live_url", fake_capture)
+    monkeypatch.setattr(preview, "capture_diagnostics", fake_diagnostics)
+    monkeypatch.setattr(vision_audit, "audit_screenshots", fake_audit)
+
+    result = await agent_vision.see_page(
+        uuid4(),
+        bootstrap_url="https://fitness-dev.example/api/omnia/preview-session?signature=x",
+    )
+
+    assert result["ok"] is True
+    assert result["verdict"] == "generic"
+    assert result["score"] == 6
+    assert result["needs_fix"] is True

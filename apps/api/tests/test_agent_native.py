@@ -28,9 +28,15 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT\nBuild the app")
 
     assert "takes precedence" in prompt
-    assert "Do NOT call or retry probe/verify_isolation" in prompt
+    assert "probe and verify_isolation tools cannot prove this runtime" in prompt
+    assert "not available in a MAX build" in prompt
     assert "run runtime_check after the final write" in prompt
     assert "signed MAX preview session" in prompt
+
+    max_names = {tool["name"] for tool in agent_native._MAX_TOOLS_CACHED}
+    assert {"build", "runtime_check", "see", "write_file", "done"} <= max_names
+    assert not ({"bash", "probe", "verify_isolation"} & max_names)
+    assert agent_native._MAX_TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
 
 
 def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> None:
@@ -628,12 +634,14 @@ async def test_completion_contract_finishes_without_ceremonial_provider_turn(
         ]
     )
     calls = 0
+    advertised_tools: list[set[str]] = []
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
     ) -> dict[str, Any]:
         nonlocal calls
         calls += 1
+        advertised_tools.append({tool["name"] for tool in kwargs["tools"]})
         return next(turns)
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
@@ -646,7 +654,7 @@ async def test_completion_contract_finishes_without_ceremonial_provider_turn(
         return None if files and all(evidence.get(key) for key in required) else "proof missing"
 
     result = await agent_native.run_native_build(
-        system="s",
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
         task="t",
         execute=execute,
         completion_check=complete,
@@ -656,3 +664,109 @@ async def test_completion_contract_finishes_without_ceremonial_provider_turn(
     assert result.done is True
     assert result.stop_reason == "contract_green"
     assert calls == 2
+    assert all(not ({"bash", "probe", "verify_isolation"} & names) for names in advertised_tools)
+
+
+@pytest.mark.asyncio
+async def test_max_applies_one_actionable_visual_fix_before_local_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "first"})),
+            _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "polished"})),
+            _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+        ]
+    )
+    calls = 0
+    see_calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        if action.name == "see":
+            see_calls += 1
+            return {
+                "ok": True,
+                "needs_fix": True,
+                "detail": "Apply this concrete visual fix.",
+            }
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="t",
+        execute=execute,
+        completion_check=complete,
+        max_steps=10,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert result.files["src/app/page.tsx"] == "polished"
+    assert calls == 4
+    assert see_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_same_turn_write_cannot_claim_it_applied_visual_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(
+                ("write_file", {"path": "src/app/page.tsx", "content": "first"}),
+                ("build", {}),
+                ("runtime_check", {"path": "/"}),
+                ("see", {"path": "/"}),
+                ("write_file", {"path": "src/app/page.tsx", "content": "same-turn"}),
+            ),
+            _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "later-fix"})),
+            _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+        ]
+    )
+    calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "see":
+            return {"ok": True, "needs_fix": True, "detail": "Fix the hero."}
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="t",
+        execute=execute,
+        completion_check=complete,
+        max_steps=10,
+    )
+
+    assert result.done is True
+    assert result.files["src/app/page.tsx"] == "later-fix"
+    assert calls == 4

@@ -509,6 +509,21 @@ Never embed a provider key in source or expose one to the browser. If a user pas
 a credential into chat, do not write it or create an .env file: Omnia handles
 credentials only through the encrypted Studio Integration Hub.
 
+LOCKED RUNTIME API (use these exact exports; do not guess substitutes):
+- `import { useMaxApp } from "@/components/MaxAppProvider"`; it returns
+  `{ mode, user, error }`, where `mode` is `"loading" | "max" | "preview" | "error"`.
+- `user` is nullable and has `id`, `firstName`, `lastName`, `username`,
+  `languageCode`, `photoUrl`. There is no `useWebApp`, `useMaxUser`, snake_case
+  user field, or `retry` property on this hook.
+- `createMaxAction(actionType, payload)` and `getMaxActions()` are exported from
+  `@/lib/omnia/integration-client`; `getMaxActions()` resolves to `{ actions }`.
+- `requestOmniaAI({ message, instructions, context })` resolves to
+  `{ answer, text, model }` from the same client.
+- Tailwind v4 is installed through `@import "tailwindcss"`; do not use v3
+  `@tailwind` directives or unconfigured semantic utilities such as `border-border`.
+- Use only dependencies present in `package.json`. `lucide-react` is available;
+  chart libraries such as Recharts are not installed.
+
 On a later surgical edit, preserve working behaviour and change only the relevant
 product files. The bash tool is disabled for MAX: all source changes must use
 edit_file/write_file so Omnia can attribute and safely roll them back.
