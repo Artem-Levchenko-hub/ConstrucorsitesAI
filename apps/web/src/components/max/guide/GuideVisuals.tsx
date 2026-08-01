@@ -17,7 +17,7 @@ import {
   Sparkles,
   Webhook,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 const ink = "#171716";
 const paper = "#fcfbf7";
@@ -27,46 +27,70 @@ const accent = "#f15a38";
 const muted = "#8d887f";
 const success = "#248a4b";
 
-function Marker({ number, className }: { number: number; className: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={`absolute z-20 grid size-7 place-items-center rounded-full border-2 border-white bg-[#f15a38] text-xs font-bold text-white shadow-[0_5px_14px_rgba(0,0,0,.28)] ${className}`}
-    >
-      {number}
-    </span>
-  );
-}
+type Callout = {
+  number: number;
+  from: [number, number];
+  to: [number, number];
+  d: string;
+};
 
-function ArrowLayer({ children }: { children: ReactNode }) {
-  return (
-    <svg
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0 z-10 h-full w-full"
-      viewBox="0 0 1000 560"
-      preserveAspectRatio="none"
-    >
-      <defs>
-        <marker id="guide-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-          <path d="M0,0 L8,4 L0,8 Z" fill={accent} />
-        </marker>
-      </defs>
-      {children}
-    </svg>
-  );
-}
+function CalloutLayer({ callouts }: { callouts: Callout[] }) {
+  const arrowId = `guide-arrow-${useId().replace(/:/g, "")}`;
 
-function Arrow({ d }: { d: string }) {
   return (
-    <path
-      d={d}
-      fill="none"
-      markerEnd="url(#guide-arrow)"
-      stroke={accent}
-      strokeDasharray="6 5"
-      strokeLinecap="round"
-      strokeWidth="3"
-    />
+    <>
+      <svg
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-20 h-full w-full"
+        viewBox="0 0 1000 560"
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <marker
+            id={arrowId}
+            markerWidth="14"
+            markerHeight="14"
+            markerUnits="userSpaceOnUse"
+            refX="8"
+            refY="4"
+            orient="auto"
+            viewBox="0 0 8 8"
+          >
+            <path d="M0,0 L8,4 L0,8 Z" fill={accent} />
+          </marker>
+        </defs>
+        {callouts.map(({ number, d }) => (
+          <g key={number}>
+            <path d={d} fill="none" stroke="white" strokeLinecap="round" strokeWidth="9" />
+            <path
+              d={d}
+              fill="none"
+              markerEnd={`url(#${arrowId})`}
+              stroke={accent}
+              strokeDasharray="8 7"
+              strokeLinecap="round"
+              strokeWidth="4"
+            />
+          </g>
+        ))}
+      </svg>
+      {callouts.map(({ number, from, to }) => (
+        <div key={number} aria-hidden="true">
+          <span
+            className="pointer-events-none absolute z-30 grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white bg-[#f15a38] text-[11px] font-bold text-white shadow-[0_5px_14px_rgba(0,0,0,.28)]"
+            style={{ left: `${from[0] / 10}%`, top: `${from[1] / 5.6}%` }}
+          >
+            {number}
+          </span>
+          <span
+            className="pointer-events-none absolute z-30 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-[#f15a38] bg-white/95"
+            style={{ left: `${to[0] / 10}%`, top: `${to[1] / 5.6}%` }}
+          >
+            <span className="size-1.5 rounded-full bg-[#f15a38]" />
+          </span>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -92,7 +116,7 @@ function ScreenshotFrame({
           <span className="size-2 rounded-full bg-[#248a4b]" />
         </div>
       </figcaption>
-      <div className="relative aspect-[1000/560] min-h-[330px] overflow-hidden bg-[#f5f3ee] sm:min-h-0">
+      <div className="relative min-h-[330px] w-full overflow-hidden bg-[#f5f3ee] sm:aspect-[1000/560] sm:min-h-0">
         {children}
       </div>
     </figure>
@@ -180,14 +204,11 @@ export function ProjectCreationVisual() {
           </div>
         </div>
       </div>
-      <ArrowLayer>
-        <Arrow d="M835 60 C835 90 800 96 765 115" />
-        <Arrow d="M920 230 C860 235 835 245 790 270" />
-        <Arrow d="M700 505 C740 500 790 490 830 455" />
-      </ArrowLayer>
-      <Marker number={1} className="right-[12%] top-[5%]" />
-      <Marker number={2} className="right-[4%] top-[36%]" />
-      <Marker number={3} className="bottom-[4%] right-[31%]" />
+      <CalloutLayer callouts={[
+        { number: 1, from: [770, 92], to: [902, 50], d: "M770 92 C812 82 852 66 890 54" },
+        { number: 2, from: [970, 246], to: [772, 270], d: "M970 246 C914 246 850 252 786 268" },
+        { number: 3, from: [704, 520], to: [858, 486], d: "M704 520 C750 519 805 507 846 490" },
+      ]} />
     </ScreenshotFrame>
   );
 }
@@ -229,14 +250,11 @@ export function BuilderVisual() {
           </div>
         </div>
       </div>
-      <ArrowLayer>
-        <Arrow d="M420 500 C430 470 450 445 475 420" />
-        <Arrow d="M815 185 C800 205 780 220 755 240" />
-        <Arrow d="M915 60 C890 75 855 85 820 92" />
-      </ArrowLayer>
-      <Marker number={1} className="bottom-[3%] left-[39%]" />
-      <Marker number={2} className="right-[7%] top-[25%]" />
-      <Marker number={3} className="right-[4%] top-[4%]" />
+      <CalloutLayer callouts={[
+        { number: 1, from: [398, 528], to: [585, 492], d: "M398 528 C456 529 522 515 573 496" },
+        { number: 2, from: [922, 176], to: [821, 283], d: "M922 176 C906 219 870 260 832 278" },
+        { number: 3, from: [820, 96], to: [936, 51], d: "M820 96 C860 87 902 69 924 55" },
+      ]} />
     </ScreenshotFrame>
   );
 }
@@ -275,12 +293,10 @@ export function IntegrationVisual() {
           </div>
         </div>
       </div>
-      <ArrowLayer>
-        <Arrow d="M555 280 C590 280 620 285 655 300" />
-        <Arrow d="M875 485 C850 470 825 455 805 430" />
-      </ArrowLayer>
-      <Marker number={1} className="left-[54%] top-[45%]" />
-      <Marker number={2} className="bottom-[4%] right-[10%]" />
+      <CalloutLayer callouts={[
+        { number: 1, from: [546, 286], to: [295, 318], d: "M546 286 C472 286 376 301 308 316" },
+        { number: 2, from: [956, 518], to: [750, 446], d: "M956 518 C891 510 814 478 763 451" },
+      ]} />
     </ScreenshotFrame>
   );
 }
@@ -322,12 +338,10 @@ export function LaunchVisual() {
           </aside>
         </div>
       </div>
-      <ArrowLayer>
-        <Arrow d="M525 390 C510 410 495 425 470 442" />
-        <Arrow d="M865 230 C845 250 830 270 815 292" />
-      </ArrowLayer>
-      <Marker number={1} className="bottom-[17%] left-[49%]" />
-      <Marker number={2} className="right-[7%] top-[35%]" />
+      <CalloutLayer callouts={[
+        { number: 1, from: [536, 449], to: [316, 333], d: "M536 449 C467 434 382 377 328 338" },
+        { number: 2, from: [941, 187], to: [815, 326], d: "M941 187 C920 245 871 299 827 321" },
+      ]} />
     </ScreenshotFrame>
   );
 }
@@ -355,14 +369,11 @@ export function PartnerVisual() {
           </div>
         </div>
       </div>
-      <ArrowLayer>
-        <Arrow d="M870 160 C835 170 795 185 750 210" />
-        <Arrow d="M890 338 C850 340 815 344 770 350" />
-        <Arrow d="M720 480 C750 475 790 466 825 450" />
-      </ArrowLayer>
-      <Marker number={1} className="right-[8%] top-[21%]" />
-      <Marker number={2} className="right-[6%] top-[56%]" />
-      <Marker number={3} className="bottom-[6%] right-[27%]" />
+      <CalloutLayer callouts={[
+        { number: 1, from: [962, 154], to: [881, 190], d: "M962 154 C937 159 909 174 893 185" },
+        { number: 2, from: [954, 321], to: [657, 341], d: "M954 321 C864 319 757 329 671 339" },
+        { number: 3, from: [735, 519], to: [883, 492], d: "M735 519 C783 519 835 506 871 496" },
+      ]} />
     </ScreenshotFrame>
   );
 }
@@ -394,12 +405,10 @@ export function DashboardVisual() {
           </div>
         </div>
       </div>
-      <ArrowLayer>
-        <Arrow d="M895 90 C860 100 830 110 790 130" />
-        <Arrow d="M520 430 C500 410 485 392 470 365" />
-      </ArrowLayer>
-      <Marker number={1} className="right-[7%] top-[7%]" />
-      <Marker number={2} className="bottom-[18%] left-[48%]" />
+      <CalloutLayer callouts={[
+        { number: 1, from: [770, 100], to: [922, 58], d: "M770 100 C821 95 876 76 910 62" },
+        { number: 2, from: [530, 474], to: [452, 365], d: "M530 474 C512 434 486 392 463 372" },
+      ]} />
     </ScreenshotFrame>
   );
 }
