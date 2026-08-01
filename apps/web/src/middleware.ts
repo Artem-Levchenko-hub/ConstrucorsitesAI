@@ -4,20 +4,6 @@ import { NextResponse, type NextRequest } from "next/server";
 // the layout calls /api/auth/me to validate the token).
 const AUTH_COOKIE = "omnia_session";
 
-/**
- * Allow only same-origin relative redirects (`/projects`, `/account?x=1`).
- * Rejects protocol-relative (`//evil`), absolute (`https://...`) and
- * back-tracking (`/../`) variants so a hostile landing CTA can't bounce
- * the user off to a phishing host after a fresh sign-in.
- */
-function safeNext(raw: string | null): string | null {
-  if (!raw) return null;
-  if (!raw.startsWith("/")) return null;
-  if (raw.startsWith("//")) return null;
-  if (raw.includes("\\")) return null;
-  return raw;
-}
-
 export function middleware(req: NextRequest) {
   // Dev mock mode (NEXT_PUBLIC_USE_MOCKS !== "false"): no backend exists to set
   // the auth cookie, so let every route through — the layout's getSession()
@@ -36,16 +22,12 @@ export function middleware(req: NextRequest) {
     path === "/max/register" ||
     path === "/max/verify-email";
 
-  // Already signed-in user hitting /login or /register → honour ?next= so
-  // the landing-page CTA "Войти" lands directly on whatever path it asked
-  // for (default: /projects).
-  if (session && isGeneralAuthRoute) {
-    const next = safeNext(req.nextUrl.searchParams.get("next"));
-    const url = req.nextUrl.clone();
-    url.pathname = next ?? "/projects";
-    url.search = "";
-    return NextResponse.redirect(url);
-  }
+  // Never redirect away from /login or /register based on cookie presence
+  // alone. Middleware cannot validate the JWT, so a stale omnia_session used
+  // to create an infinite loop:
+  //   /login -> /projects -> app layout rejects JWT -> /login -> ...
+  // Auth pages must remain reachable so the user can replace an expired
+  // session by signing in again.
 
   const isProtectedRoute =
     path.startsWith("/projects") ||
