@@ -171,6 +171,60 @@ def build_max_product_contract(prompt: str) -> str:
     return "\n".join(lines)
 
 
+def normalize_max_globals_css(css: str) -> str:
+    """Move every CSS import ahead of generated rules and Tailwind last.
+
+    Tailwind expands ``@import "tailwindcss"`` into hundreds of rules.  A font
+    import placed immediately after it therefore becomes an illegal late import
+    only in the real Next/Turbopack compiler; ``tsc --noEmit`` cannot see it.
+    Keeping external imports first is deterministic and does not alter the
+    model-owned product styles.
+    """
+
+    lines = css.splitlines()
+    imports = [line for line in lines if line.strip().lower().startswith("@import ")]
+    if not imports:
+        return css
+
+    ordered_imports = sorted(
+        imports,
+        key=lambda line: 1 if "tailwindcss" in line.lower() else 0,
+    )
+    import_order_is_safe = imports == ordered_imports
+    import_location_is_safe = True
+    seen_rule = False
+    in_comment = False
+    for line in lines:
+        stripped = line.strip()
+        if in_comment:
+            if "*/" in stripped:
+                in_comment = False
+            continue
+        if stripped.startswith("/*"):
+            in_comment = "*/" not in stripped
+            continue
+        if not stripped or stripped.lower().startswith("@charset "):
+            continue
+        if stripped.lower().startswith("@import "):
+            if seen_rule:
+                import_location_is_safe = False
+            continue
+        seen_rule = True
+
+    if import_order_is_safe and import_location_is_safe:
+        return css
+
+    charsets = [line for line in lines if line.strip().lower().startswith("@charset ")]
+    body = [
+        line for line in lines if not line.strip().lower().startswith(("@charset ", "@import "))
+    ]
+    while body and not body[0].strip():
+        body.pop(0)
+
+    normalized = "\n".join([*charsets, *ordered_imports, "", *body]).rstrip()
+    return normalized + ("\n" if css.endswith("\n") else "")
+
+
 def max_source_completion_gap(
     prompt: str,
     files: Mapping[str, str],
@@ -306,5 +360,6 @@ __all__ = [
     "build_max_product_contract",
     "max_completion_gap",
     "max_source_completion_gap",
+    "normalize_max_globals_css",
     "requested_max_capabilities",
 ]

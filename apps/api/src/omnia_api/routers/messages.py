@@ -4116,6 +4116,44 @@ async def _process_prompt(
             except Exception as _guard_exc:  # never let the guardrail break a build
                 print(f"[PP] agent_gate_feedback skipped: {_guard_exc!r}", flush=True)
 
+            # Tailwind expands its @import into hundreds of CSS rules. A model
+            # that puts Google Fonts immediately after it passes tsc but fails
+            # in Turbopack with "@import rules must precede all rules". Repair
+            # only import placement before the independent runtime gate; product
+            # styles remain entirely model-owned and no extra model call is used.
+            if project_template == "max_miniapp" and "src/app/globals.css" in files:
+                try:
+                    from omnia_api.services.max_generation_contract import (
+                        normalize_max_globals_css,
+                    )
+
+                    _original_max_css = files["src/app/globals.css"]
+                    _normalized_max_css = normalize_max_globals_css(_original_max_css)
+                    if _normalized_max_css != _original_max_css:
+                        files["src/app/globals.css"] = _normalized_max_css
+                        await orchestrator_client.hot_reload(
+                            project_id,
+                            project_slug,
+                            {"src/app/globals.css": _normalized_max_css},
+                        )
+                        await _agent_emit(
+                            "agent.step",
+                            {
+                                "step": _agent_res.steps,
+                                "action": "css_safety",
+                                "human": "Проверяю порядок CSS-импортов",
+                                "path": "src/app/globals.css",
+                                "detail": (
+                                    "Внешние шрифты перенесены перед Tailwind, чтобы "
+                                    "финальная Turbopack-сборка не упала после clean typecheck."
+                                ),
+                                "ok": True,
+                            },
+                        )
+                        print("[PP] MAX CSS imports normalized before runtime", flush=True)
+                except Exception as _css_safety_exc:
+                    print(f"[PP] MAX CSS normalization skipped: {_css_safety_exc!r}", flush=True)
+
             # Honest chat: never surface the raw internal summary on a non-done exit
             # (the "hit step budget without calling done" leak). See helper.
             accumulated = _agent_result_message(_agent_res, is_edit=_is_edit)
@@ -4135,6 +4173,14 @@ async def _process_prompt(
                 _rt = await orchestrator_client.runtime_status(
                     project_id, slug=project_slug, path="/"
                 )
+                if project_template == "max_miniapp" and _rt.get("ok"):
+                    # A first request can still hit the previous Turbopack graph
+                    # while HMR notices the last write. Require a second green
+                    # response after a short settle window before publishing.
+                    await asyncio.sleep(2)
+                    _rt = await orchestrator_client.runtime_status(
+                        project_id, slug=project_slug, path="/"
+                    )
                 _runtime_ok = bool(_rt.get("ok"))
                 if not _runtime_ok:
                     _rt_err = _rt.get("error") or _rt.get("status_code") or "5xx"

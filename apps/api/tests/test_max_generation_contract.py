@@ -4,6 +4,7 @@ from omnia_api.services.max_generation_contract import (
     build_max_product_contract,
     max_completion_gap,
     max_source_completion_gap,
+    normalize_max_globals_css,
     requested_max_capabilities,
 )
 
@@ -66,6 +67,33 @@ def test_completion_rejects_untouched_canvas_and_thin_cosmetic_page() -> None:
     gap = max_completion_gap(COMPLEX_BRIEF, thin, {})
     assert gap is not None
     assert "missing" in gap.lower() or "thin" in gap.lower()
+
+
+def test_css_imports_are_moved_before_tailwind_and_product_rules() -> None:
+    broken = """@import "tailwindcss";
+
+:root { color: black; }
+@import url('https://fonts.example/family?a=1;2');
+.card { display: grid; }
+"""
+
+    fixed = normalize_max_globals_css(broken)
+
+    assert fixed.startswith(
+        "@import url('https://fonts.example/family?a=1;2');\n@import \"tailwindcss\";"
+    )
+    assert fixed.index('@import "tailwindcss";') < fixed.index(":root")
+    assert fixed.endswith("\n")
+
+
+def test_safe_css_import_order_is_byte_stable() -> None:
+    css = """@import url('https://fonts.example/family');
+@import "tailwindcss";
+
+:root { color: black; }
+"""
+
+    assert normalize_max_globals_css(css) == css
 
 
 def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
