@@ -59,7 +59,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
             <h2 className="mt-3 text-2xl font-semibold">{projectName}</h2>
             {url ? (
               <a href={url} target="_blank" rel="noreferrer" className="mt-2 flex min-w-0 items-center gap-1.5 font-mono text-xs text-[#c84528]"><span className="truncate">{url}</span><ExternalLink className="size-3 shrink-0" /></a>
-            ) : <p className="mt-2 text-xs text-[#8d887f]">Постоянный URL появится после публикации</p>}
+            ) : <p className="mt-2 text-xs text-[#8d887f]">Текущая версия появится по постоянному URL после публикации</p>}
           </div>
           <div className="w-full lg:min-w-[280px] lg:w-auto"><RuntimeButton projectId={projectId} display="compact" /></div>
         </div>
