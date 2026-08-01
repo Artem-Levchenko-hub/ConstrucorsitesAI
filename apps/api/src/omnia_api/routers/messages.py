@@ -3167,6 +3167,7 @@ async def _process_prompt(
                                 path=action.path or "/",
                                 prompt_context=prompt_text,
                                 bootstrap_url=_bootstrap_url,
+                                product_kind="max_miniapp",
                             )
                         except Exception as _see_exc:
                             _visual = {
@@ -3239,23 +3240,36 @@ async def _process_prompt(
             # (the #1 latency sink observed in the first live runs). Fail-soft.
             _seed_parts: list[str] = []
             try:
-                _ents = await orchestrator_client.agent_list_dir(
-                    project_id, project_slug, "entities"
-                )
-                _seed_parts.append(f"entities/ contains:\n{_ents}")
-                _dash = await orchestrator_client.agent_list_dir(
-                    project_id, project_slug, "src/app/(app)/dashboard"
-                )
-                _seed_parts.append(f"src/app/(app)/dashboard/ contains:\n{_dash}")
-                _crud = await orchestrator_client.agent_read_file(
-                    project_id, project_slug, "src/components/omnia/crud-resource.tsx"
-                )
-                if _crud:
-                    _seed_parts.append(
-                        "src/components/omnia/crud-resource.tsx (the entity-page "
-                        'component — render <CrudResource entity="Name"/> in each '
-                        "page):\n" + _crud[:4000]
+                if project_template == "max_miniapp":
+                    _max_design_spec = await orchestrator_client.agent_read_file(
+                        project_id,
+                        project_slug,
+                        ".omnia/max-design-spec.json",
                     )
+                    if _max_design_spec:
+                        _seed_parts.append(
+                            "EXISTING MAX ART DIRECTION — preserve and refine this identity; "
+                            "do not replace it with a generic dashboard:\n"
+                            + _max_design_spec[:6000]
+                        )
+                else:
+                    _ents = await orchestrator_client.agent_list_dir(
+                        project_id, project_slug, "entities"
+                    )
+                    _seed_parts.append(f"entities/ contains:\n{_ents}")
+                    _dash = await orchestrator_client.agent_list_dir(
+                        project_id, project_slug, "src/app/(app)/dashboard"
+                    )
+                    _seed_parts.append(f"src/app/(app)/dashboard/ contains:\n{_dash}")
+                    _crud = await orchestrator_client.agent_read_file(
+                        project_id, project_slug, "src/components/omnia/crud-resource.tsx"
+                    )
+                    if _crud:
+                        _seed_parts.append(
+                            "src/components/omnia/crud-resource.tsx (the entity-page "
+                            'component — render <CrudResource entity="Name"/> in each '
+                            "page):\n" + _crud[:4000]
+                        )
             except Exception as _seed_exc:
                 print(f"[PP] agent seed-context skipped: {_seed_exc!r}", flush=True)
             _seed_block = (
@@ -3272,7 +3286,7 @@ async def _process_prompt(
             # agent writes distinct UI; works even on the hardcoded realtime
             # template where CSS-token injection is inert. Build only (orchestrate),
             # not surgical edits — a follow-up must not re-theme. Flag-gated, fail-soft.
-            if orchestrate and get_settings().use_design_mood:
+            if orchestrate and project_template != "max_miniapp" and get_settings().use_design_mood:
                 try:
                     from omnia_api.services.design_dna import design_mood_directive
 

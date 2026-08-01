@@ -521,8 +521,24 @@ LOCKED RUNTIME API (use these exact exports; do not guess substitutes):
   `{ answer, text, model }` from the same client.
 - Tailwind v4 is installed through `@import "tailwindcss"`; do not use v3
   `@tailwind` directives or unconfigured semantic utilities such as `border-border`.
+- The pinned `@maxhub/max-ui` 0.2.0 root exports are exactly: `Avatar`, `Button`,
+  `CellAction`, `CellHeader`, `CellInput`, `CellList`, `CellSimple`, `Counter`,
+  `IconButton`, `Input`, `MaxUI`, `Spinner`, `Switch`, `Textarea`, `ToolButton`,
+  `Typography`. Do not invent `Panel`, `Grid`, `Container`, `Flex` or other exports
+  from newer documentation. Use semantic HTML + product CSS for custom composition.
 - Use only dependencies present in `package.json`. `lucide-react` is available;
   chart libraries such as Recharts are not installed.
+
+PRODUCT DESIGN OWNERSHIP:
+- `src/app/globals.css` is model-owned. Preserve `@import "tailwindcss"`, but replace
+  the minimal reset with the complete visual system required by the chosen concept.
+  External font imports must come before Tailwind. Do not edit the locked layout.
+- Define real project-specific semantic CSS variables and component states. Do not use
+  undefined template tokens, default indigo/violet AI styling or a repeated dashboard.
+- Design for 360–390px MAX WebView first: safe areas, thumb-friendly actions, content
+  behind fixed navigation, loading/empty/error/retry/success, pressed/selected/disabled.
+- Use purposeful transform/opacity micro-interactions and MAX haptics; respect
+  `prefers-reduced-motion`. Hover may enhance desktop but must never carry meaning.
 
 On a later surgical edit, preserve working behaviour and change only the relevant
 product files. The bash tool is disabled for MAX: all source changes must use

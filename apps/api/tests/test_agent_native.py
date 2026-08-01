@@ -31,6 +31,12 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     assert "not available in a MAX build" in prompt
     assert "run runtime_check after the final write" in prompt
     assert "signed MAX preview session" in prompt
+    assert "MAX PRODUCT STUDIO" in prompt
+    assert "ТРИ действительно разных направления" in prompt
+    assert "360–390px" in prompt
+    assert "prefers-reduced-motion" in prompt
+    assert "скролл-скраб" not in prompt
+    assert "Awwwards" not in prompt
 
     max_names = {tool["name"] for tool in agent_native._MAX_TOOLS_CACHED}
     assert {"build", "runtime_check", "see", "write_file", "done"} <= max_names
@@ -65,6 +71,10 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "{} if not _max_has_generated_snapshot else dict(current_files)" in source
     assert "normalize_max_globals_css" in source
     assert "await asyncio.sleep(2)" in source
+    assert 'and project_template != "max_miniapp"' in source
+    assert 'product_kind="max_miniapp"' in source
+    assert '".omnia/max-design-spec.json"' in source
+    assert "EXISTING MAX ART DIRECTION" in source
 
 
 def test_failed_max_resume_recovers_the_original_brief() -> None:
@@ -867,7 +877,7 @@ async def test_max_applies_one_actionable_visual_fix_before_local_finish(
             see_calls += 1
             return {
                 "ok": True,
-                "needs_fix": True,
+                "needs_fix": see_calls == 1,
                 "detail": "Apply this concrete visual fix.",
             }
         return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
@@ -920,9 +930,17 @@ async def test_same_turn_write_cannot_claim_it_applied_visual_feedback(
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
 
+    see_calls = 0
+
     async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
         if action.name == "see":
-            return {"ok": True, "needs_fix": True, "detail": "Fix the hero."}
+            see_calls += 1
+            return {
+                "ok": True,
+                "needs_fix": see_calls < 3,
+                "detail": "Fix the mobile product hierarchy.",
+            }
         return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
 
     def complete(files: Any, evidence: Any) -> str | None:

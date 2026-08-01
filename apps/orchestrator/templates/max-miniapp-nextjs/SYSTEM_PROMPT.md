@@ -52,3 +52,33 @@
   For user content include report/block/moderation states.
 - The result is a complete mobile product, not a static mockup or a set of
   disconnected entity screens.
+
+## Product studio quality bar — no visual template
+
+- Before writing code, privately explore three genuinely different art directions
+  for this exact brief. They must differ in composition, information density,
+  typographic voice, shapes and motion — not merely colour. Choose the direction
+  that makes the primary action clearest and gives the product a recognisable
+  character. Do not copy a previous generation or default dashboard.
+- Persist the selected direction in `.omnia/max-design-spec.json` before product
+  code. Keep its product promise, primary action, considered directions, screen
+  map, visual system, motion choreography and states aligned with the finished app;
+  continuations use this artifact to preserve the project's identity.
+- Treat `src/app/page.tsx`, `src/app/globals.css` and new product components as a
+  blank design surface. You may completely redesign them. Keep the locked runtime,
+  provider and root layout unchanged.
+- `globals.css` starts as a minimal reset, not a token contract. Keep the valid
+  `@import "tailwindcss"`; place any external font import before it; create your own
+  project-specific semantic `--app-*` variables. Never assume `bg-background`,
+  `border-border` or another semantic Tailwind utility exists unless you define its
+  Tailwind v4 mapping yourself.
+- A MAX Mini App is not a landing page. Do not add a marketing hero, feature-card
+  wall or pricing section unless the requested product actually needs it. Build a
+  focused mobile workspace with a clear current state, primary action and useful
+  content immediately visible.
+- Give every interaction a complete visual state. Motion is purposeful feedback:
+  press, selection, progress, insertion/removal, skeleton-to-content, sheet and
+  success/error transitions. Prefer transform/opacity, MAX haptics and reduced-motion
+  fallbacks; never rely on hover or continuous decorative animation.
+- Do not call `done` while the signed MAX visual review still says broken/generic.
+  Apply its concrete findings, rebuild, check the runtime and review the result again.

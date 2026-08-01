@@ -15,6 +15,7 @@ tools stay advisory and must never turn a clean product into another model loop.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 
@@ -128,6 +129,9 @@ _MANAGED_DB_PATHS = {
     "src/app/api/omnia/preview-session/route.ts",
 }
 
+_MAX_DESIGN_SPEC_PATH = ".omnia/max-design-spec.json"
+_REQUIRED_DESIGN_STATES = frozenset({"loading", "empty", "error", "success"})
+
 
 def _is_product_source(path: str) -> bool:
     """Return whether a file is model-owned product UI/behaviour.
@@ -166,6 +170,12 @@ def build_max_product_contract(prompt: str) -> str:
     capabilities = requested_max_capabilities(prompt)
     lines = [
         "MAX PRODUCT ACCEPTANCE CONTRACT (done is rejected until this is true):",
+        "- Before product code, write .omnia/max-design-spec.json as valid JSON with: "
+        "product_promise, primary_action, three distinct directions_considered, "
+        "chosen_direction, chosen_rationale, screens, visual_system, motion and states. "
+        "The three directions must differ in composition/type/density/motion, not colour. "
+        "Keep this project-specific spec aligned with the final implementation so a later "
+        "continuation preserves the art direction instead of inventing a new template.",
         "- No product home page or visual template exists initially. Create "
         "src/app/page.tsx, product styling, screens and navigation from scratch.",
         "- Build a coherent mobile product with real screens/views and actions. Organise "
@@ -183,7 +193,8 @@ def build_max_product_contract(prompt: str) -> str:
         "the exact shape is `const { answer } = await requestOmniaAI({ message, "
         "instructions, context })`. setTimeout/random/static text is not AI.",
         "- After implementation: run a clean build, runtime_check the finished home screen "
-        "and see it once through the signed MAX preview. Apply concrete visual findings, but "
+        "and see it through the signed MAX preview. Apply concrete visual findings, then "
+        "rebuild/runtime-check/see again until the visual verdict is clean; "
         "do not retry unavailable QA infrastructure or generic probe/verify_isolation.",
     ]
     if capabilities:
@@ -270,6 +281,50 @@ def max_source_completion_gap(
             "MAX product still contains the retired generation canvas. Replace "
             "src/app/page.tsx with the actual requested product before done."
         )
+
+    spec_raw = files.get(_MAX_DESIGN_SPEC_PATH, "")
+    if not spec_raw:
+        return (
+            "MAX product has no persistent art direction. Create "
+            f"{_MAX_DESIGN_SPEC_PATH} with the three explored directions and chosen "
+            "product-specific design/motion system before done."
+        )
+    try:
+        spec = json.loads(spec_raw)
+    except (TypeError, json.JSONDecodeError):
+        return f"{_MAX_DESIGN_SPEC_PATH} is not valid JSON. Repair the design spec before done."
+    if not isinstance(spec, dict):
+        return f"{_MAX_DESIGN_SPEC_PATH} must contain one JSON object."
+
+    required_text = ("product_promise", "primary_action", "chosen_direction", "chosen_rationale")
+    missing_text = [key for key in required_text if not str(spec.get(key) or "").strip()]
+    directions = spec.get("directions_considered")
+    direction_names = (
+        {
+            str(item.get("name") if isinstance(item, dict) else item).strip().casefold()
+            for item in directions
+            if str(item.get("name") if isinstance(item, dict) else item).strip()
+        }
+        if isinstance(directions, list)
+        else set()
+    )
+    screens = spec.get("screens")
+    visual_system = spec.get("visual_system")
+    motion = spec.get("motion")
+    states = {str(item).strip().casefold() for item in (spec.get("states") or [])}
+    if missing_text:
+        return f"MAX design spec is incomplete: missing {', '.join(missing_text)}."
+    if len(direction_names) < 3:
+        return "MAX design spec must compare three genuinely distinct art directions."
+    if not isinstance(screens, list) or not screens:
+        return "MAX design spec must define the product screens/views before implementation."
+    if not isinstance(visual_system, dict) or not visual_system:
+        return "MAX design spec must define a project-specific visual_system."
+    if not isinstance(motion, list) or not motion:
+        return "MAX design spec must define purposeful interaction motion."
+    missing_states = sorted(_REQUIRED_DESIGN_STATES.difference(states))
+    if missing_states:
+        return "MAX design spec is missing product states: " + ", ".join(missing_states) + "."
 
     capabilities = requested_max_capabilities(prompt)
     product_sources = [content for path, content in files.items() if _is_product_source(path)]

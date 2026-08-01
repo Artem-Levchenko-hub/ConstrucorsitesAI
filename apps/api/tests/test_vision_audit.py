@@ -37,9 +37,7 @@ def test_unknown_verdict_defaults_to_generic():
 
 
 async def test_audit_skips_in_mock(monkeypatch):
-    monkeypatch.setattr(
-        vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": True})()
-    )
+    monkeypatch.setattr(vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": True})())
     v = await vision_audit.audit_screenshots({1440: b"PNG"}, prompt_context="x")
     assert v.skipped is True
 
@@ -51,9 +49,7 @@ async def test_audit_parses_real_verdict(monkeypatch):
         captured["content"] = messages[1]["content"]
         return '{"verdict":"beautiful","score":8,"issues":[]}'
 
-    monkeypatch.setattr(
-        vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": False})()
-    )
+    monkeypatch.setattr(vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": False})())
     monkeypatch.setattr(vision_audit, "complete_chat", fake_complete)
     v = await vision_audit.audit_screenshots(
         {1440: b"PNGWIDE", 375: b"PNGMOBILE"},
@@ -66,3 +62,34 @@ async def test_audit_parses_real_verdict(monkeypatch):
     content = captured["content"]
     assert isinstance(content, list)
     assert any(b.get("type") == "image_url" for b in content)
+
+
+async def test_max_audit_uses_mobile_product_rubric_and_phone_widths(monkeypatch):
+    captured = {}
+
+    async def fake_complete(messages, model, **kw):
+        captured["system"] = messages[0]["content"]
+        captured["content"] = messages[1]["content"]
+        return '{"verdict":"beautiful","score":9,"issues":[]}'
+
+    monkeypatch.setattr(vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": False})())
+    monkeypatch.setattr(vision_audit, "complete_chat", fake_complete)
+
+    verdict = await vision_audit.audit_screenshots(
+        {1440: b"DESKTOP", 390: b"PHONE", 360: b"COMPACT"},
+        prompt_context="фитнес-тренер внутри MAX",
+        product_kind="max_miniapp",
+        model="gemini-test",
+    )
+
+    assert verdict.verdict == "beautiful"
+    assert "MAX Mini Apps" in captured["system"]
+    assert "safe-area" in captured["system"]
+    assert "лендинг" in captured["system"]  # explicit anti-landing rule
+    assert "Awwwards" not in captured["system"]
+    text = "\n".join(
+        str(block.get("text", "")) for block in captured["content"] if block.get("type") == "text"
+    )
+    assert "390px" in text and "360px" in text
+    assert "1440px" not in text
+    assert sum(block.get("type") == "image_url" for block in captured["content"]) == 2

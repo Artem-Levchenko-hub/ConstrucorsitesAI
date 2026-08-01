@@ -21,7 +21,7 @@ async def test_max_see_bootstraps_signed_preview_before_capture(
 
     async def fake_capture(url: str, widths: Any, **kwargs: Any) -> dict[int, bytes]:
         captured.update(url=url, widths=tuple(widths), **kwargs)
-        return {1440: b"png", 360: b"png"}
+        return {390: b"png", 360: b"png"}
 
     async def fake_audit(*args: Any, **kwargs: Any) -> Any:
         return SimpleNamespace(skipped=True)
@@ -33,12 +33,13 @@ async def test_max_see_bootstraps_signed_preview_before_capture(
         uuid4(),
         path="/profile",
         bootstrap_url=bootstrap,
+        product_kind="max_miniapp",
     )
 
     assert result["ok"] is True
     assert captured == {
         "url": "https://fitness-dev.example/profile",
-        "widths": (1440, 360),
+        "widths": (390, 360),
         "bootstrap_url": bootstrap,
     }
 
@@ -78,9 +79,41 @@ async def test_see_exposes_actionable_visual_repair_signal(
     result = await agent_vision.see_page(
         uuid4(),
         bootstrap_url="https://fitness-dev.example/api/omnia/preview-session?signature=x",
+        product_kind="max_miniapp",
     )
 
     assert result["ok"] is True
     assert result["verdict"] == "generic"
     assert result["score"] == 6
     assert result["needs_fix"] is True
+
+
+@pytest.mark.asyncio
+async def test_max_see_rejects_sub_eight_score_even_if_judge_says_beautiful(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import vision_audit
+    from omnia_api.workers import preview
+
+    async def fake_capture(*args: Any, **kwargs: Any) -> dict[int, bytes]:
+        return {390: b"png", 360: b"png"}
+
+    async def fake_diagnostics(*args: Any, **kwargs: Any) -> dict[str, list[str]]:
+        return {"failed_requests": [], "console_errors": []}
+
+    async def fake_audit(*args: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(skipped=False, verdict="beautiful", score=7, issues=())
+
+    monkeypatch.setattr(preview, "capture_live_url", fake_capture)
+    monkeypatch.setattr(preview, "capture_diagnostics", fake_diagnostics)
+    monkeypatch.setattr(vision_audit, "audit_screenshots", fake_audit)
+
+    result = await agent_vision.see_page(
+        uuid4(),
+        bootstrap_url="https://fitness-dev.example/api/omnia/preview-session?signature=x",
+        product_kind="max_miniapp",
+    )
+
+    assert result["ok"] is True
+    assert result["needs_fix"] is True
+    assert "production-grade" in result["detail"]

@@ -1,14 +1,14 @@
 """Agent VISION tool — the engine behind the builder loop's `see` action.
 
 Gives the agent real EYES: screenshot the live dev-container page it is building,
-hand it to the same Awwwards-strict vision judge the acceptance gate uses
-(`vision_audit`), and return concrete fix-deltas as the agent's observation. So
+hand it to the product-appropriate vision rubric (`vision_audit`), and return
+concrete fix-deltas as the agent's observation. So
 the agent stops being a blind author — it LOOKS at what it drew and fixes
 "ugly"/"broken", not just "compiles".
 
-Composes three existing pieces, adds nothing structural:
+Composes three existing pieces, while selecting the correct product rubric:
   dev_container.resolve_live_url  → where the running app lives
-  preview.capture_live_url        → screenshot it (1440 + 360)
+  preview.capture_live_url        → screenshot it (web: 1440 + 360; MAX: 390 + 360)
   vision_audit.audit_screenshots  → vision-model verdict + concrete issues
 
 Fail-soft everywhere (R-10): no running preview, a render timeout, or a skipped
@@ -22,9 +22,11 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
-# Viewports handed to the vision judge — one wide + one narrow is enough to judge
-# composition and mobile, and matches `vision_audit._VISION_WIDTHS`.
-_SEE_WIDTHS = (1440, 360)
+# A MAX Mini App is a mobile product inside the messenger, not a desktop landing
+# page. Two common phone widths catch compact and regular layouts without paying
+# for an irrelevant 1440px render.
+_WEB_SEE_WIDTHS = (1440, 360)
+_MAX_SEE_WIDTHS = (390, 360)
 
 
 async def see_page(
@@ -33,6 +35,7 @@ async def see_page(
     path: str = "/",
     prompt_context: str = "",
     bootstrap_url: str | None = None,
+    product_kind: str = "web",
 ) -> dict[str, Any]:
     """Screenshot the live dev container's ``path`` and return a vision critique.
 
@@ -69,9 +72,10 @@ async def see_page(
         url = base.rstrip("/") + rel
 
     try:
+        widths = _MAX_SEE_WIDTHS if product_kind == "max_miniapp" else _WEB_SEE_WIDTHS
         shots = await preview.capture_live_url(
             url,
-            _SEE_WIDTHS,
+            widths,
             bootstrap_url=bootstrap_url,
         )
     except Exception as exc:
@@ -80,14 +84,31 @@ async def see_page(
         return {"ok": False, "error": f"render produced no screenshot for {rel}"}
 
     verdict = await vision_audit.audit_screenshots(
-        shots, prompt_context=prompt_context, project_id=str(pid)
+        shots,
+        prompt_context=prompt_context,
+        project_id=str(pid),
+        product_kind=product_kind,
     )
     if verdict.skipped:
         return {
             "ok": True,
             "detail": f"saw {rel}, but the vision judge was unavailable (skipped)",
         }
-    issues = "\n".join(f"- {i}" for i in verdict.issues) or "(no concrete issues)"
+    max_quality_failed = product_kind == "max_miniapp" and (
+        verdict.verdict != "beautiful" or int(verdict.score) < 8
+    )
+    needs_fix = (
+        max_quality_failed
+        if product_kind == "max_miniapp"
+        else bool(verdict.issues) and verdict.verdict in {"broken", "generic"}
+    )
+    issue_rows = tuple(verdict.issues)
+    if needs_fix and not issue_rows:
+        issue_rows = (
+            "Главный экран: visual verdict не достиг production-grade уровня — "
+            "усиль уникальную концепцию, продуктовую иерархию и mobile craft по брифу.",
+        )
+    issues = "\n".join(f"- {i}" for i in issue_rows) or "(no concrete issues)"
 
     # Browser-side signals a screenshot can't show: failed (>=400) fetches and JS
     # console/page errors on load. A failed request is a REAL runtime failure, so it
@@ -116,10 +137,10 @@ async def see_page(
         "ok": not has_failed,
         "verdict": verdict.verdict,
         "score": verdict.score,
-        # One actionable visual repair is enough for the native loop. It must
-        # not finish before the model has seen and applied the first concrete
-        # critique, but it must also never chase an aesthetic score forever.
-        "needs_fix": bool(verdict.issues) and verdict.verdict in {"broken", "generic"},
+        # Every actionable verdict blocks visual proof. The native MAX loop
+        # applies the concrete delta, rebuilds, and asks again until the judge
+        # returns a clean production-grade result (or explicitly skips).
+        "needs_fix": needs_fix,
         "detail": (
             f"LOOKED at {rel} — verdict: {verdict.verdict} ({verdict.score}/10)\n"
             f"Apply these concrete fixes:\n{issues}{diag_text}"

@@ -69,9 +69,11 @@ def skip_stats() -> dict[str, int]:
     """Snapshot of vision-skip counts by reason (for a future metrics endpoint)."""
     return dict(_skip_counts)
 
-# Cap how many viewports we ship to the model — one wide + one narrow is enough
-# to judge composition and mobile, and keeps the multimodal payload small.
+
+# Cap how many viewports we ship to the model. Web pages need wide + narrow;
+# MAX Mini Apps need two real phone widths and must never be judged as landings.
 _VISION_WIDTHS = (1440, 360)
+_MAX_VISION_WIDTHS = (390, 360)
 
 _RUBRIC = """\
 Ты — член жюри Awwwards. Тебе дают скриншот(ы) сгенерированного лендинга (десктоп +
@@ -115,6 +117,53 @@ issues — КОНКРЕТНЫЕ дельты «что → где → как», �
            добавь eyebrow и разный вес"; "Секция отзывов: плоский белый фон — добавь тон-в-тон
            mesh/grain и разведи карточки по сетке".
 Если уровень Awwwards реально взят — issues: []."""
+
+_MAX_RUBRIC = """\
+Ты — независимый senior product designer мобильных приложений и строгий ревьюер
+MAX Mini Apps. Тебе дают один экран приложения на двух ширинах телефона. Это НЕ
+лендинг: не требуй hero, длинных маркетинговых секций, pricing cards или desktop-
+композиции. Сверь результат с запросом пользователя и верни СТРОГО один JSON-
+объект без markdown.
+
+Оцени общий score 0–10 по семи осям:
+1. ПРОДУКТОВАЯ ЯСНОСТЬ — за 3 секунды понятно, что это за продукт, где главное
+   действие и что пользователь получит после него.
+2. КОНЦЕПТ И ХАРАКТЕР — есть узнаваемая идея и профессиональная арт-дирекция,
+   соответствующая нише; дефолтный AI-dashboard, фиолетовый градиент и россыпь
+   одинаковых карточек = generic.
+3. МОБИЛЬНАЯ ИЕРАРХИЯ — сильный, но не рекламный первый экран; удобный ритм,
+   читаемая типографика, управляемая плотность данных, нет случайной пустоты.
+4. НАВИГАЦИЯ И TOUCH UX — очевидно текущее место, CTA и интерактивные элементы;
+   нижняя навигация не перекрывает контент, safe-area учтён, подписи не обрезаны,
+   tap targets выглядят пригодными для пальца. Не требуй hover.
+5. ДЕТАЛЬ И КРАФТ — консистентны отступы, радиусы, иконки, поверхности, линии,
+   состояния выбранного/нажатого элемента; визуальные эффекты дозированы.
+6. КОНТЕНТ И ДОВЕРИЕ — реальные тексты и данные из брифа, без lorem ipsum,
+   заглушек, «Feature 1» и выдуманных обещаний; профиль MAX встроен естественно.
+7. АДАПТАЦИЯ — обе ширины полноценны: нет горизонтального overflow, наложений,
+   микроскопического текста, обрезанных кнопок и контента под системными зонами.
+
+Не штрафуй за отсутствие desktop-версии и за анимацию, которую невозможно увидеть
+на статичном кадре. Не навязывай конкретный стиль: минимализм, data-rich, editorial,
+brutalist или playful могут быть beautiful, если решение цельное и соответствует
+задаче. MAX UI — средство нативности, а не обязанность превратить всё в одинаковый
+набор системных карточек.
+
+verdict:
+• "broken" — приложение невозможно нормально использовать: пусто, наложения,
+  обрезка, нечитаемость, сломанная адаптация или основной сценарий визуально исчез.
+• "generic" — работает, но выглядит как сырой шаблон/вайрфрейм или не раскрывает
+  бриф; аккуратности без характера и продуктовой глубины недостаточно.
+• "beautiful" — цельный production-grade мобильный продукт с сильной идеей,
+  ясным действием, профессиональной детализацией и score не ниже 8.
+
+ВЫВОД — РОВНО ОДИН JSON:
+{"verdict":"broken|generic|beautiful","score":0-10,"issues":["<правка>","..."]}
+
+issues — только конкретные дельты «где → что не так → как исправить». Для generic
+обязательно назови 1–4 самых сильных изменения, способных поднять продукт на уровень
+профессиональной работы. Не пиши абстрактное «улучшить дизайн». Для beautiful верни
+issues: []."""
 
 
 def _data_url(png: bytes) -> str:
@@ -165,6 +214,7 @@ async def audit_screenshots(
     user_id: str | None = None,
     project_id: str | None = None,
     model: str | None = None,
+    product_kind: str = "web",
 ) -> VisionVerdict:
     """Send screenshots to a vision model and return its verdict.
 
@@ -179,21 +229,27 @@ async def audit_screenshots(
         return _skip("no_input")
 
     model = model or model_for_role("audit")
-    chosen = {w: screenshots[w] for w in _VISION_WIDTHS if w in screenshots}
+    is_max = product_kind == "max_miniapp"
+    preferred_widths = _MAX_VISION_WIDTHS if is_max else _VISION_WIDTHS
+    chosen = {w: screenshots[w] for w in preferred_widths if w in screenshots}
     if not chosen:
         chosen = screenshots
 
-    intro = "Оцени качество сгенерированного лендинга."
+    intro = (
+        "Оцени качество сгенерированного MAX Mini App как мобильного продукта."
+        if is_max
+        else "Оцени качество сгенерированного лендинга."
+    )
     if prompt_context:
         intro += f"\nЗапрос пользователя: «{prompt_context[:300]}»"
     content: list[dict[str, object]] = [{"type": "text", "text": intro}]
     for w, png in sorted(chosen.items(), reverse=True):
-        label = "десктоп" if w >= 1000 else "мобильный"
+        label = "десктоп" if w >= 1000 else "телефон"
         content.append({"type": "text", "text": f"Скриншот ({label}, {w}px):"})
         content.append({"type": "image_url", "image_url": {"url": _data_url(png)}})
 
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _RUBRIC},
+        {"role": "system", "content": _MAX_RUBRIC if is_max else _RUBRIC},
         {"role": "user", "content": content},
     ]
     try:

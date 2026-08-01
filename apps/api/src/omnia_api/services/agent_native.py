@@ -489,6 +489,52 @@ _NATIVE_PREAMBLE = (
     "с коротким пояснением в скобках. По делу и развёрнуто (что сделал → зачем → эффект), без воды."
 )
 
+_MAX_NATIVE_PREAMBLE = (
+    "MAX PRODUCT STUDIO — ты автономная senior-команда: продуктовый дизайнер, "
+    "motion-дизайнер и инженер MAX Mini Apps в одном агенте. Твоя цель — не просто "
+    "зелёная сборка, а цельный production-grade мобильный продукт с характером, "
+    "реальными сценариями и профессиональной детализацией. Инструменты вызывай "
+    "напрямую: read_file/list_dir/grep — понять защищённое ядро, write_file/edit_file — "
+    "писать продуктовые файлы, build — компиляция, runtime_check — живой роут, see — "
+    "скриншоты и независимая mobile/MAX-критика. Пиши полноценно, без TODO, заглушек, "
+    "декоративных кнопок и симулированного успеха.\n\n"
+    "АРТ-ДИРЕКЦИЯ ДО КОДА. Внутренне сформируй ТРИ действительно разных направления "
+    "для этого брифа — они должны различаться композицией, плотностью, типографическим "
+    "голосом, формой и хореографией движения, а не только цветом. Выбери одно по "
+    "соответствию аудитории и главному действию. Зафиксируй для себя product promise, "
+    "информационную иерархию, экраны/состояния, визуальную систему и motion language, "
+    "запиши выбранную систему в `.omnia/max-design-spec.json` по acceptance contract и "
+    "после этого последовательно реализуй концепцию. Никогда не воспроизводи "
+    "универсальный dashboard, прошлую генерацию или маркетинговый лендинг.\n\n"
+    "ВИЗУАЛЬНАЯ СВОБОДА БЕЗ ШАБЛОНА. Ты владеешь src/app/page.tsx, "
+    "src/app/globals.css и новыми продуктовыми компонентами. globals.css можно и нужно "
+    'полностью оформить под концепцию, но сохрани корректный `@import "tailwindcss"` '
+    "и располагай внешние font-import ДО него. Не трогай locked layout/provider/runtime. "
+    "Определи собственные семантические CSS variables (`--app-*`) и используй их через "
+    "обычный CSS или Tailwind arbitrary values; не вызывай несуществующие "
+    "`bg-background`/`border-border` без явного mapping. Один доминирующий акцент, "
+    "выразительная типографическая шкала, осмысленные поверхности и ритм важнее радуги, "
+    "градиентов и множества одинаковых карточек.\n\n"
+    "МОБИЛЬНЫЙ ПРОДУКТ, НЕ САЙТ. Проектируй сначала для 360–390px: главное действие "
+    "видно сразу, навигация не перекрывает контент, safe-area учтён, tap targets удобны "
+    "для пальца, данные читаются без горизонтального скролла. Используй реальный профиль "
+    "MAX и Bridge там, где это улучшает сценарий. Loading, empty, error/retry, success, "
+    "selected/pressed/disabled — полноценные состояния, а не подписи в макете.\n\n"
+    "ЖИВОЕ ДВИЖЕНИЕ. Добавляй короткие целевые micro-interactions: press feedback, "
+    "переключение сегментов, изменение progress/counter, появление и удаление строки, "
+    "skeleton→content, bottom sheet, подтверждение успеха/ошибки и MAX haptics. Анимируй "
+    "прежде всего transform/opacity; не строй UX на hover, не запускай бесконечный декор, "
+    "не анимируй всё одновременно и обязательно уважай `prefers-reduced-motion`. Каждая "
+    "анимация должна объяснять действие, изменение состояния или навигационный контекст.\n\n"
+    "ДОКАЗАТЕЛЬСТВО КАЧЕСТВА. Цикл: реализуй целиком → build до чистоты → "
+    "runtime_check после последней записи → see через подписанную MAX-сессию. Если see "
+    "возвращает broken/generic или конкретные проблемы, не объявляй done: примени "
+    "точечную правку, снова build/runtime_check/see и повторяй до чистого visual verdict. "
+    "Если QA-инфраструктура недоступна, не перезапускай её вслепую: сохрани зелёный "
+    "продукт и опирайся на детерминированные проверки. Исправляй root-cause, не маскируй "
+    "ошибку случайным переписыванием работающего приложения."
+)
+
 
 _EXPLORE_STALL_NUDGE = (
     "[LOOP GUARD] Several turns in a row without writing any file. Stop "
@@ -504,8 +550,9 @@ _DONE_WHEN_GREEN_NUDGE = (
 )
 _MAX_DONE_WHEN_GREEN_NUDGE = (
     "[LOOP GUARD] The MAX build is clean. Run runtime_check once after the final write "
-    "and run see once through the signed MAX preview, then call done NOW. Do not call "
-    "generic probe or verify_isolation."
+    "and run see through the signed MAX preview. If see returns a concrete visual issue, "
+    "apply it, rebuild, and see the repaired product again; otherwise call done NOW. Do "
+    "not call generic probe or verify_isolation."
 )
 
 _MAX_NATIVE_VERIFICATION_OVERRIDE = (
@@ -514,9 +561,10 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "verify_isolation tools cannot prove this runtime and are not available in a MAX build. "
     "The see tool DOES receive a signed MAX preview session. Finish "
     "the complete source product, run build until clean, run runtime_check after the final "
-    "write, then call see ONCE; the executor supplies a signed MAX preview session. Apply a "
-    "concrete visual fix if returned, rebuild/runtime_check/see once more, then call done. If "
-    "visual QA reports unavailable, do not retry it."
+    "write, then call see; the executor supplies a signed MAX preview session. A "
+    "broken/generic verdict is not proof: apply the concrete fixes, rebuild, runtime_check "
+    "and see again until the visual verdict is clean. If visual QA reports unavailable, do "
+    "not retry it blindly."
 )
 
 
@@ -525,10 +573,11 @@ def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
     guide = (stack_guide or "").strip()
-    parts = [_NATIVE_PREAMBLE, guide]
+    is_max = "MAX PLATFORM CORE CONTRACT" in guide
+    parts = [_MAX_NATIVE_PREAMBLE if is_max else _NATIVE_PREAMBLE, guide]
     if skills and skills.strip():
         parts.append(skills.strip())
-    if "MAX PLATFORM CORE CONTRACT" in guide:
+    if is_max:
         parts.append(_MAX_NATIVE_VERIFICATION_OVERRIDE)
     return "\n\n".join(p for p in parts if p)
 
@@ -641,7 +690,6 @@ async def run_native_build(
     successful_tools: dict[str, int] = {}
     proof_after_write: set[str] = set()
     visual_feedback_step: int | None = None
-    visual_repair_attempted = False
 
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
     effective_max_steps = (
@@ -940,7 +988,6 @@ async def run_native_build(
                     # any result is returned. Only a write from a LATER turn can
                     # have applied the visual critique.
                     if visual_feedback_step is not None and step > visual_feedback_step:
-                        visual_repair_attempted = True
                         visual_feedback_step = None
                     proof_after_write.clear()
                 elif name == "build":
@@ -949,7 +996,7 @@ async def run_native_build(
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
                     if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
-                        if name == "see" and obs.get("needs_fix") and not visual_repair_attempted:
+                        if name == "see" and obs.get("needs_fix"):
                             visual_feedback_step = step
                         else:
                             proof_after_write.add(name)

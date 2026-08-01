@@ -204,6 +204,10 @@ def test_model_directive_matches_locked_max_runtime_api() -> None:
     assert "requestOmniaAI({ message, instructions, context })" in MAX_MODEL_DIRECTIVE
     assert "Tailwind v4" in MAX_MODEL_DIRECTIVE
     assert "Recharts are not installed" in MAX_MODEL_DIRECTIVE
+    assert "@maxhub/max-ui` 0.2.0" in MAX_MODEL_DIRECTIVE
+    assert "Do not invent `Panel`, `Grid`, `Container`, `Flex`" in MAX_MODEL_DIRECTIVE
+    assert "src/app/globals.css` is model-owned" in MAX_MODEL_DIRECTIVE
+    assert "360–390px MAX WebView" in MAX_MODEL_DIRECTIVE
 
 
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:

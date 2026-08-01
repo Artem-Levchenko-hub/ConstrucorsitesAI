@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from omnia_api.services.max_generation_contract import (
     build_max_product_contract,
     max_completion_gap,
@@ -14,8 +16,30 @@ COMPLEX_BRIEF = """
 """
 
 
+def _design_spec() -> str:
+    return json.dumps(
+        {
+            "product_promise": "Понятная картина восстановления спортсмена",
+            "primary_action": "Разобрать тренировку",
+            "directions_considered": [
+                {"name": "Data instrument", "idea": "Плотный спортивный прибор"},
+                {"name": "Coach dialogue", "idea": "Эмоциональный тренер"},
+                {"name": "Training editorial", "idea": "Редакционный дневник"},
+            ],
+            "chosen_direction": "Data instrument",
+            "chosen_rationale": "Лучше раскрывает статистику и главное действие",
+            "screens": ["Обзор", "История", "ИИ-тренер", "Профиль"],
+            "visual_system": {"type": "контрастная", "density": "athletic compact"},
+            "motion": ["press feedback", "progress morph"],
+            "states": ["loading", "empty", "error", "success"],
+        },
+        ensure_ascii=False,
+    )
+
+
 def _complete_files() -> dict[str, str]:
     return {
+        ".omnia/max-design-spec.json": _design_spec(),
         "src/app/page.tsx": (
             'import { requestOmniaAI } from "@/lib/omnia/integration-client";\n'
             'import { createMaxAction } from "@/lib/omnia/client";\n'
@@ -84,7 +108,10 @@ export default function Page() {
   </main>;
 }
 """
-    return {"src/app/page.tsx": page}
+    return {
+        ".omnia/max-design-spec.json": _design_spec(),
+        "src/app/page.tsx": page,
+    }
 
 
 def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
@@ -97,6 +124,22 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "requestOmniaAI" in contract
     assert "fake timers" in contract
     assert "loading, empty, error/retry" in contract
+    assert ".omnia/max-design-spec.json" in contract
+    assert "three distinct directions_considered" in contract
+
+
+def test_completion_requires_persistent_project_specific_design_spec() -> None:
+    files = _complete_files()
+    files.pop(".omnia/max-design-spec.json")
+    assert "persistent art direction" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files[".omnia/max-design-spec.json"] = "{}"
+    assert "design spec is incomplete" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    spec = json.loads(_design_spec())
+    spec["directions_considered"] = ["same", "same", "same"]
+    files[".omnia/max-design-spec.json"] = json.dumps(spec)
+    assert "three genuinely distinct" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
 
 
 def test_completion_rejects_untouched_canvas_and_thin_cosmetic_page() -> None:
@@ -106,10 +149,11 @@ def test_completion_rejects_untouched_canvas_and_thin_cosmetic_page() -> None:
     assert "retired generation canvas" in str(max_completion_gap(COMPLEX_BRIEF, canvas, {}))
 
     thin = {
+        ".omnia/max-design-spec.json": _design_spec(),
         "src/app/page.tsx": (
             "export default function Page(){return <main>ИИ тренер, тренировки, "
             "профиль, история</main>}"
-        )
+        ),
     }
     gap = max_completion_gap(COMPLEX_BRIEF, thin, {})
     assert gap is not None
@@ -209,6 +253,7 @@ def test_complete_single_file_product_is_not_rejected_for_source_layout() -> Non
 
 def test_managed_core_copy_cannot_fake_product_coverage() -> None:
     files = {
+        ".omnia/max-design-spec.json": _design_spec(),
         "src/app/page.tsx": ("export default function Page(){return <main>Привет</main>}\n" * 20),
         "src/lib/omnia/max-config.ts": COMPLEX_BRIEF * 20,
         "src/lib/omnia/client.ts": (
