@@ -361,6 +361,7 @@ async def get_max_readiness(
                 select(func.count(Snapshot.id)).where(
                     Snapshot.project_id == project.id,
                     Snapshot.prompt_text.is_not(None),
+                    func.length(func.trim(Snapshot.prompt_text)) > 0,
                 )
             )
         ).scalar_one()
