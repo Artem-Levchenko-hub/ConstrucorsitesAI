@@ -9,6 +9,9 @@ const read = (path: string) =>
 const globals = read("src/app/globals.css");
 const accountShell = read("src/components/account/AccountShell.tsx");
 const maxStudio = read("src/components/max/MaxStudio.tsx");
+const maxStudioAccountDisclosure = read(
+  "src/components/max/MaxStudioAccountDisclosure.tsx",
+);
 const projectCard = read("src/components/max/MaxStudioProjectCard.tsx");
 const deleteDialog = read("src/components/projects/DeleteProjectDialog.tsx");
 const mvpPage = read("src/app/mvp/page.tsx");
@@ -61,8 +64,9 @@ describe("MAX product identity and project management", () => {
     expect(maxStudio).toContain("ref={projectsHeadingRef} tabIndex={-1}");
   });
 
-  it("sends the Studio billing entry to the actual billing route", () => {
-    expect(maxStudio).toContain('<Link href="/billing"');
+  it("keeps billing in the account disclosure without a duplicate Studio entry", () => {
+    expect(maxStudio).not.toContain('<Link href="/billing"');
+    expect(maxStudioAccountDisclosure).toContain('["/billing", WalletCards');
     expect(maxStudio).not.toContain('/account?tab=billing');
     expect(maxStudio).toContain('aria-label="Найти проект"');
     expect(maxStudio).toContain('name="project-search"');

@@ -7,7 +7,6 @@ import {
   Check,
   ChevronRight,
   CircleHelp,
-  Clock3,
   FolderKanban,
   LayoutGrid,
   Loader2,
@@ -62,9 +61,6 @@ function StudioNav({ email }: { email: string }) {
           <LayoutGrid className="size-4" /> Проекты
         </Link>
         <MaxStudioAccountDisclosure />
-        <Link href="/billing" className="mt-1 flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[#6d6962] hover:bg-[#f5f3ee]">
-          <Clock3 className="size-4" /> Биллинг
-        </Link>
       </nav>
       <div className="border-t border-[#d8d4cb] p-3">
         <p className="truncate px-3 text-xs font-medium">{email}</p>

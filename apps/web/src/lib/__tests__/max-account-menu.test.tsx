@@ -37,6 +37,10 @@ const workspace = readFileSync(
   resolve(process.cwd(), "src/components/max/MaxWorkspaceShell.tsx"),
   "utf8",
 );
+const studio = readFileSync(
+  resolve(process.cwd(), "src/components/max/MaxStudio.tsx"),
+  "utf8",
+);
 
 const accountLinks = [
   ["/account", "Профиль"],
@@ -194,6 +198,12 @@ describe("MAX Studio projects account disclosure", () => {
   async function openMenu() {
     await act(async () => trigger().click());
   }
+
+  it("keeps billing inside the account disclosure instead of a duplicate sidebar item", () => {
+    expect(studio).toContain("<MaxStudioAccountDisclosure />");
+    expect(studio).not.toContain('href="/billing"');
+    expect(studio).not.toContain("Clock3");
+  });
 
   it("keeps the projects page in place until the user chooses a section", () => {
     const menu = container.querySelector<HTMLElement>(
