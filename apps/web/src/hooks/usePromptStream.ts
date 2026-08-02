@@ -14,6 +14,7 @@ import type {
   WalletState,
   WsEvent,
 } from "@/lib/api/types";
+import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import {
   cancelGeneration,
   getLatestGeneration,
@@ -404,10 +405,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
 
       if (event.type === "snapshot.created") {
-        qc.setQueryData<Snapshot[]>(["snapshots", projectId], (prev) => [
-          event.data.snapshot,
-          ...(prev ?? []),
-        ]);
+        qc.setQueryData<Snapshot[]>(["snapshots", projectId], (prev) =>
+          upsertSnapshotNewest(prev, event.data.snapshot),
+        );
         // Hot-reload: jump the iframe to the freshly-created HEAD so the
         // user sees their generated site immediately without manually
         // clicking the new card in the timeline. `null` = "show HEAD",

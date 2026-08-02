@@ -7,6 +7,7 @@ import {
   Check,
   CircleAlert,
   ExternalLink,
+  GitCommitHorizontal,
   Loader2,
   MousePointer2,
   PanelRightClose,
@@ -22,6 +23,15 @@ import { toast } from "sonner";
 
 import { JoyBurst } from "@/components/workspace/JoyBurst";
 import { StylePanel } from "@/components/workspace/StylePanel";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,15 +46,17 @@ import {
   syncMaxManagedKit,
 } from "@/lib/api/max-studio";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
-import type { Project } from "@/lib/api/types";
+import type { Project, Snapshot } from "@/lib/api/types";
 import {
   editorModeMessages,
   previewTargetOrigin,
   type EditorMode,
 } from "@/lib/editor-bridge";
-import { cn } from "@/lib/utils";
+import { maxSnapshotLabel, maxSnapshotVersion } from "@/lib/max-version-history";
+import { cn, shortSha } from "@/lib/utils";
 import { useInspectorStore } from "@/store/inspector";
 import { useStyleEditStore } from "@/store/styleEdit";
+import { MaxVersionRail } from "./MaxVersionRail";
 
 const SCREEN_WIDTH = 390;
 const SCREEN_HEIGHT = 844;
@@ -55,9 +67,23 @@ const DEVICE_HEIGHT = SCREEN_HEIGHT + STATUS_BAR_HEIGHT + DEVICE_BEZEL * 2;
 
 export function MaxLivePreview({
   project,
+  snapshots,
+  snapshotsLoading,
+  currentSnapshotId,
+  selectedSnapshotId,
+  onSelectSnapshot,
+  onRestoreSnapshot,
+  restoringSnapshot,
   onClose,
 }: {
   project: Project;
+  snapshots: Snapshot[];
+  snapshotsLoading: boolean;
+  currentSnapshotId: string | null;
+  selectedSnapshotId: string | null;
+  onSelectSnapshot: (snapshotId: string | null) => void;
+  onRestoreSnapshot: (snapshotId: string) => Promise<void>;
+  restoringSnapshot: boolean;
   onClose?: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -71,6 +97,10 @@ export function MaxLivePreview({
   const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
   const [loadedPreviewUrl, setLoadedPreviewUrl] = useState<string | null>(null);
   const [inspectorReady, setInspectorReady] = useState(false);
+  const [restoreTarget, setRestoreTarget] = useState<{
+    snapshotId: string;
+    headId: string | null;
+  } | null>(null);
   const inspectMode = useInspectorStore((state) => state.inspectMode);
   const setInspectMode = useInspectorStore((state) => state.setInspectMode);
   const addSelection = useInspectorStore((state) => state.addSelection);
@@ -83,6 +113,25 @@ export function MaxLivePreview({
     : inspectMode
       ? "inspect"
       : "off";
+  const selectedSnapshot = selectedSnapshotId
+    ? snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null
+    : null;
+  const viewingHistorical = Boolean(
+    selectedSnapshot && selectedSnapshot.id !== currentSnapshotId,
+  );
+  const selectedVersion = selectedSnapshot
+    ? maxSnapshotVersion(snapshots, selectedSnapshot.id)
+    : null;
+  const restoreTargetId =
+    restoreTarget?.headId === currentSnapshotId
+      ? restoreTarget.snapshotId
+      : null;
+  const restoreTargetSnapshot = restoreTargetId
+    ? snapshots.find((snapshot) => snapshot.id === restoreTargetId) ?? null
+    : null;
+  const restoreTargetVersion = restoreTargetSnapshot
+    ? maxSnapshotVersion(snapshots, restoreTargetSnapshot.id)
+    : null;
   const postToPreview = useCallback((message: Record<string, unknown>) => {
     const frame = previewFrame.current;
     if (!frame?.contentWindow) return;
@@ -145,6 +194,26 @@ export function MaxLivePreview({
     },
     [setInspectMode, setStyleMode],
   );
+
+  useEffect(() => {
+    if (!viewingHistorical) return;
+    selectEditorMode("off");
+  }, [selectEditorMode, viewingHistorical]);
+
+  useEffect(() => {
+    if (
+      selectedSnapshotId &&
+      !snapshotsLoading &&
+      !snapshots.some((snapshot) => snapshot.id === selectedSnapshotId)
+    ) {
+      onSelectSnapshot(null);
+    }
+  }, [
+    onSelectSnapshot,
+    selectedSnapshotId,
+    snapshots,
+    snapshotsLoading,
+  ]);
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
@@ -421,6 +490,17 @@ export function MaxLivePreview({
     void previewSession.refetch();
   }
 
+  async function confirmRestoreSnapshot() {
+    if (!restoreTargetSnapshot) return;
+    try {
+      await onRestoreSnapshot(restoreTargetSnapshot.id);
+      setRestoreTarget(null);
+    } catch {
+      // The shell keeps the dialog open and reports the API error in a toast so
+      // a temporary failure can be retried without losing the chosen version.
+    }
+  }
+
   return (
     <aside
       className="relative flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
@@ -442,7 +522,7 @@ export function MaxLivePreview({
           </span>
           <MaxEditMenu
             mode={activeEditorMode}
-            disabled={!displayPreviewUrl}
+            disabled={!displayPreviewUrl || viewingHistorical}
             selectionCount={selections.length}
             onModeChange={selectEditorMode}
           />
@@ -462,28 +542,36 @@ export function MaxLivePreview({
       </div>
 
       <div className="mt-3 flex min-h-0 flex-1 flex-col items-center">
-        <div
-          ref={deviceStage}
-          className="flex min-h-[340px] w-full flex-1 items-center justify-center overflow-hidden px-1.5 sm:px-2"
-          data-testid="max-live-device-stage"
-        >
+        <div className="flex min-h-[340px] w-full min-w-0 flex-1 overflow-hidden px-1 sm:px-1.5">
+          <MaxVersionRail
+            snapshots={snapshots}
+            currentSnapshotId={currentSnapshotId}
+            selectedSnapshotId={selectedSnapshotId}
+            loading={snapshotsLoading}
+            onSelect={onSelectSnapshot}
+          />
           <div
-            className="relative shrink-0"
-            style={{
-              width: DEVICE_WIDTH * deviceScale,
-              height: DEVICE_HEIGHT * deviceScale,
-            }}
+            ref={deviceStage}
+            className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden"
+            data-testid="max-live-device-stage"
           >
             <div
-              className="absolute left-0 top-0 rounded-[58px] bg-[#0b0b0b] p-[10px] shadow-[0_12px_28px_rgba(23,23,22,.14),0_2px_7px_rgba(23,23,22,.12),inset_0_0_0_1px_rgba(255,255,255,.16)]"
-              data-testid="max-live-device"
+              className="relative shrink-0"
               style={{
-                width: DEVICE_WIDTH,
-                height: DEVICE_HEIGHT,
-                transform: `scale(${deviceScale})`,
-                transformOrigin: "top left",
+                width: DEVICE_WIDTH * deviceScale,
+                height: DEVICE_HEIGHT * deviceScale,
               }}
             >
+              <div
+                className="absolute left-0 top-0 rounded-[58px] bg-[#0b0b0b] p-[10px] shadow-[0_12px_28px_rgba(23,23,22,.14),0_2px_7px_rgba(23,23,22,.12),inset_0_0_0_1px_rgba(255,255,255,.16)]"
+                data-testid="max-live-device"
+                style={{
+                  width: DEVICE_WIDTH,
+                  height: DEVICE_HEIGHT,
+                  transform: `scale(${deviceScale})`,
+                  transformOrigin: "top left",
+                }}
+              >
               <span className="absolute -left-[3px] top-[154px] h-[76px] w-[4px] rounded-l-full bg-[#30302f] shadow-[inset_1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
               <span className="absolute -left-[3px] top-[242px] h-[46px] w-[4px] rounded-l-full bg-[#30302f] shadow-[inset_1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
               <span className="absolute -right-[3px] top-[196px] h-[104px] w-[4px] rounded-r-full bg-[#30302f] shadow-[inset_-1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
@@ -499,7 +587,49 @@ export function MaxLivePreview({
                   </span>
                 </div>
                 <div className="relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}>
-                  {displayPreviewUrl ? (
+                  {viewingHistorical && selectedSnapshot ? (
+                    <div
+                      className="absolute inset-0 flex flex-col items-center justify-center bg-[#f5f3ee] px-6 text-center"
+                      data-testid="max-historical-snapshot"
+                    >
+                      <span className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full border border-[#d8d4cb] bg-[#fcfbf7]/95 px-2.5 py-1 text-[10px] font-medium text-[#6d6962] shadow-sm backdrop-blur">
+                        <GitCommitHorizontal className="size-3 text-accent" />
+                        Снимок v{selectedVersion} · только просмотр
+                      </span>
+                      {selectedSnapshot.preview_url ? (
+                        <div className="w-full overflow-hidden rounded-[18px] border border-[#d8d4cb] bg-white shadow-[0_14px_38px_rgba(23,23,22,.12)]">
+                          {/* Historical MAX containers cannot be mounted safely
+                              beside the live runtime. The immutable screenshot
+                              is intentionally framed as a snapshot, not a live
+                              interactive app. */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={selectedSnapshot.preview_url}
+                            alt={`Снимок версии ${selectedVersion}: ${maxSnapshotLabel(selectedSnapshot)}`}
+                            className="aspect-[8/5] w-full object-cover object-top"
+                          />
+                        </div>
+                      ) : (
+                        <div className="grid aspect-[8/5] w-full place-items-center rounded-[18px] border border-dashed border-[#c8c3b9] bg-[#fcfbf7] px-8">
+                          <div>
+                            <GitCommitHorizontal className="mx-auto size-6 text-[#aaa59b]" />
+                            <p className="mt-3 text-[13px] font-medium text-[#171716]">
+                              Снимок ещё готовится
+                            </p>
+                            <p className="mt-1 text-[10px] leading-4 text-[#8d887f]">
+                              Версию уже можно восстановить. Изображение появится после обработки.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      <p className="mt-5 max-w-[300px] text-[15px] font-semibold leading-5 text-[#171716]">
+                        {maxSnapshotLabel(selectedSnapshot)}
+                      </p>
+                      <p className="mt-1 font-mono text-[10px] text-[#8d887f]">
+                        {shortSha(selectedSnapshot.commit_sha)}
+                      </p>
+                    </div>
+                  ) : displayPreviewUrl ? (
                     <>
                       <iframe
                       ref={previewFrame}
@@ -605,28 +735,60 @@ export function MaxLivePreview({
                 </div>
                 <div className="pointer-events-none absolute inset-0 rounded-[48px] ring-1 ring-inset ring-white/10" aria-hidden="true" />
               </div>
+              </div>
             </div>
           </div>
         </div>
         <div className="shrink-0 text-center">
-          <button
-            type="button"
-            onClick={() => void openSeparatePreview()}
-            disabled={!connected || separatePreview.isPending}
-            className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[10px] font-medium text-[#8d887f] transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
-            data-testid="max-open-preview-separate"
-            title={connected ? undefined : `Публичный адрес: ${publicUrl}`}
-          >
-            {separatePreview.isPending ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <ExternalLink className="size-3" />
-            )}
-            Открыть отдельно
-          </button>
+          {viewingHistorical && selectedSnapshot ? (
+            <div className="mt-1 flex min-h-11 items-center justify-center gap-1.5 px-2">
+              <button
+                type="button"
+                onClick={() => onSelectSnapshot(null)}
+                disabled={restoringSnapshot}
+                className="inline-flex min-h-11 items-center rounded-[9px] px-2.5 text-[10px] font-medium text-[#6d6962] transition-colors hover:bg-[#f5f3ee] hover:text-[#171716] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent disabled:opacity-45"
+                data-testid="max-return-current-version"
+              >
+                Текущая
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setRestoreTarget({
+                    snapshotId: selectedSnapshot.id,
+                    headId: currentSnapshotId,
+                  })
+                }
+                disabled={restoringSnapshot}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-[9px] border border-accent/30 bg-accent/10 px-3 text-[10px] font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/15 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent disabled:opacity-45"
+                data-testid="max-restore-version"
+              >
+                {restoringSnapshot && (
+                  <Loader2 className="size-3 animate-spin" />
+                )}
+                Восстановить v{selectedVersion}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void openSeparatePreview()}
+              disabled={!connected || separatePreview.isPending}
+              className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[10px] font-medium text-[#8d887f] transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
+              data-testid="max-open-preview-separate"
+              title={connected ? undefined : `Публичный адрес: ${publicUrl}`}
+            >
+              {separatePreview.isPending ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <ExternalLink className="size-3" />
+              )}
+              Открыть отдельно
+            </button>
+          )}
         </div>
       </div>
-      {styleMode && styleSelected && (
+      {!viewingHistorical && styleMode && styleSelected && (
         <StylePanel
           projectId={project.id}
           post={postToAllProjectPreviews}
@@ -635,6 +797,54 @@ export function MaxLivePreview({
           tokenEditing={false}
         />
       )}
+      <Dialog
+        open={Boolean(
+          restoreTargetSnapshot &&
+            restoreTargetId === selectedSnapshotId &&
+            viewingHistorical,
+        )}
+        onOpenChange={(open) => {
+          if (!restoringSnapshot && !open) setRestoreTarget(null);
+        }}
+      >
+        <DialogContent className="border-[#d8d4cb] bg-[#fcfbf7] text-[#171716] shadow-[0_30px_90px_rgba(23,23,22,.28)] [&>button]:text-[#8d887f] [&>button:hover]:bg-[#ece8df]">
+          <DialogHeader>
+            <DialogTitle className="text-[#171716]">
+              Вернуться к версии v{restoreTargetVersion}?
+            </DialogTitle>
+            <DialogDescription className="leading-6 text-[#6d6962]">
+              Создадим новую версию на основе{" "}
+              <span className="font-mono text-[#171716]">
+                {restoreTargetSnapshot
+                  ? shortSha(restoreTargetSnapshot.commit_sha)
+                  : ""}
+              </span>
+              . Текущая версия останется в истории — её можно будет вернуть.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="lg"
+              onClick={() => setRestoreTarget(null)}
+              disabled={restoringSnapshot}
+              className="text-[#6d6962] hover:bg-[#ece8df] hover:text-[#171716]"
+            >
+              Отмена
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              onClick={() => void confirmRestoreSnapshot()}
+              disabled={restoringSnapshot || !restoreTargetSnapshot}
+            >
+              {restoringSnapshot && <Loader2 className="animate-spin" />}
+              Вернуться к версии
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

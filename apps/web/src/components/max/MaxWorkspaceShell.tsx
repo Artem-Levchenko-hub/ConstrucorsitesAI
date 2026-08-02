@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   LayoutGrid,
@@ -15,14 +15,21 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 
 import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { listProjects } from "@/lib/api/projects";
+import {
+  listSnapshots,
+  rollback as rollbackSnapshot,
+} from "@/lib/api/snapshots";
 import { getMaxReadiness } from "@/lib/api/max-studio";
-import type { Project } from "@/lib/api/types";
+import type { Project, Snapshot } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
+import { visibleMaxSnapshots } from "@/lib/max-version-history";
+import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import { cn } from "@/lib/utils";
 import { useInspectorStore } from "@/store/inspector";
 import { useStyleEditStore } from "@/store/styleEdit";
@@ -94,7 +101,16 @@ function MaxWorkspaceContent({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [navigationVisible, setNavigationVisible] = useState(true);
   const [previewPanelVisible, setPreviewPanelVisible] = useState(true);
+  const [versionSelection, setVersionSelection] = useState<{
+    snapshotId: string;
+    headId: string | null;
+  } | null>(null);
+  const queryClient = useQueryClient();
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+  const snapshots = useQuery({
+    queryKey: ["snapshots", project.id],
+    queryFn: () => listSnapshots(project.id),
+  });
   const readiness = useQuery({
     queryKey: ["max-readiness", project.id],
     queryFn: () => getMaxReadiness(project.id),
@@ -112,6 +128,62 @@ function MaxWorkspaceContent({
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
     [projects.data],
   );
+  const versionSnapshots = useMemo(
+    () => visibleMaxSnapshots(snapshots.data ?? []),
+    [snapshots.data],
+  );
+  const currentSnapshotId = snapshots.data?.[0]?.id ?? project.current_snapshot_id;
+  // Bind a historical selection to the HEAD it was opened from. When a new
+  // generation lands in the shared cache, the new current version immediately
+  // wins without a state-setting effect or a flash of stale history.
+  const selectedSnapshotId =
+    versionSelection?.headId === currentSnapshotId
+      ? versionSelection.snapshotId
+      : null;
+
+  function selectSnapshot(snapshotId: string | null) {
+    setVersionSelection(
+      snapshotId ? { snapshotId, headId: currentSnapshotId } : null,
+    );
+  }
+
+  const rollbackMutation = useMutation({
+    mutationFn: (snapshotId: string) =>
+      rollbackSnapshot(project.id, snapshotId),
+    onSuccess: (snapshot) => {
+      queryClient.setQueryData<Snapshot[]>(
+        ["snapshots", project.id],
+        (previous) => upsertSnapshotNewest(previous, snapshot),
+      );
+      setVersionSelection(null);
+      toast.success("Версия восстановлена", {
+        description:
+          "Создана новая текущая версия. Предыдущее состояние осталось в истории.",
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["snapshots", project.id],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["max-managed-kit-sync", project.id],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["max-preview-session", project.id],
+      });
+    },
+    onError: (error) => {
+      toast.error("Не удалось восстановить версию", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Текущая версия не изменена. Повторите попытку.",
+      });
+    },
+  });
+
+  async function restoreSnapshot(snapshotId: string) {
+    await rollbackMutation.mutateAsync(snapshotId);
+  }
 
   return (
     <div
@@ -301,6 +373,13 @@ function MaxWorkspaceContent({
         >
           <MaxLivePreview
             project={project}
+            snapshots={versionSnapshots}
+            snapshotsLoading={snapshots.isPending}
+            currentSnapshotId={currentSnapshotId}
+            selectedSnapshotId={selectedSnapshotId}
+            onSelectSnapshot={selectSnapshot}
+            onRestoreSnapshot={restoreSnapshot}
+            restoringSnapshot={rollbackMutation.isPending}
             onClose={() => setPreviewPanelVisible(false)}
           />
         </div>
@@ -324,6 +403,13 @@ function MaxWorkspaceContent({
             <div className="min-h-0 flex-1">
               <MaxLivePreview
                 project={project}
+                snapshots={versionSnapshots}
+                snapshotsLoading={snapshots.isPending}
+                currentSnapshotId={currentSnapshotId}
+                selectedSnapshotId={selectedSnapshotId}
+                onSelectSnapshot={selectSnapshot}
+                onRestoreSnapshot={restoreSnapshot}
+                restoringSnapshot={rollbackMutation.isPending}
                 onClose={() => setPreviewOpen(false)}
               />
             </div>
