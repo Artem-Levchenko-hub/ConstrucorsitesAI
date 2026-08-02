@@ -31,6 +31,7 @@ vi.mock("@/app/(auth)/actions", () => ({
 }));
 
 import { MaxAccountMenu } from "@/components/max/MaxAccountMenu";
+import { MaxStudioAccountDisclosure } from "@/components/max/MaxStudioAccountDisclosure";
 
 const workspace = readFileSync(
   resolve(process.cwd(), "src/components/max/MaxWorkspaceShell.tsx"),
@@ -156,5 +157,93 @@ describe("MAX account disclosure", () => {
 
     expect(navigationCount).toBe(1);
     expect(trigger().getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+describe("MAX Studio projects account disclosure", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(async () => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root.render(createElement(MaxStudioAccountDisclosure));
+    });
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.restoreAllMocks();
+  });
+
+  function trigger() {
+    return container.querySelector<HTMLButtonElement>(
+      '[data-testid="max-studio-account-trigger"]',
+    )!;
+  }
+
+  async function openMenu() {
+    await act(async () => trigger().click());
+  }
+
+  it("keeps the projects page in place until the user chooses a section", () => {
+    const menu = container.querySelector<HTMLElement>(
+      '[data-testid="max-studio-account-menu"]',
+    );
+    expect(trigger().textContent).toContain("Аккаунт");
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    expect(menu?.getAttribute("aria-hidden")).toBe("true");
+    expect(menu?.querySelector("a")?.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("reveals every existing account section directly below the account row", async () => {
+    await openMenu();
+
+    const menu = container.querySelector<HTMLElement>(
+      '[data-testid="max-studio-account-menu"]',
+    );
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(menu?.getAttribute("aria-hidden")).toBe("false");
+    expect(menu).not.toBeNull();
+
+    for (const [href, label] of accountLinks) {
+      const link = menu?.querySelector<HTMLAnchorElement>(`a[href="${href}"]`);
+      expect(link?.textContent).toContain(label);
+      expect(link?.getAttribute("tabindex")).toBe("0");
+    }
+  });
+
+  it("collapses on a repeated click", async () => {
+    await openMenu();
+    await act(async () => trigger().click());
+
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    expect(
+      container
+        .querySelector('[data-testid="max-studio-account-menu"]')
+        ?.getAttribute("aria-hidden"),
+    ).toBe("true");
+  });
+
+  it("collapses on Escape and returns focus to its trigger", async () => {
+    await openMenu();
+
+    await act(async () => {
+      trigger().parentElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger());
   });
 });

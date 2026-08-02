@@ -16,7 +16,6 @@ import {
   Search,
   Settings,
   Sparkles,
-  UserRound,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -48,6 +47,7 @@ import {
 } from "@/lib/max-brief";
 import { cn } from "@/lib/utils";
 import { MaxStudioProjectCard } from "./MaxStudioProjectCard";
+import { MaxStudioAccountDisclosure } from "./MaxStudioAccountDisclosure";
 
 const STARTER_FEATURES: MaxFeature[] = ["Профиль пользователя", "История действий"];
 
@@ -57,13 +57,11 @@ function StudioNav({ email }: { email: string }) {
       <div className="flex h-16 items-center border-b border-[#d8d4cb] px-5">
         <BrandMark />
       </div>
-      <nav className="flex-1 p-3 text-sm">
+      <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 text-sm">
         <Link href="/max" className="flex items-center gap-3 rounded-[8px] bg-[#ece8df] px-3 py-2.5 font-medium">
           <LayoutGrid className="size-4" /> Проекты
         </Link>
-        <Link href="/account" className="mt-1 flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[#6d6962] hover:bg-[#f5f3ee]">
-          <UserRound className="size-4" /> Аккаунт
-        </Link>
+        <MaxStudioAccountDisclosure />
         <Link href="/billing" className="mt-1 flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[#6d6962] hover:bg-[#f5f3ee]">
           <Clock3 className="size-4" /> Биллинг
         </Link>
