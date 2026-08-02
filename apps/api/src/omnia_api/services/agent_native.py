@@ -752,18 +752,15 @@ async def _call_messages(
         }
         try:
             r = await client.post(url, json=payload, timeout=_HTTP_TIMEOUT_S)
-            # 402 = provider key out of balance. Retrying can't fix it, so fail
-            # FAST with a human cause instead of grinding 8 backoff retries and
-            # surfacing an opaque "соединение потеряно" 3+ minutes later.
-            if r.status_code == 402:
-                raise RuntimeError(
-                    "PAYMENT_REQUIRED: баланс LLM-провайдера (LLMGW) исчерпан — "
-                    "пополни ключ и повтори промпт"
-                )
             if r.status_code == 429 or (r.status_code >= 400 and "rate_limit" in r.text[:300]):
                 await asyncio.sleep(6.0 * (attempt + 1))
                 last = RuntimeError(f"429 concurrency (attempt {attempt + 1})")
                 continue
+            # Retrying a rejected request cannot repair credentials, balance,
+            # endpoint or payload validation. Surface only the numeric status:
+            # response bodies may contain provider diagnostics or secrets.
+            if 400 <= r.status_code < 500 and r.status_code not in {408, 425, 429}:
+                raise PermanentProviderError(r.status_code)
             r.raise_for_status()
             body = r.json()
             if not isinstance(body, dict):
@@ -777,6 +774,14 @@ async def _call_messages(
             last = exc
             await asyncio.sleep(min(45.0, 4.0 * (2**attempt)))
     raise last or RuntimeError("messages call failed")
+
+
+class PermanentProviderError(RuntimeError):
+    """A provider rejection that reconnecting with the same request cannot fix."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"provider rejected request (HTTP {status_code})")
 
 
 async def run_native_build(
@@ -968,6 +973,31 @@ async def run_native_build(
                     free=free,
                     stage=call_stage,
                     tools=_MAX_TOOLS_CACHED if max_runtime else _TOOLS_CACHED,
+                )
+            except PermanentProviderError as exc:
+                log.warning(
+                    "agent_native.max_provider_rejected",
+                    step=step,
+                    status_code=exc.status_code,
+                )
+                if emit:
+                    await emit(
+                        "agent.step",
+                        {
+                            "step": step,
+                            "action": "provider_rejected",
+                            "path": "",
+                            "detail": (
+                                "AI-провайдер отклонил запрос; повтор не поможет. "
+                                "Останавливаю новые списания и проверяю уже собранную версию."
+                            ),
+                            "ok": False,
+                        },
+                    )
+                return await _finish_without_provider(
+                    steps=step,
+                    reason="provider_rejected",
+                    detail=f"provider rejected request (HTTP {exc.status_code})",
                 )
             except Exception as exc:
                 if max_runtime:

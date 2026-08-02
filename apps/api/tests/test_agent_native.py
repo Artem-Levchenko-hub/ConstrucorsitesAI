@@ -11,6 +11,7 @@ import inspect
 import json
 from typing import Any
 
+import httpx
 import pytest
 
 from omnia_api.services import agent_native
@@ -725,6 +726,109 @@ async def test_provider_limit_stops_immediately_and_keeps_green_tree(
     assert calls["n"] == 1
     assert res.done is True
     assert res.stop_reason == "provider_stopped_green"
+
+
+@pytest.mark.asyncio
+async def test_max_runtime_stops_on_permanent_provider_rejection_without_retrying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"provider": 0, "build": 0}
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls["provider"] += 1
+        raise agent_native.PermanentProviderError(402)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        assert action.name == "build"
+        calls["build"] += 1
+        return {"ok": True, "detail": "clean"}
+
+    def incomplete(_files: Any, _evidence: Any) -> str | None:
+        return "product source is incomplete"
+
+    res = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="build the complete app",
+        execute=execute,
+        completion_check=incomplete,
+        max_steps=None,
+    )
+
+    assert calls == {"provider": 1, "build": 1}
+    assert res.done is False
+    assert res.stop_reason == "provider_rejected_red"
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 402, 403, 404, 422])
+@pytest.mark.asyncio
+async def test_messages_call_fails_fast_on_permanent_4xx(
+    monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    calls = 0
+
+    async def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("POST", "https://gateway.test/v1/messages")
+        return httpx.Response(status_code, request=request)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    client = httpx.AsyncClient()
+    monkeypatch.setattr(client, "post", fake_post)
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    try:
+        with pytest.raises(agent_native.PermanentProviderError) as exc_info:
+            await agent_native._call_messages(
+                client,
+                "https://gateway.test/v1/messages",
+                [{"role": "user", "content": "build"}],
+                "system",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.status_code == status_code
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_messages_call_still_recovers_transient_5xx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("POST", "https://gateway.test/v1/messages")
+        if calls == 1:
+            return httpx.Response(503, request=request)
+        return httpx.Response(200, request=request, json={"content": []})
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    client = httpx.AsyncClient()
+    monkeypatch.setattr(client, "post", fake_post)
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    try:
+        result = await agent_native._call_messages(
+            client,
+            "https://gateway.test/v1/messages",
+            [{"role": "user", "content": "build"}],
+            "system",
+        )
+    finally:
+        await client.aclose()
+
+    assert result == {"content": []}
+    assert calls == 2
 
 
 def test_native_agent_has_eyes_and_taste() -> None:
