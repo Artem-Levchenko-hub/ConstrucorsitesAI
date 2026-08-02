@@ -486,6 +486,59 @@ async def hot_reload(project_id: UUID, slug: str, files: dict[str, str]) -> dict
     )
 
 
+async def start_history_preview(
+    project_id: UUID, snapshot_id: UUID, files: dict[str, str]
+) -> dict[str, Any]:
+    """Start a private renderer populated from one exact git snapshot."""
+    return await _request(
+        "POST",
+        "/internal/projects/history-preview",
+        json={
+            "project_id": str(project_id),
+            "snapshot_id": str(snapshot_id),
+            "files": files,
+        },
+        timeout=60.0,
+    )
+
+
+async def stop_history_preview(project_id: UUID, snapshot_id: UUID) -> None:
+    """Best-effort cleanup counterpart for ``start_history_preview``."""
+    await _request(
+        "DELETE",
+        f"/internal/projects/history-preview/{project_id}/{snapshot_id}",
+        timeout=30.0,
+    )
+
+
+async def start_history_preview_session(
+    project_id: UUID, snapshot_id: UUID, files: dict[str, str]
+) -> dict[str, Any]:
+    """Start one isolated interactive sandbox for a historical snapshot."""
+    return await _request(
+        "POST",
+        "/internal/projects/history-preview/session",
+        json={
+            "project_id": str(project_id),
+            "snapshot_id": str(snapshot_id),
+            "files": files,
+        },
+        timeout=420.0,
+    )
+
+
+async def stop_history_preview_session(
+    project_id: UUID, snapshot_id: UUID, session_id: UUID
+) -> None:
+    """Close exactly one historical sandbox generation."""
+    await _request(
+        "DELETE",
+        f"/internal/projects/history-preview/session/{project_id}/{snapshot_id}",
+        params={"session_id": str(session_id)},
+        timeout=30.0,
+    )
+
+
 async def build_exe(
     name: str,
     files: dict[str, str],

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 import time
 from contextlib import suppress
@@ -37,6 +38,27 @@ log = structlog.get_logger("omnia_orchestrator.docker")
 # (the host bind is 127.0.0.1-only — unreachable from a container). Override via
 # env if the compose project/network is renamed.
 _RUNTIME_NETWORK = os.getenv("OMNIA_RUNTIME_NETWORK", "omnia-runtime_default")
+_HISTORY_PREVIEW_TTL_SECONDS = 900
+_HISTORY_PREVIEW_NAME_RE = re.compile(r"[^a-f0-9]")
+_HISTORY_SAFE_ENV_KEYS = {
+    "ALL_PROXY",
+    "HOME",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "LANG",
+    "NODE_ENV",
+    "NO_PROXY",
+    "PATH",
+    "PNPM_HOME",
+    "PORT",
+    "TZ",
+    "all_proxy",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+}
+_HISTORY_SAFE_ENV_PREFIXES = ("COREPACK_", "NEXT_", "NODE_", "NPM_", "PNPM_")
+_HISTORY_READY_MARKER = "/tmp/omnia-history-files-ready"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,9 +78,9 @@ class ContainerSpec:
     tier: str = "free"  # `omnia.tier` label — drives hibernate pause/stop policy
     container_port: int = 3000  # internal port the app listens on (StackSpec-driven)
     # ── Sandbox hardening (Phase 1) — all default to current behaviour ───────
-    runtime: str = ""        # docker --runtime, e.g. "runsc" (gVisor); "" = daemon default (runc)
-    harden: bool = False     # add no-new-privileges + a PID ceiling (safe for non-root images)
-    pids_limit: int = 0      # PID ceiling applied only when `harden` is on (0 = unset)
+    runtime: str = ""  # docker --runtime, e.g. "runsc" (gVisor); "" = daemon default (runc)
+    harden: bool = False  # add no-new-privileges + a PID ceiling (safe for non-root images)
+    pids_limit: int = 0  # PID ceiling applied only when `harden` is on (0 = unset)
 
 
 _client: docker.DockerClient | None = None
@@ -301,7 +323,6 @@ async def start_container(spec: ContainerSpec) -> str:
             ) from exc
         return str(container.id)
 
-
     return await asyncio.to_thread(_do)
 
 
@@ -382,6 +403,314 @@ async def find_project_container(project_id: str, *, kind: str = "dev") -> str |
     return await asyncio.to_thread(_do)
 
 
+def history_preview_container_name(
+    project_id: str, snapshot_id: str, *, purpose: str = "artifact"
+) -> str:
+    """Stable, Docker-safe name for one short-lived immutable history render."""
+    project = _HISTORY_PREVIEW_NAME_RE.sub("", project_id.lower())[:12]
+    snapshot = _HISTORY_PREVIEW_NAME_RE.sub("", snapshot_id.lower())[:12]
+    if purpose == "session":
+        return f"omnia-history-session-{project}"
+    return f"omnia-history-{project}-{snapshot}"
+
+
+def history_preview_environment(source: list[str], overrides: dict[str, str]) -> list[str]:
+    """Build a minimal sandbox env without live integration credentials."""
+    safe: dict[str, str] = {}
+    for item in source:
+        key, separator, value = str(item).partition("=")
+        if not separator:
+            continue
+        if key in _HISTORY_SAFE_ENV_KEYS or key.startswith(_HISTORY_SAFE_ENV_PREFIXES):
+            safe[key] = value
+    safe.update(overrides)
+    safe["OMNIA_HISTORY_PREVIEW"] = "1"
+    return [f"{key}={value}" for key, value in sorted(safe.items())]
+
+
+async def history_preview_cleanup_candidates(*, remove_all: bool = False) -> list[dict[str, str]]:
+    """Return expired renderer labels without deleting their durable cleanup key.
+
+    The container is the retry record for its database role and nginx host.  It
+    must remain until those resources are released successfully.
+    """
+
+    def _reap() -> list[dict[str, str]]:
+        client = _get_client()
+        now = time.time()
+        candidates: list[dict[str, str]] = []
+        for container in client.containers.list(all=True, filters={"label": "omnia.created_epoch"}):
+            labels = container.labels or {}
+            if labels.get("omnia.kind") not in {
+                "history-artifact",
+                "history-session",
+            }:
+                continue
+            created_raw = labels.get("omnia.created_epoch", "0")
+            try:
+                expired = now - float(created_raw) > _HISTORY_PREVIEW_TTL_SECONDS
+            except (TypeError, ValueError):
+                expired = True
+            if not remove_all and not expired:
+                continue
+            candidates.append({str(key): str(value) for key, value in labels.items()})
+        return candidates
+
+    return await asyncio.to_thread(_reap)
+
+
+async def history_preview_container_labels(
+    project_id: str,
+    snapshot_id: str | None = None,
+    *,
+    purpose: str = "artifact",
+    session_id: str | None = None,
+) -> dict[str, str]:
+    """Read the cleanup record for an exact history renderer, if it exists."""
+    name = history_preview_container_name(project_id, snapshot_id or "", purpose=purpose)
+
+    def _labels() -> dict[str, str]:
+        client = _get_client()
+        try:
+            container = client.containers.get(name)
+        except docker.errors.NotFound:
+            return {}
+        labels = {str(key): str(value) for key, value in (container.labels or {}).items()}
+        if labels.get("omnia.kind") != f"history-{purpose}":
+            raise OrchestratorError(
+                code="conflict",
+                message="refusing to inspect a non-history container",
+                status_code=409,
+            )
+        if snapshot_id is not None and labels.get("omnia.snapshot_id") != snapshot_id:
+            return {}
+        if session_id is not None and labels.get("omnia.history_session_id") != session_id:
+            return {}
+        return labels
+
+    return await asyncio.to_thread(_labels)
+
+
+async def start_history_preview_container(
+    project_id: str,
+    snapshot_id: str,
+    files: dict[str, str],
+    *,
+    purpose: str = "artifact",
+    host_port: int | None = None,
+    public_origin: str | None = None,
+    environment_overrides: dict[str, str] | None = None,
+    history_database_id: str | None = None,
+    history_session_id: str | None = None,
+) -> dict[str, str]:
+    """Start a short-lived current MAX core with historical product files.
+
+    The renderer reuses the dev container's immutable image by digest and a
+    minimal environment.  PID 1 waits on a marker while product-owned files are
+    copied, so migrations and Next.js can never observe a half-old/half-current
+    tree.  The API strips platform-owned MAX files before this boundary.
+    """
+    if purpose not in {"artifact", "session"}:
+        raise ValueError("unsupported history preview purpose")
+    name = history_preview_container_name(project_id, snapshot_id, purpose=purpose)
+
+    def _start() -> tuple[str, int]:
+        client = _get_client()
+        now = time.time()
+
+        sources = client.containers.list(
+            all=True,
+            filters={
+                "label": [
+                    f"omnia.project_id={project_id}",
+                    "omnia.kind=dev",
+                ]
+            },
+        )
+        if not sources:
+            raise OrchestratorError(
+                code="not_found",
+                message="project dev container is unavailable for history render",
+                status_code=404,
+            )
+        source = sources[0]
+        source.reload()
+        config = source.attrs.get("Config", {}) or {}
+        host_config = source.attrs.get("HostConfig", {}) or {}
+        image = getattr(source.image, "id", None) or config.get("Image")
+        if not isinstance(image, str) or not image:
+            raise OrchestratorError(
+                code="container_failure",
+                message="project template image is unavailable",
+                status_code=409,
+            )
+
+        try:
+            existing = client.containers.get(name)
+        except docker.errors.NotFound:
+            existing = None
+        if existing is not None:
+            with suppress(docker.errors.APIError, docker.errors.NotFound):
+                existing.remove(force=True)
+
+        env = history_preview_environment(
+            list(config.get("Env") or []), environment_overrides or {}
+        )
+        exposed = config.get("ExposedPorts") or {}
+        container_port = 3000
+        for key in exposed:
+            try:
+                container_port = int(str(key).split("/", 1)[0])
+                break
+            except ValueError:
+                continue
+
+        memory = int(host_config.get("Memory") or 0)
+        memory_limit = memory if memory > 0 else 2 * 1024 * 1024 * 1024
+        try:
+            run_kwargs: dict[str, object] = {}
+            if host_port is not None:
+                run_kwargs["ports"] = {f"{container_port}/tcp": ("127.0.0.1", host_port)}
+            container = client.containers.run(
+                image=image,
+                name=name,
+                command=[
+                    "sh",
+                    "-lc",
+                    (
+                        f"while [ ! -f {_HISTORY_READY_MARKER} ]; do sleep 0.1; done; "
+                        "exec ./docker-entrypoint.sh"
+                    ),
+                ],
+                detach=True,
+                environment=env,
+                mem_limit=memory_limit,
+                cpu_quota=100_000,
+                cpu_period=100_000,
+                cap_drop=["ALL"],
+                cap_add=["NET_BIND_SERVICE"],
+                user=config.get("User") or "1000:1000",
+                extra_hosts={"host.docker.internal": "host-gateway"},
+                network=_RUNTIME_NETWORK,
+                restart_policy={"Name": "no"},
+                labels={
+                    "omnia.project_id": project_id,
+                    "omnia.snapshot_id": snapshot_id,
+                    "omnia.kind": f"history-{purpose}",
+                    "omnia.created_epoch": str(now),
+                    "omnia.history_origin": public_origin or "",
+                    "omnia.history_database_id": history_database_id or "",
+                    "omnia.history_session_id": history_session_id or "",
+                },
+                **run_kwargs,
+            )
+        except docker.errors.APIError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"history preview start failed: {exc}",
+                status_code=500,
+            ) from exc
+        return str(container.id), container_port
+
+    try:
+        container_id, container_port = await asyncio.to_thread(_start)
+        await write_files(name, files)
+        marker = await exec_cmd(
+            name,
+            ["touch", _HISTORY_READY_MARKER],
+            workdir="/app",
+            timeout_sec=10,
+        )
+        if marker["exit_code"] != "0":
+            raise OrchestratorError(
+                code="container_failure",
+                message="history preview file handoff failed",
+                status_code=500,
+            )
+    except Exception:
+        # Keep the labelled container as the durable cleanup record.  Runtime
+        # releases its nginx/DB resources first and removes it only afterwards;
+        # the periodic sweeper can retry if that release is temporarily down.
+        raise
+
+    log.info(
+        "docker.history_preview_started",
+        name=name,
+        container_id=container_id[:12],
+        files=len(files),
+    )
+    return {
+        "container_name": name,
+        "internal_url": f"http://{name}:{container_port}",
+    }
+
+
+async def remove_history_preview_container(
+    project_id: str,
+    snapshot_id: str,
+    *,
+    purpose: str = "artifact",
+) -> dict[str, str]:
+    """Force-remove one bounded history renderer; safe to call repeatedly."""
+    name = history_preview_container_name(project_id, snapshot_id, purpose=purpose)
+
+    def _remove() -> dict[str, str]:
+        client = _get_client()
+        try:
+            container = client.containers.get(name)
+        except docker.errors.NotFound:
+            return {}
+        labels = container.labels or {}
+        if labels.get("omnia.kind") != f"history-{purpose}":
+            raise OrchestratorError(
+                code="conflict",
+                message="refusing to remove a non-history container",
+                status_code=409,
+            )
+        if labels.get("omnia.snapshot_id") != snapshot_id:
+            return {}
+        container.remove(force=True)
+        return {str(key): str(value) for key, value in labels.items()}
+
+    return await asyncio.to_thread(_remove)
+
+
+async def remove_history_preview_session(
+    project_id: str,
+    *,
+    snapshot_id: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, str]:
+    """Remove the matching interactive history session, if present.
+
+    The optional immutable session id prevents a delayed browser cleanup for an
+    old A request from deleting a newly opened A session.
+    """
+    name = history_preview_container_name(project_id, "", purpose="session")
+
+    def _remove() -> dict[str, str]:
+        client = _get_client()
+        try:
+            container = client.containers.get(name)
+        except docker.errors.NotFound:
+            return {}
+        labels = container.labels or {}
+        if labels.get("omnia.kind") != "history-session":
+            raise OrchestratorError(
+                code="conflict",
+                message="refusing to remove a non-history session container",
+                status_code=409,
+            )
+        if snapshot_id is not None and labels.get("omnia.snapshot_id") != snapshot_id:
+            return {}
+        if session_id is not None and labels.get("omnia.history_session_id") != session_id:
+            return {}
+        container.remove(force=True)
+        return {str(key): str(value) for key, value in labels.items()}
+
+    return await asyncio.to_thread(_remove)
+
+
 async def container_status(name: str) -> dict[str, str]:
     """Return {state, id, port, project_id} where state ∈ {running, paused,
     stopped, not_found}. `project_id` is the `omnia.project_id` label ("" when
@@ -445,7 +774,9 @@ async def container_image_template(name: str) -> str | None:
     return await asyncio.to_thread(_do)
 
 
-async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/app") -> dict[str, str]:
+async def write_files(
+    name: str, files: dict[str, str], *, dest_root: str = "/app"
+) -> dict[str, str]:
     """Stream a set of AI-generated files into a running container via
     `docker cp` semantics (put_archive). Paths in `files` are container-relative
     to `dest_root` (default `/app`, matching Next.js workdir in the template).
@@ -463,9 +794,9 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
     Missing container = explicit OrchestratorError (caller should handle).
     """
     import io
+    import posixpath
     import tarfile
     import time
-    import posixpath
 
     log.info("docker.write_files", name=name, files=len(files), dest_root=dest_root)
 
@@ -485,7 +816,9 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
         if c.status not in ("running", "paused"):
             raise OrchestratorError(
                 code="container_failure",
-                message=f"container {name} state={c.status}; can't write files into a stopped container",
+                message=(
+                    f"container {name} state={c.status}; can't write files into a stopped container"
+                ),
                 status_code=409,
             )
 
@@ -575,7 +908,9 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
                 else:
                     log.warning(
                         "docker.write_files.delete_nonzero",
-                        name=name, paths=to_delete, exit=res.exit_code,
+                        name=name,
+                        paths=to_delete,
+                        exit=res.exit_code,
                     )
             except docker.errors.APIError as exc:
                 log.warning("docker.write_files.delete_failed", name=name, err=str(exc))
@@ -695,7 +1030,9 @@ async def exec_cmd(
                 message=f"exec on {name} failed: {exc}",
                 status_code=409 if not_running else 500,
             ) from exc
-        out_bytes, err_bytes = result.output if isinstance(result.output, tuple) else (result.output, b"")
+        out_bytes, err_bytes = (
+            result.output if isinstance(result.output, tuple) else (result.output, b"")
+        )
         return {
             "exit_code": str(result.exit_code),
             "stdout": (out_bytes or b"").decode("utf-8", errors="replace")[:max_output],
@@ -705,7 +1042,7 @@ async def exec_cmd(
     # exec_run does not honor an explicit timeout; wrap in asyncio.wait_for.
     try:
         return await asyncio.wait_for(asyncio.to_thread(_do), timeout=timeout_sec)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise OrchestratorError(
             code="container_failure",
             message=f"exec {cmd[0]} on {name} timed out after {timeout_sec}s",
@@ -816,9 +1153,7 @@ async def unpause_container(name: str) -> None:
     await asyncio.to_thread(_do)
 
 
-async def copy_path_from_container(
-    name: str, container_path: str, dest_dir: str
-) -> bool:
+async def copy_path_from_container(name: str, container_path: str, dest_dir: str) -> bool:
     """Extract `container_path` from a container into `dest_dir` on the host.
 
     Used to assemble a prod build context from the live dev container. Returns
@@ -884,7 +1219,7 @@ async def build_image(
 
     try:
         await asyncio.wait_for(asyncio.to_thread(_do), timeout=timeout_sec)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise OrchestratorError(
             code="container_failure",
             message=f"prod build timed out after {timeout_sec}s",
@@ -892,9 +1227,7 @@ async def build_image(
         ) from exc
 
 
-async def container_logs(
-    name: str, *, tail: int = 200, kind: str = "dev"
-) -> dict[str, str]:
+async def container_logs(name: str, *, tail: int = 200, kind: str = "dev") -> dict[str, str]:
     """Tail recent stdout+stderr from a container. UTF-8 decoded, no follow.
 
     Returns ``{"logs": "<text>", "tail": "<n>"}``. The frontend renders this

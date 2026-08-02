@@ -25,7 +25,9 @@ def main() -> None:
     ).start()
     conn = Redis.from_url(get_settings().redis_url)
     with Connection(conn):
-        Worker([QUEUE_NAME]).work(with_scheduler=False)
+        # Preview jobs use bounded delayed retries. The embedded scheduler is
+        # required by RQ when Retry.interval is configured.
+        Worker([QUEUE_NAME]).work(with_scheduler=True)
 
 
 if __name__ == "__main__":

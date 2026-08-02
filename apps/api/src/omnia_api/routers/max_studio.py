@@ -21,15 +21,12 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.usage import Usage
 from omnia_api.schemas.max_studio import (
-    MaxLegal,
-    MaxOperator,
     MaxPreviewSessionPublic,
     MaxPreviewSessionUpstream,
     MaxProjectConfigPayload,
     MaxProjectConfigPublic,
     MaxReadinessItem,
     MaxReadinessPublic,
-    MaxSupport,
     MaxUrlAttachedPayload,
     MaxUsagePublic,
     MaxUsageStagePublic,
@@ -40,6 +37,7 @@ from omnia_api.services.deploy_attestation import ensure_current_release_proof
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
+    default_max_project_config,
     render_max_managed_files,
 )
 
@@ -66,14 +64,7 @@ async def _owned_max_project(
 
 
 def _default_config(project: Project) -> MaxProjectConfigPayload:
-    return MaxProjectConfigPayload(
-        app_name=project.name,
-        app_type="custom",
-        summary="Мини-приложение для пользователей MAX",
-        operator=MaxOperator(),
-        support=MaxSupport(),
-        legal=MaxLegal(),
-    )
+    return default_max_project_config(project.name)
 
 
 def _public(project: Project, record: MaxProjectConfig | None) -> MaxProjectConfigPublic:

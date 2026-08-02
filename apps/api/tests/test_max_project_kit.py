@@ -25,7 +25,11 @@ from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     MAX_MODEL_DIRECTIVE,
     _template_candidates,
+    max_history_product_files,
+    max_project_config_from_files,
+    render_max_history_files,
     render_max_managed_files,
+    render_max_restored_files,
     render_max_starter_files,
 )
 
@@ -56,6 +60,84 @@ def test_max_config_normalises_features() -> None:
     assert _config().features == ["Каталог", "Баллы"]
 
 
+def test_history_renderer_keeps_product_files_but_drops_managed_core() -> None:
+    assert max_history_product_files(
+        {
+            "src/app/page.tsx": "export default function Page() {}",
+            "src/app/layout.tsx": "old insecure layout",
+            "src/lib/max/session.ts": "old live auth",
+            "src/lib/omnia/legacy-control.ts": "old platform helper",
+            "src/app/api/orders/route.ts": "old arbitrary api",
+            "src/app/api/custom/score/route.ts": "isolated product api",
+            "src/middleware.ts": "old middleware",
+            "src/instrumentation.ts": "old instrumentation",
+            "public/omnia-inspector.js": "old inspector",
+            "docker-entrypoint.sh": "old entrypoint",
+            "next.config.ts": "old config",
+            "scripts/rewrite-runtime.sh": "old script",
+            "../escape.ts": "nope",
+        }
+    ) == {
+        "src/app/page.tsx": "export default function Page() {}",
+        "src/app/api/custom/score/route.ts": "isolated product api",
+    }
+
+    runtime_files = render_max_history_files(
+        {
+            "src/app/page.tsx": "historical product",
+            "src/lib/max/session.ts": "old live auth",
+        },
+        _config(),
+        "00000000-0000-0000-0000-000000000001",
+    )
+    assert runtime_files["src/app/page.tsx"] == "historical product"
+    assert runtime_files["src/lib/max/session.ts"] != "old live auth"
+    assert runtime_files["public/omnia-inspector.js"] != "old inspector"
+    assert "Кофе" in runtime_files["src/lib/omnia/max-config.ts"]
+
+
+def test_history_renderer_uses_config_committed_with_snapshot() -> None:
+    historical = _config().model_copy(update={"app_name": "Исторический бренд"})
+    source = render_max_managed_files(historical)["src/lib/omnia/max-config.ts"]
+
+    parsed = max_project_config_from_files({"src/lib/omnia/max-config.ts": source})
+
+    assert parsed is not None
+    assert parsed.app_name == "Исторический бренд"
+    assert max_project_config_from_files({"src/lib/omnia/max-config.ts": "invalid"}) is None
+
+
+def test_max_restore_combines_historical_product_with_current_platform() -> None:
+    restored = render_max_restored_files(
+        {
+            "src/app/page.tsx": "historical page",
+            "docker-entrypoint.sh": "historical entrypoint",
+            "src/middleware.ts": "historical middleware",
+        },
+        {
+            "src/app/page.tsx": "current page",
+            "docker-entrypoint.sh": "current entrypoint",
+            "next.config.ts": "current next config",
+            "src/middleware.ts": "current untrusted middleware",
+            "src/instrumentation.ts": "current untrusted instrumentation",
+            "src/app/api/private/route.ts": "current untrusted api",
+        },
+        _config(),
+        "00000000-0000-0000-0000-000000000001",
+    )
+
+    assert restored["src/app/page.tsx"] == "historical page"
+    assert restored["docker-entrypoint.sh"] != "current entrypoint"
+    assert restored["next.config.ts"] != "current next config"
+    assert restored["docker-entrypoint.sh"] == max_project_kit_svc._template_file(
+        "docker-entrypoint.sh"
+    )
+    assert restored["next.config.ts"] == max_project_kit_svc._template_file("next.config.ts")
+    assert "src/middleware.ts" not in restored
+    assert "src/instrumentation.ts" not in restored
+    assert "src/app/api/private/route.ts" not in restored
+
+
 def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     project_id = uuid4()
     files = render_max_managed_files(_config(), project_id)
@@ -64,6 +146,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "package.json",
         "pnpm-lock.yaml",
         "postcss.config.mjs",
+        "public/omnia-inspector.js",
         "src/app/layout.tsx",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",

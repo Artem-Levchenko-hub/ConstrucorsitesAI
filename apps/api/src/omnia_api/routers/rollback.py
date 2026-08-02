@@ -9,11 +9,19 @@ from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
+from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.schemas.snapshot import RollbackRequest, SnapshotPublic
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.max_project_kit import (
+    MAX_MANAGED_KIT_VERSION,
+    default_max_project_config,
+    max_project_config_from_files,
+    render_max_restored_files,
+)
 from omnia_api.services.queue import enqueue_preview
 
 router = APIRouter(prefix="/api/projects", tags=["rollback"])
@@ -81,8 +89,38 @@ async def post_rollback(
     if project.current_snapshot_id is not None:
         _cur = await session.get(Snapshot, project.current_snapshot_id)
         old_sha = _cur.commit_sha if _cur is not None else None
+    old_files = await asyncio.to_thread(repo_svc.read_files, project_id, old_sha) if old_sha else {}
 
     new_sha = await asyncio.to_thread(repo_svc.checkout, project_id, target.commit_sha)
+    target_files = await asyncio.to_thread(repo_svc.read_files, project_id, new_sha)
+    record: MaxProjectConfig | None = None
+    restored_config = None
+    if project.template == "max_miniapp":
+        record = await session.get(MaxProjectConfig, project_id)
+        historical_config = max_project_config_from_files(target_files)
+        fallback_config = max_project_config_from_files(old_files) or (
+            MaxProjectConfigPayload.model_validate(record.config)
+            if record is not None
+            else default_max_project_config(project.name)
+        )
+        restored_config = historical_config or fallback_config
+        restored_tree = render_max_restored_files(
+            target_files,
+            old_files or target_files,
+            restored_config,
+            project_id,
+        )
+        new_sha = await asyncio.to_thread(
+            repo_svc.commit_files,
+            project_id,
+            with_rollback_deletions(restored_tree, target_files),
+            "Restore MAX product with current platform core",
+            new_sha,
+        )
+        reverted_files = restored_tree
+    else:
+        historical_config = None
+        reverted_files = target_files
 
     # Container apps: push the rolled-back tree into the live dev container so the
     # preview actually reverts (parity with build / edit / style-patch). Without
@@ -92,9 +130,6 @@ async def post_rollback(
     # momentarily-down orchestrator only delays the live revert, never loses it.
     if project.template in _CONTAINER_NEXT:
         try:
-            reverted_files = await asyncio.to_thread(
-                repo_svc.read_files, project_id, new_sha
-            )
             # hot_reload can only add/overwrite — a file CREATED after the target
             # snapshot would survive the rollback inside the container and keep
             # breaking the build (2026-07-08: a failed build's phantom modules
@@ -103,9 +138,7 @@ async def post_rollback(
             # every old-tree path missing from the target tree as "".
             reverted_files = with_rollback_deletions(
                 reverted_files,
-                await asyncio.to_thread(repo_svc.read_files, project_id, old_sha)
-                if old_sha and old_sha != new_sha
-                else {},
+                old_files,
             )
             await orchestrator_client.hot_reload(
                 project_id=project_id,
@@ -127,6 +160,26 @@ async def post_rollback(
     target.is_rollback_target = True
     await session.flush()
     project.current_snapshot_id = new_snapshot.id
+    if project.template == "max_miniapp" and restored_config is not None:
+        config_data = restored_config.model_dump(mode="json")
+        if record is None:
+            record = MaxProjectConfig(
+                project_id=project.id,
+                owner_id=current_user.id,
+                config=config_data,
+                config_version=1,
+                managed_kit_version=MAX_MANAGED_KIT_VERSION,
+            )
+            session.add(record)
+        else:
+            config_data["max_url_attached"] = bool(record.config.get("max_url_attached", False))
+            if historical_config is not None:
+                record.config = config_data
+                record.config_version += 1
+            else:
+                record.config = config_data
+            record.managed_kit_version = MAX_MANAGED_KIT_VERSION
+        record.synced_snapshot_id = new_snapshot.id
     await session.commit()
     await session.refresh(new_snapshot)
 

@@ -79,6 +79,33 @@ class HotReloadRequest(BaseModel):
     files: dict[str, str]
 
 
+class HistoryPreviewRequest(BaseModel):
+    project_id: UUID
+    snapshot_id: UUID
+    files: dict[str, str]
+
+
+class HistoryPreviewResponse(BaseModel):
+    project_id: UUID
+    snapshot_id: UUID
+    container_name: str
+    internal_url: str
+
+
+class HistoryPreviewSessionRequest(BaseModel):
+    project_id: UUID
+    snapshot_id: UUID
+    files: dict[str, str]
+
+
+class HistoryPreviewSessionResponse(BaseModel):
+    project_id: UUID
+    snapshot_id: UUID
+    session_id: UUID
+    bootstrap_url: str
+    expires_at: str
+
+
 class StatusResponse(BaseModel):
     project_id: UUID
     state: RuntimeState

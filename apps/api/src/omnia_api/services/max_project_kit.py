@@ -5,16 +5,22 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 from pathlib import Path
 from uuid import UUID
 
-from omnia_api.schemas.max_studio import MaxProjectConfigPayload
+from omnia_api.schemas.max_studio import (
+    MaxLegal,
+    MaxOperator,
+    MaxProjectConfigPayload,
+    MaxSupport,
+)
 
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 13
+MAX_MANAGED_KIT_VERSION = 14
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 
@@ -112,6 +118,7 @@ def render_max_managed_files(
         "package.json": _template_file("package.json"),
         "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
+        "public/omnia-inspector.js": _template_file("public/omnia-inspector.js"),
         "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
         "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
         "src/components/OmniaCompliance.tsx": _template_file("src/components/OmniaCompliance.tsx"),
@@ -459,9 +466,22 @@ export default function SupportPage() {
 
 MAX_MODEL_LOCKED_FILES = frozenset(
     {
+        "docker-entrypoint.sh",
+        "Dockerfile.dev",
+        "Dockerfile.prod",
+        "drizzle.config.ts",
+        "next-env.d.ts",
+        "next.config.ts",
         "package.json",
         "pnpm-lock.yaml",
         "postcss.config.mjs",
+        "scripts/apply-migrations.mjs",
+        "drizzle/0000_max_core.sql",
+        "drizzle/0001_business_core.sql",
+        "public/omnia-brief-narration.js",
+        "public/omnia-inspector.js",
+        "public/omnia-remix-cta.js",
+        "src/app/api/health/route.ts",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
         "src/app/layout.tsx",
@@ -487,6 +507,140 @@ MAX_MODEL_LOCKED_FILES = frozenset(
         "src/app/support/page.tsx",
     }
 )
+
+_MAX_HISTORY_PRODUCT_ROOTS = (
+    "src/app/",
+    "src/components/",
+    "src/data/",
+    "src/hooks/",
+    "src/lib/",
+    "src/store/",
+    "src/styles/",
+    "src/types/",
+    "public/",
+)
+_MAX_HISTORY_PLATFORM_PREFIXES = (
+    "src/app/api/max/",
+    "src/app/api/omnia/",
+    "src/lib/db/",
+    "src/lib/max/",
+    "src/lib/omnia/",
+)
+# Root/build files are not valid product customisation points.  A restored
+# commit receives this audited subset from the canonical server template;
+# trusting current repo bytes (or their complement) would silently classify a
+# user-modified executable such as ``src/middleware.ts`` as platform core.
+_MAX_RESTORE_TEMPLATE_PLATFORM_FILES = frozenset(
+    {
+        "docker-entrypoint.sh",
+        "Dockerfile.dev",
+        "Dockerfile.prod",
+        "drizzle.config.ts",
+        "next-env.d.ts",
+        "next.config.ts",
+        "tsconfig.json",
+        "drizzle/0000_max_core.sql",
+        "drizzle/0001_business_core.sql",
+        "scripts/apply-migrations.mjs",
+        "public/omnia-brief-narration.js",
+        "public/omnia-remix-cta.js",
+        "src/app/api/health/route.ts",
+    }
+)
+_MAX_CONFIG_MARKER = "export const omniaMaxConfig: OmniaMaxConfig = "
+
+
+def max_history_product_files(files: dict[str, str]) -> dict[str, str]:
+    """Return only snapshot-owned product files for a history renderer.
+
+    Historical product UI is intentionally combined with the current,
+    security-patched MAX runtime baked into the renderer image.  Old commits
+    must therefore never overwrite platform-owned auth, bridge, persistence or
+    dependency files.  ``write_files`` performs its own traversal checks; this
+    normalization makes the ownership boundary explicit before data crosses
+    the orchestrator API.
+    """
+    product: dict[str, str] = {}
+    for raw_path, content in files.items():
+        path = posixpath.normpath(raw_path.replace("\\", "/"))
+        if path.startswith("/") or path == ".." or path.startswith("../"):
+            continue
+        if not path.startswith(_MAX_HISTORY_PRODUCT_ROOTS):
+            continue
+        if path in MAX_MODEL_LOCKED_FILES or path.startswith(_MAX_HISTORY_PLATFORM_PREFIXES):
+            continue
+        if path.startswith("src/app/api/") and not path.startswith("src/app/api/custom/"):
+            continue
+        if path.endswith("/route.ts") and not path.startswith("src/app/api/custom/"):
+            continue
+        if path.startswith("public/") and path.endswith((".js", ".mjs", ".cjs", ".wasm")):
+            continue
+        product[path] = content
+    return product
+
+
+def max_project_config_from_files(
+    files: dict[str, str],
+) -> MaxProjectConfigPayload | None:
+    """Read the immutable business profile committed with a MAX snapshot.
+
+    The config module is generated from JSON, so parsing it avoids executing
+    repository code and makes historical preview/restore match the selected
+    commit instead of today's database row.
+    """
+    source = files.get("src/lib/omnia/max-config.ts")
+    if not source or _MAX_CONFIG_MARKER not in source:
+        return None
+    payload = source.split(_MAX_CONFIG_MARKER, 1)[1].strip()
+    if not payload.endswith(";"):
+        return None
+    try:
+        raw = json.loads(payload[:-1])
+        return MaxProjectConfigPayload.model_validate(raw)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+
+
+def default_max_project_config(app_name: str) -> MaxProjectConfigPayload:
+    """Canonical model-free fallback for MAX projects without a saved profile."""
+    return MaxProjectConfigPayload(
+        app_name=app_name,
+        app_type="custom",
+        summary="Мини-приложение для пользователей MAX",
+        operator=MaxOperator(),
+        support=MaxSupport(),
+        legal=MaxLegal(),
+    )
+
+
+def render_max_history_files(
+    snapshot_files: dict[str, str],
+    config: MaxProjectConfigPayload,
+    project_id: UUID | str,
+) -> dict[str, str]:
+    """Combine historical product UI with today's trusted MAX runtime core."""
+    return {
+        **render_max_managed_files(config, project_id),
+        **max_history_product_files(snapshot_files),
+    }
+
+
+def render_max_restored_files(
+    snapshot_files: dict[str, str],
+    _current_files: dict[str, str],
+    config: MaxProjectConfigPayload,
+    project_id: UUID | str,
+) -> dict[str, str]:
+    """Build a rollback tree with historical product and today's trusted core."""
+    trusted_platform = {
+        path: _template_file(path)
+        for path in _MAX_RESTORE_TEMPLATE_PLATFORM_FILES
+    }
+    return {
+        **trusted_platform,
+        **render_max_history_files(snapshot_files, config, project_id),
+    }
+
 
 MAX_MODEL_DIRECTIVE = """
 MAX PLATFORM CORE CONTRACT

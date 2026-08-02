@@ -28,6 +28,9 @@ describe("MAX live preview surface", () => {
     expect(livePreview).toContain('data-testid="max-live-device-stage"');
     expect(livePreview).not.toContain("0_30px_80px");
     expect(livePreview).toContain("0_12px_28px");
+    expect(livePreview).toContain(
+      "absolute inset-0 size-full object-cover object-top transition-opacity",
+    );
   });
 
   it("celebrates a completed MAX build inside the live preview", () => {
@@ -92,9 +95,11 @@ describe("MAX live preview surface", () => {
   });
 
   it("separates the desktop preview without painting a framing card", () => {
+    expect(workspaceShell).toContain("--max-preview-column");
     expect(workspaceShell).toContain(
-      'className="hidden h-full max-h-full min-h-0 overflow-hidden border-l border-[#d8d4cb] bg-transparent xl:block"',
+      "transition-[transform,opacity,border-color] duration-300",
     );
+    expect(workspaceShell).toContain("motion-reduce:duration-0");
     expect(workspaceShell).toContain(
       'data-testid="max-desktop-preview-column"',
     );

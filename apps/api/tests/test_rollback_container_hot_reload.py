@@ -32,6 +32,7 @@ rollback (best-effort); (4) deletion-aware sync (was strict-xfail, SHIPPED
 ride along as empty-content delete-intents, which write_files turns into `rm -f`
 in the container, so phantom files can't survive a rollback anymore.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,7 +44,9 @@ import pytest
 
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers import rollback as rollback_mod
+from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.schemas.snapshot import RollbackRequest
+from omnia_api.services.max_project_kit import render_max_managed_files
 
 _OWNER = uuid.uuid4()
 _PROJECT_ID = uuid.uuid4()
@@ -58,9 +61,10 @@ class _FakeSession:
     """Minimal async session: get() dispatches by model, mutations are no-ops,
     refresh() stamps created_at so the response/publish path doesn't crash."""
 
-    def __init__(self, project, target_snap):
+    def __init__(self, project, target_snap, max_config=None):
         self._project = project
         self._target = target_snap
+        self._max_config = max_config
         self._added: list = []
         self.committed = False
 
@@ -69,6 +73,8 @@ class _FakeSession:
             return self._project
         if model.__name__ == "Snapshot":
             return self._target if ident == _TARGET_SNAP else None
+        if model.__name__ == "MaxProjectConfig":
+            return self._max_config
         return None
 
     def add(self, obj):  # sync in SQLAlchemy
@@ -114,12 +120,8 @@ def _make_target():
 
 
 def _patch_common(monkeypatch, hot_calls, *, hot_reload_raises=False):
-    monkeypatch.setattr(
-        rollback_mod.repo_svc, "checkout", lambda pid, sha: "rolledbacksha"
-    )
-    monkeypatch.setattr(
-        rollback_mod.repo_svc, "read_files", lambda pid, sha: dict(_REVERTED_FILES)
-    )
+    monkeypatch.setattr(rollback_mod.repo_svc, "checkout", lambda pid, sha: "rolledbacksha")
+    monkeypatch.setattr(rollback_mod.repo_svc, "read_files", lambda pid, sha: dict(_REVERTED_FILES))
 
     async def _hot_reload(*, project_id, slug, files):
         if hot_reload_raises:
@@ -141,9 +143,7 @@ def _run_rollback(project):
     session = _FakeSession(project, _make_target())
     user = SimpleNamespace(id=_OWNER)
     payload = RollbackRequest(snapshot_id=_TARGET_SNAP)
-    result = asyncio.run(
-        rollback_mod.post_rollback(_PROJECT_ID, payload, session, user)
-    )
+    result = asyncio.run(rollback_mod.post_rollback(_PROJECT_ID, payload, session, user))
     return session, result
 
 
@@ -190,6 +190,61 @@ def test_hot_reload_failure_never_blocks_rollback(monkeypatch):
     assert result is not None
 
 
+def test_max_rollback_restores_committed_business_config(monkeypatch):
+    historical = MaxProjectConfigPayload(
+        app_name="Исторический фитнес",
+        app_type="custom",
+        summary="Старая точная версия",
+    )
+    historical_source = render_max_managed_files(historical)["src/lib/omnia/max-config.ts"]
+    files = {
+        **_REVERTED_FILES,
+        "src/lib/omnia/max-config.ts": historical_source,
+    }
+    monkeypatch.setattr(rollback_mod.repo_svc, "checkout", lambda _pid, _sha: "rolledbacksha")
+    monkeypatch.setattr(rollback_mod.repo_svc, "read_files", lambda _pid, _sha: dict(files))
+    monkeypatch.setattr(
+        rollback_mod.repo_svc,
+        "commit_files",
+        lambda _pid, _files, _message, _parent: "restoredsha",
+    )
+    monkeypatch.setattr(
+        rollback_mod.orchestrator_client,
+        "hot_reload",
+        lambda **_kwargs: asyncio.sleep(0, result={"written": len(files)}),
+    )
+    monkeypatch.setattr(rollback_mod, "enqueue_preview", lambda _sid: None)
+    monkeypatch.setattr(rollback_mod, "preview_public_url", lambda _key: None)
+    monkeypatch.setattr(rollback_mod, "publish_event", lambda *_a, **_k: asyncio.sleep(0))
+    record = SimpleNamespace(
+        config={
+            "app_name": "Текущий фитнес",
+            "app_type": "custom",
+            "summary": "Новая версия",
+            "max_url_attached": True,
+        },
+        config_version=7,
+        managed_kit_version=1,
+        synced_snapshot_id=None,
+    )
+    project = _make_project("max_miniapp")
+    session = _FakeSession(project, _make_target(), record)
+
+    asyncio.run(
+        rollback_mod.post_rollback(
+            _PROJECT_ID,
+            RollbackRequest(snapshot_id=_TARGET_SNAP),
+            session,
+            SimpleNamespace(id=_OWNER),
+        )
+    )
+
+    assert record.config["app_name"] == "Исторический фитнес"
+    assert record.config["max_url_attached"] is True
+    assert record.config_version == 8
+    assert record.synced_snapshot_id == project.current_snapshot_id
+
+
 def test_with_rollback_deletions_pure() -> None:
     """Orphans (old-tree-only paths) become delete-intents (""); target content
     always wins over a same-path delete; no old tree → target unchanged."""
@@ -229,9 +284,7 @@ def test_rollback_deletes_files_absent_from_reverted_tree(monkeypatch):
         # pre-rollback tree: same files + an orphan the failed edit created
         return {**_REVERTED_FILES, "src/lib/items.ts": "broken phantom module"}
 
-    monkeypatch.setattr(
-        rollback_mod.repo_svc, "checkout", lambda pid, sha: "rolledbacksha"
-    )
+    monkeypatch.setattr(rollback_mod.repo_svc, "checkout", lambda pid, sha: "rolledbacksha")
     monkeypatch.setattr(rollback_mod.repo_svc, "read_files", _read)
 
     captured: dict = {}

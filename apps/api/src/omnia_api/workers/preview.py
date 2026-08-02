@@ -22,13 +22,22 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from omnia_api.core import minio as minio_core
 from omnia_api.core.config import get_settings
 from omnia_api.core.redis import project_channel
+from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.services import dev_container
+from omnia_api.schemas.max_studio import MaxProjectConfigPayload
+from omnia_api.services import dev_container, orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.max_project_kit import (
+    default_max_project_config,
+    max_project_config_from_files,
+    render_max_history_files,
+)
 
 VIEWPORT: ViewportSize = {"width": 1280, "height": 800}
+MAX_VIEWPORT: ViewportSize = {"width": 390, "height": 844}
 GOTO_TIMEOUT_MS = 15_000
+HISTORY_GOTO_TIMEOUT_MS = 45_000
 
 # Container-backed templates render from a live dev container, not from repo
 # files — their git repo only tracks AI-generated files, no root `index.html`.
@@ -446,12 +455,32 @@ async def capture_diagnostics(
     }
 
 
+async def _goto_history_snapshot(page: Page, url: str) -> None:
+    """Open a just-started history renderer, tolerating its cold compile."""
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            await page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=HISTORY_GOTO_TIMEOUT_MS,
+            )
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2:
+                await page.wait_for_timeout(2_000)
+    if last_error is not None:
+        raise last_error
+
+
 async def _render_async(snapshot_id: str) -> None:
     settings = get_settings()
     sid = UUID(snapshot_id)
 
     engine = create_async_engine(settings.database_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    history_project_id: UUID | None = None
     try:
         async with factory() as session:
             snapshot = await session.get(Snapshot, sid)
@@ -461,6 +490,11 @@ async def _render_async(snapshot_id: str) -> None:
             commit_sha = snapshot.commit_sha
             project = await session.get(Project, project_id)
             template = project.template if project is not None else None
+            max_config_record = (
+                await session.get(MaxProjectConfig, project_id)
+                if template == "max_miniapp"
+                else None
+            )
 
         files = await asyncio.to_thread(repo_svc.read_files, project_id, commit_sha)
 
@@ -476,13 +510,33 @@ async def _render_async(snapshot_id: str) -> None:
         is_container = template in CONTAINER_NEXT
         has_index = "index.html" in files
         if not has_index and not is_container:
-            return
+            raise RuntimeError("snapshot has no renderable index.html")
 
         live_url: str | None = None
         if is_container:
-            live_url = await _resolve_live_url(project_id)
-            if live_url is None:
-                return  # container not running / unreachable — no thumbnail now
+            if template == "max_miniapp":
+                if project is None:
+                    raise RuntimeError("snapshot project is unavailable")
+                fallback_config = (
+                    MaxProjectConfigPayload.model_validate(max_config_record.config)
+                    if max_config_record is not None
+                    else default_max_project_config(project.name)
+                )
+                config = max_project_config_from_files(files) or fallback_config
+                history = await orchestrator_client.start_history_preview(
+                    project_id,
+                    sid,
+                    render_max_history_files(files, config, project_id),
+                )
+                history_project_id = project_id
+                live_url_value = history.get("internal_url")
+                if not isinstance(live_url_value, str) or not live_url_value:
+                    raise RuntimeError("history renderer returned no internal URL")
+                live_url = live_url_value
+            else:
+                live_url = await _resolve_live_url(project_id)
+                if live_url is None:
+                    raise RuntimeError("project runtime is unavailable for preview")
 
         with tempfile.TemporaryDirectory(prefix=f"omnia-preview-{sid}-") as tmp:
             workdir = Path(tmp)
@@ -500,7 +554,8 @@ async def _render_async(snapshot_id: str) -> None:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 try:
-                    page = await browser.new_page(viewport=VIEWPORT, reduced_motion="reduce")
+                    viewport = MAX_VIEWPORT if template == "max_miniapp" else VIEWPORT
+                    page = await browser.new_page(viewport=viewport, reduced_motion="reduce")
                     # Abort unreachable web fonts so the screenshot's font-wait
                     # can't hang → blank white thumbnail (2026-07-18).
                     await _block_external_fonts(page)
@@ -510,11 +565,14 @@ async def _render_async(snapshot_id: str) -> None:
                     # cinematic video effect".
                     if live_url is not None:
                         await _route_media_internal(page)
-                    await page.goto(
-                        target_url,
-                        wait_until="domcontentloaded",
-                        timeout=GOTO_TIMEOUT_MS,
-                    )
+                    if live_url is not None:
+                        await _goto_history_snapshot(page, target_url)
+                    else:
+                        await page.goto(
+                            target_url,
+                            wait_until="domcontentloaded",
+                            timeout=GOTO_TIMEOUT_MS,
+                        )
                     # A live container app paints its shell first, then fetches its
                     # data client-side — wait for that to settle so the thumbnail
                     # shows real content, not the empty skeleton. Static pages
@@ -525,6 +583,8 @@ async def _render_async(snapshot_id: str) -> None:
                     # Same settle as capture(): fonts + images painted + JIT beat,
                     # and reduced_motion so reveal-animated content isn't opacity:0.
                     await _await_paint(page)
+                    if live_url is not None:
+                        await _await_content(page)
                     await page.screenshot(path=str(png_path), full_page=False)
                 finally:
                     await browser.close()
@@ -587,6 +647,13 @@ async def _render_async(snapshot_id: str) -> None:
         finally:
             await r.aclose()
     finally:
+        if history_project_id is not None:
+            try:
+                await orchestrator_client.stop_history_preview(history_project_id, sid)
+            except Exception:
+                # The orchestrator also reaps expired renderers before each start.
+                # Cleanup must never hide a successfully stored screenshot.
+                pass
         await engine.dispose()
 
 

@@ -21,9 +21,7 @@ async def test_resolve_live_url_running_returns_internal_url(monkeypatch) -> Non
         return {"state": "running", "container_name": "omnia-dev-shop-abc123"}
 
     monkeypatch.setattr(dev_container.orchestrator_client, "get_status", fake_status)
-    assert await dev_container.resolve_live_url(pid) == (
-        "http://omnia-dev-shop-abc123:3000"
-    )
+    assert await dev_container.resolve_live_url(pid) == ("http://omnia-dev-shop-abc123:3000")
 
 
 async def test_resolve_live_url_paused_returns_none(monkeypatch) -> None:
@@ -73,9 +71,7 @@ async def test_resolve_live_url_appends_route(monkeypatch) -> None:
         "http://omnia-dev-crm-abc:3000/dashboard"
     )
     # default stays byte-identical to the historical bare URL
-    assert await dev_container.resolve_live_url(uuid4()) == (
-        "http://omnia-dev-crm-abc:3000"
-    )
+    assert await dev_container.resolve_live_url(uuid4()) == ("http://omnia-dev-crm-abc:3000")
 
 
 def test_container_next_matches_messages_router() -> None:
@@ -98,6 +94,32 @@ class _FakePage:
             raise self._raises
 
 
+class _HistoryPage:
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.goto_calls = 0
+        self.wait_calls: list[int] = []
+
+    async def goto(self, url: str, **kwargs: object) -> None:
+        assert url == "http://history:3000"
+        assert kwargs["timeout"] == preview.HISTORY_GOTO_TIMEOUT_MS
+        self.goto_calls += 1
+        if self.goto_calls <= self.failures:
+            raise RuntimeError("cold compile")
+
+    async def wait_for_timeout(self, delay_ms: int) -> None:
+        self.wait_calls.append(delay_ms)
+
+
+async def test_goto_history_snapshot_retries_cold_renderer() -> None:
+    page = _HistoryPage(failures=2)
+    await preview._goto_history_snapshot(  # type: ignore[arg-type]
+        page, "http://history:3000"
+    )
+    assert page.goto_calls == 3
+    assert page.wait_calls == [2000, 2000]
+
+
 async def test_await_container_ready_waits_networkidle() -> None:
     """Container settle waits for networkidle with the bounded budget."""
     page = _FakePage()
@@ -118,6 +140,7 @@ async def test_await_container_ready_swallows_timeout() -> None:
 # resolved <img src="{public_minio}/..."> photos never paint inside chromium →
 # image-less thumbnail / design-judge view even when the deployed page is fine.
 # Fix repoints the in-memory render copy to the internal MinIO endpoint.
+
 
 def test_rewrite_minio_public_to_internal(monkeypatch) -> None:
     """A resolved public MinIO <img src> is repointed to internal minio:9000."""

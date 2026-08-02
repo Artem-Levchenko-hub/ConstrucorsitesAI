@@ -71,6 +71,8 @@ export function MaxLivePreview({
   snapshotsLoading,
   currentSnapshotId,
   selectedSnapshotId,
+  historicalSessionUrl,
+  historicalSessionLoading,
   onSelectSnapshot,
   onRestoreSnapshot,
   restoringSnapshot,
@@ -81,6 +83,8 @@ export function MaxLivePreview({
   snapshotsLoading: boolean;
   currentSnapshotId: string | null;
   selectedSnapshotId: string | null;
+  historicalSessionUrl: string | null;
+  historicalSessionLoading: boolean;
   onSelectSnapshot: (snapshotId: string | null) => void;
   onRestoreSnapshot: (snapshotId: string) => Promise<void>;
   restoringSnapshot: boolean;
@@ -92,11 +96,15 @@ export function MaxLivePreview({
   const started = useRef(false);
   const deviceStage = useRef<HTMLDivElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
+  const historicalPreviewFrame = useRef<HTMLIFrameElement>(null);
   const previousPickIds = useRef<string[]>([]);
   const [deviceScale, setDeviceScale] = useState(0.72);
   const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
   const [loadedPreviewUrl, setLoadedPreviewUrl] = useState<string | null>(null);
   const [inspectorReady, setInspectorReady] = useState(false);
+  const [loadedHistoricalSessionUrl, setLoadedHistoricalSessionUrl] = useState<
+    string | null
+  >(null);
   const [restoreTarget, setRestoreTarget] = useState<{
     snapshotId: string;
     headId: string | null;
@@ -132,6 +140,34 @@ export function MaxLivePreview({
   const restoreTargetVersion = restoreTargetSnapshot
     ? maxSnapshotVersion(snapshots, restoreTargetSnapshot.id)
     : null;
+
+  const historicalSessionReady = Boolean(
+    historicalSessionUrl && loadedHistoricalSessionUrl === historicalSessionUrl,
+  );
+  useEffect(() => {
+    if (!historicalSessionUrl) return;
+    const expectedOrigin = previewTargetOrigin(
+      historicalSessionUrl,
+      window.location.origin,
+    );
+    if (!expectedOrigin) return;
+
+    function onHistoricalReady(event: MessageEvent) {
+      if (
+        event.source !== historicalPreviewFrame.current?.contentWindow ||
+        event.origin !== expectedOrigin
+      ) {
+        return;
+      }
+      const data = event.data as { type?: string } | null;
+      if (data?.type === "omnia:inspect:ready") {
+        setLoadedHistoricalSessionUrl(historicalSessionUrl);
+      }
+    }
+
+    window.addEventListener("message", onHistoricalReady);
+    return () => window.removeEventListener("message", onHistoricalReady);
+  }, [historicalSessionUrl]);
   const postToPreview = useCallback((message: Record<string, unknown>) => {
     const frame = previewFrame.current;
     if (!frame?.contentWindow) return;
@@ -589,28 +625,30 @@ export function MaxLivePreview({
                 <div className="relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}>
                   {viewingHistorical && selectedSnapshot ? (
                     <div
-                      className="absolute inset-0 flex flex-col items-center justify-center bg-[#f5f3ee] px-6 text-center"
+                      className="absolute inset-0 bg-[#f5f3ee]"
                       data-testid="max-historical-snapshot"
                     >
-                      <span className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full border border-[#d8d4cb] bg-[#fcfbf7]/95 px-2.5 py-1 text-[10px] font-medium text-[#6d6962] shadow-sm backdrop-blur">
+                      <span className="absolute left-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-[#d8d4cb] bg-[#fcfbf7]/95 px-2.5 py-1 text-[10px] font-medium text-[#6d6962] shadow-sm backdrop-blur">
                         <GitCommitHorizontal className="size-3 text-accent" />
-                        Снимок v{selectedVersion} · только просмотр
+                        Версия v{selectedVersion} · изолированная сессия
                       </span>
                       {selectedSnapshot.preview_url ? (
-                        <div className="w-full overflow-hidden rounded-[18px] border border-[#d8d4cb] bg-white shadow-[0_14px_38px_rgba(23,23,22,.12)]">
-                          {/* Historical MAX containers cannot be mounted safely
-                              beside the live runtime. The immutable screenshot
-                              is intentionally framed as a snapshot, not a live
-                              interactive app. */}
+                        <div className="absolute inset-0 overflow-hidden bg-white">
+                          {/* The immutable PNG appears immediately. A single
+                              isolated interactive sandbox fades over it only
+                              after the exact historical commit is ready. */}
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={selectedSnapshot.preview_url}
                             alt={`Снимок версии ${selectedVersion}: ${maxSnapshotLabel(selectedSnapshot)}`}
-                            className="aspect-[8/5] w-full object-cover object-top"
+                            className={cn(
+                              "absolute inset-0 size-full object-cover object-top transition-opacity duration-300 ease-out motion-reduce:transition-none",
+                              historicalSessionReady ? "opacity-0" : "opacity-100",
+                            )}
                           />
                         </div>
                       ) : (
-                        <div className="grid aspect-[8/5] w-full place-items-center rounded-[18px] border border-dashed border-[#c8c3b9] bg-[#fcfbf7] px-8">
+                        <div className="grid size-full place-items-center bg-[#fcfbf7] px-8 text-center">
                           <div>
                             <GitCommitHorizontal className="mx-auto size-6 text-[#aaa59b]" />
                             <p className="mt-3 text-[13px] font-medium text-[#171716]">
@@ -622,12 +660,46 @@ export function MaxLivePreview({
                           </div>
                         </div>
                       )}
-                      <p className="mt-5 max-w-[300px] text-[15px] font-semibold leading-5 text-[#171716]">
-                        {maxSnapshotLabel(selectedSnapshot)}
-                      </p>
-                      <p className="mt-1 font-mono text-[10px] text-[#8d887f]">
-                        {shortSha(selectedSnapshot.commit_sha)}
-                      </p>
+                      {historicalSessionUrl && (
+                        <iframe
+                          ref={historicalPreviewFrame}
+                          key={historicalSessionUrl}
+                          src={historicalSessionUrl}
+                          title={`Интерактивная версия ${selectedVersion}`}
+                          className={cn(
+                            "absolute inset-0 size-full border-0 bg-white transition-[opacity,transform] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:transition-none",
+                            historicalSessionReady
+                              ? "pointer-events-auto translate-y-0 opacity-100"
+                              : "pointer-events-none translate-y-1 opacity-0",
+                          )}
+                          allow="clipboard-read; clipboard-write"
+                          referrerPolicy="no-referrer"
+                          data-testid="max-historical-iframe"
+                          onLoad={(event) => {
+                            const frame = event.currentTarget;
+                            const targetOrigin = previewTargetOrigin(
+                              frame.src,
+                              window.location.origin,
+                            );
+                            if (!targetOrigin || !frame.contentWindow) return;
+                            [0, 160, 640, 1_400].forEach((delay) => {
+                              window.setTimeout(() => {
+                                frame.contentWindow?.postMessage(
+                                  { type: "omnia:inspect:ping" },
+                                  targetOrigin,
+                                );
+                              }, delay);
+                            });
+                          }}
+                        />
+                      )}
+                      {(historicalSessionLoading || historicalSessionUrl) &&
+                        !historicalSessionReady && (
+                        <span className="pointer-events-none absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[#d8d4cb] bg-[#fcfbf7]/92 px-2.5 py-1 text-[9px] font-medium text-[#6d6962] shadow-sm backdrop-blur">
+                          <Loader2 className="size-2.5 animate-spin text-accent motion-reduce:animate-none" />
+                          Открываем интерактивную версию
+                        </span>
+                        )}
                     </div>
                   ) : displayPreviewUrl ? (
                     <>

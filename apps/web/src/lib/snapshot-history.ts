@@ -9,6 +9,11 @@ export function upsertSnapshotNewest(
   snapshot: Snapshot,
 ): Snapshot[] {
   const existing = snapshots?.find((item) => item.id === snapshot.id);
+  const nextVersion =
+    Math.max(
+      snapshots?.length ?? 0,
+      ...(snapshots ?? []).map((item) => item.version_number ?? 0),
+    ) + 1;
   const merged = existing
     ? {
         ...existing,
@@ -16,8 +21,13 @@ export function upsertSnapshotNewest(
         // preview.ready can beat the HTTP mutation response. Never downgrade
         // an already enriched cache entry back to the loading placeholder.
         preview_url: snapshot.preview_url ?? existing.preview_url,
+        version_number:
+          snapshot.version_number ?? existing.version_number,
       }
-    : snapshot;
+    : {
+        ...snapshot,
+        version_number: snapshot.version_number ?? nextVersion,
+      };
   return [
     merged,
     ...(snapshots ?? []).filter((item) => item.id !== snapshot.id),

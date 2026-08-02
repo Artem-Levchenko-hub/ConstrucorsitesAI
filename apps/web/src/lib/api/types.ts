@@ -94,6 +94,7 @@ export type Snapshot = {
   preview_url: string | null;
   is_rollback_target: boolean;
   created_at: IsoDateTime;
+  version_number?: number | null;
 };
 
 export type SnapshotWithFiles = Snapshot & {

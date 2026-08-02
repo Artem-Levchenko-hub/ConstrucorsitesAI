@@ -405,9 +405,24 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
 
       if (event.type === "snapshot.created") {
-        qc.setQueryData<Snapshot[]>(["snapshots", projectId], (prev) =>
-          upsertSnapshotNewest(prev, event.data.snapshot),
-        );
+        qc.setQueryData<Snapshot[]>(["snapshots", projectId], (prev) => {
+          const exists = prev?.some(
+            (snapshot) => snapshot.id === event.data.snapshot.id,
+          );
+          const newestVersion = Math.max(
+            0,
+            ...(prev ?? []).map((snapshot) => snapshot.version_number ?? 0),
+          );
+          const snapshot =
+            !exists && event.data.snapshot.version_number == null
+              ? {
+                  ...event.data.snapshot,
+                  version_number: newestVersion + 1,
+                }
+              : event.data.snapshot;
+          return upsertSnapshotNewest(prev, snapshot);
+        });
+        void qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
         // Hot-reload: jump the iframe to the freshly-created HEAD so the
         // user sees their generated site immediately without manually
         // clicking the new card in the timeline. `null` = "show HEAD",

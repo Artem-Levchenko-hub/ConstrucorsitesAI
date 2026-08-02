@@ -161,31 +161,17 @@ async def create_schema(project_id: UUID) -> SchemaCredentials:
     pool = await _get_admin_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            existing = await conn.fetchrow(
-                "SELECT 1 FROM pg_roles WHERE rolname = $1", role_name
-            )
+            existing = await conn.fetchrow("SELECT 1 FROM pg_roles WHERE rolname = $1", role_name)
             if existing is None:
-                await conn.execute(
-                    f"CREATE ROLE {role_q} LOGIN PASSWORD '{password_sql}'"
-                )
+                await conn.execute(f"CREATE ROLE {role_q} LOGIN PASSWORD '{password_sql}'")
             else:
-                await conn.execute(
-                    f"ALTER ROLE {role_q} WITH PASSWORD '{password_sql}'"
-                )
+                await conn.execute(f"ALTER ROLE {role_q} WITH PASSWORD '{password_sql}'")
 
-            await conn.execute(
-                f"CREATE SCHEMA IF NOT EXISTS {schema_q} AUTHORIZATION {role_q}"
-            )
-            await conn.execute(
-                f"GRANT USAGE, CREATE ON SCHEMA {schema_q} TO {role_q}"
-            )
-            admin_path = urlparse(
-                _normalize_admin_dsn(get_settings().database_url)
-            ).path or "/"
+            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_q} AUTHORIZATION {role_q}")
+            await conn.execute(f"GRANT USAGE, CREATE ON SCHEMA {schema_q} TO {role_q}")
+            admin_path = urlparse(_normalize_admin_dsn(get_settings().database_url)).path or "/"
             db_name = admin_path.lstrip("/") or "postgres"
-            await conn.execute(
-                f"GRANT CONNECT ON DATABASE {_quote_ident(db_name)} TO {role_q}"
-            )
+            await conn.execute(f"GRANT CONNECT ON DATABASE {_quote_ident(db_name)} TO {role_q}")
 
     dsn = build_dsn(role_name, password, schema_name)
     _persist_secret(project_id, dsn)
@@ -205,11 +191,27 @@ async def drop_schema(project_id: UUID) -> None:
     role_name = f"proj_{short}_user"
     schema_q = _quote_ident(schema_name)
     role_q = _quote_ident(role_name)
+    admin_path = urlparse(_normalize_admin_dsn(get_settings().database_url)).path or "/"
+    database_q = _quote_ident(admin_path.lstrip("/") or "postgres")
 
     pool = await _get_admin_pool()
     async with pool.acquire() as conn:
+        role_exists = await conn.fetchrow("SELECT 1 FROM pg_roles WHERE rolname = $1", role_name)
+        # History sandboxes are disposable, but a Next.js pool may still hold a
+        # connection for a moment after its container is removed. Terminate
+        # those sessions before revoking the role's database ACL; otherwise
+        # DROP ROLE deterministically fails with dependent privileges.
+        if role_exists is not None:
+            await conn.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE usename = $1 AND pid <> pg_backend_pid()",
+                role_name,
+            )
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema_q} CASCADE")
-        await conn.execute(f"DROP ROLE IF EXISTS {role_q}")
+        if role_exists is not None:
+            await conn.execute(f"REVOKE CONNECT ON DATABASE {database_q} FROM {role_q}")
+            await conn.execute(f"DROP OWNED BY {role_q}")
+            await conn.execute(f"DROP ROLE IF EXISTS {role_q}")
 
     secret_file = Path(get_settings().secrets_root) / str(project_id) / "db.env"
     secret_file.unlink(missing_ok=True)
@@ -351,10 +353,7 @@ async def seed_public_records(
                 await conn.executemany(
                     f"INSERT INTO {schema_q}.records (entity, data, created_by) "
                     f"VALUES ($1, $2::jsonb, $3::uuid)",
-                    [
-                        (entity, json.dumps(r, ensure_ascii=False), demo_user_id)
-                        for r in rows
-                    ],
+                    [(entity, json.dumps(r, ensure_ascii=False), demo_user_id) for r in rows],
                 )
                 inserted[entity] = len(rows)
 

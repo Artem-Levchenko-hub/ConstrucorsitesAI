@@ -16,6 +16,7 @@ class SnapshotPublic(BaseModel):
     preview_url: str | None = Field(default=None, alias="preview_url")
     is_rollback_target: bool
     created_at: datetime
+    version_number: int | None = None
 
 
 class SnapshotWithFiles(SnapshotPublic):

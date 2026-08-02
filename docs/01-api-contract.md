@@ -59,8 +59,11 @@
 | `POST` | `/api/projects/:id/prompt` | `{prompt: string, idempotency_key?: string, model_id?: string, selected_elements?: SelectedElement[]}` | `{run_id, message_id, snapshot_id?, mode, ...}` (snapshot_id появится позже через WS) |
 | `POST` | `/api/projects/:id/generation/cancel` | — | `GenerationRun` со статусом `cancel_requested` (202) |
 | `GET` | `/api/projects/:id/generation` | — | Последний durable `GenerationRun` или `null`; используется для восстановления реального статуса после перезагрузки |
-| `GET` | `/api/projects/:id/snapshots` | — | `Snapshot[]` (DESC по `created_at`) |
+| `GET` | `/api/projects/:id/snapshots` | `?limit=1..100` | `Snapshot[]` (DESC по `created_at`, `version_number` сохраняет абсолютный номер при усечённой истории) |
 | `GET` | `/api/projects/:id/snapshots/:sid` | — | `Snapshot & { files: { [path]: string } }` |
+| `POST` | `/api/projects/:id/snapshots/:sid/preview` | — | `Snapshot` (200 если PNG уже готов, 202 если поставлен в очередь) |
+| `POST` | `/api/projects/:id/snapshots/:sid/session` | — | `{session_id, bootstrap_url, expires_at, ...}` — короткоживущая интерактивная сессия продуктовых файлов commit на актуальном MAX core; БД, auth и env изолированы и удаляются по TTL |
+| `DELETE` | `/api/projects/:id/snapshots/:sid/session` | `?session_id=<uuid>` | 204, закрывает только указанное поколение временной сессии без изменения HEAD |
 | `POST` | `/api/projects/:id/rollback` | `{snapshot_id}` | `Snapshot` (новый — результат отката) |
 | `GET` | `/api/projects/:id/messages` | `?limit=50&before=<msg_id>` | `Message[]` |
 

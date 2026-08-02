@@ -5,7 +5,8 @@ from __future__ import annotations
 from uuid import UUID
 
 import redis as sync_redis
-from rq import Queue
+from rq import Queue, Retry
+from rq.job import JobStatus
 
 from omnia_api.core.config import get_settings
 
@@ -29,8 +30,39 @@ def get_preview_queue() -> Queue:
     return Queue(QUEUE_NAME, connection=_connection())
 
 
-def enqueue_preview(snapshot_id: UUID) -> None:
-    get_preview_queue().enqueue(PREVIEW_JOB, str(snapshot_id), job_timeout=60)
+def enqueue_preview(snapshot_id: UUID) -> bool:
+    """Queue one exact snapshot render, deduplicated by its RQ lifecycle."""
+    connection = _connection()
+    enqueue_lock = f"omnia:preview:enqueue:{snapshot_id}"
+    if not connection.set(enqueue_lock, "1", nx=True, ex=30):
+        return False
+    try:
+        queue = Queue(QUEUE_NAME, connection=connection)
+        job_id = f"snapshot-preview-{snapshot_id}"
+        existing = queue.fetch_job(job_id)
+        active = {
+            JobStatus.QUEUED,
+            JobStatus.STARTED,
+            JobStatus.DEFERRED,
+            JobStatus.SCHEDULED,
+        }
+        if existing is not None and existing.get_status(refresh=True) in active:
+            return False
+        if existing is not None:
+            existing.delete()
+        queue.enqueue(
+            PREVIEW_JOB,
+            str(snapshot_id),
+            job_id=job_id,
+            job_timeout=240,
+            retry=Retry(max=2, interval=[10, 30]),
+            failure_ttl=86_400,
+        )
+    except Exception:
+        raise
+    finally:
+        connection.delete(enqueue_lock)
+    return True
 
 
 def enqueue_entity_gate(message_id: UUID, project_id: UUID, slug: str) -> None:
