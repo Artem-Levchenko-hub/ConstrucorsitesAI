@@ -12,11 +12,15 @@ import type { SelectedElement } from "@/lib/api/types";
 export type PickedElement = SelectedElement & { id: string };
 
 type InspectorState = {
+  /** MAX editor project that owns the transient selection state. */
+  projectScope: string | null;
   /** Select-mode active — hover/click picking is live in the preview. */
   inspectMode: boolean;
   /** Picks attached to the next prompt, in pick order. */
   selections: PickedElement[];
 
+  scopeToProject: (projectId: string) => void;
+  releaseProjectScope: (projectId: string) => void;
   setInspectMode: (on: boolean) => void;
   toggleInspectMode: () => void;
   addSelection: (el: PickedElement) => void;
@@ -26,9 +30,22 @@ type InspectorState = {
 };
 
 export const useInspectorStore = create<InspectorState>((set) => ({
+  projectScope: null,
   inspectMode: false,
   selections: [],
 
+  scopeToProject: (projectId) =>
+    set((state) =>
+      state.projectScope === projectId
+        ? state
+        : { projectScope: projectId, inspectMode: false, selections: [] },
+    ),
+  releaseProjectScope: (projectId) =>
+    set((state) =>
+      state.projectScope === projectId
+        ? { projectScope: null, inspectMode: false, selections: [] }
+        : state,
+    ),
   setInspectMode: (on) => set({ inspectMode: on }),
   toggleInspectMode: () => set((s) => ({ inspectMode: !s.inspectMode })),
   addSelection: (el) =>

@@ -15,13 +15,17 @@ const usageBreakdown = readFileSync(
   resolve(process.cwd(), "src/components/max/MaxUsageBreakdown.tsx"),
   "utf8",
 );
+const stylePanel = readFileSync(
+  resolve(process.cwd(), "src/components/workspace/StylePanel.tsx"),
+  "utf8",
+);
 
 describe("MAX live preview surface", () => {
   it("keeps the phone on a transparent stage without a grey framing card", () => {
     expect(livePreview).toContain(
       'className="relative flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"',
     );
-    expect(livePreview).not.toContain('bg-[#f5f3ee]');
+    expect(livePreview).toContain('data-testid="max-live-device-stage"');
     expect(livePreview).not.toContain("0_30px_80px");
     expect(livePreview).toContain("0_12px_28px");
   });
@@ -29,6 +33,48 @@ describe("MAX live preview surface", () => {
   it("celebrates a completed MAX build inside the live preview", () => {
     expect(livePreview).toContain("<JoyBurst projectId={project.id}");
     expect(livePreview).toContain("Готово — приложение ожило");
+  });
+
+  it("keeps precise editing behind one progressive-disclosure control", () => {
+    expect(livePreview).toContain('data-testid="max-edit-menu-trigger"');
+    expect(livePreview).toContain('data-testid="max-edit-with-ai"');
+    expect(livePreview).toContain('data-testid="max-edit-manually"');
+    expect(livePreview).toContain("Точечная правка");
+    expect(livePreview).toContain("без расхода ИИ");
+    expect(livePreview).toContain("Цвет и видимость");
+    expect(livePreview).toContain("editorModeMessages(activeEditorMode)");
+    expect(livePreview).toContain(
+      "loadedPreviewUrl !== displayPreviewUrl",
+    );
+    expect(livePreview).toContain("previewTargetOrigin(");
+    expect(livePreview).toContain("<StylePanel");
+    expect(livePreview).toContain("projectId={project.id}");
+    expect(livePreview).toContain("sourceEditing={false}");
+    expect(livePreview).toContain("fontEditing={false}");
+    expect(livePreview).toContain("tokenEditing={false}");
+    expect(livePreview).toContain("post={postToAllProjectPreviews}");
+    expect(livePreview).toContain('frame.dataset.maxPreviewReady = "true"');
+    expect(livePreview).toContain("replayPendingStyles()");
+    expect(livePreview).toContain("closedStylePanel");
+    expect(livePreview).toContain("selectionIdPrefix");
+    expect(livePreview).toContain(
+      "frame.contentWindow.postMessage(message, targetOrigin)",
+    );
+    expect(livePreview).not.toContain('postMessage(message, "*")');
+    expect(stylePanel).toContain(
+      "sourceEditing && selected.editableText",
+    );
+    expect(stylePanel).toContain(
+      "fontEditing && selected.editableText",
+    );
+    expect(stylePanel).toContain("tokenEditing && (");
+    expect(workspaceShell).toContain(
+      "<MaxEditorProjectScope key={project.id} projectId={project.id}>",
+    );
+    expect(workspaceShell).toContain("scopeToProject(projectId)");
+    expect(workspaceShell).toContain("releaseProjectScope(projectId)");
+    expect(workspaceShell).toContain("inspectorScope !== projectId");
+    expect(workspaceShell).toContain("styleScope !== projectId");
   });
 
   it("does not paint a separate desktop preview column", () => {

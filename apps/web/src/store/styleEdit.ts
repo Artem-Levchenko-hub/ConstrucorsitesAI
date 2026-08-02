@@ -43,6 +43,8 @@ export type ElementEdit = {
 };
 
 type StyleEditState = {
+  /** MAX editor project that owns the transient unsaved style state. */
+  projectScope: string | null;
   /** Style-mode active — clicks select an element to recolor / restyle. */
   styleMode: boolean;
   /** The element under edit (null = panel closed). */
@@ -54,6 +56,8 @@ type StyleEditState = {
   /** Unsaved changes exist. */
   dirty: boolean;
 
+  scopeToProject: (projectId: string) => void;
+  releaseProjectScope: (projectId: string) => void;
   setStyleMode: (on: boolean) => void;
   selectElement: (el: StyleSelected) => void;
   setElementProp: (
@@ -70,12 +74,39 @@ type StyleEditState = {
 };
 
 export const useStyleEditStore = create<StyleEditState>((set) => ({
+  projectScope: null,
   styleMode: false,
   selected: null,
   tokens: {},
   elements: {},
   dirty: false,
 
+  scopeToProject: (projectId) =>
+    set((state) =>
+      state.projectScope === projectId
+        ? state
+        : {
+            projectScope: projectId,
+            styleMode: false,
+            selected: null,
+            tokens: {},
+            elements: {},
+            dirty: false,
+          },
+    ),
+  releaseProjectScope: (projectId) =>
+    set((state) =>
+      state.projectScope === projectId
+        ? {
+            projectScope: null,
+            styleMode: false,
+            selected: null,
+            tokens: {},
+            elements: {},
+            dirty: false,
+          }
+        : state,
+    ),
   setStyleMode: (on) =>
     set(on ? { styleMode: true } : { styleMode: false, selected: null }),
   selectElement: (el) => set({ selected: el }),

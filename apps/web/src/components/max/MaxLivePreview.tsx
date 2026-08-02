@@ -1,28 +1,52 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
   Check,
+  ChevronDown,
   CircleAlert,
   ExternalLink,
   Loader2,
+  MousePointer2,
   PanelRightClose,
+  Pencil,
   Play,
   RefreshCw,
   Signal,
+  Sparkles,
   Wifi,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { JoyBurst } from "@/components/workspace/JoyBurst";
+import { StylePanel } from "@/components/workspace/StylePanel";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   createMaxPreviewSession,
   syncMaxManagedKit,
 } from "@/lib/api/max-studio";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import type { Project } from "@/lib/api/types";
+import {
+  editorModeMessages,
+  previewTargetOrigin,
+  type EditorMode,
+} from "@/lib/editor-bridge";
+import { cn } from "@/lib/utils";
+import { useInspectorStore } from "@/store/inspector";
+import { useStyleEditStore } from "@/store/styleEdit";
 
 const SCREEN_WIDTH = 390;
 const SCREEN_HEIGHT = 844;
@@ -39,11 +63,90 @@ export function MaxLivePreview({
   onClose?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const editorInstanceId = useId();
+  const selectionIdPrefix = `${editorInstanceId}|`;
   const started = useRef(false);
   const deviceStage = useRef<HTMLDivElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
+  const previousPickIds = useRef<string[]>([]);
   const [deviceScale, setDeviceScale] = useState(0.72);
   const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
+  const [loadedPreviewUrl, setLoadedPreviewUrl] = useState<string | null>(null);
+  const [inspectorReady, setInspectorReady] = useState(false);
+  const inspectMode = useInspectorStore((state) => state.inspectMode);
+  const setInspectMode = useInspectorStore((state) => state.setInspectMode);
+  const addSelection = useInspectorStore((state) => state.addSelection);
+  const selections = useInspectorStore((state) => state.selections);
+  const styleMode = useStyleEditStore((state) => state.styleMode);
+  const setStyleMode = useStyleEditStore((state) => state.setStyleMode);
+  const styleSelected = useStyleEditStore((state) => state.selected);
+  const activeEditorMode: EditorMode = styleMode
+    ? "style"
+    : inspectMode
+      ? "inspect"
+      : "off";
+  const postToPreview = useCallback((message: Record<string, unknown>) => {
+    const frame = previewFrame.current;
+    if (!frame?.contentWindow) return;
+    const targetOrigin = previewTargetOrigin(frame.src, window.location.origin);
+    if (targetOrigin) frame.contentWindow.postMessage(message, targetOrigin);
+  }, []);
+  const postToAllProjectPreviews = useCallback(
+    (message: Record<string, unknown>) => {
+      document
+        .querySelectorAll<HTMLIFrameElement>(
+          'iframe[data-testid="max-live-iframe"]',
+        )
+        .forEach((frame) => {
+          if (
+            frame.dataset.maxProjectId !== project.id ||
+            frame.dataset.maxPreviewReady !== "true" ||
+            !frame.contentWindow
+          ) {
+            return;
+          }
+          const targetOrigin = previewTargetOrigin(
+            frame.src,
+            window.location.origin,
+          );
+          if (targetOrigin) {
+            frame.contentWindow.postMessage(message, targetOrigin);
+          }
+        });
+    },
+    [project.id],
+  );
+  const syncEditorMode = useCallback(() => {
+    editorModeMessages(activeEditorMode).forEach(postToPreview);
+  }, [activeEditorMode, postToPreview]);
+  const replayPendingStyles = useCallback(() => {
+    const propNames = {
+      color: "color",
+      background_color: "background-color",
+      border_color: "border-color",
+    } as const;
+    const { elements } = useStyleEditStore.getState();
+    Object.entries(elements).forEach(([selector, edit]) => {
+      Object.entries(propNames).forEach(([key, prop]) => {
+        const value = edit[key as keyof typeof propNames];
+        if (!value) return;
+        postToPreview({
+          type: "omnia:style:set",
+          target: "element",
+          selector,
+          prop,
+          value,
+        });
+      });
+    });
+  }, [postToPreview]);
+  const selectEditorMode = useCallback(
+    (mode: EditorMode) => {
+      setStyleMode(mode === "style");
+      setInspectMode(mode === "inspect");
+    },
+    [setInspectMode, setStyleMode],
+  );
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
@@ -111,24 +214,6 @@ export function MaxLivePreview({
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    const syncPreviewChrome = (event: MessageEvent) => {
-      if (
-        event.source !== previewFrame.current?.contentWindow ||
-        event.data?.type !== "omnia:inspect:ready"
-      ) {
-        return;
-      }
-      previewFrame.current?.contentWindow?.postMessage(
-        { type: "omnia:preview:chrome", hideScrollbar: true },
-        "*",
-      );
-    };
-
-    window.addEventListener("message", syncPreviewChrome);
-    return () => window.removeEventListener("message", syncPreviewChrome);
-  }, []);
-
   // A relative same-origin fallback is both correct behind the production
   // reverse proxy and stable across SSR/hydration. Reading window.location
   // during render produced different href values on server and client.
@@ -162,6 +247,148 @@ export function MaxLivePreview({
     { label: "Последняя версия", done: managedKit.isSuccess },
     { label: "Безопасная сессия", done: Boolean(previewUrl) },
   ];
+
+  // Mode changes happen long after the iframe's initial load. Gate the sync by
+  // the URL that actually completed loading so exact-origin postMessage never
+  // targets the temporary about:blank document.
+  useEffect(() => {
+    if (!displayPreviewUrl || loadedPreviewUrl !== displayPreviewUrl) return;
+    syncEditorMode();
+    const retries = [120, 450, 1_100].map((delay) =>
+      window.setTimeout(syncEditorMode, delay),
+    );
+    return () => retries.forEach(window.clearTimeout);
+  }, [displayPreviewUrl, loadedPreviewUrl, syncEditorMode]);
+
+  // One strict message boundary serves both editor paths. AI picks become
+  // commentable chips in the existing MAX composer; manual picks open the
+  // existing no-LLM StylePanel with the element's computed/source metadata.
+  useEffect(() => {
+    function onPreviewMessage(event: MessageEvent) {
+      const frame = previewFrame.current;
+      const frameWindow = frame?.contentWindow;
+      if (!frameWindow || event.source !== frameWindow) return;
+      const expectedOrigin = previewTargetOrigin(
+        frame.src,
+        window.location.origin,
+      );
+      if (!expectedOrigin || event.origin !== expectedOrigin) return;
+
+      const data = event.data as {
+        type?: string;
+        el?: Record<string, unknown>;
+      };
+      if (!data || typeof data.type !== "string") return;
+      if (data.type === "omnia:inspect:ready") {
+        frame.dataset.maxPreviewReady = "true";
+        setInspectorReady(true);
+        postToPreview({ type: "omnia:preview:chrome", hideScrollbar: true });
+        syncEditorMode();
+        replayPendingStyles();
+        return;
+      }
+      if (data.type !== "omnia:pick" || !data.el) return;
+
+      const element = data.el;
+      const selector = String(element.selector ?? "");
+      if (!selector) return;
+      if (useStyleEditStore.getState().styleMode) {
+        useStyleEditStore.getState().selectElement({
+          selector,
+          tag: String(element.tag ?? ""),
+          color: String(element.color ?? ""),
+          backgroundColor: String(element.backgroundColor ?? ""),
+          borderColor: String(element.borderColor ?? ""),
+          fontFamily: String(element.fontFamily ?? ""),
+          src: String(element.src ?? ""),
+          srcs: Array.isArray(element.srcs) ? element.srcs.map(String) : [],
+          editableText: Boolean(element.editableText),
+          editText: String(element.editText ?? ""),
+          textIndex:
+            typeof element.textIndex === "number" ? element.textIndex : 0,
+          outerHTML: String(element.outerHTML ?? ""),
+          htmlIndex:
+            typeof element.htmlIndex === "number" ? element.htmlIndex : 0,
+          prevHTML: String(element.prevHTML ?? ""),
+          prevIndex:
+            typeof element.prevIndex === "number" ? element.prevIndex : 0,
+          nextHTML: String(element.nextHTML ?? ""),
+          nextIndex:
+            typeof element.nextIndex === "number" ? element.nextIndex : 0,
+        });
+        return;
+      }
+
+      const rawId = String(element.id ?? "");
+      if (!rawId) return;
+      const alreadySelected = useInspectorStore
+        .getState()
+        .selections.some((selection) => selection.selector === selector);
+      if (alreadySelected) {
+        postToPreview({ type: "omnia:inspect:remove", id: rawId });
+        return;
+      }
+      const id = `${selectionIdPrefix}${rawId}`;
+      addSelection({
+        id,
+        selector,
+        label: element.label ? String(element.label) : null,
+        text: element.text ? String(element.text) : null,
+        html: element.html ? String(element.html) : null,
+        comment: "",
+      });
+      toast.success("Элемент добавлен в правку", {
+        description:
+          "Опишите изменение в чате — ИИ затронет только выделенное.",
+      });
+    }
+
+    window.addEventListener("message", onPreviewMessage);
+    return () => window.removeEventListener("message", onPreviewMessage);
+  }, [
+    addSelection,
+    postToPreview,
+    replayPendingStyles,
+    selectionIdPrefix,
+    syncEditorMode,
+  ]);
+
+  // The style inspector keeps its selected mark when disabled so it can resume
+  // quickly. MAX deliberately clears that mark when the panel closes or the
+  // user leaves manual mode; otherwise the phone looks editable after editing
+  // has visibly ended.
+  const previousEditorMode = useRef<EditorMode>("off");
+  useEffect(() => {
+    const leftStyleMode =
+      previousEditorMode.current === "style" && activeEditorMode !== "style";
+    const closedStylePanel = activeEditorMode === "style" && !styleSelected;
+    if (leftStyleMode || closedStylePanel) {
+      postToPreview({ type: "omnia:inspect:clear" });
+    }
+    previousEditorMode.current = activeEditorMode;
+  }, [activeEditorMode, postToPreview, styleSelected]);
+
+  // Removing a chip (or sending the prompt) must remove the matching outline in
+  // every mounted MAX preview, including the responsive drawer instance.
+  useEffect(() => {
+    const current = selections
+      .map((selection) => selection.id)
+      .filter((id) => id.startsWith(selectionIdPrefix));
+    const removed = previousPickIds.current.filter(
+      (id) => !current.includes(id),
+    );
+    if (removed.length > 0) {
+      if (current.length === 0) {
+        postToPreview({ type: "omnia:inspect:clear" });
+      } else {
+        removed.forEach((id) => {
+          const rawId = id.slice(selectionIdPrefix.length);
+          postToPreview({ type: "omnia:inspect:remove", id: rawId });
+        });
+      }
+    }
+    previousPickIds.current = current;
+  }, [postToPreview, selectionIdPrefix, selections]);
 
   async function openSeparatePreview() {
     const popup = window.open("about:blank", "_blank");
@@ -212,6 +439,12 @@ export function MaxLivePreview({
             <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#aaa59b]"}`} />
             {connected ? "Подключено" : "Запускается"}
           </span>
+          <MaxEditMenu
+            mode={activeEditorMode}
+            disabled={!displayPreviewUrl}
+            selectionCount={selections.length}
+            onModeChange={selectEditorMode}
+          />
           {onClose && (
             <button
               type="button"
@@ -276,12 +509,23 @@ export function MaxLivePreview({
                       allow="clipboard-read; clipboard-write"
                       referrerPolicy="no-referrer"
                       data-testid="max-live-iframe"
+                      data-max-project-id={project.id}
+                      data-max-preview-ready={
+                        loadedPreviewUrl === displayPreviewUrl && inspectorReady
+                          ? "true"
+                          : "false"
+                      }
                       onLoad={(event) => {
+                        event.currentTarget.dataset.maxPreviewReady = "false";
+                        setInspectorReady(false);
                         if (previewUrl) setLastWorkingUrl(previewUrl);
-                        event.currentTarget.contentWindow?.postMessage(
-                          { type: "omnia:preview:chrome", hideScrollbar: true },
-                          "*",
-                        );
+                        if (displayPreviewUrl) {
+                          setLoadedPreviewUrl(displayPreviewUrl);
+                        }
+                        postToPreview({
+                          type: "omnia:preview:chrome",
+                          hideScrollbar: true,
+                        });
                       }}
                       />
                       {!previewUrl && preparing && (
@@ -381,6 +625,123 @@ export function MaxLivePreview({
           </button>
         </div>
       </div>
+      {styleMode && styleSelected && (
+        <StylePanel
+          projectId={project.id}
+          post={postToAllProjectPreviews}
+          sourceEditing={false}
+          fontEditing={false}
+          tokenEditing={false}
+        />
+      )}
     </aside>
+  );
+}
+
+function MaxEditMenu({
+  mode,
+  disabled,
+  selectionCount,
+  onModeChange,
+}: {
+  mode: EditorMode;
+  disabled: boolean;
+  selectionCount: number;
+  onModeChange: (mode: EditorMode) => void;
+}) {
+  const active = mode !== "off";
+  const label =
+    mode === "inspect" ? "С ИИ" : mode === "style" ? "Вручную" : "Править";
+  const Icon =
+    mode === "inspect" ? Sparkles : mode === "style" ? Pencil : MousePointer2;
+  const selectionLabel =
+    mode === "inspect" && selectionCount > 0
+      ? `, выбрано: ${selectionCount}`
+      : "";
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          data-testid="max-edit-menu-trigger"
+          aria-label={`Режим правки: ${label}${selectionLabel}`}
+          aria-pressed={active}
+          className={cn(
+            "group inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[9px] border px-2.5 text-[10px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f15a38] disabled:cursor-not-allowed disabled:opacity-45",
+            active
+              ? "border-[#f15a38]/35 bg-[#f15a38]/10 text-[#c84528]"
+              : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962] hover:bg-[#f5f3ee] hover:text-[#171716]",
+          )}
+        >
+          <Icon className="size-3.5" />
+          <span>{label}</span>
+          {mode === "inspect" && selectionCount > 0 && (
+            <span className="grid min-w-4 place-items-center rounded-full bg-[#f15a38] px-1 text-[9px] leading-4 text-white">
+              {selectionCount}
+            </span>
+          )}
+          <ChevronDown className="size-3 text-[#8d887f] transition-transform group-data-[state=open]:rotate-180" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        sideOffset={8}
+        className="w-64 border-[#d8d4cb] bg-[#fcfbf7] p-1.5 text-[#171716] shadow-[0_18px_50px_rgba(23,23,22,.16)]"
+        data-testid="max-edit-menu"
+      >
+        <DropdownMenuLabel className="px-2.5 pb-1 pt-1.5 text-[9px] uppercase tracking-[0.14em] text-[#8d887f]">
+          Точечная правка
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={mode}
+          onValueChange={(value) => {
+            if (value === "inspect" || value === "style" || value === "off") {
+              onModeChange(value);
+            }
+          }}
+        >
+          <DropdownMenuRadioItem
+            value="inspect"
+            data-testid="max-edit-with-ai"
+            className="items-start rounded-[8px] py-2.5 pl-8 pr-2.5 focus:bg-[#f5f3ee]"
+          >
+            <Sparkles className="mt-0.5 size-3.5 shrink-0 text-[#f15a38]" />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium">С ИИ</span>
+              <span className="mt-0.5 block text-[10px] leading-4 text-[#8d887f]">
+                Текст, фото, структура и логика — по вашему запросу
+              </span>
+            </span>
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem
+            value="style"
+            data-testid="max-edit-manually"
+            className="items-start rounded-[8px] py-2.5 pl-8 pr-2.5 focus:bg-[#f5f3ee]"
+          >
+            <Pencil className="mt-0.5 size-3.5 shrink-0 text-[#725f4f]" />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium">Вручную</span>
+              <span className="mt-0.5 block text-[10px] leading-4 text-[#8d887f]">
+                Цвет и видимость — без расхода ИИ
+              </span>
+            </span>
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        {active && (
+          <>
+            <DropdownMenuSeparator className="bg-[#e7e3da]" />
+            <DropdownMenuItem
+              onSelect={() => onModeChange("off")}
+              className="rounded-[8px] px-2.5 py-2 text-[11px] text-[#6d6962] focus:bg-[#f5f3ee]"
+            >
+              <X className="size-3.5" />
+              Завершить правку
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

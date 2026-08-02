@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronDown,
@@ -24,12 +24,65 @@ import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
 import { cn } from "@/lib/utils";
+import { useInspectorStore } from "@/store/inspector";
+import { useStyleEditStore } from "@/store/styleEdit";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
 import { MaxProjectNav } from "./MaxProjectNav";
 import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
 
 export function MaxWorkspaceShell({
+  project,
+  email,
+}: {
+  project: Project;
+  email: string;
+}) {
+  return (
+    <MaxEditorProjectScope key={project.id} projectId={project.id}>
+      <MaxWorkspaceContent project={project} email={email} />
+    </MaxEditorProjectScope>
+  );
+}
+
+function MaxEditorProjectScope({
+  projectId,
+  children,
+}: {
+  projectId: string;
+  children: ReactNode;
+}) {
+  const inspectorScope = useInspectorStore((state) => state.projectScope);
+  const styleScope = useStyleEditStore((state) => state.projectScope);
+
+  useEffect(() => {
+    // MAX mounts both a desktop and a drawer preview for one project. This
+    // single keyed boundary scopes their shared stores before either editor is
+    // rendered, and clears transient data on unmount. Selectors can therefore
+    // never cross projects without breaking the two-preview synchronization.
+    useInspectorStore.getState().scopeToProject(projectId);
+    useStyleEditStore.getState().scopeToProject(projectId);
+    return () => {
+      useInspectorStore.getState().releaseProjectScope(projectId);
+      useStyleEditStore.getState().releaseProjectScope(projectId);
+    };
+  }, [projectId]);
+
+  if (inspectorScope !== projectId || styleScope !== projectId) {
+    return (
+      <div
+        className="grid h-full min-h-0 place-items-center bg-[#fcfbf7] text-xs text-[#8d887f]"
+        role="status"
+      >
+        Открываем редактор…
+      </div>
+    );
+  }
+
+  return children;
+}
+
+function MaxWorkspaceContent({
   project,
   email,
 }: {
