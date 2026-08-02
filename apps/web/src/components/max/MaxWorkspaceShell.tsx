@@ -5,19 +5,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   LayoutGrid,
-  LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightOpen,
-  Settings,
   Smartphone,
   X,
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 
-import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { listProjects } from "@/lib/api/projects";
@@ -33,6 +30,7 @@ import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import { cn } from "@/lib/utils";
 import { useInspectorStore } from "@/store/inspector";
 import { useStyleEditStore } from "@/store/styleEdit";
+import { MaxAccountMenu } from "./MaxAccountMenu";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
 import { MaxProjectNav } from "./MaxProjectNav";
@@ -260,14 +258,10 @@ function MaxWorkspaceContent({
         </div>
 
         <div className="shrink-0 border-t border-[#d8d4cb] p-3">
-          <Link href="/account" className="flex min-h-11 min-w-0 items-center gap-2.5 rounded-[8px] p-2 hover:bg-[#f5f3ee]">
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#171716] text-[11px] font-semibold text-white">{email.slice(0, 1).toUpperCase()}</span>
-            <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{email.split("@")[0]}</span><span className="block truncate text-[9px] text-[#8d887f]">{email}</span></span>
-            <Settings className="size-3.5 text-[#8d887f]" />
-          </Link>
-          <form action={logoutAction} className="mt-1">
-            <button type="submit" className="flex min-h-11 w-full items-center gap-2 rounded-[8px] px-2 text-[10px] text-[#8d887f] hover:bg-[#f5f3ee]"><LogOut className="size-3.5" />Выйти</button>
-          </form>
+          <MaxAccountMenu
+            email={email}
+            onNavigate={() => setMobileNavOpen(false)}
+          />
         </div>
       </aside>
 
