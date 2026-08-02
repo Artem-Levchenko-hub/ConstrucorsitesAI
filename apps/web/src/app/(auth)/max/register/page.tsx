@@ -18,14 +18,14 @@ export default async function MaxRegisterPage() {
           <span className="h-5 w-px bg-[#d8d4cb]" />
           <span className="text-sm text-[#6d6962]">MAX Studio</span>
         </div>
-        <Link href="/login?next=/max" className="text-sm text-[#c84528] hover:text-[#171716]">
+        <Link href="/login?next=/max" className="text-sm text-accent hover:text-[#171716]">
           Уже есть аккаунт
         </Link>
       </header>
 
       <div className="mx-auto grid max-w-[1120px] gap-12 py-16 lg:grid-cols-[.85fr_1.15fr] lg:items-center lg:py-24">
         <section>
-          <p className="omnia-kicker text-[#f15a38]">Регистрация владельца</p>
+          <p className="omnia-kicker text-accent">Регистрация владельца</p>
           <h1 className="mt-5 max-w-[520px] text-[44px] font-semibold leading-[1.02] tracking-[-.05em] sm:text-[58px]">
             Сначала аккаунт. Затем приложение.
           </h1>
@@ -40,7 +40,7 @@ export default async function MaxRegisterPage() {
               [Check, "Один бизнес — один бесплатный старт"],
             ].map(([Icon, text]) => {
               const ItemIcon = Icon as typeof Building2;
-              return <p key={String(text)} className="flex items-center gap-3"><ItemIcon className="size-4 text-[#f15a38]" />{String(text)}</p>;
+              return <p key={String(text)} className="flex items-center gap-3"><ItemIcon className="size-4 text-accent" />{String(text)}</p>;
             })}
           </div>
         </section>

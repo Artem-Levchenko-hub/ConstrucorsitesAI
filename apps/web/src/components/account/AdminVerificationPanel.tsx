@@ -133,7 +133,7 @@ export function AdminVerificationPanel() {
 
       {reviews.isLoading ? (
         <div className="grid min-h-[260px] place-items-center">
-          <Loader2 className="size-6 animate-spin text-[#f15a38]" />
+          <Loader2 className="size-6 animate-spin text-accent" />
         </div>
       ) : reviews.isError ? (
         <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-8 text-center">
@@ -165,7 +165,7 @@ export function AdminVerificationPanel() {
             >
               <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex min-w-0 gap-4">
-                  <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]">
+                  <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-[#ece8df] text-accent">
                     <Building2 className="size-5" />
                   </span>
                   <div className="min-w-0">

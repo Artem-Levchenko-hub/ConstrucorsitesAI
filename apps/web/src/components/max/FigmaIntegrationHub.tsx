@@ -197,14 +197,14 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       <section className="mt-8 grid gap-4 lg:grid-cols-[1fr_300px]">
         <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
           <div className="flex items-start gap-4">
-            <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-[#f15a38] text-white"><Sparkles className="size-5" /></span>
+            <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-accent text-white"><Sparkles className="size-5" /></span>
             <div>
-              <p className="omnia-kicker text-[#f15a38]">Рекомендуемый набор</p>
+              <p className="omnia-kicker text-accent">Рекомендуемый набор</p>
               <h2 className="mt-1 text-xl font-semibold">{catalog.data?.recommended_pack?.title ?? "Базовый контур приложения"}</h2>
               <p className="mt-2 text-sm leading-6 text-[#6d6962]">{catalog.data?.recommended_pack?.description ?? "Оплата, CRM, учёт и аналитика для вашего сценария."}</p>
             </div>
           </div>
-          <Button onClick={() => pack.mutate()} disabled={pack.isPending || !catalog.data?.recommended_pack} className="mt-6 min-h-11 bg-[#f15a38] text-white hover:bg-[#d94929]">
+          <Button onClick={() => pack.mutate()} disabled={pack.isPending || !catalog.data?.recommended_pack} className="mt-6 min-h-11 bg-accent text-white hover:bg-accent-hover">
             {pack.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
             Подключить рекомендуемые
           </Button>
@@ -240,7 +240,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
             <span>Сервис</span><span>Возможности</span><span>Статус</span><span />
           </div>
           {catalog.isLoading ? (
-            <div className="grid min-h-[260px] place-items-center"><Loader2 className="size-5 animate-spin text-[#f15a38]" /></div>
+            <div className="grid min-h-[260px] place-items-center"><Loader2 className="size-5 animate-spin text-accent" /></div>
           ) : catalog.isError ? (
             <div className="grid min-h-[260px] place-items-center px-6 py-10 text-center">
               <div className="max-w-[420px]">
@@ -267,7 +267,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                 return (
                   <article key={provider.key} className="grid gap-4 p-5 lg:grid-cols-[1.3fr_1fr_150px_150px] lg:items-center">
                     <div className="flex items-center gap-3">
-                      <span className="grid size-10 shrink-0 place-items-center rounded-[8px] border border-[#d8d4cb] bg-white text-[#f15a38]"><Icon className="size-4" /></span>
+                      <span className="grid size-10 shrink-0 place-items-center rounded-[8px] border border-[#d8d4cb] bg-white text-accent"><Icon className="size-4" /></span>
                       <div><h3 className="text-sm font-semibold">{provider.name}</h3><p className="mt-1 line-clamp-1 text-xs text-[#8d887f]">{provider.description}</p></div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -275,7 +275,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                     </div>
                     <div>
                       {connected ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#248a4b]"><Check className="size-3.5" />Подключено</span>
-                        : reusable ? <span className="text-xs text-[#c84528]">Есть у бизнеса</span>
+                        : reusable ? <span className="text-xs text-accent">Есть у бизнеса</span>
                         : provider.available ? <span className="text-xs text-[#8d887f]">Не подключено</span>
                         : <span className="text-xs text-[#aaa59b]">Готовим</span>}
                     </div>
@@ -315,7 +315,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
           >
             <header className="shrink-0 border-b border-[#d8d4cb] p-5 pr-16 sm:p-6 sm:pr-14">
               <div>
-                <p className="omnia-kicker text-[#f15a38]">Подключение</p>
+                <p className="omnia-kicker text-accent">Подключение</p>
                 <DialogTitle className="mt-2 text-2xl font-semibold text-[#171716]">
                   {selected.name}
                 </DialogTitle>
@@ -326,10 +326,10 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
             </header>
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5 sm:p-6">
               {selected.oauth_available && (
-                <div className="rounded-[10px] border border-[#f15a38]/30 bg-[#f15a38]/[.06] p-4">
+                <div className="rounded-[10px] border border-accent/30 bg-accent/[.06] p-4">
                   <h3 className="text-sm font-semibold">Рекомендуется: вход через {selected.name}</h3>
                   <p className="mt-1 text-xs leading-5 text-[#6d6962]">Откроется официальный кабинет. Пароли и API-ключи вводить в Omnia не потребуется.</p>
-                  <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-[#f15a38] text-white hover:bg-[#d94929]">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
+                  <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-accent text-white hover:bg-accent-hover">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
                 </div>
               )}
               {selected.fields.map((field) => (
@@ -343,7 +343,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
             </div>
             <footer className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#d8d4cb] p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between">
               <a href={selected.docs_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-xs text-[#8d887f]">Документация сервиса</a>
-              {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-[#f15a38] text-white hover:bg-[#d94929]">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
+              {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-accent text-white hover:bg-accent-hover">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
             </footer>
           </DialogContent>
         )}

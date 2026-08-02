@@ -217,7 +217,7 @@ export function AgentTranscript({
         <span
           className={cn(
             "grid size-7 shrink-0 place-items-center rounded-full border border-border-subtle bg-surface-base text-accent",
-            studio && "border-[#f15a38]/18 bg-[#f15a38]/8 text-[#e85232]",
+            studio && "border-accent/18 bg-accent/8 text-accent",
             incomplete && "border-red-500/20 bg-red-500/8 text-red-500",
           )}
         >
@@ -282,7 +282,7 @@ export function AgentTranscript({
                       "block h-1 rounded-full bg-border-subtle transition-[background-color,box-shadow] duration-300",
                       phase.status === "complete" && "bg-emerald-500/55",
                       phase.status === "active" &&
-                        "bg-accent shadow-[0_0_12px_rgba(241,90,56,.32)]",
+                        "bg-accent shadow-[0_0_12px_rgb(71_26_255_/_0.32)]",
                       phase.status === "issue" && "bg-red-500",
                     )}
                   />

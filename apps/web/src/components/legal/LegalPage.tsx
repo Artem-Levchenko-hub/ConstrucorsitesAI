@@ -20,7 +20,7 @@ export function LegalPage({
         </div>
       </header>
       <article className="mx-auto max-w-[720px] px-5 py-16 sm:px-8 sm:py-24">
-        <p className="omnia-kicker text-[#f15a38]">11 / Legal</p>
+        <p className="omnia-kicker text-accent">11 / Legal</p>
         <h1 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[54px]">{title}</h1>
         <p className="mt-4 font-mono text-[10px] uppercase tracking-[.08em] text-[#8d887f]">Редакция от {updated}</p>
         <div className="legal-copy mt-12 space-y-9 border-t border-[#d8d4cb] pt-10 text-[15px] leading-7 text-[#6d6962]">
@@ -28,7 +28,7 @@ export function LegalPage({
         </div>
         <div className="mt-14 border-t border-[#d8d4cb] pt-7 text-sm text-[#8d887f]">
           Вопросы по документу:{" "}
-          <a className="font-medium text-[#c84528]" href="mailto:support@lead-generator.ru">support@lead-generator.ru</a>
+          <a className="font-medium text-accent" href="mailto:support@lead-generator.ru">support@lead-generator.ru</a>
         </div>
       </article>
     </main>

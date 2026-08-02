@@ -167,7 +167,7 @@ function MaxWorkspaceContent({
               const active = item.id === project.id;
               return (
                 <Link key={item.id} href={`/max/${item.id}`} className={`flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs transition ${active ? "bg-[#ece8df] font-medium" : "text-[#6d6962] hover:bg-[#f5f3ee]"}`}>
-                  <Smartphone className={`size-4 ${active ? "text-[#f15a38]" : ""}`} />
+                  <Smartphone className={`size-4 ${active ? "text-accent" : ""}`} />
                   <span className="min-w-0 flex-1 truncate">{item.name}</span>
                   {active && <span className="size-1.5 rounded-full bg-[#248a4b]" />}
                 </Link>
@@ -238,7 +238,7 @@ function MaxWorkspaceContent({
                 <PanelRightOpen className="size-3.5" />
               </button>
             )}
-            <button type="button" onClick={() => setLaunchOpen(true)} className="inline-flex h-11 items-center gap-1.5 rounded-[8px] bg-[#f15a38] px-3 text-xs font-semibold text-white hover:bg-[#d94929] sm:gap-2 sm:px-4">
+            <button type="button" onClick={() => setLaunchOpen(true)} className="inline-flex h-11 items-center gap-1.5 rounded-[8px] bg-accent px-3 text-xs font-semibold text-accent-fg transition-colors hover:bg-accent-hover sm:gap-2 sm:px-4">
               <span className="sm:hidden">Дальше</span>
               <span className="hidden sm:inline">{launchLabel}</span>
               <ChevronDown className="size-3.5" />
@@ -252,7 +252,7 @@ function MaxWorkspaceContent({
           className="flex min-h-14 shrink-0 items-center gap-3 border-b border-[#d8d4cb] bg-[#f5f3ee] px-4 text-left transition-colors hover:bg-[#ece8df] sm:px-5"
           data-testid="max-next-action-bar"
         >
-          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#f15a38] text-[10px] font-semibold text-white">
+          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-accent text-[10px] font-semibold text-accent-fg">
             {readiness.isSuccess
               ? nextStage?.position ?? journey.total
               : "…"}

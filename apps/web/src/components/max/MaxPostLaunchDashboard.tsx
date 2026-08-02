@@ -58,7 +58,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
             </div>
             <h2 className="mt-3 text-2xl font-semibold">{projectName}</h2>
             {url ? (
-              <a href={url} target="_blank" rel="noreferrer" className="mt-2 flex min-w-0 items-center gap-1.5 font-mono text-xs text-[#c84528]"><span className="truncate">{url}</span><ExternalLink className="size-3 shrink-0" /></a>
+              <a href={url} target="_blank" rel="noreferrer" className="mt-2 flex min-w-0 items-center gap-1.5 font-mono text-xs text-accent"><span className="truncate">{url}</span><ExternalLink className="size-3 shrink-0" /></a>
             ) : <p className="mt-2 text-xs text-[#8d887f]">Текущая версия появится по постоянному URL после публикации</p>}
           </div>
           <div className="w-full lg:min-w-[280px] lg:w-auto"><RuntimeButton projectId={projectId} display="compact" /></div>
@@ -86,7 +86,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
           return (
             <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5">
               <div className="flex items-center justify-between">
-                <span className="grid size-9 place-items-center rounded-[8px] bg-[#ece8df]"><ItemIcon className="size-4 text-[#f15a38]" /></span>
+                <span className="grid size-9 place-items-center rounded-[8px] bg-[#ece8df]"><ItemIcon className="size-4 text-accent" /></span>
                 {ok ? <Check className="size-4 text-[#248a4b]" /> : <CircleAlert className="size-4 text-[#e8a127]" />}
               </div>
               <h3 className="mt-5 text-sm font-semibold">{String(title)}</h3>
@@ -127,7 +127,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
               [RotateCcw, "Версии и откат", "Неудачную публикацию можно повторить или вернуть предыдущую."],
             ].map(([Icon, title, copy]) => {
               const ItemIcon = Icon as typeof Clock3;
-              return <div key={String(title)} className="flex gap-3"><ItemIcon className="mt-0.5 size-4 shrink-0 text-[#f15a38]" /><div><p className="font-medium">{String(title)}</p><p className="mt-1 text-xs leading-5 text-[#8d887f]">{String(copy)}</p></div></div>;
+              return <div key={String(title)} className="flex gap-3"><ItemIcon className="mt-0.5 size-4 shrink-0 text-accent" /><div><p className="font-medium">{String(title)}</p><p className="mt-1 text-xs leading-5 text-[#8d887f]">{String(copy)}</p></div></div>;
             })}
           </div>
         </aside>

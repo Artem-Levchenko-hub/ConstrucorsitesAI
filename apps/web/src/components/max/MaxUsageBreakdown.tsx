@@ -25,7 +25,7 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
   return (
     <details className="group relative" data-testid="max-usage-breakdown">
       <summary className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-[8px] border border-[#d8d4cb] bg-white px-2.5 text-[10px] font-semibold text-[#494741] hover:bg-[#f5f3ee] [&::-webkit-details-marker]:hidden">
-        <Coins className="size-3.5 text-[#f15a38]" />
+        <Coins className="size-3.5 text-accent" />
         <span className="hidden sm:inline">Расход</span>
         <span>{usage.isLoading ? "…" : `${rub(current)} ₽`}</span>
       </summary>
@@ -49,7 +49,7 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
               <div key={stage.id} className="rounded-[9px] border border-[#e5e1d8] bg-white p-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="flex min-w-0 items-center gap-2 text-xs font-medium">
-                    {stage.id === "template" ? <Check className="size-3.5 text-[#248a4b]" /> : <Coins className="size-3.5 text-[#f15a38]" />}
+                    {stage.id === "template" ? <Check className="size-3.5 text-[#248a4b]" /> : <Coins className="size-3.5 text-accent" />}
                     <span className="truncate">{stage.label}</span>
                   </span>
                   <strong className="shrink-0 text-xs">{rub(stage.cost_rub)} ₽</strong>

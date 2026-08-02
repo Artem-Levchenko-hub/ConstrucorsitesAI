@@ -72,8 +72,8 @@ export function MaxSectionShell({
           <div className="mx-auto max-w-[1120px]">
             <header className="border-b border-[#d8d4cb] pb-8">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="omnia-kicker text-[#f15a38]">{eyebrow}</p>
-                <Link href={helpHref[active]} className="inline-flex min-h-11 items-center gap-2 text-xs font-medium text-[#6d6962] hover:text-[#c84528]">
+                <p className="omnia-kicker text-accent">{eyebrow}</p>
+                <Link href={helpHref[active]} className="inline-flex min-h-11 items-center gap-2 text-xs font-medium text-[#6d6962] hover:text-accent">
                   <CircleHelp className="size-3.5" />
                   Помощь по этому шагу
                 </Link>

@@ -26,7 +26,7 @@ export function AuthCard({
       <section className="mx-auto flex min-h-[calc(100svh-96px)] max-w-[420px] items-center py-12">
         <div className="w-full">
           <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 shadow-[0_18px_50px_rgba(23,23,22,.06)] sm:p-8">
-            <p className="omnia-kicker text-[#f15a38]">Omnia / аккаунт</p>
+            <p className="omnia-kicker text-accent">Omnia / аккаунт</p>
             <h1 className="mt-4 text-[30px] font-semibold leading-tight tracking-[-.035em]">{title}</h1>
             <p className="mt-2 text-sm leading-6 text-[#6d6962]">{subtitle}</p>
             <div className="mt-7 space-y-6">{children}</div>

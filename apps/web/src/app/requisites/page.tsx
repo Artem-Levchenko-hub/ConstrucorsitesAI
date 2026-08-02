@@ -43,7 +43,7 @@ export default function RequisitesPage() {
           генерация программного кода, публикация и сопутствующие цифровые
           услуги. Актуальные пакеты стоят 490 ₽, 1 490 ₽ и 3 990 ₽. Подробный
           состав и сумма зачисления указаны на странице{" "}
-          <Link className="font-medium text-[#c84528]" href="/pricing">
+          <Link className="font-medium text-accent" href="/pricing">
             «Тарифы»
           </Link>
           .
@@ -62,13 +62,13 @@ export default function RequisitesPage() {
 
       <LegalSection title="Документы">
         <div className="flex flex-col items-start gap-2">
-          <Link className="font-medium text-[#c84528]" href="/legal/offer">
+          <Link className="font-medium text-accent" href="/legal/offer">
             Публичная оферта
           </Link>
-          <Link className="font-medium text-[#c84528]" href="/legal/refunds">
+          <Link className="font-medium text-accent" href="/legal/refunds">
             Оплата и возвраты
           </Link>
-          <Link className="font-medium text-[#c84528]" href="/legal/privacy">
+          <Link className="font-medium text-accent" href="/legal/privacy">
             Политика конфиденциальности
           </Link>
         </div>
@@ -78,7 +78,7 @@ export default function RequisitesPage() {
         <p>
           По вопросам сервиса, документов и платежей:{" "}
           <a
-            className="font-medium text-[#c84528]"
+            className="font-medium text-accent"
             href="mailto:support@lead-generator.ru"
           >
             support@lead-generator.ru
@@ -89,7 +89,7 @@ export default function RequisitesPage() {
           href="https://npd.nalog.ru/check-status/"
           target="_blank"
           rel="noreferrer"
-          className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-[#c84528]"
+          className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-accent"
         >
           Проверить статус самозанятого на сайте ФНС
           <ExternalLink className="size-4" />

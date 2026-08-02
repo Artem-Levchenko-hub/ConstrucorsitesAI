@@ -128,7 +128,7 @@ export function MaxLaunchPanel({
           <span
             className={cn(
               "h-1.5 w-1.5 rounded-full",
-              readiness.data?.ready_to_launch ? "bg-success" : "bg-[#f15a38]",
+              readiness.data?.ready_to_launch ? "bg-success" : "bg-accent",
             )}
           />
           <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8d887f]">Путь до запуска</span>
@@ -167,12 +167,12 @@ export function MaxLaunchPanel({
               aria-valuenow={readinessAvailable ? journey.progress : 0}
               data-testid="max-launch-progress"
               role="progressbar"
-              className="h-full rounded-full bg-[#f15a38] transition-[width]"
+              className="h-full rounded-full bg-accent transition-[width]"
               style={{ width: `${readinessAvailable ? journey.progress : 0}%` }}
             />
           </div>
 
-          <div aria-live="polite" data-testid="max-launch-current-step" className="mt-5 border-l-2 border-[#f15a38]/70 pl-3">
+          <div aria-live="polite" data-testid="max-launch-current-step" className="mt-5 border-l-2 border-accent/70 pl-3">
             <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[#8d887f]">
               {currentStage ? `Этап ${currentStage.position} из ${journey.total}` : "Запуск завершён"}
             </p>
@@ -183,20 +183,20 @@ export function MaxLaunchPanel({
               {nextStepCopy}
             </p>
             {nextItem?.action && (
-              <p className="mt-2 text-[11px] font-semibold text-[#c84528]">
+              <p className="mt-2 text-[11px] font-semibold text-accent">
                 Действие: {nextItem.action}
               </p>
             )}
           </div>
           {currentStage ? (
-            <Button asChild className="mt-4 h-11 w-full bg-[#f15a38] text-white hover:bg-[#d94929]">
+            <Button asChild className="mt-4 h-11 w-full">
               <Link href={currentStage.href}>
                 {currentStage.actionLabel}
                 <ChevronRight className="size-4" />
               </Link>
             </Button>
           ) : (
-            <Button asChild className="mt-4 h-11 w-full bg-[#f15a38] text-white hover:bg-[#d94929]">
+            <Button asChild className="mt-4 h-11 w-full">
               <Link href={`/max/${project.id}/dashboard`}>
                 Открыть управление
                 <ChevronRight className="size-4" />
@@ -215,7 +215,7 @@ export function MaxLaunchPanel({
                 data-testid={`max-launch-step-${step.id}`}
                 className={cn(
                   "flex items-start gap-2.5 rounded-md px-2 py-2 text-[11px]",
-                  step.status === "current" && "bg-[#f15a38]/[.08]",
+                  step.status === "current" && "bg-accent/[.08]",
                 )}
               >
                 <span
@@ -223,7 +223,7 @@ export function MaxLaunchPanel({
                   className={cn(
                     "mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px] font-semibold",
                     step.status === "completed" && "border-success/45 bg-success/10 text-success",
-                    step.status === "current" && "border-[#f15a38] bg-[#f15a38] text-white",
+                    step.status === "current" && "border-accent bg-accent text-accent-fg",
                     step.status === "upcoming" && "border-[#d8d4cb] text-[#8d887f]",
                   )}
                 >
@@ -234,7 +234,7 @@ export function MaxLaunchPanel({
                     {step.label}
                   </span>
                   {step.status === "current" && (
-                    <span className="mt-0.5 block text-[#c84528]">Сейчас: {step.actionLabel}</span>
+                    <span className="mt-0.5 block text-accent">Сейчас: {step.actionLabel}</span>
                   )}
                   {step.status === "upcoming" && <span className="mt-0.5 block text-[#8d887f]">Далее</span>}
                 </span>
@@ -268,7 +268,7 @@ export function MaxLaunchPanel({
           >
             <Link href={`/max/${project.id}/integrations`}>
               <span className="flex items-center gap-2">
-                <Plug className="h-3.5 w-3.5 text-[#f15a38]" />
+                <Plug className="h-3.5 w-3.5 text-accent" />
                 Интеграции
               </span>
               <ChevronRight className="h-3.5 w-3.5 text-[#aaa59b]" />
@@ -312,7 +312,7 @@ export function MaxLaunchPanel({
               rel="noreferrer"
               onClick={openMaxCabinet}
               data-testid="max-open-business-cabinet"
-              className="mt-2 inline-flex min-h-11 items-center gap-1 text-xs font-medium text-[#c84528] hover:underline"
+              className="mt-2 inline-flex min-h-11 items-center gap-1 text-xs font-medium text-accent hover:underline"
             >
               Открыть кабинет MAX
               <ExternalLink className="h-3 w-3" aria-hidden="true" />

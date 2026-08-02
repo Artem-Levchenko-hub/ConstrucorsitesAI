@@ -96,7 +96,7 @@ export function ChatMessage({
             : "bg-surface-overlay border border-border-default",
           studio && "h-8 w-8 border-0",
           studio && isUser && "bg-[#6d6962] text-white",
-          studio && !isUser && "bg-[#ece8df] text-[#f15a38]",
+          studio && !isUser && "bg-[#ece8df] text-accent",
         )}
       >
         {isUser ? (
@@ -120,7 +120,7 @@ export function ChatMessage({
           className={cn(
             "text-sm text-fg-primary leading-6 space-y-2",
             studio && "w-full rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] px-4 py-3.5",
-            studio && isUser && "border-[#f15a38] bg-[#f15a38] text-white",
+            studio && isUser && "border-accent bg-accent text-white",
           )}
         >
           {!isUser && streaming && projectId && (

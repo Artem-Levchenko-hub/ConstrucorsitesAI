@@ -15,7 +15,7 @@ export function AdminAuditPanel() {
   if (audit.isLoading) {
     return (
       <div className="grid min-h-[240px] place-items-center">
-        <Loader2 className="size-6 animate-spin text-[#f15a38]" />
+        <Loader2 className="size-6 animate-spin text-accent" />
       </div>
     );
   }

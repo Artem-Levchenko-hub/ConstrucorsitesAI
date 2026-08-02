@@ -1,11 +1,13 @@
 "use client";
 
+import { useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listProjects } from "@/lib/api/projects";
 import { ProjectCard } from "./ProjectCard";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export function ProjectsList() {
+  const listFocusRef = useRef<HTMLDivElement>(null);
   const { data, isPending, isError } = useQuery({
     queryKey: ["projects"],
     queryFn: listProjects,
@@ -13,7 +15,7 @@ export function ProjectsList() {
 
   if (isPending) {
     return (
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div ref={listFocusRef} tabIndex={-1} aria-label="Список проектов" aria-live="polite" className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {Array.from({ length: 3 }).map((_, i) => (
           <Skeleton key={i} className="h-40" />
         ))}
@@ -23,7 +25,7 @@ export function ProjectsList() {
 
   if (isError) {
     return (
-      <div className="rounded-lg border border-border-default bg-surface-raised p-8 text-center text-fg-secondary">
+      <div ref={listFocusRef} tabIndex={-1} aria-label="Список проектов" aria-live="polite" className="rounded-lg border border-border-default bg-surface-raised p-8 text-center text-fg-secondary">
         Не удалось загрузить проекты. Попробуйте обновить страницу.
       </div>
     );
@@ -31,7 +33,7 @@ export function ProjectsList() {
 
   if (!data || data.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-border-default bg-surface-raised p-12 text-center space-y-3">
+      <div ref={listFocusRef} tabIndex={-1} aria-label="Список проектов" aria-live="polite" className="rounded-lg border border-dashed border-border-default bg-surface-raised p-12 text-center space-y-3">
         <h3 className="text-lg font-medium">Здесь будет ваш первый проект</h3>
         <p className="text-sm text-fg-secondary max-w-md mx-auto">
           Нажмите «Новый проект» сверху и дайте ему название — дальше Omnia
@@ -42,9 +44,9 @@ export function ProjectsList() {
   }
 
   return (
-    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div ref={listFocusRef} tabIndex={-1} aria-label="Список проектов" aria-live="polite" className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {data.map((p) => (
-        <ProjectCard key={p.id} project={p} />
+        <ProjectCard key={p.id} project={p} successFocusRef={listFocusRef} />
       ))}
     </div>
   );

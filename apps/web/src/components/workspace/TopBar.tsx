@@ -186,7 +186,7 @@ export function TopBar({
               aria-label={`${tNav("account")}: ${user.email}`}
             >
               <Avatar className="h-7 w-7 ring-1 ring-white/20">
-                <AvatarFallback className="bg-[#f15a38] font-semibold text-white">
+                <AvatarFallback className="bg-accent font-semibold text-white">
                   {initial}
                 </AvatarFallback>
               </Avatar>

@@ -103,7 +103,7 @@ export function MaxOnboarding({ email }: { email: string }) {
   if (access.isLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
-        <Loader2 className="size-6 animate-spin text-[#f15a38]" />
+        <Loader2 className="size-6 animate-spin text-accent" />
       </div>
     );
   }
@@ -120,7 +120,7 @@ export function MaxOnboarding({ email }: { email: string }) {
   return (
     <main data-light-shell className="max-studio-scroll flex-1 overflow-y-auto bg-[#f5f3ee] px-5 py-10 text-[#171716]">
       <div className="mx-auto max-w-4xl">
-        <p className="omnia-kicker text-[#f15a38]">
+        <p className="omnia-kicker text-accent">
           Настройка владельца
         </p>
         <div className="mt-3 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
@@ -150,7 +150,7 @@ export function MaxOnboarding({ email }: { email: string }) {
                   complete
                     ? "border-[#248a4b]/25 bg-[#248a4b]/[0.06] text-[#248a4b]"
                     : index + 1 === step
-                      ? "border-[#f15a38]/45 bg-[#f15a38]/8"
+                      ? "border-accent/45 bg-accent/8"
                       : "border-[#d8d4cb] text-[#8d887f]",
                 )}
               >
@@ -163,7 +163,7 @@ export function MaxOnboarding({ email }: { email: string }) {
 
         {!data?.email_verified && (
           <section className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
-            <MailCheck className="size-6 text-[#f15a38]" />
+            <MailCheck className="size-6 text-accent" />
             <h2 className="mt-5 text-2xl font-semibold">Подтвердите рабочий email</h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-[#6d6962]">
               Мы отправили ссылку на <span className="text-[#171716]">{email}</span>.
@@ -198,7 +198,7 @@ export function MaxOnboarding({ email }: { email: string }) {
             onSubmit={submit}
             className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8"
           >
-            <UserRoundCheck className="size-6 text-[#f15a38]" />
+            <UserRoundCheck className="size-6 text-accent" />
             <h2 className="mt-5 text-2xl font-semibold">Кто владеет приложением?</h2>
             <p className="mt-2 text-sm text-[#6d6962]">
               Тип должен совпадать с владельцем MAX-бота.
@@ -216,7 +216,7 @@ export function MaxOnboarding({ email }: { email: string }) {
                   className={cn(
                     "rounded-[10px] border p-4 text-left transition",
                     kind === item.id
-                      ? "border-[#f15a38]/60 bg-[#f15a38]/8"
+                      ? "border-accent/60 bg-accent/8"
                       : "border-[#d8d4cb] hover:border-[#aaa59b]",
                   )}
                 >
@@ -281,7 +281,7 @@ export function MaxOnboarding({ email }: { email: string }) {
 
             <Button
               disabled={save.isPending}
-              className="mt-7 h-12 rounded-lg bg-[#f15a38] px-6 text-white hover:bg-[#d94929]"
+              className="mt-7 h-12 rounded-lg bg-accent px-6 text-white hover:bg-accent-hover"
             >
               {save.isPending ? (
                 <Loader2 className="mr-2 size-4 animate-spin" />

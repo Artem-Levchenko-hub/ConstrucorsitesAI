@@ -29,7 +29,7 @@ export default function OpenGraphImage() {
         <div
           style={{
             display: "flex",
-            color: "#f15a38",
+            color: "#471AFF",
             fontSize: 36,
             fontWeight: 700,
             letterSpacing: "-0.02em",

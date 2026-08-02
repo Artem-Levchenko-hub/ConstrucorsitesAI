@@ -122,7 +122,7 @@ export function MaxProjectNav({
           </div>
           <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#d8d4cb]">
             <div
-              className="h-full rounded-full bg-[#f15a38] transition-[width]"
+              className="h-full rounded-full bg-accent transition-[width]"
               style={{ width: `${readiness.isSuccess ? journey.progress : 0}%` }}
             />
           </div>
@@ -149,7 +149,7 @@ export function MaxProjectNav({
                   : "text-[#6d6962] hover:bg-[#f5f3ee] hover:text-[#171716]",
               )}
             >
-              <Icon className={cn("size-4 shrink-0", selected && "text-[#f15a38]")} />
+              <Icon className={cn("size-4 shrink-0", selected && "text-accent")} />
               <span className="min-w-0 flex-1 truncate">{item.label}</span>
               {readiness.isSuccess && stage?.status === "completed" && (
                 <span className="grid size-4 shrink-0 place-items-center rounded-full bg-[#248a4b]/10 text-[#248a4b]">
@@ -158,7 +158,7 @@ export function MaxProjectNav({
               )}
               {readiness.isSuccess && stage?.status === "current" && (
                 <span
-                  className="size-2 shrink-0 rounded-full bg-[#f15a38]"
+                  className="size-2 shrink-0 rounded-full bg-accent"
                   aria-label="Текущий этап"
                 />
               )}

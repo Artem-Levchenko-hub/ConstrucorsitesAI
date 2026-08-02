@@ -145,7 +145,7 @@ export function AccountControlCenter({
 
   return (
     <div className="space-y-6">
-      {(view === "all" || view === "organization") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+      {(view === "all" || view === "organization") && <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
         <div className="flex items-start gap-4">
           <div className="rounded-xl bg-accent/10 p-3 text-accent">
             <Building2 className="size-5" />
@@ -178,13 +178,13 @@ export function AccountControlCenter({
       </section>}
 
       {(view === "all" || view === "plan") && (
-        <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+        <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
           <div className="flex items-start gap-4">
             <div className="rounded-xl bg-accent/10 p-3 text-accent">
               <CreditCard className="size-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="omnia-kicker text-[#f15a38]">Текущий тариф</p>
+              <p className="omnia-kicker text-accent">Текущий тариф</p>
               <h2 className="mt-2 text-2xl font-semibold">
                 {subscription.data?.plan.name ?? "Загрузка…"}
               </h2>
@@ -250,10 +250,10 @@ export function AccountControlCenter({
             </div>
           )}
 
-          <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-[10px] border border-[#d8d4cb] bg-white p-4 text-sm">
+          <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-[10px] border border-border-default bg-surface p-4 text-sm">
             <input
               type="checkbox"
-              className="mt-0.5 size-4 accent-[#f15a38]"
+              className="mt-0.5 size-4 accent-accent"
               checked={autoRenewConsent}
               onChange={(event) => setAutoRenewConsent(event.target.checked)}
             />
@@ -275,8 +275,8 @@ export function AccountControlCenter({
                   key={plan.id}
                   className={`rounded-[12px] border p-5 ${
                     isCurrent
-                      ? "border-[#f15a38] bg-[#fff8f5]"
-                      : "border-[#d8d4cb] bg-white"
+                      ? "border-accent bg-accent/[.06]"
+                      : "border-border-default bg-surface"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -344,7 +344,7 @@ export function AccountControlCenter({
         </section>
       )}
 
-      {(view === "all" || view === "billing" || view === "transactions" || view === "plan") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+      {(view === "all" || view === "billing" || view === "transactions" || view === "plan") && <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
         <div className="flex items-start gap-4">
           <div className="rounded-xl bg-accent/10 p-3 text-accent">
             <ReceiptRussianRuble className="size-5" />
@@ -363,7 +363,7 @@ export function AccountControlCenter({
               type="button"
               disabled={!paymentConfig.data?.enabled || pay.isPending}
               onClick={() => pay.mutate(item.code)}
-              className="rounded-[10px] border border-[#d8d4cb] bg-white p-4 text-left transition hover:border-[#f15a38] disabled:cursor-not-allowed disabled:opacity-45"
+              className="rounded-[10px] border border-border-default bg-surface p-4 text-left transition hover:border-accent disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="block text-sm font-medium">{item.title}</span>
               <span className="mt-2 block text-lg font-semibold">
@@ -403,7 +403,7 @@ export function AccountControlCenter({
         )}
       </section>}
 
-      {(view === "all" || view === "security") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+      {(view === "all" || view === "security") && <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
         <div className="flex items-start gap-4">
           <div className="rounded-xl bg-accent/10 p-3 text-accent">
             <Shield className="size-5" />
@@ -445,19 +445,19 @@ export function AccountControlCenter({
         </div>
       </section>}
 
-      {(view === "all" || view === "profile") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+      {(view === "all" || view === "profile") && <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
         <div className="mb-6 grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-2 block text-xs font-medium text-[#6d6962]" htmlFor="account-email">Рабочий email</label>
-            <Input id="account-email" value={email} readOnly className="border-[#d8d4cb] bg-[#f5f3ee]" />
+            <label className="mb-2 block text-xs font-medium text-fg-secondary" htmlFor="account-email">Рабочий email</label>
+            <Input id="account-email" value={email} readOnly className="border-border-default bg-surface-base" />
           </div>
           <div>
-            <label className="mb-2 block text-xs font-medium text-[#6d6962]" htmlFor="account-role">Роль</label>
-            <Input id="account-role" value="Владелец бизнеса" readOnly className="border-[#d8d4cb] bg-[#f5f3ee]" />
+            <label className="mb-2 block text-xs font-medium text-fg-secondary" htmlFor="account-role">Роль</label>
+            <Input id="account-role" value="Владелец бизнеса" readOnly className="border-border-default bg-surface-base" />
           </div>
         </div>
         <h2 className="font-medium">Данные аккаунта</h2>
-        <p className="mt-1 text-sm text-fg-tertiary">
+        <p className="mt-1 text-sm text-fg-secondary">
           Скачайте машиночитаемую копию профиля, согласий, проектов и операций.
         </p>
         <Button variant="outline" className="mt-4" onClick={downloadData}>
@@ -467,7 +467,7 @@ export function AccountControlCenter({
 
         <div className="mt-6 border-t border-danger/20 pt-6">
           <h3 className="text-sm font-medium text-danger">Удаление аккаунта</h3>
-          <p className="mt-1 text-xs leading-5 text-fg-tertiary">
+          <p className="mt-1 text-xs leading-5 text-fg-secondary">
             Доступ и секреты отзываются сразу. Операционные данные удаляются после
             30-дневного защитного периода; обязательные платёжные документы
             сохраняются установленный законом срок.

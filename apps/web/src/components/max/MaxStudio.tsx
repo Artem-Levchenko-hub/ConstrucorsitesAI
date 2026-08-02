@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
@@ -64,7 +64,7 @@ function StudioNav({ email }: { email: string }) {
         <Link href="/account" className="mt-1 flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[#6d6962] hover:bg-[#f5f3ee]">
           <UserRound className="size-4" /> Аккаунт
         </Link>
-        <Link href="/account?tab=billing" className="mt-1 flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[#6d6962] hover:bg-[#f5f3ee]">
+        <Link href="/billing" className="mt-1 flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[#6d6962] hover:bg-[#f5f3ee]">
           <Clock3 className="size-4" /> Биллинг
         </Link>
       </nav>
@@ -94,6 +94,7 @@ export function MaxStudio({ email }: { email: string }) {
   const [features, setFeatures] = useState<MaxFeature[]>(STARTER_FEATURES);
   const [style, setStyle] = useState<MaxStyleId>("brand");
   const [brandColors, setBrandColors] = useState("");
+  const projectsHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const maxProjects = useMemo(() => {
@@ -194,7 +195,7 @@ export function MaxStudio({ email }: { email: string }) {
             <Link href="/max/start" className="hidden rounded-[8px] px-3 py-2 text-xs text-[#6d6962] hover:bg-[#f5f3ee] sm:inline-flex">
               <CircleHelp className="mr-2 size-3.5" /> Быстрый старт
             </Link>
-            <Button onClick={() => setDialogOpen(true)} className="bg-[#f15a38] text-white hover:bg-[#d94929]">
+            <Button onClick={() => setDialogOpen(true)}>
               <Plus className="size-4" /> Новый проект
             </Button>
           </div>
@@ -204,14 +205,14 @@ export function MaxStudio({ email }: { email: string }) {
           <div className="mx-auto max-w-[1120px]">
             <div className="flex flex-col gap-6 border-b border-[#d8d4cb] pb-8 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <p className="omnia-kicker text-[#f15a38]">Рабочее пространство</p>
-                <h1 className="mt-3 text-[36px] font-semibold tracking-[-.045em] sm:text-[44px]">Мои приложения</h1>
+                <p className="omnia-kicker text-accent">Рабочее пространство</p>
+                <h1 ref={projectsHeadingRef} tabIndex={-1} className="mt-3 text-[36px] font-semibold tracking-[-.045em] sm:text-[44px]">Мои приложения</h1>
                 <p className="mt-2 text-sm text-[#6d6962]">Создание, публикация и управление MAX Mini Apps.</p>
               </div>
               {maxProjects.length > 0 && (
                 <label className="relative w-full sm:w-[260px]">
                   <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#aaa59b]" />
-                  <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" className="h-10 border-[#d8d4cb] bg-[#fcfbf7] pl-9" />
+                  <Input aria-label="Найти проект" name="project-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" className="h-10 border-[#d8d4cb] bg-[#fcfbf7] pl-9" />
                 </label>
               )}
             </div>
@@ -223,10 +224,10 @@ export function MaxStudio({ email }: { email: string }) {
             ) : maxProjects.length === 0 ? (
               <section className="mt-8 grid min-h-[460px] place-items-center rounded-[12px] border border-dashed border-[#c9c4b9] bg-[#fcfbf7] p-8 text-center">
                 <div className="max-w-[430px]">
-                  <span className="mx-auto grid size-12 place-items-center rounded-[10px] bg-[#ece8df] text-[#f15a38]"><FolderKanban className="size-5" /></span>
+                  <span className="mx-auto grid size-12 place-items-center rounded-[10px] bg-accent-subtle text-accent"><FolderKanban className="size-5" /></span>
                   <h2 className="mt-6 text-2xl font-semibold tracking-[-.025em]">Первого проекта ещё нет</h2>
                   <p className="mt-3 text-sm leading-6 text-[#6d6962]">Опишите задачу — Omnia создаст рабочее приложение, а затем проведёт через интеграции, MAX-бота и публикацию.</p>
-                  <Button onClick={() => setDialogOpen(true)} className="mt-7 bg-[#f15a38] text-white hover:bg-[#d94929]">
+                  <Button onClick={() => setDialogOpen(true)} className="mt-7">
                     <Plus className="size-4" /> Создать приложение
                   </Button>
                 </div>
@@ -238,10 +239,11 @@ export function MaxStudio({ email }: { email: string }) {
                     key={project.id}
                     project={project}
                     index={index}
+                    successFocusRef={projectsHeadingRef}
                   />
                 ))}
                 <button onClick={() => setDialogOpen(true)} className="grid min-h-[280px] place-items-center rounded-[12px] border border-dashed border-[#c9c4b9] bg-transparent p-8 text-center hover:bg-[#fcfbf7]">
-                  <span><span className="mx-auto grid size-11 place-items-center rounded-[8px] border border-[#d8d4cb] bg-[#fcfbf7]"><Plus className="size-5 text-[#f15a38]" /></span><span className="mt-4 block text-sm font-semibold">Новый проект</span></span>
+                  <span><span className="mx-auto grid size-11 place-items-center rounded-[8px] border border-border-default bg-surface-raised"><Plus className="size-5 text-accent" /></span><span className="mt-4 block text-sm font-semibold">Новый проект</span></span>
                 </button>
               </div>
             )}
@@ -263,7 +265,7 @@ export function MaxStudio({ email }: { email: string }) {
           >
             <div className="shrink-0 border-b border-[#d8d4cb] px-5 pb-5 pr-16 pt-5 sm:p-6 sm:pr-14">
               <div>
-                <p className="omnia-kicker text-[#f15a38]">Новый MAX-проект</p>
+                <p className="omnia-kicker text-accent">Новый MAX-проект</p>
                 <DialogTitle className="mt-2 text-2xl font-semibold text-[#171716]">
                   Что создаём?
                 </DialogTitle>
@@ -286,8 +288,8 @@ export function MaxStudio({ email }: { email: string }) {
                 <legend className="text-sm font-medium">Тип приложения</legend>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {MAX_APP_TYPES.map((item) => (
-                    <button key={item.id} type="button" onClick={() => setAppType(item.id)} className={cn("rounded-[10px] border p-3 text-left", appType === item.id ? "border-[#f15a38] bg-[#f15a38]/[.06]" : "border-[#d8d4cb] hover:border-[#aaa59b]")}>
-                      <span className="flex items-center justify-between text-sm font-medium">{item.label}{appType === item.id && <Check className="size-4 text-[#f15a38]" />}</span>
+                    <button key={item.id} type="button" onClick={() => setAppType(item.id)} className={cn("rounded-[10px] border p-3 text-left", appType === item.id ? "border-accent bg-accent/[.06]" : "border-border-default hover:border-border-strong")}>
+                      <span className="flex items-center justify-between text-sm font-medium">{item.label}{appType === item.id && <Check className="size-4 text-accent" />}</span>
                       <span className="mt-1 block text-xs leading-5 text-[#8d887f]">{item.description}</span>
                     </button>
                   ))}
@@ -307,7 +309,7 @@ export function MaxStudio({ email }: { email: string }) {
                     <p className="text-sm font-medium">Функции</p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {MAX_FEATURES.map((feature) => (
-                        <button key={feature} type="button" onClick={() => toggleFeature(feature)} className={cn("rounded-full border px-3 py-1.5 text-xs", features.includes(feature) ? "border-[#f15a38] bg-[#f15a38]/[.07] text-[#c84528]" : "border-[#d8d4cb] text-[#6d6962]")}>{feature}</button>
+                        <button key={feature} type="button" onClick={() => toggleFeature(feature)} className={cn("rounded-full border px-3 py-1.5 text-xs", features.includes(feature) ? "border-accent bg-accent/[.07] text-accent" : "border-border-default text-fg-secondary")}>{feature}</button>
                       ))}
                     </div>
                   </div>
@@ -315,11 +317,11 @@ export function MaxStudio({ email }: { email: string }) {
                     <p className="text-sm font-medium">Стиль</p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-3">
                       {MAX_STYLES.map((item) => (
-                        <button key={item.id} type="button" onClick={() => setStyle(item.id)} className={cn("rounded-[8px] border p-3 text-left text-xs", style === item.id ? "border-[#f15a38] bg-[#f15a38]/[.07]" : "border-[#d8d4cb]")}>{item.label}</button>
+                        <button key={item.id} type="button" onClick={() => setStyle(item.id)} className={cn("rounded-[8px] border p-3 text-left text-xs", style === item.id ? "border-accent bg-accent/[.07]" : "border-border-default")}>{item.label}</button>
                       ))}
                     </div>
                   </div>
-                  <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={brandColors} onChange={(event) => setBrandColors(event.target.value)} placeholder="#F15A38, графит, молочный" className="border-[#d8d4cb] bg-white" /></div>
+                  <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={brandColors} onChange={(event) => setBrandColors(event.target.value)} placeholder="Матовый индиго, белый, графит" className="border-[#d8d4cb] bg-white" /></div>
                 </div>
               </details>
             </div>
@@ -328,7 +330,7 @@ export function MaxStudio({ email }: { email: string }) {
               <p className="hidden text-xs text-[#8d887f] sm:block">Генерация начнётся один раз после открытия проекта.</p>
               <div className="flex flex-col-reverse gap-2 sm:ml-auto sm:flex-row">
                 <Button type="button" variant="outline" className="min-h-11" onClick={() => setDialogOpen(false)}>Отмена</Button>
-                <Button disabled={!ready || create.isPending} className="min-h-11 bg-[#f15a38] text-white hover:bg-[#d94929]">
+                <Button disabled={!ready || create.isPending} className="min-h-11">
                   {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                   Создать проект
                 </Button>

@@ -17,15 +17,29 @@
   --color-label-3: #8d887f;
   --color-label-4: #aaa59b;
 
-  --color-accent: #f15a38;
+  /* MAX-aligned matte palette. Official MAX hues remain as brand anchors;
+     product controls use quieter B2B tones derived from that family. */
+  --color-max-brand-blue: #471aff;
+  --color-max-brand-violet: #6e1aff;
+  --color-max-brand-cyan: #00bfff;
+  --color-max-brand-purple: #9500ff;
+  --color-max-blue: #554fc4;
+  --color-max-violet: #756db2;
+  --color-max-cyan: #4e91a6;
+  --color-max-purple: #8064a8;
+  --color-max-ink: #17162c;
+  --color-max-white: #ffffff;
+
+  --color-accent: #554fc4;
   --color-accent-fg: #ffffff;
+  --color-accent-on-dark: #9e99e5;
 
   --color-system-red: #c63d35;
   --color-system-orange: #f59e0b;
   --color-system-yellow: #e8c547;
   --color-system-green: #248a4b;
   --color-system-teal: #3d7c79;
-  --color-system-indigo: #725f4f;
+  --color-system-indigo: #756db2;
 
   --material-ultrathin-bg: rgb(252 251 247 / 0.65);
   --material-thin-bg: rgb(252 251 247 / 0.78);
@@ -58,20 +72,20 @@
   --color-surface-raised: #fcfbf7;
   --color-surface-overlay: #ffffff;
   --color-surface-input: #ffffff;
-  --color-surface-panel-dark: #171716;
+  --color-surface-panel-dark: #17162c;
   --color-surface-glass: rgb(252 251 247 / 0.84);
   --color-border-subtle: #e7e3da;
   --color-border-default: #d8d4cb;
   --color-border-strong: #aaa59b;
-  --color-border-accent: #f15a38;
+  --color-border-accent: #554fc4;
   --color-fg-primary: #171716;
   --color-fg-secondary: #6d6962;
   --color-fg-tertiary: #8d887f;
   --color-fg-muted: #aaa59b;
   --color-fg-on-accent: #ffffff;
-  --color-accent-hover: #d94929;
-  --color-accent-subtle: rgb(241 90 56 / 0.1);
-  --color-accent-secondary: #e8c547;
+  --color-accent-hover: #4742aa;
+  --color-accent-subtle: rgb(85 79 196 / 0.09);
+  --color-accent-secondary: #756db2;
   --color-success: #248a4b;
   --color-warning: #e8c547;
   --color-danger: #c63d35;
@@ -83,7 +97,7 @@
   --color-graphite: #121311;
   --color-muted-ink: #6d6962;
   --color-warm-border: #d8d4cb;
-  --color-publish: #f15a38;
+  --color-publish: #554fc4;
 }
 
 @layer base {
@@ -123,7 +137,7 @@
     --color-surface-raised: #fcfbf7;
     --color-surface-overlay: #ffffff;
     --color-surface-input: #ffffff;
-    --color-surface-panel-dark: #171716;
+    --color-surface-panel-dark: #17162c;
     --color-surface-glass: rgb(252 251 247 / 0.84);
     --color-border-subtle: #e7e3da;
     --color-border-default: #d8d4cb;
@@ -132,10 +146,10 @@
     --color-fg-secondary: #6d6962;
     --color-fg-tertiary: #8d887f;
     --color-fg-muted: #aaa59b;
-    --color-accent: #f15a38;
-    --color-accent-hover: #d94929;
-    --color-accent-subtle: rgb(241 90 56 / 0.1);
-    --color-accent-secondary: #e8c547;
+    --color-accent: #554fc4;
+    --color-accent-hover: #4742aa;
+    --color-accent-subtle: rgb(85 79 196 / 0.09);
+    --color-accent-secondary: #756db2;
     color: var(--color-ink);
     background: var(--color-warm-white);
   }
@@ -144,6 +158,10 @@
     color-scheme: dark;
     color: #fcfbf7;
     background: #171716;
+  }
+
+  [data-graphite-shell] :focus-visible {
+    outline-color: var(--color-accent-on-dark);
   }
 
   ::selection {
@@ -236,14 +254,14 @@
   }
 
   .omnia-button-primary {
-    border: 1px solid #f15a38;
-    background: #f15a38;
+    border: 1px solid var(--color-accent);
+    background: var(--color-accent);
     color: #ffffff;
   }
 
   .omnia-button-primary:hover {
-    border-color: #d94929;
-    background: #d94929;
+    border-color: var(--color-accent-hover);
+    background: var(--color-accent-hover);
   }
 
   .omnia-button-secondary {
@@ -308,7 +326,7 @@
   }
 
   .studio-glow {
-    background: radial-gradient(circle at 50% 0%, rgb(241 90 56 / 0.09), transparent 42%);
+    background: radial-gradient(circle at 50% 0%, rgb(85 79 196 / 0.08), transparent 42%);
   }
 
   .studio-card {
@@ -348,11 +366,11 @@
   }
   .marketing-button:active { transform: translateY(1px); }
   .marketing-button-primary {
-    border-color: #f15a38;
-    background: #f15a38;
+    border-color: var(--color-accent);
+    background: var(--color-accent);
     color: #ffffff;
   }
-  .marketing-button-primary:hover { background: #d94929; }
+  .marketing-button-primary:hover { background: var(--color-accent-hover); }
   .marketing-button-secondary {
     background: #fcfbf7;
     color: #171716;
@@ -413,4 +431,14 @@
     background-clip: padding-box;
   }
 
+}
+
+/* Unlayered on purpose: Tailwind color utilities live in the utilities layer,
+   while graphite surfaces need a brighter accessible foreground token. */
+[data-graphite-shell] .text-accent {
+  color: var(--color-accent-on-dark);
+}
+
+[data-graphite-shell] .border-accent {
+  border-color: var(--color-accent-on-dark);
 }

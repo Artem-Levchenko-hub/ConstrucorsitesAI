@@ -532,7 +532,7 @@ export function MaxLivePreview({
                       {!previewUrl && preparing && (
                         <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7]/95 px-3 py-2 text-left shadow-sm backdrop-blur">
                           <p className="flex items-center gap-2 text-[11px] font-medium text-[#171716]">
-                            <Loader2 className="size-3 animate-spin text-[#f15a38]" />
+                            <Loader2 className="size-3 animate-spin text-accent" />
                             {preparationLabel}
                           </p>
                           <p className="mt-1 text-[9px] text-[#8d887f]">
@@ -549,7 +549,7 @@ export function MaxLivePreview({
                           <button
                             type="button"
                             onClick={retryPreview}
-                            className="mt-1 text-[10px] font-medium text-[#c84528]"
+                            className="mt-1 text-[10px] font-medium text-accent"
                           >
                             Повторить проверку
                           </button>
@@ -559,9 +559,9 @@ export function MaxLivePreview({
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#fcfbf7] px-10 text-center">
                       {preparing ? (
-                        <Loader2 className="size-7 animate-spin text-[#f15a38]" />
+                        <Loader2 className="size-7 animate-spin text-accent" />
                       ) : (
-                        <Play className="size-7 text-[#f15a38]" />
+                        <Play className="size-7 text-accent" />
                       )}
                       <p className="mt-5 text-[15px] font-medium text-[#171716]">
                         {showPreviewError
@@ -613,7 +613,7 @@ export function MaxLivePreview({
             type="button"
             onClick={() => void openSeparatePreview()}
             disabled={!connected || separatePreview.isPending}
-            className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[10px] font-medium text-[#8d887f] transition-colors hover:text-[#c84528] disabled:cursor-not-allowed disabled:opacity-45"
+            className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[10px] font-medium text-[#8d887f] transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
             data-testid="max-open-preview-separate"
             title={connected ? undefined : `Публичный адрес: ${publicUrl}`}
           >
@@ -671,15 +671,15 @@ function MaxEditMenu({
           aria-pressed={active}
           title={active ? `Режим: ${label}` : "Править элементы"}
           className={cn(
-            "relative grid size-11 shrink-0 place-items-center rounded-[9px] border transition-[color,background-color,border-color,transform] duration-150 ease-out active:scale-[.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f15a38] disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100",
+            "relative grid size-11 shrink-0 place-items-center rounded-[9px] border transition-[color,background-color,border-color,transform] duration-150 ease-out active:scale-[.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100",
             active
-              ? "border-[#f15a38]/35 bg-[#f15a38]/10 text-[#c84528]"
+              ? "border-accent/35 bg-accent/10 text-accent"
               : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962] hover:bg-[#f5f3ee] hover:text-[#171716]",
           )}
         >
           <Icon className="size-4" />
           {mode === "inspect" && selectionCount > 0 && (
-            <span className="absolute right-1 top-1 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-[#f15a38] px-0.5 text-[8px] font-semibold leading-none text-white tabular-nums">
+            <span className="absolute right-1 top-1 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-accent px-0.5 text-[8px] font-semibold leading-none text-accent-fg tabular-nums">
               {selectionCount}
             </span>
           )}
@@ -704,7 +704,7 @@ function MaxEditMenu({
             data-testid="max-edit-with-ai"
             className="min-h-11 gap-2 rounded-[8px] py-2 pl-8 pr-2.5 text-xs font-medium focus:bg-[#f5f3ee]"
           >
-            <Sparkles className="size-3.5 shrink-0 text-[#f15a38]" />
+            <Sparkles className="size-3.5 shrink-0 text-accent" />
             Изменить с ИИ
           </DropdownMenuRadioItem>
           <DropdownMenuRadioItem

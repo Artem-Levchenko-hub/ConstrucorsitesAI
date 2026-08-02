@@ -151,7 +151,7 @@ export function MaxSettingsWorkspace({
             <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
             <div className="flex items-start justify-between gap-5">
               <div>
-                <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]"><Bot className="size-5" /></span>
+                <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-accent"><Bot className="size-5" /></span>
                 <h2 className="mt-6 text-2xl font-semibold">Подключение MAX-бота</h2>
                 <p className="mt-3 max-w-[580px] text-sm leading-6 text-[#6d6962]">
                   В само мини-приложение токен не попадает. Он нужен только
@@ -180,7 +180,7 @@ export function MaxSettingsWorkspace({
               target="_blank"
               rel="noreferrer"
               onClick={openMaxCabinet}
-              className="mt-6 inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-[#c84528]"
+              className="mt-6 inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-accent"
             >
               Открыть кабинет MAX
               <ExternalLink className="size-3" />
@@ -232,7 +232,7 @@ export function MaxSettingsWorkspace({
                 </Button>
                 <Button
                   type="button"
-                  className="h-11 bg-[#f15a38] text-white hover:bg-[#d94929]"
+                  className="h-11 bg-accent text-white hover:bg-accent-hover"
                   disabled={!integration.data?.app_url || confirmMaxUrl.isPending}
                   onClick={() => confirmMaxUrl.mutate()}
                 >
@@ -251,7 +251,7 @@ export function MaxSettingsWorkspace({
       {tab === "app" && (
         <section className="mt-6 grid gap-5 lg:grid-cols-[1fr_320px]">
           <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
-            <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]"><FileCheck2 className="size-5" /></span>
+            <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-accent"><FileCheck2 className="size-5" /></span>
             <h2 className="mt-6 text-2xl font-semibold">Данные готового приложения</h2>
             <p className="mt-3 max-w-[620px] text-sm leading-6 text-[#6d6962]">Название, сценарий, функции, стиль, управляемый контент, оператор, поддержка, возрастной рейтинг и обязательные юридические страницы. Эти изменения версионируются без расходов на модель.</p>
             <div className="mt-7 max-w-[260px]"><MaxProjectSetupDialog projectId={projectId} display="panel" emphasized={!config.data?.config.legal.terms_accepted} label="Открыть данные приложения" /></div>
@@ -285,9 +285,9 @@ export function MaxSettingsWorkspace({
           <aside className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
             <p className="omnia-kicker text-[#8d887f]">Безопасность</p>
             <div className="mt-5 space-y-5 text-xs leading-5 text-[#6d6962]">
-              <p className="flex gap-3"><KeyRound className="mt-0.5 size-4 shrink-0 text-[#f15a38]" />Пароль или SSH-ключ шифруется и используется только серверным provisioner.</p>
-              <p className="flex gap-3"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-[#f15a38]" />Перед установкой показываем fingerprint хоста и просим подтвердить его.</p>
-              <p className="flex gap-3"><CircleAlert className="mt-0.5 size-4 shrink-0 text-[#f15a38]" />Сначала проверяем Docker, порт, DNS и права. Деплой не начнётся на неподходящем сервере.</p>
+              <p className="flex gap-3"><KeyRound className="mt-0.5 size-4 shrink-0 text-accent" />Пароль или SSH-ключ шифруется и используется только серверным provisioner.</p>
+              <p className="flex gap-3"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-accent" />Перед установкой показываем fingerprint хоста и просим подтвердить его.</p>
+              <p className="flex gap-3"><CircleAlert className="mt-0.5 size-4 shrink-0 text-accent" />Сначала проверяем Docker, порт, DNS и права. Деплой не начнётся на неподходящем сервере.</p>
             </div>
           </aside>
         </section>

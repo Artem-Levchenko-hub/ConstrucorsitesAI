@@ -75,7 +75,7 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
   if (users.isLoading) {
     return (
       <div className="grid min-h-[280px] place-items-center">
-        <Loader2 className="size-6 animate-spin text-[#f15a38]" />
+        <Loader2 className="size-6 animate-spin text-accent" />
       </div>
     );
   }
@@ -131,7 +131,7 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                     className={cn(
                       "grid size-11 shrink-0 place-items-center rounded-[8px]",
                       user.is_admin
-                        ? "bg-[#f15a38]/10 text-[#f15a38]"
+                        ? "bg-accent/10 text-accent"
                         : "bg-[#ece8df] text-[#6d6962]",
                     )}
                   >
@@ -147,7 +147,7 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                         {user.email}
                       </h2>
                       {user.is_admin && (
-                        <span className="rounded-full bg-[#f15a38]/10 px-2.5 py-1 text-[10px] font-medium text-[#c8472b]">
+                        <span className="rounded-full bg-accent/10 px-2.5 py-1 text-[10px] font-medium text-accent">
                           Администратор
                         </span>
                       )}
