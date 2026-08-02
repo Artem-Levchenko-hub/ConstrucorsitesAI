@@ -15,6 +15,10 @@ const chatPanel = readFileSync(
   resolve(process.cwd(), "src/components/workspace/ChatPanel.tsx"),
   "utf8",
 );
+const globalStyles = readFileSync(
+  resolve(process.cwd(), "src/app/globals.css"),
+  "utf8",
+);
 
 describe("MAX workspace viewport contract", () => {
   it("pins the authenticated application shell to one viewport", () => {
@@ -32,11 +36,33 @@ describe("MAX workspace viewport contract", () => {
       'data-testid="max-navigation-scroll"',
     );
     expect(workspaceShell).toContain(
-      "min-h-0 flex-1 overflow-y-auto overscroll-contain",
+      'data-testid="max-projects-scroll"',
+    );
+    expect(workspaceShell).toContain(
+      "max-projects-scroll mt-2 min-h-20 flex-1 space-y-1 overflow-y-auto overscroll-contain",
+    );
+    expect(workspaceShell).toContain(
+      "max-projects-scroll mt-2 min-h-0 shrink overflow-y-auto overscroll-contain",
     );
     expect(workspaceShell).toContain(
       'className="shrink-0 border-t border-[#d8d4cb] p-3"',
     );
+  });
+
+  it("gives the project switcher a quiet scrollbar without native buttons", () => {
+    expect(globalStyles).toContain(
+      ".max-projects-scroll::-webkit-scrollbar { width: 6px; height: 6px; }",
+    );
+    expect(globalStyles).toContain(
+      ".max-projects-scroll::-webkit-scrollbar-button",
+    );
+    expect(globalStyles).toContain(
+      "@supports selector(::-webkit-scrollbar)",
+    );
+    expect(globalStyles).toContain(
+      "scrollbar-color: rgb(85 79 196 / 0.7) transparent",
+    );
+    expect(globalStyles).toContain("background-clip: content-box");
   });
 
   it("keeps the transcript scrollable and the composer inside the visible row", () => {

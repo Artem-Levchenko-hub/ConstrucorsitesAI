@@ -91,9 +91,12 @@ describe("MAX live preview surface", () => {
     expect(workspaceShell).not.toContain("Превью приложения</p>");
   });
 
-  it("does not paint a separate desktop preview column", () => {
+  it("separates the desktop preview without painting a framing card", () => {
     expect(workspaceShell).toContain(
-      'className="hidden h-full max-h-full min-h-0 overflow-hidden bg-transparent xl:block"',
+      'className="hidden h-full max-h-full min-h-0 overflow-hidden border-l border-[#d8d4cb] bg-transparent xl:block"',
+    );
+    expect(workspaceShell).toContain(
+      'data-testid="max-desktop-preview-column"',
     );
     expect(workspaceShell).toContain(
       'className="relative flex h-full w-full max-w-[460px] flex-col bg-[#fcfbf7]',

@@ -431,6 +431,37 @@
     background-clip: padding-box;
   }
 
+  /* A quiet, dedicated scrollbar for the project switcher. The transparent
+     channel preserves the sidebar rhythm while the 2px thumb stays usable. */
+  .max-projects-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(85 79 196 / 0.7) transparent;
+  }
+  @supports selector(::-webkit-scrollbar) {
+    .max-projects-scroll {
+      scrollbar-width: auto;
+      scrollbar-color: auto;
+    }
+  }
+  .max-projects-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+  .max-projects-scroll::-webkit-scrollbar-track { background: transparent; }
+  .max-projects-scroll::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background: rgb(85 79 196 / 0.7);
+    background-clip: content-box;
+  }
+  .max-projects-scroll:hover::-webkit-scrollbar-thumb {
+    background: rgb(85 79 196 / 0.86);
+    background-clip: content-box;
+  }
+  .max-projects-scroll::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  .max-projects-scroll::-webkit-scrollbar-corner { background: transparent; }
+
 }
 
 /* Unlayered on purpose: Tailwind color utilities live in the utilities layer,

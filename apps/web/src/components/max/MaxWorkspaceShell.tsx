@@ -155,14 +155,18 @@ function MaxWorkspaceContent({
         </div>
 
         <div
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3"
+          className="flex min-h-0 flex-1 flex-col p-3"
           data-testid="max-navigation-scroll"
         >
           <Link href="/max" className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
             <LayoutGrid className="size-4" /> Все проекты
           </Link>
-          <p className="omnia-kicker mt-6 px-3 text-[#aaa59b]">Ваши Mini Apps</p>
-          <nav className="mt-2 space-y-1">
+          <p className="omnia-kicker mt-5 px-3 text-[#aaa59b]">Ваши Mini Apps</p>
+          <nav
+            className="max-projects-scroll mt-2 min-h-20 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1"
+            aria-label="Ваши Mini Apps"
+            data-testid="max-projects-scroll"
+          >
             {maxProjects.map((item) => {
               const active = item.id === project.id;
               return (
@@ -175,8 +179,10 @@ function MaxWorkspaceContent({
             })}
           </nav>
 
-          <p className="omnia-kicker mt-7 px-3 text-[#aaa59b]">Проект</p>
-          <div className="mt-2">
+          <div className="mt-3 shrink-0 border-t border-[#d8d4cb] pt-3">
+            <p className="omnia-kicker px-3 text-[#aaa59b]">Проект</p>
+          </div>
+          <div className="max-projects-scroll mt-2 min-h-0 shrink overflow-y-auto overscroll-contain pr-1">
             <MaxProjectNav projectId={project.id} active="editor" />
           </div>
         </div>
@@ -289,7 +295,10 @@ function MaxWorkspaceContent({
       </section>
 
       {previewPanelVisible && (
-        <div className="hidden h-full max-h-full min-h-0 overflow-hidden bg-transparent xl:block">
+        <div
+          className="hidden h-full max-h-full min-h-0 overflow-hidden border-l border-[#d8d4cb] bg-transparent xl:block"
+          data-testid="max-desktop-preview-column"
+        >
           <MaxLivePreview
             project={project}
             onClose={() => setPreviewPanelVisible(false)}
