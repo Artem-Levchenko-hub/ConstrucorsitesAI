@@ -312,19 +312,11 @@ function MaxWorkspaceContent({
             aria-label="Живое превью приложения"
             data-testid="max-mobile-preview"
           >
-            <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#d8d4cb] px-3 sm:px-5">
-              <p className="text-sm font-semibold">Превью приложения</p>
-              <button
-                type="button"
-                onClick={() => setPreviewOpen(false)}
-                className="grid size-11 place-items-center rounded-[8px] text-[#6d6962] hover:bg-[#ece8df]"
-                aria-label="Закрыть превью"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
             <div className="min-h-0 flex-1">
-              <MaxLivePreview project={project} />
+              <MaxLivePreview
+                project={project}
+                onClose={() => setPreviewOpen(false)}
+              />
             </div>
           </section>
         </div>

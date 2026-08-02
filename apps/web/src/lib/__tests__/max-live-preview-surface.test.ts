@@ -39,9 +39,19 @@ describe("MAX live preview surface", () => {
     expect(livePreview).toContain('data-testid="max-edit-menu-trigger"');
     expect(livePreview).toContain('data-testid="max-edit-with-ai"');
     expect(livePreview).toContain('data-testid="max-edit-manually"');
-    expect(livePreview).toContain("Точечная правка");
-    expect(livePreview).toContain("без расхода ИИ");
-    expect(livePreview).toContain("Цвет и видимость");
+    expect(livePreview).toContain("Изменить с ИИ");
+    expect(livePreview).toContain("Настроить вручную");
+    expect(livePreview).toContain('title={active ? `Режим: ${label}` : "Править элементы"}');
+    expect(livePreview).toContain("relative grid size-11");
+    expect(livePreview).toContain(
+      'className="grid size-11 place-items-center rounded-full',
+    );
+    expect(livePreview).toContain("tabular-nums");
+    expect(livePreview).not.toContain("Точечная правка");
+    expect(livePreview).not.toContain("Текст, фото, структура и логика");
+    expect(livePreview).not.toContain("Цвет и видимость — без расхода ИИ");
+    expect(livePreview).toContain('<h2 className="text-xs font-semibold">Превью</h2>');
+    expect(livePreview).not.toContain("Mobile WebView");
     expect(livePreview).toContain("editorModeMessages(activeEditorMode)");
     expect(livePreview).toContain(
       "loadedPreviewUrl !== displayPreviewUrl",
@@ -75,6 +85,10 @@ describe("MAX live preview surface", () => {
     expect(workspaceShell).toContain("releaseProjectScope(projectId)");
     expect(workspaceShell).toContain("inspectorScope !== projectId");
     expect(workspaceShell).toContain("styleScope !== projectId");
+    expect(workspaceShell).toContain(
+      "onClose={() => setPreviewOpen(false)}",
+    );
+    expect(workspaceShell).not.toContain("Превью приложения</p>");
   });
 
   it("does not paint a separate desktop preview column", () => {

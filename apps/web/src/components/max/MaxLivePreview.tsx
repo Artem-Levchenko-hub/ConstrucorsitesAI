@@ -5,7 +5,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
   Check,
-  ChevronDown,
   CircleAlert,
   ExternalLink,
   Loader2,
@@ -27,7 +26,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -430,14 +428,17 @@ export function MaxLivePreview({
     >
       <JoyBurst projectId={project.id} label="Готово — приложение ожило" />
       <div className="flex shrink-0 items-center justify-between gap-3 px-3 sm:px-5">
-        <div>
-          <p className="omnia-kicker text-[#8d887f]">Mobile WebView</p>
-          <h2 className="mt-1 text-sm font-semibold">Живое превью</h2>
-        </div>
+        <h2 className="text-xs font-semibold">Превью</h2>
         <div className="flex items-center gap-1.5">
-          <span className="inline-flex items-center gap-2 text-[10px] text-[#6d6962]">
+          <span
+            className="grid size-6 place-items-center"
+            aria-label={connected ? "Превью подключено" : "Превью запускается"}
+            title={connected ? "Подключено" : "Запускается"}
+          >
             <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#aaa59b]"}`} />
-            {connected ? "Подключено" : "Запускается"}
+            <span className="sr-only">
+              {connected ? "Подключено" : "Запускается"}
+            </span>
           </span>
           <MaxEditMenu
             mode={activeEditorMode}
@@ -449,7 +450,7 @@ export function MaxLivePreview({
             <button
               type="button"
               onClick={onClose}
-              className="grid size-8 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716]"
+              className="grid size-11 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716]"
               aria-label="Скрыть панель превью"
               title="Скрыть превью"
               data-testid="max-desktop-preview-close"
@@ -668,32 +669,28 @@ function MaxEditMenu({
           data-testid="max-edit-menu-trigger"
           aria-label={`Режим правки: ${label}${selectionLabel}`}
           aria-pressed={active}
+          title={active ? `Режим: ${label}` : "Править элементы"}
           className={cn(
-            "group inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[9px] border px-2.5 text-[10px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f15a38] disabled:cursor-not-allowed disabled:opacity-45",
+            "relative grid size-11 shrink-0 place-items-center rounded-[9px] border transition-[color,background-color,border-color,transform] duration-150 ease-out active:scale-[.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f15a38] disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100",
             active
               ? "border-[#f15a38]/35 bg-[#f15a38]/10 text-[#c84528]"
               : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962] hover:bg-[#f5f3ee] hover:text-[#171716]",
           )}
         >
-          <Icon className="size-3.5" />
-          <span>{label}</span>
+          <Icon className="size-4" />
           {mode === "inspect" && selectionCount > 0 && (
-            <span className="grid min-w-4 place-items-center rounded-full bg-[#f15a38] px-1 text-[9px] leading-4 text-white">
+            <span className="absolute right-1 top-1 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-[#f15a38] px-0.5 text-[8px] font-semibold leading-none text-white tabular-nums">
               {selectionCount}
             </span>
           )}
-          <ChevronDown className="size-3 text-[#8d887f] transition-transform group-data-[state=open]:rotate-180" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
         sideOffset={8}
-        className="w-64 border-[#d8d4cb] bg-[#fcfbf7] p-1.5 text-[#171716] shadow-[0_18px_50px_rgba(23,23,22,.16)]"
+        className="w-52 border-[#d8d4cb] bg-[#fcfbf7] p-1 text-[#171716] shadow-[0_14px_36px_rgba(23,23,22,.14)]"
         data-testid="max-edit-menu"
       >
-        <DropdownMenuLabel className="px-2.5 pb-1 pt-1.5 text-[9px] uppercase tracking-[0.14em] text-[#8d887f]">
-          Точечная правка
-        </DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={mode}
           onValueChange={(value) => {
@@ -705,28 +702,18 @@ function MaxEditMenu({
           <DropdownMenuRadioItem
             value="inspect"
             data-testid="max-edit-with-ai"
-            className="items-start rounded-[8px] py-2.5 pl-8 pr-2.5 focus:bg-[#f5f3ee]"
+            className="min-h-11 gap-2 rounded-[8px] py-2 pl-8 pr-2.5 text-xs font-medium focus:bg-[#f5f3ee]"
           >
-            <Sparkles className="mt-0.5 size-3.5 shrink-0 text-[#f15a38]" />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium">С ИИ</span>
-              <span className="mt-0.5 block text-[10px] leading-4 text-[#8d887f]">
-                Текст, фото, структура и логика — по вашему запросу
-              </span>
-            </span>
+            <Sparkles className="size-3.5 shrink-0 text-[#f15a38]" />
+            Изменить с ИИ
           </DropdownMenuRadioItem>
           <DropdownMenuRadioItem
             value="style"
             data-testid="max-edit-manually"
-            className="items-start rounded-[8px] py-2.5 pl-8 pr-2.5 focus:bg-[#f5f3ee]"
+            className="min-h-11 gap-2 rounded-[8px] py-2 pl-8 pr-2.5 text-xs font-medium focus:bg-[#f5f3ee]"
           >
-            <Pencil className="mt-0.5 size-3.5 shrink-0 text-[#725f4f]" />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium">Вручную</span>
-              <span className="mt-0.5 block text-[10px] leading-4 text-[#8d887f]">
-                Цвет и видимость — без расхода ИИ
-              </span>
-            </span>
+            <Pencil className="size-3.5 shrink-0 text-[#725f4f]" />
+            Настроить вручную
           </DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
         {active && (
@@ -734,10 +721,10 @@ function MaxEditMenu({
             <DropdownMenuSeparator className="bg-[#e7e3da]" />
             <DropdownMenuItem
               onSelect={() => onModeChange("off")}
-              className="rounded-[8px] px-2.5 py-2 text-[11px] text-[#6d6962] focus:bg-[#f5f3ee]"
+              className="min-h-10 rounded-[8px] px-2.5 py-2 text-[11px] text-[#6d6962] focus:bg-[#f5f3ee]"
             >
               <X className="size-3.5" />
-              Завершить правку
+              Готово
             </DropdownMenuItem>
           </>
         )}
