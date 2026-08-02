@@ -24,11 +24,16 @@ import httpx
 import structlog
 from fastapi import APIRouter, Request, Response
 
+from omnia_gateway.core.config import get_settings
 from omnia_gateway.core.errors import WalletEmptyError
 from omnia_gateway.providers import llmgw
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services.model_router import native_messages_route
-from omnia_gateway.services.pricing import calculate_cost_rub
+from omnia_gateway.services.pricing import (
+    PROVIDER_INPUT_OVERHEAD_TOKENS,
+    calculate_cost_rub,
+    calculate_provider_cost_usd_upper_bound,
+)
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -352,6 +357,51 @@ def _estimate_native_cost(model: str, payload: dict[str, Any]) -> Decimal:
         return Decimal("0")
 
 
+def _reserve_native_cost(model: str, payload: dict[str, Any]) -> Decimal:
+    """Conservative upper-bound reservation for one provider request.
+
+    One BPE token cannot encode less than one UTF-8 byte, so byte length is a
+    safe input-token ceiling. Reserve the full requested output allowance and
+    assume no cache discount. The settled usage row replaces this reservation
+    with the provider's actual counters after a successful call.
+    """
+    serialized = json.dumps(
+        {"messages": payload.get("messages"), "tools": payload.get("tools")},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    input_ceiling = (
+        max(1, len(serialized.encode("utf-8")))
+        + PROVIDER_INPUT_OVERHEAD_TOKENS
+    )
+    output_ceiling = max(1, _non_negative_int(payload.get("max_tokens")))
+    return calculate_cost_rub(model, input_ceiling, output_ceiling)
+
+
+def _reserve_native_provider_cost(model: str, payload: dict[str, Any]) -> Decimal:
+    serialized = json.dumps(
+        {"messages": payload.get("messages"), "tools": payload.get("tools")},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    input_ceiling = max(1, len(serialized.encode("utf-8")))
+    output_ceiling = max(1, _non_negative_int(payload.get("max_tokens")))
+    return calculate_provider_cost_usd_upper_bound(
+        model,
+        input_ceiling,
+        output_ceiling,
+    )
+
+
+async def _release_reservation_safely(usage_id: UUID) -> None:
+    try:
+        await billing.release_native_run_reservation(usage_id)
+    except Exception:
+        # A leaked reservation is intentionally fail-closed: it may temporarily
+        # block this run, but can never permit an unaccounted provider retry.
+        log.exception("native_messages.reservation_release_failed", usage_id=str(usage_id))
+
+
 def _reported_cost(
     data: dict[str, Any], response: httpx.Response
 ) -> tuple[Decimal | None, Decimal | None]:
@@ -431,6 +481,12 @@ async def native_messages(request: Request) -> Response:
     stage = str(metadata.get("stage") or "native_agent")[:80]
     retry_count = _non_negative_int(metadata.get("retry_count"))
     free = bool(metadata.get("free", False))
+    if user_id is None or run_id is None:
+        return _err(
+            400,
+            "invalid_request_error",
+            "native agent calls require valid user and run attribution",
+        )
 
     try:
         messages = _openai_messages(body)
@@ -456,15 +512,60 @@ async def native_messages(request: Request) -> Response:
         "accept": "application/json",
     }
 
+    estimated_cost_rub = _estimate_native_cost(model, payload)
+    try:
+        reserved_cost_rub = _reserve_native_cost(model, payload)
+        reserved_provider_cost_usd = _reserve_native_provider_cost(model, payload)
+    except Exception:
+        log.exception("native_messages.run_budget_estimate_failed", run_id=str(run_id))
+        return _err(503, "billing_unavailable", "run budget could not be calculated")
+    settings = get_settings()
+    try:
+        reservation = await billing.reserve_native_run_request(
+            run_id=run_id,
+            user_id=user_id,
+            project_id=project_id,
+            message_id=message_id,
+            model_id=model,
+            stage=stage,
+            reserved_cost_rub=reserved_cost_rub,
+            reserved_provider_cost_usd=reserved_provider_cost_usd,
+            max_requests=max(1, int(settings.native_run_max_requests)),
+            max_cost_rub=Decimal(str(settings.native_run_max_cost_rub)),
+            max_provider_cost_usd=Decimal(
+                str(settings.native_run_max_provider_cost_usd)
+            ),
+        )
+    except billing.RunBudgetExceededError:
+        log.warning("native_messages.run_budget_exhausted", run_id=str(run_id), free=free)
+        return _err(
+            409,
+            "run_budget_exhausted",
+            "The safe spend limit for this generation has been reached.",
+        )
+    except (billing.UnknownRunError, billing.InvalidRunAttributionError):
+        return _err(400, "invalid_request_error", "generation run does not exist")
+    except billing.InactiveRunError:
+        return _err(409, "run_not_active", "generation run is no longer active")
+    except Exception:
+        log.exception("native_messages.run_budget_reservation_failed", run_id=str(run_id))
+        return _err(
+            503,
+            "billing_unavailable",
+            "run usage accounting is temporarily unavailable",
+        )
+
     # Fail closed before the provider call. A native build must never keep
     # spending after the user's wallet floor or when accounting is unavailable.
-    if user_id is not None and not free:
+    if not free:
         try:
-            await billing.precheck_balance(user_id, _estimate_native_cost(model, payload))
+            await billing.precheck_balance(user_id, estimated_cost_rub)
         except WalletEmptyError as exc:
+            await _release_reservation_safely(reservation.usage_id)
             return _err(402, "wallet_empty", exc.message)
         except Exception:
             log.exception("native_messages.precheck_failed", user_id=str(user_id))
+            await _release_reservation_safely(reservation.usage_id)
             return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
 
     try:
@@ -479,6 +580,16 @@ async def native_messages(request: Request) -> Response:
         return _err(502, "api_error", f"upstream transport: {type(exc).__name__}")
 
     if upstream.status_code >= 400:
+        # Release only when the provider definitively rejected the request
+        # before execution. Timeouts, throttling and 5xx are ambiguous: the
+        # upstream may already have completed and billed the call, so retaining
+        # the reservation is the only fail-closed accounting choice.
+        if 400 <= upstream.status_code < 500 and upstream.status_code not in {
+            408,
+            425,
+            429,
+        }:
+            await _release_reservation_safely(reservation.usage_id)
         try:
             upstream_error = upstream.json().get("error", {})
             message = upstream_error.get("message") or upstream.text[:300]
@@ -509,55 +620,63 @@ async def native_messages(request: Request) -> Response:
     except Exception:
         calculated_rub = Decimal("0")
     cost_rub = reported_rub if reported_rub is not None else calculated_rub
+    # Some upstream responses omit an explicit USD charge. Keep the pre-call
+    # conservative reservation in that case instead of erasing the provider
+    # budget ledger during settlement.
+    accounted_provider_cost_usd = (
+        provider_cost_usd
+        if provider_cost_usd is not None
+        else reserved_provider_cost_usd
+    )
     provider_request_id = str(upstream_data.get("id") or adapted.get("id") or "")[:200] or None
 
-    if user_id is not None:
-        try:
-            await billing.charge(
-                user_id=user_id,
-                project_id=project_id,
-                message_id=message_id,
-                run_id=run_id,
-                model_id=model,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                cost_rub=cost_rub,
-                description=f"Native agent · {stage}",
-                free=free,
-                stage=stage,
-                cache_read_tokens=cache_read,
-                cache_write_tokens=cache_write,
-                retry_count=retry_count,
-                provider_request_id=provider_request_id,
-                provider_cost_usd=provider_cost_usd,
-            )
-        except WalletEmptyError as exc:
-            log.warning(
-                "native_messages.wallet_exhausted_after_call",
-                user_id=str(user_id),
-                project_id=str(project_id) if project_id else None,
-                run_id=str(run_id) if run_id else None,
-                cost_rub=str(cost_rub),
-            )
-            return _err(402, "wallet_empty", exc.message)
-        except Exception:
-            # The provider already completed this single call, but no subsequent
-            # call may run while its accounting is unknown.
-            log.exception(
-                "native_messages.charge_failed",
-                user_id=str(user_id),
-                project_id=str(project_id) if project_id else None,
-                run_id=str(run_id) if run_id else None,
-            )
-            return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
+    try:
+        await billing.charge(
+            user_id=user_id,
+            project_id=project_id,
+            message_id=message_id,
+            run_id=run_id,
+            model_id=model,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost_rub=cost_rub,
+            description=f"Native agent · {stage}",
+            free=free,
+            stage=stage,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            retry_count=retry_count,
+            provider_request_id=provider_request_id,
+            provider_cost_usd=accounted_provider_cost_usd,
+            reserved_usage_id=reservation.usage_id,
+        )
+    except WalletEmptyError as exc:
+        log.warning(
+            "native_messages.wallet_exhausted_after_call",
+            user_id=str(user_id),
+            project_id=str(project_id) if project_id else None,
+            run_id=str(run_id),
+            cost_rub=str(cost_rub),
+        )
+        return _err(402, "wallet_empty", exc.message)
+    except Exception:
+        # The conservative reservation remains in usage, so no subsequent
+        # request can pretend this already-completed provider call was free.
+        log.exception(
+            "native_messages.charge_failed",
+            user_id=str(user_id),
+            project_id=str(project_id) if project_id else None,
+            run_id=str(run_id),
+        )
+        return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
 
     adapted["metadata"] = {
         "cost_rub": str(cost_rub),
-        "provider_cost_usd": str(provider_cost_usd) if provider_cost_usd is not None else None,
+        "provider_cost_usd": str(accounted_provider_cost_usd),
         "cache_read_tokens": cache_read,
         "cache_write_tokens": cache_write,
         "retry_count": retry_count,
-        "run_id": str(run_id) if run_id else None,
+        "run_id": str(run_id),
         "stage": stage,
     }
     try:

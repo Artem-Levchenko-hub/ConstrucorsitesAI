@@ -2281,6 +2281,23 @@ def _merge_seeded_agent_files(
     return {**seeded_files, **generated_files}
 
 
+def _publishable_agent_files(
+    seeded_files: dict[str, str],
+    generated_files: dict[str, str],
+    *,
+    must_restore_previous: bool,
+) -> dict[str, str]:
+    """Block partial publication after any forced/unsafe agent stop.
+
+    Restoring the live container is best-effort infrastructure work. Canonical
+    Git/snapshot publication must remain impossible even if that restoration
+    itself fails, otherwise a cleanly compiling partial edit can be committed.
+    """
+    if must_restore_previous:
+        return {}
+    return _merge_seeded_agent_files(seeded_files, generated_files)
+
+
 # A6a — managed auth columns the AI must never drop when it rewrites
 # src/lib/db/schema.ts for its own entity. The template ships them (+ a comment)
 # yet the model still strips them, which breaks signup/signin (insert/select on a
@@ -4030,7 +4047,11 @@ async def _process_prompt(
                         flush=True,
                     )
 
-            _all_files = _merge_seeded_agent_files(_max_seed_files, _agent_res.files)
+            _all_files = _publishable_agent_files(
+                _max_seed_files,
+                _agent_res.files,
+                must_restore_previous=_must_restore_previous,
+            )
             _total_steps = _agent_res.steps
 
             files = _all_files
@@ -4426,10 +4447,10 @@ async def _process_prompt(
                     )
             # ──────────────────────────────────────────────────────────────────
 
-            # Final green-tree invariant. Generic bounded runs may stop early;
-            # MAX reaches this point only after its unbounded native completion
-            # contract is green. This independent verification still prevents a
-            # stale dev-server response from being published.
+            # Final green-tree invariant. Generic runs may stop on their turn
+            # budget; MAX may stop on its durable spend/provider guard. This
+            # independent verification still prevents a stale dev-server
+            # response from being published.
             if get_settings().use_native_agent and (not _runtime_ok or not _typecheck_ok):
                 _verification_error = _tc_error or _rt_error or "final verification failed"
                 _verification_rolled_back = False

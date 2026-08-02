@@ -147,6 +147,11 @@ services:
       SAFETY_FILTER_ENABLED: ${SAFETY_FILTER_ENABLED:-true}
       CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-3600}
       MIN_BALANCE_RUB: ${MIN_BALANCE_RUB:-5.0}
+      # Durable per-generation financial fuse. Applies to free runs too, so a
+      # stuck agent cannot drain the operator's upstream provider balance.
+      NATIVE_RUN_MAX_COST_RUB: ${NATIVE_RUN_MAX_COST_RUB:-1200.0}
+      NATIVE_RUN_MAX_PROVIDER_COST_USD: ${NATIVE_RUN_MAX_PROVIDER_COST_USD:-2.5}
+      NATIVE_RUN_MAX_REQUESTS: ${NATIVE_RUN_MAX_REQUESTS:-80}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       # Internal-only gateway.  The API talks to it over the Compose network;

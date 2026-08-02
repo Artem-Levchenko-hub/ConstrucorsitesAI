@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -27,6 +28,28 @@ def app(neutralize_lifespan: None) -> FastAPI:
 def client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def open_native_run_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native endpoint tests run without Postgres unless budget behaviour is under test."""
+    monkeypatch.setattr(
+        messages_native.billing,
+        "reserve_native_run_request",
+        AsyncMock(
+            return_value=messages_native.billing.NativeRunReservation(
+                usage_id=UUID("99999999-9999-9999-9999-999999999999"),
+                requests_before=0,
+                cost_rub_before=messages_native.Decimal("0"),
+                provider_cost_usd_before=messages_native.Decimal("0"),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        messages_native.billing,
+        "release_native_run_reservation",
+        AsyncMock(return_value=None),
+    )
 
 
 def test_openai_messages_preserve_tool_turns() -> None:
@@ -268,12 +291,22 @@ def test_native_endpoint_uses_llmgw_chat_tools(
         )
 
     monkeypatch.setattr(messages_native, "_post_llmgw", fake_post)
+    monkeypatch.setattr(
+        messages_native.billing,
+        "charge",
+        AsyncMock(return_value=UUID("55555555-5555-5555-5555-555555555555")),
+    )
 
     response = client.post(
         "/v1/messages",
         json={
             "model": "gemini-3.1-pro-preview-customtools",
             "max_tokens": 128,
+            "user": "11111111-1111-1111-1111-111111111111",
+            "metadata": {
+                "run_id": "33333333-3333-3333-3333-333333333333",
+                "free": True,
+            },
             "system": "Build",
             "messages": [{"role": "user", "content": "Finish"}],
             "tools": [
@@ -301,6 +334,12 @@ def test_native_endpoint_uses_llmgw_chat_tools(
         "name": "done",
         "input": {"summary": "ok"},
     }
+    assert (
+        messages_native.billing.charge.await_args.kwargs["provider_cost_usd"]
+        == messages_native._reserve_native_provider_cost(
+            "gemini-3.1-pro-preview-customtools", captured["json"]
+        )
+    )
 
 
 def test_native_endpoint_attributes_and_bills_actual_cached_usage(
@@ -374,6 +413,16 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     assert kwargs["cache_read_tokens"] == 600
     assert kwargs["cache_write_tokens"] == 200
     assert str(kwargs["provider_cost_usd"]) == "0.125"
+    assert kwargs["reserved_usage_id"] == UUID(
+        "99999999-9999-9999-9999-999999999999"
+    )
+    reserve_kwargs = messages_native.billing.reserve_native_run_request.await_args.kwargs
+    assert reserve_kwargs["reserved_cost_rub"] > Decimal("0")
+    assert reserve_kwargs["reserved_provider_cost_usd"] > Decimal("0")
+    assert reserve_kwargs["reserved_provider_cost_usd"] != Decimal("0.35")
+    assert reserve_kwargs["max_requests"] == 80
+    assert reserve_kwargs["max_cost_rub"] == Decimal("1200.0")
+    assert reserve_kwargs["max_provider_cost_usd"] == Decimal("2.5")
 
 
 def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
@@ -405,3 +454,185 @@ def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
     assert response.status_code == 402
     assert response.json()["error"]["type"] == "wallet_empty"
     precheck.assert_awaited_once()
+
+
+def test_native_endpoint_stops_free_run_before_provider_when_run_budget_is_reached(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reserve = AsyncMock(
+        side_effect=messages_native.billing.RunBudgetExceededError(
+            "run budget exhausted"
+        )
+    )
+    upstream = pytest.fail
+    monkeypatch.setattr(messages_native.billing, "reserve_native_run_request", reserve)
+    monkeypatch.setattr(messages_native, "_post_llmgw", upstream)
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+    )
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "gemini-3.1-pro-preview-customtools",
+            "user": "11111111-1111-1111-1111-111111111111",
+            "metadata": {
+                "run_id": "33333333-3333-3333-3333-333333333333",
+                "free": True,
+            },
+            "messages": [{"role": "user", "content": "do not spend again"}],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["type"] == "run_budget_exhausted"
+    reserve.assert_awaited_once()
+
+
+def test_native_endpoint_fails_closed_when_run_accounting_is_unavailable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        messages_native.billing,
+        "reserve_native_run_request",
+        AsyncMock(side_effect=RuntimeError("database unavailable")),
+    )
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+    )
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "gemini-3.1-pro-preview-customtools",
+            "user": "11111111-1111-1111-1111-111111111111",
+            "metadata": {"run_id": "33333333-3333-3333-3333-333333333333"},
+            "messages": [{"role": "user", "content": "do not bypass accounting"}],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "billing_unavailable"
+
+
+def test_native_endpoint_releases_reservation_after_explicit_upstream_rejection(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = AsyncMock(return_value=None)
+    monkeypatch.setattr(messages_native.billing, "release_native_run_reservation", release)
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+    )
+    monkeypatch.setattr(
+        messages_native,
+        "_post_llmgw",
+        lambda *_args, **_kwargs: httpx.Response(
+            400,
+            json={"error": {"message": "payload rejected", "type": "invalid_request"}},
+        ),
+    )
+    monkeypatch.setattr(messages_native.billing, "charge", AsyncMock())
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "gemini-3.1-pro-preview-customtools",
+            "user": "11111111-1111-1111-1111-111111111111",
+            "metadata": {
+                "run_id": "33333333-3333-3333-3333-333333333333",
+                "free": True,
+            },
+            "messages": [{"role": "user", "content": "invalid upstream payload"}],
+        },
+    )
+
+    assert response.status_code == 400
+    release.assert_awaited_once_with(
+        UUID("99999999-9999-9999-9999-999999999999")
+    )
+    messages_native.billing.charge.assert_not_awaited()
+
+
+def test_native_endpoint_keeps_reservation_after_ambiguous_upstream_failure(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = AsyncMock(return_value=None)
+    monkeypatch.setattr(messages_native.billing, "release_native_run_reservation", release)
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+    )
+    monkeypatch.setattr(
+        messages_native,
+        "_post_llmgw",
+        lambda *_args, **_kwargs: httpx.Response(
+            503,
+            json={"error": {"message": "upstream unavailable"}},
+        ),
+    )
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "gemini-3.1-pro-preview-customtools",
+            "user": "11111111-1111-1111-1111-111111111111",
+            "metadata": {
+                "run_id": "33333333-3333-3333-3333-333333333333",
+                "free": True,
+            },
+            "messages": [{"role": "user", "content": "ambiguous failure"}],
+        },
+    )
+
+    assert response.status_code == 503
+    release.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("user", "run_id"),
+    [
+        (None, "33333333-3333-3333-3333-333333333333"),
+        ("11111111-1111-1111-1111-111111111111", None),
+        ("not-a-uuid", "33333333-3333-3333-3333-333333333333"),
+        ("11111111-1111-1111-1111-111111111111", "not-a-uuid"),
+    ],
+)
+def test_native_endpoint_blocks_unattributed_calls_before_provider(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    user: str | None,
+    run_id: str | None,
+) -> None:
+    reserve = AsyncMock()
+    monkeypatch.setattr(messages_native.billing, "reserve_native_run_request", reserve)
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+    )
+    metadata = {"free": True}
+    if run_id is not None:
+        metadata["run_id"] = run_id
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "gemini-3.1-pro-preview-customtools",
+            "user": user,
+            "metadata": metadata,
+            "messages": [{"role": "user", "content": "must be attributed"}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    reserve.assert_not_awaited()

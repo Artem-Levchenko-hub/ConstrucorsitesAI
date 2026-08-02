@@ -47,7 +47,8 @@ _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
-_CALL_RETRIES = 3  # one connection cycle; MAX retries whole cycles until user cancellation
+_CALL_RETRIES = 1  # outer MAX reconnects own the only bounded retry policy
+_MAX_PROVIDER_RECONNECT_CYCLES = 3
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
@@ -61,8 +62,8 @@ _NO_WRITE_ABORT_AT = 12
 # Infra circuit breaker: consecutive turns where EVERY executed tool op died on
 # infra (container/orchestrator unreachable — executor tags obs["infra_dead"]).
 # 3 turns tolerates a transient orchestrator restart. Generic builds still abort
-# at that point; MAX waits and keeps recovering because its lifecycle has no
-# internal stop limit and remains cancellable by the durable parent task.
+# at that point; MAX can keep repairing while the gateway's durable financial
+# fuse and the parent-task cancellation remain authoritative stop conditions.
 _INFRA_DEAD_ABORT_AT = 3
 
 # Native tool schemas — mirror the action set of make_container_executor._execute.
@@ -756,6 +757,13 @@ async def _call_messages(
                 await asyncio.sleep(6.0 * (attempt + 1))
                 last = RuntimeError(f"429 concurrency (attempt {attempt + 1})")
                 continue
+            if r.status_code == 409:
+                try:
+                    error_type = str((r.json().get("error") or {}).get("type") or "")
+                except (ValueError, AttributeError):
+                    error_type = ""
+                if error_type == "run_budget_exhausted":
+                    raise SpendBudgetExceeded
             # Retrying a rejected request cannot repair credentials, balance,
             # endpoint or payload validation. Surface only the numeric status:
             # response bodies may contain provider diagnostics or secrets.
@@ -784,6 +792,10 @@ class PermanentProviderError(RuntimeError):
         super().__init__(f"provider rejected request (HTTP {status_code})")
 
 
+class SpendBudgetExceeded(RuntimeError):
+    """The gateway stopped this run before another paid provider request."""
+
+
 async def run_native_build(
     *,
     system: str,
@@ -801,8 +813,9 @@ async def run_native_build(
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or a bounded generic build reaches ``max_steps``. MAX builds deliberately
-    ignore ``max_steps`` and continue until the factual completion contract is green
-    or the durable parent task is cancelled by the user.
+    ignore the crude turn count while the gateway enforces a durable monetary/request
+    budget; they stop on a green factual contract, that budget, repeated provider
+    failure, or parent-task cancellation.
 
     ``system`` is the stack/system prompt (reuse ``agent_builder.build_system_prompt``);
     ``task`` is the user's request. One model, full transcript (thinking preserved),
@@ -826,6 +839,7 @@ async def run_native_build(
     last_green_see_step: int | None = None
     pending_visual_evaluation_step: int | None = None
     visual_evaluation_ready = False
+    provider_reconnect_cycles = 0
 
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
     max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
@@ -925,6 +939,23 @@ async def run_native_build(
                     transcript=convo,
                     stop_reason="max_steps" if reason == "max_steps" else f"{reason}_red",
                 )
+            if (
+                max_runtime
+                and completion_check is None
+                and reason in {"spend_budget", "provider_stopped", "provider_rejected"}
+            ):
+                # A clean compile proves only that the old tree still builds. A
+                # forced stop during a MAX edit has no product acceptance check,
+                # so reporting green could falsely claim an untouched request is
+                # complete. Let the caller restore the previous snapshot instead.
+                return AgentResult(
+                    done=False,
+                    summary=detail,
+                    files=written,
+                    steps=steps,
+                    transcript=convo,
+                    stop_reason=f"{reason}_red",
+                )
             return AgentResult(
                 done=True,
                 summary=(
@@ -974,6 +1005,29 @@ async def run_native_build(
                     stage=call_stage,
                     tools=_MAX_TOOLS_CACHED if max_runtime else _TOOLS_CACHED,
                 )
+                provider_reconnect_cycles = 0
+            except SpendBudgetExceeded:
+                log.warning("agent_native.spend_budget_exhausted", step=step)
+                if emit:
+                    await emit(
+                        "agent.step",
+                        {
+                            "step": step,
+                            "action": "spend_budget",
+                            "path": "",
+                            "detail": (
+                                "Достигнут безопасный лимит расходов этой генерации. "
+                                "Новые запросы к Google AI остановлены; проверяю уже "
+                                "собранную версию локально без дополнительных списаний."
+                            ),
+                            "ok": False,
+                        },
+                    )
+                return await _finish_without_provider(
+                    steps=step,
+                    reason="spend_budget",
+                    detail="safe generation spend limit reached",
+                )
             except PermanentProviderError as exc:
                 log.warning(
                     "agent_native.max_provider_rejected",
@@ -1001,11 +1055,34 @@ async def run_native_build(
                 )
             except Exception as exc:
                 if max_runtime:
+                    provider_reconnect_cycles += 1
                     log.warning(
                         "agent_native.max_provider_reconnecting",
                         step=step,
                         error=type(exc).__name__,
+                        reconnect_cycle=provider_reconnect_cycles,
                     )
+                    if provider_reconnect_cycles >= _MAX_PROVIDER_RECONNECT_CYCLES:
+                        if emit:
+                            await emit(
+                                "agent.step",
+                                {
+                                    "step": step,
+                                    "action": "provider_stopped",
+                                    "path": "",
+                                    "detail": (
+                                        "Google AI трижды подряд не ответил. Новые "
+                                        "платные запросы остановлены; проверяю уже "
+                                        "собранную версию локально."
+                                    ),
+                                    "ok": False,
+                                },
+                            )
+                        return await _finish_without_provider(
+                            steps=step,
+                            reason="provider_stopped",
+                            detail=f"gateway error after reconnects: {type(exc).__name__}",
+                        )
                     if emit:
                         await emit(
                             "agent.step",
@@ -1342,7 +1419,7 @@ async def run_native_build(
                 )
 
     # Only bounded generic builds can exhaust this iterator. MAX uses count(),
-    # so it exits solely through a green return or parent-task cancellation.
+    # while explicit green/budget/provider/cancellation branches return above.
     assert effective_max_steps is not None
     return await _finish_without_provider(
         steps=effective_max_steps,

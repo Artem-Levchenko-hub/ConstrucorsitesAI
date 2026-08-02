@@ -10,6 +10,7 @@ from omnia_gateway.core.errors import ModelNotFoundError
 from omnia_gateway.services.pricing import (
     PRICE_TABLE,
     calculate_cost_rub,
+    calculate_provider_cost_usd_upper_bound,
     list_models,
 )
 
@@ -45,6 +46,20 @@ def test_calculate_cost_rub_negative_tokens_rejected() -> None:
         calculate_cost_rub("gemini-3.1-pro-preview-customtools", 0, -5)
     with pytest.raises(ValueError):
         calculate_cost_rub("gemini-3.1-pro-preview-customtools", 100, 0, cached_tokens=-1)
+
+
+def test_provider_cost_reservation_uses_full_output_and_headroom() -> None:
+    # (100K bytes + 32K framing) * $2/M + 20K output * $12/M, then 2x headroom.
+    assert calculate_provider_cost_usd_upper_bound(
+        "gemini-3.1-pro-preview-customtools", 100_000, 20_000
+    ) == Decimal("1.00800000")
+
+
+def test_provider_cost_reservation_switches_to_long_context_tier() -> None:
+    # 180K + 32K framing crosses 200K, so the $4/$18 tier applies.
+    assert calculate_provider_cost_usd_upper_bound(
+        "gemini-3.1-pro-preview-customtools", 180_000, 20_000
+    ) == Decimal("2.41600000")
 
 
 def test_cached_tokens_bill_cheaper() -> None:

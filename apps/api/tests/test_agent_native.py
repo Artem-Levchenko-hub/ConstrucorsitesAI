@@ -1,8 +1,8 @@
 """Tests for the native tool-use build loop (services/agent_native).
 
 Covers: `_module_not_found_hint` (anti-hallucination recovery), bounded generic
-builds, and the unbounded MAX lifecycle which keeps repairing until its factual
-completion contract is green or the user cancels the parent task.
+builds, and the MAX lifecycle which keeps repairing until its factual completion
+contract is green or a durable spend/provider/cancellation guard stops it.
 """
 
 from __future__ import annotations
@@ -71,7 +71,8 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     source = inspect.getsource(messages._process_prompt)
 
     assert 'stop_reason="deterministic_template"' not in source
-    assert "_merge_seeded_agent_files" in source
+    assert "_publishable_agent_files" in source
+    assert "must_restore_previous=_must_restore_previous" in source
     assert "agent_native.run_native_build" in source
     assert "build_max_product_contract" in source
     assert "max_completion_gap" in source
@@ -142,6 +143,25 @@ def test_seeded_max_files_are_committed_with_agent_customisations() -> None:
         "src/components/Profile.tsx": "ui",
     }
     assert starter["src/app/page.tsx"] == "starter"
+
+
+def test_unsafe_agent_stop_never_exposes_partial_files_for_publication() -> None:
+    from omnia_api.routers.messages import _publishable_agent_files
+
+    assert _publishable_agent_files(
+        {"src/app/page.tsx": "safe baseline"},
+        {
+            "src/app/page.tsx": "partial rewrite",
+            "src/components/Unfinished.tsx": "red file",
+        },
+        must_restore_previous=True,
+    ) == {}
+
+    assert _publishable_agent_files(
+        {"src/app/page.tsx": "safe baseline"},
+        {"src/app/page.tsx": "complete rewrite"},
+        must_restore_previous=False,
+    ) == {"src/app/page.tsx": "complete rewrite"}
 
 
 def test_hint_none_on_clean_or_unrelated_error() -> None:
@@ -763,6 +783,75 @@ async def test_max_runtime_stops_on_permanent_provider_rejection_without_retryin
     assert res.stop_reason == "provider_rejected_red"
 
 
+@pytest.mark.asyncio
+async def test_max_runtime_stops_on_spend_budget_without_another_provider_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"provider": 0, "build": 0}
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls["provider"] += 1
+        raise agent_native.SpendBudgetExceeded
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        assert action.name == "build"
+        calls["build"] += 1
+        return {"ok": True, "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="build the complete app",
+        execute=execute,
+        max_steps=None,
+    )
+
+    assert calls == {"provider": 1, "build": 1}
+    assert res.done is False
+    assert res.stop_reason == "spend_budget_red"
+
+
+@pytest.mark.asyncio
+async def test_max_runtime_stops_after_bounded_provider_reconnect_cycles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"provider": 0, "build": 0}
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls["provider"] += 1
+        raise RuntimeError("temporary upstream outage")
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        assert action.name == "build"
+        calls["build"] += 1
+        return {"ok": True, "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="build the complete app",
+        execute=execute,
+        max_steps=None,
+    )
+
+    assert calls == {
+        "provider": agent_native._MAX_PROVIDER_RECONNECT_CYCLES,
+        "build": 1,
+    }
+    assert res.done is False
+    assert res.stop_reason == "provider_stopped_red"
+
+
 @pytest.mark.parametrize("status_code", [400, 401, 402, 403, 404, 422])
 @pytest.mark.asyncio
 async def test_messages_call_fails_fast_on_permanent_4xx(
@@ -798,7 +887,7 @@ async def test_messages_call_fails_fast_on_permanent_4xx(
 
 
 @pytest.mark.asyncio
-async def test_messages_call_still_recovers_transient_5xx(
+async def test_messages_call_maps_run_budget_409_without_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
@@ -807,9 +896,17 @@ async def test_messages_call_still_recovers_transient_5xx(
         nonlocal calls
         calls += 1
         request = httpx.Request("POST", "https://gateway.test/v1/messages")
-        if calls == 1:
-            return httpx.Response(503, request=request)
-        return httpx.Response(200, request=request, json={"content": []})
+        return httpx.Response(
+            409,
+            request=request,
+            json={
+                "type": "error",
+                "error": {
+                    "type": "run_budget_exhausted",
+                    "message": "safe spend limit reached",
+                },
+            },
+        )
 
     async def no_sleep(_seconds: float) -> None:
         return None
@@ -818,17 +915,49 @@ async def test_messages_call_still_recovers_transient_5xx(
     monkeypatch.setattr(client, "post", fake_post)
     monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
     try:
-        result = await agent_native._call_messages(
-            client,
-            "https://gateway.test/v1/messages",
-            [{"role": "user", "content": "build"}],
-            "system",
-        )
+        with pytest.raises(agent_native.SpendBudgetExceeded):
+            await agent_native._call_messages(
+                client,
+                "https://gateway.test/v1/messages",
+                [{"role": "user", "content": "build"}],
+                "system",
+            )
     finally:
         await client.aclose()
 
-    assert result == {"content": []}
-    assert calls == 2
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_messages_call_does_not_duplicate_transient_5xx_inside_one_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("POST", "https://gateway.test/v1/messages")
+        return httpx.Response(503, request=request)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    client = httpx.AsyncClient()
+    monkeypatch.setattr(client, "post", fake_post)
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await agent_native._call_messages(
+                client,
+                "https://gateway.test/v1/messages",
+                [{"role": "user", "content": "build"}],
+                "system",
+            )
+    finally:
+        await client.aclose()
+
+    assert calls == 1
 
 
 def test_native_agent_has_eyes_and_taste() -> None:
