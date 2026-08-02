@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 
 from omnia_api.services.max_generation_contract import (
+    MAX_REQUIRED_POST_SEE_SKILL,
+    MAX_REQUIRED_PREWRITE_SKILLS,
     build_max_product_contract,
     max_completion_gap,
+    max_demo_data_rejection,
     max_source_completion_gap,
     normalize_max_globals_css,
     requested_max_capabilities,
@@ -41,11 +44,20 @@ def _complete_files() -> dict[str, str]:
     return {
         ".omnia/max-design-spec.json": _design_spec(),
         "src/app/page.tsx": (
-            'import { requestOmniaAI } from "@/lib/omnia/integration-client";\n'
-            'import { createMaxAction } from "@/lib/omnia/client";\n'
-            "export default function Page(){ return <main>ИИ тренер: тренировки, сон, "
+            'import { useEffect } from "react";\n'
+            'import { useMaxApp } from "@/components/MaxAppProvider";\n'
+            'import { createMaxAction, getMaxActions, requestOmniaAI } '
+            'from "@/lib/omnia/integration-client";\n'
+            "async function persist(){ const { answer } = await requestOmniaAI({ "
+            "message: 'Разбери', instructions: 'ИИ тренер', context: {} }); "
+            "await createMaxAction('open', { answer }); "
+            "await getMaxActions(); } "
+            "export default function Page(){ const { user } = useMaxApp(); "
+            "useEffect(() => { async function restore(){ await getMaxActions(); } "
+            "void restore(); }, []); "
+            "return <main><button onClick={persist}>Сохранить</button>ИИ тренер: тренировки, сон, "
             "питание, статистика, график, профиль, история, уведомления, loading, empty, "
-            "error, retry</main>; }"
+            "error, retry, {user?.firstName}</main>; }"
         ),
         "src/components/Coach.tsx": "export function Coach(){ return <button>Анализ</button>; }\n"
         + "// coach interaction state\n" * 10,
@@ -64,11 +76,22 @@ def _complete_files() -> dict[str, str]:
     }
 
 
+def _complete_evidence() -> dict[str, int]:
+    return {
+        **{f"skill:{skill}": 1 for skill in MAX_REQUIRED_PREWRITE_SKILLS},
+        f"skill:{MAX_REQUIRED_POST_SEE_SKILL}": 1,
+        "visual_evaluation_after_see": 1,
+        "build_after_write": 1,
+        "runtime_check_after_write": 1,
+        "see_after_write": 1,
+    }
+
+
 def _complete_single_file() -> dict[str, str]:
     """A real multi-view app may be intentionally cohesive in one component."""
 
     page = """"use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMaxApp } from "@/components/MaxAppProvider";
 import { createMaxAction, getMaxActions, requestOmniaAI } from "@/lib/omnia/integration-client";
 
@@ -78,6 +101,10 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [empty, setEmpty] = useState(false);
   const [failure, setFailure] = useState(error || "");
+  useEffect(() => {
+    async function restore() { await getMaxActions(); }
+    void restore();
+  }, []);
   async function analyze() {
     setLoading(true);
     try {
@@ -126,6 +153,8 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "loading, empty, error/retry" in contract
     assert ".omnia/max-design-spec.json" in contract
     assert "three distinct directions_considered" in contract
+    assert "validated MAX initData" in contract
+    assert "hardcoded demo" in contract
 
 
 def test_completion_requires_persistent_project_specific_design_spec() -> None:
@@ -190,9 +219,8 @@ def test_safe_css_import_order_is_byte_stable() -> None:
 def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
     files = _complete_files()
     files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
-        'import { requestOmniaAI } from "@/lib/omnia/integration-client";\n',
-        "",
-    )
+        ", requestOmniaAI", ""
+    ).replace(" void requestOmniaAI;", "")
 
     gap = max_completion_gap(
         COMPLEX_BRIEF,
@@ -204,17 +232,85 @@ def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
     assert "requestOmniaAI" in gap
 
 
+def test_completion_rejects_hardcoded_demo_user_records() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
+const demoWorkouts = [
+  { id: "demo-1", title: "Утренняя тренировка", duration: 45 },
+  { id: "demo-2", title: "Интервальный бег", duration: 30 },
+];
+"""
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert gap is not None
+    assert "demo user data" in gap.lower()
+
+
+def test_completion_rejects_unlabelled_seeded_user_records_and_profiles() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
+const workouts = [{ id: "1", title: "Утренняя тренировка" }];
+"""
+    assert "workouts" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
+const profile = { firstName: "Тест", username: "fitness_pro" };
+"""
+    assert "profile" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
+const entries = [{ id: "1", userId: "42", title: "Готовая запись" }];
+"""
+    assert "entries" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
+const initialState = [{ id: "1", title: "Кардио", duration: 45 }];
+"""
+    assert "initialState" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+
+def test_instructional_copy_is_not_mistaken_for_seeded_records() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += (
+        'const onboardingCopy = "Sample workouts are examples, not saved history";'
+    )
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
+const profileDraft = { firstName: "", email: "" };
+"""
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+
+def test_demo_data_guard_only_applies_to_model_owned_product_source() -> None:
+    content = 'const sampleOrders = [{ id: "sample-1" }];'
+
+    assert "truthful empty state" in str(
+        max_demo_data_rejection("src/app/page.tsx", content)
+    )
+    assert max_demo_data_rejection("src/lib/omnia/max-config.ts", content) is None
+
+
 def test_completion_requires_only_max_compatible_runtime_proof() -> None:
     files = _complete_files()
     gap = max_completion_gap(COMPLEX_BRIEF, files, {})
     assert gap is not None
+    assert "capability packs" in gap
+
+    skill_evidence = {
+        f"skill:{skill}": 1 for skill in MAX_REQUIRED_PREWRITE_SKILLS
+    }
+    gap = max_completion_gap(COMPLEX_BRIEF, files, skill_evidence)
+    assert gap is not None
     assert "runtime_check" in gap
 
-    evidence = {
-        "build_after_write": 1,
-        "runtime_check_after_write": 1,
-        "see_after_write": 1,
-    }
+    evidence = _complete_evidence()
     assert max_completion_gap(COMPLEX_BRIEF, files, evidence) is None
 
 
@@ -226,12 +322,7 @@ def test_source_gap_is_independent_from_broken_max_preview_tooling() -> None:
         max_completion_gap(
             COMPLEX_BRIEF,
             files,
-            {
-                "runtime_check_after_write": 1,
-                "see_after_write": 1,
-                "probe_failed": 3,
-                "see_failed": 3,
-            },
+            {**_complete_evidence(), "probe_failed": 3, "see_failed": 3},
         )
         is None
     )
@@ -245,10 +336,153 @@ def test_complete_single_file_product_is_not_rejected_for_source_layout() -> Non
         max_completion_gap(
             COMPLEX_BRIEF,
             files,
-            {"runtime_check_after_write": 1, "see_after_write": 1},
+            _complete_evidence(),
         )
         is None
     )
+
+
+def test_completion_requires_verified_identity_and_read_after_write() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        "useMaxApp()", '{} as { mode: string; user: null; error: string }'
+    )
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+    assert "verified MAX account" in str(gap)
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        "  useEffect(() => {\n"
+        "    async function restore() { await getMaxActions(); }\n"
+        "    void restore();\n"
+        "  }, []);\n",
+        "  void getMaxActions;\n",
+    )
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+    assert "does not restore it after reload" in str(gap)
+
+
+def test_completion_rejects_local_identity_and_persistence_stubs() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { useMaxApp } from "@/components/MaxAppProvider";',
+        "function useMaxApp() { return { mode: 'ready', user: null, error: '' }; }",
+    )
+    assert "Import useMaxApp" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { createMaxAction, getMaxActions, requestOmniaAI } '
+        'from "@/lib/omnia/integration-client";',
+        'import { requestOmniaAI } from "@/lib/omnia/integration-client";\n'
+        "async function createMaxAction() {}\n"
+        "async function getMaxActions() { return { actions: [] }; }\n"
+    )
+    assert "Import createMaxAction" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+
+def test_managed_import_decoys_cannot_authorize_local_stubs_in_another_module() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { useMaxApp } from "@/components/MaxAppProvider";',
+        "function useMaxApp() { return { mode: 'ready', user: null, error: '' }; }",
+    )
+    files["src/components/ManagedImports.tsx"] = (
+        'import { useMaxApp } from "@/components/MaxAppProvider";\n'
+        "export const managedIdentityReference = useMaxApp;"
+    )
+    assert "Import useMaxApp" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { createMaxAction, getMaxActions, requestOmniaAI } '
+        'from "@/lib/omnia/integration-client";',
+        'import { requestOmniaAI } from "@/lib/omnia/integration-client";\n'
+        "async function createMaxAction() {}\n"
+        "async function getMaxActions() { return { actions: [] }; }",
+    )
+    files["src/components/ManagedImports.tsx"] = (
+        'import { createMaxAction, getMaxActions } '
+        'from "@/lib/omnia/integration-client";\n'
+        "export const managedActionReferences = [createMaxAction, getMaxActions];"
+    )
+    assert "Import createMaxAction" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+
+def test_aliased_managed_imports_cannot_authorize_same_module_stubs() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { useMaxApp } from "@/components/MaxAppProvider";',
+        'import { useMaxApp as managedUseMaxApp } from "@/components/MaxAppProvider";\n'
+        "void managedUseMaxApp;\n"
+        "function useMaxApp() { return { mode: 'ready', user: null, error: '' }; }",
+    )
+    assert "Import useMaxApp" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { createMaxAction, getMaxActions, requestOmniaAI } '
+        'from "@/lib/omnia/integration-client";',
+        'import { createMaxAction as managedCreate, getMaxActions as managedGet, '
+        'requestOmniaAI } from "@/lib/omnia/integration-client";\n'
+        "void managedCreate; void managedGet;\n"
+        "async function createMaxAction() {}\n"
+        "async function getMaxActions() { return { actions: [] }; }",
+    )
+    assert "Import createMaxAction" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { createMaxAction, getMaxActions, requestOmniaAI } '
+        'from "@/lib/omnia/integration-client";',
+        'import { createMaxAction, getMaxActions, requestOmniaAI as managedAI } '
+        'from "@/lib/omnia/integration-client";\n'
+        "void managedAI;\n"
+        "async function requestOmniaAI() { return { answer: '' }; }",
+    )
+    assert "requestOmniaAI" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { useMaxApp } from "@/components/MaxAppProvider";',
+        'import { type useMaxApp } from "@/components/MaxAppProvider";\n'
+        "function useMaxApp() { return { mode: 'ready', user: null, error: '' }; }",
+    )
+    assert "Import useMaxApp" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+
+def test_commented_pseudo_imports_and_calls_do_not_satisfy_managed_runtime() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { useMaxApp } from "@/components/MaxAppProvider";',
+        '// import { useMaxApp } from "@/components/MaxAppProvider";',
+    ).replace(
+        "const { mode, user, error } = useMaxApp();",
+        "// const managed = useMaxApp();\n"
+        "  const { mode, user, error } = { mode: 'ready', user: null, error: '' };",
+    )
+    assert "Import useMaxApp" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { createMaxAction, getMaxActions, requestOmniaAI } '
+        'from "@/lib/omnia/integration-client";',
+        '// import { createMaxAction, getMaxActions, requestOmniaAI } '
+        'from "@/lib/omnia/integration-client";\n'
+        "async function createMaxAction() {}\n"
+        "async function getMaxActions() { return { actions: [] }; }\n"
+        "async function requestOmniaAI() { return { answer: '' }; }",
+    )
+    assert "requestOmniaAI" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        'import { useMaxApp } from "@/components/MaxAppProvider";',
+        "const fakeImport = `import { useMaxApp } "
+        'from "@/components/MaxAppProvider";`;\n'
+        "function useMaxApp() { return { mode: 'ready', user: null, error: '' }; }",
+    )
+    assert "Import useMaxApp" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
 
 
 def test_managed_core_copy_cannot_fake_product_coverage() -> None:

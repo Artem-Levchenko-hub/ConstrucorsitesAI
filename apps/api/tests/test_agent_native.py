@@ -15,6 +15,10 @@ import pytest
 
 from omnia_api.services import agent_native
 from omnia_api.services.agent_native import _module_not_found_hint
+from omnia_api.services.max_generation_contract import (
+    MAX_REQUIRED_POST_SEE_SKILL,
+    MAX_REQUIRED_PREWRITE_SKILLS,
+)
 
 
 def test_native_agent_and_autoheal_use_gemini_custom_tools_model() -> None:
@@ -71,6 +75,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "build_max_product_contract" in source
     assert "max_completion_gap" in source
     assert "completion_check=_completion_check" in source
+    assert "enforce_max_skill_lifecycle" in source
     assert 'max_steps=(None if project_template == "max_miniapp" else _agent_steps)' in source
     assert '"autonomous_recovery"' not in source
     assert "_seg <" not in source
@@ -80,6 +85,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "if path not in MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
     assert "max_model_write_rejection" in source
+    assert "max_demo_data_rejection" in source
     assert "create_max_preview_session" in source
     assert "_recover_max_resume_prompt" in source
     assert '"rm -f -- src/app/page.tsx"' in source
@@ -838,6 +844,92 @@ def test_native_observation_has_stable_harness_shape() -> None:
         "artifacts": [],
         "data": "TS2307 missing module",
     }
+
+
+@pytest.mark.asyncio
+async def test_max_lifecycle_enforces_unique_skills_and_visual_review_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "too early"})),
+            _turn(
+                *(
+                    ("read_skill", {"skill": skill, "reason": "required"})
+                    for skill in MAX_REQUIRED_PREWRITE_SKILLS
+                )
+            ),
+            _turn(("read_skill", {"skill": "product-flow", "reason": "duplicate"})),
+            _turn(
+                ("read_skill", {"skill": "domain-fitness", "reason": "domain"}),
+                ("read_skill", {"skill": "trust-safety", "reason": "health"}),
+                ("read_skill", {"skill": "growth-analytics", "reason": "growth"}),
+                ("read_skill", {"skill": "interaction-motion", "reason": "over budget"}),
+            ),
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "product"})),
+            _turn(("build", {})),
+            _turn(
+                (
+                    "read_skill",
+                    {"skill": MAX_REQUIRED_POST_SEE_SKILL, "reason": "too early"},
+                )
+            ),
+            _turn(("see", {"path": "/"})),
+            _turn(
+                (
+                    "read_skill",
+                    {"skill": MAX_REQUIRED_POST_SEE_SKILL, "reason": "rendered review"},
+                ),
+                ("done", {"summary": "same turn is premature"}),
+            ),
+            _turn(("done", {"summary": "review applied"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    executed: list[tuple[str, str]] = []
+
+    async def execute(action: Any) -> dict[str, Any]:
+        executed.append((action.name, str(action.args.get("skill") or action.path)))
+        return {
+            "ok": True,
+            "content": action.args.get("content", "loaded"),
+            "detail": "green",
+        }
+
+    def check(files: Any, evidence: Any) -> str | None:
+        for skill in (*MAX_REQUIRED_PREWRITE_SKILLS, MAX_REQUIRED_POST_SEE_SKILL):
+            if evidence.get(f"skill:{skill}", 0) < 1:
+                return f"missing {skill}"
+        if evidence.get("visual_evaluation_after_see", 0) < 1:
+            return "visual evaluation result is not applied yet"
+        return None if files.get("src/app/page.tsx") == "product" else "missing product"
+
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="build",
+        execute=execute,
+        completion_check=check,
+        enforce_max_skill_lifecycle=True,
+        max_steps=None,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "done"
+    assert result.summary == "review applied"
+    assert ("write_file", "src/app/page.tsx") in executed
+    assert executed.count(("write_file", "src/app/page.tsx")) == 1
+    assert executed.count(("read_skill", "product-flow")) == 1
+    assert ("read_skill", "interaction-motion") not in executed
+    assert executed.count(("read_skill", MAX_REQUIRED_POST_SEE_SKILL)) == 1
+    assert executed.index(("see", "/")) < executed.index(
+        ("read_skill", MAX_REQUIRED_POST_SEE_SKILL)
+    )
 
 
 @pytest.mark.asyncio

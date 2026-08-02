@@ -502,6 +502,10 @@ static demo response or fake timer is not a finished application. Persist user a
 `createMaxAction` and read them with `getMaxActions`, both from
 `@/lib/omnia/integration-client`. Never import `@/lib/db`/`drizzle-orm` or create
 parallel API routes: MAX Studio owns auth, tenant filtering and persistence.
+The signed MAX launch creates the real user profile automatically. Use `useMaxApp()`;
+never add email/password auth or hardcode demo/mock/sample/seed user records. A new
+account starts from truthful empty states, and data shown after reload must come from
+the managed user-scoped API.
 When the brief requests AI, use the exact typed call
 `const { answer } = await requestOmniaAI({ message, instructions, context })`
 from `@/lib/omnia/integration-client`; the managed Google model runs server-side.

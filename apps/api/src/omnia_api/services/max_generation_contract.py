@@ -107,6 +107,44 @@ _ASYNC_STATES_PROMPT_RE = re.compile(
     r"(?:loading|empty|error|retry|загрузк|пуст\w*|ошибк|повтор)",
     re.IGNORECASE,
 )
+_SEEDED_COLLECTION_RE = re.compile(
+    r"\b(?:const|let|var)\s+"
+    r"(?:(?P<name>[A-Za-z_$][\w$]*)|"
+    r"\[\s*(?P<state_name>[A-Za-z_$][\w$]*)\s*,[^\]]+\])"
+    r"\s*(?::[^=;\n]+)?=\s*"
+    r"(?:useState(?:<[^;\n()]+>)?\s*\(\s*)?"
+    r"\[\s*\{(?P<body>[^}]{0,2000})\}",
+    re.IGNORECASE | re.DOTALL,
+)
+_SEEDED_RECORD_FIELD_RE = re.compile(
+    r"\b(?:userId|maxUserId|createdAt|completedAt|duration|reps|sets|weight|"
+    r"calories|price|bookingId|orderId|workoutId|appointmentId|messageId)\s*:",
+    re.IGNORECASE,
+)
+_SEEDED_PROFILE_RE = re.compile(
+    r"\b(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)"
+    r"\s*(?::[^=;\n]+)?=\s*\{[^}]{0,1200}"
+    r"(?:first_?name|last_?name|full_?name|email|avatar|photo_?url|username)"
+    r"\s*:\s*['\"][^'\"]+['\"]",
+    re.IGNORECASE | re.DOTALL,
+)
+_SEEDED_NAME_PARTS = (
+    "appointment",
+    "booking",
+    "demo",
+    "fake",
+    "fixture",
+    "history",
+    "message",
+    "metric",
+    "mock",
+    "order",
+    "progress",
+    "record",
+    "sample",
+    "seed",
+    "workout",
+)
 
 _PRODUCT_SUFFIXES = (".ts", ".tsx", ".css")
 _NON_PRODUCT_PATHS = {
@@ -131,6 +169,178 @@ _MANAGED_DB_PATHS = {
 
 _MAX_DESIGN_SPEC_PATH = ".omnia/max-design-spec.json"
 _REQUIRED_DESIGN_STATES = frozenset({"loading", "empty", "error", "success"})
+MAX_REQUIRED_PREWRITE_SKILLS = (
+    "ui-ux-pro-max",
+    "product-flow",
+    "art-direction",
+    "production-readiness",
+)
+MAX_REQUIRED_POST_SEE_SKILL = "visual-evaluation"
+
+
+def _starts_js_regex(content: str, index: int) -> bool:
+    previous = index - 1
+    while previous >= 0 and content[previous].isspace():
+        previous -= 1
+    return previous < 0 or content[previous] in "=(:,[!&|?{};>"
+
+
+def _strip_js_non_code(content: str, *, keep_strings: bool) -> str:
+    """Blank JS/TS comments and, optionally, string literals while keeping offsets."""
+
+    chars = list(content)
+    index = 0
+    state = "code"
+    quote = ""
+    while index < len(chars):
+        char = chars[index]
+        next_char = chars[index + 1] if index + 1 < len(chars) else ""
+        if state == "code":
+            if char == "/" and next_char == "/":
+                chars[index] = chars[index + 1] = " "
+                index += 2
+                state = "line_comment"
+                continue
+            if char == "/" and next_char == "*":
+                chars[index] = chars[index + 1] = " "
+                index += 2
+                state = "block_comment"
+                continue
+            if char == "/" and _starts_js_regex(content, index):
+                state = "regex"
+                chars[index] = " "
+                index += 1
+                continue
+            if char in {"'", '"', "`"}:
+                quote = char
+                state = "string"
+                if not keep_strings:
+                    chars[index] = " "
+            index += 1
+            continue
+        if state == "line_comment":
+            if char == "\n":
+                state = "code"
+            else:
+                chars[index] = " "
+            index += 1
+            continue
+        if state == "block_comment":
+            if char == "*" and next_char == "/":
+                chars[index] = chars[index + 1] = " "
+                index += 2
+                state = "code"
+            else:
+                if char != "\n":
+                    chars[index] = " "
+                index += 1
+            continue
+        if state == "regex":
+            if char == "\\":
+                chars[index] = " "
+                if index + 1 < len(chars) and chars[index + 1] != "\n":
+                    chars[index + 1] = " "
+                index += 2
+                continue
+            if char == "/":
+                chars[index] = " "
+                state = "code"
+            elif char != "\n":
+                chars[index] = " "
+            index += 1
+            continue
+        if char == "\\":
+            if not keep_strings:
+                chars[index] = " "
+                if index + 1 < len(chars) and chars[index + 1] != "\n":
+                    chars[index + 1] = " "
+            index += 2
+            continue
+        if char == quote:
+            if not keep_strings:
+                chars[index] = " "
+            state = "code"
+            quote = ""
+        elif not keep_strings and char != "\n":
+            chars[index] = " "
+        index += 1
+    return "".join(chars)
+
+
+def _js_code_mask(content: str) -> list[bool]:
+    """Mark offsets parsed as JS/TS code rather than comments or strings."""
+
+    mask = [False] * len(content)
+    index = 0
+    state = "code"
+    quote = ""
+    while index < len(content):
+        char = content[index]
+        next_char = content[index + 1] if index + 1 < len(content) else ""
+        if state == "code":
+            if char == "/" and next_char in {"/", "*"}:
+                state = "line_comment" if next_char == "/" else "block_comment"
+                index += 2
+                continue
+            if char in {"'", '"', "`"}:
+                quote = char
+                state = "string"
+                index += 1
+                continue
+            if char == "/" and _starts_js_regex(content, index):
+                state = "regex"
+                index += 1
+                continue
+            mask[index] = True
+            index += 1
+            continue
+        if state == "line_comment":
+            if char == "\n":
+                mask[index] = True
+                state = "code"
+            index += 1
+            continue
+        if state == "block_comment":
+            if char == "*" and next_char == "/":
+                index += 2
+                state = "code"
+            else:
+                index += 1
+            continue
+        if state == "regex":
+            if char == "\\":
+                index += 2
+                continue
+            if char == "/":
+                state = "code"
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char == quote:
+            state = "code"
+            quote = ""
+        index += 1
+    return mask
+
+
+def _has_managed_named_import(content: str, symbol: str, module: str) -> bool:
+    code_mask = _js_code_mask(content)
+    content = _strip_js_non_code(content, keep_strings=True)
+    import_re = re.compile(
+        rf"import\s*\{{(?P<specifiers>[^}}]*)\}}\s*"
+        rf"from\s*['\"]{re.escape(module)}['\"]",
+        re.IGNORECASE | re.DOTALL,
+    )
+    exact_symbol_re = re.compile(re.escape(symbol), re.IGNORECASE)
+    for match in import_re.finditer(content):
+        if match.start() >= len(code_mask) or not code_mask[match.start()]:
+            continue
+        specifiers = re.sub(r"/\*.*?\*/", "", match.group("specifiers"), flags=re.DOTALL)
+        if any(exact_symbol_re.fullmatch(item.strip()) for item in specifiers.split(",")):
+            return True
+    return False
 
 
 def _is_product_source(path: str) -> bool:
@@ -164,6 +374,39 @@ def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, .
     return found
 
 
+def max_demo_data_rejection(path: str, content: str) -> str | None:
+    """Reject executable seeded user records in model-owned MAX product source.
+
+    Instructional prose remains valid; the gate targets non-empty record arrays
+    and literal manufactured profiles rather than merely matching words such as
+    ``sample`` in UI copy.
+    """
+
+    if not _is_product_source(path):
+        return None
+    matched_name = ""
+    for match in _SEEDED_COLLECTION_RE.finditer(content or ""):
+        name = str(match.group("name") or match.group("state_name") or "")
+        body = str(match.group("body") or "")
+        if any(part in name.casefold() for part in _SEEDED_NAME_PARTS) or (
+            _SEEDED_RECORD_FIELD_RE.search(body) is not None
+        ):
+            matched_name = name
+            break
+    if not matched_name:
+        profile_match = _SEEDED_PROFILE_RE.search(content or "")
+        if profile_match:
+            name = str(profile_match.group("name") or "")
+            matched_name = name
+    if not matched_name:
+        return None
+    return (
+        "Hardcoded demo user data is forbidden in a published MAX app "
+        f"({matched_name}). Remove seeded records and render a truthful empty "
+        "state backed by getMaxActions/createMaxAction."
+    )
+
+
 def build_max_product_contract(prompt: str) -> str:
     """Human/model-readable checklist appended to a full MAX build task."""
 
@@ -183,6 +426,12 @@ def build_max_product_contract(prompt: str) -> str:
         "brief coverage, never by an arbitrary number of files. Decorative tabs are not screens.",
         "- Every button must execute a real state change or persisted request. No decorative "
         "controls, fake timers, TODOs, simulated success or claimed integrations.",
+        "- Real accounts come from validated MAX initData: the managed session creates or "
+        "refreshes max_users on first open. Use useMaxApp for identity; never add password "
+        "login or manufacture a profile.",
+        "- Ship no hardcoded demo user data, history, metrics, orders, bookings or workouts. "
+        "A new account starts with truthful empty states and creates real persisted data "
+        "through the managed client. Business catalog content comes from omniaMaxConfig.",
         "- Use createMaxAction for persisted MAX user activity. Never store a provider key "
         "in source code or expose it to the browser.",
         "- Never import @/lib/db or drizzle-orm and never create parallel /api/max or "
@@ -328,7 +577,16 @@ def max_source_completion_gap(
 
     capabilities = requested_max_capabilities(prompt)
     product_sources = [content for path, content in files.items() if _is_product_source(path)]
-    corpus = "\n".join(content.lower() for content in product_sources)
+    product_source_blob = "\n".join(product_sources)
+    corpus = product_source_blob.lower()
+    product_source_views = [
+        (source, _strip_js_non_code(source, keep_strings=False))
+        for source in product_sources
+    ]
+    for path, content in files.items():
+        demo_rejection = max_demo_data_rejection(path, content)
+        if demo_rejection:
+            return demo_rejection
     unsafe_product_db_paths = [
         path
         for path, content in files.items()
@@ -362,21 +620,66 @@ def max_source_completion_gap(
         return "Explicit brief capabilities are still missing: " + ", ".join(missing) + "."
 
     if _AI_PROMPT_RE.search(prompt):
-        if "requestomniaai" not in corpus:
+        managed_ai_call = any(
+            _has_managed_named_import(
+                source, "requestOmniaAI", "@/lib/omnia/integration-client"
+            )
+            and re.search(r"\bawait\s+requestomniaai\s*\(", code, re.IGNORECASE)
+            for source, code in product_source_views
+        )
+        if not managed_ai_call:
             return (
-                "The brief requests real AI, but the product does not call requestOmniaAI. "
-                "Use the managed server-side Google AI primitive; do not simulate analysis."
+                "The brief requests real AI, but no product module imports and awaits "
+                "requestOmniaAI from @/lib/omnia/integration-client. Use the managed "
+                "server-side Google AI primitive; do not simulate analysis."
             )
         if re.search(r"settimeout\s*\([^)]*(?:analy|анализ|coach|тренер)", corpus, re.DOTALL):
             return "A timer is still simulating AI work. Replace it with requestOmniaAI."
 
-    if _PERSISTENCE_PROMPT_RE.search(prompt) and not any(
-        marker in corpus
-        for marker in ("createmaxaction", "/api/omnia/actions", "maxbusinessactions")
-    ):
+    managed_identity_call = any(
+        _has_managed_named_import(source, "useMaxApp", "@/components/MaxAppProvider")
+        and re.search(
+            r"\b(?:const|let)\s+(?:\{[^}]+\}|[A-Za-z_$][\w$]*)\s*=\s*usemaxapp\s*\(",
+            code,
+            re.IGNORECASE,
+        )
+        for source, code in product_source_views
+    )
+    if not managed_identity_call:
+        return (
+            "The product does not consume the verified MAX account. Import useMaxApp "
+            "from @/components/MaxAppProvider and call useMaxApp() in the product UI."
+        )
+
+    persistence_required = _PERSISTENCE_PROMPT_RE.search(prompt) is not None
+    managed_create_call = any(
+        _has_managed_named_import(
+            source, "createMaxAction", "@/lib/omnia/integration-client"
+        )
+        and re.search(r"\bawait\s+createmaxaction\s*\(", code, re.IGNORECASE)
+        for source, code in product_source_views
+    )
+    managed_restore_call = any(
+        _has_managed_named_import(
+            source, "getMaxActions", "@/lib/omnia/integration-client"
+        )
+        and re.search(
+            r"\buseeffect\s*\(.{0,1600}?\bawait\s+getmaxactions\s*\(",
+            code,
+            re.IGNORECASE | re.DOTALL,
+        )
+        for source, code in product_source_views
+    )
+    if persistence_required and not managed_create_call:
         return (
             "The brief requires user data/history, but no persisted MAX action flow exists. "
-            "Use createMaxAction (or a user-scoped API route) and render the saved result."
+            "Import createMaxAction from @/lib/omnia/integration-client and await it "
+            "from a real user action."
+        )
+    if persistence_required and not managed_restore_call:
+        return (
+            "The product writes user data but does not restore it after reload. Import and "
+            "await getMaxActions() from a mounted useEffect loading path."
         )
 
     if _ASYNC_STATES_PROMPT_RE.search(prompt):
@@ -413,16 +716,31 @@ def max_completion_gap(
     source_gap = max_source_completion_gap(prompt, files)
     if source_gap:
         return source_gap
+    missing_skills = [
+        skill
+        for skill in MAX_REQUIRED_PREWRITE_SKILLS
+        if evidence.get(f"skill:{skill}", 0) < 1
+    ]
+    if missing_skills:
+        return "Read required MAX capability packs: " + ", ".join(missing_skills) + "."
     if evidence.get("runtime_check_after_write", 0) < 1:
         return "Run runtime_check on the finished product after the last source write."
     if evidence.get("see_after_write", 0) < 1:
         return "Run see once through the signed MAX preview after the last source write."
+    if evidence.get("visual_evaluation_after_see", 0) < 1:
+        return (
+            "Read visual-evaluation after the first rendered see and apply its critique "
+            "before done."
+        )
     return None
 
 
 __all__ = [
+    "MAX_REQUIRED_POST_SEE_SKILL",
+    "MAX_REQUIRED_PREWRITE_SKILLS",
     "build_max_product_contract",
     "max_completion_gap",
+    "max_demo_data_rejection",
     "max_source_completion_gap",
     "normalize_max_globals_css",
     "requested_max_capabilities",

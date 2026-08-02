@@ -29,6 +29,10 @@ import structlog
 
 from omnia_api.core.config import PRIMARY_LLM_MODEL, get_settings
 from omnia_api.services.agent_builder import Action, AgentResult
+from omnia_api.services.max_generation_contract import (
+    MAX_REQUIRED_POST_SEE_SKILL,
+    MAX_REQUIRED_PREWRITE_SKILLS,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -636,9 +640,15 @@ _MAX_NATIVE_PREAMBLE = (
     "анимация должна объяснять действие, изменение состояния или навигационный контекст.\n\n"
     "УСИЛЕНИЕ НАВЫКАМИ, НЕ ШАБЛОНАМИ. В system prompt есть короткий MAX "
     "CAPABILITY CATALOG. На первой полной сборке до первой записи продуктового кода "
-    "обязательно вызови read_skill(`ui-ux-pro-max`) ровно один раз: это расширяет "
-    "творческий диапазон, но не выбирает пресет. Затем можно подключить не более двух "
-    "других packs для реально сложных частей брифа. На точечной правке "
+    "обязательно по одному разу вызови read_skill(`ui-ux-pro-max`), "
+    "read_skill(`product-flow`), read_skill(`art-direction`) и "
+    "read_skill(`production-readiness`). Это расширяет "
+    "творческий диапазон, но не выбирает пресет. После первого `see`, перед финальным "
+    "`done`, ровно один раз вызови read_skill(`visual-evaluation`) и примени честную "
+    "критику к уже отрисованному продукту. Дополнительно загрузи `interaction-motion`, "
+    "ровно один подходящий domain-pack, `trust-safety` или `growth-analytics` только "
+    "когда их trigger из каталога реально присутствует в брифе; не более трёх таких "
+    "triggered packs за сборку. На точечной правке "
     "не трать ход на skill, если уже знаешь решение. Навык — это оптика, эвристики и "
     "сырьё для мышления: он не меняет бриф, не выбирает за тебя арт-дирекцию и не "
     "обязывает к конкретной компоновке. Не загружай всё подряд.\n\n"
@@ -781,6 +791,7 @@ async def run_native_build(
     free: bool = False,
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
+    enforce_max_skill_lifecycle: bool = False,
     max_steps: int | None = 24,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
@@ -804,16 +815,25 @@ async def run_native_build(
     no_write_turns = 0  # consecutive assistant turns with no successful write
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
     successful_tools: dict[str, int] = {}
+    successful_skill_ids: set[str] = set()
     proof_after_write: set[str] = set()
     visual_feedback_step: int | None = None
+    last_green_see_step: int | None = None
+    pending_visual_evaluation_step: int | None = None
+    visual_evaluation_ready = False
 
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
+    max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
     effective_max_steps = (
         None if max_runtime else max(1, int(24 if max_steps is None else max_steps))
     )
 
     def _evidence() -> dict[str, int]:
         result = dict(successful_tools)
+        for skill in successful_skill_ids:
+            result[f"skill:{skill}"] = 1
+        if visual_evaluation_ready:
+            result["visual_evaluation_after_see"] = 1
         for tool in proof_after_write:
             result[f"{tool}_after_write"] = 1
         return result
@@ -923,6 +943,11 @@ async def run_native_build(
     async with httpx.AsyncClient() as client:
         step_numbers = count() if effective_max_steps is None else range(effective_max_steps)
         for step in step_numbers:
+            if (
+                pending_visual_evaluation_step is not None
+                and step > pending_visual_evaluation_step
+            ):
+                visual_evaluation_ready = True
             call_stage = (
                 "build_plan"
                 if step == 0
@@ -1068,10 +1093,68 @@ async def run_native_build(
                     continue
 
                 action = _tool_use_to_action(tu)
-                try:
-                    obs = await execute(action)
-                except Exception as exc:  # a tool crash must not kill the build
-                    obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
+                lifecycle_error = ""
+                if max_runtime and name == "read_skill":
+                    skill_id = str(action.args.get("skill") or "").strip().casefold()
+                    if skill_id in successful_skill_ids:
+                        lifecycle_error = (
+                            f"Capability pack `{skill_id}` is already loaded. Apply it instead "
+                            "of spending another tool call."
+                        )
+                    elif (
+                        max_lifecycle
+                        and skill_id == MAX_REQUIRED_POST_SEE_SKILL
+                        and (
+                            "see" not in proof_after_write
+                            or last_green_see_step is None
+                            or step <= last_green_see_step
+                        )
+                    ):
+                        lifecycle_error = (
+                            "Run a green `see` after the latest product write, then load "
+                            "`visual-evaluation` in the next model turn so it can inspect "
+                            "the actual screenshot result."
+                        )
+                    elif max_lifecycle and skill_id not in {
+                        *MAX_REQUIRED_PREWRITE_SKILLS,
+                        MAX_REQUIRED_POST_SEE_SKILL,
+                    }:
+                        optional_skills = successful_skill_ids.difference(
+                            {*MAX_REQUIRED_PREWRITE_SKILLS, MAX_REQUIRED_POST_SEE_SKILL}
+                        )
+                        if len(optional_skills) >= 3:
+                            lifecycle_error = (
+                                "The three optional capability-pack slots are already used. "
+                                "Apply the loaded specialist guidance and continue building."
+                            )
+                elif max_lifecycle and name in {"write_file", "edit_file"}:
+                    missing_skills: list[str] = []
+                    if pending_visual_evaluation_step == step:
+                        lifecycle_error = (
+                            "Apply visual-evaluation in the next model turn after receiving "
+                            "the capability result; a same-turn write cannot use it."
+                        )
+                    else:
+                        missing_skills = [
+                            skill
+                            for skill in MAX_REQUIRED_PREWRITE_SKILLS
+                            if skill not in successful_skill_ids
+                        ]
+                    if not lifecycle_error and missing_skills:
+                        lifecycle_error = (
+                            "Before the first product write, load the required capability packs: "
+                            + ", ".join(missing_skills)
+                            + "."
+                        )
+
+                obs: dict[str, Any]
+                if lifecycle_error:
+                    obs = {"ok": False, "error": lifecycle_error}
+                else:
+                    try:
+                        obs = await execute(action)
+                    except Exception as exc:  # a tool crash must not kill the build
+                        obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
                 # Emit AFTER execute so the step carries a `detail` — what the tool
                 # actually did (written content preview, build output, read result)
                 # — so the UI can let the user drill INTO a step and see inside it.
@@ -1106,16 +1189,25 @@ async def run_native_build(
                     if visual_feedback_step is not None and step > visual_feedback_step:
                         visual_feedback_step = None
                     proof_after_write.clear()
+                    last_green_see_step = None
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
                     wrote_since_build = False
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
+                    if name == "read_skill":
+                        skill_id = str(action.args.get("skill") or "").strip().casefold()
+                        if skill_id:
+                            successful_skill_ids.add(skill_id)
+                        if skill_id == MAX_REQUIRED_POST_SEE_SKILL and max_lifecycle:
+                            pending_visual_evaluation_step = step
                     if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
                         if name == "see" and obs.get("needs_fix"):
                             visual_feedback_step = step
                         else:
                             proof_after_write.add(name)
+                            if name == "see":
+                                last_green_see_step = step
                 _tr = _obs_to_tool_result(tu_id, obs, tool_name=name)
                 if name == "build" and not obs.get("ok"):
                     _hint = _build_error_hint(str(_tr.get("content") or ""))

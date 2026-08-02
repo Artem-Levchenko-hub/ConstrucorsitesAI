@@ -3179,6 +3179,9 @@ async def _process_prompt(
             )
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
             if project_template == "max_miniapp":
+                from omnia_api.services.max_generation_contract import (
+                    max_demo_data_rejection,
+                )
                 from omnia_api.services.max_project_kit import MAX_MODEL_LOCKED_FILES
                 from omnia_api.services.secret_safety import max_model_write_rejection
 
@@ -3252,6 +3255,9 @@ async def _process_prompt(
                         _secret_rejection = max_model_write_rejection(action.path, _candidate)
                         if _secret_rejection:
                             return {"ok": False, "error": _secret_rejection}
+                        _demo_rejection = max_demo_data_rejection(action.path, _candidate)
+                        if _demo_rejection:
+                            return {"ok": False, "error": _demo_rejection}
                         if "@/lib/db" in _candidate or "drizzle-orm" in _candidate:
                             return {
                                 "ok": False,
@@ -3809,6 +3815,9 @@ async def _process_prompt(
                     free=is_free,
                     emit=_agent_emit,
                     completion_check=_completion_check,
+                    enforce_max_skill_lifecycle=(
+                        project_template == "max_miniapp" and not _is_edit
+                    ),
                     max_steps=(None if project_template == "max_miniapp" else _agent_steps),
                 )
             elif _agent_res is None:

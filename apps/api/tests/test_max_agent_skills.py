@@ -3,6 +3,21 @@ from __future__ import annotations
 from omnia_api.services import agent_builder, agent_native
 from omnia_api.services.max_agent_skills import read_max_skill
 
+CREATIVE_CAPABILITY_PACKS = {
+    "product-flow",
+    "art-direction",
+    "interaction-motion",
+    "domain-fitness",
+    "domain-restaurant",
+    "domain-booking",
+    "domain-education",
+    "domain-commerce",
+    "trust-safety",
+    "growth-analytics",
+    "visual-evaluation",
+    "production-readiness",
+}
+
 
 def test_max_system_gets_only_compact_capability_catalog() -> None:
     index = agent_builder.load_stack_skill_index("max-miniapp-nextjs")
@@ -15,8 +30,25 @@ def test_max_system_gets_only_compact_capability_catalog() -> None:
 
     prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT", index)
     assert "MAX capability catalog" in prompt
-    assert "`product-strategy`" in prompt
+    assert "`product-flow`" in prompt
     assert "read_skill(`ui-ux-pro-max`)" in prompt
+    assert "read_skill(`production-readiness`)" in prompt
+    assert "read_skill(`visual-evaluation`)" in prompt
+
+
+def test_creative_capability_architecture_is_routable_without_templates() -> None:
+    index = agent_builder.load_stack_skill_index("max-miniapp-nextjs")
+
+    assert index is not None
+    for skill_id in CREATIVE_CAPABILITY_PACKS:
+        assert f"`{skill_id}`" in index
+        loaded = agent_builder.load_stack_skill("max-miniapp-nextjs", skill_id)
+        assert loaded is not None
+        _, body = loaded
+        assert "template" not in body.lower() or "not a template" in body.lower()
+
+    assert "Lifecycle core" in index
+    assert "Trigger only when" in index
 
 
 def test_stack_skill_loader_is_slug_allowlisted() -> None:

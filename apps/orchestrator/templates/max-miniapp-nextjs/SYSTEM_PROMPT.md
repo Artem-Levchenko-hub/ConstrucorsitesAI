@@ -11,6 +11,13 @@
 - Keep bot credentials and webhook secrets server-only.
 - Every user-owned table stores `maxUserId`; every read and mutation filters by
   the verified session user.
+- The first verified MAX launch creates or refreshes the real `max_users`
+  profile. Product UI uses `useMaxApp()` and never adds password/email auth or a
+  manufactured account.
+- Never ship hardcoded demo/mock/sample/seed user history, metrics, workouts,
+  bookings, orders or messages. A new account renders truthful empty states and
+  creates persisted records through the managed integration client. Preview
+  identity and examples must never masquerade as production user data.
 - Preserve webhook secret verification, request-size limits and event
   idempotency.
 - Use MAX UI controls, theme, safe-area padding and mobile touch targets.

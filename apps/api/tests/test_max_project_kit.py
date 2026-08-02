@@ -208,6 +208,9 @@ def test_model_directive_matches_locked_max_runtime_api() -> None:
     assert "Do not invent `Panel`, `Grid`, `Container`, `Flex`" in MAX_MODEL_DIRECTIVE
     assert "src/app/globals.css` is model-owned" in MAX_MODEL_DIRECTIVE
     assert "360–390px MAX WebView" in MAX_MODEL_DIRECTIVE
+    assert "real user profile automatically" in MAX_MODEL_DIRECTIVE
+    assert "demo/mock/sample/seed user records" in MAX_MODEL_DIRECTIVE
+    assert "truthful empty states" in MAX_MODEL_DIRECTIVE
 
 
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:
