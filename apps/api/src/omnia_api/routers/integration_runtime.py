@@ -18,7 +18,7 @@ from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Header, status
 from sqlalchemy import select
 
-from omnia_api.core.config import PRIMARY_LLM_MODEL
+from omnia_api.core.config import MAX_STUDIO_LLM_MODEL
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
 from omnia_api.core.deps import SessionDep
 from omnia_api.core.errors import ApiError
@@ -199,7 +199,7 @@ async def runtime_integration_status(
     return RuntimeIntegrationStatus(
         providers=sorted(connections),
         capabilities=sorted(
-            {"Управляемый Google AI"}
+            {"Управляемый Sonnet 5"}
             | {
                 capability
                 for connection in connections.values()
@@ -253,7 +253,7 @@ async def request_runtime_ai(
     session: SessionDep,
     x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
 ) -> RuntimeAIPublic:
-    """Run real owner-funded Gemini inference without exposing provider keys."""
+    """Run real owner-funded Sonnet inference without exposing provider keys."""
 
     context = await _runtime_context(session, project_id, x_max_init_data)
     await _enforce_runtime_ai_limits(project_id, context.max_user_id)
@@ -282,7 +282,7 @@ async def request_runtime_ai(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            PRIMARY_LLM_MODEL,
+            MAX_STUDIO_LLM_MODEL,
             user_id=str(project.owner_id),
             project_id=str(project.id),
             max_tokens=1_600,
@@ -310,7 +310,7 @@ async def request_runtime_ai(
             "ИИ не вернул ответ. Попробуйте ещё раз.",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    return RuntimeAIPublic(answer=answer.strip(), model=PRIMARY_LLM_MODEL)
+    return RuntimeAIPublic(answer=answer.strip(), model=MAX_STUDIO_LLM_MODEL)
 
 
 @router.post("/{project_id}/payments", response_model=RuntimePaymentPublic)

@@ -230,7 +230,7 @@ def test_anthropic_response_preserves_tool_id_and_arguments() -> None:
         },
     }
 
-    adapted = messages_native._anthropic_response(upstream, "gemini-3.1-pro-preview-customtools")
+    adapted = messages_native._anthropic_response(upstream, "claude-sonnet-5")
 
     assert adapted["stop_reason"] == "tool_use"
     assert adapted["content"][0] == {
@@ -300,7 +300,7 @@ def test_native_endpoint_uses_llmgw_chat_tools(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "max_tokens": 128,
             "user": "11111111-1111-1111-1111-111111111111",
             "metadata": {
@@ -326,7 +326,7 @@ def test_native_endpoint_uses_llmgw_chat_tools(
 
     assert response.status_code == 200
     assert captured["url"] == "https://api.llmgw.ru/v1/chat/completions"
-    assert captured["json"]["model"] == "google/gemini-3.1-pro-preview-customtools"
+    assert captured["json"]["model"] == "anthropic/claude-sonnet-5"
     assert captured["json"]["tools"][0]["function"]["name"] == "done"
     assert response.json()["content"][0] == {
         "type": "tool_use",
@@ -337,7 +337,7 @@ def test_native_endpoint_uses_llmgw_chat_tools(
     assert messages_native.billing.charge.await_args.kwargs[
         "provider_cost_usd"
     ] == messages_native._reserve_native_provider_cost(
-        "gemini-3.1-pro-preview-customtools", captured["json"]
+        "claude-sonnet-5", captured["json"]
     )
 
 
@@ -386,7 +386,7 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "max_tokens": 1000,
             "user": user_id,
             "metadata": {
@@ -438,7 +438,7 @@ def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "user": "11111111-1111-1111-1111-111111111111",
             "metadata": {
                 "project_id": "22222222-2222-2222-2222-222222222222",
@@ -471,7 +471,7 @@ def test_native_endpoint_stops_free_run_before_provider_when_run_budget_is_reach
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "user": "11111111-1111-1111-1111-111111111111",
             "metadata": {
                 "run_id": "33333333-3333-3333-3333-333333333333",
@@ -504,7 +504,7 @@ def test_native_endpoint_fails_closed_when_run_accounting_is_unavailable(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "user": "11111111-1111-1111-1111-111111111111",
             "metadata": {"run_id": "33333333-3333-3333-3333-333333333333"},
             "messages": [{"role": "user", "content": "do not bypass accounting"}],
@@ -538,7 +538,7 @@ def test_native_endpoint_releases_reservation_after_explicit_upstream_rejection(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "user": "11111111-1111-1111-1111-111111111111",
             "metadata": {
                 "run_id": "33333333-3333-3333-3333-333333333333",
@@ -575,7 +575,7 @@ def test_native_endpoint_keeps_reservation_after_ambiguous_upstream_failure(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "user": "11111111-1111-1111-1111-111111111111",
             "metadata": {
                 "run_id": "33333333-3333-3333-3333-333333333333",
@@ -624,7 +624,7 @@ def test_native_endpoint_marks_post_provider_settlement_failure_as_ambiguous(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "user": "11111111-1111-1111-1111-111111111111",
             "metadata": {
                 "run_id": "33333333-3333-3333-3333-333333333333",
@@ -672,7 +672,7 @@ def test_native_endpoint_marks_post_provider_wallet_race_as_ambiguous(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "user": "11111111-1111-1111-1111-111111111111",
             "metadata": {
                 "run_id": "33333333-3333-3333-3333-333333333333",
@@ -716,7 +716,7 @@ def test_native_endpoint_blocks_unattributed_calls_before_provider(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "gemini-3.1-pro-preview-customtools",
+            "model": "claude-sonnet-5",
             "user": user,
             "metadata": metadata,
             "messages": [{"role": "user", "content": "must be attributed"}],

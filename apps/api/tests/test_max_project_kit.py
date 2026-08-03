@@ -334,19 +334,20 @@ def test_managed_kit_never_contains_model_or_generation_calls() -> None:
     assert "generate(" not in combined
 
 
-def test_starter_kit_has_only_neutral_product_slot_without_visual_template() -> None:
+def test_starter_kit_is_a_working_green_product_shell() -> None:
     files = render_max_starter_files(_config(), uuid4())
 
     assert "OmniaProductRuntime" in files[MAX_PRODUCT_PAGE_PATH]
     assert "ssr: false" in files[MAX_PRODUCT_RUNTIME_PATH]
-    assert "return null" in files[MAX_PRODUCT_ENTRY_PATH]
+    assert "export default function ProductApp" in files[MAX_PRODUCT_ENTRY_PATH]
+    assert "useMaxApp" in files[MAX_PRODUCT_ENTRY_PATH]
+    assert "Начать" in files[MAX_PRODUCT_ENTRY_PATH]
     assert "src/app/globals.css" in files
     assert "src/app/layout.tsx" in files
     css = files["src/app/globals.css"]
-    assert '@import "tailwindcss"' in css
-    assert "generation-canvas" not in css
-    assert "canvas-" not in css
-    assert "feature-grid" not in css
+    assert ":root" in css
+    assert ".max-shell" in css
+    assert "@media" in css
     assert "TODO" not in "\n".join(files.values())
 
 
@@ -683,7 +684,7 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
                 user_id=user.id,
                 project_id=project.id,
                 run_id=run.id,
-                model_id="gemini-3.1-pro-preview-customtools",
+                model_id="claude-sonnet-5",
                 tokens_in=1_000,
                 tokens_out=100,
                 cost_rub=Decimal("2.5000"),
@@ -696,7 +697,7 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
                 user_id=user.id,
                 project_id=project.id,
                 run_id=run.id,
-                model_id="gemini-3.1-pro-preview-customtools",
+                model_id="claude-sonnet-5",
                 tokens_in=2_000,
                 tokens_out=200,
                 cost_rub=Decimal("5.2500"),
@@ -708,7 +709,7 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
                 user_id=user.id,
                 project_id=project.id,
                 run_id=run.id,
-                model_id="gemini-3.1-pro-preview-customtools",
+                model_id="claude-sonnet-5",
                 tokens_in=0,
                 tokens_out=0,
                 cost_rub=Decimal("80.0000"),

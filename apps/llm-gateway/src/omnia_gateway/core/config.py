@@ -54,10 +54,9 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 3600
     min_balance_rub: float = 5.0
 
-    # Native agent financial fuse. A MAX build may keep repairing beyond a
-    # fixed turn count, but no single run may spend without a hard server-side
-    # ceiling. These limits apply to free runs too: ``free`` means the customer
-    # wallet is not debited, not that the provider budget is unlimited.
+    # Native-agent financial fuse. It is independent from the restored bounded
+    # Sonnet loop and applies to free runs too: ``free`` means the customer
+    # wallet is not debited, not that provider spend is unlimited.
     native_run_max_cost_rub: float = 1200.0
     native_run_max_provider_cost_usd: float = 2.5
     native_run_max_requests: int = 80

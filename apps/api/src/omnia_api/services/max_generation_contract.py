@@ -440,7 +440,7 @@ def build_max_product_contract(prompt: str) -> str:
         "/api/omnia routes. Use the managed integration client for tenant-safe reads, "
         "writes, AI, consent and events.",
         "- If the brief asks for AI, call requestOmniaAI from "
-        "@/lib/omnia/integration-client. It reaches the managed Google model server-side; "
+        "@/lib/omnia/integration-client. It reaches the managed model server-side; "
         "the exact shape is `const { answer } = await requestOmniaAI({ message, "
         "instructions, context })`. setTimeout/random/static text is not AI.",
         "- After implementation: run a clean build, runtime_check the finished home screen "
@@ -645,7 +645,7 @@ def max_source_completion_gap(
             return (
                 "The brief requests real AI, but no product module imports and awaits "
                 "requestOmniaAI from @/lib/omnia/integration-client. Use the managed "
-                "server-side Google AI primitive; do not simulate analysis."
+                "server-side managed AI primitive; do not simulate analysis."
             )
         if re.search(r"settimeout\s*\([^)]*(?:analy|анализ|coach|тренер)", corpus, re.DOTALL):
             return "A timer is still simulating AI work. Replace it with requestOmniaAI."

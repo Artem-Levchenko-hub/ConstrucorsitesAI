@@ -20,11 +20,12 @@ from omnia_gateway.core.errors import (
 )
 from omnia_gateway.providers import llmgw
 
-_MODEL = "gemini-3.1-pro-preview-customtools"
+_MODEL = "claude-sonnet-5"
 
 
 def test_is_llmgw_model() -> None:
     assert llmgw.is_llmgw_model(_MODEL) is True
+    assert llmgw.is_llmgw_model("gemini-3.1-pro-preview-customtools") is True
     # Retired / other-provider slugs are not served here.
     assert llmgw.is_llmgw_model("deepseek-v4-pro") is False
     assert llmgw.is_llmgw_model("claude-opus-4-7") is False
@@ -34,11 +35,17 @@ def test_is_llmgw_model() -> None:
 
 def test_slug_mapping_round_trip() -> None:
     # Omnia id → canonical llmgw catalog slug.
-    assert llmgw.native_slug(_MODEL) == "google/gemini-3.1-pro-preview-customtools"
+    assert llmgw.native_slug(_MODEL) == "anthropic/claude-sonnet-5"
     assert llmgw.native_slug("unknown-model") == "unknown-model"
     # Upstream response `model` → Omnia id (both surfaces' spellings).
-    assert llmgw.slug_to_omnia("gemini-3.1-pro-preview-customtools") == _MODEL
-    assert llmgw.slug_to_omnia("google/gemini-3.1-pro-preview-customtools") == _MODEL
+    assert llmgw.slug_to_omnia("claude-sonnet-5") == _MODEL
+    assert llmgw.slug_to_omnia("anthropic/claude-sonnet-5") == _MODEL
+    assert llmgw.native_slug("gemini-3.1-pro-preview-customtools") == (
+        "google/gemini-3.1-pro-preview-customtools"
+    )
+    assert llmgw.slug_to_omnia("google/gemini-3.1-pro-preview-customtools") == (
+        "gemini-3.1-pro-preview-customtools"
+    )
     assert llmgw.slug_to_omnia("gpt-5") is None
 
 

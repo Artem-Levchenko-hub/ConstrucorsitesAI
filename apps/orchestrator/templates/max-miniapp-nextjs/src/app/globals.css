@@ -1,17 +1,185 @@
-@import "tailwindcss";
-
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
+  --app-bg: #f3f5f8;
+  --app-card: rgba(255, 255, 255, 0.88);
+  --app-text: #121722;
+  --app-muted: #687386;
+  --app-accent: #7857ff;
+  --app-line: rgba(18, 23, 34, 0.08);
 }
 
-*,
-*::before,
-*::after {
+@media (prefers-color-scheme: dark) {
+  :root {
+    --app-bg: #0d1016;
+    --app-card: rgba(28, 32, 42, 0.86);
+    --app-text: #f7f8fb;
+    --app-muted: #9da7b8;
+    --app-line: rgba(255, 255, 255, 0.09);
+  }
+}
+
+* {
   box-sizing: border-box;
 }
 
 html,
 body {
+  width: 100%;
+  max-width: 100%;
   min-height: 100%;
   margin: 0;
+  overflow-x: clip;
+  background: var(--app-bg);
+  color: var(--app-text);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.max-shell {
+  width: min(100%, 560px);
+  min-width: 0;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding:
+    max(24px, env(safe-area-inset-top))
+    18px
+    calc(104px + env(safe-area-inset-bottom));
+  overflow: hidden;
+}
+
+.hero {
+  position: relative;
+  padding: 28px 24px 26px;
+  border: 1px solid rgba(120, 87, 255, 0.18);
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at 85% 0%, rgba(120, 87, 255, 0.34), transparent 38%),
+    linear-gradient(145deg, rgba(120, 87, 255, 0.16), var(--app-card));
+  box-shadow: 0 28px 70px rgba(34, 26, 72, 0.13);
+}
+
+.platform-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 42px;
+  color: var(--app-muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.platform-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #52d98b;
+  box-shadow: 0 0 0 5px rgba(82, 217, 139, 0.12);
+}
+
+.hero-title {
+  display: block;
+  margin: 0;
+  font-weight: 750;
+  max-width: 350px;
+  font-size: clamp(38px, 11vw, 58px) !important;
+  line-height: 0.96 !important;
+  letter-spacing: -0.055em !important;
+}
+
+.hero-copy {
+  display: block;
+  max-width: 400px;
+  margin-top: 18px;
+  color: var(--app-muted) !important;
+  line-height: 1.55 !important;
+}
+
+.profile-title {
+  margin: 0;
+  font-size: 16px;
+}
+
+.profile-card p {
+  margin-bottom: 0;
+}
+
+.profile-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--app-line);
+  border-radius: 22px;
+  background: var(--app-card);
+  backdrop-filter: blur(18px);
+}
+
+.avatar {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 17px;
+  color: white;
+  font-size: 20px;
+  font-weight: 800;
+  background: linear-gradient(145deg, #8e70ff, #5f3de7);
+}
+
+.muted {
+  display: block;
+  margin-top: 3px;
+  color: var(--app-muted) !important;
+}
+
+.feature-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.feature-grid article {
+  position: relative;
+  padding: 18px 18px 17px 62px;
+  border: 1px solid var(--app-line);
+  border-radius: 22px;
+  background: var(--app-card);
+}
+
+.feature-grid article > span {
+  position: absolute;
+  top: 19px;
+  left: 18px;
+  color: var(--app-accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.feature-grid h2 {
+  margin: 0 0 5px;
+  font-size: 16px;
+  letter-spacing: -0.02em;
+}
+
+.feature-grid p {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.bottom-action {
+  position: fixed;
+  z-index: 5;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: min(100%, 560px);
+  margin: auto;
+  padding: 14px 18px max(18px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--app-line);
+  background: color-mix(in srgb, var(--app-bg) 82%, transparent);
+  backdrop-filter: blur(22px);
 }

@@ -282,8 +282,8 @@ services:
       USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
       USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
       USE_DESIGN_JUDGE: ${USE_DESIGN_JUDGE:-false}
-      # Native tool-use agent: one Gemini Custom Tools pass end-to-end with
-      # structured tools and fact gates. Flip in .env.
+      # Native tool-use agent: the general builder keeps Gemini; MAX Studio
+      # explicitly selects Sonnet 5 and its stable pre-Gemini loop.
       USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.

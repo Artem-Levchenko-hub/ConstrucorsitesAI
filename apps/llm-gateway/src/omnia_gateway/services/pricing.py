@@ -28,12 +28,6 @@ class ModelPrice:
 
 
 PRICE_TABLE: Mapping[str, ModelPrice] = {
-    # Gemini 3.1 Pro Preview Custom Tools drives every orchestration role. Image generation
-    # (routers/images.py), video, and whisper
-    # transcription (routers/audio.py) bill via their own paths, not this table.
-    # Google publishes $2/$12 per 1M input/output tokens through 200K input and
-    # $4/$18 above it for Gemini 3.1 Pro Preview. Custom Tools is the same model
-    # variant. The request reservation below adds separate broker/format headroom.
     "gemini-3.1-pro-preview-customtools": ModelPrice(
         Decimal("1.50"),
         Decimal("7.50"),
@@ -42,6 +36,18 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
         Decimal("4"),
         Decimal("18"),
         200_000,
+    ),
+    # LLMGW catalog price on 2026-08-03: ₽323/₽1615 per 1M input/output.
+    # Provider reservation deliberately uses Sonnet 5's post-introductory
+    # $3/$15 rates, so the financial fuse stays conservative after 2026-08-31.
+    "claude-sonnet-5": ModelPrice(
+        Decimal("0.323"),
+        Decimal("1.615"),
+        Decimal("3"),
+        Decimal("15"),
+        Decimal("3"),
+        Decimal("15"),
+        1_000_000,
     ),
 }
 
@@ -144,6 +150,12 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
         "google",
         1_048_576,
         ("agentic", "coding", "multimodal"),
+    ),
+    "claude-sonnet-5": _ModelMeta(
+        "Claude Sonnet 5",
+        "anthropic",
+        1_000_000,
+        ("agentic", "coding", "tool-use", "multimodal"),
     ),
 }
 

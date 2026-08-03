@@ -1,8 +1,8 @@
 """Native structured tool-use build loop for executable app generation.
 
 Supersedes the text-``<omnia:action>`` protocol (``agent_builder.run_agent_build``)
-with native structured tool calls. Gemini 3.1 Pro Preview Custom Tools drives the
-whole build end-to-end. The only "gate" is FACT-based: the ``build`` tool returns
+with native structured tool calls. The caller selects the model; MAX Studio uses
+Sonnet 5 for the whole build end-to-end. The only "gate" is FACT-based: the ``build`` tool returns
 real compiler errors as a ``tool_result`` and the model fixes them itself
 (do → check → fix), with no taste/vision judges here.
 
@@ -249,6 +249,33 @@ _CACHE: dict[str, str] = {"type": "ephemeral"}
 _TOOLS_CACHED: list[dict[str, Any]] = [
     *_TOOLS[:-1],
     {**_TOOLS[-1], "cache_control": _CACHE},
+]
+
+# MAX Studio's proven pre-Gemini loop had no planning/capability/skill protocol:
+# the model inspected files, wrote the product, built, fixed, and called done.
+# Keep the current safe executor surface, but hide later orchestration ceremony.
+_STABLE_MAX_TOOL_NAMES = frozenset(
+    {
+        "list_dir",
+        "read_file",
+        "grep",
+        "docs",
+        "write_file",
+        "edit_file",
+        "build",
+        "read_logs",
+        "runtime_check",
+        "see",
+        "generate_media",
+        "probe",
+        "verify_isolation",
+        "done",
+    }
+)
+_STABLE_MAX_TOOLS = [tool for tool in _TOOLS if tool["name"] in _STABLE_MAX_TOOL_NAMES]
+_STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_STABLE_MAX_TOOLS[:-1],
+    {**_STABLE_MAX_TOOLS[-1], "cache_control": _CACHE},
 ]
 
 # MAX has a narrower executor contract. Do not advertise operations which the
@@ -763,18 +790,13 @@ def native_system_prompt(
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
     guide = (stack_guide or "").strip()
-    is_max = "MAX PLATFORM CORE CONTRACT" in guide
-    if is_max and reference_max_loop:
-        parts = [
-            _MAX_REFERENCE_EDIT_PREAMBLE if reference_max_edit else _MAX_REFERENCE_PREAMBLE,
-            guide,
-        ]
-    else:
-        parts = [_MAX_NATIVE_PREAMBLE if is_max else _NATIVE_PREAMBLE, guide]
+    # MAX used the generic native Anthropic loop before the Gemini migration.
+    # Keep the compatibility kwargs so callers and old transcripts remain valid,
+    # but do not inject Gemini-only lifecycle/skill/reference protocols.
+    _ = reference_max_loop, reference_max_edit
+    parts = [_NATIVE_PREAMBLE, guide]
     if skills and skills.strip():
         parts.append(skills.strip())
-    if is_max and not reference_max_loop:
-        parts.append(_MAX_NATIVE_VERIFICATION_OVERRIDE)
     return "\n\n".join(p for p in parts if p)
 
 
@@ -791,11 +813,12 @@ async def _call_messages(
     free: bool = False,
     stage: str = "native_agent",
     tools: list[dict[str, Any]] | None = None,
+    model: str = _MODEL,
 ) -> dict[str, Any]:
     """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
     Anthropic response dict, or raises the last error."""
     payload: dict[str, Any] = {
-        "model": _MODEL,
+        "model": model,
         "max_tokens": _MAX_TOKENS,
         "thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGET},
         # Prompt caching: cache the stable system prompt + tool schemas, and a
@@ -927,12 +950,13 @@ async def run_native_build(
     enforce_max_skill_lifecycle: bool = False,
     reference_max_loop: bool = False,
     max_steps: int | None = 24,
+    model: str = _MODEL,
+    stable_max_loop: bool = False,
 ) -> AgentResult:
-    """Drive the native tool-use loop until the model calls ``done`` (with a clean
-    build) or a bounded generic build reaches ``max_steps``. MAX builds deliberately
-    ignore the crude turn count while the gateway enforces a durable monetary/request
-    budget; they stop on a green factual contract, that budget, repeated provider
-    failure, or parent-task cancellation.
+    """Drive one native tool-use loop until the model calls ``done`` after a clean
+    build or reaches ``max_steps``. MAX uses the same bounded loop as the proven
+    pre-Gemini production path; the gateway's durable monetary/request fuse is an
+    independent final guard, not the loop controller.
 
     ``system`` is the stack/system prompt (reuse ``agent_builder.build_system_prompt``);
     ``task`` is the user's request. One model, full transcript (thinking preserved),
@@ -1119,12 +1143,15 @@ async def run_native_build(
                     free=free,
                     stage=call_stage,
                     tools=(
-                        _MAX_REFERENCE_TOOLS_CACHED
+                        _STABLE_MAX_TOOLS_CACHED
+                        if stable_max_loop
+                        else _MAX_REFERENCE_TOOLS_CACHED
                         if reference_max_loop
                         else _MAX_TOOLS_CACHED
                         if max_runtime
                         else _TOOLS_CACHED
                     ),
+                    model=model,
                 )
             except SpendBudgetExceeded:
                 log.warning("agent_native.spend_budget_exhausted", step=step)
@@ -1137,7 +1164,7 @@ async def run_native_build(
                             "path": "",
                             "detail": (
                                 "Достигнут безопасный лимит расходов этой генерации. "
-                                "Новые запросы к Google AI остановлены; проверяю уже "
+                                "Новые запросы к LLM остановлены; проверяю уже "
                                 "собранную версию локально без дополнительных списаний."
                             ),
                             "ok": False,
@@ -1217,7 +1244,7 @@ async def run_native_build(
                                     "action": "provider_stopped",
                                     "path": "",
                                     "detail": (
-                                        "Google AI трижды подряд не ответил. Новые "
+                                        "LLM-провайдер трижды подряд не ответил. Новые "
                                         "платные запросы остановлены; проверяю уже "
                                         "собранную версию локально."
                                     ),
@@ -1237,7 +1264,7 @@ async def run_native_build(
                                 "action": "provider_retry",
                                 "path": "",
                                 "detail": (
-                                    "Связь с Google AI временно прервалась; сборка "
+                                    "Связь с LLM временно прервалась; сборка "
                                     "не остановлена и продолжится автоматически."
                                 ),
                                 "ok": False,
@@ -1269,7 +1296,7 @@ async def run_native_build(
                                     "action": "provider_stopped",
                                     "path": "",
                                     "detail": (
-                                        "Google AI трижды вернул повреждённый ответ. "
+                                        "LLM-провайдер трижды вернул повреждённый ответ. "
                                         "Новые запросы остановлены; проверяю уже "
                                         "собранную версию локально."
                                     ),

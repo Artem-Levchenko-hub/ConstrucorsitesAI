@@ -23,90 +23,52 @@ from omnia_api.services.max_generation_contract import (
 )
 
 
-def test_native_agent_and_autoheal_use_gemini_custom_tools_model() -> None:
+def test_generic_native_agent_and_autoheal_keep_primary_model() -> None:
     from omnia_api.services import autoheal
 
     assert agent_native._MODEL == "gemini-3.1-pro-preview-customtools"
     assert autoheal._HEAL_MODEL == "gemini-3.1-pro-preview-customtools"
 
 
-def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
+def test_max_native_prompt_uses_the_stable_generic_tool_loop() -> None:
     prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT\nBuild the app")
 
-    assert "takes precedence" in prompt
-    assert "probe and verify_isolation tools cannot prove this runtime" in prompt
-    assert "not available in a MAX build" in prompt
-    assert "run runtime_check after the final write" in prompt
-    assert "signed MAX preview session" in prompt
-    assert "MAX PRODUCT STUDIO" in prompt
-    assert "ТРИ действительно разных направления" in prompt
-    assert "360–390px" in prompt
-    assert "prefers-reduced-motion" in prompt
-    assert "read_skill" in prompt
-    assert "Не загружай всё подряд" in prompt
-    assert "скролл-скраб" not in prompt
-    assert "Awwwards" not in prompt
-
-    max_names = {tool["name"] for tool in agent_native._MAX_TOOLS_CACHED}
-    assert {
-        "build",
-        "runtime_check",
-        "see",
-        "write_file",
-        "read_skill",
-        "plan_task",
-        "update_plan",
-        "discover_capabilities",
-        "call_capability",
-        "done",
-    } <= max_names
-    assert not ({"bash", "probe", "verify_isolation"} & max_names)
-    assert "read_skill" not in {tool["name"] for tool in agent_native._TOOLS_CACHED}
-    assert agent_native._MAX_TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
+    assert "автономный инженер" in prompt
+    assert "MAX PLATFORM CORE CONTRACT" in prompt
+    assert "MAX PRODUCT STUDIO" not in prompt
+    assert "read_skill" not in prompt
+    names = {tool["name"] for tool in agent_native._TOOLS_CACHED}
+    assert {"read_file", "write_file", "build", "done"} <= names
+    assert "read_skill" not in names
+    assert agent_native._TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
+    stable_names = {tool["name"] for tool in agent_native._STABLE_MAX_TOOLS_CACHED}
+    assert {"read_file", "write_file", "build", "done"} <= stable_names
+    ceremony = {"plan_task", "update_plan", "discover_capabilities", "call_capability"}
+    assert not (ceremony & stable_names)
 
 
-def test_reference_max_loop_is_one_compact_google_build_pass() -> None:
+def test_legacy_reference_flags_do_not_change_the_stable_prompt() -> None:
+    baseline = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT\nBuild the app")
     prompt = agent_native.native_system_prompt(
         "MAX PLATFORM CORE CONTRACT\nBuild the app",
         reference_max_loop=True,
     )
 
-    assert "автономный Google AI-агент" in prompt
-    assert "один непрерывный проход" in prompt
-    assert "чистого build и зелёного runtime_check" in prompt
-    assert "read_skill" not in prompt
-    assert "plan_task" not in prompt
-    assert "ТРИ действительно разных направления" not in prompt
-
-    names = {tool["name"] for tool in agent_native._MAX_REFERENCE_TOOLS_CACHED}
-    assert names == {
-        "list_dir",
-        "read_file",
-        "grep",
-        "docs",
-        "write_file",
-        "edit_file",
-        "build",
-        "read_logs",
-        "runtime_check",
-        "see",
-        "generate_media",
-        "done",
-    }
-    assert agent_native._MAX_REFERENCE_TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
+    assert prompt == baseline
+    assert "Google" not in prompt
 
     edit_prompt = agent_native.native_system_prompt(
         "MAX PLATFORM CORE CONTRACT\nPreserve the app",
         reference_max_loop=True,
         reference_max_edit=True,
     )
-    assert "точечной правки" in edit_prompt
-    assert "Не переписывай весь продукт" in edit_prompt
-    assert "сразу напиши весь продукт" not in edit_prompt
+    assert edit_prompt == agent_native.native_system_prompt(
+        "MAX PLATFORM CORE CONTRACT\nPreserve the app"
+    )
 
 
-def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> None:
-    """The verified core is a seed, never a replacement for the Google agent."""
+def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
+    """MAX starts from a working shell, then Sonnet rewrites product files."""
     source = inspect.getsource(messages._process_prompt)
 
     assert 'stop_reason="deterministic_template"' not in source
@@ -115,19 +77,21 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "agent_native.run_native_build" in source
     assert "build_max_product_contract" not in source
     assert "completion_check=max_completion_gap" not in source
-    assert "completion_check=_reference_completion_check" in source
-    assert 'reference_max_loop=project_template == "max_miniapp"' in source
-    assert 'max_steps=(None if project_template == "max_miniapp"' in source
-    assert "_agent_steps = 40" in source
+    assert "completion_check=None" in source
+    assert "reference_max_loop=False" in source
+    assert "max_steps=_agent_steps" in source
+    assert "model=(" in source
+    assert "MAX_STUDIO_LLM_MODEL" in source
+    assert 'stable_max_loop=project_template == "max_miniapp"' in source
+    assert "_agent_steps = 120" in source
+    assert "render_max_starter_files" in source
     assert '"autonomous_recovery"' not in source
     assert "_seg <" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
-    assert '_bounded_stop and project_template != "max_miniapp"' in source
+    assert "not _agent_res.done or _bounded_stop" in source
     assert "if path not in MAX_MODEL_LOCKED_FILES" in source
     assert "max_model_path_rejection(action.path)" in source
-    assert "_reference_max_completion_gap" in source
-    assert "_fresh_max_product = not _max_has_generated_snapshot" in source
     assert "_max_runtime_probe_is_green" in source
     assert "pg_advisory_xact_lock" in source
     assert "project.current_snapshot_id != current_snapshot_id" in source
@@ -143,8 +107,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert 'product_kind="max_miniapp"' in source
     assert '".omnia/max-design-spec.json"' in source
     assert "EXISTING MAX ART DIRECTION" in source
-    assert "load_stack_skill_index" in source
-    assert "read_max_skill" in source
+    assert "_skills = None" in source
 
 
 def test_fresh_max_reference_gate_rejects_css_only_or_placeholder_entry() -> None:
@@ -645,17 +608,17 @@ async def test_generic_native_honours_configured_limit_and_forwards_trace_ids(
 
 
 @pytest.mark.asyncio
-async def test_max_runtime_continues_past_turn_30_until_contract_is_green(
+async def test_max_runtime_obeys_the_explicit_step_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = 0
+    calls: list[dict[str, Any]] = []
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
     ) -> dict[str, Any]:
-        nonlocal calls
-        calls += 1
-        if calls <= 31:
+        calls.append(kwargs)
+        call_number = len(calls)
+        if call_number <= 31:
             return _turn(
                 (
                     "write_file",
@@ -663,7 +626,7 @@ async def test_max_runtime_continues_past_turn_30_until_contract_is_green(
                         "path": "src/app/page.tsx",
                         "content": (
                             '"use client"; export default function Page() '
-                            f"{{ return <main>{calls}</main>; }}"
+                            f"{{ return <main>{call_number}</main>; }}"
                         ),
                     },
                 )
@@ -690,16 +653,20 @@ async def test_max_runtime_continues_past_turn_30_until_contract_is_green(
         execute=execute,
         completion_check=complete,
         max_steps=1,
+        model="claude-sonnet-5",
+        stable_max_loop=True,
     )
 
-    assert result.done is True
-    assert result.stop_reason == "contract_green"
-    assert calls == 32
-    assert result.steps == 32
+    assert result.done is False
+    assert result.stop_reason == "max_steps"
+    assert len(calls) == 1
+    assert calls[0]["model"] == "claude-sonnet-5"
+    assert calls[0]["tools"] == agent_native._STABLE_MAX_TOOLS_CACHED
+    assert result.steps == 1
 
 
 @pytest.mark.asyncio
-async def test_max_runtime_recovers_provider_and_long_exploration_without_abort(
+async def test_max_runtime_stops_after_provider_failure_without_paid_replay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
@@ -755,14 +722,13 @@ async def test_max_runtime_recovers_provider_and_long_exploration_without_abort(
         max_steps=1,
     )
 
-    assert result.done is True
-    assert result.stop_reason == "contract_green"
-    assert calls == agent_native._NO_WRITE_ABORT_AT + 4
-    assert "[LOOP GUARD]" in str(result.transcript)
+    assert result.done is False
+    assert result.stop_reason == "provider_stopped_red"
+    assert calls == 1
 
 
 @pytest.mark.asyncio
-async def test_max_runtime_waits_for_infrastructure_instead_of_aborting(
+async def test_max_runtime_stops_at_limit_during_infrastructure_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
@@ -812,9 +778,9 @@ async def test_max_runtime_waits_for_infrastructure_instead_of_aborting(
         max_steps=1,
     )
 
-    assert result.done is True
-    assert result.stop_reason == "contract_green"
-    assert calls == agent_native._INFRA_DEAD_ABORT_AT + 2
+    assert result.done is False
+    assert result.stop_reason == "max_steps_red"
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -904,8 +870,8 @@ async def test_max_runtime_stops_on_spend_budget_without_another_provider_turn(
     )
 
     assert calls == {"provider": 1, "build": 1}
-    assert res.done is False
-    assert res.stop_reason == "spend_budget_red"
+    assert res.done is True
+    assert res.stop_reason == "spend_budget_green"
 
 
 @pytest.mark.asyncio
@@ -938,12 +904,9 @@ async def test_max_runtime_stops_after_bounded_provider_reconnect_cycles(
         max_steps=None,
     )
 
-    assert calls == {
-        "provider": agent_native._MAX_PROVIDER_RECONNECT_CYCLES,
-        "build": 1,
-    }
-    assert res.done is False
-    assert res.stop_reason == "provider_stopped_red"
+    assert calls == {"provider": 1, "build": 1}
+    assert res.done is True
+    assert res.stop_reason == "provider_stopped_green"
 
 
 @pytest.mark.asyncio
@@ -1542,7 +1505,8 @@ async def test_completion_contract_finishes_without_ceremonial_provider_turn(
     assert result.done is True
     assert result.stop_reason == "contract_green"
     assert calls == 2
-    assert all(not ({"bash", "probe", "verify_isolation"} & names) for names in advertised_tools)
+    assert all({"probe", "verify_isolation"} <= names for names in advertised_tools)
+    assert all("read_skill" not in names for names in advertised_tools)
 
 
 @pytest.mark.asyncio

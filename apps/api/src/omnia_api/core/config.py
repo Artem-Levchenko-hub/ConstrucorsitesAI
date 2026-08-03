@@ -1203,6 +1203,7 @@ def get_settings() -> Settings:
 MODEL_TIER_MAP: dict[str, str] = {
     # Premium — full single-shot prompt, no decomposition.
     "claude-opus-4-7": "premium",
+    "claude-sonnet-5": "premium",
     "gemini-3.1-pro-preview-customtools": "premium",
     "gemini-3.5-flash-high": "premium",  # orchestrator (art_director)
     "deepseek-v4-pro-thinking": "premium",  # orchestrator (owner 06-02)
@@ -1304,11 +1305,11 @@ def generation_mode(model_id: str | None, project_id: str | None = None) -> Gene
 # ──────────────────────────────────────────────────────────────────────────
 
 PRIMARY_LLM_MODEL = "gemini-3.1-pro-preview-customtools"
+MAX_STUDIO_LLM_MODEL = "claude-sonnet-5"
 
 ROLE_MODEL_MAP: dict[str, str] = {
-    # Owner directive (2026-07-31): Gemini 3.1 Pro Preview Custom Tools drives
-    # classify → art direction → implementation → visual audit → repair. Flux
-    # image generation and Seedance video generation remain separate media tools.
+    # Owner directive (2026-07-31): keep the existing general generator on
+    # Gemini. MAX Studio selects MAX_STUDIO_LLM_MODEL explicitly.
     "classify": PRIMARY_LLM_MODEL,  # pick 1 of N presets
     "director": PRIMARY_LLM_MODEL,  # catalog orchestrator — structure
     "polish": PRIMARY_LLM_MODEL,  # writes the real PageIR content (RU copy)

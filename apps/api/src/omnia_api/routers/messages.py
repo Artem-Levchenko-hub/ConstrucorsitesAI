@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.core.config import (
     FREE_GENERATION_LIMIT,
+    MAX_STUDIO_LLM_MODEL,
+    PRIMARY_LLM_MODEL,
     get_settings,
     model_for_role,
     tier_for_model,
@@ -3808,7 +3810,7 @@ async def _process_prompt(
             _skills = None
             if get_settings().use_skill_injection:
                 _skills = (
-                    agent_builder.load_stack_skill_index(_orch_name)
+                    None
                     if project_template == "max_miniapp"
                     else agent_builder.load_stack_skills(_orch_name)
                 )
@@ -3916,7 +3918,7 @@ async def _process_prompt(
                     f"\n\nДоп. пожелание пользователя: {prompt_text}{_seed_block}"
                 )
                 _agent_system = _stack_system
-                _agent_steps = 30
+                _agent_steps = 120 if project_template == "max_miniapp" else 30
             elif _is_edit:
                 _sel_block = ""
                 try:
@@ -3941,27 +3943,21 @@ async def _process_prompt(
             else:
                 if project_template == "max_miniapp":
                     _agent_user = (
-                        "За один непрерывный проход построй полноценный MAX Mini App "
-                        "под ПОЛНЫЙ запрос "
-                        f"пользователя:\n\n{prompt_text}\n\n{_seed_block}\n\n"
-                        "В контейнере уже есть только защищённое платформенное ядро. "
-                        "Продуктового UI, визуального шаблона и готовой навигации нет: "
-                        "полностью замени src/components/product/ProductApp.tsx, создай "
-                        "стили, архитектуру, экраны, компоненты и "
-                        "все рабочие сценарии с нуля. Сначала реализуй продукт целиком, "
-                        "затем исправляй фактические ошибки build/runtime до зелёного состояния. "
-                        "Не переключайся на отдельные планы, skill-пакеты или формальную "
-                        "полировку — это одна генерация одной Google-моделью. Сохрани MAX Bridge, "
-                        "серверную проверку initData, профиль пользователя, webhook и "
-                        "управляемые Studio-файлы. Не зашивай секреты пользователя в код.\n\n"
-                        "Используй реальный MAX-профиль и управляемое серверное хранилище; "
-                        "не публикуй тестовые профили, метрики, историю или другие демо-данные. "
-                        "Перед done обязательны чистый build и зелёный runtime_check /."
+                        "Собери полноценный MAX Mini App по запросу пользователя:\n\n"
+                        f"{prompt_text}\n\n{_seed_block}\n\n"
+                        "Рабочий MAX starter уже запущен. Не считай его готовым продуктом: "
+                        "перепиши src/components/product/ProductApp.tsx и "
+                        "src/app/globals.css под запрос, реализуй все нужные экраны и "
+                        "сценарии. Сохрани MAX Bridge, серверную проверку initData, "
+                        "профиль, webhook и managed Studio-файлы. Минимизируй разведку: "
+                        "пиши код, запускай build, чини фактические ошибки до чистоты, "
+                        "затем done. Не загружай skill-пакеты и не выполняй отдельные "
+                        "церемониальные проверки. Не зашивай секреты и демо-профили."
                     )
-                    # Compatibility value for non-native fallbacks. The MAX native
-                    # loop is governed by the atomic gateway spend/request fuse,
-                    # not an arbitrary local turn that can discard a nearly-ready app.
-                    _agent_steps = 40
+                    # Exact pre-Gemini production ceiling used by successful MAX
+                    # builds. The independent atomic gateway fuse still bounds
+                    # provider spend and applies to free runs.
+                    _agent_steps = 120
                 else:
                     _agent_user = (
                         f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
@@ -4026,10 +4022,10 @@ async def _process_prompt(
                         transcript=[],
                         stop_reason="platform_core_failed",
                     )
-            # A new MAX project starts from the verified platform CORE with no
-            # product page, then ALWAYS continues through the durable native Google
-            # agent below. There is no product UI template to recolour or mistake
-            # for a completed application.
+            # Restore the pre-Gemini MAX path: start from a verified, working
+            # product baseline and let one native Anthropic-family agent rewrite
+            # it end-to-end. A zero-write run is still rejected below, so the
+            # starter can never masquerade as the requested product.
             if (
                 project_template == "max_miniapp"
                 and orchestrate
@@ -4066,15 +4062,14 @@ async def _process_prompt(
                             "human": "Подготавливаю защищённое ядро MAX",
                             "path": "",
                             "detail": (
-                                f"Готовлю {len(_starter_files)} инфраструктурных файлов без "
-                                "продуктовой страницы; затем Google AI-агент построит продукт."
+                                f"Готовлю {len(_starter_files)} файлов рабочего MAX starter; "
+                                "затем Sonnet 5 соберёт продукт."
                             ),
                             "ok": True,
                         },
                     )
-                    # Remove any prior entry bytes before applying the neutral,
-                    # build-only starter. hot_reload immediately writes the locked
-                    # root boundary and empty ProductApp slot back atomically.
+                    # Apply the trusted platform boundary and working product
+                    # baseline atomically before the first paid Sonnet turn.
                     _starter_patch = {
                         "src/app/page.tsx": "",
                         "src/components/product/ProductApp.tsx": "",
@@ -4098,11 +4093,11 @@ async def _process_prompt(
                             {
                                 "step": 0,
                                 "action": "build",
-                                "human": "Основа готова — запускаю Google AI-агента",
+                                "human": "Основа готова — запускаю Sonnet 5",
                                 "path": "",
                                 "detail": (
-                                    "Ядро MAX собирается чисто; теперь Google AI-агент "
-                                    "проектирует продукт без готового UI-шаблона."
+                                    "MAX starter собирается чисто; Sonnet 5 начинает "
+                                    "полную сборку продукта."
                                 ),
                                 "ok": True,
                             },
@@ -4134,7 +4129,7 @@ async def _process_prompt(
                             "human": "Не удалось подготовить чистое ядро MAX",
                             "path": "",
                             "detail": (
-                                "Google AI-агент не запущен, чтобы не тратить деньги на "
+                                "Sonnet 5 не запущен, чтобы не тратить деньги на "
                                 "генерацию поверх старого шаблона."
                             ),
                             "ok": False,
@@ -4152,50 +4147,10 @@ async def _process_prompt(
                 # see agent_native._NO_WRITE_*/_INFRA_DEAD_ABORT_AT.
                 from omnia_api.services import agent_native
 
-                _reference_completion_check: (
-                    Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None
-                ) = None
-                if project_template == "max_miniapp":
-                    from omnia_api.services.max_generation_contract import (
-                        max_source_completion_gap,
-                    )
-
-                    # A failed first run has no trusted product snapshot.  A
-                    # subsequent "continue" (or a narrowly-worded edit) must
-                    # therefore still replace the neutral ProductApp slot; CSS
-                    # plus a green runtime probe is not a finished application.
-                    _fresh_max_product = not _max_has_generated_snapshot
-                    _max_reference_baseline = (
-                        dict(current_files) if _max_has_generated_snapshot else {}
-                    )
-
-                    def _reference_max_completion_check(
-                        written: Mapping[str, str], evidence: Mapping[str, int]
-                    ) -> str | None:
-                        _effective_files = {
-                            **_max_reference_baseline,
-                            **_max_seed_files,
-                            **written,
-                        }
-                        return _reference_max_completion_gap(
-                            written,
-                            evidence,
-                            require_product_entry=_fresh_max_product,
-                            source_gap=max_source_completion_gap(
-                                prompt_text,
-                                _effective_files,
-                                require_design_spec=False,
-                            ),
-                        )
-
-                    _reference_completion_check = _reference_max_completion_check
-
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(
                         _stack_guide or "",
-                        None if project_template == "max_miniapp" else _skills,
-                        reference_max_loop=project_template == "max_miniapp",
-                        reference_max_edit=(project_template == "max_miniapp" and _is_edit),
+                        _skills,
                     ),
                     task=_agent_user,
                     execute=_agent_executor,
@@ -4205,9 +4160,15 @@ async def _process_prompt(
                     message_id=str(assistant_message_id),
                     free=is_free,
                     emit=_agent_emit,
-                    completion_check=_reference_completion_check,
-                    reference_max_loop=project_template == "max_miniapp",
-                    max_steps=(None if project_template == "max_miniapp" else _agent_steps),
+                    completion_check=None,
+                    reference_max_loop=False,
+                    max_steps=_agent_steps,
+                    model=(
+                        MAX_STUDIO_LLM_MODEL
+                        if project_template == "max_miniapp"
+                        else PRIMARY_LLM_MODEL
+                    ),
+                    stable_max_loop=project_template == "max_miniapp",
                 )
             elif _agent_res is None:
                 _agent_res = await agent_builder.run_agent_build(
@@ -4250,7 +4211,7 @@ async def _process_prompt(
                 _agent_res = agent_builder.AgentResult(
                     done=False,
                     summary=(
-                        "Google AI-агент не внёс ни одного изменения в MAX-приложение; "
+                        "Sonnet 5 не внёс ни одного изменения в MAX-приложение; "
                         "неизменённый шаблон не засчитан как готовая генерация."
                     ),
                     files={},
@@ -4272,15 +4233,16 @@ async def _process_prompt(
                 "max_steps_red",
                 "provider_stopped_green",
                 "provider_stopped_red",
+                "spend_budget_green",
+                "spend_budget_red",
+                "paid_call_ambiguous_green",
+                "paid_call_ambiguous_red",
+                "provider_rejected_green",
+                "provider_rejected_red",
             }
-            # For MAX, a green bounded stop has already passed both the source
-            # build and the brief-aware completion contract (including local
-            # proof recovery above). Shipping it is safer than discarding a
-            # complete product merely because the provider turn ended. Other
-            # stacks preserve the historical conservative rollback policy.
-            _must_restore_previous = not _agent_res.done or (
-                _bounded_stop and project_template != "max_miniapp"
-            )
+            # A forced stop is never proof of product completion. Preserve the
+            # previous green snapshot for every stack, including MAX.
+            _must_restore_previous = not _agent_res.done or _bounded_stop
             _first_max_without_product = (
                 project_template == "max_miniapp" and not _max_has_generated_snapshot
             )

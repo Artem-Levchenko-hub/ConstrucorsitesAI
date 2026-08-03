@@ -4,7 +4,7 @@ Bills only for tokens actually delivered to the wire. If the client disconnects
 mid-stream, the loop short-circuits and the bill reflects the partial output —
 never the un-streamed tail (per AGENT-C-LLM-GATEWAY.md, M1 cancellation rule).
 
-There is exactly one chat model (`gemini-3.1-pro-preview-customtools`) and one upstream
+There is one upstream serving the configured Gemini and Sonnet chat models
 (llmgw), so the stream source is always `providers/llmgw.astream`.
 """
 

@@ -30,8 +30,7 @@ MAX_PRODUCT_RUNTIME_PATH = "src/components/OmniaProductRuntime.tsx"
 
 _EMPTY_PRODUCT_ENTRY = """"use client";
 
-// Neutral build-only slot. The Google agent must replace this entire file with
-// the requested product before the completion gate can publish a generation.
+// Safe fallback used only when a historical snapshot has no product entry.
 export default function ProductApp() {
   return null;
 }
@@ -869,19 +868,20 @@ def render_max_restored_files(
 
 MAX_MODEL_DIRECTIVE = """
 MAX PLATFORM CORE CONTRACT
-The existing MAX files are a secure runtime substrate, not a product UI template.
-Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
-and integration clients, webhook security and generated business config. Do not
-rewrite platform-owned files.
+Restore the proven pre-Gemini MAX generation flow used for FitnessStat and
+Coffee Nearby: one native Anthropic tool loop owns the product end-to-end.
+The existing starter is a working safety baseline, not the requested result.
+Rewrite src/components/product/ProductApp.tsx and src/app/globals.css for the
+user's actual product, then run build, fix factual errors and call done.
 
-On a FULL BUILD, there is deliberately no product UI or visual template. Replace
-src/components/product/ProductApp.tsx with the complete client-side product and
-create its styling, domain screens and components from scratch. The locked root
-page is only a browser-isolation boundary; never edit it or create app/API routes.
+Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
+and integration clients, webhook security and generated business config. The
+locked root page is only a browser-isolation boundary; never edit it or create
+app/API routes.
 Never declare `"use server"` or import `next/server`, `next/headers`, `next/cache`
 or server-only MAX modules from product code.
-A thin shell, decorative tabs,
-static demo response or fake timer is not a finished application. Persist user actions with
+A thin shell, decorative tabs, static demo response or fake timer is not a
+finished application. Persist user actions with
 `createMaxAction` and read them with `getMaxActions`, both from
 `@/lib/omnia/integration-client`. Never import `@/lib/db`/`drizzle-orm` or create
 parallel API routes: MAX Studio owns auth, tenant filtering and persistence.
@@ -891,7 +891,7 @@ account starts from truthful empty states, and data shown after reload must come
 the managed user-scoped API.
 When the brief requests AI, use the exact typed call
 `const { answer } = await requestOmniaAI({ message, instructions, context })`
-from `@/lib/omnia/integration-client`; the managed Google model runs server-side.
+from `@/lib/omnia/integration-client`; the managed model runs server-side.
 Never embed a provider key in source or expose one to the browser. If a user pastes
 a credential into chat, do not write it or create an .env file: Omnia handles
 credentials only through the encrypted Studio Integration Hub.
@@ -928,22 +928,24 @@ PRODUCT DESIGN OWNERSHIP:
   `prefers-reduced-motion`. Hover may enhance desktop but must never carry meaning.
 
 On a later surgical edit, preserve working behaviour and change only the relevant
-product files. The bash tool is disabled for MAX: all source changes must use
-edit_file/write_file so Omnia can attribute and safely roll them back.
+product files. Use edit_file/write_file so Omnia can attribute and safely roll
+changes back. Do not spend turns loading capability packs or performing ceremony:
+read only what is needed, implement, build, fix, done.
 """.strip()
 
 
 def render_max_starter_files(
     config: MaxProjectConfigPayload, project_id: UUID | str | None = None
 ) -> dict[str, str]:
-    """Buildable MAX platform core with no generated product UI.
+    """Buildable stable MAX starter plus the current trusted platform core.
 
-    Security/session/legal primitives stay deterministic.  Product design and
-    feature architecture do not: the Google agent must create the home page and
-    product styling from scratch instead of inheriting a deceptively finished UI.
+    The starter is the same working baseline shape used before the Gemini
+    migration. The model must still personalise and implement the requested
+    product; keeping a green base prevents a failed provider turn from leaving a
+    blank application.
     """
     return {
         **render_max_managed_files(config, project_id),
-        MAX_PRODUCT_ENTRY_PATH: _EMPTY_PRODUCT_ENTRY,
+        MAX_PRODUCT_ENTRY_PATH: _template_file(MAX_PRODUCT_ENTRY_PATH),
         "src/app/globals.css": _template_file("src/app/globals.css"),
     }
