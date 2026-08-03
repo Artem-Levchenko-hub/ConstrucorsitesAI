@@ -34,11 +34,21 @@ from omnia_api.schemas.max_studio import (
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.deploy_attestation import ensure_current_release_proof
+from omnia_api.services.deployment_state import (
+    current_snapshot_id_fresh,
+    deployment_is_active,
+)
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     default_max_project_config,
+    max_legacy_snapshot_incompatibility,
+    render_max_entry_migration_files,
     render_max_managed_files,
+)
+from omnia_api.services.runtime_sync import (
+    mark_runtime_sync_required,
+    reconcile_locked_runtime,
 )
 
 router = APIRouter(prefix="/api/projects", tags=["max-studio"])
@@ -65,6 +75,29 @@ async def _owned_max_project(
 
 def _default_config(project: Project) -> MaxProjectConfigPayload:
     return default_max_project_config(project.name)
+
+
+def _max_config_sync_files(
+    payload: MaxProjectConfigPayload,
+    project_id: UUID,
+    current_files: dict[str, str],
+) -> dict[str, str]:
+    """Prepare a lossless kit/config sync or reject before any commit."""
+
+    incompatibility = max_legacy_snapshot_incompatibility(current_files)
+    if incompatibility:
+        raise ApiError(
+            "conflict",
+            (
+                "Старая версия использует серверную структуру, которую нельзя "
+                "безопасно обновить только настройками. Сначала пересоберите приложение."
+            ),
+            status.HTTP_409_CONFLICT,
+        )
+    return {
+        **render_max_managed_files(payload, project_id),
+        **render_max_entry_migration_files(current_files),
+    }
 
 
 def _public(project: Project, record: MaxProjectConfig | None) -> MaxProjectConfigPublic:
@@ -242,9 +275,13 @@ async def put_max_config(
         )
     try:
         deployment = await orchestrator_client.get_deploy(project.id)
-    except Exception:
-        deployment = {}
-    if deployment.get("phase") in {"building", "pushing", "swapping", "cancelling"}:
+    except Exception as exc:
+        raise ApiError(
+            "deployment_state_unavailable",
+            "Не удалось безопасно проверить публикацию проекта. Повторите позже.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    if deployment_is_active(deployment):
         raise ApiError(
             "conflict",
             "Дождитесь завершения публикации и сохраните настройки ещё раз",
@@ -268,12 +305,33 @@ async def put_max_config(
         and record.synced_snapshot_id == project.current_snapshot_id
         and record.managed_kit_version == MAX_MANAGED_KIT_VERSION
     ):
+        if project.runtime_sync_required:
+            try:
+                synced = await reconcile_locked_runtime(
+                    session,
+                    project,
+                    ensure_running=False,
+                    full_tree=True,
+                )
+                if synced:
+                    await session.commit()
+            except Exception as sync_exc:
+                log.error(
+                    "max.config_noop_runtime_sync_pending",
+                    project_id=str(project_id),
+                    err=str(sync_exc),
+                )
+                raise ApiError(
+                    "orchestrator_unavailable",
+                    "Настройки сохранены; превью будет восстановлено перед следующим запуском.",
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                ) from sync_exc
         await _refresh_release_proof(session, project)
         return _public(project, record)
 
-    files = render_max_managed_files(payload, project.id)
-    commit_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
+    current_files = await asyncio.to_thread(repo_svc.read_files, project.id, current.commit_sha)
+    files = _max_config_sync_files(payload, project.id, current_files)
+    commit_sha = await repo_svc.commit_files_async(
         project.id,
         files,
         "Update MAX business configuration",
@@ -303,18 +361,100 @@ async def put_max_config(
         record.config_version += 1
         record.managed_kit_version = MAX_MANAGED_KIT_VERSION
     record.synced_snapshot_id = snapshot.id
-    await session.commit()
+    mark_runtime_sync_required(project, files)
+
+    # Canonical state and its durable runtime-sync guard commit atomically. The
+    # live tree is touched only afterwards; therefore a failed/lost COMMIT ACK
+    # can never require a best-effort reverse mutation.
+    try:
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        try:
+            canonical_snapshot_id = await current_snapshot_id_fresh(project.id)
+        except Exception as state_exc:
+            log.error(
+                "max.config_commit_state_unknown",
+                project_id=str(project.id),
+                err=str(state_exc),
+            )
+            raise ApiError(
+                "deployment_state_unavailable",
+                "Не удалось подтвердить результат сохранения. Повторите позже.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
+        if canonical_snapshot_id != snapshot.id:
+            raise ApiError(
+                "conflict",
+                "Проект уже изменился; обновите страницу перед сохранением.",
+                status.HTTP_409_CONFLICT,
+            ) from exc
+        reloaded_project = await session.get(Project, project_id)
+        record = await session.get(MaxProjectConfig, project_id)
+        if reloaded_project is None or record is None:
+            raise ApiError(
+                "deployment_state_unavailable",
+                "Настройки сохранены, но результат пока нельзя отобразить.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
+        project = reloaded_project
+    try:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": str(project_id)},
+        )
+        await session.refresh(project, with_for_update=True)
+        if project.current_snapshot_id != snapshot.id:
+            raise ApiError(
+                "conflict",
+                "Проект уже изменился; обновите страницу перед сохранением.",
+                status.HTTP_409_CONFLICT,
+            )
+        synced = await reconcile_locked_runtime(
+            session,
+            project,
+            ensure_running=False,
+            full_tree=True,
+        )
+        if synced:
+            await session.commit()
+    except Exception as sync_exc:
+        log.error(
+            "max.config_runtime_sync_pending",
+            project_id=str(project_id),
+            err=str(sync_exc),
+        )
+        raise ApiError(
+            "orchestrator_unavailable",
+            "Настройки сохранены; превью будет восстановлено перед следующим запуском.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from sync_exc
     await session.refresh(record)
 
-    # A stopped runtime will receive the canonical snapshot on the next start.
-    # A live runtime can be updated immediately; a preview outage must not roll
-    # back the safely persisted business configuration.
+    # Proof refresh performs a full-tree hot reload. Reacquire the common lock
+    # after the commit and recheck both long-running state machines so it cannot
+    # overwrite a Google agent or a deploy that won the post-commit race.
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    await session.refresh(project, with_for_update=True)
+    active_generation = (
+        await session.execute(
+            select(GenerationRun.id).where(
+                GenerationRun.project_id == project.id,
+                GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
+            )
+        )
+    ).scalar_one_or_none()
+    if active_generation is not None:
+        return _public(project, record)
     try:
-        runtime = await orchestrator_client.get_status(project.id)
-        if runtime.get("state") == "running":
-            await orchestrator_client.hot_reload(project.id, project.slug, files)
+        deployment = await orchestrator_client.get_deploy(project.id)
     except Exception:
-        log.warning("max_config_live_sync_failed", project_id=str(project.id), exc_info=True)
+        return _public(project, record)
+    if deployment_is_active(deployment):
+        return _public(project, record)
     await _refresh_release_proof(session, project)
     return _public(project, record)
 
@@ -465,14 +605,21 @@ async def get_max_usage(
             .limit(1)
         )
     ).scalar_one_or_none()
-    rows = list(
+    ledger_rows = list(
         (
             await session.execute(
                 select(Usage).where(Usage.project_id == project_id).order_by(Usage.created_at.asc())
             )
         ).scalars()
     )
+    pending_rows = [
+        row for row in ledger_rows if row.provider_request_id == "native-budget-reservation"
+    ]
+    rows = [row for row in ledger_rows if row.provider_request_id != "native-budget-reservation"]
     run_rows = [row for row in rows if latest_run is not None and row.run_id == latest_run.id]
+    run_pending_rows = [
+        row for row in pending_rows if latest_run is not None and row.run_id == latest_run.id
+    ]
     visible_rows = run_rows if latest_run is not None else rows
     grouped: dict[str, dict[str, int | float]] = {}
     for row in visible_rows:
@@ -529,6 +676,9 @@ async def get_max_usage(
     return MaxUsagePublic(
         total_cost_rub=round(sum(float(row.cost_rub) for row in rows), 4),
         run_cost_rub=round(sum(float(row.cost_rub) for row in run_rows), 4),
+        pending_reservation_rub=round(sum(float(row.cost_rub) for row in pending_rows), 4),
+        run_pending_reservation_rub=round(sum(float(row.cost_rub) for row in run_pending_rows), 4),
+        pending_reservation_calls=len(run_pending_rows if latest_run else pending_rows),
         run_id=latest_run.id if latest_run else None,
         run_status=latest_run.status if latest_run else None,
         stages=stages,

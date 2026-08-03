@@ -6,6 +6,7 @@ sync with docs/01-api-contract.md V2 section.
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Literal
 from uuid import UUID
 
@@ -139,10 +140,18 @@ class DeployTargetCreds(BaseModel):
 
 class DeployRequest(BaseModel):
     project_id: UUID
-    # Optional: we deploy the live container state, not a git commit (runtime
-    # has no git history — hot-reload writes files straight into the container).
-    # Kept for forward-compat (future rollback-by-sha).
-    commit_sha: str | None = None
+    # Exact immutable repository tree selected and attested by apps/api.  The
+    # orchestrator deliberately has no MinIO/Git credentials: the trusted API
+    # sends this bounded snapshot over the internal-token channel.
+    commit_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+    slug: str | None = Field(default=None, min_length=3, max_length=63, pattern=_SLUG_PATTERN)
+    template: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9-]*$",
+    )
+    source_files: dict[str, str] | None = None
     # BYO-VPS: если задан — деплоим собранный образ на этот чужой VPS по SSH,
     # а не на наш хост. None = наш хостинг.
     target: DeployTargetCreds | None = None
@@ -153,6 +162,33 @@ class DeployRequest(BaseModel):
     # deployment records or logs; the builder clears the mutable dict on exit.
     runtime_env: dict[str, str] = Field(default_factory=dict)
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
+
+    @field_validator("source_files")
+    @classmethod
+    def _safe_source_files(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is None:
+            return None
+        if not value or len(value) > 100:
+            raise ValueError("source_files must contain between 1 and 100 files")
+        total_bytes = 0
+        for raw_path, content in value.items():
+            path = PurePosixPath(raw_path)
+            if (
+                not raw_path
+                or "\\" in raw_path
+                or "\x00" in raw_path
+                or path.is_absolute()
+                or path.as_posix() != raw_path
+                or any(part in {"", ".", ".."} for part in path.parts)
+            ):
+                raise ValueError(f"source_files contains an unsafe path: {raw_path!r}")
+            size = len(content.encode("utf-8"))
+            if size > 2 * 1024 * 1024:
+                raise ValueError(f"source file is too large: {raw_path!r}")
+            total_bytes += size
+            if total_bytes > 32 * 1024 * 1024:
+                raise ValueError("source_files exceeds the 32 MiB request limit")
+        return value
 
     @field_validator("runtime_env")
     @classmethod

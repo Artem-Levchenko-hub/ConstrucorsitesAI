@@ -23,7 +23,7 @@ import os
 import shutil
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, unquote, urlparse
 from uuid import UUID
 
@@ -73,6 +73,59 @@ _OVERLAY_PATHS = [
 # can carry an older copy, and overlaying its whole scripts/ directory must not
 # downgrade the runner that executes against the production database.
 _TEMPLATE_OWNED_PROD_PATHS = ("scripts/apply-migrations.mjs",)
+
+
+def _is_app_owned_snapshot_path(relative: str) -> bool:
+    return any(relative == root or relative.startswith(f"{root}/") for root in _OVERLAY_PATHS)
+
+
+def _reset_app_owned_paths(build_dir: Path) -> None:
+    """Remove template app files before laying down one immutable snapshot.
+
+    Omissions in a Git tree represent deletions.  Overlaying without this reset
+    would resurrect starter files that the selected version had removed.
+    """
+    for relative in _OVERLAY_PATHS:
+        target = build_dir / relative
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        else:
+            target.unlink(missing_ok=True)
+
+
+def _materialize_snapshot(build_dir: Path, source_files: dict[str, str]) -> None:
+    """Write bounded app-owned text files without permitting path escape.
+
+    Production Dockerfiles/configs remain template-owned.  The API repository
+    may contain them, but generated code must never replace that trusted build
+    boundary.
+    """
+    _reset_app_owned_paths(build_dir)
+    resolved_root = build_dir.resolve()
+    for relative, content in sorted(source_files.items()):
+        path = PurePosixPath(relative)
+        if (
+            path.is_absolute()
+            or path.as_posix() != relative
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise OrchestratorError(
+                code="validation_failed",
+                message=f"unsafe source path: {relative!r}",
+                status_code=403,
+            )
+        if not _is_app_owned_snapshot_path(relative):
+            continue
+        destination = build_dir.joinpath(*path.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        resolved_destination = destination.resolve()
+        if resolved_root not in resolved_destination.parents:
+            raise OrchestratorError(
+                code="validation_failed",
+                message=f"source path escapes build root: {relative!r}",
+                status_code=403,
+            )
+        destination.write_text(content, encoding="utf-8")
 
 
 def _restore_template_owned_prod_files(template_dir: Path, build_dir: Path) -> None:
@@ -147,6 +200,9 @@ _project_tasks: dict[str, asyncio.Task[None]] = {}
 async def start_deploy(
     project_id: str,
     slug: str | None = None,
+    commit_sha: str | None = None,
+    template: str | None = None,
+    source_files: dict[str, str] | None = None,
     target: dict[str, object] | None = None,
     domains: list[str] | None = None,
     idempotency_key: str | None = None,
@@ -159,27 +215,47 @@ async def start_deploy(
     secret}: when set, the built image is deployed to the user's own VPS over
     SSH instead of run locally on our host. None = наш хостинг (текущий путь).
     """
-    dev_name = await docker_client.find_project_container(project_id, kind="dev")
-    if dev_name is None and slug:
-        dev_name = f"omnia-dev-{slug}"
-    if dev_name is None:
+    exact_snapshot = template is not None and source_files is not None and slug is not None
+    dev_name: str | None = None
+    if not exact_snapshot:
+        dev_name = await docker_client.find_project_container(project_id, kind="dev")
+        if dev_name is None and slug:
+            dev_name = f"omnia-dev-{slug}"
+    if dev_name is None and not exact_snapshot:
         raise OrchestratorError(
             code="not_found",
             message="no dev container for this project — provision/start it first",
             status_code=404,
         )
-    resolved_slug = slug or dev_name.removeprefix("omnia-dev-")
+    resolved_slug = slug or (dev_name.removeprefix("omnia-dev-") if dev_name else "")
 
     active = deploy_state.get(project_id)
     if active is not None and deploy_state.is_active(project_id):
+        if commit_sha is not None and active.commit_sha != commit_sha:
+            raise OrchestratorError(
+                code="conflict",
+                message="another revision is already deploying",
+                status_code=409,
+            )
+        # The first task owns this project until the persisted active record
+        # reaches a terminal phase. Replaying the same exact revision must not
+        # start a second build/push/swap coroutine.
         return active
 
-    rec = deploy_state.start(
-        project_id,
-        idempotency_key=idempotency_key,
-        target_label=str(target.get("label")) if target and target.get("label") else None,
-        target_id=str(target.get("id")) if target and target.get("id") else None,
-    )
+    try:
+        rec = deploy_state.start(
+            project_id,
+            idempotency_key=idempotency_key,
+            commit_sha=commit_sha,
+            target_label=str(target.get("label")) if target and target.get("label") else None,
+            target_id=str(target.get("id")) if target and target.get("id") else None,
+        )
+    except deploy_state.DeployRevisionConflict as exc:
+        raise OrchestratorError(
+            code="conflict",
+            message=str(exc),
+            status_code=409,
+        ) from exc
     if rec.phase not in ("building", "queued"):
         return rec
     # Optimistic public URL — deterministic, shown before the build completes.
@@ -191,6 +267,8 @@ async def start_deploy(
             project_id,
             resolved_slug,
             dev_name,
+            template,
+            dict(source_files) if source_files is not None else None,
             target,
             domains,
             rec.run_id,
@@ -394,7 +472,9 @@ async def _export_project_database(project_id: str) -> tuple[str, str]:
 async def _run(
     project_id: str,
     slug: str,
-    dev_name: str,
+    dev_name: str | None,
+    requested_template: str | None = None,
+    source_files: dict[str, str] | None = None,
     target: dict[str, object] | None = None,
     domains: list[str] | None = None,
     run_id: str = "",
@@ -402,7 +482,12 @@ async def _run(
 ) -> None:
     build_dir = Path(tempfile.mkdtemp(prefix=f"omnia-build-{slug}-"))
     try:
-        log.info("deploy.start", project_id=project_id, slug=slug, dev=dev_name)
+        log.info(
+            "deploy.start",
+            project_id=project_id,
+            slug=slug,
+            exact_snapshot=source_files is not None,
+        )
         deploy_state.update(project_id, phase="building")
         deploy_state.append_log(project_id, "Собираем production-образ")
         await publish_project_event(
@@ -412,7 +497,10 @@ async def _run(
         # 1. Seed the build context from the PROJECT's template (recovered from
         # the dev container's image), falling back to the default. This keeps an
         # entities project on the entities template's Dockerfile.prod/configs.
-        template = await docker_client.container_image_template(dev_name) or _DEFAULT_TEMPLATE
+        detected_template = (
+            await docker_client.container_image_template(dev_name) if dev_name is not None else None
+        )
+        template = requested_template or detected_template or _DEFAULT_TEMPLATE
         log.info("deploy.template", project_id=project_id, template=template)
         stack = get_stack(template)
         is_next_template = _is_next_template(template)
@@ -433,10 +521,22 @@ async def _run(
             ignore=shutil.ignore_patterns("node_modules", ".next", ".git", "__pycache__"),
         )
 
-        # 2. Overlay the live app files from the dev container.
-        await docker_client.unpause_container(dev_name)
-        for rel in _OVERLAY_PATHS:
-            await docker_client.copy_path_from_container(dev_name, f"/app/{rel}", str(build_dir))
+        # 2. Materialize the exact attested repository tree.  Legacy internal
+        # callers without a snapshot keep the old live-container fallback.
+        if source_files is not None:
+            _materialize_snapshot(build_dir, source_files)
+        else:
+            if dev_name is None:
+                raise OrchestratorError(
+                    code="not_found",
+                    message="deploy source is unavailable",
+                    status_code=404,
+                )
+            await docker_client.unpause_container(dev_name)
+            for rel in _OVERLAY_PATHS:
+                await docker_client.copy_path_from_container(
+                    dev_name, f"/app/{rel}", str(build_dir)
+                )
         _restore_template_owned_prod_files(template_dir, build_dir)
 
         # 2b. Force a prod-safe next.config (tolerate AI type/lint errors +
@@ -609,6 +709,8 @@ async def _run(
             target.clear()
         if runtime_env is not None:
             runtime_env.clear()
+        if source_files is not None:
+            source_files.clear()
         shutil.rmtree(build_dir, ignore_errors=True)
 
 

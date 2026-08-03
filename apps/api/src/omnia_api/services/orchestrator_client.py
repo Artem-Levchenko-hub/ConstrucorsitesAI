@@ -8,6 +8,9 @@ ApiError taxonomy so the public response shape stays consistent.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, cast
 from uuid import UUID
 
@@ -18,6 +21,47 @@ from omnia_api.core.config import get_settings
 from omnia_api.core.errors import ApiError
 
 log = structlog.get_logger(__name__)
+
+_hot_reload_tracker: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar(
+    "omnia_hot_reload_tracker",
+    default=None,
+)
+_mutation_persistor: contextvars.ContextVar[
+    Callable[[set[str]], Awaitable[None]] | None
+] = contextvars.ContextVar("omnia_mutation_persistor", default=None)
+
+
+def bind_hot_reload_tracker(
+    paths: set[str],
+    persist: Callable[[set[str]], Awaitable[None]] | None = None,
+) -> tuple[
+    contextvars.Token[set[str] | None],
+    contextvars.Token[Callable[[set[str]], Awaitable[None]] | None],
+]:
+    return _hot_reload_tracker.set(paths), _mutation_persistor.set(persist)
+
+
+def reset_hot_reload_tracker(
+    tokens: tuple[
+        contextvars.Token[set[str] | None],
+        contextvars.Token[Callable[[set[str]], Awaitable[None]] | None],
+    ],
+) -> None:
+    tracker_token, persistor_token = tokens
+    _hot_reload_tracker.reset(tracker_token)
+    _mutation_persistor.reset(persistor_token)
+
+
+async def track_mutation_paths(paths: Iterable[str]) -> None:
+    """Record potential live-tree mutations before the orchestrator request starts."""
+
+    tracker = _hot_reload_tracker.get()
+    if tracker is None:
+        return
+    tracker.update(path for path in paths if path)
+    persist = _mutation_persistor.get()
+    if persist is not None:
+        await persist(set(tracker))
 
 
 class OrchestratorUnavailable(ApiError):
@@ -207,6 +251,9 @@ async def deploy(
     project_id: UUID,
     *,
     commit_sha: str | None = None,
+    slug: str | None = None,
+    template: str | None = None,
+    source_files: dict[str, str] | None = None,
     target: dict[str, Any] | None = None,
     domains: list[str] | None = None,
     runtime_env: dict[str, str] | None = None,
@@ -222,6 +269,12 @@ async def deploy(
     payload: dict[str, Any] = {"project_id": str(project_id)}
     if commit_sha:
         payload["commit_sha"] = commit_sha
+    if slug:
+        payload["slug"] = slug
+    if template:
+        payload["template"] = template
+    if source_files is not None:
+        payload["source_files"] = source_files
     if target:
         payload["target"] = target
     if domains:
@@ -429,6 +482,26 @@ async def agent_list_dir(project_id: UUID, slug: str, path: str = ".") -> str:
     return detail if isinstance(detail, str) else ""
 
 
+async def agent_list_source_files(project_id: UUID, slug: str) -> list[str]:
+    """List mutable source paths for an exact post-provision reconciliation."""
+
+    resp = await _request(
+        "GET",
+        f"/internal/projects/{project_id}/agent/list-source-files",
+        params={"slug": slug},
+        timeout=60.0,
+    )
+    if not resp.get("ok"):
+        raise OrchestratorUnavailable("Orchestrator could not enumerate runtime source files")
+    raw = resp.get("files")
+    if not isinstance(raw, list):
+        raise OrchestratorUnavailable("Orchestrator returned an invalid source file list")
+    files = [path for path in raw if isinstance(path, str) and path and len(path) <= 500]
+    if len(files) != len(raw) or len(files) > 10_000:
+        raise OrchestratorUnavailable("Orchestrator returned an unsafe source file list")
+    return files
+
+
 async def agent_grep(project_id: UUID, slug: str, *, pattern: str, path: str = "src") -> str:
     """Recursive text search under /app; returns matches (or '(no matches)')."""
     resp = await _request(
@@ -442,11 +515,23 @@ async def agent_grep(project_id: UUID, slug: str, *, pattern: str, path: str = "
 
 async def agent_build(project_id: UUID, slug: str) -> dict[str, Any]:
     """Run the container typecheck; returns {ok: bool, detail/error: str}."""
-    return await _request(
-        "POST",
-        f"/internal/projects/{project_id}/agent/build",
-        params={"slug": slug},
+    # Dependency doctor may update these files before typecheck. Persist the
+    # paths before dispatch and make the bounded mutation non-interruptible so
+    # cancellation cleanup never races a still-running worker thread.
+    await track_mutation_paths(("package.json", "pnpm-lock.yaml"))
+    request_task = asyncio.create_task(
+        _request(
+            "POST",
+            f"/internal/projects/{project_id}/agent/build",
+            params={"slug": slug},
+            timeout=240.0,
+        )
     )
+    try:
+        return await asyncio.shield(request_task)
+    except asyncio.CancelledError:
+        await request_task
+        raise
 
 
 async def agent_exec(project_id: UUID, slug: str, cmd: str) -> dict[str, Any]:
@@ -478,12 +563,61 @@ async def hot_reload(project_id: UUID, slug: str, files: dict[str, str]) -> dict
     lookup is `omnia-dev-<slug>` (no project_id ↔ container_name registry
     yet, PoC). apps/api always has the slug at hand from its own Project row.
     """
-    return await _request(
-        "POST",
-        "/internal/projects/hot-reload",
-        json={"project_id": str(project_id), "files": files},
-        params={"slug": slug},
+    await track_mutation_paths(files)
+    request_task = asyncio.create_task(
+        _request(
+            "POST",
+            "/internal/projects/hot-reload",
+            json={"project_id": str(project_id), "files": files},
+            params={"slug": slug},
+            timeout=120.0,
+        )
     )
+    try:
+        return await asyncio.shield(request_task)
+    except asyncio.CancelledError:
+        # Once the internal request has started, the container may already be
+        # mutating. Wait for its bounded outcome before the generation slot is
+        # released; the caller's cancellation is re-raised afterwards.
+        await request_task
+        raise
+
+
+def require_exact_hot_reload(result: dict[str, Any], files: dict[str, str]) -> None:
+    """Fail closed unless every requested write/delete reached the container."""
+    expected_written = sum(content != "" for content in files.values())
+    expected_deleted = sum(content == "" for content in files.values())
+    try:
+        written = int(result.get("written", -1))
+        deleted = int(result.get("deleted", -1))
+    except (TypeError, ValueError) as exc:
+        raise OrchestratorUnavailable("Orchestrator returned invalid hot-reload counters") from exc
+    dropped = result.get("dropped")
+    if isinstance(dropped, list):
+        dropped_any = bool(dropped)
+    else:
+        dropped_any = bool(str(dropped or "").strip())
+    if dropped_any or written != expected_written or deleted != expected_deleted:
+        raise OrchestratorUnavailable(
+            "Orchestrator did not apply the complete hot-reload tree",
+            details={
+                "expected_written": expected_written,
+                "written": written,
+                "expected_deleted": expected_deleted,
+                "deleted": deleted,
+                "dropped": dropped_any,
+            },
+        )
+
+
+async def hot_reload_exact(
+    project_id: UUID,
+    slug: str,
+    files: dict[str, str],
+) -> dict[str, Any]:
+    result = await hot_reload(project_id, slug, files)
+    require_exact_hot_reload(result, files)
+    return result
 
 
 async def start_history_preview(

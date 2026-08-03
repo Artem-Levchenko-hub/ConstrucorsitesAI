@@ -22,7 +22,7 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.config import get_settings
@@ -33,6 +33,7 @@ from omnia_api.models.account import BusinessMember
 from omnia_api.models.billing import BillingAccount, BillingPlan, Subscription
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
@@ -50,6 +51,9 @@ from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.billing_accounts import resolve_billing_account
 from omnia_api.services.deploy_attestation import blocking_required, resolve_deploy_proof
+from omnia_api.services.deployment_state import deployment_is_active
+from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
+from omnia_api.services.runtime_sync import reconcile_locked_runtime
 
 log = structlog.get_logger(__name__)
 
@@ -63,6 +67,41 @@ router = APIRouter(prefix="/api/projects", tags=["runtime"])
 # we re-push the latest snapshot. start_runtime does exactly that. `spa` (Vite +
 # React, Phase 7.2) holds its AI files in the writable layer too.
 _CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
+_DEPLOY_MAX_FILES = 100
+_DEPLOY_MAX_FILE_BYTES = 2 * 1024 * 1024
+_DEPLOY_MAX_TOTAL_BYTES = 32 * 1024 * 1024
+
+
+def _validate_deploy_source_files(files: dict[str, str]) -> None:
+    """Bound the immutable internal deploy payload before crossing services."""
+    if not files:
+        raise ApiError(
+            "project_empty",
+            "Выбранная версия проекта не содержит файлов для публикации",
+            status.HTTP_409_CONFLICT,
+        )
+    if len(files) > _DEPLOY_MAX_FILES:
+        raise ApiError(
+            "too_large",
+            "В выбранной версии слишком много файлов для безопасной публикации",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    total_bytes = 0
+    for path, content in files.items():
+        size = len(content.encode("utf-8"))
+        if size > _DEPLOY_MAX_FILE_BYTES:
+            raise ApiError(
+                "too_large",
+                f"Файл {path} слишком большой для безопасной публикации",
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        total_bytes += size
+        if total_bytes > _DEPLOY_MAX_TOTAL_BYTES:
+            raise ApiError(
+                "too_large",
+                "Выбранная версия слишком большая для безопасной публикации",
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
 
 
 async def _project_owned_by(session: AsyncSession, project_id: UUID, user_id: UUID) -> Project:
@@ -177,7 +216,33 @@ async def start_runtime(
     provisions on first call. (Wake-on-request is wired separately at the ingress
     layer, so a sleeping preview self-revives on the first visitor hit.)
     """
-    project = await _project_owned_by(session, project_id, current_user.id)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    project = (
+        await session.execute(
+            select(Project)
+            .where(Project.id == project_id, Project.owner_id == current_user.id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if project is None:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    active_generation = (
+        await session.execute(
+            select(GenerationRun.id).where(
+                GenerationRun.project_id == project_id,
+                GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
+            )
+        )
+    ).scalar_one_or_none()
+    if active_generation is not None:
+        raise ApiError(
+            "conflict",
+            "Дождитесь завершения или отмены текущей генерации",
+            status.HTTP_409_CONFLICT,
+        )
     _, plan = await _billing_plan_for_user(session, current_user.id)
     # Map api-side `template` to the orchestrator's actual template dir.
     # Static V1 templates (blank/landing/portfolio/blog) have no orchestrator
@@ -199,7 +264,20 @@ async def start_runtime(
     # their app, not the starter. Fail-soft: a resync hiccup must not turn a
     # successful start into an error — git/MinIO stay canonical and the user can
     # hit "Запустить" again.
-    if project.template in _CONTAINER_NEXT and project.current_snapshot_id:
+    if project.runtime_sync_required:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": str(project_id)},
+        )
+        await session.refresh(project, with_for_update=True)
+        await reconcile_locked_runtime(
+            session,
+            project,
+            ensure_running=False,
+            full_tree=True,
+        )
+        await session.commit()
+    elif project.template in _CONTAINER_NEXT and project.current_snapshot_id:
         await _resync_latest_snapshot(session, project)
 
     # Auto-heal on open (owner 2026-07-16): if the just-opened app has a RED build,
@@ -347,14 +425,18 @@ async def set_runtime_keep_alive(
             )
         account_user_ids = await _billing_account_user_ids(session, account)
         active_slots = (
-            await session.execute(
-                select(Project.id).where(
-                    Project.owner_id.in_(account_user_ids),
-                    Project.keep_alive_enabled.is_(True),
-                    Project.id != project_id,
+            (
+                await session.execute(
+                    select(Project.id).where(
+                        Project.owner_id.in_(account_user_ids),
+                        Project.keep_alive_enabled.is_(True),
+                        Project.id != project_id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if len(active_slots) >= always_on_slots:
             raise ApiError(
                 "subscription_entitlement_required",
@@ -388,8 +470,58 @@ async def trigger_deploy(
     current_user: CurrentUserDep,
 ) -> DeployStatus:
     project = await _project_owned_by(session, project_id, current_user.id)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    await session.refresh(project, with_for_update=True)
+    if project.owner_id != current_user.id:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    active_generation = (
+        await session.execute(
+            select(GenerationRun.id).where(
+                GenerationRun.project_id == project_id,
+                GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
+            )
+        )
+    ).scalar_one_or_none()
+    if active_generation is not None:
+        raise ApiError(
+            "conflict",
+            "Дождитесь завершения или отмените текущую генерацию перед публикацией",
+            status.HTTP_409_CONFLICT,
+        )
+    try:
+        deployment = await orchestrator_client.get_deploy(project_id)
+    except Exception as exc:
+        raise ApiError(
+            "deployment_state_unavailable",
+            "Не удалось безопасно проверить текущую публикацию. Повторите позже.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    if deployment_is_active(deployment):
+        raise ApiError(
+            "conflict",
+            "Дождитесь завершения текущей публикации",
+            status.HTTP_409_CONFLICT,
+        )
     sha = body.commit_sha if body is not None else None
     idempotency_key = body.idempotency_key if body is not None else None
+    if sha is None:
+        if project.current_snapshot_id is None:
+            raise ApiError(
+                "project_empty",
+                "У проекта нет версии для публикации",
+                status.HTTP_409_CONFLICT,
+            )
+        snapshot = await session.get(Snapshot, project.current_snapshot_id)
+        if snapshot is None or snapshot.project_id != project_id:
+            raise ApiError(
+                "project_empty",
+                "Текущая версия проекта не найдена",
+                status.HTTP_409_CONFLICT,
+            )
+        sha = snapshot.commit_sha
     # BYO-VPS: если у проекта выбран свой сервер — грузим цель, расшифровываем
     # креды и передаём оркестратору, чтобы он развернул образ на машине юзера.
     # None = наш хостинг (текущее поведение).
@@ -473,9 +605,28 @@ async def trigger_deploy(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     details={"reason": "proof_unavailable"},
                 ) from exc
+    try:
+        source_files = await asyncio.to_thread(repo_svc.read_files, project_id, sha)
+    except ValueError as exc:
+        raise ApiError(
+            "validation_failed",
+            "Выбранная версия проекта не найдена",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        ) from exc
+    except Exception as exc:
+        raise ApiError(
+            "deployment_state_unavailable",
+            "Не удалось безопасно прочитать выбранную версию проекта. Повторите позже.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    _validate_deploy_source_files(source_files)
+    deploy_template = orchestrator_template(project.template) or "nextjs-postgres-drizzle"
     payload = await orchestrator_client.deploy(
         project_id,
         commit_sha=sha,
+        slug=project.slug,
+        template=deploy_template,
+        source_files=source_files,
         target=target,
         domains=domains,
         runtime_env=runtime_env,

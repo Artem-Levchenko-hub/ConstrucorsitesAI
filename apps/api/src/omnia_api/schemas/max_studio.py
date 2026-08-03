@@ -122,6 +122,9 @@ class MaxUsageStagePublic(BaseModel):
 class MaxUsagePublic(BaseModel):
     total_cost_rub: float
     run_cost_rub: float
+    pending_reservation_rub: float = 0
+    run_pending_reservation_rub: float = 0
+    pending_reservation_calls: int = 0
     run_id: UUID | None = None
     run_status: str | None = None
     stages: list[MaxUsageStagePublic]

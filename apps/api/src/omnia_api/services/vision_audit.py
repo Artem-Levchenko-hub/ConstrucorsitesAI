@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from omnia_api.core.config import get_settings, model_for_role
-from omnia_api.services.llm_client import LLMError, complete_chat
+from omnia_api.services.llm_client import LLMError, PaidCallAmbiguousError, complete_chat
 
 log = logging.getLogger(__name__)
 
@@ -260,6 +260,8 @@ async def audit_screenshots(
             project_id=project_id,
             max_tokens=1000,
         )
+    except PaidCallAmbiguousError:
+        raise
     except LLMError as exc:
         return _skip("gateway_error", repr(exc)[:200])
     if not raw.strip():

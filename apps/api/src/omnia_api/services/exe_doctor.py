@@ -1,6 +1,7 @@
 """Self-heal a failed PyInstaller/NSIS build: ask the exe_doctor model role for a
 structured patch (extra hidden-imports / collect-all / requirements pin) and apply it
 to the BuildSpec. Returns None when the model gives nothing usable (caller gives up)."""
+
 from __future__ import annotations
 
 import json
@@ -9,7 +10,7 @@ from dataclasses import replace
 
 from omnia_api.core.config import model_for_role
 from omnia_api.services.exe_build import BuildSpec
-from omnia_api.services.llm_client import LLMError, complete_chat
+from omnia_api.services.llm_client import LLMError, PaidCallAmbiguousError, complete_chat
 
 _PROMPT = """PyInstaller/NSIS build failed. Return ONLY JSON, no prose:
 {{"hidden_imports": [..], "collect_all": [..], "requirements": "<full requirements.txt or null>"}}
@@ -26,6 +27,8 @@ async def _ask_model(prompt: str) -> str:
             max_tokens=400,
             temperature=0.0,
         )
+    except PaidCallAmbiguousError:
+        raise
     except LLMError:
         return ""
 

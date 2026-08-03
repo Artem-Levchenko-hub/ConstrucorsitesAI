@@ -82,6 +82,105 @@ def test_chat_completion_non_streaming_happy_path(client: TestClient) -> None:
     assert data["metadata"]["cache_hit"] is False
 
 
+def test_chat_fails_closed_before_provider_when_billing_is_unavailable(
+    client: TestClient,
+) -> None:
+    provider = AsyncMock(return_value={})
+    with (
+        patch(
+            "omnia_gateway.routers.chat.billing.precheck_balance",
+            new=AsyncMock(side_effect=RuntimeError("database unavailable")),
+        ),
+        patch("omnia_gateway.routers.chat.router_module.acompletion", new=provider),
+    ):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gemini-3.1-pro-preview-customtools",
+                "messages": [{"role": "user", "content": "do not spend"}],
+                "user": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"]["code"] == "billing_unavailable"
+    provider.assert_not_awaited()
+
+
+def test_chat_marks_post_provider_charge_failure_as_ambiguous(client: TestClient) -> None:
+    fake_response = {
+        "id": "provider-completed",
+        "model": "google/gemini-3.1-pro-preview-customtools",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "completed"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    with (
+        patch(
+            "omnia_gateway.routers.chat.router_module.acompletion",
+            new=AsyncMock(return_value=fake_response),
+        ),
+        patch(
+            "omnia_gateway.routers.chat.billing.charge",
+            new=AsyncMock(side_effect=RuntimeError("database unavailable")),
+        ),
+    ):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gemini-3.1-pro-preview-customtools",
+                "messages": [{"role": "user", "content": "one attempt"}],
+                "user": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"]["code"] == "paid_call_ambiguous"
+
+
+def test_chat_marks_post_provider_wallet_race_as_ambiguous(client: TestClient) -> None:
+    from omnia_gateway.core.errors import WalletEmptyError
+
+    fake_response = {
+        "id": "provider-completed-wallet-race",
+        "model": "google/gemini-3.1-pro-preview-customtools",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "completed"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    with (
+        patch(
+            "omnia_gateway.routers.chat.router_module.acompletion",
+            new=AsyncMock(return_value=fake_response),
+        ),
+        patch(
+            "omnia_gateway.routers.chat.billing.charge",
+            new=AsyncMock(side_effect=WalletEmptyError("wallet changed after provider call")),
+        ),
+    ):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gemini-3.1-pro-preview-customtools",
+                "messages": [{"role": "user", "content": "one attempt"}],
+                "user": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"]["code"] == "paid_call_ambiguous"
+
+
 def test_chat_unknown_model_returns_404(client: TestClient) -> None:
     body = {
         "model": "totally-fake-model",

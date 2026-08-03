@@ -171,11 +171,16 @@ async def test_production_deploy_blocks_unproven_and_allows_proven(
     async def current_user() -> User:
         return user
 
-    calls: list[uuid.UUID] = []
+    calls: list[tuple[uuid.UUID, dict[str, object]]] = []
 
-    async def deploy(project_id: uuid.UUID, **_: object) -> dict[str, object]:
-        calls.append(project_id)
+    async def deploy(project_id: uuid.UUID, **kwargs: object) -> dict[str, object]:
+        calls.append((project_id, kwargs))
         return {"phase": "queued"}
+
+    def read_files(project_id: uuid.UUID, commit_sha: str) -> dict[str, str]:
+        assert project_id == project.id
+        assert commit_sha == snapshot.commit_sha
+        return {"src/app/page.tsx": "export default function Page() { return null }"}
 
     prod_settings = get_settings().model_copy(
         update={"env": "prod", "deploy_attestation_blocking": False}
@@ -183,6 +188,7 @@ async def test_production_deploy_blocks_unproven_and_allows_proven(
     app.dependency_overrides[get_current_user] = current_user
     monkeypatch.setattr("omnia_api.routers.runtime.get_settings", lambda: prod_settings)
     monkeypatch.setattr("omnia_api.routers.runtime.orchestrator_client.deploy", deploy)
+    monkeypatch.setattr("omnia_api.routers.runtime.repo_svc.read_files", read_files)
     try:
         blocked = await client.post(f"/api/projects/{project.id}/deploy", json={})
         assert blocked.status_code == 409
@@ -194,7 +200,14 @@ async def test_production_deploy_blocks_unproven_and_allows_proven(
         allowed = await client.post(f"/api/projects/{project.id}/deploy", json={})
         assert allowed.status_code == 200
         assert allowed.json()["phase"] == "queued"
-        assert calls == [project.id]
+        assert len(calls) == 1
+        called_project, called_kwargs = calls[0]
+        assert called_project == project.id
+        assert called_kwargs["commit_sha"] == snapshot.commit_sha
+        assert called_kwargs["slug"] == project.slug
+        assert called_kwargs["source_files"] == {
+            "src/app/page.tsx": "export default function Page() { return null }"
+        }
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 

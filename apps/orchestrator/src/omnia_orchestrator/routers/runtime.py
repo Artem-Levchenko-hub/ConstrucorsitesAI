@@ -465,6 +465,7 @@ async def hot_reload(
         "state": "hot_reloaded",
         "written": write_result.get("written", "0"),
         "total_bytes": write_result.get("total_bytes", "0"),
+        "deleted": write_result.get("deleted", "0"),
         "dropped": write_result.get("dropped", ""),
         "seeded": str(sum(seeded.values())),
     }
@@ -803,10 +804,7 @@ async def _sweep_history_previews(*, remove_all: bool = False) -> int:
         try:
             UUID(record.project_id)
             UUID(record.snapshot_id)
-            if (
-                not remove_all
-                and time() - record.created_epoch < _HISTORY_JOURNAL_GRACE_SECONDS
-            ):
+            if not remove_all and time() - record.created_epoch < _HISTORY_JOURNAL_GRACE_SECONDS:
                 continue
             labels = await history_preview_container_labels(
                 record.project_id,
@@ -1131,6 +1129,58 @@ async def agent_list_dir(
     return {"ok": ok, "detail": result["stdout"] if ok else result["stderr"]}
 
 
+@router.get("/{project_id}/agent/list-source-files")
+async def agent_list_source_files(
+    project_id: str,
+    slug: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """List mutable project source without exposing runtime secrets/caches."""
+
+    _verify_token(x_internal_token)
+    await record_activity(project_id)
+    container_name = f"omnia-dev-{slug}"
+    result = await exec_cmd(
+        container_name,
+        cmd=[
+            "find",
+            ".",
+            "-path",
+            "./node_modules",
+            "-prune",
+            "-o",
+            "-path",
+            "./.next",
+            "-prune",
+            "-o",
+            "-path",
+            "./.git",
+            "-prune",
+            "-o",
+            "-path",
+            "./public/uploads",
+            "-prune",
+            "-o",
+            "-type",
+            "f",
+            "-not",
+            "-name",
+            ".env",
+            "-not",
+            "-name",
+            ".env.*",
+            "-printf",
+            "%P\n",
+        ],
+        workdir="/app",
+        max_output=2_000_000,
+    )
+    if result["exit_code"] != "0":
+        return {"ok": False, "files": [], "detail": result["stderr"][:500]}
+    files = sorted({line.strip() for line in result["stdout"].splitlines() if line.strip()})
+    return {"ok": True, "files": files}
+
+
 @router.get("/{project_id}/agent/grep")
 async def agent_grep(
     project_id: str,
@@ -1404,14 +1454,31 @@ async def deploy(
     optional — the dev container is resolved by the `omnia.project_id` label.
     """
     _verify_token(x_internal_token)
+    exact_parts = (
+        payload.commit_sha,
+        payload.slug,
+        payload.template,
+        payload.source_files,
+    )
+    if any(part is not None for part in exact_parts) and not all(
+        part is not None for part in exact_parts
+    ):
+        raise OrchestratorError(
+            code="validation_failed",
+            message="commit_sha, slug, template and source_files must be supplied together",
+            status_code=422,
+        )
     target = payload.target.model_dump() if payload.target else None
     rec = await builder.start_deploy(
-        str(payload.project_id),
-        slug,
-        target,
-        payload.domains,
-        payload.idempotency_key,
-        payload.runtime_env,
+        project_id=str(payload.project_id),
+        slug=payload.slug or slug,
+        commit_sha=payload.commit_sha,
+        template=payload.template,
+        source_files=payload.source_files,
+        target=target,
+        domains=payload.domains,
+        idempotency_key=payload.idempotency_key,
+        runtime_env=payload.runtime_env,
     )
     return _deploy_record_to_response(rec)
 

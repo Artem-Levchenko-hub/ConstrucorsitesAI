@@ -8,9 +8,16 @@ upstream happy-path is covered by the deployed end-to-end verification.
 
 from __future__ import annotations
 
+from typing import Any
+
+import httpx
 import pytest
 
-from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from omnia_gateway.core.errors import (
+    PaidCallAmbiguousError,
+    UpstreamProviderError,
+    ValidationFailedError,
+)
 from omnia_gateway.providers import llmgw
 
 _MODEL = "gemini-3.1-pro-preview-customtools"
@@ -84,4 +91,151 @@ async def test_acompletion_unknown_model_raises() -> None:
 async def test_acompletion_missing_key_raises() -> None:
     # conftest clears LLMGW_API_KEY → _key_and_url raises UpstreamProviderError.
     with pytest.raises(UpstreamProviderError):
+        await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+
+
+class _ClientContext:
+    def __init__(self, post) -> None:
+        self.post = post
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+
+async def test_acompletion_never_retries_ambiguous_read_failure(monkeypatch) -> None:
+    calls = 0
+
+    def post(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("lost after send")
+
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw.httpx, "Client", lambda **_kwargs: _ClientContext(post))
+
+    with pytest.raises(PaidCallAmbiguousError):
+        await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+
+    assert calls == 1
+
+
+async def test_astream_never_retries_ambiguous_protocol_failure(monkeypatch) -> None:
+    calls = 0
+
+    class StreamContext:
+        def __enter__(self):
+            nonlocal calls
+            calls += 1
+            raise httpx.RemoteProtocolError("response lost")
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    class Client(_ClientContext):
+        def __init__(self, **_kwargs: Any) -> None:
+            super().__init__(lambda: None)
+
+        def stream(self, *_args, **_kwargs):
+            return StreamContext()
+
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw.httpx, "Client", Client)
+
+    stream = llmgw.astream(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+    with pytest.raises(PaidCallAmbiguousError):
+        await anext(stream)
+
+    assert calls == 1
+
+
+class _StreamResponse:
+    status_code = 200
+
+    def __init__(self, lines: list[str], *, status_code: int = 200) -> None:
+        self._lines = lines
+        self.status_code = status_code
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def iter_lines(self):
+        yield from self._lines
+
+    def read(self) -> bytes:
+        return b"provider diagnostic"
+
+
+async def test_astream_eof_without_terminal_marker_is_ambiguous(monkeypatch) -> None:
+    class Client(_ClientContext):
+        def __init__(self, **_kwargs: Any) -> None:
+            super().__init__(lambda: None)
+
+        def stream(self, *_args, **_kwargs):
+            return _StreamResponse(
+                ['data: {"choices":[{"delta":{"content":"partial"}}]}']
+            )
+
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw.httpx, "Client", Client)
+
+    stream = llmgw.astream(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+    assert await anext(stream) == ("partial", _MODEL)
+    with pytest.raises(PaidCallAmbiguousError):
+        await anext(stream)
+
+
+async def test_astream_503_is_ambiguous(monkeypatch) -> None:
+    class Client(_ClientContext):
+        def __init__(self, **_kwargs: Any) -> None:
+            super().__init__(lambda: None)
+
+        def stream(self, *_args, **_kwargs):
+            return _StreamResponse([], status_code=503)
+
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw.httpx, "Client", Client)
+
+    stream = llmgw.astream(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+    with pytest.raises(PaidCallAmbiguousError):
+        await anext(stream)
+
+
+async def test_astream_empty_terminal_completion_is_ambiguous(monkeypatch) -> None:
+    class Client(_ClientContext):
+        def __init__(self, **_kwargs: Any) -> None:
+            super().__init__(lambda: None)
+
+        def stream(self, *_args, **_kwargs):
+            return _StreamResponse(["data: [DONE]"])
+
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw.httpx, "Client", Client)
+
+    stream = llmgw.astream(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+    with pytest.raises(PaidCallAmbiguousError):
+        await anext(stream)
+
+
+async def test_acompletion_malformed_2xx_is_ambiguous(monkeypatch) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            raise ValueError("truncated json")
+
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(
+        llmgw.httpx,
+        "Client",
+        lambda **_kwargs: _ClientContext(lambda *_args, **_kwargs: Response()),
+    )
+
+    with pytest.raises(PaidCallAmbiguousError):
         await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])

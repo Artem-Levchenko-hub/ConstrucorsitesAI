@@ -18,6 +18,7 @@ from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.max_project_kit import (
     default_max_project_config,
+    max_legacy_snapshot_incompatibility,
     max_project_config_from_files,
     render_max_history_files,
 )
@@ -102,13 +103,26 @@ async def prepare_snapshot_preview(
     current_user: CurrentUserDep,
 ) -> SnapshotPublic:
     """Ensure one immutable history preview is queued, without duplicates."""
-    await _project_owned_by(session, project_id, current_user.id)
+    project = await _project_owned_by(session, project_id, current_user.id)
     snapshot = await session.get(Snapshot, snapshot_id)
     if snapshot is None or snapshot.project_id != project_id:
         raise ApiError("not_found", "snapshot not found", status.HTTP_404_NOT_FOUND)
     if snapshot.preview_key:
         response.status_code = status.HTTP_200_OK
     else:
+        if project.template == "max_miniapp":
+            snapshot_files = await asyncio.to_thread(
+                repo_svc.read_files, project_id, snapshot.commit_sha
+            )
+            if max_legacy_snapshot_incompatibility(snapshot_files):
+                raise ApiError(
+                    "conflict",
+                    (
+                        "Эта старая версия использует серверную структуру, которую нельзя "
+                        "безопасно открыть для создания превью."
+                    ),
+                    status.HTTP_409_CONFLICT,
+                )
         await asyncio.to_thread(enqueue_preview, snapshot.id)
     return SnapshotPublic.model_validate(_public_dict(snapshot))
 
@@ -132,6 +146,16 @@ async def start_snapshot_session(
             status.HTTP_409_CONFLICT,
         )
     snapshot_files = await asyncio.to_thread(repo_svc.read_files, project_id, snapshot.commit_sha)
+    incompatibility = max_legacy_snapshot_incompatibility(snapshot_files)
+    if incompatibility:
+        raise ApiError(
+            "conflict",
+            (
+                "Эта старая версия использует серверную структуру, которую нельзя "
+                "безопасно открыть в интерактивном просмотре."
+            ),
+            status.HTTP_409_CONFLICT,
+        )
     record = await session.get(MaxProjectConfig, project_id)
     fallback_config = (
         MaxProjectConfigPayload.model_validate(record.config)

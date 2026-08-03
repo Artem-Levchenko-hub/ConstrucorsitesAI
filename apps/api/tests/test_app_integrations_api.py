@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
+from omnia_api.core.errors import ApiError
 from omnia_api.models.app_integration import (
     BusinessIntegration,
     ProjectIntegrationBinding,
@@ -24,6 +25,19 @@ from omnia_api.routers import max_accounts as max_accounts_router
 from omnia_api.routers import projects as projects_router
 from omnia_api.services import integration_providers, llm_client
 from omnia_api.services import repo as repo_svc
+
+
+async def test_runtime_ai_limit_fails_closed_when_redis_is_unavailable(monkeypatch) -> None:
+    class BrokenRedis:
+        async def incr(self, _key: str) -> int:
+            raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(integration_runtime_router, "get_redis", lambda: BrokenRedis())
+
+    with pytest.raises(ApiError) as raised:
+        await integration_runtime_router._enforce_runtime_ai_limits(UUID(int=1), 42)
+
+    assert raised.value.status_code == 503
 
 
 async def _register_and_create(

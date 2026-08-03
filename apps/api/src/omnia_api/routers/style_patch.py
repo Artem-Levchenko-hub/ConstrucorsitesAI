@@ -14,11 +14,13 @@ import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, status
+from sqlalchemy import select, text, update
 
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers.public import _INDEX_CANDIDATES
@@ -27,9 +29,17 @@ from omnia_api.schemas.style_patch import StylePatchRequest
 from omnia_api.services import orchestrator_client
 from omnia_api.services import overrides as ov
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.deployment_state import (
+    current_snapshot_id_fresh,
+    deployment_is_active,
+)
 from omnia_api.services.fonts import css_stack_for, href_for, is_known_family
+from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
 from omnia_api.services.palette_guard import BANNED_HEXES
 from omnia_api.services.queue import enqueue_preview
+from omnia_api.services.runtime_sync import (
+    mark_runtime_sync_required,
+)
 
 router = APIRouter(prefix="/api/projects", tags=["style-patch"])
 
@@ -80,6 +90,42 @@ async def post_style_patch(
     if project is None or project.owner_id != current_user.id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
 
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    await session.refresh(project, with_for_update=True)
+    if project.owner_id != current_user.id:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    active_generation = (
+        await session.execute(
+            select(GenerationRun.id).where(
+                GenerationRun.project_id == project_id,
+                GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
+            )
+        )
+    ).scalar_one_or_none()
+    if active_generation is not None:
+        raise ApiError(
+            "conflict",
+            "Дождитесь завершения или отмените текущую генерацию перед ручной правкой",
+            status.HTTP_409_CONFLICT,
+        )
+    try:
+        deployment = await orchestrator_client.get_deploy(project_id)
+    except Exception as exc:
+        raise ApiError(
+            "deployment_state_unavailable",
+            "Не удалось безопасно проверить публикацию проекта. Повторите позже.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    if deployment_is_active(deployment):
+        raise ApiError(
+            "conflict",
+            "Дождитесь завершения публикации перед ручной правкой",
+            status.HTTP_409_CONFLICT,
+        )
+
     if not payload.tokens and not payload.elements:
         raise ApiError("empty_patch", "no changes provided", status.HTTP_400_BAD_REQUEST)
 
@@ -108,9 +154,8 @@ async def post_style_patch(
         )
     current = await session.get(Snapshot, project.current_snapshot_id)
     if current is None:
-        raise ApiError(
-            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
-        )
+        raise ApiError("no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST)
+    expected_snapshot_id = project.current_snapshot_id
     parent_sha = current.commit_sha
 
     files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
@@ -164,16 +209,12 @@ async def post_style_patch(
                 f"this app has no {target_path} to style-edit",
                 status.HTTP_400_BAD_REQUEST,
             )
-        new_content = ov.apply_css_overrides(
-            src, tokens=tokens, element_rules=element_rules
-        )
+        new_content = ov.apply_css_overrides(src, tokens=tokens, element_rules=element_rules)
         # First container-sourced edit: there is no prior repo copy of
         # globals.css, so the unchanged-content guard below would never trip;
         # the merge always adds the managed block on a fresh read.
         if from_container and new_content == src:
-            raise ApiError(
-                "empty_patch", "no effective changes", status.HTTP_400_BAD_REQUEST
-            )
+            raise ApiError("empty_patch", "no effective changes", status.HTTP_400_BAD_REQUEST)
     else:
         index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
         if index_path is None:
@@ -193,46 +234,111 @@ async def post_style_patch(
     # in `files`), the fresh-read case is already handled above; `.get` keeps
     # this from KeyError-ing on that path.
     if new_content == files.get(target_path):
-        raise ApiError(
-            "empty_patch", "no effective changes", status.HTTP_400_BAD_REQUEST
-        )
+        raise ApiError("empty_patch", "no effective changes", status.HTTP_400_BAD_REQUEST)
 
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
+    new_sha = await repo_svc.commit_files_async(
         project_id,
         {target_path: new_content},
         "style: прямое редактирование",
         parent_sha,
     )
 
-    # Container apps: push the edited globals.css into the live dev container so
-    # the change shows immediately via HMR (parity with the build path). Best-
-    # effort (R-10): the canonical state is already committed to git, and the
-    # snapshot is created regardless, so a momentarily-down orchestrator only
-    # delays the live preview, never loses the edit.
-    if is_container:
-        try:
-            await orchestrator_client.hot_reload(
-                project_id=project_id,
-                slug=project.slug,
-                files={target_path: new_content},
-            )
-        except Exception:
-            # Preview refresh must never block save; edit is already committed.
-            pass
-
     new_snapshot = Snapshot(
         project_id=project_id,
         commit_sha=new_sha,
         prompt_text="(прямое редактирование стиля)",
         model_id=None,
-        parent_id=project.current_snapshot_id,
+        parent_id=expected_snapshot_id,
     )
     session.add(new_snapshot)
     await session.flush()
-    project.current_snapshot_id = new_snapshot.id
-    await session.commit()
-    await session.refresh(new_snapshot)
+    advanced = (
+        await session.execute(
+            update(Project)
+            .where(
+                Project.id == project_id,
+                Project.current_snapshot_id == expected_snapshot_id,
+            )
+            .values(current_snapshot_id=new_snapshot.id)
+            .returning(Project.id)
+            .execution_options(synchronize_session="fetch")
+        )
+    ).scalar_one_or_none()
+    if advanced is None:
+        raise ApiError(
+            "conflict",
+            "Проект уже изменился; обновите страницу перед ручной правкой",
+            status.HTTP_409_CONFLICT,
+        )
+    commit_confirmed_after_error = False
+    if is_container:
+        mark_runtime_sync_required(project, (target_path,))
+    try:
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        try:
+            canonical_snapshot_id = await current_snapshot_id_fresh(project_id)
+        except Exception as state_exc:
+            raise ApiError(
+                "deployment_state_unavailable",
+                "Не удалось подтвердить результат ручной правки. Повторите позже.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from state_exc
+        if canonical_snapshot_id == new_snapshot.id:
+            commit_confirmed_after_error = True
+        elif canonical_snapshot_id != expected_snapshot_id:
+            raise ApiError(
+                "conflict",
+                "Проект уже изменился; обновите страницу перед ручной правкой",
+                status.HTTP_409_CONFLICT,
+            ) from exc
+        if not commit_confirmed_after_error:
+            if isinstance(exc, ApiError):
+                raise
+            raise ApiError(
+                "orchestrator_unavailable",
+                "Ручная правка не применена.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
+    if commit_confirmed_after_error:
+        refreshed = await session.get(Snapshot, new_snapshot.id)
+        if refreshed is None:
+            raise ApiError(
+                "deployment_state_unavailable",
+                "Правка сохранена, но её состояние пока нельзя подтвердить.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        new_snapshot = refreshed
+    else:
+        await session.refresh(new_snapshot)
+    if is_container:
+        try:
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+                {"project_id": str(project_id)},
+            )
+            await session.refresh(project, with_for_update=True)
+            if project.current_snapshot_id != new_snapshot.id:
+                raise ApiError(
+                    "conflict",
+                    "Проект уже изменился; обновите страницу перед ручной правкой",
+                    status.HTTP_409_CONFLICT,
+                )
+            await orchestrator_client.hot_reload_exact(
+                project_id=project_id,
+                slug=project.slug,
+                files={target_path: new_content},
+            )
+            project.runtime_sync_required = False
+            project.runtime_sync_paths = []
+            await session.commit()
+        except Exception as sync_exc:
+            raise ApiError(
+                "orchestrator_unavailable",
+                "Правка сохранена; превью будет восстановлено перед следующим запуском.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from sync_exc
 
     await asyncio.to_thread(enqueue_preview, new_snapshot.id)
 
@@ -246,9 +352,7 @@ async def post_style_patch(
                 "commit_sha": new_snapshot.commit_sha,
                 "prompt_text": new_snapshot.prompt_text,
                 "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
+                "parent_id": (str(new_snapshot.parent_id) if new_snapshot.parent_id else None),
                 "preview_url": preview_public_url(new_snapshot.preview_key),
                 "is_rollback_target": new_snapshot.is_rollback_target,
                 "created_at": new_snapshot.created_at.isoformat(),

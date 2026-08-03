@@ -18,7 +18,12 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from omnia_gateway.core.errors import GatewayError, WalletEmptyError
+from omnia_gateway.core.errors import (
+    BillingUnavailableError,
+    GatewayError,
+    PaidCallAmbiguousError,
+    WalletEmptyError,
+)
 from omnia_gateway.services import billing, cache, file_logger, safety, streaming
 from omnia_gateway.services import model_router as router_module
 from omnia_gateway.services.pricing import calculate_cost_rub
@@ -97,9 +102,11 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 )
             except WalletEmptyError as exc:
                 raise _gateway_error_to_http(exc) from exc
-            except Exception:
-                # DB unavailable — allow through; the post-stream charge will surface real failures.
+            except Exception as exc:
                 log.exception("stream.precheck_failed", user=str(req.user))
+                raise _gateway_error_to_http(
+                    BillingUnavailableError("Usage accounting is temporarily unavailable")
+                ) from exc
 
         return EventSourceResponse(
             streaming.stream_completion(
@@ -151,8 +158,11 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
             await billing.precheck_balance(req.user, _estimate_cost(req.model, filtered_messages))
         except WalletEmptyError as exc:
             raise _gateway_error_to_http(exc) from exc
-        except Exception:
+        except Exception as exc:
             log.exception("precheck.db_unavailable", user=str(req.user))
+            raise _gateway_error_to_http(
+                BillingUnavailableError("Usage accounting is temporarily unavailable")
+            ) from exc
 
     try:
         response = await router_module.acompletion(
@@ -189,9 +199,18 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 free=meta.free,
             )
         except WalletEmptyError as exc:
-            raise _gateway_error_to_http(exc) from exc
-        except Exception:
+            raise _gateway_error_to_http(
+                PaidCallAmbiguousError(
+                    "The provider completed but wallet settlement could not be confirmed"
+                )
+            ) from exc
+        except Exception as exc:
             log.exception("charge_failed", user=str(req.user), model=actual_model)
+            raise _gateway_error_to_http(
+                PaidCallAmbiguousError(
+                    "The provider completed but settlement is temporarily unavailable"
+                )
+            ) from exc
 
     response.setdefault("metadata", {})
     response["metadata"]["actual_model_used"] = actual_model

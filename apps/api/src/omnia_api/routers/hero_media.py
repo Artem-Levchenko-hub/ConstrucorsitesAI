@@ -33,6 +33,7 @@ from omnia_api.schemas.snapshot import SnapshotPublic
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.hero_media_assembler import render_preview_document
 from omnia_api.services.hero_media_planner import plan_hero_media
+from omnia_api.services.project_mutation import lock_project_mutation
 from omnia_api.services.queue import enqueue_hero_media_render, enqueue_preview
 from omnia_api.services.user_uploads import UploadRejected, sanitize_and_upload_record
 
@@ -544,7 +545,11 @@ async def apply_hero_media_render(
     current_user: CurrentUserDep,
 ) -> SnapshotPublic:
     _require_feature()
-    project = await _owned_project(session, project_id, current_user.id)
+    project = await lock_project_mutation(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+    )
     render = await _owned_render(session, project_id, render_id, current_user.id)
     if project.template not in _STATIC_TEMPLATES:
         raise ApiError(
@@ -580,8 +585,7 @@ async def apply_hero_media_render(
             status.HTTP_400_BAD_REQUEST,
         )
     new_html = _apply_hero_block(files[index_path], _render_block(_render_public(render)))
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
+    new_sha = await repo_svc.commit_files_async(
         project_id,
         {index_path: new_html},
         "hero-media: apply generated hero",

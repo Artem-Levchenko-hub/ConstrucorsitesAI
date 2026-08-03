@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
+from omnia_api.core.errors import ApiError
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
@@ -24,14 +25,53 @@ from omnia_api.services import max_project_kit as max_project_kit_svc
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     MAX_MODEL_DIRECTIVE,
+    MAX_PRODUCT_ENTRY_PATH,
+    MAX_PRODUCT_PAGE_PATH,
+    MAX_PRODUCT_RUNTIME_PATH,
     _template_candidates,
     max_history_product_files,
+    max_legacy_server_file_deletions,
+    max_legacy_snapshot_incompatibility,
+    max_model_path_rejection,
     max_project_config_from_files,
+    render_max_entry_migration_files,
     render_max_history_files,
     render_max_managed_files,
     render_max_restored_files,
     render_max_starter_files,
 )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "./src/lib/omnia/integration-client.ts",
+        "src/app/../lib/omnia/integration-client.ts",
+        "src//lib/omnia/integration-client.ts",
+        "src\\lib\\omnia\\integration-client.ts",
+        "/src/app/page.tsx",
+        ".",
+    ],
+)
+def test_max_model_write_paths_must_be_canonical(path: str) -> None:
+    assert max_model_path_rejection(path)
+
+
+def test_max_model_write_path_accepts_normal_product_file() -> None:
+    assert max_model_path_rejection(MAX_PRODUCT_ENTRY_PATH) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/app/page.tsx",
+        "src/app/api/debug/route.ts",
+        "src/middleware.ts",
+        "src/lib/db-copy.ts",
+    ],
+)
+def test_max_model_write_path_blocks_server_execution(path: str) -> None:
+    assert max_model_path_rejection(path)
 
 
 def _config() -> MaxProjectConfigPayload:
@@ -77,10 +117,7 @@ def test_history_renderer_keeps_product_files_but_drops_managed_core() -> None:
             "scripts/rewrite-runtime.sh": "old script",
             "../escape.ts": "nope",
         }
-    ) == {
-        "src/app/page.tsx": "export default function Page() {}",
-        "src/app/api/custom/score/route.ts": "isolated product api",
-    }
+    ) == {MAX_PRODUCT_ENTRY_PATH: "export default function Page() {}"}
 
     runtime_files = render_max_history_files(
         {
@@ -90,10 +127,57 @@ def test_history_renderer_keeps_product_files_but_drops_managed_core() -> None:
         _config(),
         "00000000-0000-0000-0000-000000000001",
     )
-    assert runtime_files["src/app/page.tsx"] == "historical product"
+    assert runtime_files[MAX_PRODUCT_PAGE_PATH] != "historical product"
+    assert runtime_files[MAX_PRODUCT_ENTRY_PATH] == "historical product"
+    assert "OmniaProductRuntime" in runtime_files[MAX_PRODUCT_PAGE_PATH]
     assert runtime_files["src/lib/max/session.ts"] != "old live auth"
     assert runtime_files["public/omnia-inspector.js"] != "old inspector"
     assert "Кофе" in runtime_files["src/lib/omnia/max-config.ts"]
+
+
+def test_history_preserves_every_current_model_owned_product_artifact() -> None:
+    snapshot = {
+        MAX_PRODUCT_ENTRY_PATH: '"use client"; export default function ProductApp() {}',
+        ".omnia/max-design-spec.json": '{"chosen_direction":"editorial"}',
+        "public/product/worker.js": "self.onmessage = () => {};",
+        "public/product/model.wasm": "binary-placeholder",
+    }
+
+    assert max_legacy_snapshot_incompatibility(snapshot) is None
+    product = max_history_product_files(snapshot)
+    assert product[".omnia/max-design-spec.json"] == snapshot[".omnia/max-design-spec.json"]
+    assert product["public/product/worker.js"] == snapshot["public/product/worker.js"]
+    assert product["public/product/model.wasm"] == snapshot["public/product/model.wasm"]
+
+
+def test_history_refuses_legacy_public_executable_outside_product_root() -> None:
+    snapshot = {"public/legacy-worker.js": "self.onmessage = () => {};"}
+
+    assert max_legacy_snapshot_incompatibility(snapshot)
+    with pytest.raises(ValueError, match="cannot be restored safely"):
+        render_max_history_files(snapshot, _config(), uuid4())
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "src/lib/omnia/custom.ts",
+        "src/lib/max/custom.ts",
+        "src/lib/db/custom.ts",
+    ],
+)
+def test_history_refuses_unknown_helpers_inside_platform_prefixes(unsafe_path: str) -> None:
+    snapshot = {
+        MAX_PRODUCT_ENTRY_PATH: (
+            f'import {{ helper }} from "@/{unsafe_path.removeprefix("src/").removesuffix(".ts")}"; '
+            "export default function ProductApp() { return <p>{helper}</p>; }"
+        ),
+        unsafe_path: "export const helper = 'legacy';",
+    }
+
+    assert max_legacy_snapshot_incompatibility(snapshot)
+    with pytest.raises(ValueError, match="cannot be restored safely"):
+        render_max_history_files(snapshot, _config(), uuid4())
 
 
 def test_history_renderer_uses_config_committed_with_snapshot() -> None:
@@ -112,7 +196,6 @@ def test_max_restore_combines_historical_product_with_current_platform() -> None
         {
             "src/app/page.tsx": "historical page",
             "docker-entrypoint.sh": "historical entrypoint",
-            "src/middleware.ts": "historical middleware",
         },
         {
             "src/app/page.tsx": "current page",
@@ -126,7 +209,8 @@ def test_max_restore_combines_historical_product_with_current_platform() -> None
         "00000000-0000-0000-0000-000000000001",
     )
 
-    assert restored["src/app/page.tsx"] == "historical page"
+    assert restored[MAX_PRODUCT_PAGE_PATH] != "historical page"
+    assert restored[MAX_PRODUCT_ENTRY_PATH] == "historical page"
     assert restored["docker-entrypoint.sh"] != "current entrypoint"
     assert restored["next.config.ts"] != "current next config"
     assert restored["docker-entrypoint.sh"] == max_project_kit_svc._template_file(
@@ -147,9 +231,11 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "pnpm-lock.yaml",
         "postcss.config.mjs",
         "public/omnia-inspector.js",
+        MAX_PRODUCT_PAGE_PATH,
         "src/app/layout.tsx",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
+        MAX_PRODUCT_RUNTIME_PATH,
         "src/lib/db/index.ts",
         "src/lib/db/schema.ts",
         "src/lib/max/bot-api.ts",
@@ -248,10 +334,12 @@ def test_managed_kit_never_contains_model_or_generation_calls() -> None:
     assert "generate(" not in combined
 
 
-def test_starter_kit_has_no_product_page_or_visual_template() -> None:
+def test_starter_kit_has_only_neutral_product_slot_without_visual_template() -> None:
     files = render_max_starter_files(_config(), uuid4())
 
-    assert "src/app/page.tsx" not in files
+    assert "OmniaProductRuntime" in files[MAX_PRODUCT_PAGE_PATH]
+    assert "ssr: false" in files[MAX_PRODUCT_RUNTIME_PATH]
+    assert "return null" in files[MAX_PRODUCT_ENTRY_PATH]
     assert "src/app/globals.css" in files
     assert "src/app/layout.tsx" in files
     css = files["src/app/globals.css"]
@@ -260,6 +348,119 @@ def test_starter_kit_has_no_product_page_or_visual_template() -> None:
     assert "canvas-" not in css
     assert "feature-grid" not in css
     assert "TODO" not in "\n".join(files.values())
+
+
+def test_entry_migration_preserves_legacy_product_behind_locked_runtime() -> None:
+    legacy = '"use client"; export default function Page() { return <main>Legacy</main>; }'
+
+    files = render_max_entry_migration_files({MAX_PRODUCT_PAGE_PATH: legacy})
+
+    assert files[MAX_PRODUCT_ENTRY_PATH] == legacy
+    assert files[MAX_PRODUCT_PAGE_PATH] != legacy
+    assert "OmniaProductRuntime" in files[MAX_PRODUCT_PAGE_PATH]
+    assert "ssr: false" in files[MAX_PRODUCT_RUNTIME_PATH]
+
+
+def test_legacy_server_cleanup_covers_all_next_execution_entrypoints() -> None:
+    files = max_legacy_server_file_deletions(
+        {
+            "src/app/api/custom/route.ts": "route",
+            "src/app/dashboard/page.tsx": "page",
+            "app/api/leak/route.ts": "shadow route",
+            "src/pages/api/legacy.ts": "handler",
+            "src/instrumentation.ts": "register()",
+            "src/proxy.ts": "proxy()",
+            "next.config.js": "module.exports = {}",
+            "src/app/api/health/route.ts": "platform health",
+            "src/app/globals.css": "body {}",
+        }
+    )
+
+    assert files["src/app/api/custom/route.ts"] == ""
+    assert files["src/app/dashboard/page.tsx"] == ""
+    assert files["app/api/leak/route.ts"] == ""
+    assert files["src/pages/api/legacy.ts"] == ""
+    assert files["src/instrumentation.ts"] == ""
+    assert files["src/proxy.ts"] == ""
+    assert files["next.config.js"] == ""
+    assert "src/app/api/health/route.ts" not in files
+    assert "src/app/globals.css" not in files
+
+
+def test_entry_migration_refuses_incompatible_tree_before_writing() -> None:
+    with pytest.raises(ValueError, match="cannot be migrated safely"):
+        render_max_entry_migration_files(
+            {
+                MAX_PRODUCT_PAGE_PATH: (
+                    'import Widget from "./Widget"; '
+                    "export default function Page() { return <Widget />; }"
+                ),
+                "src/app/Widget.tsx": "export default function Widget() {}",
+            }
+        )
+
+
+def test_config_sync_refuses_lossy_legacy_migration_before_commit() -> None:
+    with pytest.raises(ApiError) as raised:
+        max_studio._max_config_sync_files(
+            _config(),
+            uuid4(),
+            {
+                MAX_PRODUCT_PAGE_PATH: (
+                    'import Dashboard from "./Dashboard"; '
+                    "export default function Page() { return <Dashboard />; }"
+                ),
+                "src/app/dashboard/page.tsx": "export default function Dashboard() {}",
+            },
+        )
+
+    assert raised.value.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        {"src/app/dashboard/page.tsx": "export default function Dashboard() {}"},
+        {"src/app/api/custom/route.ts": "export function GET() {}"},
+        {"src/lib/helpers.ts": "export const value = 1"},
+        {
+            MAX_PRODUCT_PAGE_PATH: (
+                'import Dashboard from "./Dashboard"; '
+                "export default function Page() { return <Dashboard />; }"
+            )
+        },
+    ],
+)
+def test_history_refuses_lossy_legacy_product_restore(snapshot: dict[str, str]) -> None:
+    assert max_legacy_snapshot_incompatibility(snapshot)
+    with pytest.raises(ValueError, match="cannot be restored safely"):
+        render_max_history_files(snapshot, _config(), uuid4())
+
+
+def test_history_refuses_legacy_product_server_action() -> None:
+    snapshot = {
+        "src/app/page.tsx": 'export { default } from "@/components/product/ProductApp";',
+        "src/components/product/ProductApp.tsx": (
+            '"use server";\nexport default async function ProductApp() { return null; }'
+        ),
+    }
+
+    assert max_legacy_snapshot_incompatibility(snapshot)
+    with pytest.raises(ValueError, match="cannot be restored safely"):
+        render_max_history_files(snapshot, _config(), uuid4())
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    ["app/api/leak/route.ts", "next.config.js", "postcss.config.js"],
+)
+def test_history_refuses_root_server_and_build_config_bypasses(unsafe_path: str) -> None:
+    snapshot = {
+        "src/app/page.tsx": "export default function Page() { return null; }",
+        unsafe_path: "export default {};",
+    }
+
+    assert max_legacy_snapshot_incompatibility(snapshot)
 
 
 def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
@@ -348,6 +549,14 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     async def refresh_proof(_session, project):
         proof_refreshes.append(str(project.current_snapshot_id))
 
+    def fake_read(_project_id, _commit_sha):
+        return {
+            MAX_PRODUCT_PAGE_PATH: (
+                '"use client"; export default function Page() { return <main>Coffee</main>; }'
+            )
+        }
+
+    monkeypatch.setattr(max_studio.repo_svc, "read_files", fake_read)
     monkeypatch.setattr(max_studio.repo_svc, "commit_files", fake_commit)
     monkeypatch.setattr(max_studio.orchestrator_client, "get_status", stopped)
     monkeypatch.setattr(max_studio.orchestrator_client, "get_deploy", not_deployed)
@@ -495,6 +704,17 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
                 cache_read_tokens=1_500,
                 retry_count=2,
             ),
+            Usage(
+                user_id=user.id,
+                project_id=project.id,
+                run_id=run.id,
+                model_id="gemini-3.1-pro-preview-customtools",
+                tokens_in=0,
+                tokens_out=0,
+                cost_rub=Decimal("80.0000"),
+                stage="native_agent:reservation",
+                provider_request_id="native-budget-reservation",
+            ),
         ]
     )
     await db_session.commit()
@@ -504,6 +724,9 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
     assert result.run_id == run.id
     assert result.run_status == "running"
     assert result.run_cost_rub == result.total_cost_rub == 7.75
+    assert result.pending_reservation_rub == 80
+    assert result.run_pending_reservation_rub == 80
+    assert result.pending_reservation_calls == 1
     stages = {stage.id: stage for stage in result.stages}
     assert stages["template"].cost_rub == 0
     assert stages["build_plan"].cache_read_tokens == 600

@@ -32,7 +32,26 @@ def set_free_generation(value: bool) -> None:
 
 
 class LLMError(Exception):
-    pass
+    def __init__(self, message: str, *, code: str = "llm_error") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class PaidCallAmbiguousError(LLMError):
+    def __init__(self, message: str = "paid call result is ambiguous") -> None:
+        super().__init__(message, code="paid_call_ambiguous")
+
+
+def _gateway_error_code(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return "gateway_error"
+    detail = payload.get("detail")
+    if isinstance(detail, dict):
+        payload = detail
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return "gateway_error"
+    return str(error.get("code") or error.get("type") or "gateway_error")
 
 
 async def stream_chat_completion(
@@ -45,7 +64,7 @@ async def stream_chat_completion(
     """Yields events:
     - {"delta": "..."} — текстовый чанк
     - {"usage": {"tokens_in", "tokens_out", "cost_rub"}} — финальная статистика
-    - {"error": "..."} — ошибка (после неё — конец)
+    - {"error": "...", "error_code": "..."} — ошибка (после неё — конец)
     """
     settings = get_settings()
     if settings.mock_llm:
@@ -74,6 +93,7 @@ async def stream_chat_completion(
     line_count = 0
     delta_count = 0
     usage_seen = False
+    done_seen = False
     last_line_sample = ""
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -81,8 +101,22 @@ async def stream_chat_completion(
                 print(f"[LLM] connected status={resp.status_code}", flush=True)
                 if resp.status_code >= 400:
                     body = await resp.aread()
-                    print(f"[LLM] http_error {resp.status_code} {body[:300]!r}", flush=True)
-                    yield {"error": f"gateway {resp.status_code}: {body!r}"}
+                    try:
+                        error_code = _gateway_error_code(json.loads(body))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        error_code = "gateway_error"
+                    if error_code == "gateway_error" and (
+                        resp.status_code in {408, 425, 429} or resp.status_code >= 500
+                    ):
+                        error_code = "paid_call_ambiguous"
+                    print(
+                        f"[LLM] http_error status={resp.status_code} code={error_code}",
+                        flush=True,
+                    )
+                    yield {
+                        "error": f"LLM gateway rejected the request (HTTP {resp.status_code})",
+                        "error_code": error_code,
+                    }
                     return
                 async for line in resp.aiter_lines():
                     line_count += 1
@@ -92,13 +126,31 @@ async def stream_chat_completion(
                     if not line.startswith("data:"):
                         continue
                     chunk = line[5:].strip()
-                    if not chunk or chunk == "[DONE]":
+                    if not chunk:
                         continue
+                    if chunk == "[DONE]":
+                        done_seen = True
+                        break
                     try:
                         data = json.loads(chunk)
                     except json.JSONDecodeError as exc:
                         print(f"[LLM] json_err chunk={chunk[:100]!r} err={exc}", flush=True)
-                        continue
+                        yield {
+                            "error": (
+                                "Ответ платного вызова повреждён; автоматический повтор отключён."
+                            ),
+                            "error_code": "paid_call_ambiguous",
+                        }
+                        return
+                    if not isinstance(data, dict):
+                        yield {
+                            "error": (
+                                "Ответ платного вызова имеет неверный формат; "
+                                "автоматический повтор отключён."
+                            ),
+                            "error_code": "paid_call_ambiguous",
+                        }
+                        return
                     # Upstream errors arrive INSIDE the SSE stream as
                     # `data: {"error": {...}}` (vsegpt: out-of-budget / rate-limit
                     # / model-unavailable). Without this they looked like an empty
@@ -106,6 +158,11 @@ async def stream_chat_completion(
                     # clean, actionable message instead and end the stream.
                     if isinstance(data, dict) and data.get("error"):
                         _e = data["error"]
+                        _code = (
+                            str(_e.get("code") or _e.get("type") or "upstream_error")
+                            if isinstance(_e, dict)
+                            else "upstream_error"
+                        )
                         _raw = (
                             _e.get("message") if isinstance(_e, dict) else str(_e)
                         ) or "upstream error"
@@ -129,8 +186,8 @@ async def stream_chat_completion(
                             )
                         else:
                             _msg = f"Ошибка LLM-провайдера: {_raw[:200]}"
-                        print(f"[LLM] upstream_error {_raw[:200]!r}", flush=True)
-                        yield {"error": _msg}
+                        print(f"[LLM] upstream_error code={_code}", flush=True)
+                        yield {"error": _msg, "error_code": _code}
                         return
                     delta = data.get("choices", [{}])[0].get("delta", {}).get("content")
                     if delta:
@@ -152,11 +209,31 @@ async def stream_chat_completion(
                                 "cost_rub": cost_rub,
                             }
                         }
-    except httpx.HTTPError as e:
+                if not done_seen:
+                    yield {
+                        "error": (
+                            "Ответ платного вызова оборвался; автоматический повтор отключён."
+                        ),
+                        "error_code": "paid_call_ambiguous",
+                    }
+                    return
+    except (
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.ReadError,
+        httpx.WriteError,
+        httpx.RemoteProtocolError,
+    ) as e:
         import traceback as _tb
 
         print(f"[LLM] transport_error err={e!r}\n{_tb.format_exc()}", flush=True)
-        yield {"error": f"http: {e}"}
+        yield {
+            "error": "Ответ платного вызова потерян; автоматический повтор отключён.",
+            "error_code": "paid_call_ambiguous",
+        }
+    except httpx.HTTPError as e:
+        print(f"[LLM] connection_error type={type(e).__name__}", flush=True)
+        yield {"error": "LLM gateway is unavailable", "error_code": "gateway_transport"}
     print(
         f"[LLM] done lines={line_count} deltas={delta_count} "
         f"usage_seen={usage_seen} last={last_line_sample!r}",
@@ -209,11 +286,46 @@ async def complete_chat(
             resp = await client.post(url, json=payload)
             if resp.status_code >= 400:
                 body = await resp.aread()
-                raise LLMError(f"gateway {resp.status_code}: {body[:300]!r}")
-            data = resp.json()
+                try:
+                    error_code = _gateway_error_code(json.loads(body))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    error_code = "gateway_error"
+                if error_code == "gateway_error" and (
+                    resp.status_code in {408, 425, 429} or resp.status_code >= 500
+                ):
+                    error_code = "paid_call_ambiguous"
+                if error_code == "paid_call_ambiguous":
+                    raise PaidCallAmbiguousError()
+                raise LLMError(
+                    f"gateway rejected the request (HTTP {resp.status_code})",
+                    code=error_code,
+                )
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise PaidCallAmbiguousError(
+                    "gateway returned malformed JSON after a paid call"
+                ) from exc
+            if not isinstance(data, dict):
+                raise PaidCallAmbiguousError(
+                    "gateway returned a non-object response after a paid call"
+                )
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+        raise LLMError("gateway connection failed", code="gateway_transport") from exc
     except httpx.HTTPError as exc:
-        raise LLMError(f"http: {exc}") from exc
-    return data.get("choices", [{}])[0].get("message", {}).get("content") or ""
+        raise PaidCallAmbiguousError(
+            f"gateway response status is unknown after {type(exc).__name__}"
+        ) from exc
+    try:
+        choices = data["choices"]
+        content = choices[0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise PaidCallAmbiguousError(
+            "gateway returned an incomplete response after a paid call"
+        ) from exc
+    if not isinstance(content, str):
+        raise PaidCallAmbiguousError("gateway returned invalid content after a paid call")
+    return content
 
 
 async def _mock_stream(messages: list[dict[str, str]]) -> AsyncIterator[dict[str, Any]]:

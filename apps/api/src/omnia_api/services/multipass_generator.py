@@ -309,7 +309,7 @@ async def _run_pass(
     project_id: UUID,
     message_id: UUID,
     forward_chunks: bool,
-) -> tuple[str, dict[str, Any] | None, str | None]:
+) -> tuple[str, dict[str, Any] | None, str | None, str | None]:
     """Run one pass, return (accumulated_text, usage, error).
 
     forward_chunks=True yields each chunk back to the caller via the
@@ -320,6 +320,7 @@ async def _run_pass(
     accumulated: list[str] = []
     usage: dict[str, Any] | None = None
     error: str | None = None
+    error_code: str | None = None
     async for event in stream_chat_completion(
         messages=messages,
         model=model,
@@ -333,8 +334,9 @@ async def _run_pass(
             usage = u
         if err := event.get("error"):
             error = err
+            error_code = str(event.get("error_code") or "") or None
             break
-    return "".join(accumulated), usage, error
+    return "".join(accumulated), usage, error, error_code
 
 
 def _build_skeleton_messages(
@@ -492,7 +494,7 @@ async def multipass_generate(
     # ─── Pass 1: SKELETON ────────────────────────────────────────────
     yield {"pass": "skeleton", "stage": "start"}
     skeleton_msgs = _build_skeleton_messages(base_messages, user_prompt, skeleton_model)
-    skeleton_raw, sk_usage, sk_err = await _run_pass(
+    skeleton_raw, sk_usage, sk_err, sk_error_code = await _run_pass(
         messages=skeleton_msgs,
         model=skeleton_model,
         user_id=user_id,
@@ -501,7 +503,10 @@ async def multipass_generate(
         forward_chunks=False,
     )
     if sk_err:
-        yield {"error": f"skeleton pass failed: {sk_err}"}
+        yield {
+            "error": f"skeleton pass failed: {sk_err}",
+            **({"error_code": sk_error_code} if sk_error_code else {}),
+        }
         return
 
     skeleton_clean = _strip_json_fence(skeleton_raw)
@@ -547,9 +552,26 @@ async def multipass_generate(
         message_id=message_id,
         forward_chunks=False,
     )
-    (content_raw, co_usage, co_err), (visual_raw, vi_usage, vi_err) = await asyncio.gather(
-        content_task, visual_task
+    (
+        (content_raw, co_usage, co_err, co_error_code),
+        (
+            visual_raw,
+            vi_usage,
+            vi_err,
+            vi_error_code,
+        ),
+    ) = await asyncio.gather(content_task, visual_task)
+
+    ambiguous_code = next(
+        (code for code in (co_error_code, vi_error_code) if code == "paid_call_ambiguous"),
+        None,
     )
+    if ambiguous_code:
+        yield {
+            "error": "Промежуточный платный вызов завершился неоднозначно; сборка остановлена.",
+            "error_code": ambiguous_code,
+        }
+        return
 
     # Soft-fail: if either side errored, log via event but continue —
     # assembly will see an empty/partial intermediate and degrade gracefully.
@@ -588,6 +610,7 @@ async def multipass_generate(
     )
     asm_usage: dict[str, Any] | None = None
     asm_err: str | None = None
+    asm_error_code: str | None = None
     async for event in stream_chat_completion(
         messages=assembly_msgs,
         model=assembly_model,
@@ -601,10 +624,14 @@ async def multipass_generate(
             asm_usage = event["usage"]
         elif "error" in event:
             asm_err = event["error"]
+            asm_error_code = str(event.get("error_code") or "") or None
             break
 
     if asm_err:
-        yield {"error": f"assembly pass failed: {asm_err}"}
+        yield {
+            "error": f"assembly pass failed: {asm_err}",
+            **({"error_code": asm_error_code} if asm_error_code else {}),
+        }
         return
 
     yield {"pass": "assembly", "stage": "end"}

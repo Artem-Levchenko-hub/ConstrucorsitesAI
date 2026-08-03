@@ -40,6 +40,16 @@ class ModelUnavailableError(GatewayError):
     http_status = 503
 
 
+class BillingUnavailableError(GatewayError):
+    code = "billing_unavailable"
+    http_status = 503
+
+
+class PaidCallAmbiguousError(GatewayError):
+    code = "paid_call_ambiguous"
+    http_status = 503
+
+
 class UpstreamProviderError(GatewayError):
     code = "model_unavailable"
     http_status = 502

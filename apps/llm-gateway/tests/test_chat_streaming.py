@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Iterator
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -84,3 +84,34 @@ def test_chat_streaming_yields_sse_chunks(client: TestClient) -> None:
     assert final["model"] == _MODEL
     assert final["metadata"]["actual_model_used"] == _MODEL
     assert final["metadata"]["fallback_used"] is False
+
+
+def test_chat_streaming_never_claims_success_when_charge_is_ambiguous(
+    client: TestClient,
+) -> None:
+    charge = AsyncMock(side_effect=RuntimeError("database reply lost"))
+    with (
+        patch("omnia_gateway.services.streaming.llmgw.astream", _fake_astream),
+        patch("omnia_gateway.services.streaming.billing.charge", charge),
+    ):
+        r = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": _MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+                "user": str(uuid4()),
+            },
+        )
+
+    events = _parse_sse(r.text)
+    terminal_errors = [e["error"] for e in events if isinstance(e, dict) and e.get("error")]
+    assert terminal_errors == [
+        {
+            "code": "paid_call_ambiguous",
+            "message": "The provider completed but settlement is temporarily unavailable",
+        }
+    ]
+    assert not [e for e in events if isinstance(e, dict) and e.get("usage")]
+    assert events[-1] == "[DONE]"
+    charge.assert_awaited_once()

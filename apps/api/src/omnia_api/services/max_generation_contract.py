@@ -153,6 +153,7 @@ _NON_PRODUCT_PATHS = {
     "src/lib/omnia/max-config.ts",
     "src/components/MaxAppProvider.tsx",
     "src/components/OmniaCompliance.tsx",
+    "src/components/OmniaProductRuntime.tsx",
     "src/lib/omnia/client.ts",
     "src/lib/omnia/integration-client.ts",
 }
@@ -419,8 +420,9 @@ def build_max_product_contract(prompt: str) -> str:
         "The three directions must differ in composition/type/density/motion, not colour. "
         "Keep this project-specific spec aligned with the final implementation so a later "
         "continuation preserves the art direction instead of inventing a new template.",
-        "- No product home page or visual template exists initially. Create "
-        "src/app/page.tsx, product styling, screens and navigation from scratch.",
+        "- No product UI or visual template exists initially. Replace "
+        "src/components/product/ProductApp.tsx and create the product styling, "
+        "screens and navigation from scratch. Never edit the locked root page.",
         "- Build a coherent mobile product with real screens/views and actions. Organise "
         "the source however best fits the product: completion is judged by behaviour and "
         "brief coverage, never by an arbitrary number of files. Decorative tabs are not screens.",
@@ -511,6 +513,8 @@ def normalize_max_globals_css(css: str) -> str:
 def max_source_completion_gap(
     prompt: str,
     files: Mapping[str, str],
+    *,
+    require_design_spec: bool = True,
 ) -> str | None:
     """Return a source/product gap independently of runtime proof infrastructure.
 
@@ -519,69 +523,81 @@ def max_source_completion_gap(
     not a source gap and therefore never authorises another paid segment.
     """
 
-    page = files.get("src/app/page.tsx", "")
-    if not page:
+    # Legacy snapshots (kit <=14) still carry their product in page.tsx. They
+    # are migrated behind the browser-only runtime before execution, but the
+    # source contract remains able to assess them during that transition.
+    entry = files.get("src/components/product/ProductApp.tsx", "") or files.get(
+        "src/app/page.tsx", ""
+    )
+    if not entry:
         return (
-            "MAX product has no home page. Create src/app/page.tsx with the actual "
+            "MAX product has no product entry. Create "
+            "src/components/product/ProductApp.tsx with the actual "
             "requested product before done."
         )
-    if "max-generation-canvas" in page:
+    if "max-generation-canvas" in entry:
         return (
             "MAX product still contains the retired generation canvas. Replace "
-            "src/app/page.tsx with the actual requested product before done."
+            "src/components/product/ProductApp.tsx with the actual requested product "
+            "before done."
         )
 
-    spec_raw = files.get(_MAX_DESIGN_SPEC_PATH, "")
-    if not spec_raw:
-        return (
-            "MAX product has no persistent art direction. Create "
-            f"{_MAX_DESIGN_SPEC_PATH} with the three explored directions and chosen "
-            "product-specific design/motion system before done."
-        )
-    try:
-        spec = json.loads(spec_raw)
-    except (TypeError, json.JSONDecodeError):
-        return f"{_MAX_DESIGN_SPEC_PATH} is not valid JSON. Repair the design spec before done."
-    if not isinstance(spec, dict):
-        return f"{_MAX_DESIGN_SPEC_PATH} must contain one JSON object."
+    if require_design_spec:
+        spec_raw = files.get(_MAX_DESIGN_SPEC_PATH, "")
+        if not spec_raw:
+            return (
+                "MAX product has no persistent art direction. Create "
+                f"{_MAX_DESIGN_SPEC_PATH} with the three explored directions and chosen "
+                "product-specific design/motion system before done."
+            )
+        try:
+            spec = json.loads(spec_raw)
+        except (TypeError, json.JSONDecodeError):
+            return f"{_MAX_DESIGN_SPEC_PATH} is not valid JSON. Repair the design spec before done."
+        if not isinstance(spec, dict):
+            return f"{_MAX_DESIGN_SPEC_PATH} must contain one JSON object."
 
-    required_text = ("product_promise", "primary_action", "chosen_direction", "chosen_rationale")
-    missing_text = [key for key in required_text if not str(spec.get(key) or "").strip()]
-    directions = spec.get("directions_considered")
-    direction_names = (
-        {
-            str(item.get("name") if isinstance(item, dict) else item).strip().casefold()
-            for item in directions
-            if str(item.get("name") if isinstance(item, dict) else item).strip()
-        }
-        if isinstance(directions, list)
-        else set()
-    )
-    screens = spec.get("screens")
-    visual_system = spec.get("visual_system")
-    motion = spec.get("motion")
-    states = {str(item).strip().casefold() for item in (spec.get("states") or [])}
-    if missing_text:
-        return f"MAX design spec is incomplete: missing {', '.join(missing_text)}."
-    if len(direction_names) < 3:
-        return "MAX design spec must compare three genuinely distinct art directions."
-    if not isinstance(screens, list) or not screens:
-        return "MAX design spec must define the product screens/views before implementation."
-    if not isinstance(visual_system, dict) or not visual_system:
-        return "MAX design spec must define a project-specific visual_system."
-    if not isinstance(motion, list) or not motion:
-        return "MAX design spec must define purposeful interaction motion."
-    missing_states = sorted(_REQUIRED_DESIGN_STATES.difference(states))
-    if missing_states:
-        return "MAX design spec is missing product states: " + ", ".join(missing_states) + "."
+        required_text = (
+            "product_promise",
+            "primary_action",
+            "chosen_direction",
+            "chosen_rationale",
+        )
+        missing_text = [key for key in required_text if not str(spec.get(key) or "").strip()]
+        directions = spec.get("directions_considered")
+        direction_names = (
+            {
+                str(item.get("name") if isinstance(item, dict) else item).strip().casefold()
+                for item in directions
+                if str(item.get("name") if isinstance(item, dict) else item).strip()
+            }
+            if isinstance(directions, list)
+            else set()
+        )
+        screens = spec.get("screens")
+        visual_system = spec.get("visual_system")
+        motion = spec.get("motion")
+        states = {str(item).strip().casefold() for item in (spec.get("states") or [])}
+        if missing_text:
+            return f"MAX design spec is incomplete: missing {', '.join(missing_text)}."
+        if len(direction_names) < 3:
+            return "MAX design spec must compare three genuinely distinct art directions."
+        if not isinstance(screens, list) or not screens:
+            return "MAX design spec must define the product screens/views before implementation."
+        if not isinstance(visual_system, dict) or not visual_system:
+            return "MAX design spec must define a project-specific visual_system."
+        if not isinstance(motion, list) or not motion:
+            return "MAX design spec must define purposeful interaction motion."
+        missing_states = sorted(_REQUIRED_DESIGN_STATES.difference(states))
+        if missing_states:
+            return "MAX design spec is missing product states: " + ", ".join(missing_states) + "."
 
     capabilities = requested_max_capabilities(prompt)
     product_sources = [content for path, content in files.items() if _is_product_source(path)]
     product_source_blob = "\n".join(product_sources)
     corpus = product_source_blob.lower()
     product_source_views = [
-        (source, _strip_js_non_code(source, keep_strings=False))
-        for source in product_sources
+        (source, _strip_js_non_code(source, keep_strings=False)) for source in product_sources
     ]
     for path, content in files.items():
         demo_rejection = max_demo_data_rejection(path, content)
@@ -621,9 +637,7 @@ def max_source_completion_gap(
 
     if _AI_PROMPT_RE.search(prompt):
         managed_ai_call = any(
-            _has_managed_named_import(
-                source, "requestOmniaAI", "@/lib/omnia/integration-client"
-            )
+            _has_managed_named_import(source, "requestOmniaAI", "@/lib/omnia/integration-client")
             and re.search(r"\bawait\s+requestomniaai\s*\(", code, re.IGNORECASE)
             for source, code in product_source_views
         )
@@ -653,16 +667,12 @@ def max_source_completion_gap(
 
     persistence_required = _PERSISTENCE_PROMPT_RE.search(prompt) is not None
     managed_create_call = any(
-        _has_managed_named_import(
-            source, "createMaxAction", "@/lib/omnia/integration-client"
-        )
+        _has_managed_named_import(source, "createMaxAction", "@/lib/omnia/integration-client")
         and re.search(r"\bawait\s+createmaxaction\s*\(", code, re.IGNORECASE)
         for source, code in product_source_views
     )
     managed_restore_call = any(
-        _has_managed_named_import(
-            source, "getMaxActions", "@/lib/omnia/integration-client"
-        )
+        _has_managed_named_import(source, "getMaxActions", "@/lib/omnia/integration-client")
         and re.search(
             r"\buseeffect\s*\(.{0,1600}?\bawait\s+getmaxactions\s*\(",
             code,
@@ -717,9 +727,7 @@ def max_completion_gap(
     if source_gap:
         return source_gap
     missing_skills = [
-        skill
-        for skill in MAX_REQUIRED_PREWRITE_SKILLS
-        if evidence.get(f"skill:{skill}", 0) < 1
+        skill for skill in MAX_REQUIRED_PREWRITE_SKILLS if evidence.get(f"skill:{skill}", 0) < 1
     ]
     if missing_skills:
         return "Read required MAX capability packs: " + ", ".join(missing_skills) + "."

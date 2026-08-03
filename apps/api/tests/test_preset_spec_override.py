@@ -99,3 +99,19 @@ async def test_confident_heuristic_beats_spec() -> None:
         discovery_spec={"primary_family": "violet", "dark_mode": True},
     )
     assert picked == "law-authority"
+
+
+@pytest.mark.asyncio
+async def test_classifier_does_not_hide_ambiguous_paid_call(monkeypatch) -> None:
+    """A lost paid response must stop the run before the main model call."""
+
+    async def ambiguous_stream(*args, **kwargs):
+        yield {
+            "error": "provider result is unknown",
+            "error_code": "paid_call_ambiguous",
+        }
+
+    monkeypatch.setattr(pc, "stream_chat_completion", ambiguous_stream)
+
+    with pytest.raises(pc.PaidCallAmbiguousError):
+        await pc._llm_classify("Неясный проект", "freeform", "собери приложение")

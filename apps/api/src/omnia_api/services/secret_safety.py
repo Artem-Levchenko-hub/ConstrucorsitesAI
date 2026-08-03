@@ -19,6 +19,30 @@ _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"),
 )
 
+_MAX_RUNTIME_SECRET_ACCESS_RE = re.compile(
+    r"(?i)\b(?:process\.env|import\.meta\.env|Bun\.env|Deno\.env)\b"
+)
+_MAX_PRIVILEGED_RUNTIME_IMPORT_RE = re.compile(
+    r"(?i)(?:from\s+|require\s*\(|import\s*\()[\"']"
+    r"(?:node:)?(?:fs|child_process|cluster|worker_threads)[\"']"
+)
+# A valid directive may share its line with exports or comments, and may appear
+# inside a function body.  Matching the exact string literal anywhere is
+# deliberately conservative: product copy almost never needs to render this
+# phrase, while missing one occurrence creates a secret-bearing Server Action.
+_MAX_SERVER_ACTION_DIRECTIVE_RE = re.compile(r"(?i)[\"']use[ \t]+server[\"']")
+_MAX_SERVER_RUNTIME_IMPORT_RE = re.compile(
+    r"(?i)(?:from\s+|require\s*\(|import\s*(?:\(\s*)?)[\"'](?:"
+    r"server-only|next/(?:server|headers|cache)|"
+    r"@/lib/max/(?:bot-api|session|validate-init-data)"
+    r")[\"']"
+)
+_MAX_RAW_DB_IMPORT_RE = re.compile(
+    r"(?i)(?:from\s+|require\s*\(|import\s*\()[\"'](?:"
+    r"@/lib/db|(?:\.\.?/)+[^\"']*lib/db|drizzle-orm(?:/[^\"']*)?|pg|postgres"
+    r")[\"']"
+)
+
 
 def contains_provider_secret(value: str) -> bool:
     """Return true only for high-confidence credential shapes.
@@ -70,6 +94,31 @@ def max_model_write_rejection(path: str, candidate: str) -> str | None:
         return (
             "A provider credential was detected and the write was blocked before it "
             "reached the project repository. Use the Studio Integration Hub instead."
+        )
+    if _MAX_RUNTIME_SECRET_ACCESS_RE.search(candidate):
+        return (
+            "Generated MAX product code cannot read runtime environment variables. "
+            "Use the managed MAX/integration client; secrets remain server-owned."
+        )
+    if _MAX_PRIVILEGED_RUNTIME_IMPORT_RE.search(candidate):
+        return (
+            "Generated MAX product code cannot import filesystem/process runtime modules. "
+            "Use the managed MAX/integration client instead."
+        )
+    if _MAX_SERVER_ACTION_DIRECTIVE_RE.search(candidate):
+        return (
+            "Generated MAX product code is browser-only and cannot declare Server Actions. "
+            "Use the managed MAX/integration client instead."
+        )
+    if _MAX_SERVER_RUNTIME_IMPORT_RE.search(candidate):
+        return (
+            "Generated MAX product code cannot import server-only Next.js or MAX modules. "
+            "Use the managed MAX/integration client instead."
+        )
+    if _MAX_RAW_DB_IMPORT_RE.search(candidate):
+        return (
+            "Generated MAX product code cannot import a raw database client. "
+            "Use createMaxAction/getMaxActions from the managed integration client."
         )
     return None
 

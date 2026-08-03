@@ -16,12 +16,26 @@ from omnia_api.schemas.max_studio import (
     MaxProjectConfigPayload,
     MaxSupport,
 )
+from omnia_api.services.secret_safety import max_model_write_rejection
 
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 14
+MAX_MANAGED_KIT_VERSION = 16
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
+
+MAX_PRODUCT_ENTRY_PATH = "src/components/product/ProductApp.tsx"
+MAX_PRODUCT_PAGE_PATH = "src/app/page.tsx"
+MAX_PRODUCT_RUNTIME_PATH = "src/components/OmniaProductRuntime.tsx"
+
+_EMPTY_PRODUCT_ENTRY = """"use client";
+
+// Neutral build-only slot. The Google agent must replace this entire file with
+// the requested product before the completion gate can publish a generation.
+export default function ProductApp() {
+  return null;
+}
+"""
 
 
 def _template_candidates(
@@ -119,9 +133,11 @@ def render_max_managed_files(
         "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
         "public/omnia-inspector.js": _template_file("public/omnia-inspector.js"),
+        MAX_PRODUCT_PAGE_PATH: _template_file(MAX_PRODUCT_PAGE_PATH),
         "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
         "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
         "src/components/OmniaCompliance.tsx": _template_file("src/components/OmniaCompliance.tsx"),
+        MAX_PRODUCT_RUNTIME_PATH: _template_file(MAX_PRODUCT_RUNTIME_PATH),
         "src/lib/db/index.ts": _template_file("src/lib/db/index.ts"),
         "src/lib/db/schema.ts": _template_file("src/lib/db/schema.ts"),
         "src/lib/max/bot-api.ts": _template_file("src/lib/max/bot-api.ts"),
@@ -482,8 +498,10 @@ MAX_MODEL_LOCKED_FILES = frozenset(
         "public/omnia-inspector.js",
         "public/omnia-remix-cta.js",
         "src/app/api/health/route.ts",
+        MAX_PRODUCT_PAGE_PATH,
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
+        MAX_PRODUCT_RUNTIME_PATH,
         "src/app/layout.tsx",
         "src/lib/db/index.ts",
         "src/lib/db/schema.ts",
@@ -509,6 +527,7 @@ MAX_MODEL_LOCKED_FILES = frozenset(
 )
 
 _MAX_HISTORY_PRODUCT_ROOTS = (
+    ".omnia/",
     "src/app/",
     "src/components/",
     "src/data/",
@@ -526,6 +545,176 @@ _MAX_HISTORY_PLATFORM_PREFIXES = (
     "src/lib/max/",
     "src/lib/omnia/",
 )
+_LEGACY_RELATIVE_IMPORT_RE = re.compile(
+    r"(?:from\s+|import\s*(?:\(\s*)?|require\s*\(\s*)[\"']\.\.?/"
+)
+
+
+def max_legacy_server_file_deletions(files: dict[str, str]) -> dict[str, str]:
+    """Delete executable legacy Next routes outside the audited platform kit.
+
+    Empty content is the shared repo/orchestrator delete-intent.  This is used
+    during both config sync and pre-generation migration so an old arbitrary
+    API/Page route cannot survive beside the new browser-only product entry.
+    """
+
+    deletions: dict[str, str] = {}
+    for raw_path in files:
+        path = posixpath.normpath(raw_path.replace("\\", "/"))
+        if path != raw_path or path.startswith(("/", "../")):
+            continue
+        unmanaged_app = path.startswith("app/") or (
+            path.startswith("src/app/")
+            and path != "src/app/globals.css"
+            and path not in MAX_MODEL_LOCKED_FILES
+        )
+        legacy_pages_router = path.startswith(("src/pages/", "pages/"))
+        executable_build_config = path in {
+            ".babelrc",
+            ".babelrc.js",
+            ".babelrc.cjs",
+            ".babelrc.mjs",
+            "babel.config.js",
+            "babel.config.cjs",
+            "babel.config.mjs",
+            "babel.config.ts",
+            "next.config.js",
+            "next.config.mjs",
+            "postcss.config.js",
+            "postcss.config.cjs",
+            "postcss.config.ts",
+            "tailwind.config.js",
+            "tailwind.config.cjs",
+            "tailwind.config.mjs",
+            "tailwind.config.ts",
+        }
+        legacy_server_entry = path in {
+            "middleware.ts",
+            "middleware.js",
+            "src/middleware.ts",
+            "src/middleware.js",
+            "instrumentation.ts",
+            "instrumentation.js",
+            "src/instrumentation.ts",
+            "src/instrumentation.js",
+            "instrumentation-client.ts",
+            "instrumentation-client.js",
+            "src/instrumentation-client.ts",
+            "src/instrumentation-client.js",
+            "proxy.ts",
+            "proxy.js",
+            "src/proxy.ts",
+            "src/proxy.js",
+        }
+        if unmanaged_app or legacy_pages_router or executable_build_config or legacy_server_entry:
+            deletions[path] = ""
+    return deletions
+
+
+def max_legacy_snapshot_incompatibility(files: dict[str, str]) -> str | None:
+    """Explain why a historical product cannot be restored losslessly.
+
+    Older agents could spread product functionality across server-capable App
+    Router routes and arbitrary ``src/lib`` modules.  Silently pruning those
+    files produces a green-looking but incomplete rollback, so history must
+    refuse that version until a real dependency migration exists.
+    """
+
+    unsafe_routes = sorted(max_legacy_server_file_deletions(files))
+    if unsafe_routes:
+        return f"legacy server route is not browser-isolatable: {unsafe_routes[0]}"
+    unsafe_libs = sorted(
+        path
+        for path in files
+        if path.startswith("src/lib/")
+        and not path.startswith("src/lib/product/")
+        and path not in MAX_MODEL_LOCKED_FILES
+    )
+    if unsafe_libs:
+        return f"legacy product helper is outside src/lib/product: {unsafe_libs[0]}"
+    unsafe_public_runtime = sorted(
+        path
+        for path in files
+        if path.startswith("public/")
+        and path.endswith((".js", ".mjs", ".cjs", ".wasm"))
+        and not path.startswith("public/product/")
+        and path not in MAX_MODEL_LOCKED_FILES
+    )
+    if unsafe_public_runtime:
+        return f"legacy public executable is outside public/product: {unsafe_public_runtime[0]}"
+    for path, content in sorted(files.items()):
+        is_product_file = path == "src/app/globals.css" or path.startswith(
+            (
+                "src/components/",
+                "src/data/",
+                "src/hooks/",
+                "src/lib/product/",
+                "src/store/",
+                "src/styles/",
+                "src/types/",
+                "public/product/",
+            )
+        )
+        if not is_product_file or path in MAX_MODEL_LOCKED_FILES:
+            continue
+        if max_model_write_rejection(path, content):
+            return f"legacy product file violates the browser boundary: {path}"
+    legacy_page = files.get(MAX_PRODUCT_PAGE_PATH)
+    if legacy_page and max_model_write_rejection(MAX_PRODUCT_ENTRY_PATH, legacy_page):
+        return "legacy root page violates the browser boundary"
+    if (
+        MAX_PRODUCT_ENTRY_PATH not in files
+        and legacy_page
+        and _LEGACY_RELATIVE_IMPORT_RE.search(legacy_page)
+    ):
+        return "legacy root page uses relative imports that would break after isolation"
+    return None
+
+
+def max_model_path_rejection(path: str) -> str | None:
+    """Reject non-canonical model write paths before applying MAX policy.
+
+    The orchestrator safely normalizes archive paths, but policy checks happen in
+    apps/api first. Without this guard, ``./src/...`` or ``src/x/../...`` could
+    normalize onto a Studio-owned file after bypassing an exact-path lock.
+    """
+
+    raw = str(path or "")
+    normalized = posixpath.normpath(raw)
+    if (
+        not raw
+        or raw != raw.strip()
+        or raw.startswith(("/", "~"))
+        or "\\" in raw
+        or "\x00" in raw
+        or normalized in {"", "."}
+        or normalized != raw
+    ):
+        return (
+            "MAX source paths must be canonical project-relative POSIX paths "
+            "without '.', '..', duplicate separators or backslashes."
+        )
+    allowed = (
+        raw == "src/app/globals.css"
+        or raw == ".omnia/max-design-spec.json"
+        or raw.startswith("src/components/")
+        or raw.startswith("src/hooks/")
+        or raw.startswith("src/data/")
+        or raw.startswith("src/store/")
+        or raw.startswith("src/styles/")
+        or raw.startswith("src/types/")
+        or raw.startswith("src/lib/product/")
+        or raw.startswith("public/product/")
+    )
+    if not allowed:
+        return (
+            "MAX product code is browser-isolated. Write ProductApp and client-only "
+            "components/styles under the allowed product directories; server routes, "
+            "middleware, app routes and runtime files are platform-owned."
+        )
+    return None
+
+
 # Root/build files are not valid product customisation points.  A restored
 # commit receives this audited subset from the canonical server template;
 # trusting current repo bytes (or their complement) would silently classify a
@@ -561,6 +750,7 @@ def max_history_product_files(files: dict[str, str]) -> dict[str, str]:
     the orchestrator API.
     """
     product: dict[str, str] = {}
+    legacy_page = files.get(MAX_PRODUCT_PAGE_PATH)
     for raw_path, content in files.items():
         path = posixpath.normpath(raw_path.replace("\\", "/"))
         if path.startswith("/") or path == ".." or path.startswith("../"):
@@ -569,14 +759,48 @@ def max_history_product_files(files: dict[str, str]) -> dict[str, str]:
             continue
         if path in MAX_MODEL_LOCKED_FILES or path.startswith(_MAX_HISTORY_PLATFORM_PREFIXES):
             continue
-        if path.startswith("src/app/api/") and not path.startswith("src/app/api/custom/"):
+        if path.startswith(".omnia/") and path != ".omnia/max-design-spec.json":
             continue
-        if path.endswith("/route.ts") and not path.startswith("src/app/api/custom/"):
+        # Historical model-owned App Router files are server-capable code. Keep
+        # only globals.css and migrate the legacy root product into ProductApp;
+        # every executable product module is then reached through ssr:false.
+        if path.startswith("src/app/") and path != "src/app/globals.css":
             continue
-        if path.startswith("public/") and path.endswith((".js", ".mjs", ".cjs", ".wasm")):
+        if path.startswith("src/lib/") and not path.startswith("src/lib/product/"):
+            continue
+        if (
+            path.startswith("public/")
+            and path.endswith((".js", ".mjs", ".cjs", ".wasm"))
+            and not path.startswith("public/product/")
+        ):
             continue
         product[path] = content
+    if MAX_PRODUCT_ENTRY_PATH not in product and legacy_page:
+        # Kit v14 and older let the model own the root page.  History and restore
+        # migrate that product byte-for-byte behind the current browser-only
+        # runtime instead of executing the historical module on the server.
+        product[MAX_PRODUCT_ENTRY_PATH] = legacy_page
     return product
+
+
+def render_max_entry_migration_files(snapshot_files: dict[str, str]) -> dict[str, str]:
+    """Return the trusted entry boundary plus the current product component.
+
+    Config/kit sync is a partial commit, so it must explicitly carry a legacy
+    page into the new ProductApp path before replacing the root page.
+    """
+
+    incompatibility = max_legacy_snapshot_incompatibility(snapshot_files)
+    if incompatibility:
+        raise ValueError(f"MAX entry cannot be migrated safely: {incompatibility}")
+    product = max_history_product_files(snapshot_files)
+    return {
+        **max_legacy_server_file_deletions(snapshot_files),
+        "next.config.ts": _template_file("next.config.ts"),
+        MAX_PRODUCT_PAGE_PATH: _template_file(MAX_PRODUCT_PAGE_PATH),
+        MAX_PRODUCT_RUNTIME_PATH: _template_file(MAX_PRODUCT_RUNTIME_PATH),
+        MAX_PRODUCT_ENTRY_PATH: product.get(MAX_PRODUCT_ENTRY_PATH, _EMPTY_PRODUCT_ENTRY),
+    }
 
 
 def max_project_config_from_files(
@@ -619,8 +843,12 @@ def render_max_history_files(
     project_id: UUID | str,
 ) -> dict[str, str]:
     """Combine historical product UI with today's trusted MAX runtime core."""
+    incompatibility = max_legacy_snapshot_incompatibility(snapshot_files)
+    if incompatibility:
+        raise ValueError(f"MAX snapshot cannot be restored safely: {incompatibility}")
     return {
         **render_max_managed_files(config, project_id),
+        MAX_PRODUCT_ENTRY_PATH: _EMPTY_PRODUCT_ENTRY,
         **max_history_product_files(snapshot_files),
     }
 
@@ -632,10 +860,7 @@ def render_max_restored_files(
     project_id: UUID | str,
 ) -> dict[str, str]:
     """Build a rollback tree with historical product and today's trusted core."""
-    trusted_platform = {
-        path: _template_file(path)
-        for path in _MAX_RESTORE_TEMPLATE_PLATFORM_FILES
-    }
+    trusted_platform = {path: _template_file(path) for path in _MAX_RESTORE_TEMPLATE_PLATFORM_FILES}
     return {
         **trusted_platform,
         **render_max_history_files(snapshot_files, config, project_id),
@@ -649,9 +874,13 @@ Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
 and integration clients, webhook security and generated business config. Do not
 rewrite platform-owned files.
 
-On a FULL BUILD, there is deliberately no product home page or visual template.
-Create src/app/page.tsx, the product styling, domain screens, components and API
-behaviour required by the brief from scratch. A thin shell, decorative tabs,
+On a FULL BUILD, there is deliberately no product UI or visual template. Replace
+src/components/product/ProductApp.tsx with the complete client-side product and
+create its styling, domain screens and components from scratch. The locked root
+page is only a browser-isolation boundary; never edit it or create app/API routes.
+Never declare `"use server"` or import `next/server`, `next/headers`, `next/cache`
+or server-only MAX modules from product code.
+A thin shell, decorative tabs,
 static demo response or fake timer is not a finished application. Persist user actions with
 `createMaxAction` and read them with `getMaxActions`, both from
 `@/lib/omnia/integration-client`. Never import `@/lib/db`/`drizzle-orm` or create
@@ -715,5 +944,6 @@ def render_max_starter_files(
     """
     return {
         **render_max_managed_files(config, project_id),
+        MAX_PRODUCT_ENTRY_PATH: _EMPTY_PRODUCT_ENTRY,
         "src/app/globals.css": _template_file("src/app/globals.css"),
     }

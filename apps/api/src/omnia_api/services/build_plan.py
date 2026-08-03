@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from omnia_api.core.config import get_settings, model_for_role
-from omnia_api.services.llm_client import LLMError, complete_chat
+from omnia_api.services.llm_client import LLMError, PaidCallAmbiguousError, complete_chat
 
 log = logging.getLogger(__name__)
 
@@ -185,9 +185,7 @@ class Entity:
         raw_fields = d.get("fields") or ()
         if isinstance(raw_fields, str):
             raw_fields = re.split(r"[,;]", raw_fields)
-        fields = tuple(
-            f for f in (_clean_str(x, limit=60) for x in raw_fields) if f
-        )[:24]
+        fields = tuple(f for f in (_clean_str(x, limit=60) for x in raw_fields) if f)[:24]
         return cls(
             name=name,
             fields=fields,
@@ -237,18 +235,14 @@ class BuildPlan:
             screens = tuple(
                 s
                 for s in (
-                    Screen.from_dict(x)
-                    for x in (data.get("screens") or [])
-                    if isinstance(x, dict)
+                    Screen.from_dict(x) for x in (data.get("screens") or []) if isinstance(x, dict)
                 )
                 if s
             )[:_MAX_SCREENS]
             entities = tuple(
                 e
                 for e in (
-                    Entity.from_dict(x)
-                    for x in (data.get("entities") or [])
-                    if isinstance(x, dict)
+                    Entity.from_dict(x) for x in (data.get("entities") or []) if isinstance(x, dict)
                 )
                 if e
             )[:_MAX_ENTITIES]
@@ -262,11 +256,7 @@ class BuildPlan:
                 if c
             )[:_MAX_CAPABILITIES]
             acc = tuple(
-                a
-                for a in (
-                    _clean_str(x, limit=200) for x in (data.get("acceptance") or [])
-                )
-                if a
+                a for a in (_clean_str(x, limit=200) for x in (data.get("acceptance") or [])) if a
             )[:12]
             return cls(
                 summary=_clean_str(data.get("summary"), limit=400),
@@ -308,9 +298,7 @@ class BuildPlan:
             for c in self.capabilities:
                 where = f" → {c.method} {c.path}" if c.path else " (через UI)"
                 star = "" if c.must_have else " (доп.)"
-                lines.append(
-                    f"  - [{c.actor_role}] {c.action}{where} ⇒ {c.expect}{star}"
-                )
+                lines.append(f"  - [{c.actor_role}] {c.action}{where} ⇒ {c.expect}{star}")
         if self.blocking_capabilities():
             lines.append(
                 "ПЕРЕД done: проверь КАЖДУЮ обязательную возможность инструментом "
@@ -333,9 +321,7 @@ def read_plan(discovery_spec: dict[str, Any] | None) -> BuildPlan:
     return BuildPlan.from_dict(discovery_spec.get("build_plan"))
 
 
-def merge_plan_into_spec(
-    discovery_spec: dict[str, Any] | None, plan: BuildPlan
-) -> dict[str, Any]:
+def merge_plan_into_spec(discovery_spec: dict[str, Any] | None, plan: BuildPlan) -> dict[str, Any]:
     """Return a new ``discovery_spec`` dict carrying ``build_plan`` without
     disturbing the existing (FidelitySpec) keys. Empty plan → spec unchanged."""
     out = dict(discovery_spec or {})
@@ -467,6 +453,8 @@ async def plan_build(
             max_tokens=2048,
             temperature=0.0,
         )
+    except PaidCallAmbiguousError:
+        raise
     except LLMError as exc:
         log.warning("build_plan: planner gateway error → empty plan: %r", exc)
         return BuildPlan()

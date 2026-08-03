@@ -621,17 +621,15 @@ def test_agentic_off_by_default():
 
 
 def test_green_explore_stall_nudges_done_not_write():
-    """After build+runtime are green, a no-write thrash (bash spiral) must nudge
-    the model to FINISH (done), not to write — fixes the observed see-driven
-    bash spiral that wasted ~10 steps post-success."""
+    """After build+runtime are green, observation thrash must nudge done."""
     record: list = []
     replies = [
         '<omnia:action name="write_file">{"path":"src/app/page.tsx","content":"v1"}</omnia:action>',
         '<omnia:action name="build"></omnia:action>',
         '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
-        '<omnia:action name="bash">{"cmd":"pnpm test"}</omnia:action>',
-        '<omnia:action name="bash">{"cmd":"pnpm lint"}</omnia:action>',
-        '<omnia:action name="bash">{"cmd":"echo hi"}</omnia:action>',
+        '<omnia:action name="read_logs">{"tail":80}</omnia:action>',
+        '<omnia:action name="see">{"path":"/dashboard"}</omnia:action>',
+        '<omnia:action name="see">{"path":"/settings"}</omnia:action>',
         '<omnia:action name="done">{"summary":"crm built"}</omnia:action>',
     ]
     res = asyncio.run(
@@ -648,6 +646,13 @@ def test_green_explore_stall_nudges_done_not_write():
     # the GREEN done-nudge was issued (not the write nudge)
     user_msgs = [m["content"] for m in res.transcript if m["role"] == "user"]
     assert any(m == ab._DONE_WHEN_GREEN_NUDGE for m in user_msgs)
+
+
+def test_arbitrary_shell_is_not_an_agent_action() -> None:
+    assert ab.parse_action(
+        '<omnia:action name="bash">{"cmd":"rm -rf src"}</omnia:action>'
+    ) is None
+    assert "bash" not in ab._KNOWN_ACTIONS
 
 
 _FONTS_IMPORT = (

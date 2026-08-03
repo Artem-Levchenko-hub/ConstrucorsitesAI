@@ -674,6 +674,9 @@ export type MaxPreviewSession = {
 export type MaxUsage = {
   total_cost_rub: number;
   run_cost_rub: number;
+  pending_reservation_rub: number;
+  run_pending_reservation_rub: number;
+  pending_reservation_calls: number;
   run_id: Uuid | null;
   run_status: string | null;
   stages: {

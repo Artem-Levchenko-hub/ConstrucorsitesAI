@@ -47,7 +47,7 @@ _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
-_CALL_RETRIES = 1  # outer MAX reconnects own the only bounded retry policy
+_CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside one cycle
 _MAX_PROVIDER_RECONNECT_CYCLES = 3
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
@@ -108,7 +108,6 @@ _TOOLS: list[dict[str, Any]] = [
     _tool(
         "build", "Typecheck/compile the app. Returns the real errors to fix (empty = clean).", {}
     ),
-    _tool("bash", "Run a shell command in the dev container.", {"cmd": _STR}, ["cmd"]),
     _tool(
         "read_logs",
         "Tail the live dev-server logs (runtime errors build can't see).",
@@ -253,10 +252,10 @@ _TOOLS_CACHED: list[dict[str, Any]] = [
 ]
 
 # MAX has a narrower executor contract. Do not advertise operations which the
-# server will always reject (bash) or which authenticate through the generic web
+# server will always reject or which authenticate through the generic web
 # harness (probe/isolation). Gemini otherwise spends turns discovering the
 # rejection even though the MAX prompt already says not to call them.
-_MAX_UNAVAILABLE_TOOLS = frozenset({"bash", "probe", "verify_isolation"})
+_MAX_UNAVAILABLE_TOOLS = frozenset({"probe", "verify_isolation"})
 _MAX_READ_SKILL_TOOL = _tool(
     "read_skill",
     "Load one optional MAX capability pack by exact catalog slug. Use it to gain "
@@ -271,6 +270,34 @@ _MAX_TOOLS = [*_MAX_BASE_TOOLS[:-1], _MAX_READ_SKILL_TOOL, _MAX_BASE_TOOLS[-1]]
 _MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     *_MAX_TOOLS[:-1],
     {**_MAX_TOOLS[-1], "cache_control": _CACHE},
+]
+
+# The reliable MAX path from 4cb0ee18 was a single Google tool loop, not a
+# ceremony of nested planners, capability brokers and mandatory visual judges.
+# Keep only the tools that can directly advance or prove the product.  This also
+# shrinks every provider request and leaves more of Gemini's context for the app.
+_MAX_REFERENCE_TOOL_NAMES = frozenset(
+    {
+        "list_dir",
+        "read_file",
+        "grep",
+        "docs",
+        "write_file",
+        "edit_file",
+        "build",
+        "read_logs",
+        "runtime_check",
+        "see",
+        "generate_media",
+        "done",
+    }
+)
+_MAX_REFERENCE_TOOLS = [
+    tool for tool in _TOOLS if str(tool.get("name") or "") in _MAX_REFERENCE_TOOL_NAMES
+]
+_MAX_REFERENCE_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_MAX_REFERENCE_TOOLS[:-1],
+    {**_MAX_REFERENCE_TOOLS[-1], "cache_control": _CACHE},
 ]
 
 
@@ -355,9 +382,7 @@ def _obs_to_tool_result(
             ]
     raw_artifacts = obs.get("artifacts")
     artifacts = (
-        [str(item)[:500] for item in raw_artifacts[:20]]
-        if isinstance(raw_artifacts, list)
-        else []
+        [str(item)[:500] for item in raw_artifacts[:20]] if isinstance(raw_artifacts, list) else []
     )
     if tool_name in {"write_file", "edit_file"} and ok:
         artifacts = list(dict.fromkeys([*artifacts, str(obs.get("path") or "")]))
@@ -482,7 +507,7 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
         return _cap(obs.get("content") or "")
     if name == "build":
         return _cap(obs.get("detail") or obs.get("content") or "сборка чистая")
-    if name in ("grep", "list_dir", "bash", "read_logs", "docs"):
+    if name in ("grep", "list_dir", "read_logs", "docs"):
         return _cap(obs.get("detail") or obs.get("content") or "")
     if name in ("runtime_check", "probe", "verify_isolation"):
         return _cap(obs.get("detail") or obs.get("content") or "проверка пройдена")
@@ -492,7 +517,7 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
 _NATIVE_PREAMBLE = (
     "Ты — автономный инженер: строишь РАБОЧЕЕ приложение в этом проекте, как Claude "
     "Code. Инструменты вызывай напрямую: read_file/list_dir/grep — понять код, "
-    "write_file/edit_file — писать, build — компиляция, bash/read_logs — рантайм, "
+    "write_file/edit_file — писать, build — компиляция, read_logs — рантайм, "
     "runtime_check — открыть роут в ЖИВОМ приложении, probe — реальный запрос ОТ "
     "ИМЕНИ залогиненного юзера, verify_isolation — доказать отсутствие утечки данных "
     "между юзерами, docs — свежая дока библиотек. Думай сколько нужно. Цикл: пиши "
@@ -619,8 +644,9 @@ _MAX_NATIVE_PREAMBLE = (
     "запиши выбранную систему в `.omnia/max-design-spec.json` по acceptance contract и "
     "после этого последовательно реализуй концепцию. Никогда не воспроизводи "
     "универсальный dashboard, прошлую генерацию или маркетинговый лендинг.\n\n"
-    "ВИЗУАЛЬНАЯ СВОБОДА БЕЗ ШАБЛОНА. Ты владеешь src/app/page.tsx, "
-    "src/app/globals.css и новыми продуктовыми компонентами. globals.css можно и нужно "
+    "ВИЗУАЛЬНАЯ СВОБОДА БЕЗ ШАБЛОНА. Ты владеешь "
+    "src/components/product/ProductApp.tsx, src/app/globals.css и новыми клиентскими "
+    "продуктовыми компонентами. globals.css можно и нужно "
     'полностью оформить под концепцию, но сохрани корректный `@import "tailwindcss"` '
     "и располагай внешние font-import ДО него. Не трогай locked layout/provider/runtime. "
     "Определи собственные семантические CSS variables (`--app-*`) и используй их через "
@@ -694,17 +720,60 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "not retry it blindly."
 )
 
+_MAX_REFERENCE_PREAMBLE = (
+    "Ты — автономный Google AI-агент, который за один непрерывный проход строит "
+    "полноценный MAX Mini App. Работай прямо с проектом: коротко изучи защищённое "
+    "ядро, затем сразу напиши весь продукт по брифу — экраны, навигацию, состояния, "
+    "взаимодействия и аккуратный mobile-first дизайн. Не используй визуальный шаблон, "
+    "не подменяй функции текстом, TODO или декоративными кнопками. Не останавливайся "
+    "на частичном результате и не объявляй успех словами.\n\n"
+    "Сохрани управляемую MAX-обвязку: подписанный initData, useMaxApp/профиль, "
+    "integration-client, webhook и закрытые Studio-файлы. Пользовательские данные "
+    "бери из MAX и управляемого серверного хранилища; не зашивай демо-профили, "
+    "историю, метрики или секреты. Не создавай параллельную email-регистрацию.\n\n"
+    "Надёжный цикл: минимально прочитай нужные файлы → пиши полные продуктовые файлы "
+    "→ build → исправь каждую реальную ошибку → runtime_check корневого экрана после "
+    "последней записи. Если runtime_check красный, прочитай конкретный файл/лог и "
+    "перезапиши его полностью вместо серии хрупких edit_file. Вызови done только после "
+    "чистого build и зелёного runtime_check. see можно использовать один раз для "
+    "точечной визуальной проверки, но недоступность visual QA не блокирует рабочий "
+    "продукт. Не трать ходы на церемониальный план, skill-пакеты или внешнее исследование, "
+    "если без него можно сразу собрать приложение."
+)
 
-def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
+_MAX_REFERENCE_EDIT_PREAMBLE = (
+    "Ты — автономный Google AI-агент для точечной правки существующего MAX Mini App. "
+    "Сначала прочитай только целевой участок, затем внеси минимальное изменение, "
+    "сохрани все остальные экраны, данные и сценарии. Не переписывай весь продукт, "
+    "не меняй визуальное направление без прямого запроса и не трогай управляемое "
+    "MAX-ядро. После последней записи исправь фактические ошибки build/runtime_check "
+    "и заверши только на зелёной версии. Не создавай демо-данные, секреты, параллельную "
+    "email-авторизацию, API или прямой доступ к БД."
+)
+
+
+def native_system_prompt(
+    stack_guide: str,
+    skills: str | None = None,
+    *,
+    reference_max_loop: bool = False,
+    reference_max_edit: bool = False,
+) -> str:
     """Native-tools system prompt: a short tool-loop preamble + the stack guide (+
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
     guide = (stack_guide or "").strip()
     is_max = "MAX PLATFORM CORE CONTRACT" in guide
-    parts = [_MAX_NATIVE_PREAMBLE if is_max else _NATIVE_PREAMBLE, guide]
+    if is_max and reference_max_loop:
+        parts = [
+            _MAX_REFERENCE_EDIT_PREAMBLE if reference_max_edit else _MAX_REFERENCE_PREAMBLE,
+            guide,
+        ]
+    else:
+        parts = [_MAX_NATIVE_PREAMBLE if is_max else _NATIVE_PREAMBLE, guide]
     if skills and skills.strip():
         parts.append(skills.strip())
-    if is_max:
+    if is_max and not reference_max_loop:
         parts.append(_MAX_NATIVE_VERIFICATION_OVERRIDE)
     return "\n\n".join(p for p in parts if p)
 
@@ -753,15 +822,33 @@ async def _call_messages(
         }
         try:
             r = await client.post(url, json=payload, timeout=_HTTP_TIMEOUT_S)
-            if r.status_code == 429 or (r.status_code >= 400 and "rate_limit" in r.text[:300]):
+            try:
+                parsed_body = r.json()
+            except ValueError as exc:
+                if 200 <= r.status_code < 300:
+                    raise AmbiguousPaidCallError(r.status_code) from exc
+                parsed_body = None
+            if 200 <= r.status_code < 300 and not isinstance(parsed_body, dict):
+                raise AmbiguousPaidCallError(r.status_code)
+            try:
+                error_payload = parsed_body.get("error") or {}
+                error_type = str(error_payload.get("code") or error_payload.get("type") or "")
+            except AttributeError:
+                error_type = ""
+            if error_type == "paid_call_ambiguous":
+                raise AmbiguousPaidCallError(r.status_code)
+            trusted_rate_limit = error_type in {
+                "rate_limit",
+                "rate_limited",
+                "concurrency_limited",
+            }
+            if r.status_code == 429 and trusted_rate_limit:
                 await asyncio.sleep(6.0 * (attempt + 1))
                 last = RuntimeError(f"429 concurrency (attempt {attempt + 1})")
                 continue
+            if r.status_code in {408, 425, 429} or r.status_code >= 500:
+                raise AmbiguousPaidCallError(r.status_code)
             if r.status_code == 409:
-                try:
-                    error_type = str((r.json().get("error") or {}).get("type") or "")
-                except (ValueError, AttributeError):
-                    error_type = ""
                 if error_type == "run_budget_exhausted":
                     raise SpendBudgetExceeded
             # Retrying a rejected request cannot repair credentials, balance,
@@ -770,17 +857,37 @@ async def _call_messages(
             if 400 <= r.status_code < 500 and r.status_code not in {408, 425, 429}:
                 raise PermanentProviderError(r.status_code)
             r.raise_for_status()
-            body = r.json()
-            if not isinstance(body, dict):
-                raise RuntimeError("messages API returned a non-object payload")
-            return body
-        except httpx.HTTPError as exc:
-            # oneprovider flakes in SUSTAINED bursts (observed live: series of
-            # 502s + 504s over several minutes killed builds mid-run). Linear
-            # 3-15s backoff only covered ~30s; exponential-with-cap rides out a
-            # multi-minute flake window (~3.5 min total) before giving up.
+            assert isinstance(parsed_body, dict)
+            content = parsed_body.get("content")
+            if not isinstance(content, list) or not content:
+                raise AmbiguousPaidCallError(r.status_code)
+            recognised = False
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type in {"text", "thinking", "redacted_thinking"}:
+                    recognised = True
+                elif (
+                    block_type == "tool_use"
+                    and isinstance(block.get("id"), str)
+                    and isinstance(block.get("name"), str)
+                    and isinstance(block.get("input"), dict)
+                ):
+                    recognised = True
+            if not recognised:
+                raise AmbiguousPaidCallError(r.status_code)
+            return parsed_body
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            # These failures happen before a response-bearing connection is
+            # available, so the outer MAX reconnect cycle may safely retry.
             last = exc
             await asyncio.sleep(min(45.0, 4.0 * (2**attempt)))
+        except httpx.HTTPError as exc:
+            # Once request transmission may have started, a timeout/protocol
+            # loss can hide a provider response that was already billed.  Do
+            # not let the outer loop repeat that logical paid turn.
+            raise AmbiguousPaidCallError(None) from exc
     raise last or RuntimeError("messages call failed")
 
 
@@ -790,6 +897,15 @@ class PermanentProviderError(RuntimeError):
     def __init__(self, status_code: int) -> None:
         self.status_code = status_code
         super().__init__(f"provider rejected request (HTTP {status_code})")
+
+
+class AmbiguousPaidCallError(RuntimeError):
+    """A provider may have billed this call; repeating it would risk double spend."""
+
+    def __init__(self, status_code: int | None) -> None:
+        self.status_code = status_code
+        suffix = f" (HTTP {status_code})" if status_code is not None else ""
+        super().__init__(f"paid provider call has ambiguous settlement{suffix}")
 
 
 class SpendBudgetExceeded(RuntimeError):
@@ -809,6 +925,7 @@ async def run_native_build(
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
     enforce_max_skill_lifecycle: bool = False,
+    reference_max_loop: bool = False,
     max_steps: int | None = 24,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
@@ -841,10 +958,11 @@ async def run_native_build(
     visual_evaluation_ready = False
     provider_reconnect_cycles = 0
 
-    max_runtime = "MAX VERIFICATION OVERRIDE" in system
+    max_runtime = "MAX VERIFICATION OVERRIDE" in system or reference_max_loop
     max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
+    unbounded_max_runtime = max_runtime
     effective_max_steps = (
-        None if max_runtime else max(1, int(24 if max_steps is None else max_steps))
+        None if unbounded_max_runtime else max(1, int(40 if max_steps is None else max_steps))
     )
 
     def _evidence() -> dict[str, int]:
@@ -979,10 +1097,7 @@ async def run_native_build(
     async with httpx.AsyncClient() as client:
         step_numbers = count() if effective_max_steps is None else range(effective_max_steps)
         for step in step_numbers:
-            if (
-                pending_visual_evaluation_step is not None
-                and step > pending_visual_evaluation_step
-            ):
+            if pending_visual_evaluation_step is not None and step > pending_visual_evaluation_step:
                 visual_evaluation_ready = True
             call_stage = (
                 "build_plan"
@@ -1003,9 +1118,14 @@ async def run_native_build(
                     message_id=str(message_id) if message_id else None,
                     free=free,
                     stage=call_stage,
-                    tools=_MAX_TOOLS_CACHED if max_runtime else _TOOLS_CACHED,
+                    tools=(
+                        _MAX_REFERENCE_TOOLS_CACHED
+                        if reference_max_loop
+                        else _MAX_TOOLS_CACHED
+                        if max_runtime
+                        else _TOOLS_CACHED
+                    ),
                 )
-                provider_reconnect_cycles = 0
             except SpendBudgetExceeded:
                 log.warning("agent_native.spend_budget_exhausted", step=step)
                 if emit:
@@ -1027,6 +1147,32 @@ async def run_native_build(
                     steps=step,
                     reason="spend_budget",
                     detail="safe generation spend limit reached",
+                )
+            except AmbiguousPaidCallError as exc:
+                log.warning(
+                    "agent_native.max_paid_call_ambiguous",
+                    step=step,
+                    status_code=exc.status_code,
+                )
+                if emit:
+                    await emit(
+                        "agent.step",
+                        {
+                            "step": step,
+                            "action": "accounting_guard",
+                            "path": "",
+                            "detail": (
+                                "Ответ платного вызова неоднозначен. Повтор отключён, "
+                                "чтобы исключить двойное списание; проверяю уже "
+                                "собранную версию локально."
+                            ),
+                            "ok": False,
+                        },
+                    )
+                return await _finish_without_provider(
+                    steps=step,
+                    reason="provider_stopped",
+                    detail="paid provider call was not retried after ambiguous settlement",
                 )
             except PermanentProviderError as exc:
                 log.warning(
@@ -1108,7 +1254,33 @@ async def run_native_build(
             content = resp.get("content")
             if not isinstance(content, list):
                 if max_runtime:
-                    log.warning("agent_native.max_malformed_provider_retry", step=step)
+                    provider_reconnect_cycles += 1
+                    log.warning(
+                        "agent_native.max_malformed_provider_retry",
+                        step=step,
+                        reconnect_cycle=provider_reconnect_cycles,
+                    )
+                    if provider_reconnect_cycles >= _MAX_PROVIDER_RECONNECT_CYCLES:
+                        if emit:
+                            await emit(
+                                "agent.step",
+                                {
+                                    "step": step,
+                                    "action": "provider_stopped",
+                                    "path": "",
+                                    "detail": (
+                                        "Google AI трижды вернул повреждённый ответ. "
+                                        "Новые запросы остановлены; проверяю уже "
+                                        "собранную версию локально."
+                                    ),
+                                    "ok": False,
+                                },
+                            )
+                        return await _finish_without_provider(
+                            steps=step,
+                            reason="provider_stopped",
+                            detail="gateway returned malformed content repeatedly",
+                        )
                     await asyncio.sleep(5.0)
                     continue
                 return AgentResult(
@@ -1119,6 +1291,7 @@ async def run_native_build(
                     transcript=convo,
                     stop_reason="error",
                 )
+            provider_reconnect_cycles = 0
             # Echo the assistant turn VERBATIM — thinking blocks (with signatures)
             # MUST be preserved for the next turn or Anthropic rejects the round-trip.
             convo.append({"role": "assistant", "content": content})
@@ -1376,7 +1549,7 @@ async def run_native_build(
             else:
                 no_write_turns += 1
                 if _NO_WRITE_NUDGE_AT <= no_write_turns and (
-                    max_runtime or no_write_turns < _NO_WRITE_ABORT_AT
+                    unbounded_max_runtime or no_write_turns < _NO_WRITE_ABORT_AT
                 ):
                     results.append(
                         {
@@ -1395,7 +1568,7 @@ async def run_native_build(
                     if emit:
                         await emit("agent.stalled", {"step": step})
             convo.append({"role": "user", "content": results})
-            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT and not max_runtime:
+            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT and not unbounded_max_runtime:
                 log.warning("agent_native.infra_dead_abort", step=step)
                 return AgentResult(
                     done=False,
@@ -1405,10 +1578,10 @@ async def run_native_build(
                     transcript=convo,
                     stop_reason="infra_error",
                 )
-            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT and max_runtime:
+            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT and unbounded_max_runtime:
                 log.warning("agent_native.max_infra_reconnecting", step=step)
                 await asyncio.sleep(15.0)
-            if no_write_turns >= _NO_WRITE_ABORT_AT and not max_runtime:
+            if no_write_turns >= _NO_WRITE_ABORT_AT and not unbounded_max_runtime:
                 return AgentResult(
                     done=False,
                     summary="stuck exploring (reading/verifying) without writing any file",

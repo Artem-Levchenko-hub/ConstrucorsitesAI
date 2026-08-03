@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Check, Coins, RotateCcw } from "lucide-react";
+import { Check, CircleDashed, Coins, RotateCcw } from "lucide-react";
 
 import { getMaxUsage } from "@/lib/api/max-studio";
 import type { Uuid } from "@/lib/api/types";
@@ -21,6 +21,7 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
     retry: false,
   });
   const current = usage.data?.run_cost_rub ?? 0;
+  const pending = usage.data?.run_pending_reservation_rub ?? 0;
 
   return (
     <details className="group relative" data-testid="max-usage-breakdown">
@@ -61,6 +62,15 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
                 </p>
               </div>
             ))}
+          </div>
+        )}
+        {pending > 0 && (
+          <div className="mt-3 flex gap-2 rounded-[9px] border border-[#ddd6c5] bg-[#f5f1e8] p-3 text-[10px] leading-4 text-[#69645b]">
+            <CircleDashed className="mt-0.5 size-3.5 shrink-0" />
+            <p>
+              До {rub(pending)} ₽ зарезервировано, но не подтверждено и не входит в
+              фактический расход. Повтор платного вызова отключён.
+            </p>
           </div>
         )}
         <p className="mt-3 text-[9px] leading-4 text-[#8d887f]">Данные берутся из фактического gateway-ledger и обновляются во время работы.</p>

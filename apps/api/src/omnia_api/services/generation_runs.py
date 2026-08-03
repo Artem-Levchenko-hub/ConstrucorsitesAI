@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from datetime import UTC, datetime
 from uuid import UUID
@@ -127,6 +128,65 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
     now = datetime.now(UTC)
     marker = "[Генерация прервана перезапуском сервера — отправьте запрос повторно]"
     for run in runs:
+        cleanup_paths_raw = (run.agent_state or {}).get("cleanup_paths")
+        cleanup_required = bool((run.agent_state or {}).get("cleanup_required"))
+        if cleanup_required and isinstance(cleanup_paths_raw, list):
+            cleanup_paths = {
+                path
+                for path in cleanup_paths_raw
+                if isinstance(path, str) and path and len(path) <= 500
+            }
+            if cleanup_paths:
+                try:
+                    from omnia_api.models.project import Project
+                    from omnia_api.models.snapshot import Snapshot
+                    from omnia_api.services import orchestrator_client
+                    from omnia_api.services import repo as repo_svc
+
+                    await session.execute(
+                        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+                        {"project_id": str(run.project_id)},
+                    )
+                    project = await session.get(Project, run.project_id)
+                    if project is None or project.current_snapshot_id is None:
+                        raise RuntimeError("canonical project snapshot is unavailable")
+                    snapshot = await session.get(Snapshot, project.current_snapshot_id)
+                    if snapshot is None:
+                        raise RuntimeError("canonical snapshot is unavailable")
+                    canonical = await asyncio.to_thread(
+                        repo_svc.read_files,
+                        run.project_id,
+                        snapshot.commit_sha,
+                    )
+                    patch = {path: canonical.get(path, "") for path in cleanup_paths}
+                    await orchestrator_client.hot_reload_exact(
+                        run.project_id,
+                        project.slug,
+                        patch,
+                    )
+                    project.runtime_sync_required = False
+                    project.runtime_sync_paths = []
+                except Exception:
+                    # Fail closed: keep cancel_requested inside the partial
+                    # unique index until a later restart/recovery can restore
+                    # the canonical files.
+                    run.status = "cancel_requested"
+                    run.error = "runtime cleanup is still pending after API restart"
+                    continue
+                run.status = "cancelled"
+                run.error = None
+                run.finished_at = now
+                if run.assistant_message_id is not None:
+                    message = await session.get(Message, run.assistant_message_id)
+                    if message is not None and message.tokens_out is None:
+                        cancel_marker = "[Отменено пользователем]"
+                        if cancel_marker not in (message.content or ""):
+                            message.content = (
+                                f"{message.content.rstrip()}\n\n{cancel_marker}".strip()
+                            )
+                        message.tokens_in = message.tokens_in or 0
+                        message.tokens_out = 0
+                continue
         run.status = "failed"
         run.error = "API process restarted before generation completed"
         run.finished_at = now
@@ -218,6 +278,23 @@ async def save_generation_agent_state(
         await session.commit()
 
 
+async def merge_generation_agent_state(
+    run_id: UUID,
+    state: dict[str, object],
+) -> None:
+    """Merge a durable runtime-safety checkpoint without erasing the public plan."""
+
+    from omnia_api.core.db import get_engine
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        run = await session.get(GenerationRun, run_id, with_for_update=True)
+        if run is None:
+            return
+        run.agent_state = {**(run.agent_state or {}), **state}
+        await session.commit()
+
+
 async def latest_failed_agent_state(
     session: AsyncSession,
     *,
@@ -257,6 +334,12 @@ async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
     run.finished_at = datetime.now(UTC)
     if build_failed and not run.error:
         run.error = "build finished without a committed snapshot"
+    if run.agent_state:
+        run.agent_state = {
+            **run.agent_state,
+            "cleanup_required": False,
+            "cleanup_paths": [],
+        }
     await session.commit()
     return run.status
 

@@ -31,7 +31,6 @@ Actions (file tools + real build/runtime observations):
     write_file   {"path": "...", "content": "...full file..."}
     edit_file    {"path": "...", "search": "...", "replace": "..."}
     build        {}                      # real typecheck/compile observation
-    bash         {"cmd": "pnpm test"}    # arbitrary shell in the container
     read_logs    {}                      # live dev-server stdout/stderr (runtime errors)
     runtime_check{"path": "/"}           # hit a route, get the REAL HTTP status / crash file
     see          {"path": "/"}           # screenshot the live page → vision-model design critique
@@ -66,9 +65,22 @@ _ACTION_RE = re.compile(
 )
 
 _KNOWN_ACTIONS = frozenset(
-    {"list_dir", "read_file", "grep", "docs", "write_file", "edit_file", "build",
-     "bash", "read_logs", "runtime_check", "see", "generate_media", "probe",
-     "verify_isolation", "done"}
+    {
+        "list_dir",
+        "read_file",
+        "grep",
+        "docs",
+        "write_file",
+        "edit_file",
+        "build",
+        "read_logs",
+        "runtime_check",
+        "see",
+        "generate_media",
+        "probe",
+        "verify_isolation",
+        "done",
+    }
 )
 
 # Idempotent "observe the world after acting" actions. Re-running them across a
@@ -103,10 +115,10 @@ class Action:
 class AgentResult:
     done: bool
     summary: str
-    files: dict[str, str]          # path -> final content the agent wrote
+    files: dict[str, str]  # path -> final content the agent wrote
     steps: int
     transcript: list[dict[str, str]] = field(default_factory=list)
-    stop_reason: str = ""          # "done" | "max_steps" | "stalled" | "error" | "infra_error"
+    stop_reason: str = ""  # "done" | "max_steps" | "stalled" | "error" | "infra_error"
 
 
 def parse_action(reply: str) -> Action | None:
@@ -153,9 +165,7 @@ def _truncate(s: str, n: int) -> str:
 # turn (task + seeded project context) + the most recent `keep_last` turns. The
 # loop still holds the full transcript for its own logic; only the MODEL CALL is
 # windowed. This is what keeps a 30-step loop at roughly one-step cost.
-def _window_messages(
-    convo: list[dict[str, Any]], keep_last: int = 12
-) -> list[dict[str, Any]]:
+def _window_messages(convo: list[dict[str, Any]], keep_last: int = 12) -> list[dict[str, Any]]:
     head = 2  # system + first user (orientation + seeded layout)
     if len(convo) <= head + keep_last:
         return convo
@@ -305,7 +315,9 @@ async def run_agent_build(
             return AgentResult(
                 done=True,
                 summary="Приложение собрано — билд проходит чисто.",
-                files=written, steps=step_no + 1, transcript=convo,
+                files=written,
+                steps=step_no + 1,
+                transcript=convo,
                 stop_reason="done_on_green",
             )
         return fallback
@@ -327,8 +339,7 @@ async def run_agent_build(
         _note = _progress_note(written, last_build_ok)
         if _note and call_msgs:
             call_msgs = [
-                {"role": call_msgs[0]["role"],
-                 "content": call_msgs[0]["content"] + _note},
+                {"role": call_msgs[0]["role"], "content": call_msgs[0]["content"] + _note},
                 *call_msgs[1:],
             ]
         # 429-resilience: vsegpt enforces ~1 req/sec globally; under concurrent
@@ -354,7 +365,10 @@ async def run_agent_build(
             return AgentResult(
                 done=False,
                 summary=f"gateway error after retries: {last_exc}",
-                files=written, steps=step, transcript=convo, stop_reason="error",
+                files=written,
+                steps=step,
+                transcript=convo,
+                stop_reason="error",
             )
 
         convo.append({"role": "assistant", "content": reply})
@@ -373,7 +387,8 @@ async def run_agent_build(
             else:
                 _nm = _tags[-1].group(1).strip().lower()
                 _why = (
-                    f"unknown name={_nm!r}" if _nm not in _KNOWN_ACTIONS
+                    f"unknown name={_nm!r}"
+                    if _nm not in _KNOWN_ACTIONS
                     else f"name={_nm} body-not-valid-json"
                 )
             print(
@@ -386,8 +401,11 @@ async def run_agent_build(
                 await emit("agent.stalled", {"step": step})
             if stalls >= _NO_ACTION_ABORT_AT:
                 return AgentResult(
-                    done=False, summary="model emitted no valid action repeatedly",
-                    files=written, steps=step + 1, transcript=convo,
+                    done=False,
+                    summary="model emitted no valid action repeatedly",
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
                     stop_reason="stalled",
                 )
             # A model that can't emit the action protocol usually needs a DIFFERENT
@@ -402,9 +420,14 @@ async def run_agent_build(
         stalls = 0
 
         if emit:
-            await emit("agent.step", {
-                "step": step, "action": action.name, "path": action.path,
-            })
+            await emit(
+                "agent.step",
+                {
+                    "step": step,
+                    "action": action.name,
+                    "path": action.path,
+                },
+            )
 
         if action.name == "done":
             # Green-gate: refuse a premature `done`. The model loves to declare
@@ -416,9 +439,7 @@ async def run_agent_build(
             if require_green_before_done and done_rejections < _DONE_REJECT_CAP:
                 gap = None
                 if last_build_ok is not True:
-                    gap = (
-                        "run `build` and fix errors until it is CLEAN before done"
-                    )
+                    gap = "run `build` and fix errors until it is CLEAN before done"
                 elif wrote_since_check or last_runtime_ok is not True:
                     gap = (
                         "you wrote files but did not confirm they RUN — "
@@ -429,13 +450,14 @@ async def run_agent_build(
                     done_rejections += 1
                     if emit:
                         await emit("agent.stalled", {"step": step})
-                    convo.append({"role": "user", "content": (
-                        "NOT DONE YET — " + gap + "."
-                    )})
+                    convo.append({"role": "user", "content": ("NOT DONE YET — " + gap + ".")})
                     continue
             return AgentResult(
-                done=True, summary=str(action.args.get("summary", "")),
-                files=written, steps=step + 1, transcript=convo,
+                done=True,
+                summary=str(action.args.get("summary", "")),
+                files=written,
+                steps=step + 1,
+                transcript=convo,
                 stop_reason="done",
             )
 
@@ -466,10 +488,13 @@ async def run_agent_build(
                     AgentResult(
                         done=False,
                         summary=f"stuck re-issuing {action.name} {action.path}",
-                        files=written, steps=step + 1, transcript=convo,
+                        files=written,
+                        steps=step + 1,
+                        transcript=convo,
                         stop_reason="looping",
                     ),
-                    step, "cycle",
+                    step,
+                    "cycle",
                 )
             if sig_seen[sig] >= _REPEAT_NUDGE_AT:
                 await _escalate(step, "cycle")
@@ -479,9 +504,12 @@ async def run_agent_build(
                 )
                 if emit:
                     await emit("agent.stalled", {"step": step})
-                convo.append({"role": "user", "content": (
-                    _EDIT_REPEAT_CYCLE_NUDGE if edit_mode else _REPEAT_CYCLE_NUDGE
-                )})
+                convo.append(
+                    {
+                        "role": "user",
+                        "content": (_EDIT_REPEAT_CYCLE_NUDGE if edit_mode else _REPEAT_CYCLE_NUDGE),
+                    }
+                )
                 continue
         if sig == last_sig:
             repeat_count += 1
@@ -492,10 +520,13 @@ async def run_agent_build(
                 AgentResult(
                     done=False,
                     summary=f"stuck repeating {action.name} {action.path}",
-                    files=written, steps=step + 1, transcript=convo,
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
                     stop_reason="looping",
                 ),
-                step, "repeat",
+                step,
+                "repeat",
             )
         if repeat_count >= 2:
             await _escalate(step, "repeat")
@@ -503,21 +534,26 @@ async def run_agent_build(
                 f"[AGENT] step={step} REPEAT x{repeat_count} {action.name} {action.path}",
                 flush=True,
             )
-            convo.append({"role": "user", "content": (
-                (
-                    f"STOP — you ran this EXACT action {repeat_count + 1} times with "
-                    "the same result. Do NOT repeat it. You have enough context: emit "
-                    "the edit_file / write_file patch for the requested change NOW, "
-                    "then run build, then call done."
-                )
-                if edit_mode
-                else (
-                    f"STOP — you ran this EXACT action {repeat_count + 1} times with the "
-                    "same result. Do NOT repeat it. You have enough context: WRITE the "
-                    "next file now (a dashboard page renders <CrudResource entity=\"...\"/>; "
-                    "also write dashboard/page.tsx), or run build, or call done."
-                )
-            )})
+            convo.append(
+                {
+                    "role": "user",
+                    "content": (
+                        (
+                            f"STOP — you ran this EXACT action {repeat_count + 1} times with "
+                            "the same result. Do NOT repeat it. You have enough context: emit "
+                            "the edit_file / write_file patch for the requested change NOW, "
+                            "then run build, then call done."
+                        )
+                        if edit_mode
+                        else (
+                            f"STOP — you ran this EXACT action {repeat_count + 1} times with the "
+                            "same result. Do NOT repeat it. You have enough context: WRITE the "
+                            'next file now (a dashboard page renders <CrudResource entity="..."/>; '
+                            "also write dashboard/page.tsx), or run build, or call done."
+                        )
+                    ),
+                }
+            )
             continue
 
         # Cycle breaker: the consecutive-identical check above MISSES a multi-step
@@ -551,10 +587,13 @@ async def run_agent_build(
                     AgentResult(
                         done=False,
                         summary="rewriting the same files in a loop without ever building",
-                        files=written, steps=step + 1, transcript=convo,
+                        files=written,
+                        steps=step + 1,
+                        transcript=convo,
                         stop_reason="looping",
                     ),
-                    step, "rewrite-loop",
+                    step,
+                    "rewrite-loop",
                 )
             if rewrites_since_build >= _REWRITE_BEFORE_BUILD_NUDGE:
                 await _escalate(step, "rewrite_loop")
@@ -567,10 +606,7 @@ async def run_agent_build(
                     await emit("agent.stalled", {"step": step})
                 convo.append({"role": "user", "content": _BUILD_PRESSURE_NUDGE})
                 continue  # don't execute the rewrite — force a build first
-            if (
-                not build_pressure_nudged
-                and writes_since_build >= _WRITES_BEFORE_BUILD_NUDGE
-            ):
+            if not build_pressure_nudged and writes_since_build >= _WRITES_BEFORE_BUILD_NUDGE:
                 build_pressure_nudged = True  # one gentle reminder per no-build window
                 await _escalate(step, "no_build")
                 print(
@@ -580,14 +616,6 @@ async def run_agent_build(
                 )
                 convo.append({"role": "user", "content": _BUILD_PRESSURE_NUDGE})
                 continue  # build once before piling on more files
-        elif bare_mode and action.name == "bash":
-            # Bare / no-stack: bash IS the productive work — scaffold (pnpm create),
-            # install, write the dev-server start script, run/build. It is NOT
-            # "exploring"; the template-flow assumption "progress == write_file" does
-            # not hold when the agent builds a whole app from a blank box. Resetting
-            # the streak stops the explore-abort from killing a from-scratch build
-            # mid-scaffold (the live failure: aborted at 13 steps, 0 files).
-            no_write_streak = 0
         else:
             no_write_streak += 1
             if no_write_streak >= _NO_WRITE_ABORT_AT:
@@ -595,24 +623,20 @@ async def run_agent_build(
                     AgentResult(
                         done=False,
                         summary="stuck exploring (reading) without writing any file",
-                        files=written, steps=step + 1, transcript=convo,
+                        files=written,
+                        steps=step + 1,
+                        transcript=convo,
                         stop_reason="exploring",
                     ),
-                    step, "explore",
+                    step,
+                    "explore",
                 )
-            if no_write_streak >= (
-                _EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT
-            ):
+            if no_write_streak >= (_EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT):
                 # If the app is already GREEN (build clean + route verified + no
                 # unverified writes) there is nothing left to write — the model is
-                # thrashing on bash/see/build AFTER success (observed live: a
-                # failed `see` sent it into a bash spiral, ~10 wasted steps). Nudge
+                # thrashing on see/build AFTER success. Nudge
                 # it to FINISH (call done), not to write. Otherwise nudge to write.
-                _green = (
-                    last_build_ok is True
-                    and last_runtime_ok is True
-                    and not wrote_since_check
-                )
+                _green = last_build_ok is True and last_runtime_ok is True and not wrote_since_check
                 await _escalate(step, "explore")
                 print(
                     f"[AGENT] step={step} EXPLORE-STALL x{no_write_streak} "
@@ -621,13 +645,16 @@ async def run_agent_build(
                 )
                 if emit:
                     await emit("agent.stalled", {"step": step})
-                convo.append({"role": "user", "content": (
-                    _DONE_WHEN_GREEN_NUDGE
-                    if _green
-                    else (
-                        _EDIT_EXPLORE_STALL_NUDGE if edit_mode else _EXPLORE_STALL_NUDGE
-                    )
-                )})
+                convo.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            _DONE_WHEN_GREEN_NUDGE
+                            if _green
+                            else (_EDIT_EXPLORE_STALL_NUDGE if edit_mode else _EXPLORE_STALL_NUDGE)
+                        ),
+                    }
+                )
                 continue  # don't execute another read — force write/done next
 
         obs = await execute(action)
@@ -646,7 +673,9 @@ async def run_agent_build(
                 return AgentResult(
                     done=False,
                     summary="container/orchestrator unreachable — build aborted",
-                    files=written, steps=step + 1, transcript=convo,
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
                     stop_reason="infra_error",
                 )
         else:
@@ -689,10 +718,15 @@ async def run_agent_build(
 
     return _ship_green_or(
         AgentResult(
-            done=False, summary="hit step budget without calling done",
-            files=written, steps=max_steps, transcript=convo, stop_reason="max_steps",
+            done=False,
+            summary="hit step budget without calling done",
+            files=written,
+            steps=max_steps,
+            transcript=convo,
+            stop_reason="max_steps",
         ),
-        max_steps - 1, "budget",
+        max_steps - 1,
+        "budget",
     )
 
 
@@ -745,10 +779,10 @@ _NO_ACTION_ABORT_AT = 4
 
 # Issued when the loop stalls (no-write streak) but the app is already GREEN —
 # nothing left to build, the model is just thrashing after success. Push it to
-# finish rather than invent more work (kills the see-driven bash spiral).
+# finish rather than invent more work.
 _DONE_WHEN_GREEN_NUDGE = (
     "STOP — the build is CLEAN and the main route already renders (verified). The "
-    "app is DONE. Do NOT run more bash / see / build / reads. Call "
+    "app is DONE. Do NOT run more see / build / reads. Call "
     '<omnia:action name="done">{"summary": "what you built"}</omnia:action> NOW. '
     "A cosmetic `see` nitpick is NOT a reason to keep working once it builds and "
     "runs — ship it."
@@ -777,8 +811,8 @@ _EXPLORE_STALL_NUDGE = (
     "STOP READING. You have already read the entity JSON, the CrudResource "
     "component and use-entity — that is ENOUGH context. Do NOT read_file / grep / "
     "list_dir again. Your VERY NEXT action MUST be write_file: create the next "
-    "missing page now — an entity page is \"use client\" and renders "
-    "<CrudResource entity=\"Name\" .../>; the dashboard index is "
+    'missing page now — an entity page is "use client" and renders '
+    '<CrudResource entity="Name" .../>; the dashboard index is '
     "src/app/(app)/dashboard/page.tsx. When every page exists, run build; when the "
     "build is clean, call done. Writing a file is the ONLY way to make progress."
 )
@@ -794,7 +828,7 @@ _EDIT_NO_WRITE_NUDGE_AT = 3
 
 _EDIT_EXPLORE_STALL_NUDGE = (
     "STOP READING. You have already located the code for this change — that is "
-    "ENOUGH. Do NOT read_file / grep / list_dir / bash again. Your VERY NEXT action "
+    "ENOUGH. Do NOT read_file / grep / list_dir again. Your VERY NEXT action "
     "MUST be edit_file or write_file that implements the requested change (add the "
     "UI control, wire the call, fix the handler — whatever was asked). After "
     "writing, run build; when it is clean, call done. Emitting the file patch is "
@@ -834,7 +868,6 @@ ACTIONS:
 - write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
 - build      {}                                — real typecheck; returns the actual errors
-- bash       {"cmd": "npm run lint"}           — run a shell command in the container (lint/test/install)
 - read_logs  {}                                — live dev-server stdout/stderr (find RUNTIME crashes build can't see)
 - runtime_check {"path": "/dashboard"}         — open a real route, get the REAL HTTP status + crash file
 - see        {"path": "/dashboard"}            — LOOK at the rendered page (screenshot → design critique); fix the issues it returns
@@ -907,7 +940,6 @@ ACTIONS:
 - write_file {"path": "...", "content": "FULL FILE"} — only when creating a new file
 - list_dir   {"path": "..."}
 - build      {}                                     — typecheck; fix real errors
-- bash       {"cmd": "..."}                         — run a shell command if needed
 - read_logs  {}                                     — live dev-server logs (runtime errors)
 - runtime_check {"path": "/"}                        — open the changed route, confirm it still renders
 - see        {"path": "/"}                           — LOOK at the changed page; fix any visual regression it reports
@@ -969,7 +1001,6 @@ ACTIONS:
 - write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
 - build      {}                                — real typecheck; returns the actual errors
-- bash       {"cmd": "pnpm test"}              — run a shell command (lint / test / install)
 - read_logs  {}                                — live dev-server stdout/stderr (RUNTIME errors build can't see)
 - runtime_check {"path": "/"}                  — open a real route, get the REAL HTTP status + crash file
 - see        {"path": "/"}                     — LOOK at the rendered page (screenshot → design critique); fix what it reports
@@ -980,8 +1011,8 @@ ACTIONS:
 WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
 read or write, never ask the user questions — decide and act. When an EXTERNAL library's \
 API bites you (a build error about a wrong signature, a renamed export, a removed option), \
-call `docs` for that library BEFORE guessing — current docs beat a stale memory. When you author tests, \
-run them with bash. After the build is clean, `runtime_check` the main route(s) — a \
+call `docs` for that library BEFORE guessing — current docs beat a stale memory. After the \
+build is clean, `runtime_check` the main route(s) — a \
 typecheck-clean app can still crash on render; if it 5xx, `read_logs`, fix, re-check. \
 For an INTERACTIVE feature (send a message, save, submit a form, log in), a clean build \
 and a 200 page do NOT prove it works — the real failure is a 4xx on the user's POST that \
@@ -1028,9 +1059,7 @@ def load_stack_system_prompt(orch_template: str | None) -> str | None:
         return None
 
 
-def is_agentic_enabled(
-    global_flag: bool, canary_csv: str | None, user_id: str | None
-) -> bool:
+def is_agentic_enabled(global_flag: bool, canary_csv: str | None, user_id: str | None) -> bool:
     """Whether the agentic builder runs for THIS request.
 
     True when the global flag is on (everyone), OR the user is in the canary list
@@ -1242,20 +1271,14 @@ async def _enrich_build_failure(detail: str, project_id: Any, slug: str) -> str:
     for spec in sorted(specs)[:4]:
         for cand in _resolve_app_module(spec):
             try:
-                content = await orchestrator_client.agent_read_file(
-                    project_id, slug, cand
-                )
+                content = await orchestrator_client.agent_read_file(project_id, slug, cand)
             except Exception:
                 content = None
             if not content:
                 continue
             names: list[str] = list(_EXPORT_DECL_RE.findall(content))
             for grp in _EXPORT_LIST_RE.findall(content):
-                names += [
-                    x.strip().split(" as ")[-1].strip()
-                    for x in grp.split(",")
-                    if x.strip()
-                ]
+                names += [x.strip().split(" as ")[-1].strip() for x in grp.split(",") if x.strip()]
             names = sorted({n for n in names if n})
             if names:
                 blocks.append(
@@ -1404,21 +1427,23 @@ def make_container_executor(
         try:
             if action.name == "list_dir":
                 detail = await orchestrator_client.agent_list_dir(
-                    project_id, slug, action.path or ".")
+                    project_id, slug, action.path or "."
+                )
                 return {"ok": True, "detail": detail}
 
             if action.name == "read_file":
-                content = await orchestrator_client.agent_read_file(
-                    project_id, slug, action.path)
+                content = await orchestrator_client.agent_read_file(project_id, slug, action.path)
                 if content is None:
                     return {"ok": False, "error": f"not found: {action.path}"}
                 return {"ok": True, "content": _truncate(content, _MAX_READ_CHARS)}
 
             if action.name == "grep":
                 detail = await orchestrator_client.agent_grep(
-                    project_id, slug,
+                    project_id,
+                    slug,
                     pattern=str(action.args.get("pattern", "")),
-                    path=action.path or "src")
+                    path=action.path or "src",
+                )
                 return {"ok": True, "detail": detail}
 
             if action.name == "docs":
@@ -1427,6 +1452,7 @@ def make_container_executor(
                 # source of build-loop / edit-fail churn). Fail-soft: a miss returns
                 # ok=False with a «continue from what you know» nudge, never raises.
                 from omnia_api.services import context7_client
+
                 _lib = str(action.args.get("library") or action.args.get("lib") or "")
                 _q = str(action.args.get("query") or action.args.get("topic") or "")
                 _docs = await context7_client.fetch_docs(_lib, _q)
@@ -1452,32 +1478,39 @@ def make_container_executor(
                 content = _sanitize_nested_layout(action.path, content)
                 content = _sanitize_css_imports(action.path, content)
                 await orchestrator_client.hot_reload(
-                    project_id=project_id, slug=slug, files={action.path: content})
-                return {"ok": True, "content": content,
-                        "detail": f"wrote {action.path} ({len(content)} bytes)"}
+                    project_id=project_id, slug=slug, files={action.path: content}
+                )
+                return {
+                    "ok": True,
+                    "content": content,
+                    "detail": f"wrote {action.path} ({len(content)} bytes)",
+                }
 
             if action.name == "edit_file":
                 search = action.args.get("search")
                 replace = action.args.get("replace")
                 if not action.path or not isinstance(search, str) or replace is None:
                     return {"ok": False, "error": "edit_file needs path, search, replace"}
-                current = await orchestrator_client.agent_read_file(
-                    project_id, slug, action.path)
+                current = await orchestrator_client.agent_read_file(project_id, slug, action.path)
                 if current is None:
                     return {"ok": False, "error": f"not found: {action.path}"}
                 if search not in current:
-                    return {"ok": False,
-                            "error": "search text not found exactly; read the file and copy it byte-for-byte"}
+                    return {
+                        "ok": False,
+                        "error": "search text not found exactly; read the file and copy it byte-for-byte",
+                    }
                 if current.count(search) > 1:
-                    return {"ok": False,
-                            "error": "search text is not unique; add surrounding lines"}
+                    return {
+                        "ok": False,
+                        "error": "search text is not unique; add surrounding lines",
+                    }
                 new_content = current.replace(search, str(replace), 1)
                 new_content = _sanitize_nested_layout(action.path, new_content)
                 new_content = _sanitize_css_imports(action.path, new_content)
                 await orchestrator_client.hot_reload(
-                    project_id=project_id, slug=slug, files={action.path: new_content})
-                return {"ok": True, "content": new_content,
-                        "detail": f"patched {action.path}"}
+                    project_id=project_id, slug=slug, files={action.path: new_content}
+                )
+                return {"ok": True, "content": new_content, "detail": f"patched {action.path}"}
 
             if action.name == "build":
                 res = await orchestrator_client.agent_build(project_id, slug)
@@ -1500,14 +1533,6 @@ def make_container_executor(
                     )
                 return {"ok": ok, "detail": detail}
 
-            if action.name == "bash":
-                cmd = action.args.get("cmd")
-                if not isinstance(cmd, str) or not cmd.strip():
-                    return {"ok": False, "error": "bash needs a non-empty cmd string"}
-                res = await orchestrator_client.agent_exec(project_id, slug, cmd)
-                return {"ok": bool(res.get("ok")),
-                        "detail": res.get("detail") or "(no output)"}
-
             if action.name == "read_logs":
                 # Live dev-server stdout/stderr — the RUNTIME errors `build`
                 # (typecheck) can't see (an unhandled exception, a failed import
@@ -1517,8 +1542,7 @@ def make_container_executor(
                     _tail = int(action.args.get("tail", 120))
                 except (TypeError, ValueError):
                     _tail = 120
-                res = await orchestrator_client.get_logs(
-                    project_id, tail=max(20, min(_tail, 400)))
+                res = await orchestrator_client.get_logs(project_id, tail=max(20, min(_tail, 400)))
                 logs = res.get("logs") if isinstance(res, dict) else ""
                 return {"ok": True, "detail": (logs or "").strip() or "(no logs yet)"}
 
@@ -1529,7 +1553,8 @@ def make_container_executor(
                 # executor error, so the loop reads it and fixes the named file.
                 path = action.args.get("path") or "/"
                 res = await orchestrator_client.runtime_status(
-                    project_id, slug=slug, path=str(path))
+                    project_id, slug=slug, path=str(path)
+                )
                 ok = bool(res.get("ok", True))
                 code = res.get("status_code")
                 if ok:
@@ -1537,11 +1562,10 @@ def make_container_executor(
                 else:
                     err = res.get("error") or "5xx"
                     where = res.get("file")
-                    detail = (
-                        f"route {path} FAILED (HTTP {code or 500}): {err}"
-                        + (f" — in {where}" if where else "")
+                    detail = f"route {path} FAILED (HTTP {code or 500}): {err}" + (
+                        f" — in {where}" if where else ""
                     )
-                return {"ok": ok, "detail": detail}
+                return {"ok": ok, "status_code": code, "detail": detail}
 
             if action.name == "see":
                 # Real EYES: screenshot the live page → vision judge → concrete
@@ -1549,8 +1573,7 @@ def make_container_executor(
                 # no Playwright/vision dependency. Fail-soft inside see_page.
                 from omnia_api.services import agent_vision
 
-                return await agent_vision.see_page(
-                    project_id, path=action.path or "/")
+                return await agent_vision.see_page(project_id, path=action.path or "/")
 
             if action.name == "generate_media":
                 # Real ASSET: generate a photoreal image (flux) or a short cinematic
@@ -1566,7 +1589,7 @@ def make_container_executor(
                         return {
                             "ok": False,
                             "error": f"video budget reached ({_cap} clip(s) this build) — "
-                                     "reuse an existing clip or use a Flux image instead.",
+                            "reuse an existing clip or use a Flux image instead.",
                         }
                     _video_used[0] += 1
                 _dur = action.args.get("duration")
@@ -1615,8 +1638,7 @@ def make_container_executor(
                     "detail": _iv.summary
                     + "\n"
                     + "\n".join(
-                        f"  - {'OK' if c.ok else 'FAIL'} {c.name}: {c.detail}"
-                        for c in _iv.checks
+                        f"  - {'OK' if c.ok else 'FAIL'} {c.name}: {c.detail}" for c in _iv.checks
                     ),
                 }
 

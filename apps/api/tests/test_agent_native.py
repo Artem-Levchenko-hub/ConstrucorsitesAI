@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import pytest
 
+from omnia_api.routers import messages
 from omnia_api.services import agent_native
 from omnia_api.services.agent_native import _module_not_found_hint
 from omnia_api.services.max_generation_contract import (
@@ -64,34 +65,78 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     assert agent_native._MAX_TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
 
 
+def test_reference_max_loop_is_one_compact_google_build_pass() -> None:
+    prompt = agent_native.native_system_prompt(
+        "MAX PLATFORM CORE CONTRACT\nBuild the app",
+        reference_max_loop=True,
+    )
+
+    assert "автономный Google AI-агент" in prompt
+    assert "один непрерывный проход" in prompt
+    assert "чистого build и зелёного runtime_check" in prompt
+    assert "read_skill" not in prompt
+    assert "plan_task" not in prompt
+    assert "ТРИ действительно разных направления" not in prompt
+
+    names = {tool["name"] for tool in agent_native._MAX_REFERENCE_TOOLS_CACHED}
+    assert names == {
+        "list_dir",
+        "read_file",
+        "grep",
+        "docs",
+        "write_file",
+        "edit_file",
+        "build",
+        "read_logs",
+        "runtime_check",
+        "see",
+        "generate_media",
+        "done",
+    }
+    assert agent_native._MAX_REFERENCE_TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
+
+    edit_prompt = agent_native.native_system_prompt(
+        "MAX PLATFORM CORE CONTRACT\nPreserve the app",
+        reference_max_loop=True,
+        reference_max_edit=True,
+    )
+    assert "точечной правки" in edit_prompt
+    assert "Не переписывай весь продукт" in edit_prompt
+    assert "сразу напиши весь продукт" not in edit_prompt
+
+
 def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> None:
     """The verified core is a seed, never a replacement for the Google agent."""
-    from omnia_api.routers import messages
-
     source = inspect.getsource(messages._process_prompt)
 
     assert 'stop_reason="deterministic_template"' not in source
     assert "_publishable_agent_files" in source
     assert "must_restore_previous=_must_restore_previous" in source
     assert "agent_native.run_native_build" in source
-    assert "build_max_product_contract" in source
-    assert "max_completion_gap" in source
-    assert "completion_check=_completion_check" in source
-    assert "enforce_max_skill_lifecycle" in source
-    assert 'max_steps=(None if project_template == "max_miniapp" else _agent_steps)' in source
+    assert "build_max_product_contract" not in source
+    assert "completion_check=max_completion_gap" not in source
+    assert "completion_check=_reference_completion_check" in source
+    assert 'reference_max_loop=project_template == "max_miniapp"' in source
+    assert 'max_steps=(None if project_template == "max_miniapp"' in source
+    assert "_agent_steps = 40" in source
     assert '"autonomous_recovery"' not in source
     assert "_seg <" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
     assert '_bounded_stop and project_template != "max_miniapp"' in source
     assert "if path not in MAX_MODEL_LOCKED_FILES" in source
+    assert "max_model_path_rejection(action.path)" in source
+    assert "_reference_max_completion_gap" in source
+    assert "_fresh_max_product = not _max_has_generated_snapshot" in source
+    assert "_max_runtime_probe_is_green" in source
+    assert "pg_advisory_xact_lock" in source
+    assert "project.current_snapshot_id != current_snapshot_id" in source
     assert "Direct DB access is forbidden in MAX product files." in source
     assert "max_model_write_rejection" in source
     assert "max_demo_data_rejection" in source
     assert "create_max_preview_session" in source
     assert "_recover_max_resume_prompt" in source
-    assert '"rm -f -- src/app/page.tsx"' in source
-    assert "{} if not _max_has_generated_snapshot else dict(current_files)" in source
+    assert "src/components/product/ProductApp.tsx" in source
     assert "normalize_max_globals_css" in source
     assert "await asyncio.sleep(2)" in source
     assert 'and project_template != "max_miniapp"' in source
@@ -100,6 +145,52 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "EXISTING MAX ART DIRECTION" in source
     assert "load_stack_skill_index" in source
     assert "read_max_skill" in source
+
+
+def test_fresh_max_reference_gate_rejects_css_only_or_placeholder_entry() -> None:
+    evidence = {"runtime_check_after_write": 1}
+
+    assert messages._reference_max_completion_gap(
+        {"src/app/globals.css": "body { color: black; }"},
+        evidence,
+        require_product_entry=True,
+    )
+    assert messages._reference_max_completion_gap(
+        {
+            "src/components/product/ProductApp.tsx": (
+                "export default function ProductApp() { return <p>Hi</p>; }"
+            )
+        },
+        evidence,
+        require_product_entry=True,
+    )
+    entry = (
+        "export default function ProductApp() { return <main>" + ("product " * 60) + "</main>; }"
+    )
+    assert (
+        messages._reference_max_completion_gap(
+            {"src/components/product/ProductApp.tsx": entry},
+            evidence,
+            require_product_entry=True,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("probe", "expected"),
+    [
+        ({"ok": True, "status_code": 200}, True),
+        ({"ok": True, "status_code": 307}, True),
+        ({"ok": True, "status_code": 404}, False),
+        ({"ok": False, "status_code": 500}, False),
+        ({"ok": True, "status_code": None}, False),
+    ],
+)
+def test_max_runtime_completion_requires_a_real_route(
+    probe: dict[str, object], expected: bool
+) -> None:
+    assert messages._max_runtime_probe_is_green(probe) is expected
 
 
 def test_failed_max_resume_recovers_the_original_brief() -> None:
@@ -148,14 +239,17 @@ def test_seeded_max_files_are_committed_with_agent_customisations() -> None:
 def test_unsafe_agent_stop_never_exposes_partial_files_for_publication() -> None:
     from omnia_api.routers.messages import _publishable_agent_files
 
-    assert _publishable_agent_files(
-        {"src/app/page.tsx": "safe baseline"},
-        {
-            "src/app/page.tsx": "partial rewrite",
-            "src/components/Unfinished.tsx": "red file",
-        },
-        must_restore_previous=True,
-    ) == {}
+    assert (
+        _publishable_agent_files(
+            {"src/app/page.tsx": "safe baseline"},
+            {
+                "src/app/page.tsx": "partial rewrite",
+                "src/components/Unfinished.tsx": "red file",
+            },
+            must_restore_previous=True,
+        )
+        == {}
+    )
 
     assert _publishable_agent_files(
         {"src/app/page.tsx": "safe baseline"},
@@ -852,6 +946,157 @@ async def test_max_runtime_stops_after_bounded_provider_reconnect_cycles(
     assert res.stop_reason == "provider_stopped_red"
 
 
+@pytest.mark.asyncio
+async def test_max_runtime_stops_after_three_malformed_provider_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"provider": 0, "build": 0}
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls["provider"] += 1
+        return {"content": None}
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    async def execute(action: Any) -> dict[str, Any]:
+        assert action.name == "build"
+        calls["build"] += 1
+        return {"ok": True, "detail": "clean"}
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt(
+            "MAX PLATFORM CORE CONTRACT",
+            reference_max_loop=True,
+        ),
+        task="build",
+        execute=execute,
+        completion_check=lambda _files, _evidence: "product missing",
+        reference_max_loop=True,
+        max_steps=1,
+    )
+
+    assert calls == {
+        "provider": agent_native._MAX_PROVIDER_RECONNECT_CYCLES,
+        "build": 1,
+    }
+    assert result.done is False
+    assert result.stop_reason == "provider_stopped_red"
+
+
+@pytest.mark.asyncio
+async def test_reference_max_loop_is_not_cut_off_at_turn_40(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls <= 40:
+            return _turn(("read_file", {"path": "src/app/page.tsx"}))
+        if calls == 41:
+            return _turn(
+                (
+                    "write_file",
+                    {"path": "src/app/page.tsx", "content": "product source"},
+                )
+            )
+        return _turn(("build", {}), ("runtime_check", {"path": "/"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "content": action.args.get("content", "existing source"),
+            "detail": "green",
+        }
+
+    def completion(files: Any, evidence: Any) -> str | None:
+        if not files:
+            return "write product"
+        if evidence.get("runtime_check_after_write", 0) < 1:
+            return "run runtime_check"
+        return None
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt(
+            "MAX PLATFORM CORE CONTRACT",
+            reference_max_loop=True,
+        ),
+        task="build",
+        execute=execute,
+        completion_check=completion,
+        reference_max_loop=True,
+        max_steps=1,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert calls == 42
+
+
+@pytest.mark.asyncio
+async def test_reference_max_loop_finishes_only_after_clean_build_and_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"})),
+            _turn(("build", {})),
+            _turn(("done", {"summary": "too early"})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("done", {"summary": "ready"})),
+        ]
+    )
+    advertised: set[str] = set()
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        advertised.update(str(tool["name"]) for tool in kwargs["tools"])
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "write_file":
+            return {"ok": True, "content": "page"}
+        return {"ok": True, "detail": "green"}
+
+    def completion(files: Any, evidence: Any) -> str | None:
+        if not files:
+            return "write the product"
+        if evidence.get("runtime_check_after_write", 0) < 1:
+            return "run runtime_check"
+        return None
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt(
+            "MAX PLATFORM CORE CONTRACT",
+            reference_max_loop=True,
+        ),
+        task="build",
+        execute=execute,
+        completion_check=completion,
+        reference_max_loop=True,
+        max_steps=40,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert result.steps == 4
+    assert advertised == agent_native._MAX_REFERENCE_TOOL_NAMES
+
+
 @pytest.mark.parametrize("status_code", [400, 401, 402, 403, 404, 422])
 @pytest.mark.asyncio
 async def test_messages_call_fails_fast_on_permanent_4xx(
@@ -883,6 +1128,97 @@ async def test_messages_call_fails_fast_on_permanent_4xx(
         await client.aclose()
 
     assert exc_info.value.status_code == status_code
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_messages_call_never_retries_ambiguous_paid_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("POST", "https://gateway.test/v1/messages")
+        return httpx.Response(
+            503,
+            request=request,
+            json={"error": {"type": "paid_call_ambiguous"}},
+        )
+
+    client = httpx.AsyncClient()
+    monkeypatch.setattr(client, "post", fake_post)
+    try:
+        with pytest.raises(agent_native.AmbiguousPaidCallError):
+            await agent_native._call_messages(
+                client,
+                "https://gateway.test/v1/messages",
+                [{"role": "user", "content": "build"}],
+                "system",
+            )
+    finally:
+        await client.aclose()
+
+    assert calls == 1
+
+
+@pytest.mark.parametrize("content", [None, [], [{"type": "unknown"}]])
+@pytest.mark.asyncio
+async def test_messages_call_never_retries_malformed_paid_success(
+    monkeypatch: pytest.MonkeyPatch,
+    content: Any,
+) -> None:
+    calls = 0
+
+    async def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("POST", "https://gateway.test/v1/messages")
+        return httpx.Response(200, request=request, json={"content": content})
+
+    client = httpx.AsyncClient()
+    monkeypatch.setattr(client, "post", fake_post)
+    try:
+        with pytest.raises(agent_native.AmbiguousPaidCallError):
+            await agent_native._call_messages(
+                client,
+                "https://gateway.test/v1/messages",
+                [{"role": "user", "content": "build"}],
+                "system",
+            )
+    finally:
+        await client.aclose()
+
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_messages_call_never_retries_after_response_read_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("POST", "https://gateway.test/v1/messages")
+        raise httpx.ReadTimeout("response lost", request=request)
+
+    client = httpx.AsyncClient()
+    monkeypatch.setattr(client, "post", fake_post)
+    try:
+        with pytest.raises(agent_native.AmbiguousPaidCallError) as exc_info:
+            await agent_native._call_messages(
+                client,
+                "https://gateway.test/v1/messages",
+                [{"role": "user", "content": "build"}],
+                "system",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.status_code is None
     assert calls == 1
 
 
@@ -929,7 +1265,7 @@ async def test_messages_call_maps_run_budget_409_without_retry(
 
 
 @pytest.mark.asyncio
-async def test_messages_call_does_not_duplicate_transient_5xx_inside_one_cycle(
+async def test_messages_call_treats_unstructured_5xx_as_ambiguous_without_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
@@ -947,7 +1283,7 @@ async def test_messages_call_does_not_duplicate_transient_5xx_inside_one_cycle(
     monkeypatch.setattr(client, "post", fake_post)
     monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
     try:
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(agent_native.AmbiguousPaidCallError):
             await agent_native._call_messages(
                 client,
                 "https://gateway.test/v1/messages",

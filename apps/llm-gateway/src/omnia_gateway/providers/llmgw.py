@@ -31,16 +31,27 @@ from uuid import uuid4
 import httpx
 
 from omnia_gateway.core.config import get_settings
-from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from omnia_gateway.core.errors import (
+    PaidCallAmbiguousError,
+    UpstreamProviderError,
+    ValidationFailedError,
+)
 
-# Transient transport faults worth one retry (a TLS handshake to a reseller edge
-# can intermittently stall inside a long-lived process).
-_TRANSIENT = (
+# Only failures proven to happen before a request reaches the paid provider may
+# be retried. Read/write/protocol failures are ambiguous even before the first
+# streamed delta: the provider may already have completed and billed the call.
+_SAFE_CONNECT_RETRY = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
-    httpx.ReadTimeout,
-    httpx.RemoteProtocolError,
+    httpx.PoolTimeout,
 )
+
+_AMBIGUOUS_HTTP_STATUSES = frozenset({408, 425, 429})
+
+
+def _http_status_is_ambiguous(status_code: int) -> bool:
+    return status_code >= 500 or status_code in _AMBIGUOUS_HTTP_STATUSES
+
 
 # Omnia model ID → the exact llmgw catalog id sent as the OpenAI `model` field.
 _MODEL_SLUG: dict[str, str] = {
@@ -186,6 +197,20 @@ async def astream(
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[Any] = asyncio.Queue()
     _DONE = object()
+    stopped = threading.Event()
+
+    def _put(item: object) -> bool:
+        """Best-effort bridge that cannot outlive the consuming event loop."""
+
+        if stopped.is_set() or loop.is_closed():
+            return False
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, item)
+        except RuntimeError:
+            # The async generator may have raised on an ambiguity marker and
+            # its test/request loop can close before the producer posts DONE.
+            return False
+        return True
 
     def _produce() -> None:
         emitted = False
@@ -200,24 +225,46 @@ async def astream(
                     client.stream("POST", url, json=payload, headers=headers) as r,
                 ):
                     if r.status_code >= 400:
-                        body = r.read().decode("utf-8", "replace")[:300]
-                        loop.call_soon_threadsafe(
-                            queue.put_nowait,
-                            ("err", f"llmgw HTTP {r.status_code}: {body}"),
-                        )
-                        loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                        # Consume the body so the connection closes cleanly, but
+                        # never surface provider diagnostics (they may contain
+                        # account data). 408/425/429/5xx are ambiguous after an
+                        # accepted paid request and must stop every later pass.
+                        r.read()
+                        kind = "ambiguous" if _http_status_is_ambiguous(r.status_code) else "err"
+                        _put((kind, f"llmgw HTTP {r.status_code}"))
+                        _put(_DONE)
                         return
+                    saw_terminal = False
+                    malformed_payload = False
                     for raw in r.iter_lines():
                         if not raw or not raw.startswith("data:"):
                             continue
                         data = raw[5:].strip()
                         if data == "[DONE]":
-                            loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                            invalid_completion = malformed_payload or not emitted
+                            _put(
+                                (
+                                    "ambiguous",
+                                    "llmgw stream ended without usable completion content",
+                                )
+                                if invalid_completion
+                                else _DONE
+                            )
+                            if invalid_completion:
+                                _put(_DONE)
                             return
                         try:
                             obj = json.loads(data)
                         except ValueError:
+                            malformed_payload = True
                             continue
+                        if not isinstance(obj, dict):
+                            malformed_payload = True
+                            continue
+                        if obj.get("error"):
+                            _put(("ambiguous", "llmgw stream returned an error event"))
+                            _put(_DONE)
+                            return
                         usage = obj.get("usage")
                         if usage:
                             print(
@@ -228,42 +275,61 @@ async def astream(
                                 flush=True,
                             )
                         try:
-                            delta = obj["choices"][0].get("delta", {}).get("content", "")
+                            choice = obj["choices"][0]
+                            if choice.get("finish_reason") is not None:
+                                saw_terminal = True
+                            delta = choice.get("delta", {}).get("content", "")
                         except (KeyError, IndexError, TypeError):
                             delta = ""
                         if delta:
                             emitted = True
-                            loop.call_soon_threadsafe(queue.put_nowait, ("delta", delta))
-                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                            _put(("delta", delta))
+                if saw_terminal and emitted and not malformed_payload:
+                    _put(_DONE)
+                else:
+                    _put(("ambiguous", "llmgw stream ended without a terminal marker"))
+                    _put(_DONE)
                 return
-            except _TRANSIENT as exc:
+            except _SAFE_CONNECT_RETRY as exc:
                 if not emitted and attempt == 0:
                     time.sleep(0.5)
                     continue
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("err", f"llmgw stream transport: {type(exc).__name__}: {exc}"),
+                _put(
+                    (
+                        "ambiguous" if emitted else "err",
+                        f"llmgw stream transport: {type(exc).__name__}",
+                    ),
                 )
-                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                _put(_DONE)
                 return
-            except Exception as exc:  # noqa: BLE001 — surface as a clean error event
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("err", f"llmgw stream error: {type(exc).__name__}: {exc}"),
+            except httpx.HTTPError as exc:
+                _put(
+                    ("ambiguous", f"llmgw stream response lost: {type(exc).__name__}"),
                 )
-                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                _put(_DONE)
+                return
+            except Exception as exc:  # noqa: BLE001 — response processing is ambiguous
+                _put(
+                    ("ambiguous", f"llmgw stream error: {type(exc).__name__}"),
+                )
+                _put(_DONE)
                 return
 
     threading.Thread(target=_produce, daemon=True).start()
 
-    while True:
-        item = await queue.get()
-        if item is _DONE:
-            break
-        kind, val = item
-        if kind == "err":
-            raise UpstreamProviderError(val)
-        yield val, model
+    try:
+        while True:
+            item = await queue.get()
+            if item is _DONE:
+                break
+            kind, val = item
+            if kind == "ambiguous":
+                raise PaidCallAmbiguousError(val)
+            if kind == "err":
+                raise UpstreamProviderError(val)
+            yield val, model
+    finally:
+        stopped.set()
 
 
 async def acompletion(
@@ -300,7 +366,7 @@ async def acompletion(
 
     def _completion_sync() -> dict[str, Any]:
         # trust_env=False + no-op mounts: ignore the container's HTTPS_PROXY so the
-        # provider endpoint is hit DIRECT. Retry a transient transport fault once.
+        # provider endpoint is hit DIRECT. Retry only a proven pre-send connect fault.
         last: Exception | None = None
         for attempt in range(2):
             try:
@@ -311,8 +377,18 @@ async def acompletion(
                 ) as client:
                     r = client.post(url, json=payload, headers=headers)
                     r.raise_for_status()
-                    return cast(dict[str, Any], r.json())
-            except _TRANSIENT as exc:
+                    try:
+                        data = r.json()
+                    except ValueError as exc:
+                        raise PaidCallAmbiguousError(
+                            "llmgw returned malformed JSON after accepting the request"
+                        ) from exc
+                    if not isinstance(data, dict):
+                        raise PaidCallAmbiguousError(
+                            "llmgw returned a non-object response after accepting the request"
+                        )
+                    return cast(dict[str, Any], data)
+            except _SAFE_CONNECT_RETRY as exc:
                 last = exc
                 if attempt == 0:
                     time.sleep(0.5)
@@ -323,23 +399,30 @@ async def acompletion(
     try:
         data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
-        print(
-            f"[LLMGW] HTTP {exc.response.status_code}: {exc.response.text[:300]!r}",
-            flush=True,
-        )
+        print(f"[LLMGW] HTTP {exc.response.status_code}", flush=True)
+        if _http_status_is_ambiguous(exc.response.status_code):
+            raise PaidCallAmbiguousError(
+                f"llmgw HTTP {exc.response.status_code} after a paid request"
+            ) from exc
         raise UpstreamProviderError(
             f"llmgw HTTP {exc.response.status_code}",
-            details={"body": exc.response.text[:500]},
         ) from exc
+    except _SAFE_CONNECT_RETRY as exc:
+        raise UpstreamProviderError(f"llmgw connection failed: {type(exc).__name__}") from exc
     except httpx.HTTPError as exc:
-        raise UpstreamProviderError(f"llmgw transport error: {type(exc).__name__}: {exc}") from exc
+        raise PaidCallAmbiguousError(
+            f"llmgw response status is unknown after {type(exc).__name__}"
+        ) from exc
 
     try:
         choice = (data.get("choices") or [])[0]
-        content = (choice.get("message") or {}).get("content") or ""
-    except (IndexError, AttributeError, KeyError) as exc:
-        raise UpstreamProviderError(
-            "llmgw: malformed response", details={"body": str(data)[:500]}
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("missing completion content")
+    except (IndexError, AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise PaidCallAmbiguousError(
+            "llmgw returned a structurally malformed response after a paid request"
         ) from exc
     content = _strip_reasoning(content)
 

@@ -81,13 +81,9 @@ def _validate_init_data(init_data: str, bot_token: str) -> int:
     return user_id
 
 
-async def _runtime_context(
-    session: SessionDep, project_id: UUID, init_data: str
-) -> RuntimeContext:
+async def _runtime_context(session: SessionDep, project_id: UUID, init_data: str) -> RuntimeContext:
     max_integration = (
-        await session.execute(
-            select(MaxIntegration).where(MaxIntegration.project_id == project_id)
-        )
+        await session.execute(select(MaxIntegration).where(MaxIntegration.project_id == project_id))
     ).scalar_one_or_none()
     if max_integration is None:
         raise ApiError(
@@ -107,9 +103,7 @@ async def _runtime_context(
     return RuntimeContext(project_id=project_id, max_user_id=max_user_id)
 
 
-async def _connections(
-    session: SessionDep, project_id: UUID
-) -> dict[str, BusinessIntegration]:
+async def _connections(session: SessionDep, project_id: UUID) -> dict[str, BusinessIntegration]:
     rows = (
         await session.execute(
             select(BusinessIntegration)
@@ -128,9 +122,7 @@ async def _connections(
     return {row.provider: row for row in rows}
 
 
-async def _secrets(
-    session: SessionDep, connection: BusinessIntegration
-) -> dict[str, str]:
+async def _secrets(session: SessionDep, connection: BusinessIntegration) -> dict[str, str]:
     try:
         value = json.loads(decrypt_strong(connection.credentials_enc))
     except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -244,10 +236,14 @@ async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None
                 )
     except ApiError:
         raise
-    except Exception:
-        # Billing still fails closed at the gateway wallet. A transient Redis
-        # outage must not take every generated MAX product offline.
-        return
+    except Exception as exc:
+        # Owner-funded inference must never become unlimited when the shared
+        # limiter is unavailable. Non-AI product features remain online.
+        raise ApiError(
+            "runtime_ai_limits_unavailable",
+            "ИИ временно недоступен: не удалось проверить лимит запросов.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
 
 
 @router.post("/{project_id}/ai", response_model=RuntimeAIPublic)
@@ -294,6 +290,15 @@ async def request_runtime_ai(
             stage="runtime_ai",
         )
     except llm_client.LLMError as exc:
+        if exc.code == "paid_call_ambiguous":
+            raise ApiError(
+                "paid_call_ambiguous",
+                (
+                    "Статус платного запроса не подтверждён. Не повторяйте его сразу: "
+                    "проверьте расход или обратитесь в поддержку."
+                ),
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
         raise ApiError(
             "integration_provider_unavailable",
             "ИИ временно недоступен. Попробуйте ещё раз.",
@@ -362,9 +367,7 @@ async def create_runtime_payment(
             request_kwargs: dict[str, Any] = {"headers": headers, "json": body}
             if auth is not None:
                 request_kwargs["auth"] = auth
-            response = await client.post(
-                "https://api.yookassa.ru/v3/payments", **request_kwargs
-            )
+            response = await client.post("https://api.yookassa.ru/v3/payments", **request_kwargs)
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise ApiError(
             "integration_provider_unavailable",
@@ -470,15 +473,12 @@ async def create_runtime_lead(
                 if payload.email:
                     fields["EMAIL"] = [{"VALUE": payload.email, "VALUE_TYPE": "WORK"}]
                 if credentials.get("webhook_url"):
-                    url = (
-                        credentials["webhook_url"].rstrip("/")
-                        + "/crm.lead.add.json"
-                    )
+                    url = credentials["webhook_url"].rstrip("/") + "/crm.lead.add.json"
                     response = await client.post(url, json={"fields": fields})
                 else:
-                    endpoint = str(
-                        connection.public_config.get("client_endpoint") or ""
-                    ).rstrip("/")
+                    endpoint = str(connection.public_config.get("client_endpoint") or "").rstrip(
+                        "/"
+                    )
                     response = await client.post(
                         f"{endpoint}/crm.lead.add.json",
                         json={
@@ -587,8 +587,10 @@ async def get_runtime_catalog(
                         name=str(row.get("name") or "Товар"),
                         description=str(row.get("description") or ""),
                         price=(
-                            Decimal(str((row.get("salePrices") or [{}])[0].get("value", 0)))
-                            / Decimal(100)
+                            float(
+                                Decimal(str((row.get("salePrices") or [{}])[0].get("value", 0)))
+                                / Decimal(100)
+                            )
                             if row.get("salePrices")
                             else None
                         ),
@@ -615,9 +617,7 @@ async def get_runtime_catalog(
             if organizations_response.status_code >= 300:
                 raise _provider_failure("iikoCloud", organizations_response)
             organizations = organizations_response.json().get("organizations") or []
-            organization_id = str(
-                (organizations[0] if organizations else {}).get("id") or ""
-            )
+            organization_id = str((organizations[0] if organizations else {}).get("id") or "")
             if not organization_id:
                 raise ApiError(
                     "integration_configuration_invalid",
@@ -648,7 +648,7 @@ async def get_runtime_catalog(
                         id=str(product["id"]),
                         name=str(product.get("name") or "Позиция"),
                         description=str(product.get("description") or ""),
-                        price=Decimal(str(first_price)) if first_price is not None else None,
+                        price=float(Decimal(str(first_price))) if first_price is not None else None,
                         available=not bool(product.get("isDeleted")),
                         image_url=str(image_links[0]) if image_links else None,
                     )

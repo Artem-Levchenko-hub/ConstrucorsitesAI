@@ -370,10 +370,7 @@ def _reserve_native_cost(model: str, payload: dict[str, Any]) -> Decimal:
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    input_ceiling = (
-        max(1, len(serialized.encode("utf-8")))
-        + PROVIDER_INPUT_OVERHEAD_TOKENS
-    )
+    input_ceiling = max(1, len(serialized.encode("utf-8"))) + PROVIDER_INPUT_OVERHEAD_TOKENS
     output_ceiling = max(1, _non_negative_int(payload.get("max_tokens")))
     return calculate_cost_rub(model, input_ceiling, output_ceiling)
 
@@ -532,9 +529,7 @@ async def native_messages(request: Request) -> Response:
             reserved_provider_cost_usd=reserved_provider_cost_usd,
             max_requests=max(1, int(settings.native_run_max_requests)),
             max_cost_rub=Decimal(str(settings.native_run_max_cost_rub)),
-            max_provider_cost_usd=Decimal(
-                str(settings.native_run_max_provider_cost_usd)
-            ),
+            max_provider_cost_usd=Decimal(str(settings.native_run_max_provider_cost_usd)),
         )
     except billing.RunBudgetExceededError:
         log.warning("native_messages.run_budget_exhausted", run_id=str(run_id), free=free)
@@ -577,7 +572,11 @@ async def native_messages(request: Request) -> Response:
         )
     except httpx.HTTPError as exc:
         log.warning("native_messages.transport_error", model=model, error=str(exc))
-        return _err(502, "api_error", f"upstream transport: {type(exc).__name__}")
+        return _err(
+            502,
+            "paid_call_ambiguous",
+            f"upstream transport: {type(exc).__name__}",
+        )
 
     if upstream.status_code >= 400:
         # Release only when the provider definitively rejected the request
@@ -595,14 +594,23 @@ async def native_messages(request: Request) -> Response:
             message = upstream_error.get("message") or upstream.text[:300]
         except (ValueError, AttributeError):
             message = upstream.text[:300]
-        return _err(upstream.status_code, "api_error", str(message))
+        error_type = (
+            "paid_call_ambiguous"
+            if upstream.status_code >= 500 or upstream.status_code in {408, 425, 429}
+            else "api_error"
+        )
+        return _err(upstream.status_code, error_type, str(message))
 
     try:
         upstream_data = upstream.json()
         adapted = _anthropic_response(upstream_data, model)
     except (ValueError, TypeError) as exc:
         log.warning("native_messages.malformed_response", model=model, error=str(exc))
-        return _err(502, "api_error", "llmgw returned a malformed response")
+        return _err(
+            502,
+            "paid_call_ambiguous",
+            "llmgw returned a malformed response",
+        )
     usage = adapted["usage"]
     tokens_in = int(usage.get("input_tokens") or 0)
     tokens_out = int(usage.get("output_tokens") or 0)
@@ -624,9 +632,7 @@ async def native_messages(request: Request) -> Response:
     # conservative reservation in that case instead of erasing the provider
     # budget ledger during settlement.
     accounted_provider_cost_usd = (
-        provider_cost_usd
-        if provider_cost_usd is not None
-        else reserved_provider_cost_usd
+        provider_cost_usd if provider_cost_usd is not None else reserved_provider_cost_usd
     )
     provider_request_id = str(upstream_data.get("id") or adapted.get("id") or "")[:200] or None
 
@@ -650,7 +656,7 @@ async def native_messages(request: Request) -> Response:
             provider_cost_usd=accounted_provider_cost_usd,
             reserved_usage_id=reservation.usage_id,
         )
-    except WalletEmptyError as exc:
+    except WalletEmptyError:
         log.warning(
             "native_messages.wallet_exhausted_after_call",
             user_id=str(user_id),
@@ -658,7 +664,11 @@ async def native_messages(request: Request) -> Response:
             run_id=str(run_id),
             cost_rub=str(cost_rub),
         )
-        return _err(402, "wallet_empty", exc.message)
+        return _err(
+            503,
+            "paid_call_ambiguous",
+            "the provider completed but wallet settlement could not be confirmed",
+        )
     except Exception:
         # The conservative reservation remains in usage, so no subsequent
         # request can pretend this already-completed provider call was free.
@@ -668,7 +678,11 @@ async def native_messages(request: Request) -> Response:
             project_id=str(project_id) if project_id else None,
             run_id=str(run_id),
         )
-        return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
+        return _err(
+            503,
+            "paid_call_ambiguous",
+            "the provider completed but settlement is temporarily unavailable",
+        )
 
     adapted["metadata"] = {
         "cost_rub": str(cost_rub),

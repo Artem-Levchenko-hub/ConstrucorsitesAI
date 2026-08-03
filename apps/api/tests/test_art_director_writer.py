@@ -109,6 +109,35 @@ def test_brief_failure_is_fail_soft() -> None:
     assert not any("error" in e for e in events)
 
 
+def test_ambiguous_brief_charge_stops_before_writer() -> None:
+    calls = 0
+
+    async def ambiguous_stream(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        yield {
+            "error": "response lost",
+            "error_code": "paid_call_ambiguous",
+        }
+
+    adw.stream_chat_completion = ambiguous_stream
+    events = asyncio.run(
+        _drain(
+            art_director_writer_generate(
+                base_messages=_BASE,
+                user_prompt="PROMPT",
+                user_id=uuid4(),
+                project_id=uuid4(),
+                message_id=uuid4(),
+            )
+        )
+    )
+
+    assert calls == 1
+    assert not any("delta" in event for event in events)
+    assert events[-1]["error_code"] == "paid_call_ambiguous"
+
+
 def test_freeform_archetype_hero_map_is_total_and_deterministic() -> None:
     # Keystone (v2.24 #1a): every _STYLE_KIT archetype must resolve to EXACTLY
     # ONE kit hero snippet, so the first screen differentiates by niche instead

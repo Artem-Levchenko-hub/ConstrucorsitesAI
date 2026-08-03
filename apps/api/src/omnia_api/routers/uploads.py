@@ -34,6 +34,7 @@ from omnia_api.schemas.upload import (
 )
 from omnia_api.services import repo as repo_svc
 from omnia_api.services import user_uploads
+from omnia_api.services.project_mutation import lock_project_mutation
 from omnia_api.services.queue import enqueue_preview
 
 router = APIRouter(prefix="/api/projects", tags=["uploads"])
@@ -76,18 +77,18 @@ async def upload_image(
     raw = await request.body()
     if len(raw) > _MAX_UPLOAD_BYTES:
         raise ApiError(
-            "too_large", "файл слишком большой (макс. 6 МБ)",
+            "too_large",
+            "файл слишком большой (макс. 6 МБ)",
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
         )
     try:
-        url = await asyncio.to_thread(
-            user_uploads.sanitize_and_upload, raw, str(project_id)
-        )
+        url = await asyncio.to_thread(user_uploads.sanitize_and_upload, raw, str(project_id))
     except user_uploads.UploadRejected as exc:
         raise ApiError("bad_image", str(exc), status.HTTP_400_BAD_REQUEST) from exc
     except Exception as exc:
         raise ApiError(
-            "upload_failed", "не удалось сохранить изображение",
+            "upload_failed",
+            "не удалось сохранить изображение",
             status.HTTP_502_BAD_GATEWAY,
         ) from exc
     return {"url": url}
@@ -101,14 +102,19 @@ async def image_patch(
     current_user: CurrentUserDep,
 ) -> SnapshotPublic:
     """Replace one image's ``src`` with an uploaded asset; commit a snapshot."""
-    project = await _owned_project(session, project_id, current_user.id)
+    project = await lock_project_mutation(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+    )
 
     # Security: only allow swapping IN one of our own MinIO assets (an uploaded
     # or generated image) — never an arbitrary external/script URL into the page.
     base = get_settings().minio_public_url.rstrip("/")
     if not payload.new_src.startswith(base):
         raise ApiError(
-            "bad_src", "картинка должна быть загруженным ассетом",
+            "bad_src",
+            "картинка должна быть загруженным ассетом",
             status.HTTP_400_BAD_REQUEST,
         )
     if payload.old_src == payload.new_src:
@@ -116,36 +122,36 @@ async def image_patch(
 
     if project.current_snapshot_id is None:
         raise ApiError(
-            "no_snapshot", "project has no snapshot to edit",
+            "no_snapshot",
+            "project has no snapshot to edit",
             status.HTTP_400_BAD_REQUEST,
         )
     current = await session.get(Snapshot, project.current_snapshot_id)
     if current is None:
-        raise ApiError(
-            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
-        )
+        raise ApiError("no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST)
     parent_sha = current.commit_sha
 
     files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
     index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
     if index_path is None:
         raise ApiError(
-            "no_index", "this project has no static index.html to edit",
+            "no_index",
+            "this project has no static index.html to edit",
             status.HTTP_400_BAD_REQUEST,
         )
 
     html = files[index_path]
     if payload.old_src not in html:
         raise ApiError(
-            "src_not_found", "эта картинка не найдена на странице",
+            "src_not_found",
+            "эта картинка не найдена на странице",
             status.HTTP_400_BAD_REQUEST,
         )
     new_html = html.replace(payload.old_src, payload.new_src)
     if new_html == html:
         raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
 
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
+    new_sha = await repo_svc.commit_files_async(
         project_id,
         {index_path: new_html},
         "image: своя картинка",
@@ -177,9 +183,7 @@ async def image_patch(
                 "commit_sha": new_snapshot.commit_sha,
                 "prompt_text": new_snapshot.prompt_text,
                 "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
+                "parent_id": (str(new_snapshot.parent_id) if new_snapshot.parent_id else None),
                 "preview_url": preview_public_url(new_snapshot.preview_key),
                 "is_rollback_target": new_snapshot.is_rollback_target,
                 "created_at": new_snapshot.created_at.isoformat(),
@@ -198,27 +202,31 @@ async def text_patch(
     current_user: CurrentUserDep,
 ) -> SnapshotPublic:
     """Replace a text element's content directly (no LLM); commit a snapshot."""
-    project = await _owned_project(session, project_id, current_user.id)
+    project = await lock_project_mutation(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+    )
 
     if payload.old_text == payload.new_text:
         raise ApiError("empty_patch", "no change", status.HTTP_400_BAD_REQUEST)
     if project.current_snapshot_id is None:
         raise ApiError(
-            "no_snapshot", "project has no snapshot to edit",
+            "no_snapshot",
+            "project has no snapshot to edit",
             status.HTTP_400_BAD_REQUEST,
         )
     current = await session.get(Snapshot, project.current_snapshot_id)
     if current is None:
-        raise ApiError(
-            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
-        )
+        raise ApiError("no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST)
     parent_sha = current.commit_sha
 
     files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
     index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
     if index_path is None:
         raise ApiError(
-            "no_index", "this project has no static index.html to edit",
+            "no_index",
+            "this project has no static index.html to edit",
             status.HTTP_400_BAD_REQUEST,
         )
 
@@ -231,7 +239,8 @@ async def text_patch(
     matches = list(pattern.finditer(html_src))
     if not matches:
         raise ApiError(
-            "text_not_found", "не нашёл этот текст на странице",
+            "text_not_found",
+            "не нашёл этот текст на странице",
             status.HTTP_400_BAD_REQUEST,
         )
     idx = payload.index if payload.index < len(matches) else 0
@@ -239,14 +248,17 @@ async def text_patch(
     esc_new = _html.escape(payload.new_text, quote=False)
     new_html = (
         html_src[: m.start()]
-        + m.group(1) + m.group(2) + esc_new + m.group(3) + m.group(4)
+        + m.group(1)
+        + m.group(2)
+        + esc_new
+        + m.group(3)
+        + m.group(4)
         + html_src[m.end() :]
     )
     if new_html == html_src:
         raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
 
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
+    new_sha = await repo_svc.commit_files_async(
         project_id,
         {index_path: new_html},
         "text: правка текста",
@@ -277,9 +289,7 @@ async def text_patch(
                 "commit_sha": new_snapshot.commit_sha,
                 "prompt_text": new_snapshot.prompt_text,
                 "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
+                "parent_id": (str(new_snapshot.parent_id) if new_snapshot.parent_id else None),
                 "preview_url": preview_public_url(new_snapshot.preview_key),
                 "is_rollback_target": new_snapshot.is_rollback_target,
                 "created_at": new_snapshot.created_at.isoformat(),
@@ -298,25 +308,29 @@ async def element_delete(
     current_user: CurrentUserDep,
 ) -> SnapshotPublic:
     """HARD delete — cut the element's exact source HTML out of index.html."""
-    project = await _owned_project(session, project_id, current_user.id)
+    project = await lock_project_mutation(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+    )
 
     if project.current_snapshot_id is None:
         raise ApiError(
-            "no_snapshot", "project has no snapshot to edit",
+            "no_snapshot",
+            "project has no snapshot to edit",
             status.HTTP_400_BAD_REQUEST,
         )
     current = await session.get(Snapshot, project.current_snapshot_id)
     if current is None:
-        raise ApiError(
-            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
-        )
+        raise ApiError("no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST)
     parent_sha = current.commit_sha
 
     files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
     index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
     if index_path is None:
         raise ApiError(
-            "no_index", "this project has no static index.html to edit",
+            "no_index",
+            "this project has no static index.html to edit",
             status.HTTP_400_BAD_REQUEST,
         )
 
@@ -340,8 +354,7 @@ async def element_delete(
     if new_html == html_src:
         raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
 
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
+    new_sha = await repo_svc.commit_files_async(
         project_id,
         {index_path: new_html},
         "element: жёсткое удаление",
@@ -372,9 +385,7 @@ async def element_delete(
                 "commit_sha": new_snapshot.commit_sha,
                 "prompt_text": new_snapshot.prompt_text,
                 "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
+                "parent_id": (str(new_snapshot.parent_id) if new_snapshot.parent_id else None),
                 "preview_url": preview_public_url(new_snapshot.preview_key),
                 "is_rollback_target": new_snapshot.is_rollback_target,
                 "created_at": new_snapshot.created_at.isoformat(),
@@ -393,25 +404,29 @@ async def element_move(
     current_user: CurrentUserDep,
 ) -> SnapshotPublic:
     """Move up/down — swap two elements' exact source HTML in index.html."""
-    project = await _owned_project(session, project_id, current_user.id)
+    project = await lock_project_mutation(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+    )
 
     if project.current_snapshot_id is None:
         raise ApiError(
-            "no_snapshot", "project has no snapshot to edit",
+            "no_snapshot",
+            "project has no snapshot to edit",
             status.HTTP_400_BAD_REQUEST,
         )
     current = await session.get(Snapshot, project.current_snapshot_id)
     if current is None:
-        raise ApiError(
-            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
-        )
+        raise ApiError("no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST)
     parent_sha = current.commit_sha
 
     files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
     index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
     if index_path is None:
         raise ApiError(
-            "no_index", "this project has no static index.html to edit",
+            "no_index",
+            "this project has no static index.html to edit",
             status.HTTP_400_BAD_REQUEST,
         )
 
@@ -444,7 +459,8 @@ async def element_move(
         lo, lo_h, hi, hi_h = pb, payload.b_html, pa, payload.a_html
     if lo + len(lo_h) > hi:
         raise ApiError(
-            "overlap", "элементы вложены — переместить нельзя",
+            "overlap",
+            "элементы вложены — переместить нельзя",
             status.HTTP_400_BAD_REQUEST,
         )
     mid = html_src[lo + len(lo_h) : hi]
@@ -452,8 +468,7 @@ async def element_move(
     if new_html == html_src:
         raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
 
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
+    new_sha = await repo_svc.commit_files_async(
         project_id,
         {index_path: new_html},
         "element: перемещение",
@@ -484,9 +499,7 @@ async def element_move(
                 "commit_sha": new_snapshot.commit_sha,
                 "prompt_text": new_snapshot.prompt_text,
                 "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
+                "parent_id": (str(new_snapshot.parent_id) if new_snapshot.parent_id else None),
                 "preview_url": preview_public_url(new_snapshot.preview_key),
                 "is_rollback_target": new_snapshot.is_rollback_target,
                 "created_at": new_snapshot.created_at.isoformat(),
