@@ -1,9 +1,10 @@
-"""llmgw.ru provider — chat completions over its OpenAI-compatible surface.
+"""OpenAI-compatible text provider for llmgw.ru and the Sonnet fallback.
 
 The public API lives under ``https://api.llmgw.ru/v1`` and uses
 ``Authorization: Bearer <LLMGW_API_KEY>``. The provider requires canonical
-vendor-prefixed model ids (for example ``anthropic/claude-sonnet-5``), while
-Omnia keeps a stable public id without the vendor prefix.
+Gemini uses llmgw's vendor-prefixed id. Sonnet 5 uses AITunnel's canonical
+``claude-sonnet-5`` id because the production LLMGW credential can be rotated
+independently without taking MAX Studio offline.
 
 Why a sync ``httpx.Client`` on a worker thread instead of ``AsyncClient``: the
 gateway container may carry an ``HTTPS_PROXY`` (a UK egress used only to
@@ -56,7 +57,7 @@ def _http_status_is_ambiguous(status_code: int) -> bool:
 # Omnia model ID → the exact llmgw catalog id sent as the OpenAI `model` field.
 _MODEL_SLUG: dict[str, str] = {
     "gemini-3.1-pro-preview-customtools": "google/gemini-3.1-pro-preview-customtools",
-    "claude-sonnet-5": "anthropic/claude-sonnet-5",
+    "claude-sonnet-5": "claude-sonnet-5",
 }
 
 # The native Messages response may add the provider prefix; accept both forms.
@@ -154,8 +155,14 @@ def _cached_tokens(usage: dict[str, Any]) -> int:
     return int(details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or 0)
 
 
-def _key_and_url() -> tuple[str, str]:
+def _key_and_url(model: str) -> tuple[str, str]:
     settings = get_settings()
+    if model == "claude-sonnet-5":
+        if not settings.aitunnel_api_key:
+            raise UpstreamProviderError("AITUNNEL_API_KEY not configured for Sonnet 5")
+        key = settings.aitunnel_api_key.get_secret_value()
+        url = f"{settings.aitunnel_base_url.rstrip('/')}/chat/completions"
+        return key, url
     if not settings.llmgw_api_key:
         raise UpstreamProviderError("LLMGW_API_KEY not configured")
     key = settings.llmgw_api_key.get_secret_value()
@@ -181,7 +188,7 @@ async def astream(
     slug = _MODEL_SLUG.get(model)
     if slug is None:
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
-    key, url = _key_and_url()
+    key, url = _key_and_url(model)
 
     payload: dict[str, Any] = {
         "model": slug,
@@ -354,7 +361,7 @@ async def acompletion(
     slug = _MODEL_SLUG.get(model)
     if slug is None:
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
-    key, url = _key_and_url()
+    key, url = _key_and_url(model)
 
     payload: dict[str, Any] = {
         "model": slug,

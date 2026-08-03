@@ -461,12 +461,12 @@ async def native_messages(request: Request) -> Response:
     if not model:
         return _err(400, "invalid_request_error", "model is required")
 
-    route = native_messages_route()
+    route = native_messages_route(model)
     if route is None:
         return _err(
             400,
             "invalid_request_error",
-            "LLMGW_API_KEY is not configured for the native agent",
+            "provider API key is not configured for the native agent model",
         )
     api_key, api_base = route
     raw_metadata = body.get("metadata")

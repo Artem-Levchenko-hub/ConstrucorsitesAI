@@ -247,7 +247,7 @@ def test_anthropic_response_preserves_tool_id_and_arguments() -> None:
     assert adapted["usage"]["cache_creation_input_tokens"] == 3
 
 
-def test_native_endpoint_uses_llmgw_chat_tools(
+def test_native_endpoint_uses_sonnet_chat_tools(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, Any] = {}
@@ -255,7 +255,7 @@ def test_native_endpoint_uses_llmgw_chat_tools(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
 
     def fake_post(
@@ -325,8 +325,8 @@ def test_native_endpoint_uses_llmgw_chat_tools(
     )
 
     assert response.status_code == 200
-    assert captured["url"] == "https://api.llmgw.ru/v1/chat/completions"
-    assert captured["json"]["model"] == "anthropic/claude-sonnet-5"
+    assert captured["url"] == "https://api.aitunnel.ru/v1/chat/completions"
+    assert captured["json"]["model"] == "claude-sonnet-5"
     assert captured["json"]["tools"][0]["function"]["name"] == "done"
     assert response.json()["content"][0] == {
         "type": "tool_use",
@@ -356,7 +356,7 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
 
     def fake_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
@@ -432,7 +432,7 @@ def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
 
     response = client.post(
@@ -465,7 +465,7 @@ def test_native_endpoint_stops_free_run_before_provider_when_run_budget_is_reach
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
 
     response = client.post(
@@ -498,7 +498,7 @@ def test_native_endpoint_fails_closed_when_run_accounting_is_unavailable(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
 
     response = client.post(
@@ -523,7 +523,7 @@ def test_native_endpoint_releases_reservation_after_explicit_upstream_rejection(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
     monkeypatch.setattr(
         messages_native,
@@ -561,7 +561,7 @@ def test_native_endpoint_keeps_reservation_after_ambiguous_upstream_failure(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
     monkeypatch.setattr(
         messages_native,
@@ -596,7 +596,7 @@ def test_native_endpoint_marks_post_provider_settlement_failure_as_ambiguous(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
     monkeypatch.setattr(
         messages_native,
@@ -644,7 +644,7 @@ def test_native_endpoint_marks_post_provider_wallet_race_as_ambiguous(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
     monkeypatch.setattr(
         messages_native,
@@ -707,7 +707,7 @@ def test_native_endpoint_blocks_unattributed_calls_before_provider(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
     )
     metadata = {"free": True}
     if run_id is not None:

@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 import pytest
 
+from omnia_gateway.core.config import reset_settings_cache
 from omnia_gateway.core.errors import (
     PaidCallAmbiguousError,
     UpstreamProviderError,
@@ -35,7 +36,7 @@ def test_is_llmgw_model() -> None:
 
 def test_slug_mapping_round_trip() -> None:
     # Omnia id → canonical llmgw catalog slug.
-    assert llmgw.native_slug(_MODEL) == "anthropic/claude-sonnet-5"
+    assert llmgw.native_slug(_MODEL) == "claude-sonnet-5"
     assert llmgw.native_slug("unknown-model") == "unknown-model"
     # Upstream response `model` → Omnia id (both surfaces' spellings).
     assert llmgw.slug_to_omnia("claude-sonnet-5") == _MODEL
@@ -47,6 +48,23 @@ def test_slug_mapping_round_trip() -> None:
         "gemini-3.1-pro-preview-customtools"
     )
     assert llmgw.slug_to_omnia("gpt-5") is None
+
+
+def test_sonnet_and_gemini_use_independent_provider_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("AITUNNEL_API_KEY", "aitunnel-key")
+    monkeypatch.setenv("AITUNNEL_BASE_URL", "https://aitunnel.test/v1")
+    monkeypatch.setenv("LLMGW_API_KEY", "llmgw-key")
+    monkeypatch.setenv("LLMGW_BASE_URL", "https://llmgw.test/v1")
+    reset_settings_cache()
+
+    assert llmgw._key_and_url("claude-sonnet-5") == (
+        "aitunnel-key",
+        "https://aitunnel.test/v1/chat/completions",
+    )
+    assert llmgw._key_and_url("gemini-3.1-pro-preview-customtools") == (
+        "llmgw-key",
+        "https://llmgw.test/v1/chat/completions",
+    )
 
 
 def test_is_vision() -> None:
@@ -120,7 +138,7 @@ async def test_acompletion_never_retries_ambiguous_read_failure(monkeypatch) -> 
         calls += 1
         raise httpx.ReadTimeout("lost after send")
 
-    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda _model: ("key", "https://provider.invalid"))
     monkeypatch.setattr(llmgw.httpx, "Client", lambda **_kwargs: _ClientContext(post))
 
     with pytest.raises(PaidCallAmbiguousError):
@@ -148,7 +166,7 @@ async def test_astream_never_retries_ambiguous_protocol_failure(monkeypatch) -> 
         def stream(self, *_args, **_kwargs):
             return StreamContext()
 
-    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda _model: ("key", "https://provider.invalid"))
     monkeypatch.setattr(llmgw.httpx, "Client", Client)
 
     stream = llmgw.astream(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
@@ -188,7 +206,7 @@ async def test_astream_eof_without_terminal_marker_is_ambiguous(monkeypatch) -> 
                 ['data: {"choices":[{"delta":{"content":"partial"}}]}']
             )
 
-    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda _model: ("key", "https://provider.invalid"))
     monkeypatch.setattr(llmgw.httpx, "Client", Client)
 
     stream = llmgw.astream(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
@@ -205,7 +223,7 @@ async def test_astream_503_is_ambiguous(monkeypatch) -> None:
         def stream(self, *_args, **_kwargs):
             return _StreamResponse([], status_code=503)
 
-    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda _model: ("key", "https://provider.invalid"))
     monkeypatch.setattr(llmgw.httpx, "Client", Client)
 
     stream = llmgw.astream(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
@@ -221,7 +239,7 @@ async def test_astream_empty_terminal_completion_is_ambiguous(monkeypatch) -> No
         def stream(self, *_args, **_kwargs):
             return _StreamResponse(["data: [DONE]"])
 
-    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda _model: ("key", "https://provider.invalid"))
     monkeypatch.setattr(llmgw.httpx, "Client", Client)
 
     stream = llmgw.astream(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
@@ -237,7 +255,7 @@ async def test_acompletion_malformed_2xx_is_ambiguous(monkeypatch) -> None:
         def json(self):
             raise ValueError("truncated json")
 
-    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("key", "https://provider.invalid"))
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda _model: ("key", "https://provider.invalid"))
     monkeypatch.setattr(
         llmgw.httpx,
         "Client",

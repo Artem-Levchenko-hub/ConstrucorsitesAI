@@ -3,13 +3,13 @@
 R-02 (hide what changes): all env access goes through `get_settings()`. If we
 later swap pydantic-settings for vault / SSM, only this module changes.
 
-Text generation runs through **llmgw.ru** and its OpenAI-compatible API at
-`https://api.llmgw.ru/v1`. Omnia's native-agent endpoint adapts Anthropic-shaped
-tool turns to llmgw's documented OpenAI tool-calling contract.
+General text generation runs through **llmgw.ru**. MAX Studio's Sonnet 5 route
+uses AITunnel's OpenAI-compatible chat endpoint so provider credentials fail
+independently. The native-agent endpoint adapts Anthropic-shaped tool turns to
+the selected provider's OpenAI tool-calling contract.
 
-AITunnel remains isolated to optional image/video generation because those are
-separate media products, not LLM model routes. `proxyapi.ru` remains only for
-speech-to-text (whisper) and the optional `gpt-image-1` model.
+AITunnel also serves optional image/video generation. `proxyapi.ru` remains only
+for speech-to-text (whisper) and the optional `gpt-image-1` model.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     llmgw_api_key: SecretStr | None = None
     llmgw_base_url: str = "https://api.llmgw.ru/v1"
 
-    # --- aitunnel.ru — optional image/video upstream only ---
+    # --- aitunnel.ru — Sonnet 5 plus optional image/video upstream ---
     aitunnel_api_key: SecretStr | None = None
     aitunnel_base_url: str = "https://api.aitunnel.ru/v1"
 
