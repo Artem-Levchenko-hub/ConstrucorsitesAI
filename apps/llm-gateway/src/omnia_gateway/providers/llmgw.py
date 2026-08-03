@@ -1,10 +1,9 @@
-"""OpenAI-compatible text provider for llmgw.ru and the Sonnet fallback.
+"""OpenAI-compatible text provider for llmgw.ru.
 
 The public API lives under ``https://api.llmgw.ru/v1`` and uses
 ``Authorization: Bearer <LLMGW_API_KEY>``. The provider requires canonical
-Gemini uses llmgw's vendor-prefixed id. Sonnet 5 uses AITunnel's canonical
-``claude-sonnet-5`` id because the production LLMGW credential can be rotated
-independently without taking MAX Studio offline.
+Gemini uses llmgw's vendor-prefixed id. Sonnet 5 uses llmgw's canonical
+``claude-sonnet-5`` id.
 
 Why a sync ``httpx.Client`` on a worker thread instead of ``AsyncClient``: the
 gateway container may carry an ``HTTPS_PROXY`` (a UK egress used only to
@@ -157,12 +156,6 @@ def _cached_tokens(usage: dict[str, Any]) -> int:
 
 def _key_and_url(model: str) -> tuple[str, str]:
     settings = get_settings()
-    if model == "claude-sonnet-5":
-        if not settings.aitunnel_api_key:
-            raise UpstreamProviderError("AITUNNEL_API_KEY not configured for Sonnet 5")
-        key = settings.aitunnel_api_key.get_secret_value()
-        url = f"{settings.aitunnel_base_url.rstrip('/')}/chat/completions"
-        return key, url
     if not settings.llmgw_api_key:
         raise UpstreamProviderError("LLMGW_API_KEY not configured")
     key = settings.llmgw_api_key.get_secret_value()

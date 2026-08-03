@@ -50,7 +50,7 @@ def test_slug_mapping_round_trip() -> None:
     assert llmgw.slug_to_omnia("gpt-5") is None
 
 
-def test_sonnet_and_gemini_use_independent_provider_credentials(monkeypatch) -> None:
+def test_sonnet_and_gemini_use_llmgw_credentials(monkeypatch) -> None:
     monkeypatch.setenv("AITUNNEL_API_KEY", "aitunnel-key")
     monkeypatch.setenv("AITUNNEL_BASE_URL", "https://aitunnel.test/v1")
     monkeypatch.setenv("LLMGW_API_KEY", "llmgw-key")
@@ -58,8 +58,8 @@ def test_sonnet_and_gemini_use_independent_provider_credentials(monkeypatch) -> 
     reset_settings_cache()
 
     assert llmgw._key_and_url("claude-sonnet-5") == (
-        "aitunnel-key",
-        "https://aitunnel.test/v1/chat/completions",
+        "llmgw-key",
+        "https://llmgw.test/v1/chat/completions",
     )
     assert llmgw._key_and_url("gemini-3.1-pro-preview-customtools") == (
         "llmgw-key",

@@ -255,7 +255,7 @@ def test_native_endpoint_uses_sonnet_chat_tools(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
+        lambda _model: ("test-key", "https://api.llmgw.ru/v1"),
     )
 
     def fake_post(
@@ -325,7 +325,7 @@ def test_native_endpoint_uses_sonnet_chat_tools(
     )
 
     assert response.status_code == 200
-    assert captured["url"] == "https://api.aitunnel.ru/v1/chat/completions"
+    assert captured["url"] == "https://api.llmgw.ru/v1/chat/completions"
     assert captured["json"]["model"] == "claude-sonnet-5"
     assert captured["json"]["tools"][0]["function"]["name"] == "done"
     assert response.json()["content"][0] == {
