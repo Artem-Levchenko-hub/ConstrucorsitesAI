@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     llmgw_api_key: SecretStr | None = None
     llmgw_base_url: str = "https://api.llmgw.ru/v1"
 
-    # --- aitunnel.ru — Sonnet 5 plus optional image/video upstream ---
+    # --- aitunnel.ru — optional image/video upstream ---
     aitunnel_api_key: SecretStr | None = None
     aitunnel_base_url: str = "https://api.aitunnel.ru/v1"
 
