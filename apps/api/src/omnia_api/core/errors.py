@@ -101,6 +101,7 @@ ErrorCode = Literal[
     "crm_integration_required",
     # MAX Studio account, legal and payment lifecycle.
     "max_registration_required",
+    "max_demo_exhausted",
     "email_verification_required",
     "business_profile_required",
     "business_verification_required",

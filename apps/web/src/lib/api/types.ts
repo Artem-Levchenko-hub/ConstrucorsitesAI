@@ -497,6 +497,7 @@ export type ApiErrorCode =
   | "integration_provider_unavailable"
   | "integration_connection_failed"
   | "max_registration_required"
+  | "max_demo_exhausted"
   | "email_verification_required"
   | "business_profile_required"
   | "business_verification_required"

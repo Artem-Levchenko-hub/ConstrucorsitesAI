@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { MaxStudio } from "@/components/max/MaxStudio";
-import { getMaxAccessServer, getSession } from "@/lib/auth-mock";
+import { getSession } from "@/lib/auth-mock";
 
 export const metadata: Metadata = {
   title: "MAX Studio — конструктор мини-приложений",
@@ -15,9 +15,6 @@ export default async function MaxStudioPage() {
   const session = await getSession();
   if (!session) return null;
   if (session.isAnon) redirect("/max/register");
-  if (!session.emailVerifiedAt) redirect("/max/onboarding");
-  const access = await getMaxAccessServer();
-  if (!access?.can_create_project) redirect("/max/onboarding");
 
   return <MaxStudio email={session.email} />;
 }

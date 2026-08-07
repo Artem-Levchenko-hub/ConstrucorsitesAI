@@ -31,7 +31,7 @@ const navigation: Array<{
   icon: typeof Smartphone;
   stageId?: MaxJourneyStageId;
 }> = [
-  { key: "editor", label: "Редактор", suffix: "", icon: Smartphone, stageId: "build" },
+  { key: "editor", label: "Редактор", suffix: "", icon: Smartphone, stageId: "demo" },
   {
     key: "app",
     label: "Данные приложения",

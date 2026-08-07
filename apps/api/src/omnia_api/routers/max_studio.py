@@ -14,6 +14,7 @@ from sqlalchemy import func, select, text
 
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.models.billing import BillingPlan, Subscription
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.max_project_config import MaxProjectConfig
@@ -33,12 +34,14 @@ from omnia_api.schemas.max_studio import (
 )
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.billing_accounts import resolve_billing_account
 from omnia_api.services.deploy_attestation import ensure_current_release_proof
 from omnia_api.services.deployment_state import (
     current_snapshot_id_fresh,
     deployment_is_active,
 )
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
+from omnia_api.services.max_access import get_user_business
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     default_max_project_config,
@@ -481,6 +484,22 @@ async def get_max_readiness(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> MaxReadinessPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
+    business_profile = await get_user_business(session, current_user.id)
+    billing_account = await resolve_billing_account(session, current_user.id)
+    launch_plan = (
+        await session.execute(
+            select(BillingPlan)
+            .join(Subscription, Subscription.plan_id == BillingPlan.id)
+            .where(
+                Subscription.billing_account_id == billing_account.id,
+                Subscription.status.in_(("trialing", "active", "past_due", "paused")),
+            )
+        )
+    ).scalar_one()
+    configured_publish_slots = launch_plan.entitlements.get("static_publish_slots")
+    can_publish = (
+        isinstance(configured_publish_slots, int) and configured_publish_slots > 0
+    )
     record = await session.get(MaxProjectConfig, project_id)
     config = MaxProjectConfigPayload.model_validate(record.config) if record else None
     integration = (
@@ -543,13 +562,25 @@ async def get_max_readiness(
         ),
         MaxReadinessItem(
             id="build",
-            label="Рабочая версия приложения собрана",
+            label="Демо-приложение собрано и доступно в превью",
             done=generated_count > 0,
             action="Завершить сборку",
         ),
         MaxReadinessItem(
+            id="max_business",
+            label="Владелец бизнеса подтверждён в Omnia",
+            done=bool(business_profile and business_profile.status == "verified"),
+            action="Подтвердить владельца",
+        ),
+        MaxReadinessItem(
+            id="plan",
+            label="Тариф с публикацией подключён",
+            done=can_publish,
+            action="Подключить Pro",
+        ),
+        MaxReadinessItem(
             id="bot",
-            label="MAX-бот проверен",
+            label="Бот создан, прошёл модерацию MAX, секрет проверен",
             done=bool(integration and integration.verified_at),
             action="Подключить бота",
         ),

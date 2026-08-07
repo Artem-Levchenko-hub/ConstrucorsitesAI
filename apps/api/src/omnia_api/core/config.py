@@ -1342,6 +1342,11 @@ DEFAULT_ROLE_MODEL = PRIMARY_LLM_MODEL
 # Counter lives on User.free_generations_used; the gate is in routers/messages.py
 # and the wallet-skip is in the LLM gateway (metadata.free=true).
 FREE_GENERATION_LIMIT = 3
+# MAX Studio has a deliberately narrower acquisition allowance than the
+# general-purpose builder: one accepted first build per registered account.
+# Follow-up AI work uses the normal wallet path.  Keep this server-owned -- the
+# client only displays the returned entitlement and can never mint another run.
+MAX_DEMO_GENERATION_LIMIT = 1
 
 
 def model_for_role(role: str, override: str | None = None) -> str:

@@ -1,19 +1,20 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   Building2,
   Check,
   CircleAlert,
+  CreditCard,
   Loader2,
   MailCheck,
   RefreshCw,
   ShieldCheck,
   UserRoundCheck,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -44,7 +45,6 @@ function errorMessage(error: unknown): string {
 }
 
 export function MaxOnboarding({ email }: { email: string }) {
-  const router = useRouter();
   const queryClient = useQueryClient();
   const [kind, setKind] = useState<BusinessKind>("self_employed");
   const [inn, setInn] = useState("");
@@ -55,12 +55,6 @@ export function MaxOnboarding({ email }: { email: string }) {
     queryFn: getMaxAccess,
     refetchInterval: 15_000,
   });
-
-  useEffect(() => {
-    if (access.data?.can_create_project) {
-      router.replace("/max");
-    }
-  }, [access.data?.can_create_project, router]);
 
   const resend = useMutation({
     mutationFn: () => resendVerification(email),
@@ -86,7 +80,7 @@ export function MaxOnboarding({ email }: { email: string }) {
       queryClient.invalidateQueries({ queryKey: ["max-access"] });
       if (profile.status === "verified") {
         toast.success("Самозанятость подтверждена", {
-          description: "Открываем создание приложения.",
+          description: "Теперь можно вернуться к проекту и перейти к публикации.",
         });
       } else {
         toast.success("Реквизиты сохранены", {
@@ -110,7 +104,13 @@ export function MaxOnboarding({ email }: { email: string }) {
 
   const data = access.data;
   const business = data?.business;
-  const step = !data?.email_verified ? 1 : business ? 3 : 2;
+  const step = !data?.email_verified
+    ? 1
+    : !business
+      ? 2
+      : business.status !== "verified"
+        ? 3
+        : 4;
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -126,20 +126,21 @@ export function MaxOnboarding({ email }: { email: string }) {
         <div className="mt-3 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
           <div>
             <h1 className="text-3xl font-semibold tracking-[-0.03em] sm:text-4xl">
-              Подготовим доступ к MAX Studio
+              Подготовим запуск в MAX
             </h1>
             <p className="mt-3 text-sm text-[#6d6962]">
               Проверка выполняется один раз для всех будущих приложений бизнеса.
             </p>
           </div>
-          <span className="text-sm text-[#8d887f]">Шаг {step} из 3</span>
+          <span className="text-sm text-[#8d887f]">Шаг {step} из 4</span>
         </div>
 
-        <div className="mt-8 grid gap-3 sm:grid-cols-3">
+        <div className="mt-8 grid gap-3 sm:grid-cols-4">
           {[
             [MailCheck, "Email", data?.email_verified],
             [Building2, "Владелец", Boolean(business)],
             [ShieldCheck, "Проверка", business?.status === "verified"],
+            [CreditCard, "Публикация", data?.can_launch],
           ].map(([Icon, label, complete], index) => {
             const ItemIcon = Icon as typeof MailCheck;
             return (
@@ -328,6 +329,26 @@ export function MaxOnboarding({ email }: { email: string }) {
             >
               <RefreshCw className="mr-2 size-4" />
               Обновить статус
+            </Button>
+          </section>
+        )}
+
+        {business?.status === "verified" && (
+          <section className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
+            <ShieldCheck className="size-7 text-[#248a4b]" />
+            <h2 className="mt-5 text-2xl font-semibold">
+              {data?.can_launch ? "Доступ к запуску готов" : "Осталось подключить публикацию"}
+            </h2>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-[#6d6962]">
+              {data?.can_launch
+                ? "Бизнес подтверждён, а тариф включает постоянный HTTPS-адрес. Вернитесь к проекту и продолжите мастер запуска."
+                : "Демо и превью остаются бесплатными. Pro нужен только для постоянного HTTPS-адреса, webhook и запуска приложения в MAX."}
+            </p>
+            <Button asChild className="mt-6 h-11">
+              <Link href={data?.can_launch ? "/max" : "/billing/plan"}>
+                {data?.can_launch ? "Вернуться к проектам" : "Подключить Pro"}
+                <ArrowRight className="ml-2 size-4" />
+              </Link>
             </Button>
           </section>
         )}

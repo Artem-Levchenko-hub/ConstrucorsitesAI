@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.account import BusinessEntitlement, BusinessMember, BusinessProfile
+from omnia_api.models.account import BusinessMember, BusinessProfile
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.routers import auth as auth_router
@@ -44,7 +44,7 @@ async def test_max_registration_requires_separate_legal_acceptances(
     assert response.json()["error"]["code"] == "legal_acceptance_required"
 
 
-async def test_max_project_requires_verified_email_and_business(
+async def test_signed_in_user_gets_max_demo_before_email_and_business(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -54,17 +54,42 @@ async def test_max_project_requires_verified_email_and_business(
         verification_tokens.append(raw_token)
 
     monkeypatch.setattr(auth_router, "_send_verification", capture_verification)
+    monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
+    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
+
+    async def no_publish(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(projects_router, "publish_event", no_publish)
     registration = await client.post("/api/auth/register", json=MAX_REGISTRATION)
     assert registration.status_code == 201
     assert registration.json()["email_verified_at"] is None
     assert len(verification_tokens) == 1
 
-    blocked = await client.post(
+    project = await client.post(
         "/api/projects",
-        json={"name": "Blocked MAX", "template": "max_miniapp"},
+        json={"name": "Instant MAX demo", "template": "max_miniapp"},
     )
-    assert blocked.status_code == 403
-    assert blocked.json()["error"]["code"] == "email_verification_required"
+    assert project.status_code == 201
+
+    access = await client.get("/api/max/account/access")
+    assert access.status_code == 200
+    assert access.json()["can_create_project"] is True
+    assert access.json()["can_launch"] is False
+    assert access.json()["launch_reason"] == "email_verification_required"
+    assert access.json()["demo"] == {
+        "limit": 1,
+        "used": 0,
+        "remaining": 1,
+        "available": True,
+        "upgrade_path": "/billing/plan",
+    }
+    launch_action = await client.post(
+        f"/api/projects/{project.json()['id']}/integrations/max/connect",
+        json={"token": "not-sent-to-max-before-business-check"},
+    )
+    assert launch_action.status_code == 403
+    assert launch_action.json()["error"]["code"] == "email_verification_required"
 
     verified = await client.post(
         "/api/auth/email/verify",
@@ -72,12 +97,9 @@ async def test_max_project_requires_verified_email_and_business(
     )
     assert verified.status_code == 200
 
-    still_blocked = await client.post(
-        "/api/projects",
-        json={"name": "No business", "template": "max_miniapp"},
-    )
-    assert still_blocked.status_code == 403
-    assert still_blocked.json()["error"]["code"] == "business_profile_required"
+    access = await client.get("/api/max/account/access")
+    assert access.json()["can_create_project"] is True
+    assert access.json()["launch_reason"] == "business_profile_required"
 
 
 async def test_verified_self_employed_owner_can_create_max_project(
@@ -115,6 +137,8 @@ async def test_verified_self_employed_owner_can_create_max_project(
     access = await client.get("/api/max/account/access")
     assert access.status_code == 200
     assert access.json()["can_create_project"] is True
+    assert access.json()["can_launch"] is False
+    assert access.json()["launch_reason"] == "subscription_entitlement_required"
 
     project = await client.post(
         "/api/projects",
@@ -123,23 +147,33 @@ async def test_verified_self_employed_owner_can_create_max_project(
     assert project.status_code == 201
 
 
-async def test_general_registration_cannot_bypass_max_business_gate(
+async def test_general_registration_can_create_but_not_launch_max(
     client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
+    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
+
+    async def no_publish(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(projects_router, "publish_event", no_publish)
     registered = await client.post(
         "/api/auth/register",
         json={"email": "general@example.com", "password": "secret123"},
     )
     assert registered.status_code == 201
-    blocked = await client.post(
+    project = await client.post(
         "/api/projects",
-        json={"name": "Bypass", "template": "max_miniapp"},
+        json={"name": "Pre-verification demo", "template": "max_miniapp"},
     )
-    assert blocked.status_code == 403
-    assert blocked.json()["error"]["code"] == "business_profile_required"
+    assert project.status_code == 201
+    access = await client.get("/api/max/account/access")
+    assert access.json()["can_launch"] is False
+    assert access.json()["launch_reason"] == "business_profile_required"
 
 
-async def test_max_free_generation_limit_belongs_to_business(
+async def test_max_demo_limit_is_server_enforced_per_account(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -175,14 +209,11 @@ async def test_max_free_generation_limit_belongs_to_business(
     )
     assert project.status_code == 201
 
-    business_id = (await db_session.execute(select(BusinessMember.business_id))).scalar_one()
-    entitlement = await db_session.get(BusinessEntitlement, business_id)
-    assert entitlement is not None
-    entitlement.free_generations_used = entitlement.free_generation_limit
-    user_id = (
-        await db_session.execute(select(User.id).where(User.email == "quota@example.com"))
+    user = (
+        await db_session.execute(select(User).where(User.email == "quota@example.com"))
     ).scalar_one()
-    wallet = await db_session.get(Wallet, user_id)
+    user.max_demo_generations_used = 1
+    wallet = await db_session.get(Wallet, user.id)
     assert wallet is not None
     wallet.balance_rub = Decimal("0")
     await db_session.commit()
@@ -196,7 +227,11 @@ async def test_max_free_generation_limit_belongs_to_business(
         },
     )
     assert blocked.status_code == 402
-    assert blocked.json()["error"]["code"] == "wallet_empty"
+    assert blocked.json()["error"]["code"] == "max_demo_exhausted"
+    assert blocked.json()["error"]["details"] == {
+        "limit": 1,
+        "upgrade_path": "/billing/plan",
+    }
 
 
 async def test_admin_can_list_and_decide_pending_businesses(

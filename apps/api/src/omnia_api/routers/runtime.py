@@ -53,6 +53,7 @@ from omnia_api.services.billing_accounts import resolve_billing_account
 from omnia_api.services.deploy_attestation import blocking_required, resolve_deploy_proof
 from omnia_api.services.deployment_state import deployment_is_active
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
+from omnia_api.services.max_access import require_max_business
 from omnia_api.services.runtime_sync import reconcile_locked_runtime
 
 log = structlog.get_logger(__name__)
@@ -477,6 +478,20 @@ async def trigger_deploy(
     await session.refresh(project, with_for_update=True)
     if project.owner_id != current_user.id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+    if project.template == "max_miniapp":
+        # Preview stays available on Free; the external launch boundary is where
+        # verified ownership and a hosting entitlement become mandatory.
+        await require_max_business(session, current_user)
+        _, publish_plan = await _billing_plan_for_user(session, current_user.id)
+        configured_slots = publish_plan.entitlements.get("static_publish_slots")
+        publish_slots = configured_slots if isinstance(configured_slots, int) else 0
+        if publish_slots < 1:
+            raise ApiError(
+                "subscription_entitlement_required",
+                "Демо готово. Для постоянного HTTPS-адреса и запуска в MAX подключите Pro.",
+                status.HTTP_402_PAYMENT_REQUIRED,
+                details={"upgrade_path": "/billing/plan"},
+            )
     active_generation = (
         await session.execute(
             select(GenerationRun.id).where(

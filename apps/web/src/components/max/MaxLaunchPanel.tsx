@@ -172,6 +172,17 @@ export function MaxLaunchPanel({
             />
           </div>
 
+          <div className="mt-4 grid gap-2 text-[11px] leading-4">
+            <div className="rounded-md bg-success/[.06] px-3 py-2 text-[#476451]">
+              <span className="font-semibold">Omnia подготовит:</span> демо, проверку данных,
+              production URL и webhook.
+            </div>
+            <div className="rounded-md bg-[#f5f3ee] px-3 py-2 text-[#6d6962]">
+              <span className="font-semibold text-[#171716]">Вы делаете в MAX Partner:</span>{" "}
+              верификацию, карточку и бота, модерацию, копирование секрета и привязку URL.
+            </div>
+          </div>
+
           <div aria-live="polite" data-testid="max-launch-current-step" className="mt-5 border-l-2 border-accent/70 pl-3">
             <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[#8d887f]">
               {currentStage ? `Этап ${currentStage.position} из ${journey.total}` : "Запуск завершён"}

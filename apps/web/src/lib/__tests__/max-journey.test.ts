@@ -16,6 +16,8 @@ describe("getMaxJourney", () => {
       item("business", true),
       item("legal", true),
       item("build", true),
+      item("max_business", true),
+      item("plan", true),
       item("bot", false),
       item("publish", false),
       item("webhook", false),
@@ -37,6 +39,8 @@ describe("getMaxJourney", () => {
       item("business", true),
       item("legal", true),
       item("build", true),
+      item("max_business", true),
+      item("plan", true),
       item("bot", true),
       item("publish", true),
       item("webhook", true),
@@ -55,6 +59,9 @@ describe("getMaxJourneyItemHref", () => {
     );
     expect(getMaxJourneyItemHref("project-1", "publish")).toBe(
       "/max/project-1/publish",
+    );
+    expect(getMaxJourneyItemHref("project-1", "max_business")).toBe(
+      "/max/onboarding?next=%2Fmax%2Fproject-1",
     );
   });
 });

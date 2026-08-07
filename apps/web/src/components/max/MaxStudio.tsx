@@ -34,6 +34,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { createProject, listProjects } from "@/lib/api/projects";
+import { getMaxAccess } from "@/lib/api/max-account";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
 import {
   MAX_APP_TYPES,
@@ -91,6 +92,7 @@ export function MaxStudio({ email }: { email: string }) {
   const projectsHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+  const access = useQuery({ queryKey: ["max-access"], queryFn: getMaxAccess });
   const maxProjects = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
     return (projects.data ?? []).filter(
@@ -211,6 +213,29 @@ export function MaxStudio({ email }: { email: string }) {
               )}
             </div>
 
+            <section className="mt-6 flex flex-col gap-4 rounded-[12px] border border-accent/25 bg-accent/[.06] p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[.14em] text-accent">Сначала готовый результат</p>
+                <p className="mt-2 text-sm font-medium">
+                  {access.data?.demo.available === false
+                    ? "Демо-сборка использована — проект и превью остаются доступны."
+                    : "Одна полноценная демо-сборка без верификации бизнеса и оплаты."}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-[#6d6962]">
+                  Проверка бизнеса, тариф, бот и модерация понадобятся только когда решите запустить приложение в MAX.
+                </p>
+              </div>
+              {access.data?.demo.available === false ? (
+                <Button asChild variant="outline" className="shrink-0 border-accent/30">
+                  <Link href={access.data.demo.upgrade_path}>Продолжить с Pro</Link>
+                </Button>
+              ) : (
+                <span className="shrink-0 rounded-full bg-[#fcfbf7] px-3 py-2 text-xs font-semibold text-accent">
+                  Демо: {access.data?.demo.remaining ?? 1} из {access.data?.demo.limit ?? 1}
+                </span>
+              )}
+            </section>
+
             {projects.isLoading ? (
               <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-[260px] rounded-[12px]" />)}
@@ -261,10 +286,10 @@ export function MaxStudio({ email }: { email: string }) {
               <div>
                 <p className="omnia-kicker text-accent">Новый MAX-проект</p>
                 <DialogTitle className="mt-2 text-2xl font-semibold text-[#171716]">
-                  Что создаём?
+                  Опишите бизнес — получите приложение
                 </DialogTitle>
                 <DialogDescription className="mt-1 text-sm text-[#6d6962]">
-                  Короткого описания достаточно для первой сборки.
+                  Названия и одного понятного сценария достаточно. MAX Partner пока не нужен.
                 </DialogDescription>
               </div>
             </div>
@@ -321,12 +346,12 @@ export function MaxStudio({ email }: { email: string }) {
             </div>
 
             <div className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#d8d4cb] bg-[#fcfbf7] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:p-5">
-              <p className="hidden text-xs text-[#8d887f] sm:block">Генерация начнётся один раз после открытия проекта.</p>
+              <p className="hidden text-xs text-[#8d887f] sm:block">После открытия сразу покажем живую сборку в телефоне.</p>
               <div className="flex flex-col-reverse gap-2 sm:ml-auto sm:flex-row">
                 <Button type="button" variant="outline" className="min-h-11" onClick={() => setDialogOpen(false)}>Отмена</Button>
                 <Button disabled={!ready || create.isPending} className="min-h-11">
                   {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                  Создать проект
+                  Получить демо-приложение
                 </Button>
               </div>
             </div>

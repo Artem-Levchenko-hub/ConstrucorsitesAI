@@ -63,6 +63,13 @@ class User(Base):
     # (core/config.py) the user is billed from their wallet like everyone else.
     free_generations_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
+    # MAX's instant-demo allowance is separate from the generic site-builder
+    # welcome generations.  It is reserved under a row lock before a MAX build
+    # is accepted, so parallel projects/tabs cannot each claim a free build.
+    max_demo_generations_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+
     # Viral-funnel provenance (V4.2b return-edge). Set at registration from the
     # share-link return path: `signup_source` is a bounded enum ("share_link"
     # when a stranger came in via a /p/<slug> "Сделай свой" CTA, else NULL for

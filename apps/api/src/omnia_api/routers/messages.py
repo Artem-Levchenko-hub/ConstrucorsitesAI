@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.core.config import (
     FREE_GENERATION_LIMIT,
+    MAX_DEMO_GENERATION_LIMIT,
     MAX_STUDIO_LLM_MODEL,
     PRIMARY_LLM_MODEL,
     get_settings,
@@ -38,7 +39,6 @@ from omnia_api.core.redis import (
     request_generation_cancel,
     set_stream_state,
 )
-from omnia_api.models.account import BusinessEntitlement, BusinessMember
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
@@ -1551,31 +1551,25 @@ async def post_prompt(
     )
 
     # Free-tier gate: regular projects keep the historical per-user allowance.
-    # MAX projects spend the allowance attached to the verified business instead,
-    # so creating another user account cannot mint another set of free builds for
-    # the same INN. Legacy MAX projects without a business profile keep the old
-    # counter and remain editable.
+    # MAX has one separate instant-demo build.  The user row is locked and the
+    # allowance is reserved in this request transaction before any model task is
+    # spawned, so two projects/tabs cannot both pass a stale counter check.
     # `UNLIMITED_GENERATIONS=true` (testing escape hatch) forces every gen to be
     # free → skips this wallet-floor check AND the gateway debit (metadata.free).
-    free_business_id: UUID | None = None
+    max_demo_reserved = False
     if project.template == "max_miniapp":
-        free_business_id = (
-            await session.execute(
-                select(BusinessMember.business_id).where(BusinessMember.user_id == current_user.id)
+        if get_settings().unlimited_generations or credential_redirect:
+            is_free = True
+        else:
+            locked_user = await session.get(User, current_user.id, with_for_update=True)
+            if locked_user is None:
+                raise ApiError("unauthorized", "user not found", status.HTTP_401_UNAUTHORIZED)
+            is_free = (
+                locked_user.max_demo_generations_used < MAX_DEMO_GENERATION_LIMIT
             )
-        ).scalar_one_or_none()
-    if free_business_id is not None:
-        entitlement = await session.get(BusinessEntitlement, free_business_id)
-        if entitlement is None:
-            entitlement = BusinessEntitlement(
-                business_id=free_business_id,
-                free_generation_limit=FREE_GENERATION_LIMIT,
-            )
-            session.add(entitlement)
-            await session.flush()
-        is_free = get_settings().unlimited_generations or (
-            entitlement.free_generations_used < entitlement.free_generation_limit
-        )
+            if is_free:
+                locked_user.max_demo_generations_used += 1
+                max_demo_reserved = True
     else:
         is_free = get_settings().unlimited_generations or (
             (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
@@ -1586,6 +1580,16 @@ async def post_prompt(
             await session.execute(select(Wallet).where(Wallet.billing_account_id == account.id))
         ).scalar_one_or_none()
         if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
+            if project.template == "max_miniapp":
+                raise ApiError(
+                    "max_demo_exhausted",
+                    "Демо-сборка уже использована. Подключите Pro, чтобы продолжить работу с AI.",
+                    status.HTTP_402_PAYMENT_REQUIRED,
+                    details={
+                        "limit": MAX_DEMO_GENERATION_LIMIT,
+                        "upgrade_path": "/billing/plan",
+                    },
+                )
             raise ApiError("wallet_empty", "insufficient balance", 402)
 
     # Select-mode picks (serialized for JSONB + the background task). Computed
@@ -2062,6 +2066,16 @@ async def post_prompt(
         )
         else ("build" if orchestrate else "edit")
     )
+    # A clarification/configuration turn does not receive the demo build.  The
+    # reservation is still under the same transaction and row lock, so returning
+    # it here cannot create a parallel-claim race.
+    if max_demo_reserved and turn_mode == "clarify":
+        locked_user = await session.get(User, current_user.id, with_for_update=True)
+        if locked_user is not None:
+            locked_user.max_demo_generations_used = max(
+                0, locked_user.max_demo_generations_used - 1
+            )
+        max_demo_reserved = False
     await session.flush()
     generation_run.assistant_message_id = assistant_msg.id
     generation_run.response_mode = turn_mode
@@ -2155,7 +2169,7 @@ async def post_prompt(
             model_id=routing_model,
             force_model=force_model,
             is_free=is_free,
-            free_business_id=free_business_id,
+            max_demo_reserved=max_demo_reserved,
             orchestrate=orchestrate,
             selected_elements=selected_dump,
         )
@@ -3110,7 +3124,7 @@ async def _process_prompt(
     model_id: str,
     force_model: str | None = None,
     is_free: bool = False,
-    free_business_id: UUID | None = None,
+    max_demo_reserved: bool = False,
     orchestrate: bool = True,
     selected_elements: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -3150,18 +3164,8 @@ async def _process_prompt(
     accumulated = ""
 
     async def _consume_free_generation(session: AsyncSession) -> None:
-        if not is_free:
+        if not is_free or max_demo_reserved or project_template == "max_miniapp":
             return
-        if free_business_id is not None:
-            entitlement = await session.get(
-                BusinessEntitlement,
-                free_business_id,
-                with_for_update=True,
-            )
-            if entitlement is not None:
-                entitlement.free_generations_used += 1
-                entitlement.updated_at = datetime.now(UTC)
-                return
         user_row = await session.get(User, user_id)
         if user_row is not None:
             user_row.free_generations_used = (user_row.free_generations_used or 0) + 1
