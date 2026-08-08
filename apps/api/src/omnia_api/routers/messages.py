@@ -1467,6 +1467,17 @@ async def post_prompt(
     current_user: CurrentUserDep,
 ) -> PromptResponse:
     project = await _ensure_owner(session, project_id, current_user.id)
+
+    # A credential pasted into MAX chat must never reach persistence or a model.
+    # Keep the product request: redact it before even hashing the prompt and
+    # route the model to the managed, secretless runtime instead of stopping.
+    from omnia_api.services.secret_safety import prepare_safe_max_prompt
+
+    safe_max_prompt = prepare_safe_max_prompt(payload.prompt)
+    credential_removed = project.template == "max_miniapp" and safe_max_prompt.credential_removed
+    if credential_removed:
+        payload = payload.model_copy(update={"prompt": safe_max_prompt.chat_text})
+
     idempotency_key = payload.idempotency_key or str(uuid4())
     generation_run, replayed = await reserve_generation_run(
         session,
@@ -1537,18 +1548,6 @@ async def post_prompt(
             status.HTTP_409_CONFLICT,
         )
 
-    # A credential pasted into MAX chat is configuration, not a code-generation
-    # request.  Redirect it before wallet checks/model dispatch and redact the
-    # chat row; generated repositories must never become a secret store.
-    from omnia_api.services.secret_safety import (
-        contains_provider_secret,
-        redact_provider_secrets,
-    )
-
-    credential_redirect = project.template == "max_miniapp" and contains_provider_secret(
-        payload.prompt
-    )
-
     # Free-tier gate: regular projects keep the historical per-user allowance.
     # MAX projects spend the allowance attached to the verified business instead,
     # so creating another user account cannot mint another set of free builds for
@@ -1579,7 +1578,7 @@ async def post_prompt(
         is_free = get_settings().unlimited_generations or (
             (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
         )
-    if not is_free and not credential_redirect:
+    if not is_free:
         account = await resolve_billing_account(session, current_user.id)
         wallet = (
             await session.execute(select(Wallet).where(Wallet.billing_account_id == account.id))
@@ -1717,13 +1716,8 @@ async def post_prompt(
     # now, the survey arrives via `onboarding.survey` (see _run_async_onboarding).
     async_onboarding = False
     do_clarify = False
-    effective_prompt = payload.prompt
-    interview_eligible = (
-        is_first_build
-        and not payload.skip_clarify
-        and not selected_dump
-        and not credential_redirect
-    )
+    effective_prompt = safe_max_prompt.model_text if credential_removed else payload.prompt
+    interview_eligible = is_first_build and not payload.skip_clarify and not selected_dump
     if interview_eligible and settings.use_progressive_discovery:
         # Gather the prior conversation (questions already asked + answers) to
         # drive the next discovery turn. The newest message (payload.prompt) is
@@ -1865,7 +1859,6 @@ async def post_prompt(
     # PROPOSAL P-H1). Fail-soft (R-10): a hiccup falls back to a static build.
     if (
         is_first_build
-        and not credential_redirect
         and discovery_result is None
         and not discovery_ask
         and not do_clarify
@@ -1988,7 +1981,7 @@ async def post_prompt(
         # App-ification triage rule (P-H1), flag-gated so it's a no-op until enabled.
         appify_enabled=settings.use_followup_appification,
     )
-    orchestrate = intent == ORCHESTRATE and not credential_redirect
+    orchestrate = intent == ORCHESTRATE
 
     # Model choice is server-side — the user never picks. `force_model` is the
     # hidden admin override (env FORCE_MODEL). Otherwise the triage decides:
@@ -2006,9 +1999,7 @@ async def post_prompt(
     user_msg = Message(
         project_id=project_id,
         role="user",
-        content=(
-            redact_provider_secrets(payload.prompt) if credential_redirect else payload.prompt
-        ),
+        content=payload.prompt,
         model_id=None,  # user turns have no model
         selected_elements=selected_dump,
         created_at=_now,
@@ -2050,15 +2041,7 @@ async def post_prompt(
     # request sees the active-run guard and cannot start in parallel.
     turn_mode: Literal["build", "edit", "clarify"] = (
         "clarify"
-        if (
-            credential_redirect
-            or discovery_ask
-            or async_onboarding
-            or do_clarify
-            or run_intent
-            or run_ask
-            or run_decline
-        )
+        if (discovery_ask or async_onboarding or do_clarify or run_intent or run_ask or run_decline)
         else ("build" if orchestrate else "edit")
     )
     await session.flush()
@@ -2068,19 +2051,7 @@ async def post_prompt(
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
 
-    if credential_redirect:
-        _spawn_text_turn(
-            project_id,
-            assistant_msg.id,
-            (
-                "Ключ не сохранён и не передан агенту. Подключите провайдера через "
-                "«Интеграции» — там секрет хранится зашифрованно и не попадает в код "
-                "или историю проекта. Если ключ уже был отправлен в чат, отзовите его "
-                "у провайдера и создайте новый."
-            ),
-            run_id=generation_run.id,
-        )
-    elif async_onboarding:
+    if async_onboarding:
         # Deferred first-turn onboarding: no gateway call ran in-request. Plan the
         # question batch out of band (Opus ~60-70s) and deliver the survey over WS
         # so POST already returned inside the client's 30s budget.
