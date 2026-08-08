@@ -1645,6 +1645,7 @@ async def run_native_build(
                         )
 
                 obs: dict[str, Any]
+                tool_executed = False
                 allowed_progress_tools = (
                     {"write_file", "edit_file", "build"}
                     if force_progress
@@ -1715,6 +1716,7 @@ async def run_native_build(
                 elif lifecycle_error:
                     obs = {"ok": False, "error": lifecycle_error}
                 else:
+                    tool_executed = True
                     try:
                         obs = await execute(action)
                     except Exception as exc:  # a tool crash must not kill the build
@@ -1737,7 +1739,7 @@ async def run_native_build(
                 ops_this_turn += 1
                 if obs.get("infra_dead"):
                     infra_this_turn += 1
-                if name in ("write_file", "edit_file") and obs.get("ok"):
+                if tool_executed and name in ("write_file", "edit_file") and obs.get("ok"):
                     if name == "write_file":
                         written[action.path] = action.args.get("content", "")
                     elif isinstance(obs.get("content"), str):
@@ -1754,7 +1756,7 @@ async def run_native_build(
                         visual_feedback_step = None
                     proof_after_write.clear()
                     last_green_see_step = None
-                elif name == "build":
+                elif tool_executed and name == "build":
                     last_build_ok = bool(obs.get("ok"))
                     last_build_error_paths = (
                         frozenset()
