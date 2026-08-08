@@ -506,7 +506,7 @@ async def test_stable_max_first_write_is_enforced_when_provider_reuses_old_tools
 
 
 @pytest.mark.asyncio
-async def test_stable_max_supporting_files_cannot_postpone_product_entry(
+async def test_stable_max_supporting_files_do_not_unlock_reading_before_product_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
@@ -531,6 +531,10 @@ async def test_stable_max_supporting_files_cannot_postpone_product_entry(
             )
         if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 2:
             assert "main product entry is still unchanged" in str(convo[-1])
+            assert {tool["name"] for tool in kwargs["tools"]} == {
+                "write_file",
+                "edit_file",
+            }
             return _turn(
                 (
                     "write_file",
@@ -563,8 +567,11 @@ async def test_stable_max_supporting_files_cannot_postpone_product_entry(
     )
 
     assert result.done is True
-    assert executed_paths == [agent_native._STABLE_MAX_PRODUCT_ENTRY]
-    assert "src/components/product/types.ts" not in result.files
+    assert executed_paths == [
+        "src/components/product/types.ts",
+        agent_native._STABLE_MAX_PRODUCT_ENTRY,
+    ]
+    assert "src/components/product/types.ts" in result.files
 
 
 @pytest.mark.asyncio

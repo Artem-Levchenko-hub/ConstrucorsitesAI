@@ -293,9 +293,10 @@ _STABLE_MAX_WRITE_REQUIRED = (
     "read/list/grep/build/done calls are disabled until one product file is written."
 )
 _STABLE_MAX_ENTRY_REQUIRED = (
-    "The main product entry is still unchanged. Your next successful write/edit MUST target "
-    f"`{_STABLE_MAX_PRODUCT_ENTRY}` and create the real screen composition. Supporting types, "
-    "notes, data, or styles do not satisfy this requirement."
+    "The main product entry is still unchanged. Stay in write-only mode: create one compact "
+    "required product component per turn (total tool content below 24000 characters), then "
+    f"compose the complete screen in `{_STABLE_MAX_PRODUCT_ENTRY}`. Do not put the whole app "
+    "in one oversized file. Notes, fake data, or decorative placeholders are not progress."
 )
 _STABLE_MAX_PROGRESS_REQUIRED = (
     "The product entry exists, but this build is not proven yet. Stop reading. Your next "
@@ -1562,8 +1563,6 @@ async def run_native_build(
                             else _STABLE_MAX_WRITE_REQUIRED
                         ),
                     }
-                elif force_entry_write and action.path != _STABLE_MAX_PRODUCT_ENTRY:
-                    obs = {"ok": False, "error": _STABLE_MAX_ENTRY_REQUIRED}
                 elif lifecycle_error:
                     obs = {"ok": False, "error": lifecycle_error}
                 else:
@@ -1630,6 +1629,9 @@ async def run_native_build(
                     if _hint:
                         _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
+
+            if force_entry_write and _STABLE_MAX_PRODUCT_ENTRY not in written:
+                results.append({"type": "text", "text": _STABLE_MAX_ENTRY_REQUIRED})
 
             response_hit_output_limit = (
                 stable_max_loop
