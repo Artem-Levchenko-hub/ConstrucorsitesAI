@@ -190,7 +190,7 @@ export default function MvpChecklistPage() {
             сценарием. После этого чек-лист MVP считается закрытым.
           </p>
           <Link
-            href="/max/register"
+            href="/max/demo"
             className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[8px] bg-accent px-5 text-sm font-semibold text-white hover:bg-accent-hover"
           >
             Открыть MAX Studio

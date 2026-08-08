@@ -196,7 +196,7 @@ export default function HomePage() {
           </nav>
           <div className="flex items-center gap-2.5">
             <Link href="/login?next=/max" className="hidden px-3 py-2 text-[13px] text-white/65 hover:text-white sm:block">Войти</Link>
-            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-9 px-4 text-[13px]">Создать приложение</Link>
+            <Link href="/max/demo" className="omnia-button omnia-button-primary min-h-9 px-4 text-[13px]">Попробовать демо</Link>
           </div>
         </header>
 
@@ -211,7 +211,7 @@ export default function HomePage() {
             подключит сервисы и доведёт приложение до запуска.
           </p>
           <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-12 px-6">
+            <Link href="/max/demo" className="omnia-button omnia-button-primary min-h-12 px-6">
               Начать бесплатно <ArrowRight className="size-4" />
             </Link>
             <Link href="/max/product" className="omnia-button min-h-12 border border-white/20 px-6 text-white hover:bg-white/5">
@@ -315,7 +315,7 @@ export default function HomePage() {
               Исходный код остаётся вашим. Приложение разворачивается в изолированном контейнере,
               получает рабочие данные, версии, мониторинг и возможность отката.
             </p>
-            <Link href="/max/register" className="omnia-button omnia-button-primary mt-8">Создать MAX-приложение <ArrowRight className="size-4" /></Link>
+            <Link href="/max/demo" className="omnia-button omnia-button-primary mt-8">Показать моё MAX-приложение <ArrowRight className="size-4" /></Link>
           </div>
           <div className="grid gap-px overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#d8d4cb] sm:grid-cols-2">
             {[
@@ -418,7 +418,7 @@ export default function HomePage() {
           <MessageSquareText className="mx-auto size-7 text-accent" />
           <h2 className="mx-auto mt-6 max-w-[780px] text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[58px]">Опишите приложение.<br />Остальное соберёт Omnia.</h2>
           <p className="mx-auto mt-5 max-w-[560px] text-sm leading-6 text-white/48">Регистрация займёт несколько минут. Первая сборка запускается только после подтверждения владельца.</p>
-          <Link href="/max/register" className="omnia-button omnia-button-primary mt-8 min-h-12 px-6">Начать бесплатно <ArrowRight className="size-4" /></Link>
+          <Link href="/max/demo" className="omnia-button omnia-button-primary mt-8 min-h-12 px-6">Собрать демо бесплатно <ArrowRight className="size-4" /></Link>
         </div>
       </section>
 

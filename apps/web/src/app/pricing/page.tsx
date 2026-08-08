@@ -46,7 +46,7 @@ export default function PricingPage() {
             <ul className="mt-7 space-y-4">
               {plan.items.map((item) => <li key={item} className="flex items-center gap-2.5 text-[13px] text-[#6d6962]"><CheckCircle2 className="h-4 w-4 text-[#248a4b]" />{item}</li>)}
             </ul>
-            <Link href="/max/register" className={`mt-8 inline-flex h-11 w-full items-center justify-center rounded-[8px] text-[13px] font-semibold ${plan.popular ? "bg-accent text-white" : "border border-[#d8d4cb]"}`}>
+            <Link href="/max/demo" className={`mt-8 inline-flex h-11 w-full items-center justify-center rounded-[8px] text-[13px] font-semibold ${plan.popular ? "bg-accent text-white" : "border border-[#d8d4cb]"}`}>
               Создать аккаунт
             </Link>
           </article>
