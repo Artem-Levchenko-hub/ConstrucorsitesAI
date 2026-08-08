@@ -499,7 +499,86 @@ async def test_stable_max_first_write_is_enforced_when_provider_reuses_old_tools
 
     assert result.done is True
     assert executed_reads == agent_native._STABLE_MAX_FIRST_WRITE_AT
-    assert "First product write is now required" in str(result.transcript)
+    assert "A product write is now required" in str(result.transcript)
+
+
+@pytest.mark.asyncio
+async def test_stable_max_red_build_forces_a_repair_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    executed_reads = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": "export default function ProductApp(){return <main>bad</main>}",
+                    },
+                )
+            )
+        if calls == 2:
+            return _turn(("build", {}))
+        if calls <= 5:
+            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
+        if calls == 6:
+            assert {tool["name"] for tool in kwargs["tools"]} == {
+                "write_file",
+                "edit_file",
+            }
+            return _turn(("build", {}))
+        if calls == 7:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": (
+                            "export default function ProductApp(){return <main>fixed</main>}"
+                        ),
+                    },
+                )
+            )
+        if calls == 8:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    builds = 0
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal builds, executed_reads
+        if action.name == "read_file":
+            executed_reads += 1
+            return {"ok": True, "content": "current file"}
+        if action.name == "write_file":
+            return {"ok": True, "content": action.args["content"]}
+        if action.name == "build":
+            builds += 1
+            return {"ok": builds > 1, "detail": "clean" if builds > 1 else "TS error"}
+        return {"ok": True}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="build product",
+        execute=execute,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert executed_reads == 3
+    assert builds == 2
+    assert result.files["src/components/product/ProductApp.tsx"].endswith("fixed</main>}")
+    assert "A product write is now required" in str(result.transcript)
 
 
 @pytest.mark.asyncio

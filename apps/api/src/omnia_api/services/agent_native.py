@@ -284,8 +284,8 @@ _STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
 # into an enforceable cost boundary instead of letting a model re-read the same
 # files until the generic 12-turn explore guard aborts the generation.
 _STABLE_MAX_FIRST_WRITE_AT = 4
-_STABLE_MAX_FIRST_WRITE_REQUIRED = (
-    "First product write is now required. Use write_file or edit_file; "
+_STABLE_MAX_WRITE_REQUIRED = (
+    "A product write is now required. Use write_file or edit_file; "
     "read/list/grep/build/done calls are disabled until one product file is written."
 )
 _STABLE_MAX_FIRST_WRITE_TOOLS = [
@@ -1148,8 +1148,10 @@ async def run_native_build(
         for step in step_numbers:
             if pending_visual_evaluation_step is not None and step > pending_visual_evaluation_step:
                 visual_evaluation_ready = True
-            force_first_write = (
-                stable_max_loop and not written and no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT
+            force_product_write = (
+                stable_max_loop
+                and no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT
+                and (not written or last_build_ok is False)
             )
             call_stage = (
                 "build_plan"
@@ -1172,7 +1174,7 @@ async def run_native_build(
                     stage=call_stage,
                     tools=(
                         _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
-                        if force_first_write
+                        if force_product_write
                         else _STABLE_MAX_TOOLS_CACHED
                         if stable_max_loop
                         else _MAX_REFERENCE_TOOLS_CACHED
@@ -1400,13 +1402,13 @@ async def run_native_build(
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
                 if name == "done":
-                    if force_first_write:
+                    if force_product_write:
                         results.append(
                             {
                                 "type": "tool_result",
                                 "tool_use_id": tu_id,
                                 "is_error": True,
-                                "content": _STABLE_MAX_FIRST_WRITE_REQUIRED,
+                                "content": _STABLE_MAX_WRITE_REQUIRED,
                             }
                         )
                         continue
@@ -1495,7 +1497,7 @@ async def run_native_build(
                         )
 
                 obs: dict[str, Any]
-                if force_first_write and name not in {"write_file", "edit_file"}:
+                if force_product_write and name not in {"write_file", "edit_file"}:
                     # Some provider-compatible gateways keep earlier tool schemas
                     # available for the cached conversation even when this turn
                     # advertises only write/edit. Enforce the transition at the
@@ -1503,7 +1505,7 @@ async def run_native_build(
                     # more paid turns after the bounded exploration window.
                     obs = {
                         "ok": False,
-                        "error": _STABLE_MAX_FIRST_WRITE_REQUIRED,
+                        "error": _STABLE_MAX_WRITE_REQUIRED,
                     }
                 elif lifecycle_error:
                     obs = {"ok": False, "error": lifecycle_error}
