@@ -944,11 +944,13 @@ async def test_stable_max_stops_paid_calls_after_two_truncated_writes(
 
 
 @pytest.mark.asyncio
-async def test_stable_max_red_build_forces_a_repair_write(
+async def test_stable_max_red_build_forces_targeted_edit_and_blocks_full_rewrite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
     executed_reads = 0
+    executed_writes = 0
+    executed_edits = 0
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
@@ -970,12 +972,11 @@ async def test_stable_max_red_build_forces_a_repair_write(
         if calls == 3:
             assert {tool["name"] for tool in kwargs["tools"]} == {
                 "read_file",
-                "write_file",
                 "edit_file",
             }
             return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
         if calls == 4:
-            assert "current file" in str(convo[-1])
+            assert "ProductApp" in str(convo[-1])
             return _turn(
                 (
                     "write_file",
@@ -989,39 +990,45 @@ async def test_stable_max_red_build_forces_a_repair_write(
             assert "history placeholder" in str(convo[-1])
             return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
         if calls == 6:
-            assert "current file" in str(convo[-1])
-            return _turn(("build", {}))
-        if calls == 7:
-            assert "build is RED" in str(convo[-1])
-            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
-        if calls == 8:
-            assert "build is RED" in str(convo[-1])
-            return _turn(("read_file", {"path": "src/components/product/types.ts"}))
-        if calls == 9:
-            assert "ProductApp.tsx" in str(convo[-1])
-            return _turn(
-                (
-                    "write_file",
-                    {
-                        "path": "src/components/product/types.ts",
-                        "content": "export type Unrelated = string",
-                    },
-                )
-            )
-        if calls == 10:
-            assert "ProductApp.tsx" in str(convo[-1])
+            assert "ProductApp" in str(convo[-1])
             return _turn(
                 (
                     "write_file",
                     {
                         "path": "src/components/product/ProductApp.tsx",
-                        "content": (
-                            "export default function ProductApp(){return <main>fixed</main>}"
-                        ),
+                        "content": "export default function Recreated(){return null}",
                     },
                 )
             )
-        if calls == 11:
+        if calls == 7:
+            assert "build is RED" in str(convo[-1])
+            return _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "old_string": "bad",
+                        "new_string": "fixed",
+                    },
+                )
+            )
+        if calls == 8:
+            assert {tool["name"] for tool in kwargs["tools"]} == {
+                "read_file",
+                "edit_file",
+                "build",
+            }
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": "export default function Recreated(){return null}",
+                    },
+                )
+            )
+        if calls == 9:
+            assert "write_file remains disabled" in str(convo[-1])
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
 
@@ -1030,12 +1037,22 @@ async def test_stable_max_red_build_forces_a_repair_write(
     builds = 0
 
     async def execute(action: Any) -> dict[str, Any]:
-        nonlocal builds, executed_reads
+        nonlocal builds, executed_reads, executed_writes, executed_edits
         if action.name == "read_file":
             executed_reads += 1
-            return {"ok": True, "content": "current file"}
+            return {
+                "ok": True,
+                "content": "export default function ProductApp(){return <main>bad</main>}",
+            }
         if action.name == "write_file":
+            executed_writes += 1
             return {"ok": True, "content": action.args["content"]}
+        if action.name == "edit_file":
+            executed_edits += 1
+            return {
+                "ok": True,
+                "content": "export default function ProductApp(){return <main>fixed</main>}",
+            }
         if action.name == "build":
             builds += 1
             return {
@@ -1058,6 +1075,8 @@ async def test_stable_max_red_build_forces_a_repair_write(
 
     assert result.done is True
     assert executed_reads == 2
+    assert executed_writes == 1
+    assert executed_edits == 1
     assert builds == 2
     assert result.files["src/components/product/ProductApp.tsx"].endswith("fixed</main>}")
     assert "build is RED" in str(result.transcript)
