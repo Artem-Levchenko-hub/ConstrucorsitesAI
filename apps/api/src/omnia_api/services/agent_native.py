@@ -325,6 +325,20 @@ _STABLE_MAX_PROGRESS_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_PROGRESS_TOOLS[:-1],
     {**_STABLE_MAX_PROGRESS_TOOLS[-1], "cache_control": _CACHE},
 ]
+_STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED = [
+    {
+        **_tool(
+            "write_file",
+            f"Write the complete compact product composition to {_STABLE_MAX_PRODUCT_ENTRY}.",
+            {
+                "path": {"type": "string", "enum": [_STABLE_MAX_PRODUCT_ENTRY]},
+                "content": _STR,
+            },
+            ["path", "content"],
+        ),
+        "cache_control": _CACHE,
+    }
+]
 
 # MAX has a narrower executor contract. Do not advertise operations which the
 # server will always reject or which authenticate through the generic web
@@ -857,6 +871,30 @@ def native_system_prompt(
     return "\n\n".join(p for p in parts if p)
 
 
+def _stable_max_entry_focus_task(task: str, written: Mapping[str, str]) -> str:
+    """Compact a stale pre-entry transcript into one bounded composition turn."""
+
+    support: list[str] = []
+    budget = 16_000
+    for path, content in written.items():
+        if path == _STABLE_MAX_PRODUCT_ENTRY or budget <= 0:
+            continue
+        excerpt = content[: min(1_800, budget)]
+        support.append(f"FILE {path}\n{excerpt}")
+        budget -= len(excerpt)
+    return (
+        "[FOCUSED PRODUCT ENTRY]\n"
+        "The supporting layer below is already written. Do not read or rewrite it. "
+        f"Now write ONLY `{_STABLE_MAX_PRODUCT_ENTRY}` as a compact complete screen "
+        "composition. Import useful modules when their exports are clear; otherwise keep "
+        "the complete user-facing UI in ProductApp. Stay below 24000 output characters. "
+        "Include all requested screens, navigation, loading/empty/error/success states, and "
+        "real interactions; this is a full application, not a placeholder.\n\n"
+        f"ORIGINAL TASK\n{task}\n\n"
+        "ALREADY WRITTEN SUPPORT\n" + "\n\n".join(support)
+    )
+
+
 async def _call_messages(
     client: httpx.AsyncClient,
     url: str,
@@ -1040,6 +1078,7 @@ async def run_native_build(
     provider_reconnect_cycles = 0
     truncated_no_write_turns = 0
     turns_without_product_entry = 0
+    entry_focus_compacted = False
 
     max_runtime = "MAX VERIFICATION OVERRIDE" in system or reference_max_loop
     max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
@@ -1182,10 +1221,26 @@ async def run_native_build(
         for step in step_numbers:
             if pending_visual_evaluation_step is not None and step > pending_visual_evaluation_step:
                 visual_evaluation_ready = True
+            if (
+                stable_max_loop
+                and not entry_focus_compacted
+                and _STABLE_MAX_PRODUCT_ENTRY not in written
+                and len(written) >= _STABLE_MAX_SUPPORT_FILE_LIMIT
+            ):
+                convo = [
+                    {
+                        "role": "user",
+                        "content": _stable_max_entry_focus_task(task, written),
+                    }
+                ]
+                entry_focus_compacted = True
             force_entry_write = (
                 stable_max_loop
-                and turns_without_product_entry >= _STABLE_MAX_FIRST_WRITE_AT
                 and _STABLE_MAX_PRODUCT_ENTRY not in written
+                and (
+                    turns_without_product_entry >= _STABLE_MAX_FIRST_WRITE_AT
+                    or entry_focus_compacted
+                )
             )
             force_repair_write = (
                 stable_max_loop
@@ -1219,7 +1274,9 @@ async def run_native_build(
                     free=free,
                     stage=call_stage,
                     tools=(
-                        _STABLE_MAX_PROGRESS_TOOLS_CACHED
+                        _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
+                        if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
+                        else _STABLE_MAX_PROGRESS_TOOLS_CACHED
                         if force_progress
                         else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
                         if force_entry_write or force_repair_write
@@ -1556,7 +1613,13 @@ async def run_native_build(
                     if force_progress
                     else {"write_file", "edit_file"}
                 )
-                if force_product_progress and name not in allowed_progress_tools:
+                if (
+                    entry_focus_compacted
+                    and _STABLE_MAX_PRODUCT_ENTRY not in written
+                    and (name != "write_file" or action.path != _STABLE_MAX_PRODUCT_ENTRY)
+                ):
+                    obs = {"ok": False, "error": _STABLE_MAX_ENTRY_NOW_REQUIRED}
+                elif force_product_progress and name not in allowed_progress_tools:
                     # Some provider-compatible gateways keep earlier tool schemas
                     # available for the cached conversation even when this turn
                     # advertises only write/edit. Enforce the transition at the

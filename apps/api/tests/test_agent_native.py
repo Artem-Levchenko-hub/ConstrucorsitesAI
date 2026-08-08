@@ -586,6 +586,70 @@ async def test_stable_max_supporting_files_do_not_unlock_reading_before_product_
 
 
 @pytest.mark.asyncio
+async def test_stable_max_compacts_to_entry_only_after_support_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    executed_paths: list[str] = []
+    supports = [f"src/components/product/Part{i}.tsx" for i in range(8)]
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _turn(
+                *(
+                    ("write_file", {"path": path, "content": f"export const Part{i}=1"})
+                    for i, path in enumerate(supports)
+                )
+            )
+        if calls == 2:
+            assert len(convo) == 1
+            assert "[FOCUSED PRODUCT ENTRY]" in str(convo[0])
+            assert {tool["name"] for tool in kwargs["tools"]} == {"write_file"}
+            path_schema = kwargs["tools"][0]["input_schema"]["properties"]["path"]
+            assert path_schema["enum"] == [agent_native._STABLE_MAX_PRODUCT_ENTRY]
+            # Simulate a provider-compatible gateway reusing an earlier schema.
+            return _turn(("write_file", {"path": supports[0], "content": "export const Part0=2"}))
+        if calls == 3:
+            assert "supporting-file budget is complete" in str(convo[-1])
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "content": (
+                            "export default function ProductApp(){return <main>Complete</main>}"
+                        ),
+                    },
+                )
+            )
+        if calls == 4:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "write_file":
+            executed_paths.append(action.path)
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="build full product",
+        execute=execute,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert executed_paths == [*supports, agent_native._STABLE_MAX_PRODUCT_ENTRY]
+
+
+@pytest.mark.asyncio
 async def test_stable_max_forces_build_or_write_after_product_entry_stall(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
