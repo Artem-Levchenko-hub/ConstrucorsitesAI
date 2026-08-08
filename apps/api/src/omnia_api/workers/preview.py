@@ -342,6 +342,7 @@ async def capture_live_url(
     settle_container: bool = True,
     full_page: bool = False,
     bootstrap_url: str | None = None,
+    hide_platform_chrome: bool = False,
 ) -> dict[int, bytes]:
     """Screenshot a LIVE running URL (the dev container's preview) at each width.
 
@@ -373,6 +374,15 @@ async def capture_live_url(
                             timeout=GOTO_TIMEOUT_MS,
                         )
                     await page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS)
+                    if hide_platform_chrome:
+                        # The public share surface injects Omnia's remix CTA and
+                        # watermark outside the generated product. They are useful
+                        # conversion chrome for visitors, but the build agent cannot
+                        # edit them and must not burn its budget trying to move them
+                        # around a MAX app's own fixed bottom navigation.
+                        await page.add_style_tag(
+                            content=("#omnia-remix-cta,#omnia-wm{display:none!important}")
+                        )
                     if settle_container:
                         await _await_container_ready(page)
                     await _await_paint(page)

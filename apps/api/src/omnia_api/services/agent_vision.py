@@ -78,6 +78,7 @@ async def see_page(
             url,
             widths,
             bootstrap_url=bootstrap_url,
+            hide_platform_chrome=True,
         )
     except Exception as exc:
         return {"ok": False, "error": f"could not render {rel}: {type(exc).__name__}"}

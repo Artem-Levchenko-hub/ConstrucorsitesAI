@@ -46,6 +46,7 @@ async def test_max_see_bootstraps_signed_preview_before_capture(
         "url": "https://fitness-dev.example/profile",
         "widths": (390, 360),
         "bootstrap_url": bootstrap,
+        "hide_platform_chrome": True,
     }
 
 
