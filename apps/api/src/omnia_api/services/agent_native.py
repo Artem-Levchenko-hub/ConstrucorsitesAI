@@ -297,12 +297,23 @@ _STABLE_MAX_ENTRY_REQUIRED = (
     f"`{_STABLE_MAX_PRODUCT_ENTRY}` and create the real screen composition. Supporting types, "
     "notes, data, or styles do not satisfy this requirement."
 )
+_STABLE_MAX_PROGRESS_REQUIRED = (
+    "The product entry exists, but this build is not proven yet. Stop reading. Your next "
+    "action must write/edit a required component or run build to expose concrete errors."
+)
 _STABLE_MAX_FIRST_WRITE_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file"}
 ]
 _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_FIRST_WRITE_TOOLS[:-1],
     {**_STABLE_MAX_FIRST_WRITE_TOOLS[-1], "cache_control": _CACHE},
+]
+_STABLE_MAX_PROGRESS_TOOLS = [
+    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file", "build"}
+]
+_STABLE_MAX_PROGRESS_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_STABLE_MAX_PROGRESS_TOOLS[:-1],
+    {**_STABLE_MAX_PROGRESS_TOOLS[-1], "cache_control": _CACHE},
 ]
 
 # MAX has a narrower executor contract. Do not advertise operations which the
@@ -1161,13 +1172,23 @@ async def run_native_build(
         for step in step_numbers:
             if pending_visual_evaluation_step is not None and step > pending_visual_evaluation_step:
                 visual_evaluation_ready = True
-            force_product_write = stable_max_loop and (
-                (
-                    turns_without_product_entry >= _STABLE_MAX_FIRST_WRITE_AT
-                    and _STABLE_MAX_PRODUCT_ENTRY not in written
-                )
-                or (no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT and last_build_ok is False)
+            force_entry_write = (
+                stable_max_loop
+                and turns_without_product_entry >= _STABLE_MAX_FIRST_WRITE_AT
+                and _STABLE_MAX_PRODUCT_ENTRY not in written
             )
+            force_repair_write = (
+                stable_max_loop
+                and no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT
+                and last_build_ok is False
+            )
+            force_progress = (
+                stable_max_loop
+                and no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT
+                and _STABLE_MAX_PRODUCT_ENTRY in written
+                and (last_build_ok is None or wrote_since_build)
+            )
+            force_product_progress = force_entry_write or force_repair_write or force_progress
             call_stage = (
                 "build_plan"
                 if step == 0
@@ -1188,8 +1209,10 @@ async def run_native_build(
                     free=free,
                     stage=call_stage,
                     tools=(
-                        _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
-                        if force_product_write
+                        _STABLE_MAX_PROGRESS_TOOLS_CACHED
+                        if force_progress
+                        else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
+                        if force_entry_write or force_repair_write
                         else _STABLE_MAX_TOOLS_CACHED
                         if stable_max_loop
                         else _MAX_REFERENCE_TOOLS_CACHED
@@ -1417,13 +1440,19 @@ async def run_native_build(
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
                 if name == "done":
-                    if force_product_write:
+                    if force_product_progress:
                         results.append(
                             {
                                 "type": "tool_result",
                                 "tool_use_id": tu_id,
                                 "is_error": True,
-                                "content": _STABLE_MAX_WRITE_REQUIRED,
+                                "content": (
+                                    _STABLE_MAX_PROGRESS_REQUIRED
+                                    if force_progress
+                                    else _STABLE_MAX_ENTRY_REQUIRED
+                                    if force_entry_write
+                                    else _STABLE_MAX_WRITE_REQUIRED
+                                ),
                             }
                         )
                         continue
@@ -1512,7 +1541,12 @@ async def run_native_build(
                         )
 
                 obs: dict[str, Any]
-                if force_product_write and name not in {"write_file", "edit_file"}:
+                allowed_progress_tools = (
+                    {"write_file", "edit_file", "build"}
+                    if force_progress
+                    else {"write_file", "edit_file"}
+                )
+                if force_product_progress and name not in allowed_progress_tools:
                     # Some provider-compatible gateways keep earlier tool schemas
                     # available for the cached conversation even when this turn
                     # advertises only write/edit. Enforce the transition at the
@@ -1521,16 +1555,14 @@ async def run_native_build(
                     obs = {
                         "ok": False,
                         "error": (
-                            _STABLE_MAX_ENTRY_REQUIRED
-                            if _STABLE_MAX_PRODUCT_ENTRY not in written
+                            _STABLE_MAX_PROGRESS_REQUIRED
+                            if force_progress
+                            else _STABLE_MAX_ENTRY_REQUIRED
+                            if force_entry_write
                             else _STABLE_MAX_WRITE_REQUIRED
                         ),
                     }
-                elif (
-                    force_product_write
-                    and _STABLE_MAX_PRODUCT_ENTRY not in written
-                    and action.path != _STABLE_MAX_PRODUCT_ENTRY
-                ):
+                elif force_entry_write and action.path != _STABLE_MAX_PRODUCT_ENTRY:
                     obs = {"ok": False, "error": _STABLE_MAX_ENTRY_REQUIRED}
                 elif lifecycle_error:
                     obs = {"ok": False, "error": lifecycle_error}

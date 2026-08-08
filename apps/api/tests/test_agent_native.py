@@ -568,6 +568,63 @@ async def test_stable_max_supporting_files_cannot_postpone_product_entry(
 
 
 @pytest.mark.asyncio
+async def test_stable_max_forces_build_or_write_after_product_entry_stall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    executed_reads = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "content": "export default function ProductApp(){return <main>App</main>}",
+                    },
+                )
+            )
+        if calls <= agent_native._STABLE_MAX_FIRST_WRITE_AT + 1:
+            return _turn(("read_file", {"path": "src/lib/omnia/max-config.ts"}))
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 2:
+            assert {tool["name"] for tool in kwargs["tools"]} == {
+                "write_file",
+                "edit_file",
+                "build",
+            }
+            return _turn(("read_file", {"path": "src/lib/omnia/max-config.ts"}))
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
+            assert "product is not proven yet" in str(convo[-1])
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal executed_reads
+        if action.name == "read_file":
+            executed_reads += 1
+            return {"ok": True, "content": "managed integration"}
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="build full product",
+        execute=execute,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert executed_reads == agent_native._STABLE_MAX_FIRST_WRITE_AT
+
+
+@pytest.mark.asyncio
 async def test_stable_max_truncated_write_is_retried_as_smaller_components(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
