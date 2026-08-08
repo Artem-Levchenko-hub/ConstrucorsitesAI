@@ -314,9 +314,9 @@ _STABLE_MAX_ENTRY_NOW_REQUIRED = (
 def _stable_max_repair_required(paths: frozenset[str]) -> str:
     targets = ", ".join(f"`{path}`" for path in sorted(paths)) or "the file named by build"
     return (
-        f"The build is RED. Fix {targets} now using write_file or edit_file. "
-        "Do not read dependencies, rewrite unrelated files, or run build again before "
-        "applying a targeted repair. Preserve the rest of the product."
+        f"The build is RED. Fix {targets} now. You may read each failing file once, then "
+        "use write_file or edit_file. Do not read dependencies, rewrite unrelated files, "
+        "or run build again before applying a targeted repair. Preserve the rest of the product."
     )
 
 
@@ -326,6 +326,13 @@ _STABLE_MAX_FIRST_WRITE_TOOLS = [
 _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_FIRST_WRITE_TOOLS[:-1],
     {**_STABLE_MAX_FIRST_WRITE_TOOLS[-1], "cache_control": _CACHE},
+]
+_STABLE_MAX_REPAIR_TOOLS = [
+    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"read_file", "write_file", "edit_file"}
+]
+_STABLE_MAX_REPAIR_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_STABLE_MAX_REPAIR_TOOLS[:-1],
+    {**_STABLE_MAX_REPAIR_TOOLS[-1], "cache_control": _CACHE},
 ]
 _STABLE_MAX_PROGRESS_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file", "build"}
@@ -1084,6 +1091,7 @@ async def run_native_build(
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
     last_build_error_paths: frozenset[str] = frozenset()
+    repair_reads_since_build: set[str] = set()
     wrote_since_build = False
     no_write_turns = 0  # consecutive assistant turns with no successful write
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
@@ -1298,8 +1306,10 @@ async def run_native_build(
                         if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
                         else _STABLE_MAX_PROGRESS_TOOLS_CACHED
                         if force_progress
+                        else _STABLE_MAX_REPAIR_TOOLS_CACHED
+                        if force_repair_write
                         else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
-                        if force_entry_write or force_repair_write
+                        if force_entry_write
                         else _STABLE_MAX_TOOLS_CACHED
                         if stable_max_loop
                         else _MAX_REFERENCE_TOOLS_CACHED
@@ -1638,6 +1648,8 @@ async def run_native_build(
                 allowed_progress_tools = (
                     {"write_file", "edit_file", "build"}
                     if force_progress
+                    else {"read_file", "write_file", "edit_file"}
+                    if force_repair_write
                     else {"write_file", "edit_file"}
                 )
                 if (
@@ -1663,6 +1675,18 @@ async def run_native_build(
                             if force_repair_write
                             else _STABLE_MAX_WRITE_REQUIRED
                         ),
+                    }
+                elif (
+                    force_repair_write
+                    and name == "read_file"
+                    and (
+                        action.path not in last_build_error_paths
+                        or action.path in repair_reads_since_build
+                    )
+                ):
+                    obs = {
+                        "ok": False,
+                        "error": _stable_max_repair_required(last_build_error_paths),
                     }
                 elif (
                     force_repair_write
@@ -1739,9 +1763,12 @@ async def run_native_build(
                             str(obs.get("error") or obs.get("detail") or "")
                         )
                     )
+                    repair_reads_since_build.clear()
                     wrote_since_build = False
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
+                    if force_repair_write and name == "read_file":
+                        repair_reads_since_build.add(action.path)
                     if name == "read_skill":
                         skill_id = str(action.args.get("skill") or "").strip().casefold()
                         if skill_id:

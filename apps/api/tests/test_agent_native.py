@@ -822,12 +822,19 @@ async def test_stable_max_red_build_forces_a_repair_write(
             return _turn(("build", {}))
         if calls == 3:
             assert {tool["name"] for tool in kwargs["tools"]} == {
+                "read_file",
                 "write_file",
                 "edit_file",
             }
             return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
         if calls == 4:
+            assert "current file" in str(convo[-1])
+            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
+        if calls == 5:
             assert "build is RED" in str(convo[-1])
+            return _turn(("read_file", {"path": "src/components/product/types.ts"}))
+        if calls == 6:
+            assert "ProductApp.tsx" in str(convo[-1])
             return _turn(
                 (
                     "write_file",
@@ -837,7 +844,7 @@ async def test_stable_max_red_build_forces_a_repair_write(
                     },
                 )
             )
-        if calls == 5:
+        if calls == 7:
             assert "ProductApp.tsx" in str(convo[-1])
             return _turn(
                 (
@@ -850,7 +857,7 @@ async def test_stable_max_red_build_forces_a_repair_write(
                     },
                 )
             )
-        if calls == 6:
+        if calls == 8:
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
 
@@ -886,7 +893,7 @@ async def test_stable_max_red_build_forces_a_repair_write(
     )
 
     assert result.done is True
-    assert executed_reads == 0
+    assert executed_reads == 1
     assert builds == 2
     assert result.files["src/components/product/ProductApp.tsx"].endswith("fixed</main>}")
     assert "build is RED" in str(result.transcript)
