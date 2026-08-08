@@ -410,6 +410,11 @@ _STABLE_MAX_PROOF_REQUIRED = (
     "Run runtime_check and see now; if see reports a concrete issue, edit it on the "
     "following turn, rebuild, and verify again."
 )
+_STABLE_MAX_VISUAL_REPAIR_REQUIRED = (
+    "A concrete visual issue is already known. Stop searching or rereading. "
+    "Write or edit the product now to apply that visual feedback; then rebuild "
+    "and verify the rendered result again."
+)
 _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED = [
     {
         **_tool(
@@ -1399,6 +1404,11 @@ async def run_native_build(
                 and completion_gap is not None
                 and ("runtime_check" in completion_gap or completion_gap.startswith("Run see"))
             )
+            force_visual_repair = (
+                stable_max_loop
+                and visual_feedback_step is not None
+                and step >= visual_feedback_step + 2
+            )
             force_product_progress = (
                 force_entry_write or force_repair_write or force_repair_verify or force_progress
             )
@@ -1426,6 +1436,8 @@ async def run_native_build(
                         if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
                         else _STABLE_MAX_PROOF_TOOLS_CACHED
                         if force_proof
+                        else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
+                        if force_visual_repair
                         else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
                         if force_repair_verify
                         else _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED
@@ -1809,6 +1821,11 @@ async def run_native_build(
                     # execution too, otherwise repeated read/grep calls can spend
                     # the entire generation budget after a green build.
                     obs = {"ok": False, "error": _STABLE_MAX_PROOF_REQUIRED}
+                elif force_visual_repair and name not in {"write_file", "edit_file"}:
+                    # After one turn to inspect the concrete visual verdict,
+                    # further search only inflates paid context and can hit the
+                    # provider rate limit before the known repair is applied.
+                    obs = {"ok": False, "error": _STABLE_MAX_VISUAL_REPAIR_REQUIRED}
                 elif (
                     entry_focus_compacted
                     and _STABLE_MAX_PRODUCT_ENTRY not in written

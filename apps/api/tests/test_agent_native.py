@@ -1577,6 +1577,99 @@ async def test_stable_max_reopens_editing_after_actionable_visual_feedback(
 
 
 @pytest.mark.asyncio
+async def test_stable_max_forces_known_visual_repair_after_one_inspection_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    advertised: list[set[str]] = []
+    executed: list[str] = []
+    turns = iter(
+        [
+            _turn(
+                (
+                    "write_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "content": "first",
+                    },
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+            _turn(("read_file", {"path": agent_native._STABLE_MAX_PRODUCT_ENTRY})),
+            _turn(("grep", {"path": "src", "query": "hero"})),
+            _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "old_string": "first",
+                        "new_string": "polished",
+                    },
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+        ]
+    )
+    see_calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        advertised.append({str(tool["name"]) for tool in kwargs["tools"]})
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        executed.append(action.name)
+        if action.name == "see":
+            see_calls += 1
+            return {
+                "ok": True,
+                "needs_fix": see_calls == 1,
+                "detail": "Make the hero compact.",
+            }
+        if action.name == "edit_file":
+            return {"ok": True, "content": "polished", "detail": "updated"}
+        return {
+            "ok": True,
+            "content": action.args.get("content", "first"),
+            "detail": "clean",
+        }
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        if not files:
+            return "source missing"
+        if not evidence.get("runtime_check_after_write"):
+            return "Run runtime_check on the finished product after the last source write."
+        if not evidence.get("see_after_write"):
+            return "Run see once through the signed MAX preview after the last source write."
+        return None
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="build the complete app",
+        execute=execute,
+        completion_check=complete,
+        max_steps=14,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert result.files[agent_native._STABLE_MAX_PRODUCT_ENTRY] == "polished"
+    assert advertised[5:7] == [
+        {"write_file", "edit_file"},
+        {"write_file", "edit_file"},
+    ]
+    assert "grep" not in executed
+
+
+@pytest.mark.asyncio
 async def test_max_runtime_stops_after_provider_failure_without_paid_replay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
