@@ -57,8 +57,11 @@ class Settings(BaseSettings):
     # Native-agent financial fuse. It is independent from the restored bounded
     # Sonnet loop and applies to free runs too: ``free`` means the customer
     # wallet is not debited, not that provider spend is unlimited.
-    native_run_max_cost_rub: float = 1200.0
-    native_run_max_provider_cost_usd: float = 2.5
+    # A complete MAX build can legitimately need several long composition and
+    # repair calls. Keep a generous per-run envelope; the independent request
+    # count remains the absolute emergency brake against an infinite loop.
+    native_run_max_cost_rub: float = 5000.0
+    native_run_max_provider_cost_usd: float = 10.0
     native_run_max_requests: int = 80
 
     # Read timeout for one long agentic pass, which can spend tens of

@@ -416,8 +416,8 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     assert reserve_kwargs["reserved_provider_cost_usd"] > Decimal("0")
     assert reserve_kwargs["reserved_provider_cost_usd"] != Decimal("0.35")
     assert reserve_kwargs["max_requests"] == 80
-    assert reserve_kwargs["max_cost_rub"] == Decimal("1200.0")
-    assert reserve_kwargs["max_provider_cost_usd"] == Decimal("2.5")
+    assert reserve_kwargs["max_cost_rub"] == Decimal("5000.0")
+    assert reserve_kwargs["max_provider_cost_usd"] == Decimal("10.0")
 
 
 def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
