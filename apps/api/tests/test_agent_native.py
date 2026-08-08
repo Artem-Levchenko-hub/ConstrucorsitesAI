@@ -30,12 +30,19 @@ def test_generic_native_agent_and_autoheal_keep_primary_model() -> None:
     assert autoheal._HEAL_MODEL == "gemini-3.1-pro-preview-customtools"
 
 
-def test_max_native_prompt_uses_the_stable_generic_tool_loop() -> None:
-    prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT\nBuild the app")
+def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
+    prompt = agent_native.native_system_prompt(
+        "MAX PLATFORM CORE CONTRACT\nBuild the app",
+        stable_max_loop=True,
+    )
 
-    assert "автономный инженер" in prompt
+    assert "один непрерывный проход" in prompt
+    assert "сразу напиши весь продукт" in prompt
     assert "MAX PLATFORM CORE CONTRACT" in prompt
     assert "MAX PRODUCT STUDIO" not in prompt
+    assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" not in prompt
+    assert "Sonnet" not in prompt
+    assert "Gemini" not in prompt
     assert "read_skill" not in prompt
     names = {tool["name"] for tool in agent_native._TOOLS_CACHED}
     assert {"read_file", "write_file", "build", "done"} <= names
@@ -45,6 +52,13 @@ def test_max_native_prompt_uses_the_stable_generic_tool_loop() -> None:
     assert {"read_file", "write_file", "build", "done"} <= stable_names
     ceremony = {"plan_task", "update_plan", "discover_capabilities", "call_capability"}
     assert not (ceremony & stable_names)
+
+
+def test_generic_native_prompt_stays_unchanged_outside_max() -> None:
+    prompt = agent_native.native_system_prompt("Build the web app")
+
+    assert "автономный инженер" in prompt
+    assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" in prompt
 
 
 def test_legacy_reference_flags_do_not_change_the_stable_prompt() -> None:
@@ -328,6 +342,62 @@ async def test_native_no_write_guard_nudges_then_aborts(
     assert res.stop_reason == "exploring"
     assert res.steps == agent_native._NO_WRITE_ABORT_AT
     assert "[LOOP GUARD]" in str(res.transcript)  # the nudge actually landed
+
+
+@pytest.mark.asyncio
+async def test_stable_max_loop_forces_a_first_write_after_bounded_exploration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[set[str]] = []
+    executed_reads = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        names = {tool["name"] for tool in kwargs["tools"]}
+        calls.append(names)
+        if "read_file" in names and len(calls) <= agent_native._STABLE_MAX_FIRST_WRITE_AT:
+            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
+        if names == {"write_file", "edit_file"}:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": (
+                            "export default function ProductApp(){return <main>Готово</main>}"
+                        ),
+                    },
+                )
+            )
+        if len(calls) == agent_native._STABLE_MAX_FIRST_WRITE_AT + 2:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal executed_reads
+        if action.name == "read_file":
+            executed_reads += 1
+            return {"ok": True, "content": "starter"}
+        if action.name == "write_file":
+            return {"ok": True, "content": action.args["content"]}
+        return {"ok": True, "detail": "clean"}
+
+    result = await agent_native.run_native_build(
+        system="MAX starter",
+        task="build product",
+        execute=execute,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "done"
+    assert executed_reads == agent_native._STABLE_MAX_FIRST_WRITE_AT
+    assert calls[agent_native._STABLE_MAX_FIRST_WRITE_AT] == {"write_file", "edit_file"}
+    assert "src/components/product/ProductApp.tsx" in result.files
 
 
 @pytest.mark.asyncio

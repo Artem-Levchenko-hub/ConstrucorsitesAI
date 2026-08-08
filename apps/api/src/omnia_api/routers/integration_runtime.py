@@ -199,7 +199,7 @@ async def runtime_integration_status(
     return RuntimeIntegrationStatus(
         providers=sorted(connections),
         capabilities=sorted(
-            {"Управляемый Sonnet 5"}
+            {"Встроенный AI"}
             | {
                 capability
                 for connection in connections.values()
@@ -253,7 +253,7 @@ async def request_runtime_ai(
     session: SessionDep,
     x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
 ) -> RuntimeAIPublic:
-    """Run real owner-funded Sonnet inference without exposing provider keys."""
+    """Run managed owner-funded AI without exposing provider keys or routing."""
 
     context = await _runtime_context(session, project_id, x_max_init_data)
     await _enforce_runtime_ai_limits(project_id, context.max_user_id)
@@ -310,7 +310,7 @@ async def request_runtime_ai(
             "ИИ не вернул ответ. Попробуйте ещё раз.",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    return RuntimeAIPublic(answer=answer.strip(), model=MAX_STUDIO_LLM_MODEL)
+    return RuntimeAIPublic(answer=answer.strip(), model="managed-ai")
 
 
 @router.post("/{project_id}/payments", response_model=RuntimePaymentPublic)

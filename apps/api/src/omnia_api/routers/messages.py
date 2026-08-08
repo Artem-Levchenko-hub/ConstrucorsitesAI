@@ -4034,7 +4034,7 @@ async def _process_prompt(
                             "path": "",
                             "detail": (
                                 f"Готовлю {len(_starter_files)} файлов рабочего MAX starter; "
-                                "затем Sonnet 5 соберёт продукт."
+                                "затем AI-агент соберёт продукт."
                             ),
                             "ok": True,
                         },
@@ -4066,10 +4066,10 @@ async def _process_prompt(
                             {
                                 "step": 0,
                                 "action": "build",
-                                "human": "Основа готова — запускаю Sonnet 5",
+                                "human": "Основа готова — запускаю AI-сборку",
                                 "path": "",
                                 "detail": (
-                                    "MAX starter собирается чисто; Sonnet 5 начинает "
+                                    "MAX starter собирается чисто; AI-агент начинает "
                                     "полную сборку продукта."
                                 ),
                                 "ok": True,
@@ -4109,7 +4109,7 @@ async def _process_prompt(
                             "human": "Не удалось подготовить чистое ядро MAX",
                             "path": "",
                             "detail": (
-                                "Sonnet 5 не запущен, чтобы не тратить деньги на "
+                                "AI-агент не запущен, чтобы не тратить деньги на "
                                 "генерацию поверх старого шаблона."
                             ),
                             "ok": False,
@@ -4131,6 +4131,8 @@ async def _process_prompt(
                     system=agent_native.native_system_prompt(
                         _stack_guide or "",
                         _skills,
+                        stable_max_loop=project_template == "max_miniapp",
+                        stable_max_edit=(project_template == "max_miniapp" and _is_edit),
                     ),
                     task=_agent_user,
                     execute=_agent_executor,
@@ -4191,7 +4193,7 @@ async def _process_prompt(
                 _agent_res = agent_builder.AgentResult(
                     done=False,
                     summary=(
-                        "Sonnet 5 не внёс ни одного изменения в MAX-приложение; "
+                        "AI-агент не внёс ни одного изменения в MAX-приложение; "
                         "неизменённый шаблон не засчитан как готовая генерация."
                     ),
                     files={},

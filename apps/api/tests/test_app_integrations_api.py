@@ -306,7 +306,8 @@ async def test_bound_integration_is_available_to_signed_max_runtime(
     assert runtime.status_code == 200
     assert runtime.json()["providers"] == ["yookassa"]
     assert "Оплата" in runtime.json()["capabilities"]
-    assert "Управляемый Sonnet 5" in runtime.json()["capabilities"]
+    assert "Встроенный AI" in runtime.json()["capabilities"]
+    assert "Sonnet" not in runtime.text
 
     string_user = await client.get(
         f"/api/runtime/projects/{project_id}/integrations",
@@ -365,7 +366,8 @@ async def test_signed_max_runtime_can_call_managed_ai_without_a_client_key(
 
     assert response.status_code == 200
     assert "ходьбы" in response.json()["answer"]
-    assert response.json()["model"] == "claude-sonnet-5"
+    assert response.json()["model"] == "managed-ai"
+    assert "sonnet" not in response.text.lower()
     assert captured["user_id"] == str(project.owner_id)
     assert captured["project_id"] == str(project.id)
     assert captured["stage"] == "runtime_ai"

@@ -278,6 +278,20 @@ _STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     {**_STABLE_MAX_TOOLS[-1], "cache_control": _CACHE},
 ]
 
+# A first MAX build already starts from a clean, known starter. Four model turns
+# are ample to inspect its small product surface. After that, expose only write
+# tools until the first real product change lands. This turns the no-write nudge
+# into an enforceable cost boundary instead of letting a model re-read the same
+# files until the generic 12-turn explore guard aborts the generation.
+_STABLE_MAX_FIRST_WRITE_AT = 4
+_STABLE_MAX_FIRST_WRITE_TOOLS = [
+    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file"}
+]
+_STABLE_MAX_FIRST_WRITE_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_STABLE_MAX_FIRST_WRITE_TOOLS[:-1],
+    {**_STABLE_MAX_FIRST_WRITE_TOOLS[-1], "cache_control": _CACHE},
+]
+
 # MAX has a narrower executor contract. Do not advertise operations which the
 # server will always reject or which authenticate through the generic web
 # harness (probe/isolation). Gemini otherwise spends turns discovering the
@@ -748,7 +762,7 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
 )
 
 _MAX_REFERENCE_PREAMBLE = (
-    "Ты — автономный Google AI-агент, который за один непрерывный проход строит "
+    "Ты — автономный AI-агент, который за один непрерывный проход строит "
     "полноценный MAX Mini App. Работай прямо с проектом: коротко изучи защищённое "
     "ядро, затем сразу напиши весь продукт по брифу — экраны, навигацию, состояния, "
     "взаимодействия и аккуратный mobile-first дизайн. Не используй визуальный шаблон, "
@@ -769,7 +783,7 @@ _MAX_REFERENCE_PREAMBLE = (
 )
 
 _MAX_REFERENCE_EDIT_PREAMBLE = (
-    "Ты — автономный Google AI-агент для точечной правки существующего MAX Mini App. "
+    "Ты — автономный AI-агент для точечной правки существующего MAX Mini App. "
     "Сначала прочитай только целевой участок, затем внеси минимальное изменение, "
     "сохрани все остальные экраны, данные и сценарии. Не переписывай весь продукт, "
     "не меняй визуальное направление без прямого запроса и не трогай управляемое "
@@ -783,6 +797,8 @@ def native_system_prompt(
     stack_guide: str,
     skills: str | None = None,
     *,
+    stable_max_loop: bool = False,
+    stable_max_edit: bool = False,
     reference_max_loop: bool = False,
     reference_max_edit: bool = False,
 ) -> str:
@@ -790,11 +806,16 @@ def native_system_prompt(
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
     guide = (stack_guide or "").strip()
-    # MAX used the generic native Anthropic loop before the Gemini migration.
-    # Keep the compatibility kwargs so callers and old transcripts remain valid,
-    # but do not inject Gemini-only lifecycle/skill/reference protocols.
+    # The stable MAX path needs a short product-first preamble. The generic web
+    # prompt advertises unavailable planning/probe tools and is large enough to
+    # encourage repeated exploration of the already-known starter.
     _ = reference_max_loop, reference_max_edit
-    parts = [_NATIVE_PREAMBLE, guide]
+    parts = [
+        (_MAX_REFERENCE_EDIT_PREAMBLE if stable_max_edit else _MAX_REFERENCE_PREAMBLE)
+        if stable_max_loop
+        else _NATIVE_PREAMBLE,
+        guide,
+    ]
     if skills and skills.strip():
         parts.append(skills.strip())
     return "\n\n".join(p for p in parts if p)
@@ -1143,7 +1164,11 @@ async def run_native_build(
                     free=free,
                     stage=call_stage,
                     tools=(
-                        _STABLE_MAX_TOOLS_CACHED
+                        _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
+                        if stable_max_loop
+                        and not written
+                        and no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT
+                        else _STABLE_MAX_TOOLS_CACHED
                         if stable_max_loop
                         else _MAX_REFERENCE_TOOLS_CACHED
                         if reference_max_loop
@@ -1575,7 +1600,8 @@ async def run_native_build(
                 no_write_turns = 0
             else:
                 no_write_turns += 1
-                if _NO_WRITE_NUDGE_AT <= no_write_turns and (
+                _nudge_at = _STABLE_MAX_FIRST_WRITE_AT if stable_max_loop else _NO_WRITE_NUDGE_AT
+                if _nudge_at <= no_write_turns and (
                     unbounded_max_runtime or no_write_turns < _NO_WRITE_ABORT_AT
                 ):
                     results.append(
