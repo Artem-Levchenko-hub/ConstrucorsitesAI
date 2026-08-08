@@ -45,6 +45,7 @@ _MODEL = PRIMARY_LLM_MODEL
 # while cutting the reserve ~35%. Env override: NATIVE_MAX_TOKENS (future).
 _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
+_ENTRY_FOCUS_THINKING_BUDGET = 2000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
 _CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside one cycle
@@ -909,13 +910,14 @@ async def _call_messages(
     stage: str = "native_agent",
     tools: list[dict[str, Any]] | None = None,
     model: str = _MODEL,
+    thinking_budget: int = _THINKING_BUDGET,
 ) -> dict[str, Any]:
     """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
     Anthropic response dict, or raises the last error."""
     payload: dict[str, Any] = {
         "model": model,
         "max_tokens": _MAX_TOKENS,
-        "thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGET},
+        "thinking": {"type": "enabled", "budget_tokens": thinking_budget},
         # Prompt caching: cache the stable system prompt + tool schemas, and a
         # moving breakpoint on the transcript tail (see _with_incremental_cache).
         "system": _system_blocks(system),
@@ -1289,6 +1291,11 @@ async def run_native_build(
                         else _TOOLS_CACHED
                     ),
                     model=model,
+                    thinking_budget=(
+                        _ENTRY_FOCUS_THINKING_BUDGET
+                        if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
+                        else _THINKING_BUDGET
+                    ),
                 )
             except SpendBudgetExceeded:
                 log.warning("agent_native.spend_budget_exhausted", step=step)

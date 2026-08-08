@@ -608,6 +608,7 @@ async def test_stable_max_compacts_to_entry_only_after_support_budget(
         if calls == 2:
             assert len(convo) == 1
             assert "[FOCUSED PRODUCT ENTRY]" in str(convo[0])
+            assert kwargs["thinking_budget"] == agent_native._ENTRY_FOCUS_THINKING_BUDGET
             assert {tool["name"] for tool in kwargs["tools"]} == {"write_file"}
             path_schema = kwargs["tools"][0]["input_schema"]["properties"]["path"]
             assert path_schema["enum"] == [agent_native._STABLE_MAX_PRODUCT_ENTRY]
@@ -627,6 +628,7 @@ async def test_stable_max_compacts_to_entry_only_after_support_budget(
                 )
             )
         if calls == 4:
+            assert kwargs["thinking_budget"] == agent_native._THINKING_BUDGET
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
 
