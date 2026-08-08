@@ -206,7 +206,7 @@ def _reference_max_completion_gap(
 
     if not written:
         return (
-            "The Google agent has not changed a product file yet. "
+            "The agent has not changed a product file yet. "
             "Implement the requested MAX app before finishing."
         )
     if source_gap:
@@ -217,7 +217,7 @@ def _reference_max_completion_gap(
             return (
                 "A fresh MAX build must replace "
                 "src/components/product/ProductApp.tsx with a real product, not only "
-                "CSS, a placeholder or platform core."
+                "CSS or a placeholder."
             )
     if evidence.get("runtime_check_after_write", 0) < 1:
         return (
@@ -4111,7 +4111,17 @@ async def _process_prompt(
                     message_id=str(assistant_message_id),
                     free=is_free,
                     emit=_agent_emit,
-                    completion_check=None,
+                    completion_check=(
+                        (
+                            lambda written, evidence: _reference_max_completion_gap(
+                                written,
+                                evidence,
+                                require_product_entry=not _max_has_generated_snapshot,
+                            )
+                        )
+                        if project_template == "max_miniapp"
+                        else None
+                    ),
                     reference_max_loop=False,
                     max_steps=_agent_steps,
                     model=(

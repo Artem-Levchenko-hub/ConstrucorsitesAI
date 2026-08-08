@@ -50,6 +50,7 @@ _HTTP_TIMEOUT_S = 300.0
 _CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside one cycle
 _MAX_PROVIDER_RECONNECT_CYCLES = 3
 _MAX_TRUNCATED_WRITE_ABORT_AT = 2
+_STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
@@ -290,6 +291,11 @@ _STABLE_MAX_FIRST_WRITE_AT = 4
 _STABLE_MAX_WRITE_REQUIRED = (
     "A product write is now required. Use write_file or edit_file; "
     "read/list/grep/build/done calls are disabled until one product file is written."
+)
+_STABLE_MAX_ENTRY_REQUIRED = (
+    "The main product entry is still unchanged. Your next successful write/edit MUST target "
+    f"`{_STABLE_MAX_PRODUCT_ENTRY}` and create the real screen composition. Supporting types, "
+    "notes, data, or styles do not satisfy this requirement."
 )
 _STABLE_MAX_FIRST_WRITE_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file"}
@@ -1012,6 +1018,7 @@ async def run_native_build(
     visual_evaluation_ready = False
     provider_reconnect_cycles = 0
     truncated_no_write_turns = 0
+    turns_without_product_entry = 0
 
     max_runtime = "MAX VERIFICATION OVERRIDE" in system or reference_max_loop
     max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
@@ -1154,10 +1161,12 @@ async def run_native_build(
         for step in step_numbers:
             if pending_visual_evaluation_step is not None and step > pending_visual_evaluation_step:
                 visual_evaluation_ready = True
-            force_product_write = (
-                stable_max_loop
-                and no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT
-                and (not written or last_build_ok is False)
+            force_product_write = stable_max_loop and (
+                (
+                    turns_without_product_entry >= _STABLE_MAX_FIRST_WRITE_AT
+                    and _STABLE_MAX_PRODUCT_ENTRY not in written
+                )
+                or (no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT and last_build_ok is False)
             )
             call_stage = (
                 "build_plan"
@@ -1511,8 +1520,18 @@ async def run_native_build(
                     # more paid turns after the bounded exploration window.
                     obs = {
                         "ok": False,
-                        "error": _STABLE_MAX_WRITE_REQUIRED,
+                        "error": (
+                            _STABLE_MAX_ENTRY_REQUIRED
+                            if _STABLE_MAX_PRODUCT_ENTRY not in written
+                            else _STABLE_MAX_WRITE_REQUIRED
+                        ),
                     }
+                elif (
+                    force_product_write
+                    and _STABLE_MAX_PRODUCT_ENTRY not in written
+                    and action.path != _STABLE_MAX_PRODUCT_ENTRY
+                ):
+                    obs = {"ok": False, "error": _STABLE_MAX_ENTRY_REQUIRED}
                 elif lifecycle_error:
                     obs = {"ok": False, "error": lifecycle_error}
                 else:
@@ -1678,6 +1697,10 @@ async def run_native_build(
                     )
                     if emit:
                         await emit("agent.stalled", {"step": step})
+            if _STABLE_MAX_PRODUCT_ENTRY in written:
+                turns_without_product_entry = 0
+            else:
+                turns_without_product_entry += 1
             convo.append({"role": "user", "content": results})
             if truncated_no_write_turns >= _MAX_TRUNCATED_WRITE_ABORT_AT:
                 log.warning(

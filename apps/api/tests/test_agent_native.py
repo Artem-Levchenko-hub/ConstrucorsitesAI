@@ -93,7 +93,8 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "agent_native.run_native_build" in source
     assert "build_max_product_contract" not in source
     assert "completion_check=max_completion_gap" not in source
-    assert "completion_check=None" in source
+    assert "_reference_max_completion_gap" in source
+    assert "require_product_entry=not _max_has_generated_snapshot" in source
     assert "reference_max_loop=False" in source
     assert "max_steps=_agent_steps" in source
     assert "model=(" in source
@@ -501,7 +502,69 @@ async def test_stable_max_first_write_is_enforced_when_provider_reuses_old_tools
 
     assert result.done is True
     assert executed_reads == agent_native._STABLE_MAX_FIRST_WRITE_AT
-    assert "A product write is now required" in str(result.transcript)
+    assert "main product entry is still unchanged" in str(result.transcript)
+
+
+@pytest.mark.asyncio
+async def test_stable_max_supporting_files_cannot_postpone_product_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    executed_paths: list[str] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls <= agent_native._STABLE_MAX_FIRST_WRITE_AT:
+            return _turn(("read_file", {"path": "src/lib/omnia/max-config.ts"}))
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 1:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/types.ts",
+                        "content": "export type Item = { id: string }",
+                    },
+                )
+            )
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 2:
+            assert "main product entry is still unchanged" in str(convo[-1])
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": (
+                            "export default function ProductApp(){return <main>Full app</main>}"
+                        ),
+                    },
+                )
+            )
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name in {"write_file", "edit_file"}:
+            executed_paths.append(action.path)
+            return {"ok": True, "content": action.args.get("content", "")}
+        return {"ok": True, "content": "starter", "detail": "clean"}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="build full product",
+        execute=execute,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert executed_paths == [agent_native._STABLE_MAX_PRODUCT_ENTRY]
+    assert "src/components/product/types.ts" not in result.files
 
 
 @pytest.mark.asyncio
