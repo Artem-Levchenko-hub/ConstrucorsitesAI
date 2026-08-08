@@ -90,12 +90,13 @@ async def see_page(
     # agent through another paid reasoning turn just to call ``see`` again.
     verdict = None
     attempts = _VISION_AUDIT_ATTEMPTS if product_kind == "max_miniapp" else 1
-    for _attempt in range(attempts):
+    for attempt in range(attempts):
         verdict = await vision_audit.audit_screenshots(
             shots,
             prompt_context=prompt_context,
             project_id=str(pid),
             product_kind=product_kind,
+            retry_index=attempt,
         )
         if not verdict.skipped:
             break

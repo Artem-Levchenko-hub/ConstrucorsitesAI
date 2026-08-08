@@ -215,6 +215,7 @@ async def audit_screenshots(
     project_id: str | None = None,
     model: str | None = None,
     product_kind: str = "web",
+    retry_index: int = 0,
 ) -> VisionVerdict:
     """Send screenshots to a vision model and return its verdict.
 
@@ -242,6 +243,18 @@ async def audit_screenshots(
     )
     if prompt_context:
         intro += f"\nЗапрос пользователя: «{prompt_context[:300]}»"
+    intro += (
+        "\nФормат проверки: compact-v2. Верни не более четырёх issues; "
+        "каждая правка — не длиннее 180 символов."
+    )
+    if retry_index > 0:
+        # The gateway caches non-streaming responses by model + messages. A
+        # distinct retry instruction prevents an invalid/truncated first answer
+        # from being served from cache again verbatim.
+        intro += (
+            f"\nПовтор формата {retry_index + 1}: предыдущий ответ не удалось "
+            "разобрать. Верни только короткий завершённый JSON-объект."
+        )
     content: list[dict[str, object]] = [{"type": "text", "text": intro}]
     for w, png in sorted(chosen.items(), reverse=True):
         label = "десктоп" if w >= 1000 else "телефон"
@@ -258,7 +271,7 @@ async def audit_screenshots(
             model,
             user_id=user_id,
             project_id=project_id,
-            max_tokens=1000,
+            max_tokens=1800,
         )
     except PaidCallAmbiguousError:
         raise

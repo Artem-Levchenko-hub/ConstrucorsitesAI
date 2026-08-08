@@ -93,3 +93,33 @@ async def test_max_audit_uses_mobile_product_rubric_and_phone_widths(monkeypatch
     assert "390px" in text and "360px" in text
     assert "1440px" not in text
     assert sum(block.get("type") == "image_url" for block in captured["content"]) == 2
+
+
+async def test_max_audit_retry_busts_invalid_cached_answer_and_allows_complete_json(
+    monkeypatch,
+):
+    captured = {}
+
+    async def fake_complete(messages, model, **kw):
+        captured["content"] = messages[1]["content"]
+        captured["max_tokens"] = kw["max_tokens"]
+        return '{"verdict":"generic","score":6,"issues":["Сделай CTA заметнее"]}'
+
+    monkeypatch.setattr(vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": False})())
+    monkeypatch.setattr(vision_audit, "complete_chat", fake_complete)
+
+    verdict = await vision_audit.audit_screenshots(
+        {390: b"PHONE", 360: b"COMPACT"},
+        prompt_context="фитнес",
+        product_kind="max_miniapp",
+        model="vision-test",
+        retry_index=1,
+    )
+
+    assert verdict.skipped is False
+    assert captured["max_tokens"] == 1800
+    text = "\n".join(
+        str(block.get("text", "")) for block in captured["content"] if block.get("type") == "text"
+    )
+    assert "compact-v2" in text
+    assert "Повтор формата 2" in text
