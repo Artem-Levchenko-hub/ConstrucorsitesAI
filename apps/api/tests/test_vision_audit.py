@@ -27,6 +27,28 @@ def test_parse_garbage_is_skipped():
     assert _parse("totally not json").skipped is True
 
 
+def test_parse_salvages_truncated_negative_verdict_for_repair():
+    raw = (
+        '{"verdict":"broken","score":3,"issues":['
+        '"Нижняя навигация перекрывает контент — добавь safe-area отступ'
+    )
+
+    verdict = _parse(raw)
+
+    assert verdict.skipped is False
+    assert verdict.verdict == "broken"
+    assert verdict.score == 3
+    assert verdict.issues == (
+        "Нижняя навигация перекрывает контент — добавь safe-area отступ",
+    )
+
+
+def test_parse_never_salvages_truncated_beautiful_as_green_proof():
+    raw = '{"verdict":"beautiful","score":9,"issues":['
+
+    assert _parse(raw).skipped is True
+
+
 def test_score_is_clamped():
     assert _parse('{"verdict":"broken","score":99}').score == 10
     assert _parse('{"verdict":"broken","score":-4}').score == 0
@@ -117,9 +139,11 @@ async def test_max_audit_retry_busts_invalid_cached_answer_and_allows_complete_j
     )
 
     assert verdict.skipped is False
-    assert captured["max_tokens"] == 1800
+    assert captured["max_tokens"] == 4000
     text = "\n".join(
         str(block.get("text", "")) for block in captured["content"] if block.get("type") == "text"
     )
-    assert "compact-v2" in text
+    assert "compact-v3" in text
+    assert "не длиннее 500 символов" in text
+    assert "не более двух issues" in text
     assert "Повтор формата 2" in text

@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -177,8 +178,102 @@ def _coerce_score(value: object) -> int:
         return 0
 
 
+_NEGATIVE_VERDICT_RE = re.compile(
+    r'["\u201c\u201d]verdict["\u201c\u201d]\s*:\s*["\u201c\u201d](broken|generic)["\u201c\u201d]',
+    re.IGNORECASE,
+)
+_SCORE_RE = re.compile(
+    r'["\u201c\u201d]score["\u201c\u201d]\s*:\s*(-?\d+(?:\.\d+)?)',
+    re.IGNORECASE,
+)
+_ISSUES_RE = re.compile(r'["\u201c\u201d]issues["\u201c\u201d]\s*:\s*\[', re.IGNORECASE)
+_COMPLETE_JSON_STRING_RE = re.compile(r'"((?:\\.|[^"\\])*)"', re.DOTALL)
+
+
+def _decode_json_string_fragment(value: str) -> str:
+    """Decode complete JSON escapes while tolerating a cut-off final escape."""
+    out: list[str] = []
+    pos = 0
+    escapes = {
+        '"': '"',
+        "\\": "\\",
+        "/": "/",
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+    }
+    while pos < len(value):
+        char = value[pos]
+        if char != "\\":
+            out.append(char)
+            pos += 1
+            continue
+        if pos + 1 >= len(value):
+            break
+        escaped = value[pos + 1]
+        if escaped == "u" and pos + 5 < len(value):
+            hex_value = value[pos + 2 : pos + 6]
+            if all(char in "0123456789abcdefABCDEF" for char in hex_value):
+                out.append(chr(int(hex_value, 16)))
+                pos += 6
+                continue
+        out.append(escapes.get(escaped, escaped))
+        pos += 2
+    return " ".join("".join(out).split()).strip(" `,]}")
+
+
+def _salvage_negative_verdict(raw: str) -> VisionVerdict | None:
+    """Recover an explicit negative verdict from truncated model JSON.
+
+    A malformed ``beautiful`` answer must never become green proof. Negative
+    verdicts are safe to recover because they keep the visual gate closed and
+    let the repair loop use any complete or partial concrete issue text.
+    """
+    verdict_match = _NEGATIVE_VERDICT_RE.search(raw)
+    score_match = _SCORE_RE.search(raw)
+    if verdict_match is None or score_match is None:
+        return None
+
+    issues: list[str] = []
+    issues_match = _ISSUES_RE.search(raw)
+    if issues_match is not None:
+        remainder = raw[issues_match.end() :]
+        last_end = 0
+        for match in _COMPLETE_JSON_STRING_RE.finditer(remainder):
+            decoded = _decode_json_string_fragment(match.group(1))
+            if decoded:
+                issues.append(decoded[:180])
+            last_end = match.end()
+            if len(issues) >= 2:
+                break
+        if len(issues) < 2:
+            partial_start = remainder.find('"', last_end)
+            if partial_start != -1:
+                partial = _decode_json_string_fragment(remainder[partial_start + 1 :])
+                if len(partial) >= 12:
+                    issues.append(partial[:180])
+
+    verdict = verdict_match.group(1).lower()
+    score = _coerce_score(score_match.group(1))
+    log.warning(
+        "metric=vision_parse_salvaged verdict=%s score=%d issues=%d raw_len=%d",
+        verdict,
+        score,
+        len(issues),
+        len(raw),
+    )
+    return VisionVerdict(
+        verdict=verdict,
+        score=score,
+        issues=tuple(issues),
+        raw=raw[:500],
+    )
+
+
 def _parse(raw: str) -> VisionVerdict:
-    """Parse the model's JSON verdict; fail-soft to skipped on garbage."""
+    """Parse model JSON; recover only explicit negative truncated verdicts."""
     text = raw.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -193,6 +288,9 @@ def _parse(raw: str) -> VisionVerdict:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
+        salvaged = _salvage_negative_verdict(raw)
+        if salvaged is not None:
+            return salvaged
         return _skip("parse_fail", raw[:200])
     verdict = str(data.get("verdict", "")).strip().lower()
     if verdict not in {"broken", "generic", "beautiful"}:
@@ -244,8 +342,8 @@ async def audit_screenshots(
     if prompt_context:
         intro += f"\nЗапрос пользователя: «{prompt_context[:300]}»"
     intro += (
-        "\nФормат проверки: compact-v2. Верни не более четырёх issues; "
-        "каждая правка — не длиннее 180 символов."
+        "\nФормат проверки: compact-v3. Весь JSON — не длиннее 500 символов. "
+        "Верни не более двух issues; каждая правка — не длиннее 120 символов."
     )
     if retry_index > 0:
         # The gateway caches non-streaming responses by model + messages. A
@@ -271,7 +369,7 @@ async def audit_screenshots(
             model,
             user_id=user_id,
             project_id=project_id,
-            max_tokens=1800,
+            max_tokens=4000,
         )
     except PaidCallAmbiguousError:
         raise
