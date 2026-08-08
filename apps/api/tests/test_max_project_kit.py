@@ -134,6 +134,19 @@ def test_history_renderer_keeps_product_files_but_drops_managed_core() -> None:
     assert "Кофе" in runtime_files["src/lib/omnia/max-config.ts"]
 
 
+def test_empty_initial_history_restores_usable_max_starter() -> None:
+    runtime_files = render_max_history_files({}, _config(), uuid4())
+    config_only_files = render_max_history_files(
+        {"src/lib/omnia/max-config.ts": "managed config only"},
+        _config(),
+        uuid4(),
+    )
+
+    assert "Готово к работе" in runtime_files[MAX_PRODUCT_ENTRY_PATH]
+    assert "--app-accent" in runtime_files["src/app/globals.css"]
+    assert "Готово к работе" in config_only_files[MAX_PRODUCT_ENTRY_PATH]
+
+
 def test_history_preserves_every_current_model_owned_product_artifact() -> None:
     snapshot = {
         MAX_PRODUCT_ENTRY_PATH: '"use client"; export default function ProductApp() {}',

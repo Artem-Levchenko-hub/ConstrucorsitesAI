@@ -318,6 +318,27 @@ async def _resync_cancelled_runtime(project_id: UUID, touched_paths: set[str]) -
             project_id,
             snapshot.commit_sha,
         )
+        if project.template == "max_miniapp":
+            # A brand-new MAX project's canonical Git snapshot is empty by
+            # design; the maintained starter is rendered into its live runtime.
+            # Restore through that same trusted renderer so cleanup cannot turn
+            # touched ProductApp/globals paths into delete intents.
+            from omnia_api.models.max_project_config import MaxProjectConfig
+            from omnia_api.schemas.max_studio import MaxProjectConfigPayload
+            from omnia_api.services.max_project_kit import (
+                default_max_project_config,
+                max_project_config_from_files,
+                render_max_history_files,
+            )
+
+            record = await session.get(MaxProjectConfig, project.id)
+            snapshot_config = max_project_config_from_files(canonical)
+            config = (
+                MaxProjectConfigPayload.model_validate(record.config)
+                if record is not None
+                else snapshot_config or default_max_project_config(project.name)
+            )
+            canonical = render_max_history_files(canonical, config, project.id)
         patch = {path: canonical.get(path, "") for path in touched_paths}
         await orchestrator_client.hot_reload_exact(project_id, project.slug, patch)
         project.runtime_sync_required = False

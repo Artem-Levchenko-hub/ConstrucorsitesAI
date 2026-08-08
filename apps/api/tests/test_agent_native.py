@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import inspect
 import json
+from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -327,6 +329,70 @@ def test_first_max_runtime_restore_uses_checkpoint_not_generated_core() -> None:
         **checkpoint,
     }
     assert "src/app/page.tsx" not in patch
+
+
+@pytest.mark.asyncio
+async def test_failed_first_max_cleanup_restores_rendered_starter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = uuid4()
+    snapshot_id = uuid4()
+    project = SimpleNamespace(
+        id=project_id,
+        slug="fresh-max",
+        name="Новый MAX",
+        template="max_miniapp",
+        current_snapshot_id=snapshot_id,
+        runtime_sync_required=True,
+        runtime_sync_paths=["src/app/globals.css"],
+    )
+    snapshot = SimpleNamespace(commit_sha="empty-initial")
+
+    class FakeSession:
+        async def execute(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        async def get(self, model: Any, key: Any) -> Any:
+            if model is messages.Project and key == project_id:
+                return project
+            if model is messages.Snapshot and key == snapshot_id:
+                return snapshot
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    class SessionContext:
+        async def __aenter__(self) -> FakeSession:
+            return FakeSession()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    monkeypatch.setattr(messages, "get_engine", lambda: object())
+    monkeypatch.setattr(
+        messages,
+        "async_sessionmaker",
+        lambda *_args, **_kwargs: lambda: SessionContext(),
+    )
+    monkeypatch.setattr(messages.repo_svc, "read_files", lambda *_args: {})
+    applied: dict[str, str] = {}
+
+    async def hot_reload(_project_id: Any, _slug: str, patch: dict[str, str]) -> None:
+        applied.update(patch)
+
+    monkeypatch.setattr(messages.orchestrator_client, "hot_reload_exact", hot_reload)
+
+    await messages._resync_cancelled_runtime(
+        project_id,
+        {
+            "src/app/globals.css",
+            "src/components/product/ProductApp.tsx",
+        },
+    )
+
+    assert "--app-accent" in applied["src/app/globals.css"]
+    assert "Готово к работе" in applied["src/components/product/ProductApp.tsx"]
 
 
 def test_unsafe_agent_stop_never_exposes_partial_files_for_publication() -> None:

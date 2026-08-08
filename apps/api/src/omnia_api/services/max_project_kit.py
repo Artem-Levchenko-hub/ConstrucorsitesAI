@@ -849,10 +849,17 @@ def render_max_history_files(
     incompatibility = max_legacy_snapshot_incompatibility(snapshot_files)
     if incompatibility:
         raise ValueError(f"MAX snapshot cannot be restored safely: {incompatibility}")
+    product = max_history_product_files(snapshot_files)
+    default_entry = _template_file(MAX_PRODUCT_ENTRY_PATH) if not product else _EMPTY_PRODUCT_ENTRY
     return {
         **render_max_managed_files(config, project_id),
-        MAX_PRODUCT_ENTRY_PATH: _EMPTY_PRODUCT_ENTRY,
-        **max_history_product_files(snapshot_files),
+        # New MAX projects intentionally start with an empty Git snapshot while
+        # the maintained starter lives in the runtime image. Reconciliation of
+        # that empty snapshot must restore the same usable starter, not delete
+        # its model-owned entry and CSS after a failed/cancelled first build.
+        "src/app/globals.css": _template_file("src/app/globals.css"),
+        MAX_PRODUCT_ENTRY_PATH: default_entry,
+        **product,
     }
 
 
