@@ -326,7 +326,7 @@ def test_native_endpoint_uses_sonnet_chat_tools(
 
     assert response.status_code == 200
     assert captured["url"] == "https://api.llmgw.ru/v1/chat/completions"
-    assert captured["json"]["model"] == "claude-sonnet-5"
+    assert captured["json"]["model"] == "anthropic/claude-sonnet-5"
     assert captured["json"]["tools"][0]["function"]["name"] == "done"
     assert response.json()["content"][0] == {
         "type": "tool_use",
@@ -336,9 +336,7 @@ def test_native_endpoint_uses_sonnet_chat_tools(
     }
     assert messages_native.billing.charge.await_args.kwargs[
         "provider_cost_usd"
-    ] == messages_native._reserve_native_provider_cost(
-        "claude-sonnet-5", captured["json"]
-    )
+    ] == messages_native._reserve_native_provider_cost("claude-sonnet-5", captured["json"])
 
 
 def test_native_endpoint_attributes_and_bills_actual_cached_usage(

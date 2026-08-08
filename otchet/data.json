@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-08-08",
-  "version": 32,
+  "version": 33,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "MAX показывает интерактивный результат до регистрации и сохраняет его до рабочей сборки",
   "subtitle": "Анонимное демо не вызывает модель и не выдаёт код; после проверки владельца черновик переносится в Studio, пробный лимит бизнеса остаётся серверным, а исходники становятся доступны после настоящей сборки.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Sonnet 5 направлен на фактический LLMGW catalog ID",
+    "d": "Последний MAX-run прошёл starter и первый LLM-вызов, но native tool-call получил 403: gateway отправлял устаревший claude-sonnet-5. Каталог нового ключа вернул anthropic/claude-sonnet-5; одинаковый tool-probe дал 403 на старом ID и 200 на vendor-prefixed ID. Новый ключ подключён, mapping исправлен без изменения внутренней модели, цен и usage."
+   },
    {
     "s": "worked",
     "t": "Sonnet 5 снова получает чистое MAX-ядро до платного вызова",
@@ -2380,6 +2385,18 @@
    "evidence": "Первый Sonnet 5 run останавливался до модели: production project fitness-ec4686 дважды возвращал 28 TS2307 для @/lib, @/components и ProductApp. В контейнере оставался generic tsconfig без paths, хотя актуальный MAX-шаблон содержал @/* → ./src/*. После подстановки ровно этого tsconfig тот же tsc завершился с кодом 0 без единого изменения продуктового кода и без вызова модели. MAX_MANAGED_KIT_VERSION повышен до 17, tsconfig включён в render_max_managed_files, контракт закреплён unit-тестом, а диагностический лог теперь сохраняет detail обеих build-попыток.",
    "impact": "Предварительная проверка больше не блокирует Sonnet 5 из-за возраста базового образа. Сбой остаётся money-safe, но теперь диагностируется по фактической ошибке, а существующие проекты получают исправление через обычное обновление managed kit.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H124",
+   "title": "LLMGW требует vendor-prefixed ID для Sonnet 5",
+   "status": "worked",
+   "score": 10,
+   "category": "MAX / Sonnet 5 / LLMGW / routing",
+   "period": "08.08",
+   "description": "Маршрутизировать внутренний claude-sonnet-5 на точный ID, который возвращает живой каталог LLMGW для текущего аккаунта.",
+   "evidence": "Последний production-run успешно прошёл MAX starter, затем gateway получил 200 для первого Gemini-запроса и 403 для native Sonnet на step 0. Новый LLMGW-ключ был синхронизирован в gateway, но контрольный tool-probe со старым ID также получил 403 permission. GET /models вернул anthropic/claude-sonnet-5. Тем же ключом и payload vendor-prefixed ID ответил 200 и вернул completion. Mapping и два regression-assert обновлены; внутренний Omnia ID и pricing сохранены.",
+   "impact": "Native Sonnet-вызов больше не отклоняется до первого шага из-за неверного provider model slug. Ротация ключа отделена от маршрутизации и не маскирует реальную причину.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2905,6 +2922,10 @@
      true
     ],
     [
+     "Внутренний Sonnet 5 направлен на живой LLMGW catalog ID anthropic/claude-sonnet-5",
+     true
+    ],
+    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2937,7 +2958,8 @@
     "H117",
     "H118",
     "H121",
-    "H123"
+    "H123",
+    "H124"
    ]
   }
  ],
