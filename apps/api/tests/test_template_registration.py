@@ -10,6 +10,7 @@ with no template dir, the exact integration tail of G001.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from omnia_api.schemas.project import (
@@ -19,9 +20,7 @@ from omnia_api.schemas.project import (
 
 # typing.Literal stores its members on __args__.
 _TEMPLATE_VALUES = set(Template.__args__)  # type: ignore[attr-defined]
-_TEMPLATES_DIR = (
-    Path(__file__).resolve().parents[2] / "orchestrator" / "templates"
-)
+_TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "orchestrator" / "templates"
 
 
 def test_every_orchestrator_key_is_a_valid_template() -> None:
@@ -34,9 +33,7 @@ def test_every_orchestrator_key_is_a_valid_template() -> None:
 def test_every_orchestrator_template_dir_exists() -> None:
     for api_value, dir_name in _ORCHESTRATOR_TEMPLATE_BY_API.items():
         path = _TEMPLATES_DIR / dir_name
-        assert path.is_dir(), (
-            f"template {api_value!r} -> {dir_name!r} but {path} does not exist"
-        )
+        assert path.is_dir(), f"template {api_value!r} -> {dir_name!r} but {path} does not exist"
         assert (path / "Dockerfile.dev").is_file(), (
             f"template {dir_name!r} has no Dockerfile.dev — orchestrator can't build it"
         )
@@ -53,3 +50,19 @@ def test_max_miniapp_stack_registered() -> None:
     assert "max_miniapp" in _TEMPLATE_VALUES
     assert _ORCHESTRATOR_TEMPLATE_BY_API.get("max_miniapp") == "max-miniapp-nextjs"
     assert (_TEMPLATES_DIR / "max-miniapp-nextjs" / "Dockerfile.dev").is_file()
+
+
+def test_max_starter_exposes_the_managed_integration_contract() -> None:
+    omnia_dir = _TEMPLATES_DIR / "max-miniapp-nextjs" / "src" / "lib" / "omnia"
+    implementation = omnia_dir / "client.ts"
+    public_client = omnia_dir / "integration-client.ts"
+
+    assert implementation.is_file()
+    assert public_client.is_file()
+    assert 'export * from "./client"' in public_client.read_text(encoding="utf-8")
+    implementation_source = implementation.read_text(encoding="utf-8")
+    for export_name in ("createMaxAction", "getMaxActions", "requestOmniaAI"):
+        assert re.search(
+            rf"export\s+(?:async\s+)?function\s+{export_name}\s*\(",
+            implementation_source,
+        )
