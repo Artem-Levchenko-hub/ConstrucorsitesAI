@@ -49,7 +49,10 @@ _CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside o
 _MAX_PROVIDER_RECONNECT_CYCLES = 3
 _MAX_TRUNCATED_WRITE_ABORT_AT = 2
 _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
-_STABLE_MAX_SUPPORT_FILE_LIMIT = 8
+# A fresh build needs at most a design spec plus two compact domain/support files
+# before composing the screen. A larger allowance was observed live producing
+# competing types/catalog copies instead of the product entry.
+_STABLE_MAX_SUPPORT_FILE_LIMIT = 3
 _HISTORY_PLACEHOLDER_MARKERS = (
     "[OMITTED FROM HISTORY:",
     "[OLDER TOOL RESULT OMITTED:",
@@ -1740,7 +1743,8 @@ async def run_native_build(
                 ):
                     obs = {"ok": False, "error": _STABLE_MAX_SUPPORT_ADVANCE_REQUIRED}
                 elif (
-                    force_entry_write
+                    stable_max_loop
+                    and _STABLE_MAX_PRODUCT_ENTRY not in written
                     and name in {"write_file", "edit_file"}
                     and action.path != _STABLE_MAX_PRODUCT_ENTRY
                     and len(written) >= _STABLE_MAX_SUPPORT_FILE_LIMIT

@@ -664,7 +664,10 @@ async def test_stable_max_compacts_to_entry_only_after_support_budget(
 ) -> None:
     calls = 0
     executed_paths: list[str] = []
-    supports = [f"src/components/product/Part{i}.tsx" for i in range(8)]
+    supports = [
+        f"src/components/product/Part{i}.tsx"
+        for i in range(agent_native._STABLE_MAX_SUPPORT_FILE_LIMIT + 1)
+    ]
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
@@ -721,7 +724,10 @@ async def test_stable_max_compacts_to_entry_only_after_support_budget(
     )
 
     assert result.done is True
-    assert executed_paths == [*supports, agent_native._STABLE_MAX_PRODUCT_ENTRY]
+    assert executed_paths == [
+        *supports[: agent_native._STABLE_MAX_SUPPORT_FILE_LIMIT],
+        agent_native._STABLE_MAX_PRODUCT_ENTRY,
+    ]
 
 
 @pytest.mark.asyncio
