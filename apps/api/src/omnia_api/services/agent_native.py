@@ -50,6 +50,10 @@ _MAX_PROVIDER_RECONNECT_CYCLES = 3
 _MAX_TRUNCATED_WRITE_ABORT_AT = 2
 _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
 _STABLE_MAX_SUPPORT_FILE_LIMIT = 8
+_HISTORY_PLACEHOLDER_MARKERS = (
+    "[OMITTED FROM HISTORY:",
+    "[OLDER TOOL RESULT OMITTED:",
+)
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
@@ -309,6 +313,10 @@ _STABLE_MAX_ENTRY_NOW_REQUIRED = (
     "The supporting-file budget is complete. Compose the real screen in "
     f"`{_STABLE_MAX_PRODUCT_ENTRY}` now; add or refine remaining components after that."
 )
+_HISTORY_PLACEHOLDER_WRITE_REJECTED = (
+    "A transcript history placeholder is not source code and was not written. "
+    "Read the target file again, then submit its actual complete source or a real exact edit."
+)
 
 
 def _stable_max_repair_required(paths: frozenset[str]) -> str:
@@ -440,6 +448,17 @@ def _tool_use_to_action(block: dict[str, Any]) -> Action:
     if not isinstance(inp, dict):
         inp = {}
     return Action(name=str(block.get("name", "")), args=dict(inp), raw="")
+
+
+def _contains_history_placeholder(action: Action) -> bool:
+    if action.name not in {"write_file", "edit_file"}:
+        return False
+    return any(
+        marker in value
+        for value in action.args.values()
+        if isinstance(value, str)
+        for marker in _HISTORY_PLACEHOLDER_MARKERS
+    )
 
 
 def _obs_to_tool_result(
@@ -1653,7 +1672,15 @@ async def run_native_build(
                     if force_repair_write
                     else {"write_file", "edit_file"}
                 )
-                if (
+                if _contains_history_placeholder(action):
+                    # The gateway replaces large historical tool arguments with
+                    # explicit markers. A long-running model can occasionally
+                    # echo that marker back as if it were the file body. Never
+                    # let transcript compaction destroy the live source; allow
+                    # one fresh read of the failing path on the next turn.
+                    repair_reads_since_build.discard(action.path)
+                    obs = {"ok": False, "error": _HISTORY_PLACEHOLDER_WRITE_REJECTED}
+                elif (
                     entry_focus_compacted
                     and _STABLE_MAX_PRODUCT_ENTRY not in written
                     and (name != "write_file" or action.path != _STABLE_MAX_PRODUCT_ENTRY)

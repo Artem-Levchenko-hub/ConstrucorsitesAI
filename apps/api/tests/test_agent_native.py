@@ -829,14 +829,28 @@ async def test_stable_max_red_build_forces_a_repair_write(
             return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
         if calls == 4:
             assert "current file" in str(convo[-1])
-            return _turn(("build", {}))
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": "[OMITTED FROM HISTORY: 20000 characters already applied]",
+                    },
+                )
+            )
         if calls == 5:
-            assert "build is RED" in str(convo[-1])
+            assert "history placeholder" in str(convo[-1])
             return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
         if calls == 6:
+            assert "current file" in str(convo[-1])
+            return _turn(("build", {}))
+        if calls == 7:
+            assert "build is RED" in str(convo[-1])
+            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
+        if calls == 8:
             assert "build is RED" in str(convo[-1])
             return _turn(("read_file", {"path": "src/components/product/types.ts"}))
-        if calls == 7:
+        if calls == 9:
             assert "ProductApp.tsx" in str(convo[-1])
             return _turn(
                 (
@@ -847,7 +861,7 @@ async def test_stable_max_red_build_forces_a_repair_write(
                     },
                 )
             )
-        if calls == 8:
+        if calls == 10:
             assert "ProductApp.tsx" in str(convo[-1])
             return _turn(
                 (
@@ -860,7 +874,7 @@ async def test_stable_max_red_build_forces_a_repair_write(
                     },
                 )
             )
-        if calls == 9:
+        if calls == 11:
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
 
@@ -896,7 +910,7 @@ async def test_stable_max_red_build_forces_a_repair_write(
     )
 
     assert result.done is True
-    assert executed_reads == 1
+    assert executed_reads == 2
     assert builds == 2
     assert result.files["src/components/product/ProductApp.tsx"].endswith("fixed</main>}")
     assert "build is RED" in str(result.transcript)
