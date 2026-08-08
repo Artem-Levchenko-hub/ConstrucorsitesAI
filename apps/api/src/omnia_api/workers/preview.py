@@ -381,7 +381,9 @@ async def capture_live_url(
                         # edit them and must not burn its budget trying to move them
                         # around a MAX app's own fixed bottom navigation.
                         await page.add_style_tag(
-                            content=("#omnia-remix-cta,#omnia-wm{display:none!important}")
+                            content=(
+                                "#omnia-remix-cta,#omnia-wm,nextjs-portal{display:none!important}"
+                            )
                         )
                     if settle_container:
                         await _await_container_ready(page)

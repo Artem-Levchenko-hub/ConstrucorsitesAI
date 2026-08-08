@@ -398,6 +398,18 @@ _STABLE_MAX_PROGRESS_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_PROGRESS_TOOLS[:-1],
     {**_STABLE_MAX_PROGRESS_TOOLS[-1], "cache_control": _CACHE},
 ]
+_STABLE_MAX_PROOF_TOOLS = [
+    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"runtime_check", "see"}
+]
+_STABLE_MAX_PROOF_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_STABLE_MAX_PROOF_TOOLS[:-1],
+    {**_STABLE_MAX_PROOF_TOOLS[-1], "cache_control": _CACHE},
+]
+_STABLE_MAX_PROOF_REQUIRED = (
+    "The product source and build are green. Stop reading or polishing blindly. "
+    "Run runtime_check and see now; if see reports a concrete issue, edit it on the "
+    "following turn, rebuild, and verify again."
+)
 _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED = [
     {
         **_tool(
@@ -1378,6 +1390,15 @@ async def run_native_build(
                 and _STABLE_MAX_PRODUCT_ENTRY in written
                 and (last_build_ok is None or wrote_since_build)
             )
+            completion_gap = _completion_gap()
+            force_proof = (
+                stable_max_loop
+                and last_build_ok is True
+                and not wrote_since_build
+                and visual_feedback_step is None
+                and completion_gap is not None
+                and ("runtime_check" in completion_gap or completion_gap.startswith("Run see"))
+            )
             force_product_progress = (
                 force_entry_write or force_repair_write or force_repair_verify or force_progress
             )
@@ -1403,6 +1424,8 @@ async def run_native_build(
                     tools=(
                         _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
                         if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
+                        else _STABLE_MAX_PROOF_TOOLS_CACHED
+                        if force_proof
                         else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
                         if force_repair_verify
                         else _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED
@@ -1780,6 +1803,12 @@ async def run_native_build(
                         "ok": False,
                         "error": "Visual QA is unavailable; repeated see was skipped.",
                     }
+                elif force_proof and name not in {"runtime_check", "see"}:
+                    # Cached provider turns may still reference schemas from an
+                    # earlier unrestricted phase. Enforce the proof transition at
+                    # execution too, otherwise repeated read/grep calls can spend
+                    # the entire generation budget after a green build.
+                    obs = {"ok": False, "error": _STABLE_MAX_PROOF_REQUIRED}
                 elif (
                     entry_focus_compacted
                     and _STABLE_MAX_PRODUCT_ENTRY not in written
