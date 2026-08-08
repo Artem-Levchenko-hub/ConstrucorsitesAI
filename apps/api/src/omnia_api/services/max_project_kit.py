@@ -872,9 +872,8 @@ def render_max_restored_files(
 
 MAX_MODEL_DIRECTIVE = """
 MAX PLATFORM CORE CONTRACT
-Restore the proven pre-Gemini MAX generation flow used for FitnessStat and
-Coffee Nearby: one native Anthropic tool loop owns the product end-to-end.
-The existing starter is a working safety baseline, not the requested result.
+One native AI tool loop owns the requested product end-to-end. The maintained
+MAX runtime already exists and is not a product template or generated result.
 Rewrite src/components/product/ProductApp.tsx and src/app/globals.css for the
 user's actual product, then run build, fix factual errors and call done.
 
@@ -936,20 +935,3 @@ product files. Use edit_file/write_file so Omnia can attribute and safely roll
 changes back. Do not spend turns loading capability packs or performing ceremony:
 read only what is needed, implement, build, fix, done.
 """.strip()
-
-
-def render_max_starter_files(
-    config: MaxProjectConfigPayload, project_id: UUID | str | None = None
-) -> dict[str, str]:
-    """Buildable stable MAX starter plus the current trusted platform core.
-
-    The starter is the same working baseline shape used before the Gemini
-    migration. The model must still personalise and implement the requested
-    product; keeping a green base prevents a failed provider turn from leaving a
-    blank application.
-    """
-    return {
-        **render_max_managed_files(config, project_id),
-        MAX_PRODUCT_ENTRY_PATH: _template_file(MAX_PRODUCT_ENTRY_PATH),
-        "src/app/globals.css": _template_file("src/app/globals.css"),
-    }

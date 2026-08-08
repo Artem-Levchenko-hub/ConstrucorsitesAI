@@ -38,7 +38,6 @@ from omnia_api.services.max_project_kit import (
     render_max_history_files,
     render_max_managed_files,
     render_max_restored_files,
-    render_max_starter_files,
 )
 
 
@@ -334,23 +333,6 @@ def test_managed_kit_never_contains_model_or_generation_calls() -> None:
     assert "llmgw" not in combined
     assert "/chat/completions" not in combined
     assert "generate(" not in combined
-
-
-def test_starter_kit_is_a_working_green_product_shell() -> None:
-    files = render_max_starter_files(_config(), uuid4())
-
-    assert "OmniaProductRuntime" in files[MAX_PRODUCT_PAGE_PATH]
-    assert "ssr: false" in files[MAX_PRODUCT_RUNTIME_PATH]
-    assert "export default function ProductApp" in files[MAX_PRODUCT_ENTRY_PATH]
-    assert "useMaxApp" in files[MAX_PRODUCT_ENTRY_PATH]
-    assert "Начать" in files[MAX_PRODUCT_ENTRY_PATH]
-    assert "src/app/globals.css" in files
-    assert "src/app/layout.tsx" in files
-    css = files["src/app/globals.css"]
-    assert ":root" in css
-    assert ".max-shell" in css
-    assert "@media" in css
-    assert "TODO" not in "\n".join(files.values())
 
 
 def test_entry_migration_preserves_legacy_product_behind_locked_runtime() -> None:

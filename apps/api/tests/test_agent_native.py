@@ -98,7 +98,10 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "MAX_STUDIO_LLM_MODEL" in source
     assert 'stable_max_loop=project_template == "max_miniapp"' in source
     assert "_agent_steps = 120" in source
-    assert "render_max_starter_files" in source
+    assert "render_max_starter_files" not in source
+    assert "Подготавливаю защищённое ядро MAX" not in source
+    assert "_capture_max_runtime_checkpoint" in source
+    assert "_restore_max_runtime_checkpoint" in source
     assert '"autonomous_recovery"' not in source
     assert "_seg <" not in source
     assert "_first_max_without_product" in source
@@ -188,10 +191,10 @@ def test_rolled_back_max_generation_is_never_reported_as_done() -> None:
 
     result = AgentResult(
         done=False,
-        summary="Первая генерация не завершена; оставлена безопасная основа.",
+        summary="Первая генерация не завершена; среда восстановлена.",
         files={},
         steps=30,
-        stop_reason="core_only_rolled_back",
+        stop_reason="first_build_rolled_back",
     )
 
     assert _agent_result_message(result, is_edit=False).startswith("Первая генерация не завершена")
@@ -211,6 +214,43 @@ def test_seeded_max_files_are_committed_with_agent_customisations() -> None:
         "src/components/Profile.tsx": "ui",
     }
     assert starter["src/app/page.tsx"] == "starter"
+
+
+def test_first_max_runtime_restore_uses_checkpoint_not_generated_core() -> None:
+    from omnia_api.routers.messages import (
+        _max_runtime_checkpoint_path,
+        _max_runtime_restore_patch,
+    )
+
+    assert _max_runtime_checkpoint_path("package.json")
+    assert _max_runtime_checkpoint_path("src/app/globals.css")
+    assert _max_runtime_checkpoint_path("src/components/product/ProductApp.tsx")
+    assert not _max_runtime_checkpoint_path("src/app/page.tsx")
+    assert not _max_runtime_checkpoint_path(".env")
+
+    checkpoint = {
+        "package.json": '{"scripts":{"build":"next build"}}',
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'",
+        "src/app/globals.css": "body { color: black; }",
+        "src/components/product/ProductApp.tsx": "export default function ProductApp() {}",
+    }
+
+    patch = _max_runtime_restore_patch(
+        checkpoint,
+        [
+            *checkpoint,
+            "src/components/product/NewScreen.tsx",
+            "src/lib/product/state.ts",
+            "src/app/page.tsx",
+        ],
+    )
+
+    assert patch == {
+        "src/components/product/NewScreen.tsx": "",
+        "src/lib/product/state.ts": "",
+        **checkpoint,
+    }
+    assert "src/app/page.tsx" not in patch
 
 
 def test_unsafe_agent_stop_never_exposes_partial_files_for_publication() -> None:
