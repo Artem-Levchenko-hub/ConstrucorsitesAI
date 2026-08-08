@@ -37,7 +37,9 @@ def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     )
 
     assert "один непрерывный проход" in prompt
-    assert "сразу напиши весь продукт" in prompt
+    assert "сразу создавай продукт" in prompt
+    assert "защищённое ядро" not in prompt
+    assert "короче 24 000 символов" in prompt
     assert "MAX PLATFORM CORE CONTRACT" in prompt
     assert "MAX PRODUCT STUDIO" not in prompt
     assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" not in prompt
@@ -500,6 +502,93 @@ async def test_stable_max_first_write_is_enforced_when_provider_reuses_old_tools
     assert result.done is True
     assert executed_reads == agent_native._STABLE_MAX_FIRST_WRITE_AT
     assert "A product write is now required" in str(result.transcript)
+
+
+@pytest.mark.asyncio
+async def test_stable_max_truncated_write_is_retried_as_smaller_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            truncated = _turn(("write_file", {}))
+            truncated["stop_reason"] = "max_tokens"
+            return truncated
+        if calls == 2:
+            assert "[OUTPUT LIMIT]" in str(convo[-1])
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": "export default function ProductApp(){return <main>OK</main>}",
+                    },
+                )
+            )
+        if calls == 3:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "write_file" and not action.path:
+            return {"ok": False, "error": "write_file needs path + content"}
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="build product",
+        execute=execute,
+        max_steps=10,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "done"
+    assert calls == 4
+    assert "src/components/product/ProductApp.tsx" in result.files
+
+
+@pytest.mark.asyncio
+async def test_stable_max_stops_paid_calls_after_two_truncated_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        truncated = _turn(("write_file", {}))
+        truncated["stop_reason"] = "max_tokens"
+        return truncated
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "build":
+            return {"ok": False, "detail": "no product files"}
+        return {"ok": False, "error": "write_file needs path + content"}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="build product",
+        execute=execute,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert calls == agent_native._MAX_TRUNCATED_WRITE_ABORT_AT
+    assert result.done is False
+    assert result.stop_reason == "oversized_write_red"
+    assert "[OUTPUT LIMIT]" in str(result.transcript)
 
 
 @pytest.mark.asyncio

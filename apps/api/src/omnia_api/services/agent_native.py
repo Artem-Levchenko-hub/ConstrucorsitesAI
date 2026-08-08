@@ -49,6 +49,7 @@ _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
 _CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside one cycle
 _MAX_PROVIDER_RECONNECT_CYCLES = 3
+_MAX_TRUNCATED_WRITE_ABORT_AT = 2
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
@@ -95,7 +96,9 @@ _TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "write_file",
-        "Create or overwrite a whole file with its FULL content.",
+        "Create or overwrite a whole file with its FULL content. Keep each file compact; "
+        "if the product is large, split it into components. Across one assistant turn, "
+        "keep all write/edit content below 24000 characters so tool arguments are not truncated.",
         {"path": _STR, "content": _STR},
         ["path", "content"],
     ),
@@ -767,11 +770,13 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
 
 _MAX_REFERENCE_PREAMBLE = (
     "Ты — автономный AI-агент, который за один непрерывный проход строит "
-    "полноценный MAX Mini App. Работай прямо с проектом: коротко изучи защищённое "
-    "ядро, затем сразу напиши весь продукт по брифу — экраны, навигацию, состояния, "
+    "полноценный MAX Mini App. Работай прямо с проектом: коротко изучи управляемые "
+    "файлы интеграции MAX, затем сразу создавай продукт по брифу — экраны, навигацию, состояния, "
     "взаимодействия и аккуратный mobile-first дизайн. Не используй визуальный шаблон, "
     "не подменяй функции текстом, TODO или декоративными кнопками. Не останавливайся "
-    "на частичном результате и не объявляй успех словами.\n\n"
+    "на частичном результате и не объявляй успех словами. Большой интерфейс раскладывай "
+    "по небольшим компонентам: суммарное содержимое write_file/edit_file за один ответ "
+    "должно быть короче 24 000 символов, иначе аргументы инструмента будут обрезаны.\n\n"
     "Сохрани управляемую MAX-обвязку: подписанный initData, useMaxApp/профиль, "
     "integration-client, webhook и закрытые Studio-файлы. Пользовательские данные "
     "бери из MAX и управляемого серверного хранилища; не зашивай демо-профили, "
@@ -1006,6 +1011,7 @@ async def run_native_build(
     pending_visual_evaluation_step: int | None = None
     visual_evaluation_ready = False
     provider_reconnect_cycles = 0
+    truncated_no_write_turns = 0
 
     max_runtime = "MAX VERIFICATION OVERRIDE" in system or reference_max_loop
     max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
@@ -1574,6 +1580,31 @@ async def run_native_build(
                         _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
 
+            response_hit_output_limit = (
+                stable_max_loop
+                and resp.get("stop_reason") == "max_tokens"
+                and any(tu.get("name") in {"write_file", "edit_file"} for tu in tool_uses)
+            )
+            if response_hit_output_limit:
+                if wrote_this_turn:
+                    truncated_no_write_turns = 0
+                else:
+                    truncated_no_write_turns += 1
+                results.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            "[OUTPUT LIMIT] The previous write was truncated before its tool "
+                            "arguments were complete. Do not retry the same large file. Split "
+                            "the screen into smaller component files and keep the TOTAL "
+                            "write_file/edit_file content in the next response below 24000 "
+                            "characters. Your next turn must perform one or more smaller writes."
+                        ),
+                    }
+                )
+            else:
+                truncated_no_write_turns = 0
+
             if done_summary is not None:
                 if emit:
                     await emit("agent.done", {"step": step, "files": len(written)})
@@ -1648,6 +1679,31 @@ async def run_native_build(
                     if emit:
                         await emit("agent.stalled", {"step": step})
             convo.append({"role": "user", "content": results})
+            if truncated_no_write_turns >= _MAX_TRUNCATED_WRITE_ABORT_AT:
+                log.warning(
+                    "agent_native.oversized_write_abort",
+                    step=step,
+                    consecutive_truncated_turns=truncated_no_write_turns,
+                )
+                if emit:
+                    await emit(
+                        "agent.step",
+                        {
+                            "step": step,
+                            "action": "output_limit",
+                            "path": "",
+                            "detail": (
+                                "Две записи подряд превысили безопасный размер. Новые "
+                                "платные запросы остановлены; проверяю уже записанные файлы."
+                            ),
+                            "ok": False,
+                        },
+                    )
+                return await _finish_without_provider(
+                    steps=step + 1,
+                    reason="oversized_write",
+                    detail="two consecutive write responses exceeded the output limit",
+                )
             if infra_dead_turns >= _INFRA_DEAD_ABORT_AT and not unbounded_max_runtime:
                 log.warning("agent_native.infra_dead_abort", step=step)
                 return AgentResult(
