@@ -294,6 +294,10 @@ _STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
 # into an enforceable cost boundary instead of letting a model re-read the same
 # files until the generic 12-turn explore guard aborts the generation.
 _STABLE_MAX_FIRST_WRITE_AT = 4
+# After two write-only turns, stop offering arbitrary support paths even when
+# the file cap is not full. Live runs showed duplicate-support retries could
+# otherwise continue indefinitely without composing the product entry.
+_STABLE_MAX_ENTRY_FOCUS_AT = _STABLE_MAX_FIRST_WRITE_AT + 2
 _STABLE_MAX_WRITE_REQUIRED = (
     "A product write is now required. Use write_file or edit_file; "
     "read/list/grep/build/done calls are disabled until one product file is written."
@@ -1283,7 +1287,10 @@ async def run_native_build(
                 stable_max_loop
                 and not entry_focus_compacted
                 and _STABLE_MAX_PRODUCT_ENTRY not in written
-                and len(written) >= _STABLE_MAX_SUPPORT_FILE_LIMIT
+                and (
+                    len(written) >= _STABLE_MAX_SUPPORT_FILE_LIMIT
+                    or turns_without_product_entry >= _STABLE_MAX_ENTRY_FOCUS_AT
+                )
             ):
                 convo = [
                     {

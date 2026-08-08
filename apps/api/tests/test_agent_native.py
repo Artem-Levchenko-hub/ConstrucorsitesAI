@@ -618,7 +618,10 @@ async def test_stable_max_supporting_files_do_not_unlock_reading_before_product_
                 )
             )
         if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
-            assert "already written" in str(convo[-1])
+            assert len(convo) == 1
+            assert "[FOCUSED PRODUCT ENTRY]" in str(convo[-1])
+            path_schema = kwargs["tools"][0]["input_schema"]["properties"]["path"]
+            assert path_schema["enum"] == [agent_native._STABLE_MAX_PRODUCT_ENTRY]
             return _turn(
                 (
                     "write_file",
