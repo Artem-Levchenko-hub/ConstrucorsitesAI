@@ -441,6 +441,68 @@ async def test_stable_max_loop_forces_a_first_write_after_bounded_exploration(
 
 
 @pytest.mark.asyncio
+async def test_stable_max_first_write_is_enforced_when_provider_reuses_old_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    executed_reads = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls <= agent_native._STABLE_MAX_FIRST_WRITE_AT:
+            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 1:
+            # Simulate a compatible gateway/provider continuing to call a tool
+            # advertised earlier in the cached conversation.
+            assert {tool["name"] for tool in kwargs["tools"]} == {
+                "write_file",
+                "edit_file",
+            }
+            return _turn(("grep", {"pattern": "ProductApp", "path": "src"}))
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 2:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": "export default function ProductApp(){return <main>OK</main>}",
+                    },
+                )
+            )
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal executed_reads
+        if action.name == "read_file":
+            executed_reads += 1
+            return {"ok": True, "content": "existing product"}
+        if action.name == "grep":
+            raise AssertionError("executor-level first-write gate was bypassed")
+        if action.name == "write_file":
+            return {"ok": True, "content": action.args["content"]}
+        return {"ok": True, "detail": "clean"}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="build product",
+        execute=execute,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert executed_reads == agent_native._STABLE_MAX_FIRST_WRITE_AT
+    assert "First product write is now required" in str(result.transcript)
+
+
+@pytest.mark.asyncio
 async def test_native_write_resets_no_write_streak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
