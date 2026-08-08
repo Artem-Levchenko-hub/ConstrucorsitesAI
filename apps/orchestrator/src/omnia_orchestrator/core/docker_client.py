@@ -77,6 +77,10 @@ class ContainerSpec:
     restart_policy_name: str = "no"  # "unless-stopped" for deployed prod
     tier: str = "free"  # `omnia.tier` label — drives hibernate pause/stop policy
     container_port: int = 3000  # internal port the app listens on (StackSpec-driven)
+    # File baked into the template image and required for PID 1 to start.  When
+    # a previous faulty sync removed the protected core, provision recreates
+    # that container instead of returning a restart loop as "running".
+    integrity_path: str | None = None
     # ── Sandbox hardening (Phase 1) — all default to current behaviour ───────
     runtime: str = ""  # docker --runtime, e.g. "runsc" (gVisor); "" = daemon default (runc)
     harden: bool = False  # add no-new-privileges + a PID ceiling (safe for non-root images)
@@ -210,8 +214,10 @@ async def start_container(spec: ContainerSpec) -> str:
     """Create + start a container. Returns container id.
 
     Idempotent: if a container with the same name exists, restart it if
-    stopped and return the existing id without recreating. This matters
-    because `provision` and `wake` may race on a fresh project.
+    stopped and return the existing id without recreating. A container whose
+    baked runtime manifest is missing is recreated so provision can recover
+    from an incomplete/legacy sync. This matters because `provision` and
+    `wake` may race on a fresh project.
 
     Exception — image change: if the existing container runs a DIFFERENT image
     than `spec.image`, it is stale and must be replaced. This happens on a stack
@@ -261,9 +267,32 @@ async def start_container(spec: ContainerSpec) -> str:
             else:
                 if existing.status == "paused":
                     existing.unpause()  # can't .start() a frozen container
-                elif existing.status != "running":
+                elif existing.status not in {"running", "restarting", "dead"}:
                     existing.start()
-                return str(existing.id)
+                existing.reload()
+                core_ok = existing.status == "running"
+                if core_ok and spec.integrity_path:
+                    try:
+                        check = existing.exec_run(
+                            cmd=["test", "-f", f"/app/{spec.integrity_path}"],
+                            user="1000:1000",
+                        )
+                        core_ok = check.exit_code == 0
+                    except (docker.errors.APIError, requests.exceptions.RequestException):
+                        core_ok = False
+                if core_ok:
+                    return str(existing.id)
+                # Canonical project state lives in the API snapshot.  Recreate
+                # a broken runtime from the current template; the API overlays
+                # the product snapshot immediately after provision returns.
+                log.warning(
+                    "docker.recreate_invalid_runtime",
+                    name=spec.name,
+                    status=existing.status,
+                    integrity_path=spec.integrity_path,
+                )
+                with suppress(docker.errors.APIError, docker.errors.NotFound):
+                    existing.remove(force=True)
 
         # Sandbox hardening (Phase 1) — every entry is OFF by default, so when
         # the spec carries no overrides the run kwargs are byte-identical to

@@ -10,11 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.core.db import get_engine
 from omnia_api.core.errors import ApiError
+from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.schemas.project import is_fullstack, orchestrator_template
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.max_project_kit import (
+    default_max_project_config,
+    max_history_product_files,
+    max_project_config_from_files,
+    render_max_history_files,
+)
 
 
 def mark_runtime_sync_required(project: Project, paths: Iterable[str]) -> None:
@@ -95,8 +103,25 @@ async def reconcile_locked_runtime(
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     canonical = await asyncio.to_thread(repo_svc.read_files, project.id, snapshot.commit_sha)
+    if full_tree and project.template == "max_miniapp":
+        # MAX snapshots deliberately keep product files and may also contain
+        # per-project Studio output. Rebuild the live tree from today's trusted
+        # managed kit plus the current business config and snapshot product.
+        # Comparing the raw product-only snapshot against every live path would
+        # delete package.json/bridge/routes; dropping all locked files would in
+        # turn lose max-config and the project-bound preview route.
+        record = await session.get(MaxProjectConfig, project.id)
+        snapshot_config = max_project_config_from_files(canonical)
+        config = (
+            MaxProjectConfigPayload.model_validate(record.config)
+            if record is not None
+            else snapshot_config or default_max_project_config(project.name)
+        )
+        canonical = render_max_history_files(canonical, config, project.id)
     if full_tree:
         live_paths = await orchestrator_client.agent_list_source_files(project.id, project.slug)
+        if project.template == "max_miniapp":
+            live_paths = list(max_history_product_files(dict.fromkeys(live_paths, "")))
         patch = {
             **{path: "" for path in live_paths if path not in canonical},
             **canonical,

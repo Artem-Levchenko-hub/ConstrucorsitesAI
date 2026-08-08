@@ -16,7 +16,7 @@ def _project() -> Project:
         owner_id=uuid4(),
         name="MAX app",
         slug="max-app",
-        template="max_miniapp",
+        template="fullstack",
         language="ru",
     )
     project.current_snapshot_id = uuid4()
@@ -150,3 +150,73 @@ async def test_full_reconcile_restores_snapshot_and_deletes_stale_starter_files(
             "src/components/Product.tsx": "product",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_full_max_reconcile_never_deletes_platform_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project()
+    project.template = "max_miniapp"
+    snapshot = SimpleNamespace(commit_sha="abc123")
+    config = runtime_sync.default_max_project_config("Клиентский FitFlow")
+    config_record = SimpleNamespace(config=config.model_dump(mode="json"))
+
+    async def get_model(model: object, _key: object) -> object | None:
+        if model is runtime_sync.Snapshot:
+            return snapshot
+        if model is runtime_sync.MaxProjectConfig:
+            return config_record
+        return None
+
+    session = SimpleNamespace(get=AsyncMock(side_effect=get_model), flush=AsyncMock())
+    monkeypatch.setattr(
+        runtime_sync.orchestrator_client,
+        "get_status",
+        AsyncMock(return_value={"state": "running"}),
+    )
+    monkeypatch.setattr(
+        runtime_sync.orchestrator_client,
+        "agent_list_source_files",
+        AsyncMock(
+            return_value=[
+                "package.json",
+                "src/app/page.tsx",
+                "src/lib/omnia/client.ts",
+                "src/components/product/ProductApp.tsx",
+                "src/components/product/OldProduct.tsx",
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_sync.repo_svc,
+        "read_files",
+        lambda *_args: {
+            "package.json": "untrusted old core",
+            "src/app/page.tsx": "untrusted old route",
+            "src/components/product/ProductApp.tsx": "canonical product",
+        },
+    )
+    hot_reload = AsyncMock(return_value={"written": 1, "deleted": 1})
+    monkeypatch.setattr(runtime_sync.orchestrator_client, "hot_reload_exact", hot_reload)
+
+    synced = await runtime_sync.reconcile_locked_runtime(
+        session,
+        project,
+        ensure_running=False,
+        full_tree=True,
+    )
+
+    assert synced is True
+    hot_reload.assert_awaited_once()
+    call = hot_reload.await_args
+    assert call is not None
+    runtime_patch = call.args[2]
+    assert call.args[:2] == (project.id, project.slug)
+    assert runtime_patch["src/components/product/OldProduct.tsx"] == ""
+    assert runtime_patch["src/components/product/ProductApp.tsx"] == "canonical product"
+    assert "Клиентский FitFlow" in runtime_patch["src/lib/omnia/max-config.ts"]
+    assert str(project.id) in runtime_patch["src/app/api/omnia/preview-session/route.ts"]
+    assert runtime_patch["package.json"]
+    assert runtime_patch["src/app/page.tsx"]
+    assert runtime_patch["src/lib/omnia/client.ts"]
