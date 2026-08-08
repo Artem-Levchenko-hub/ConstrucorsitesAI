@@ -1099,7 +1099,10 @@ async def run_native_build(
     turns_without_product_entry = 0
     entry_focus_compacted = False
 
-    max_runtime = "MAX VERIFICATION OVERRIDE" in system or reference_max_loop
+    # Stable MAX builds must be allowed to finish their compile/repair loop.
+    # The durable gateway fuse (80 requests + cost ceilings) is the authoritative
+    # hard stop; the generic 24-turn iterator must not cut a healthy repair short.
+    max_runtime = "MAX VERIFICATION OVERRIDE" in system or reference_max_loop or stable_max_loop
     max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
     unbounded_max_runtime = max_runtime
     effective_max_steps = (

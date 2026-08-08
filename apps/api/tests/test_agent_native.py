@@ -684,7 +684,7 @@ async def test_stable_max_forces_build_or_write_after_product_entry_stall(
             }
             return _turn(("read_file", {"path": "src/lib/omnia/max-config.ts"}))
         if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
-            assert "product is not proven yet" in str(convo[-1])
+            assert "build is not proven yet" in str(convo[-1])
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
 
@@ -1170,7 +1170,7 @@ async def test_generic_native_honours_configured_limit_and_forwards_trace_ids(
 
 
 @pytest.mark.asyncio
-async def test_max_runtime_obeys_the_explicit_step_limit(
+async def test_stable_max_uses_durable_fuse_instead_of_generic_step_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -1185,7 +1185,7 @@ async def test_max_runtime_obeys_the_explicit_step_limit(
                 (
                     "write_file",
                     {
-                        "path": "src/app/page.tsx",
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
                         "content": (
                             '"use client"; export default function Page() '
                             f"{{ return <main>{call_number}</main>; }}"
@@ -1219,12 +1219,12 @@ async def test_max_runtime_obeys_the_explicit_step_limit(
         stable_max_loop=True,
     )
 
-    assert result.done is False
-    assert result.stop_reason == "max_steps"
-    assert len(calls) == 1
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert len(calls) == 32
     assert calls[0]["model"] == "claude-sonnet-5"
     assert calls[0]["tools"] == agent_native._STABLE_MAX_TOOLS_CACHED
-    assert result.steps == 1
+    assert result.steps == 32
 
 
 @pytest.mark.asyncio
