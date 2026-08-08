@@ -121,6 +121,13 @@ _SEEDED_RECORD_FIELD_RE = re.compile(
     r"calories|price|bookingId|orderId|workoutId|appointmentId|messageId)\s*:",
     re.IGNORECASE,
 )
+_SEEDED_USER_RECORD_KEY_RE = re.compile(
+    r"(?:userId|maxUserId|createdAt|completedAt|happenedAt|performedAt|finishedAt|"
+    r"startedAt|lastCompletedAt|date|status|completed|done|progress|streak|first_?name|"
+    r"last_?name|full_?name|email|avatar|photo_?url|username|bookingId|orderId|"
+    r"workoutId|appointmentId|messageId)",
+    re.IGNORECASE,
+)
 _SEEDED_PROFILE_RE = re.compile(
     r"\b(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)"
     r"\s*(?::[^=;\n]+)?=\s*\{[^}]{0,1200}"
@@ -144,6 +151,18 @@ _SEEDED_NAME_PARTS = (
     "sample",
     "seed",
     "workout",
+)
+_STATIC_CATALOG_NAME_PARTS = ("catalog", "library", "program", "template")
+_USER_ACTIVITY_NAME_PARTS = (
+    "appointment",
+    "booking",
+    "history",
+    "message",
+    "metric",
+    "order",
+    "progress",
+    "record",
+    "user",
 )
 
 _PRODUCT_SUFFIXES = (".ts", ".tsx", ".css")
@@ -326,6 +345,93 @@ def _js_code_mask(content: str) -> list[bool]:
     return mask
 
 
+def _seeded_collection_literal(content: str, match: re.Match[str]) -> str:
+    """Return the matched array without trusting brackets inside JS strings/comments."""
+
+    body_start = match.start("body")
+    opening = content.rfind("[", match.start(), body_start)
+    if opening < 0:
+        return str(match.group(0) or "")
+    code_mask = _js_code_mask(content)
+    depth = 0
+    for index in range(opening, len(content)):
+        if not code_mask[index]:
+            continue
+        char = content[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return content[opening : index + 1]
+    return content[opening:]
+
+
+def _js_object_keys(content: str) -> set[str]:
+    """Extract bare and quoted JS object keys, ignoring values and comments."""
+
+    keys: set[str] = set()
+    index = 0
+    length = len(content)
+    while index < length:
+        char = content[index]
+        next_char = content[index + 1] if index + 1 < length else ""
+        if char == "/" and next_char == "/":
+            newline = content.find("\n", index + 2)
+            index = length if newline < 0 else newline + 1
+            continue
+        if char == "/" and next_char == "*":
+            closing = content.find("*/", index + 2)
+            index = length if closing < 0 else closing + 2
+            continue
+        if char == "/" and _starts_js_regex(content, index):
+            index += 1
+            while index < length:
+                if content[index] == "\\":
+                    index += 2
+                    continue
+                if content[index] == "/":
+                    index += 1
+                    while index < length and content[index].isalpha():
+                        index += 1
+                    break
+                index += 1
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+            index += 1
+            token: list[str] = []
+            while index < length:
+                char = content[index]
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    index += 1
+                    break
+                token.append(char)
+                index += 1
+            lookahead = index
+            while lookahead < length and content[lookahead].isspace():
+                lookahead += 1
+            if lookahead < length and content[lookahead] == ":":
+                keys.add("".join(token))
+            continue
+        if char.isalpha() or char in {"_", "$"}:
+            start = index
+            index += 1
+            while index < length and (content[index].isalnum() or content[index] in {"_", "$"}):
+                index += 1
+            lookahead = index
+            while lookahead < length and content[lookahead].isspace():
+                lookahead += 1
+            if lookahead < length and content[lookahead] == ":":
+                keys.add(content[start:index])
+            continue
+        index += 1
+    return keys
+
+
 def _has_managed_named_import(content: str, symbol: str, module: str) -> bool:
     code_mask = _js_code_mask(content)
     content = _strip_js_non_code(content, keep_strings=True)
@@ -389,7 +495,23 @@ def max_demo_data_rejection(path: str, content: str) -> str | None:
     for match in _SEEDED_COLLECTION_RE.finditer(content or ""):
         name = str(match.group("name") or match.group("state_name") or "")
         body = str(match.group("body") or "")
-        if any(part in name.casefold() for part in _SEEDED_NAME_PARTS) or (
+        collection = _seeded_collection_literal(content or "", match)
+        collection_keys = _js_object_keys(collection)
+        # Product reference content (exercise/workout libraries, programme
+        # templates) is not manufactured user history. It may contain duration,
+        # sets or reps, but never user identity or activity lifecycle fields.
+        # Keeping this distinction avoids forcing a useful fresh app into an
+        # empty catalog while still rejecting fake completed records.
+        name_folded = name.casefold()
+        static_reference = any(part in name_folded for part in _STATIC_CATALOG_NAME_PARTS)
+        user_activity_name = any(part in name_folded for part in _USER_ACTIVITY_NAME_PARTS)
+        if (
+            static_reference
+            and not user_activity_name
+            and not any(_SEEDED_USER_RECORD_KEY_RE.fullmatch(key) for key in collection_keys)
+        ):
+            continue
+        if any(part in name_folded for part in _SEEDED_NAME_PARTS) or (
             _SEEDED_RECORD_FIELD_RE.search(body) is not None
         ):
             matched_name = name
@@ -431,7 +553,9 @@ def build_max_product_contract(prompt: str) -> str:
         "- Real accounts come from validated MAX initData: the managed session creates or "
         "refreshes max_users on first open. Use useMaxApp for identity; never add password "
         "login or manufacture a profile.",
-        "- Ship no hardcoded demo user data, history, metrics, orders, bookings or workouts. "
+        "- Ship no hardcoded demo user data, history, metrics, orders, bookings or completed "
+        "workouts. Static exercise/workout catalog or programme templates are allowed only "
+        "when they are clearly reference content, never user activity. "
         "A new account starts with truthful empty states and creates real persisted data "
         "through the managed client. Business catalog content comes from omniaMaxConfig.",
         "- Use createMaxAction for persisted MAX user activity. Never store a provider key "

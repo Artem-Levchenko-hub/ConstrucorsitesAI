@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from omnia_api.services.max_generation_contract import (
     MAX_REQUIRED_POST_SEE_SKILL,
     MAX_REQUIRED_PREWRITE_SKILLS,
@@ -295,6 +297,122 @@ def test_demo_data_guard_only_applies_to_model_owned_product_source() -> None:
 
     assert "truthful empty state" in str(max_demo_data_rejection("src/app/page.tsx", content))
     assert max_demo_data_rejection("src/lib/omnia/max-config.ts", content) is None
+
+
+def test_static_workout_catalog_is_not_mistaken_for_user_history() -> None:
+    catalog = """
+const WORKOUT_CATALOG = [
+  { id: "mobility-15", title: "Мобильность", duration: 15, sets: 3, reps: "8" },
+];
+"""
+    library = """
+const WORKOUT_LIBRARY = [
+  { id: "strength-30", title: "Сила", duration: 30, sets: 4, reps: "10" },
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/catalog.ts", catalog) is None
+    assert max_demo_data_rejection("src/components/product/library.ts", library) is None
+
+    catalog_with_later_state = (
+        catalog + "\ntype ScreenState = { status: 'idle' | 'loading'; progress: number };"
+    )
+    assert (
+        max_demo_data_rejection("src/components/product/catalog.ts", catalog_with_later_state)
+        is None
+    )
+
+    catalog_with_wording = """
+const WORKOUT_CATALOG = [
+  {
+    id: "daily-20",
+    title: "status: ежедневная практика",
+    description: "progress: от простого к сложному",
+    duration: 20,
+    /* completed: wording in a maintainer comment only */
+  },
+];
+"""
+    assert (
+        max_demo_data_rejection("src/components/product/catalog.ts", catalog_with_wording) is None
+    )
+
+
+def test_static_catalog_with_user_activity_fields_is_still_rejected() -> None:
+    content = """
+const WORKOUT_CATALOG = [
+  { id: "done-1", title: "Сила", userId: "42", completedAt: "2026-08-08" },
+];
+"""
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/catalog.ts", content)).lower()
+    )
+
+    later_record = """
+const WORKOUT_CATALOG = [
+  { id: "reference-1", title: "Сила", duration: 30 },
+  { id: "done-1", title: "Кардио", userId: "42", completedAt: "2026-08-08" },
+];
+"""
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/catalog.ts", later_record)).lower()
+    )
+
+    deceptive_terminator = """
+const WORKOUT_CATALOG = [
+  { id: "reference-1", title: "];", duration: 30 },
+  { id: "done-1", title: "Кардио", userId: "42", completed: true },
+];
+"""
+    assert (
+        "demo user data"
+        in str(
+            max_demo_data_rejection("src/components/product/catalog.ts", deceptive_terminator)
+        ).lower()
+    )
+
+
+@pytest.mark.parametrize(
+    "activity_fields",
+    [
+        'completed: true, date: "2026-08-08"',
+        'status: "completed", happenedAt: "2026-08-08"',
+        "progress: 75, streak: 4",
+        'firstName: "Анна", username: "fitness_pro"',
+    ],
+)
+def test_static_catalog_alias_cannot_hide_fake_activity(activity_fields: str) -> None:
+    content = f'const WORKOUT_LIBRARY = [{{ id: "done-1", {activity_fields} }}];'
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/library.ts", content)).lower()
+    )
+
+
+def test_static_catalog_alias_cannot_hide_quoted_activity_keys() -> None:
+    content = """
+const WORKOUT_CATALOG = [
+  { "id": "done-1", "status": "completed", "date": "2026-08-08" },
+];
+"""
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/catalog.ts", content)).lower()
+    )
+
+
+def test_user_activity_collection_cannot_hide_behind_catalog_suffix() -> None:
+    content = 'const ORDER_CATALOG = [{ id: "order-1", title: "Заказ" }];'
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/catalog.ts", content)).lower()
+    )
 
 
 def test_completion_requires_only_max_compatible_runtime_proof() -> None:
