@@ -132,7 +132,7 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
 
 
 def test_fresh_max_reference_gate_rejects_css_only_or_placeholder_entry() -> None:
-    evidence = {"runtime_check_after_write": 1}
+    evidence = {"runtime_check_after_write": 1, "see_after_write": 1}
 
     assert messages._reference_max_completion_gap(
         {"src/app/globals.css": "body { color: black; }"},
@@ -149,16 +149,88 @@ def test_fresh_max_reference_gate_rejects_css_only_or_placeholder_entry() -> Non
         require_product_entry=True,
     )
     entry = (
-        "export default function ProductApp() { return <main>" + ("product " * 60) + "</main>; }"
+        'export default function ProductApp() { return <main className="app-shell">'
+        + ("product " * 60)
+        + "</main>; }"
     )
+    styles = ".app-shell { min-height: 100dvh; }\n" + ("/* product visual system */\n" * 20)
     assert (
         messages._reference_max_completion_gap(
-            {"src/components/product/ProductApp.tsx": entry},
+            {
+                "src/components/product/ProductApp.tsx": entry,
+                "src/app/globals.css": styles,
+            },
             evidence,
             require_product_entry=True,
         )
         is None
     )
+
+
+def test_fresh_max_reference_gate_rejects_unstyled_component_classes() -> None:
+    entry = (
+        'export default function ProductApp() { return <main className="app-shell">'
+        '<header className="app-header"><h1 className="hero-title">Fit</h1></header>'
+        '<button className="primary-action">Старт</button>' + ("product " * 60) + "</main>; }"
+    )
+    starter_css = ".max-shell { padding: 20px; }\n" + ("/* starter */\n" * 40)
+
+    gap = messages._reference_max_completion_gap(
+        {
+            "src/components/product/ProductApp.tsx": entry,
+            "src/app/globals.css": starter_css,
+        },
+        {"runtime_check_after_write": 1, "see_after_write": 1},
+        require_product_entry=True,
+    )
+
+    assert gap is not None
+    assert "class vocabulary" in gap
+
+
+def test_fresh_max_style_gate_ignores_class_names_inside_css_comments() -> None:
+    entry = (
+        'export default function ProductApp() { return <main className="app-shell">'
+        '<header className="app-header"><h1 className="hero-title">Fit</h1></header>'
+        '<button className="primary-action">Старт</button>' + ("product " * 60) + "</main>; }"
+    )
+    deceptive_css = (
+        "/* .app-shell .app-header .hero-title .primary-action */\n"
+        ".unrelated { padding: 20px; }\n" + ("/* enough bytes but no product selectors */\n" * 20)
+    )
+
+    gap = messages._reference_max_completion_gap(
+        {
+            "src/components/product/ProductApp.tsx": entry,
+            "src/app/globals.css": deceptive_css,
+        },
+        {"runtime_check_after_write": 1, "see_after_write": 1},
+        require_product_entry=True,
+    )
+
+    assert gap is not None
+    assert "class vocabulary" in gap
+
+
+def test_fresh_max_reference_gate_requires_visual_proof_after_final_write() -> None:
+    entry = (
+        'export default function ProductApp() { return <main className="app-shell">'
+        + ("product " * 60)
+        + "</main>; }"
+    )
+    styles = ".app-shell { min-height: 100dvh; }\n" + ("/* visual */\n" * 40)
+
+    gap = messages._reference_max_completion_gap(
+        {
+            "src/components/product/ProductApp.tsx": entry,
+            "src/app/globals.css": styles,
+        },
+        {"runtime_check_after_write": 1},
+        require_product_entry=True,
+    )
+
+    assert gap is not None
+    assert "Run see" in gap
 
 
 @pytest.mark.parametrize(
@@ -2093,6 +2165,60 @@ async def test_completion_contract_finishes_without_ceremonial_provider_turn(
     assert calls == 2
     assert all({"probe", "verify_isolation"} <= names for names in advertised_tools)
     assert all("read_skill" not in names for names in advertised_tools)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_see_does_not_satisfy_completion_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"})),
+            _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+            _turn(("done", {"summary": "finished"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    see_calls = 0
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        if action.name == "see":
+            see_calls += 1
+            return {
+                "ok": True,
+                "proof_unavailable": True,
+                "detail": "visual QA unavailable",
+            }
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        if not files or not evidence.get("build_after_write"):
+            return "proof missing"
+        if not evidence.get("runtime_check_after_write"):
+            return "Run runtime_check"
+        if not evidence.get("see_after_write"):
+            return "Run see on / after the final product write"
+        return None
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="t",
+        execute=execute,
+        completion_check=complete,
+        max_steps=3,
+    )
+
+    assert result.done is False
+    assert result.stop_reason == "max_steps"
+    assert result.summary == "Run see on / after the final product write"
+    assert see_calls == 2
 
 
 @pytest.mark.asyncio

@@ -195,6 +195,51 @@ def _max_runtime_probe_is_green(probe: Mapping[str, Any]) -> bool:
     return bool(probe.get("ok")) and isinstance(code, int) and 200 <= code < 400
 
 
+_MAX_LITERAL_CLASS_RE = re.compile(r"className\s*=\s*['\"]([^'\"]+)['\"]")
+_MAX_CSS_CLASS_RE = re.compile(r"\.(-?[_a-zA-Z]+[_a-zA-Z0-9-]*)")
+
+
+def _fresh_max_style_gap(written: Mapping[str, str], entry: str) -> str | None:
+    """Reject a typed-but-unstyled fresh product before visual QA.
+
+    The maintained starter has its own class vocabulary. A model can create a
+    perfectly valid ProductApp with new class names, skip globals.css, and still
+    pass typecheck/runtime HTTP 200 while rendering as raw browser controls.
+    """
+
+    globals_css = str(written.get("src/app/globals.css") or "").strip()
+    if len(globals_css) < 400:
+        return (
+            "A fresh MAX product must also rewrite src/app/globals.css with the "
+            "product-specific mobile visual system; the starter CSS is not the result."
+        )
+    css = "\n".join(str(content) for path, content in written.items() if path.endswith(".css"))
+    css_code = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    if (
+        '@import "tailwindcss"' in css_code
+        or "@import 'tailwindcss'" in css_code
+        or "@tailwind " in css_code
+    ):
+        return None
+    literal_classes = {
+        token
+        for value in _MAX_LITERAL_CLASS_RE.findall(entry)
+        for token in value.split()
+        if re.fullmatch(r"-?[_a-zA-Z]+[_a-zA-Z0-9-]*", token)
+    }
+    if len(literal_classes) < 4:
+        return None
+    defined_classes = set(_MAX_CSS_CLASS_RE.findall(css_code))
+    styled = literal_classes.intersection(defined_classes)
+    if len(styled) * 2 < len(literal_classes):
+        missing = ", ".join(sorted(literal_classes - defined_classes)[:8])
+        return (
+            "The ProductApp class vocabulary is not implemented in product CSS. "
+            f"Style the actual component classes before done (examples: {missing})."
+        )
+    return None
+
+
 def _reference_max_completion_gap(
     written: Mapping[str, str],
     evidence: Mapping[str, int],
@@ -219,10 +264,18 @@ def _reference_max_completion_gap(
                 "src/components/product/ProductApp.tsx with a real product, not only "
                 "CSS or a placeholder."
             )
+        style_gap = _fresh_max_style_gap(written, entry)
+        if style_gap:
+            return style_gap
     if evidence.get("runtime_check_after_write", 0) < 1:
         return (
             "Run runtime_check on / after the final product write; "
             "if it is red, fix that concrete runtime error first."
+        )
+    if require_product_entry and evidence.get("see_after_write", 0) < 1:
+        return (
+            "Run see on / after the final product write and apply any concrete visual "
+            "issues before finishing."
         )
     return None
 

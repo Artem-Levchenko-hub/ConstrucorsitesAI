@@ -93,6 +93,7 @@ async def see_page(
         return {
             "ok": True,
             "detail": f"saw {rel}, but the vision judge was unavailable (skipped)",
+            "proof_unavailable": True,
         }
     max_quality_failed = product_kind == "max_miniapp" and (
         verdict.verdict != "beautiful" or int(verdict.score) < 8

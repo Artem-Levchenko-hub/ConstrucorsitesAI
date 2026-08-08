@@ -37,6 +37,7 @@ async def test_max_see_bootstraps_signed_preview_before_capture(
     )
 
     assert result["ok"] is True
+    assert result["proof_unavailable"] is True
     assert captured == {
         "url": "https://fitness-dev.example/profile",
         "widths": (390, 360),

@@ -1216,6 +1216,12 @@ async def run_native_build(
                     )
                 if not proof.get("ok"):
                     break
+                if action.name == "see" and (
+                    proof.get("proof_unavailable") or proof.get("skipped")
+                ):
+                    # Fail-soft visual infrastructure is not production proof.
+                    # Preserve the contract gap and return an honest red result.
+                    break
                 successful_tools[action.name] = successful_tools.get(action.name, 0) + 1
                 proof_after_write.add(action.name)
                 gap = _completion_gap()
@@ -1807,6 +1813,10 @@ async def run_native_build(
                     if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
                         if name == "see" and obs.get("needs_fix"):
                             visual_feedback_step = step
+                        elif name == "see" and (obs.get("proof_unavailable") or obs.get("skipped")):
+                            # A fail-soft visual executor result keeps the loop alive,
+                            # but must never satisfy a production visual-proof gate.
+                            last_green_see_step = None
                         else:
                             proof_after_write.add(name)
                             if name == "see":
