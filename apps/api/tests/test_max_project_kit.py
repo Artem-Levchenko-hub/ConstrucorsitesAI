@@ -230,6 +230,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "package.json",
         "pnpm-lock.yaml",
         "postcss.config.mjs",
+        "tsconfig.json",
         "public/omnia-inspector.js",
         MAX_PRODUCT_PAGE_PATH,
         "src/app/layout.tsx",
@@ -289,6 +290,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert 'from "@/components/OmniaCompliance"' in provider
     assert "src/components/OmniaCompliance.tsx" in files
     assert 'from "@/lib/omnia/max-config"' in files["src/components/OmniaCompliance.tsx"]
+    assert '"@/*": ["./src/*"]' in files["tsconfig.json"]
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
     assert "timingSafeEqual" in validator

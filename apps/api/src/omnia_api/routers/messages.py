@@ -4082,11 +4082,13 @@ async def _process_prompt(
                     )
                     _max_seed_files = _starter_files
                     _starter_build = await orchestrator_client.agent_build(project_id, project_slug)
+                    _starter_build_attempts = [_starter_build]
                     if not _starter_build.get("ok"):
                         await asyncio.sleep(1.0)
                         _starter_build = await orchestrator_client.agent_build(
                             project_id, project_slug
                         )
+                        _starter_build_attempts.append(_starter_build)
                     if _starter_build.get("ok"):
                         await _agent_emit(
                             "agent.step",
@@ -4103,8 +4105,15 @@ async def _process_prompt(
                             },
                         )
                     else:
+                        _build_failures = " | ".join(
+                            str(attempt.get("detail") or attempt.get("error") or "unknown error")[
+                                :2000
+                            ]
+                            for attempt in _starter_build_attempts
+                        )
                         raise RuntimeError(
-                            "trusted MAX platform core failed two deterministic builds"
+                            "trusted MAX platform core failed deterministic builds: "
+                            f"{_build_failures}"
                         )
                 except Exception as _starter_exc:
                     print(f"[PP] MAX starter preparation skipped: {_starter_exc!r}", flush=True)

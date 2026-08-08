@@ -21,7 +21,7 @@ from omnia_api.services.secret_safety import max_model_write_rejection
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 16
+MAX_MANAGED_KIT_VERSION = 17
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 MAX_PRODUCT_ENTRY_PATH = "src/components/product/ProductApp.tsx"
@@ -131,6 +131,10 @@ def render_max_managed_files(
         "package.json": _template_file("package.json"),
         "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
+        # MAX source uses the @/* alias throughout the protected runtime.  The
+        # base container may predate the MAX template, so its generic tsconfig
+        # cannot be trusted to carry that alias into a freshly overlaid starter.
+        "tsconfig.json": _template_file("tsconfig.json"),
         "public/omnia-inspector.js": _template_file("public/omnia-inspector.js"),
         MAX_PRODUCT_PAGE_PATH: _template_file(MAX_PRODUCT_PAGE_PATH),
         "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
