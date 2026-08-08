@@ -27,6 +27,7 @@ from uuid import UUID
 # for an irrelevant 1440px render.
 _WEB_SEE_WIDTHS = (1440, 360)
 _MAX_SEE_WIDTHS = (390, 360)
+_VISION_AUDIT_ATTEMPTS = 2
 
 
 async def see_page(
@@ -83,12 +84,22 @@ async def see_page(
     if not shots:
         return {"ok": False, "error": f"render produced no screenshot for {rel}"}
 
-    verdict = await vision_audit.audit_screenshots(
-        shots,
-        prompt_context=prompt_context,
-        project_id=str(pid),
-        product_kind=product_kind,
-    )
+    # A screenshot capture is comparatively expensive, while an unavailable or
+    # unparsable judge response is often transient. Reuse the same captured
+    # pixels for one bounded retry here instead of sending the native build
+    # agent through another paid reasoning turn just to call ``see`` again.
+    verdict = None
+    attempts = _VISION_AUDIT_ATTEMPTS if product_kind == "max_miniapp" else 1
+    for _attempt in range(attempts):
+        verdict = await vision_audit.audit_screenshots(
+            shots,
+            prompt_context=prompt_context,
+            project_id=str(pid),
+            product_kind=product_kind,
+        )
+        if not verdict.skipped:
+            break
+    assert verdict is not None
     if verdict.skipped:
         return {
             "ok": True,

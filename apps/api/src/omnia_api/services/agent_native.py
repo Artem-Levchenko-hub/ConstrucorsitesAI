@@ -1571,6 +1571,7 @@ async def run_native_build(
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
             wrote_this_turn = False
+            visual_proof_unavailable_this_turn = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
             for tu in tool_uses:
@@ -1696,6 +1697,15 @@ async def run_native_build(
                     # one fresh read of the failing path on the next turn.
                     repair_reads_since_build.discard(action.path)
                     obs = {"ok": False, "error": _HISTORY_PLACEHOLDER_WRITE_REJECTED}
+                elif visual_proof_unavailable_this_turn and name == "see":
+                    # Tool calls in one assistant response are planned before
+                    # their results return. Execute at most one unavailable
+                    # visual proof in the batch; the bounded retry already ran
+                    # inside ``see_page``.
+                    obs = {
+                        "ok": False,
+                        "error": "Visual QA is unavailable; repeated see was skipped.",
+                    }
                 elif (
                     entry_focus_compacted
                     and _STABLE_MAX_PRODUCT_ENTRY not in written
@@ -1825,9 +1835,10 @@ async def run_native_build(
                         if name == "see" and obs.get("needs_fix"):
                             visual_feedback_step = step
                         elif name == "see" and (obs.get("proof_unavailable") or obs.get("skipped")):
-                            # A fail-soft visual executor result keeps the loop alive,
-                            # but must never satisfy a production visual-proof gate.
+                            # A fail-soft visual executor result must never satisfy
+                            # a production visual-proof gate.
                             last_green_see_step = None
+                            visual_proof_unavailable_this_turn = True
                         else:
                             proof_after_write.add(name)
                             if name == "see":
@@ -1945,6 +1956,23 @@ async def run_native_build(
             else:
                 turns_without_product_entry += 1
             convo.append({"role": "user", "content": results})
+            if visual_proof_unavailable_this_turn and max_runtime and completion_check is not None:
+                # ``see_page`` already performs its own bounded retry using the
+                # same screenshots. Another native-agent turn would only ask the
+                # provider to call ``see`` again, which previously created an
+                # unbounded paid loop while producing no new product evidence.
+                log.warning("agent_native.visual_proof_unavailable", step=step)
+                return AgentResult(
+                    done=False,
+                    summary=(
+                        "Визуальная проверка недоступна после повторной попытки. "
+                        "Результат не отмечен как готовый; повторите генерацию."
+                    ),
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="visual_proof_unavailable",
+                )
             if truncated_no_write_turns >= _MAX_TRUNCATED_WRITE_ABORT_AT:
                 log.warning(
                     "agent_native.oversized_write_abort",

@@ -2138,7 +2138,11 @@ async def test_completion_contract_finishes_without_ceremonial_provider_turn(
     turns = iter(
         [
             _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"})),
-            _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+            _turn(
+                ("build", {}),
+                ("runtime_check", {"path": "/"}),
+                ("see", {"path": "/"}),
+            ),
         ]
     )
     calls = 0
@@ -2183,7 +2187,12 @@ async def test_unavailable_see_does_not_satisfy_completion_contract(
     turns = iter(
         [
             _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"})),
-            _turn(("build", {}), ("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+            _turn(
+                ("build", {}),
+                ("runtime_check", {"path": "/"}),
+                ("see", {"path": "/"}),
+                ("see", {"path": "/"}),
+            ),
             _turn(("done", {"summary": "finished"})),
         ]
     )
@@ -2217,7 +2226,9 @@ async def test_unavailable_see_does_not_satisfy_completion_contract(
         return None
 
     result = await agent_native.run_native_build(
-        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        system=agent_native.native_system_prompt(
+            "MAX VERIFICATION OVERRIDE\nMAX PLATFORM CORE CONTRACT"
+        ),
         task="t",
         execute=execute,
         completion_check=complete,
@@ -2225,9 +2236,9 @@ async def test_unavailable_see_does_not_satisfy_completion_contract(
     )
 
     assert result.done is False
-    assert result.stop_reason == "max_steps"
-    assert result.summary == "Run see on / after the final product write"
-    assert see_calls == 2
+    assert result.stop_reason == "visual_proof_unavailable"
+    assert "Визуальная проверка недоступна" in result.summary
+    assert see_calls == 1
 
 
 @pytest.mark.asyncio
