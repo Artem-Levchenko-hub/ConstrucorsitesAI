@@ -51,6 +51,7 @@ _CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside o
 _MAX_PROVIDER_RECONNECT_CYCLES = 3
 _MAX_TRUNCATED_WRITE_ABORT_AT = 2
 _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
+_STABLE_MAX_SUPPORT_FILE_LIMIT = 8
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
@@ -301,6 +302,14 @@ _STABLE_MAX_ENTRY_REQUIRED = (
 _STABLE_MAX_PROGRESS_REQUIRED = (
     "The product entry exists, but this build is not proven yet. Stop reading. Your next "
     "action must write/edit a required component or run build to expose concrete errors."
+)
+_STABLE_MAX_SUPPORT_ADVANCE_REQUIRED = (
+    "That supporting file is already written. Do not rewrite it before the product entry "
+    f"exists. Create the next required component or compose `{_STABLE_MAX_PRODUCT_ENTRY}` now."
+)
+_STABLE_MAX_ENTRY_NOW_REQUIRED = (
+    "The supporting-file budget is complete. Compose the real screen in "
+    f"`{_STABLE_MAX_PRODUCT_ENTRY}` now; add or refine remaining components after that."
 )
 _STABLE_MAX_FIRST_WRITE_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file"}
@@ -1563,6 +1572,20 @@ async def run_native_build(
                             else _STABLE_MAX_WRITE_REQUIRED
                         ),
                     }
+                elif (
+                    force_entry_write
+                    and name in {"write_file", "edit_file"}
+                    and action.path != _STABLE_MAX_PRODUCT_ENTRY
+                    and action.path in written
+                ):
+                    obs = {"ok": False, "error": _STABLE_MAX_SUPPORT_ADVANCE_REQUIRED}
+                elif (
+                    force_entry_write
+                    and name in {"write_file", "edit_file"}
+                    and action.path != _STABLE_MAX_PRODUCT_ENTRY
+                    and len(written) >= _STABLE_MAX_SUPPORT_FILE_LIMIT
+                ):
+                    obs = {"ok": False, "error": _STABLE_MAX_ENTRY_NOW_REQUIRED}
                 elif lifecycle_error:
                     obs = {"ok": False, "error": lifecycle_error}
                 else:

@@ -539,6 +539,17 @@ async def test_stable_max_supporting_files_do_not_unlock_reading_before_product_
                 (
                     "write_file",
                     {
+                        "path": "src/components/product/types.ts",
+                        "content": "export type Item = { id: string; title: string }",
+                    },
+                )
+            )
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
+            assert "already written" in str(convo[-1])
+            return _turn(
+                (
+                    "write_file",
+                    {
                         "path": "src/components/product/ProductApp.tsx",
                         "content": (
                             "export default function ProductApp(){return <main>Full app</main>}"
@@ -546,7 +557,7 @@ async def test_stable_max_supporting_files_do_not_unlock_reading_before_product_
                     },
                 )
             )
-        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 4:
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
 
