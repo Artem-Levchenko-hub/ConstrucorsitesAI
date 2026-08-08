@@ -342,6 +342,28 @@ _STABLE_MAX_REPAIR_VERIFY_REQUIRED = (
 )
 
 
+def _stable_max_compact_repair_task(
+    error: str,
+    paths: frozenset[str],
+    written: Mapping[str, str],
+) -> str:
+    sources: list[str] = []
+    remaining = 60_000
+    for path in sorted(paths):
+        content = written.get(path, "")
+        if not content or remaining <= 0:
+            continue
+        excerpt = content[:remaining]
+        remaining -= len(excerpt)
+        sources.append(f"CURRENT `{path}` (preserve everything else):\n```tsx\n{excerpt}\n```")
+    return (
+        "TARGETED COMPILER REPAIR. The current product is already implemented. "
+        "Do not redesign or recreate files. Call edit_file only, replacing the smallest exact "
+        "old_string that fixes all listed errors you can address in one edit.\n\n"
+        f"BUILD ERRORS:\n{error[:12_000]}\n\n" + "\n\n".join(sources)
+    )
+
+
 _STABLE_MAX_FIRST_WRITE_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file"}
 ]
@@ -355,6 +377,12 @@ _STABLE_MAX_REPAIR_TOOLS = [
 _STABLE_MAX_REPAIR_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_REPAIR_TOOLS[:-1],
     {**_STABLE_MAX_REPAIR_TOOLS[-1], "cache_control": _CACHE},
+]
+_STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
+    {
+        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "edit_file"),
+        "cache_control": _CACHE,
+    }
 ]
 _STABLE_MAX_REPAIR_VERIFY_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"read_file", "edit_file", "build"}
@@ -1131,7 +1159,9 @@ async def run_native_build(
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
     last_build_error_paths: frozenset[str] = frozenset()
+    last_build_error_text = ""
     repair_reads_since_build: set[str] = set()
+    repair_context_compacted = False
     wrote_since_build = False
     no_write_turns = 0  # consecutive assistant turns with no successful write
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
@@ -1324,6 +1354,24 @@ async def run_native_build(
             repair_mode = stable_max_loop and last_build_ok is False
             force_repair_write = repair_mode and not wrote_since_build
             force_repair_verify = repair_mode and wrote_since_build
+            if (
+                force_repair_write
+                and last_build_error_paths
+                and not repair_context_compacted
+                and all(path in written for path in last_build_error_paths)
+            ):
+                convo = [
+                    {
+                        "role": "user",
+                        "content": _stable_max_compact_repair_task(
+                            last_build_error_text,
+                            last_build_error_paths,
+                            written,
+                        ),
+                    }
+                ]
+                repair_context_compacted = True
+            force_repair_edit_only = force_repair_write and repair_context_compacted
             force_progress = (
                 stable_max_loop
                 and no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT
@@ -1357,6 +1405,8 @@ async def run_native_build(
                         if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
                         else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
                         if force_repair_verify
+                        else _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED
+                        if force_repair_edit_only
                         else _STABLE_MAX_PROGRESS_TOOLS_CACHED
                         if force_progress
                         else _STABLE_MAX_REPAIR_TOOLS_CACHED
@@ -1705,6 +1755,8 @@ async def run_native_build(
                 allowed_progress_tools = (
                     {"read_file", "edit_file", "build"}
                     if force_repair_verify
+                    else {"edit_file"}
+                    if force_repair_edit_only
                     else {"read_file", "edit_file"}
                     if force_repair_write
                     else {"write_file", "edit_file", "build"}
@@ -1836,6 +1888,7 @@ async def run_native_build(
                     last_green_see_step = None
                 elif tool_executed and name == "build":
                     last_build_ok = bool(obs.get("ok"))
+                    last_build_error_text = str(obs.get("error") or obs.get("detail") or "")
                     last_build_error_paths = (
                         frozenset()
                         if last_build_ok
@@ -1844,6 +1897,7 @@ async def run_native_build(
                         )
                     )
                     repair_reads_since_build.clear()
+                    repair_context_compacted = False
                     wrote_since_build = False
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1

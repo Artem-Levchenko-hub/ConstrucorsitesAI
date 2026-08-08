@@ -970,13 +970,10 @@ async def test_stable_max_red_build_forces_targeted_edit_and_blocks_full_rewrite
         if calls == 2:
             return _turn(("build", {}))
         if calls == 3:
-            assert {tool["name"] for tool in kwargs["tools"]} == {
-                "read_file",
-                "edit_file",
-            }
-            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
-        if calls == 4:
-            assert "ProductApp" in str(convo[-1])
+            assert {tool["name"] for tool in kwargs["tools"]} == {"edit_file"}
+            assert "TARGETED COMPILER REPAIR" in str(convo[-1])
+            assert "TS2322" in str(convo[-1])
+            assert "<main>bad</main>" in str(convo[-1])
             return _turn(
                 (
                     "write_file",
@@ -986,11 +983,8 @@ async def test_stable_max_red_build_forces_targeted_edit_and_blocks_full_rewrite
                     },
                 )
             )
-        if calls == 5:
+        if calls == 4:
             assert "history placeholder" in str(convo[-1])
-            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
-        if calls == 6:
-            assert "ProductApp" in str(convo[-1])
             return _turn(
                 (
                     "write_file",
@@ -1000,7 +994,7 @@ async def test_stable_max_red_build_forces_targeted_edit_and_blocks_full_rewrite
                     },
                 )
             )
-        if calls == 7:
+        if calls == 5:
             assert "build is RED" in str(convo[-1])
             return _turn(
                 (
@@ -1012,7 +1006,7 @@ async def test_stable_max_red_build_forces_targeted_edit_and_blocks_full_rewrite
                     },
                 )
             )
-        if calls == 8:
+        if calls == 6:
             assert {tool["name"] for tool in kwargs["tools"]} == {
                 "read_file",
                 "edit_file",
@@ -1027,7 +1021,7 @@ async def test_stable_max_red_build_forces_targeted_edit_and_blocks_full_rewrite
                     },
                 )
             )
-        if calls == 9:
+        if calls == 7:
             assert "write_file remains disabled" in str(convo[-1])
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
@@ -1074,7 +1068,7 @@ async def test_stable_max_red_build_forces_targeted_edit_and_blocks_full_rewrite
     )
 
     assert result.done is True
-    assert executed_reads == 2
+    assert executed_reads == 0
     assert executed_writes == 1
     assert executed_edits == 1
     assert builds == 2
