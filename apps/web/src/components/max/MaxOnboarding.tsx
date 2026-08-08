@@ -7,12 +7,14 @@ import {
   Building2,
   Check,
   CircleAlert,
+  Eye,
   Loader2,
   MailCheck,
   RefreshCw,
   ShieldCheck,
   UserRoundCheck,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -26,6 +28,9 @@ import {
   type BusinessKind,
 } from "@/lib/api/max-account";
 import { ApiError } from "@/lib/api/client";
+import {
+  useMaxDemoDraft,
+} from "@/hooks/useMaxDemoDraft";
 import { cn } from "@/lib/utils";
 
 const kinds: Array<{
@@ -50,6 +55,7 @@ export function MaxOnboarding({ email }: { email: string }) {
   const [inn, setInn] = useState("");
   const [ogrn, setOgrn] = useState("");
   const [legalName, setLegalName] = useState("");
+  const demoDraft = useMaxDemoDraft();
   const access = useQuery({
     queryKey: ["max-access"],
     queryFn: getMaxAccess,
@@ -134,6 +140,18 @@ export function MaxOnboarding({ email }: { email: string }) {
           </div>
           <span className="text-sm text-[#8d887f]">Шаг {step} из 3</span>
         </div>
+
+        {demoDraft && (
+          <section className="mt-6 flex flex-col gap-4 rounded-[12px] border border-accent/30 bg-accent-subtle p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold">Ваше демо «{demoDraft.brief.name}» сохранено</p>
+              <p className="mt-1 text-xs leading-5 text-[#6d6962]">Пока идёт проверка, можно вернуться в интерактивный просмотр. Описание не потеряется.</p>
+            </div>
+            <Link href="/max/demo" className="omnia-button omnia-button-secondary min-h-10 shrink-0 px-4">
+              <Eye className="size-4" /> Открыть демо
+            </Link>
+          </section>
+        )}
 
         <div className="mt-8 grid gap-3 sm:grid-cols-3">
           {[

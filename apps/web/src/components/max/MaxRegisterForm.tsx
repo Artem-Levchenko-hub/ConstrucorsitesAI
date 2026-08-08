@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function MaxRegisterForm() {
+export function MaxRegisterForm({ fromDemo = false }: { fromDemo?: boolean }) {
   const [state, action, pending] = useActionState(maxRegisterAction, {
     error: null,
   });
@@ -123,7 +123,11 @@ export function MaxRegisterForm() {
         disabled={pending}
         className="h-12 w-full rounded-lg bg-accent text-base text-white hover:bg-accent-hover"
       >
-        {pending ? "Создаём аккаунт…" : "Продолжить"}
+        {pending
+          ? "Сохраняем…"
+          : fromDemo
+            ? "Сохранить проект и продолжить"
+            : "Продолжить"}
         {!pending && <ArrowRight className="ml-2 size-4" />}
       </Button>
 

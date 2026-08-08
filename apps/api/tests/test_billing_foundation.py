@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from omnia_api.models.account import BusinessEntitlement
 from omnia_api.models.billing import BillingAccount, BillingPlan, Subscription
 from omnia_api.models.user import User
 from omnia_api.models.wallet_charge import WalletCharge
@@ -103,9 +104,7 @@ async def test_max_business_keeps_the_same_account_and_financial_history(
     )
     assert registered.status_code == 201
     user_id = (
-        await db_session.execute(
-            select(User.id).where(User.email == "business-ledger@example.com")
-        )
+        await db_session.execute(select(User.id).where(User.email == "business-ledger@example.com"))
     ).scalar_one()
     original = (
         await db_session.execute(
@@ -138,19 +137,30 @@ async def test_max_business_keeps_the_same_account_and_financial_history(
     assert promoted.personal_user_id is None
     assert str(promoted.business_id) == business.json()["id"]
 
+    entitlement = await db_session.get(BusinessEntitlement, promoted.business_id)
+    assert entitlement is not None
+    entitlement.free_generations_used = 2
+    await db_session.commit()
+
     subscription = await client.get("/api/billing/subscription")
     assert subscription.status_code == 200
     assert subscription.json()["plan"]["code"] == "free"
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
     assert wallet.json()["balance_rub"] == "125.0000"
+    assert wallet.json()["free_generations_left"] == 1
+    assert wallet.json()["free_generation_limit"] == 3
     [ledger_entry] = (
-        await db_session.execute(
-            select(WalletCharge).where(
-                WalletCharge.description == "Balance created before business onboarding"
+        (
+            await db_session.execute(
+                select(WalletCharge).where(
+                    WalletCharge.description == "Balance created before business onboarding"
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert ledger_entry.billing_account_id == original_id
     assert wallet.json()["recent_charges"][0]["description"] == ledger_entry.description
 

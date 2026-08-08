@@ -26,6 +26,7 @@ import { toast } from "sonner";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
+import { DownloadButton } from "@/components/workspace/DownloadButton";
 import { listProjects } from "@/lib/api/projects";
 import {
   listSnapshots,
@@ -51,6 +52,7 @@ import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
 import { MaxProjectNav } from "./MaxProjectNav";
 import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
+import { MaxTrialBadge } from "./MaxTrialBadge";
 
 type HistorySessionRequest = { snapshotId: string; requestId: number };
 
@@ -509,7 +511,13 @@ function MaxWorkspaceContent({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <MaxTrialBadge />
             <MaxUsageBreakdown projectId={project.id} />
+            {versionSnapshots.length > 0 && (
+              <div className="hidden md:block">
+                <DownloadButton projectId={project.id} projectSlug={project.slug} />
+              </div>
+            )}
             <Link href={`/max/${project.id}/integrations`} className="hidden h-11 items-center rounded-[8px] border border-[#d8d4cb] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee] md:inline-flex">Интеграции</Link>
             <button
               type="button"
