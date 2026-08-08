@@ -37,13 +37,10 @@ from omnia_api.services.max_generation_contract import (
 log = structlog.get_logger(__name__)
 
 _MODEL = PRIMARY_LLM_MODEL
-# Providers can pre-reserve the full max_tokens × output price on every call and 402
-# if the key balance is below that reserve — so an over-large ceiling caps how many
-# calls fit the balance (an oversized reserve can 402 mid-build,
-# which surfaced to the user as "соединение потеряно"). 20000 still leaves ~12000
-# tokens for tool args after the 8000 thinking budget — enough for a large file —
-# while cutting the reserve ~35%. Env override: NATIVE_MAX_TOKENS (future).
-_MAX_TOKENS = 20000
+# Match the current native gateway ceiling. Complete product composition is more
+# important than reducing the provider's per-call reservation; bounded retries,
+# truncation handling, and the durable run fuse still prevent unbounded spending.
+_MAX_TOKENS = 32768
 _THINKING_BUDGET = 8000
 _ENTRY_FOCUS_THINKING_BUDGET = 2000
 _MAX_TOOL_RESULT_CHARS = 20000

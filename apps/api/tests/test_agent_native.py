@@ -54,6 +54,7 @@ def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     assert {"read_file", "write_file", "build", "done"} <= stable_names
     ceremony = {"plan_task", "update_plan", "discover_capabilities", "call_capability"}
     assert not (ceremony & stable_names)
+    assert agent_native._MAX_TOKENS == 32_768
 
 
 def test_generic_native_prompt_stays_unchanged_outside_max() -> None:
