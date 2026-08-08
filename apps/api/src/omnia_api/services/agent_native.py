@@ -309,6 +309,17 @@ _STABLE_MAX_ENTRY_NOW_REQUIRED = (
     "The supporting-file budget is complete. Compose the real screen in "
     f"`{_STABLE_MAX_PRODUCT_ENTRY}` now; add or refine remaining components after that."
 )
+
+
+def _stable_max_repair_required(paths: frozenset[str]) -> str:
+    targets = ", ".join(f"`{path}`" for path in sorted(paths)) or "the file named by build"
+    return (
+        f"The build is RED. Fix {targets} now using write_file or edit_file. "
+        "Do not read dependencies, rewrite unrelated files, or run build again before "
+        "applying a targeted repair. Preserve the rest of the product."
+    )
+
+
 _STABLE_MAX_FIRST_WRITE_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file"}
 ]
@@ -531,6 +542,14 @@ _PARALLEL_PAGES_RE = re.compile(
     r"two parallel pages that resolve to the same path.*?check\s+(\S+)\s+and\s+(\S+)",
     re.IGNORECASE | re.DOTALL,
 )
+
+_TYPESCRIPT_ERROR_PATH_RE = re.compile(r"(?m)^((?:src|app|pages)/.+?)\(\d+,\d+\):\s+error\s+TS\d+")
+
+
+def _typescript_error_paths(build_output: str) -> frozenset[str]:
+    """Files named by TypeScript diagnostics in a build result."""
+
+    return frozenset(_TYPESCRIPT_ERROR_PATH_RE.findall(build_output or ""))
 
 
 def _parallel_pages_hint(build_output: str) -> str | None:
@@ -1064,6 +1083,7 @@ async def run_native_build(
     convo: list[dict[str, Any]] = [{"role": "user", "content": task}]
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
+    last_build_error_paths: frozenset[str] = frozenset()
     wrote_since_build = False
     no_write_turns = 0  # consecutive assistant turns with no successful write
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
@@ -1242,9 +1262,7 @@ async def run_native_build(
                 )
             )
             force_repair_write = (
-                stable_max_loop
-                and no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT
-                and last_build_ok is False
+                stable_max_loop and last_build_ok is False and not wrote_since_build
             )
             force_progress = (
                 stable_max_loop
@@ -1522,6 +1540,8 @@ async def run_native_build(
                                     if force_progress
                                     else _STABLE_MAX_ENTRY_REQUIRED
                                     if force_entry_write
+                                    else _stable_max_repair_required(last_build_error_paths)
+                                    if force_repair_write
                                     else _STABLE_MAX_WRITE_REQUIRED
                                 ),
                             }
@@ -1636,8 +1656,20 @@ async def run_native_build(
                             if force_progress
                             else _STABLE_MAX_ENTRY_REQUIRED
                             if force_entry_write
+                            else _stable_max_repair_required(last_build_error_paths)
+                            if force_repair_write
                             else _STABLE_MAX_WRITE_REQUIRED
                         ),
+                    }
+                elif (
+                    force_repair_write
+                    and name in {"write_file", "edit_file"}
+                    and last_build_error_paths
+                    and action.path not in last_build_error_paths
+                ):
+                    obs = {
+                        "ok": False,
+                        "error": _stable_max_repair_required(last_build_error_paths),
                     }
                 elif (
                     force_entry_write
@@ -1697,6 +1729,13 @@ async def run_native_build(
                     last_green_see_step = None
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
+                    last_build_error_paths = (
+                        frozenset()
+                        if last_build_ok
+                        else _typescript_error_paths(
+                            str(obs.get("error") or obs.get("detail") or "")
+                        )
+                    )
                     wrote_since_build = False
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1

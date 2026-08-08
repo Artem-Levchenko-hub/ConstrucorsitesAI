@@ -820,15 +820,25 @@ async def test_stable_max_red_build_forces_a_repair_write(
             )
         if calls == 2:
             return _turn(("build", {}))
-        if calls <= 5:
-            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
-        if calls == 6:
+        if calls == 3:
             assert {tool["name"] for tool in kwargs["tools"]} == {
                 "write_file",
                 "edit_file",
             }
-            return _turn(("build", {}))
-        if calls == 7:
+            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
+        if calls == 4:
+            assert "build is RED" in str(convo[-1])
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/types.ts",
+                        "content": "export type Unrelated = string",
+                    },
+                )
+            )
+        if calls == 5:
+            assert "ProductApp.tsx" in str(convo[-1])
             return _turn(
                 (
                     "write_file",
@@ -840,7 +850,7 @@ async def test_stable_max_red_build_forces_a_repair_write(
                     },
                 )
             )
-        if calls == 8:
+        if calls == 6:
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
 
@@ -857,7 +867,14 @@ async def test_stable_max_red_build_forces_a_repair_write(
             return {"ok": True, "content": action.args["content"]}
         if action.name == "build":
             builds += 1
-            return {"ok": builds > 1, "detail": "clean" if builds > 1 else "TS error"}
+            return {
+                "ok": builds > 1,
+                "detail": (
+                    "clean"
+                    if builds > 1
+                    else "src/components/product/ProductApp.tsx(10,2): error TS2322: bad type"
+                ),
+            }
         return {"ok": True}
 
     result = await agent_native.run_native_build(
@@ -869,10 +886,10 @@ async def test_stable_max_red_build_forces_a_repair_write(
     )
 
     assert result.done is True
-    assert executed_reads == 3
+    assert executed_reads == 0
     assert builds == 2
     assert result.files["src/components/product/ProductApp.tsx"].endswith("fixed</main>}")
-    assert "A product write is now required" in str(result.transcript)
+    assert "build is RED" in str(result.transcript)
 
 
 @pytest.mark.asyncio
