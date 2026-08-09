@@ -395,6 +395,15 @@ _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_FIRST_WRITE_TOOLS[:-1],
     {**_STABLE_MAX_FIRST_WRITE_TOOLS[-1], "cache_control": _CACHE},
 ]
+_STABLE_MAX_VISUAL_REPAIR_TOOLS = [
+    tool
+    for tool in _STABLE_MAX_TOOLS
+    if tool["name"] in {"write_file", "edit_file", "generate_media"}
+]
+_STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_STABLE_MAX_VISUAL_REPAIR_TOOLS[:-1],
+    {**_STABLE_MAX_VISUAL_REPAIR_TOOLS[-1], "cache_control": _CACHE},
+]
 _STABLE_MAX_REPAIR_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"read_file", "edit_file"}
 ]
@@ -492,8 +501,9 @@ _STABLE_MAX_SEE_PROOF_REQUIRED = (
 )
 _STABLE_MAX_VISUAL_REPAIR_REQUIRED = (
     "A concrete visual issue is already known. Stop searching or rereading. "
-    "Write or edit the product now to apply that visual feedback; then rebuild "
-    "and verify the rendered result again."
+    "Write or edit the product now to apply that visual feedback. If the verdict "
+    "specifically requires real imagery, generate one suitable image first and embed "
+    "its returned hosted URL on the next turn. Then rebuild and verify the render again."
 )
 _STABLE_MAX_VISUAL_FINISH_REQUIRED = (
     "The component-side visual repair is applied. Before proof, either edit "
@@ -1155,6 +1165,9 @@ def _stable_max_visual_repair_task(
         "is below the production visual floor. The current source and exact visual verdict "
         "are included below, so do not read, list, grep, plan, or explain. Your next action "
         "must write_file or edit_file and apply every concrete issue in one coherent pass. "
+        "When the verdict specifically requires real photography or illustration, you may "
+        "instead call generate_media(kind='image') once, then embed its returned hosted URL "
+        "with edit_file on the following turn. Never substitute an icon or gradient placeholder. "
         "When both component markup and stylesheet need changes, emit both edits in this "
         "turn when they fit; otherwise finish the component first and the executor will "
         "offer one bounded stylesheet-or-build turn next. "
@@ -1355,6 +1368,7 @@ async def run_native_build(
     visual_feedback_step: int | None = None
     visual_feedback_detail = ""
     visual_context_compacted_step: int | None = None
+    visual_media_generated_step: int | None = None
     visual_repair_attempts = 0
     visual_finish_pending = False
     last_green_see_step: int | None = None
@@ -1667,7 +1681,7 @@ async def run_native_build(
                         if force_see_proof
                         else _STABLE_MAX_PROOF_TOOLS_CACHED
                         if force_proof
-                        else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
+                        else _STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED
                         if force_visual_repair
                         else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
                         if force_repair_verify
@@ -2083,7 +2097,23 @@ async def run_native_build(
                     # execution too, otherwise repeated read/grep calls can spend
                     # the entire generation budget after a green build.
                     obs = {"ok": False, "error": _STABLE_MAX_PROOF_REQUIRED}
-                elif force_visual_repair and name not in {"write_file", "edit_file"}:
+                elif (
+                    force_visual_repair
+                    and name == "generate_media"
+                    and visual_media_generated_step == visual_feedback_step
+                ):
+                    obs = {
+                        "ok": False,
+                        "error": (
+                            "One visual asset is already generated for this rendered verdict. "
+                            "Embed its returned URL with edit_file now."
+                        ),
+                    }
+                elif force_visual_repair and name not in {
+                    "write_file",
+                    "edit_file",
+                    "generate_media",
+                }:
                     # After one turn to inspect the concrete visual verdict,
                     # further search only inflates paid context and can hit the
                     # provider rate limit before the known repair is applied.
@@ -2257,6 +2287,8 @@ async def run_native_build(
                     wrote_since_build = False
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
+                    if name == "generate_media" and visual_feedback_step is not None:
+                        visual_media_generated_step = visual_feedback_step
                     if (
                         stable_max_loop
                         and _STABLE_MAX_PRODUCT_ENTRY not in written

@@ -1803,9 +1803,101 @@ async def test_stable_max_compacts_visual_repair_around_current_source_and_verdi
     assert "first-screen" in rescue["prompt"]
     assert "Never fix a hidden CTA by floating it over scrollable choices" in rescue["prompt"]
     assert "Пользователь/User/Guest" in rescue["prompt"]
-    assert rescue["tools"] == {"write_file", "edit_file"}
+    assert rescue["tools"] == {"write_file", "edit_file", "generate_media"}
     assert result.done is True
     assert result.files[entry] == "polished-screen"
+
+
+@pytest.mark.asyncio
+async def test_stable_max_can_generate_and_embed_required_visual_media(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    turns = iter(
+        [
+            _turn(("write_file", {"path": entry, "content": '<div className="dish" />'})),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+            _turn(
+                (
+                    "generate_media",
+                    {"kind": "image", "prompt": "warm editorial bakery photography"},
+                ),
+                (
+                    "generate_media",
+                    {"kind": "image", "prompt": "duplicate asset must be rejected"},
+                ),
+            ),
+            _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": entry,
+                        "search": '<div className="dish" />',
+                        "replace": '<img src="https://cdn.example/bakery.webp" alt="Выпечка" />',
+                    },
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+        ]
+    )
+    advertised: list[set[str]] = []
+    executed: list[str] = []
+    see_calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        advertised.append({str(tool["name"]) for tool in kwargs["tools"]})
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        executed.append(action.name)
+        if action.name == "see":
+            see_calls += 1
+            return {
+                "ok": True,
+                "needs_fix": see_calls == 1,
+                "detail": "Replace the food icon with real bakery photography.",
+            }
+        if action.name == "generate_media":
+            return {
+                "ok": True,
+                "url": "https://cdn.example/bakery.webp",
+                "content": "https://cdn.example/bakery.webp",
+            }
+        if action.name == "edit_file":
+            return {
+                "ok": True,
+                "content": '<img src="https://cdn.example/bakery.webp" alt="Выпечка" />',
+                "detail": "edited",
+            }
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build a premium bakery ordering app.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert executed.count("generate_media") == 1
+    assert "https://cdn.example/bakery.webp" in result.files[entry]
+    assert advertised[4] == {"write_file", "edit_file", "generate_media"}
+    assert advertised[5] == {"write_file", "edit_file", "generate_media"}
 
 
 @pytest.mark.asyncio
@@ -2054,7 +2146,7 @@ async def test_stable_max_rehydrates_visual_source_after_history_placeholder(
         stable_max_loop=True,
     )
 
-    assert calls[4]["tools"] == {"write_file", "edit_file"}
+    assert calls[4]["tools"] == {"write_file", "edit_file", "generate_media"}
     assert len(calls[5]["convo"]) == 1
     assert "[FOCUSED VISUAL RESCUE]" in str(calls[5]["convo"][0])
     assert "first-screen" in str(calls[5]["convo"][0])
@@ -2168,8 +2260,8 @@ async def test_stable_max_forces_known_visual_repair_after_one_inspection_turn(
     assert result.stop_reason == "contract_green"
     assert result.files[agent_native._STABLE_MAX_PRODUCT_ENTRY] == "polished"
     assert advertised[5:7] == [
-        {"write_file", "edit_file"},
-        {"write_file", "edit_file"},
+        {"write_file", "edit_file", "generate_media"},
+        {"write_file", "edit_file", "generate_media"},
     ]
     assert "grep" not in executed
 
