@@ -923,6 +923,14 @@ LOCKED RUNTIME API (use these exact exports; do not guess substitutes):
   `IconButton`, `Input`, `MaxUI`, `Spinner`, `Switch`, `Textarea`, `ToolButton`,
   `Typography`. Do not invent `Panel`, `Grid`, `Container`, `Flex` or other exports
   from newer documentation. Use semantic HTML + product CSS for custom composition.
+- `Typography` and `Avatar` are component namespaces, not JSX components. Never render
+  `<Typography>` or `<Avatar>` directly. Use documented subcomponents such as
+  `Typography.Title`, `Typography.Body`, `Avatar.Container`, `Avatar.Image` and
+  `Avatar.Text`, or use semantic HTML. `Button.size` accepts only `"small"`,
+  `"medium"` or `"large"` — never `"s"`/`"m"`/`"l"`.
+- `omniaMaxConfig` has top-level `app_name`, `summary`, `primary_action`, `features`,
+  `content`, `operator`, `support` and `legal`. `content` is an array of catalog items;
+  it never has `businessName` or other profile fields.
 - Use only dependencies present in `package.json`. `lucide-react` is available;
   chart libraries such as Recharts are not installed.
 

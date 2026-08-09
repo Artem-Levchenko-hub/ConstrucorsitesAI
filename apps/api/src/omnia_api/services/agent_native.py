@@ -53,6 +53,12 @@ _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
 # before composing the screen. A larger allowance was observed live producing
 # competing types/catalog copies instead of the product entry.
 _STABLE_MAX_SUPPORT_FILE_LIMIT = 3
+_STABLE_MAX_PREWRITE_INSPECTION_LIMIT = 8
+# One initial visual verdict plus three focused repair passes is enough to prove
+# whether the generated direction can reach the production floor.  The gateway's
+# 80-request fuse must remain a last-resort money guard, not the normal controller
+# for a visual loop that keeps re-reading the same transcript.
+_STABLE_MAX_VISUAL_REPAIR_LIMIT = 3
 _HISTORY_PLACEHOLDER_MARKERS = (
     "[OMITTED FROM HISTORY:",
     "[OLDER TOOL RESULT OMITTED:",
@@ -312,6 +318,20 @@ _STABLE_MAX_PROGRESS_REQUIRED = (
     "The product entry exists, but this build is not proven yet. Stop reading. Your next "
     "action must write/edit a required component or run build to expose concrete errors."
 )
+_STABLE_MAX_BUILD_REQUIRED = (
+    "The product changed and must be compiled before any more rewriting. Run build now. "
+    "If it is red, repair only the reported locations; if it is green, continue with "
+    "runtime and visual proof."
+)
+_STABLE_MAX_STYLE_REQUIRED = (
+    "The product component exists, but its product-specific visual system is missing. "
+    "Write the complete `src/app/globals.css` now. Preserve the Tailwind import, style "
+    "the real component classes, mobile states and safe areas; do not rewrite ProductApp."
+)
+_STABLE_MAX_INSPECTION_COMPLETE = (
+    "The MAX core has been inspected enough. Re-reading it will not improve the product. "
+    "Write a product file now; compiler-guided repair will expose any remaining API mismatch."
+)
 _STABLE_MAX_SUPPORT_ADVANCE_REQUIRED = (
     "That supporting file is already written. Do not rewrite it before the product entry "
     f"exists. Create the next required component or compose `{_STABLE_MAX_PRODUCT_ENTRY}` now."
@@ -397,6 +417,26 @@ _STABLE_MAX_PROGRESS_TOOLS = [
 _STABLE_MAX_PROGRESS_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_PROGRESS_TOOLS[:-1],
     {**_STABLE_MAX_PROGRESS_TOOLS[-1], "cache_control": _CACHE},
+]
+_STABLE_MAX_BUILD_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
+    {
+        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "build"),
+        "cache_control": _CACHE,
+    }
+]
+_STABLE_MAX_STYLE_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
+    {
+        **_tool(
+            "write_file",
+            "Write the complete product-specific visual system.",
+            {
+                "path": {"type": "string", "enum": ["src/app/globals.css"]},
+                "content": _STR,
+            },
+            ["path", "content"],
+        ),
+        "cache_control": _CACHE,
+    }
 ]
 _STABLE_MAX_PROOF_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"runtime_check", "see"}
@@ -1004,6 +1044,39 @@ def _stable_max_entry_focus_task(task: str, written: Mapping[str, str]) -> str:
     )
 
 
+def _stable_max_visual_repair_task(
+    task: str,
+    feedback: str,
+    written: Mapping[str, str],
+) -> str:
+    """Replace a stale build transcript with one evidence-led visual repair turn."""
+
+    preferred = [_STABLE_MAX_PRODUCT_ENTRY, "src/app/globals.css"]
+    paths = [*preferred, *(path for path in written if path not in preferred)]
+    sources: list[str] = []
+    remaining = 72_000
+    for path in paths:
+        content = written.get(path, "")
+        if not content or remaining <= 0:
+            continue
+        excerpt = content[:remaining]
+        remaining -= len(excerpt)
+        sources.append(f"CURRENT `{path}`\n```\n{excerpt}\n```")
+    return (
+        "[FOCUSED VISUAL RESCUE]\n"
+        "The application already compiles and runs, but the rendered desktop/mobile result "
+        "is below the production visual floor. The current source and exact visual verdict "
+        "are included below, so do not read, list, grep, plan, or explain. Your next action "
+        "must write_file or edit_file and apply every concrete issue in one coherent pass. "
+        "Preserve working behavior, MAX integration, honest empty states, and accessibility. "
+        "Prefer exact edits; keep total tool content below 24000 characters. Do not add fake "
+        "user history, completed activity, statistics, testimonials, or decorative filler.\n\n"
+        f"ORIGINAL TASK\n{task[:12_000]}\n\n"
+        f"LATEST RENDERED VERDICT\n{feedback[:8_000]}\n\n"
+        "CURRENT PRODUCT SOURCE\n" + "\n\n".join(sources)
+    )
+
+
 async def _call_messages(
     client: httpx.AsyncClient,
     url: str,
@@ -1186,6 +1259,9 @@ async def run_native_build(
     successful_skill_ids: set[str] = set()
     proof_after_write: set[str] = set()
     visual_feedback_step: int | None = None
+    visual_feedback_detail = ""
+    visual_context_compacted_step: int | None = None
+    visual_repair_attempts = 0
     last_green_see_step: int | None = None
     pending_visual_evaluation_step: int | None = None
     visual_evaluation_ready = False
@@ -1193,6 +1269,9 @@ async def run_native_build(
     truncated_no_write_turns = 0
     turns_without_product_entry = 0
     entry_focus_compacted = False
+    prewrite_inspection_paths: set[str] = set()
+    prewrite_inspection_ops = 0
+    prewrite_inspection_exhausted = False
 
     # Stable MAX builds must be allowed to finish their compile/repair loop.
     # The durable gateway fuse (80 requests + cost ceilings) is the authoritative
@@ -1346,6 +1425,22 @@ async def run_native_build(
                 visual_evaluation_ready = True
             if (
                 stable_max_loop
+                and visual_feedback_step is not None
+                and visual_context_compacted_step != visual_feedback_step
+            ):
+                convo = [
+                    {
+                        "role": "user",
+                        "content": _stable_max_visual_repair_task(
+                            task,
+                            visual_feedback_detail,
+                            written,
+                        ),
+                    }
+                ]
+                visual_context_compacted_step = visual_feedback_step
+            if (
+                stable_max_loop
                 and not entry_focus_compacted
                 and _STABLE_MAX_PRODUCT_ENTRY not in written
                 and (
@@ -1366,11 +1461,24 @@ async def run_native_build(
                 and (
                     turns_without_product_entry >= _STABLE_MAX_FIRST_WRITE_AT
                     or entry_focus_compacted
+                    or prewrite_inspection_exhausted
                 )
             )
             repair_mode = stable_max_loop and last_build_ok is False
             force_repair_write = repair_mode and not wrote_since_build
             force_repair_verify = repair_mode and wrote_since_build
+            # A successful product write is not permission to redesign the same
+            # screen again. Live MAX runs repeatedly rewrote ProductApp without
+            # ever compiling it because every rewrite reset the no-write guard.
+            # Force a deterministic build immediately after the initial product
+            # composition and after every green/visual revision. Red-build
+            # repairs keep their existing edit-then-verify flow below.
+            force_build_after_write = (
+                stable_max_loop
+                and _STABLE_MAX_PRODUCT_ENTRY in written
+                and wrote_since_build
+                and not repair_mode
+            )
             if (
                 force_repair_write
                 and last_build_error_paths
@@ -1396,6 +1504,13 @@ async def run_native_build(
                 and (last_build_ok is None or wrote_since_build)
             )
             completion_gap = _completion_gap()
+            force_style_write = (
+                stable_max_loop
+                and last_build_ok is True
+                and not wrote_since_build
+                and completion_gap is not None
+                and "src/app/globals.css" in completion_gap
+            )
             force_proof = (
                 stable_max_loop
                 and last_build_ok is True
@@ -1407,10 +1522,15 @@ async def run_native_build(
             force_visual_repair = (
                 stable_max_loop
                 and visual_feedback_step is not None
-                and step >= visual_feedback_step + 2
+                and step >= visual_feedback_step + 1
             )
             force_product_progress = (
-                force_entry_write or force_repair_write or force_repair_verify or force_progress
+                force_entry_write
+                or force_build_after_write
+                or force_style_write
+                or force_repair_write
+                or force_repair_verify
+                or force_progress
             )
             call_stage = (
                 "build_plan"
@@ -1434,6 +1554,10 @@ async def run_native_build(
                     tools=(
                         _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
                         if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
+                        else _STABLE_MAX_BUILD_ONLY_TOOLS_CACHED
+                        if force_build_after_write
+                        else _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED
+                        if force_style_write
                         else _STABLE_MAX_PROOF_TOOLS_CACHED
                         if force_proof
                         else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
@@ -1675,6 +1799,7 @@ async def run_native_build(
             done_summary: str | None = None
             wrote_this_turn = False
             visual_proof_unavailable_this_turn = False
+            visual_quality_exhausted_this_turn = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
             for tu in tool_uses:
@@ -1688,7 +1813,11 @@ async def run_native_build(
                                 "tool_use_id": tu_id,
                                 "is_error": True,
                                 "content": (
-                                    _STABLE_MAX_PROGRESS_REQUIRED
+                                    _STABLE_MAX_BUILD_REQUIRED
+                                    if force_build_after_write
+                                    else _STABLE_MAX_STYLE_REQUIRED
+                                    if force_style_write
+                                    else _STABLE_MAX_PROGRESS_REQUIRED
                                     if force_progress
                                     else _STABLE_MAX_REPAIR_VERIFY_REQUIRED
                                     if force_repair_verify
@@ -1788,7 +1917,11 @@ async def run_native_build(
                 obs: dict[str, Any]
                 tool_executed = False
                 allowed_progress_tools = (
-                    {"read_file", "edit_file", "build"}
+                    {"build"}
+                    if force_build_after_write
+                    else {"write_file"}
+                    if force_style_write
+                    else {"read_file", "edit_file", "build"}
                     if force_repair_verify
                     else {"edit_file"}
                     if force_repair_edit_only
@@ -1827,6 +1960,18 @@ async def run_native_build(
                     # provider rate limit before the known repair is applied.
                     obs = {"ok": False, "error": _STABLE_MAX_VISUAL_REPAIR_REQUIRED}
                 elif (
+                    stable_max_loop
+                    and _STABLE_MAX_PRODUCT_ENTRY not in written
+                    and name in {"read_file", "list_dir", "grep", "docs"}
+                    and (
+                        prewrite_inspection_ops >= _STABLE_MAX_PREWRITE_INSPECTION_LIMIT
+                        or (name == "read_file" and action.path in prewrite_inspection_paths)
+                    )
+                ):
+                    if prewrite_inspection_ops >= _STABLE_MAX_PREWRITE_INSPECTION_LIMIT:
+                        prewrite_inspection_exhausted = True
+                    obs = {"ok": False, "error": _STABLE_MAX_INSPECTION_COMPLETE}
+                elif (
                     entry_focus_compacted
                     and _STABLE_MAX_PRODUCT_ENTRY not in written
                     and (name != "write_file" or action.path != _STABLE_MAX_PRODUCT_ENTRY)
@@ -1841,7 +1986,11 @@ async def run_native_build(
                     obs = {
                         "ok": False,
                         "error": (
-                            _STABLE_MAX_PROGRESS_REQUIRED
+                            _STABLE_MAX_BUILD_REQUIRED
+                            if force_build_after_write
+                            else _STABLE_MAX_STYLE_REQUIRED
+                            if force_style_write
+                            else _STABLE_MAX_PROGRESS_REQUIRED
                             if force_progress
                             else _STABLE_MAX_REPAIR_VERIFY_REQUIRED
                             if force_repair_verify
@@ -1852,6 +2001,10 @@ async def run_native_build(
                             else _STABLE_MAX_WRITE_REQUIRED
                         ),
                     }
+                elif force_style_write and (
+                    name != "write_file" or action.path != "src/app/globals.css"
+                ):
+                    obs = {"ok": False, "error": _STABLE_MAX_STYLE_REQUIRED}
                 elif (
                     repair_mode
                     and name == "read_file"
@@ -1929,7 +2082,9 @@ async def run_native_build(
                     # any result is returned. Only a write from a LATER turn can
                     # have applied the visual critique.
                     if visual_feedback_step is not None and step > visual_feedback_step:
+                        visual_repair_attempts += 1
                         visual_feedback_step = None
+                        visual_context_compacted_step = None
                     proof_after_write.clear()
                     last_green_see_step = None
                 elif tool_executed and name == "build":
@@ -1947,6 +2102,16 @@ async def run_native_build(
                     wrote_since_build = False
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
+                    if (
+                        stable_max_loop
+                        and _STABLE_MAX_PRODUCT_ENTRY not in written
+                        and name in {"read_file", "list_dir", "grep", "docs"}
+                    ):
+                        prewrite_inspection_ops += 1
+                        if name == "read_file":
+                            prewrite_inspection_paths.add(action.path)
+                        if prewrite_inspection_ops >= _STABLE_MAX_PREWRITE_INSPECTION_LIMIT:
+                            prewrite_inspection_exhausted = True
                     if repair_mode and name == "read_file":
                         repair_reads_since_build.add(action.path)
                     if name == "read_skill":
@@ -1958,6 +2123,11 @@ async def run_native_build(
                     if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
                         if name == "see" and obs.get("needs_fix"):
                             visual_feedback_step = step
+                            visual_feedback_detail = str(
+                                obs.get("detail") or obs.get("error") or "Visual quality is red."
+                            )
+                            if visual_repair_attempts >= _STABLE_MAX_VISUAL_REPAIR_LIMIT:
+                                visual_quality_exhausted_this_turn = True
                         elif name == "see" and (obs.get("proof_unavailable") or obs.get("skipped")):
                             # A fail-soft visual executor result must never satisfy
                             # a production visual-proof gate.
@@ -2080,6 +2250,24 @@ async def run_native_build(
             else:
                 turns_without_product_entry += 1
             convo.append({"role": "user", "content": results})
+            if visual_quality_exhausted_this_turn and max_runtime:
+                log.warning(
+                    "agent_native.visual_quality_unmet",
+                    step=step,
+                    repair_attempts=visual_repair_attempts,
+                )
+                return AgentResult(
+                    done=False,
+                    summary=(
+                        "Визуальная проверка всё ещё ниже production-уровня после трёх "
+                        "сфокусированных исправлений. Результат не опубликован, чтобы не "
+                        "выдать посредственный интерфейс за готовое приложение."
+                    ),
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="visual_quality_unmet",
+                )
             if visual_proof_unavailable_this_turn and max_runtime and completion_check is not None:
                 # ``see_page`` already performs its own bounded retry using the
                 # same screenshots. Another native-agent turn would only ask the

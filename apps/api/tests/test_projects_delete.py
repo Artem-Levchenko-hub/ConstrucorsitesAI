@@ -10,6 +10,7 @@ exercised live in E2E).
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -18,8 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.deps import get_current_user
 from omnia_api.main import app
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.usage import Usage
 from omnia_api.models.user import User
 
 pytestmark = pytest.mark.asyncio
@@ -138,6 +141,53 @@ async def test_delete_cascades_messages(
 
     assert resp.status_code == 204
     assert await db_session.get(Message, msg_id) is None
+
+
+async def test_delete_preserves_usage_ledger_without_project_child_links(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    as_user,
+    fake_teardown,
+) -> None:
+    owner = await _make_user(db_session, "owner-usage@example.com")
+    project = await _make_project(db_session, owner)
+    msg = Message(project_id=project.id, role="user", content="build")
+    db_session.add(msg)
+    await db_session.flush()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=None,
+        idempotency_key="delete-usage-ledger",
+        prompt_hash="hash",
+        status="completed",
+    )
+    db_session.add(run)
+    await db_session.flush()
+    usage = Usage(
+        user_id=owner.id,
+        project_id=project.id,
+        message_id=msg.id,
+        run_id=run.id,
+        model_id="test-model",
+        tokens_in=10,
+        tokens_out=5,
+        cost_rub=Decimal("1.25"),
+    )
+    db_session.add(usage)
+    await db_session.commit()
+    usage_id = usage.id
+    as_user(owner)
+
+    resp = await client.delete(f"/api/projects/{project.id}")
+
+    assert resp.status_code == 204
+    preserved = await db_session.get(Usage, usage_id)
+    assert preserved is not None
+    assert preserved.cost_rub == Decimal("1.2500")
+    assert preserved.project_id is None
+    assert preserved.message_id is None
+    assert preserved.run_id is None
 
 
 async def test_delete_foreign_project_forbidden(

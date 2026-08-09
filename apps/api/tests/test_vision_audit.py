@@ -106,6 +106,8 @@ async def test_max_audit_uses_mobile_product_rubric_and_phone_widths(monkeypatch
 
     assert verdict.verdict == "beautiful"
     assert "MAX Mini Apps" in captured["system"]
+    assert "Никогда не" in captured["system"]
+    assert "выдуманными" in captured["system"]
     assert "safe-area" in captured["system"]
     assert "лендинг" in captured["system"]  # explicit anti-landing rule
     assert "Awwwards" not in captured["system"]

@@ -52,6 +52,16 @@ def test_max_miniapp_stack_registered() -> None:
     assert (_TEMPLATES_DIR / "max-miniapp-nextjs" / "Dockerfile.dev").is_file()
 
 
+def test_max_starter_docker_context_and_windows_entrypoint_are_safe() -> None:
+    template_dir = _TEMPLATES_DIR / "max-miniapp-nextjs"
+    dockerignore = (template_dir / ".dockerignore").read_text(encoding="utf-8")
+    dockerfile = (template_dir / "Dockerfile.dev").read_text(encoding="utf-8")
+
+    assert "node_modules" in dockerignore
+    assert ".next" in dockerignore
+    assert "sed -i 's/\\r$//' docker-entrypoint.sh" in dockerfile
+
+
 def test_max_starter_exposes_the_managed_integration_contract() -> None:
     omnia_dir = _TEMPLATES_DIR / "max-miniapp-nextjs" / "src" / "lib" / "omnia"
     implementation = omnia_dir / "client.ts"

@@ -391,8 +391,10 @@ async def test_failed_first_max_cleanup_restores_rendered_starter(
         },
     )
 
-    assert "--app-accent" in applied["src/app/globals.css"]
-    assert "Готово к работе" in applied["src/components/product/ProductApp.tsx"]
+    assert '@import "tailwindcss"' in applied["src/app/globals.css"]
+    assert 'data-max-product-canvas="empty"' in applied[
+        "src/components/product/ProductApp.tsx"
+    ]
 
 
 def test_unsafe_agent_stop_never_exposes_partial_files_for_publication() -> None:
@@ -577,9 +579,65 @@ async def test_stable_max_loop_forces_a_first_write_after_bounded_exploration(
 
     assert result.done is True
     assert result.stop_reason == "done"
-    assert executed_reads == agent_native._STABLE_MAX_FIRST_WRITE_AT
+    assert executed_reads == 1
     assert calls[agent_native._STABLE_MAX_FIRST_WRITE_AT] == {"write_file", "edit_file"}
     assert "src/components/product/ProductApp.tsx" in result.files
+
+
+@pytest.mark.asyncio
+async def test_stable_max_caps_bundled_prewrite_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    executed_reads: list[str] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _turn(
+                *(("read_file", {"path": f"src/core-{index}.ts"}) for index in range(12))
+            )
+        if calls == 2:
+            assert {tool["name"] for tool in kwargs["tools"]} == {
+                "write_file",
+                "edit_file",
+            }
+            assert "inspected enough" in str(convo[-1])
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "content": "export default function ProductApp(){return <main>App</main>}",
+                    },
+                )
+            )
+        if calls == 3:
+            assert {tool["name"] for tool in kwargs["tools"]} == {"build"}
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "read_file":
+            executed_reads.append(action.path)
+            return {"ok": True, "content": "managed core"}
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="build product",
+        execute=execute,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert len(executed_reads) == agent_native._STABLE_MAX_PREWRITE_INSPECTION_LIMIT
 
 
 @pytest.mark.asyncio
@@ -640,7 +698,7 @@ async def test_stable_max_first_write_is_enforced_when_provider_reuses_old_tools
     )
 
     assert result.done is True
-    assert executed_reads == agent_native._STABLE_MAX_FIRST_WRITE_AT
+    assert executed_reads == 1
     assert "main product entry is still unchanged" in str(result.transcript)
 
 
@@ -800,11 +858,12 @@ async def test_stable_max_compacts_to_entry_only_after_support_budget(
 
 
 @pytest.mark.asyncio
-async def test_stable_max_forces_build_or_write_after_product_entry_stall(
+async def test_stable_max_forces_build_immediately_after_product_entry_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
     executed_reads = 0
+    executed_writes = 0
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
@@ -821,27 +880,39 @@ async def test_stable_max_forces_build_or_write_after_product_entry_stall(
                     },
                 )
             )
-        if calls <= agent_native._STABLE_MAX_FIRST_WRITE_AT + 1:
-            return _turn(("read_file", {"path": "src/lib/omnia/max-config.ts"}))
-        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 2:
-            assert {tool["name"] for tool in kwargs["tools"]} == {
-                "write_file",
-                "edit_file",
-                "build",
-            }
-            return _turn(("read_file", {"path": "src/lib/omnia/max-config.ts"}))
-        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
-            assert "build is not proven yet" in str(convo[-1])
+        if calls == 2:
+            assert {tool["name"] for tool in kwargs["tools"]} == {"build"}
+            # Simulate a cached provider turn trying to rewrite the complete
+            # product again. Executor enforcement must reject it.
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "content": (
+                            "export default function ProductApp()"
+                            "{return <main>rewrite</main>}"
+                        ),
+                    },
+                )
+            )
+        if calls == 3:
+            assert {tool["name"] for tool in kwargs["tools"]} == {"build"}
+            assert "must be compiled" in str(convo[-1])
             return _turn(("build", {}))
+        if calls == 4:
+            return _turn(("read_file", {"path": "src/lib/omnia/max-config.ts"}))
         return _turn(("done", {"summary": "Готово"}))
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
 
     async def execute(action: Any) -> dict[str, Any]:
-        nonlocal executed_reads
+        nonlocal executed_reads, executed_writes
         if action.name == "read_file":
             executed_reads += 1
             return {"ok": True, "content": "managed integration"}
+        if action.name == "write_file":
+            executed_writes += 1
         return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
 
     result = await agent_native.run_native_build(
@@ -853,7 +924,87 @@ async def test_stable_max_forces_build_or_write_after_product_entry_stall(
     )
 
     assert result.done is True
-    assert executed_reads == agent_native._STABLE_MAX_FIRST_WRITE_AT
+    assert executed_reads == 1
+    assert executed_writes == 1
+    assert calls == 5
+
+
+@pytest.mark.asyncio
+async def test_stable_max_forces_product_css_after_green_unstyled_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    writes: list[str] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "content": "export default function ProductApp(){return <main>App</main>}",
+                    },
+                )
+            )
+        if calls == 2:
+            return _turn(("build", {}))
+        if calls == 3:
+            assert {tool["name"] for tool in kwargs["tools"]} == {"write_file"}
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "content": (
+                            "export default function ProductApp()"
+                            "{return <main>rewrite</main>}"
+                        ),
+                    },
+                )
+            )
+        if calls == 4:
+            assert "visual system is missing" in str(convo[-1])
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/app/globals.css",
+                        "content": '@import "tailwindcss";\nbody { color: black; }',
+                    },
+                )
+            )
+        assert {tool["name"] for tool in kwargs["tools"]} == {"build"}
+        return _turn(("build", {}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "write_file":
+            writes.append(action.path)
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def completion(files: dict[str, str], _evidence: dict[str, int]) -> str | None:
+        if "src/app/globals.css" not in files:
+            return "A fresh product must rewrite src/app/globals.css."
+        return None
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="build product",
+        execute=execute,
+        completion_check=completion,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert writes == [agent_native._STABLE_MAX_PRODUCT_ENTRY, "src/app/globals.css"]
+    assert calls == 5
 
 
 @pytest.mark.asyncio
@@ -1405,10 +1556,14 @@ async def test_stable_max_uses_durable_fuse_instead_of_generic_step_limit(
 
     assert result.done is True
     assert result.stop_reason == "contract_green"
-    assert len(calls) == 32
+    # The first product write immediately switches to build-only. Thirty
+    # provider attempts may still reuse an older write schema, but none execute;
+    # the final proof needs one following turn because same-turn runtime/see
+    # calls were planned before the build result existed.
+    assert len(calls) == 33
     assert calls[0]["model"] == "claude-sonnet-5"
     assert calls[0]["tools"] == agent_native._STABLE_MAX_TOOLS_CACHED
-    assert result.steps == 32
+    assert result.steps == 33
 
 
 @pytest.mark.asyncio
@@ -1574,6 +1729,148 @@ async def test_stable_max_reopens_editing_after_actionable_visual_feedback(
         {"runtime_check", "see"},
         {"runtime_check", "see"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_stable_max_compacts_visual_repair_around_current_source_and_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    turns = iter(
+        [
+            _turn(("write_file", {"path": entry, "content": "first-screen"})),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+            _turn(
+                (
+                    "edit_file",
+                    {"path": entry, "search": "first-screen", "replace": "polished-screen"},
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+        ]
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "convo_len": len(convo),
+                "prompt": convo[0]["content"] if len(convo) == 1 else "",
+                "tools": {str(t["name"]) for t in kwargs["tools"]},
+            }
+        )
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    see_calls = 0
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        if action.name == "see":
+            see_calls += 1
+            return {
+                "ok": True,
+                "needs_fix": see_calls == 1,
+                "detail": "Increase CTA contrast and reduce the mobile heading.",
+            }
+        if action.name == "edit_file":
+            return {"ok": True, "content": "polished-screen", "detail": "edited"}
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build a premium training companion.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    rescue = calls[4]
+    assert rescue["convo_len"] == 1
+    assert "[FOCUSED VISUAL RESCUE]" in rescue["prompt"]
+    assert "Increase CTA contrast" in rescue["prompt"]
+    assert "first-screen" in rescue["prompt"]
+    assert rescue["tools"] == {"write_file", "edit_file"}
+    assert result.done is True
+    assert result.files[entry] == "polished-screen"
+
+
+@pytest.mark.asyncio
+async def test_stable_max_stops_after_three_unsuccessful_visual_repairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    turns: list[dict[str, Any]] = [
+        _turn(("write_file", {"path": entry, "content": "screen-0"})),
+        _turn(("build", {})),
+        _turn(("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+    ]
+    for attempt in range(1, 4):
+        turns.extend(
+            [
+                _turn(
+                    (
+                        "write_file",
+                        {"path": entry, "content": f"screen-{attempt}"},
+                    )
+                ),
+                _turn(("build", {})),
+                _turn(("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+            ]
+        )
+    call_count = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal call_count
+        response = turns[call_count]
+        call_count += 1
+        return response
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    see_calls = 0
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        if action.name == "see":
+            see_calls += 1
+            return {
+                "ok": True,
+                "needs_fix": True,
+                "detail": f"Visual verdict {see_calls} remains below the floor.",
+            }
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build the complete app.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=30,
+        stable_max_loop=True,
+    )
+
+    assert result.done is False
+    assert result.stop_reason == "visual_quality_unmet"
+    assert result.files[entry] == "screen-3"
+    assert call_count == 12
+    assert see_calls == 4
 
 
 @pytest.mark.asyncio

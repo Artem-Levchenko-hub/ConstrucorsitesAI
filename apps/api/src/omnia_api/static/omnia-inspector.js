@@ -725,7 +725,7 @@
   }
 
   function post(msg) {
-    if (window.parent)
+    if (window.parent && window.parent !== window)
       window.parent.postMessage(msg, trustedParentOrigin || "*");
   }
 
