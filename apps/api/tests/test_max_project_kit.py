@@ -472,6 +472,8 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     assert "text: result.answer" in client
     assert "createMaxAction" in client
     assert "getMaxActions" in client
+    assert 'credentials: "include"' in client
+    assert 'if (!initData) throw new Error("Откройте приложение внутри MAX")' not in client
     assert '"lucide-react": "^0.469.0"' in files["package.json"]
     assert '"tailwindcss": "^4.0.0"' in files["package.json"]
     assert '"catalog", "ai"' in proxy

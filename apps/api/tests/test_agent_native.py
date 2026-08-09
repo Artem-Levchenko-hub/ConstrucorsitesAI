@@ -2295,6 +2295,86 @@ async def test_stable_max_allows_one_css_finish_turn_after_component_visual_repa
 
 
 @pytest.mark.asyncio
+async def test_stable_max_css_only_visual_repair_keeps_product_feedback_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    stylesheet = "src/app/globals.css"
+    turns = iter(
+        [
+            _turn(
+                ("write_file", {"path": entry, "content": "screen-first"}),
+                ("write_file", {"path": stylesheet, "content": "css-first"}),
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+            _turn(
+                (
+                    "edit_file",
+                    {"path": stylesheet, "search": "css-first", "replace": "css-polished"},
+                )
+            ),
+            _turn(("build", {})),
+            _turn(
+                (
+                    "edit_file",
+                    {"path": entry, "search": "screen-first", "replace": "screen-polished"},
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+        ]
+    )
+    advertised: list[set[str]] = []
+    see_calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        advertised.append({str(tool["name"]) for tool in kwargs["tools"]})
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        if action.name == "see":
+            see_calls += 1
+            return {
+                "ok": True,
+                "needs_fix": see_calls == 1,
+                "detail": "Fix duplicated CTA copy and the blue button color.",
+            }
+        if action.name == "edit_file" and action.path == stylesheet:
+            return {"ok": True, "content": "css-polished", "detail": "edited"}
+        if action.name == "edit_file" and action.path == entry:
+            return {"ok": True, "content": "screen-polished", "detail": "edited"}
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build a premium bakery ordering app.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=16,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert result.files[entry] == "screen-polished"
+    assert result.files[stylesheet] == "css-polished"
+    assert advertised[4] == {"write_file", "edit_file", "generate_media"}
+    assert advertised[5] == {"build"}
+    assert advertised[6] == {"write_file", "edit_file", "generate_media"}
+
+
+@pytest.mark.asyncio
 async def test_stable_max_stops_after_bounded_unsuccessful_visual_repairs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1439,6 +1439,7 @@ async def run_native_build(
     visual_context_compacted_step: int | None = None
     visual_media_generated_step: int | None = None
     visual_repair_attempts = 0
+    visual_repair_paths: set[str] = set()
     visual_finish_pending = False
     last_green_see_step: int | None = None
     pending_visual_evaluation_step: int | None = None
@@ -1992,7 +1993,6 @@ async def run_native_build(
             wrote_this_turn = False
             visual_proof_unavailable_this_turn = False
             visual_quality_exhausted_this_turn = False
-            visual_repair_paths_this_turn: set[str] = set()
             visual_finish_satisfied_this_turn = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
@@ -2186,7 +2186,7 @@ async def run_native_build(
                     "write_file",
                     "edit_file",
                     "generate_media",
-                }:
+                } and not (force_build_after_write and name == "build"):
                     # After one turn to inspect the concrete visual verdict,
                     # further search only inflates paid context and can hit the
                     # provider rate limit before the known repair is applied.
@@ -2330,17 +2330,13 @@ async def run_native_build(
                         written[action.path] = action.args.get("content", "")
                     wrote_since_build = True
                     wrote_this_turn = True
-                    if force_visual_repair:
-                        visual_repair_paths_this_turn.add(action.path)
                     if force_visual_finish and action.path == "src/app/globals.css":
                         visual_finish_satisfied_this_turn = True
                     # Tool calls in one assistant response are planned before
                     # any result is returned. Only a write from a LATER turn can
                     # have applied the visual critique.
                     if visual_feedback_step is not None and step > visual_feedback_step:
-                        visual_repair_attempts += 1
-                        visual_feedback_step = None
-                        visual_context_compacted_step = None
+                        visual_repair_paths.add(action.path)
                     proof_after_write.clear()
                     last_green_see_step = None
                 elif tool_executed and name == "build":
@@ -2395,6 +2391,7 @@ async def run_native_build(
                     visual_feedback_detail = str(
                         obs.get("detail") or obs.get("error") or "Visual quality is red."
                     )
+                    visual_repair_paths.clear()
                     if visual_repair_attempts >= _STABLE_MAX_VISUAL_REPAIR_LIMIT:
                         visual_quality_exhausted_this_turn = True
                 if obs.get("ok"):
@@ -2449,7 +2446,20 @@ async def run_native_build(
                 # its next globals.css edits were rejected, so the same defects
                 # survived every repair. Offer exactly one bounded stylesheet-
                 # or-build turn, then resume deterministic proof.
-                visual_finish_pending = "src/app/globals.css" not in visual_repair_paths_this_turn
+                product_repaired = any(
+                    path != "src/app/globals.css" for path in visual_repair_paths
+                )
+                if product_repaired:
+                    visual_repair_attempts += 1
+                    visual_feedback_step = None
+                    visual_context_compacted_step = None
+                    visual_finish_pending = "src/app/globals.css" not in visual_repair_paths
+                    visual_repair_paths.clear()
+                else:
+                    # CSS alone cannot fix copy, duplicated controls or missing
+                    # product structure. Compile it, then keep the exact verdict
+                    # active until a product component is actually changed.
+                    visual_finish_pending = False
             elif force_visual_finish and visual_finish_satisfied_this_turn:
                 visual_finish_pending = False
 

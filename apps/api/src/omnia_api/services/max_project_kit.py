@@ -21,7 +21,7 @@ from omnia_api.services.secret_safety import max_model_write_rejection
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 18
+MAX_MANAGED_KIT_VERSION = 19
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 MAX_PRODUCT_ENTRY_PATH = "src/components/product/ProductApp.tsx"
@@ -189,9 +189,9 @@ async function invoke<T>(
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
-  if (!initData) throw new Error("Откройте приложение внутри MAX");
   const response = await fetch(`/api/omnia/integrations/${path}`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ initData, payload }),
   });
