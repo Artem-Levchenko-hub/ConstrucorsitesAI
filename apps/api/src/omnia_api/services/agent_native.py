@@ -44,7 +44,10 @@ _MAX_TOKENS = 32768
 _THINKING_BUDGET = 8000
 _ENTRY_FOCUS_THINKING_BUDGET = 2000
 _MAX_TOOL_RESULT_CHARS = 20000
-_HTTP_TIMEOUT_S = 300.0
+# The gateway allows one long product-composition response up to 600 seconds.
+# The caller must outlive that window; otherwise it would abandon a request the
+# gateway is still settling and correctly refuse a duplicate paid attempt.
+_GATEWAY_TIMEOUT = httpx.Timeout(660.0, connect=30.0, write=60.0, pool=30.0)
 _CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside one cycle
 _MAX_PROVIDER_RECONNECT_CYCLES = 3
 _MAX_TRUNCATED_WRITE_ABORT_AT = 2
@@ -1213,7 +1216,7 @@ async def _call_messages(
             "retry_count": attempt,
         }
         try:
-            r = await client.post(url, json=payload, timeout=_HTTP_TIMEOUT_S)
+            r = await client.post(url, json=payload, timeout=_GATEWAY_TIMEOUT)
             try:
                 parsed_body = r.json()
             except ValueError as exc:

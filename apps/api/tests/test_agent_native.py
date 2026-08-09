@@ -3349,3 +3349,12 @@ async def test_same_turn_write_cannot_claim_it_applied_visual_feedback(
     assert result.done is True
     assert result.files["src/app/page.tsx"] == "later-fix"
     assert calls == 4
+
+
+def test_native_api_timeout_outlives_gateway_settlement_window() -> None:
+    timeout = agent_native._GATEWAY_TIMEOUT
+
+    assert timeout.connect == 30.0
+    assert timeout.write == 60.0
+    assert timeout.pool == 30.0
+    assert timeout.read == 660.0

@@ -38,7 +38,13 @@ from omnia_gateway.services.pricing import (
 log = structlog.get_logger(__name__)
 router = APIRouter()
 
-_TIMEOUT_S = 240.0
+# A complete MAX product composition can legitimately take more than four
+# minutes upstream even when the response stays inside the agent's bounded tool
+# payload.  A read timeout after request transmission is billing-ambiguous and
+# therefore cannot be retried; cutting it short discards the whole generation.
+# Keep connection/write/pool failures tight while giving the paid response time
+# to finish.  The API caller waits longer than this value.
+_UPSTREAM_TIMEOUT = httpx.Timeout(600.0, connect=30.0, write=60.0, pool=30.0)
 
 
 def _err(status: int, err_type: str, message: str) -> Response:
@@ -443,7 +449,7 @@ def _reported_cost(
 
 def _post_llmgw(url: str, payload: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
     with httpx.Client(
-        timeout=httpx.Timeout(_TIMEOUT_S, connect=30.0),
+        timeout=_UPSTREAM_TIMEOUT,
         trust_env=False,
         mounts={"all://": httpx.HTTPTransport()},
     ) as client:

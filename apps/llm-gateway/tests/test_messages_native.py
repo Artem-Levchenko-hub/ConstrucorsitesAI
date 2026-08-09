@@ -724,3 +724,12 @@ def test_native_endpoint_blocks_unattributed_calls_before_provider(
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "invalid_request_error"
     reserve.assert_not_awaited()
+
+
+def test_native_product_timeout_outlives_observed_four_minute_response() -> None:
+    timeout = messages_native._UPSTREAM_TIMEOUT
+
+    assert timeout.connect == 30.0
+    assert timeout.write == 60.0
+    assert timeout.pool == 30.0
+    assert timeout.read == 600.0
