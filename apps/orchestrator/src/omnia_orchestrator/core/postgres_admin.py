@@ -57,6 +57,11 @@ def _project_short_id(project_id: UUID) -> str:
     return project_id.hex[:8]
 
 
+def project_schema_name(project_id: UUID) -> str:
+    """Return the single tenant schema name used by provisioner and templates."""
+    return f"proj_{_project_short_id(project_id)}"
+
+
 def _quote_ident(ident: str) -> str:
     if not _VALID_IDENT.match(ident):
         raise OrchestratorError(
@@ -150,7 +155,7 @@ async def create_schema(project_id: UUID) -> SchemaCredentials:
     without keeping stale credentials alive.
     """
     short = _project_short_id(project_id)
-    schema_name = f"proj_{short}"
+    schema_name = project_schema_name(project_id)
     role_name = f"proj_{short}_user"
     password = secrets.token_urlsafe(32)
 
@@ -187,7 +192,7 @@ async def create_schema(project_id: UUID) -> SchemaCredentials:
 async def drop_schema(project_id: UUID) -> None:
     """Tear down the project's schema + role. Idempotent: missing is success."""
     short = _project_short_id(project_id)
-    schema_name = f"proj_{short}"
+    schema_name = project_schema_name(project_id)
     role_name = f"proj_{short}_user"
     schema_q = _quote_ident(schema_name)
     role_q = _quote_ident(role_name)
@@ -237,7 +242,7 @@ async def archive_schema(project_id: UUID) -> None:
     left in place — harmless, and a fresh provision rotates its password.
     """
     short = _project_short_id(project_id)
-    schema_name = f"proj_{short}"
+    schema_name = project_schema_name(project_id)
     archived_name = f"zdel_proj_{short}"
     schema_q = _quote_ident(schema_name)
     archived_q = _quote_ident(archived_name)
@@ -330,7 +335,7 @@ async def seed_public_records(
     if not batches:
         return {}
     short = _project_short_id(project_id)
-    schema_q = _quote_ident(f"proj_{short}")
+    schema_q = _quote_ident(project_schema_name(project_id))
     role_q = _quote_ident(f"proj_{short}_user")
 
     pool = await _get_admin_pool()

@@ -347,6 +347,7 @@ async def _deploy_remote(
         "PORT": "3000",
         "HOSTNAME": "0.0.0.0",
         "OMNIA_PROJECT_ID": project_id,
+        "OMNIA_DB_SCHEMA": db_schema or postgres_admin.project_schema_name(UUID(project_id)),
         "OMNIA_PLATFORM_API_URL": os.getenv(
             "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
         ),
@@ -633,6 +634,7 @@ async def _run(
                 "PORT": "3000",
                 "HOSTNAME": "0.0.0.0",  # standalone server must bind all ifaces
                 "OMNIA_PROJECT_ID": project_id,
+                "OMNIA_DB_SCHEMA": postgres_admin.project_schema_name(UUID(project_id)),
                 "OMNIA_PLATFORM_API_URL": os.getenv(
                     "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
                 ),

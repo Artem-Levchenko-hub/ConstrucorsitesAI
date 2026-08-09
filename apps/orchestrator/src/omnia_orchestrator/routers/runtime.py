@@ -582,7 +582,11 @@ async def start_history_preview(
             str(payload.project_id),
             str(payload.snapshot_id),
             payload.files,
-            environment_overrides=_history_environment(payload.project_id, credentials.dsn),
+            environment_overrides=_history_environment(
+                payload.project_id,
+                credentials.dsn,
+                credentials.schema_name,
+            ),
             history_database_id=str(database_id),
         )
     except Exception:
@@ -638,12 +642,17 @@ def _history_database_key(project_id: UUID, snapshot_id: UUID, *, purpose: str) 
     )
 
 
-def _history_environment(project_id: UUID, database_url: str) -> dict[str, str]:
+def _history_environment(
+    project_id: UUID,
+    database_url: str,
+    database_schema: str,
+) -> dict[str, str]:
     """Credentials scoped to one disposable history container only."""
     return {
         "AUTH_SECRET": secrets.token_urlsafe(32),
         "AUTH_TRUST_HOST": "true",
         "DATABASE_URL": database_url,
+        "OMNIA_DB_SCHEMA": database_schema,
         "NODE_ENV": "development",
         "OMNIA_PROJECT_ID": str(project_id),
     }
@@ -1009,7 +1018,11 @@ async def start_history_preview_session(
             nonlocal port
             await postgres_admin.drop_schema(database_id)
             credentials = await postgres_admin.create_schema(database_id)
-            environment = _history_environment(payload.project_id, credentials.dsn)
+            environment = _history_environment(
+                payload.project_id,
+                credentials.dsn,
+                credentials.schema_name,
+            )
             secret_value = environment["AUTH_SECRET"]
             port = await get_port_allocator().acquire(port_key)
             await start_history_preview_container(

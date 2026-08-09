@@ -3681,6 +3681,11 @@ async def _process_prompt(
                         _observation
                     ):
                         _code = _observation.get("status_code")
+                        _runtime_detail = str(
+                            _observation.get("detail")
+                            or _observation.get("error")
+                            or "runtime failure"
+                        )
                         return {
                             **_observation,
                             "ok": False,
@@ -3688,7 +3693,7 @@ async def _process_prompt(
                             "detail": (
                                 f"MAX route {action.path or '/'} is not ready "
                                 f"(HTTP {_code if _code is not None else 'unavailable'}); "
-                                "create or fix the route before finishing."
+                                f"create or fix the route before finishing. {_runtime_detail}"
                             ),
                         }
                     return _observation

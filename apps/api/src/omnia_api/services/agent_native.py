@@ -950,7 +950,8 @@ _MAX_NATIVE_PREAMBLE = (
     "src/components/product/ProductApp.tsx, src/app/globals.css и новыми клиентскими "
     "продуктовыми компонентами. globals.css можно и нужно "
     'полностью оформить под концепцию, но сохрани корректный `@import "tailwindcss"` '
-    "и располагай внешние font-import ДО него. Не трогай locked layout/provider/runtime. "
+    "и располагай внешние font-import ДО него. Это обычный глобальный CSS, не CSS Module: "
+    "никогда не используй в нём `:global(...)`. Не трогай locked layout/provider/runtime. "
     "Определи собственные семантические CSS variables (`--app-*`) и используй их через "
     "обычный CSS или Tailwind arbitrary values; не вызывай несуществующие "
     "`bg-background`/`border-border` без явного mapping. Один доминирующий акцент, "
@@ -1046,11 +1047,14 @@ _MAX_REFERENCE_PREAMBLE = (
     "Сохрани управляемую MAX-обвязку: подписанный initData, useMaxApp/профиль, "
     "integration-client, webhook и закрытые Studio-файлы. Пользовательские данные "
     "бери из MAX и управляемого серверного хранилища; не зашивай демо-профили, "
-    "историю, метрики или секреты. Не создавай параллельную email-регистрацию.\n\n"
+    "историю, метрики или секреты. Не создавай параллельную email-регистрацию. "
+    "src/app/globals.css — обычный глобальный CSS, не CSS Module: никогда не используй "
+    "в нём `:global(...)`.\n\n"
     "Надёжный цикл: минимально прочитай нужные файлы → пиши полные продуктовые файлы "
     "→ build → исправь каждую реальную ошибку → runtime_check корневого экрана после "
-    "последней записи. Если runtime_check красный, прочитай конкретный файл/лог и "
-    "перезапиши его полностью вместо серии хрупких edit_file. Вызови done только после "
+    "последней записи. Если runtime_check красный, используй возвращённый файл и текст "
+    "ошибки для минимальной точечной edit_file, затем снова build/runtime_check; не повторяй "
+    "красную проверку без исправления. Вызови done только после "
     "чистого build и зелёного runtime_check. see можно использовать один раз для "
     "точечной визуальной проверки, но недоступность visual QA не блокирует рабочий "
     "продукт. Не трать ходы на церемониальный план, skill-пакеты или внешнее исследование, "
@@ -2223,6 +2227,19 @@ async def run_native_build(
                             str(obs.get("error") or obs.get("detail") or "")
                         )
                     )
+                    repair_reads_since_build.clear()
+                    repair_context_compacted = False
+                    wrote_since_build = False
+                elif tool_executed and name == "runtime_check" and not obs.get("ok"):
+                    # A typecheck-clean app can still fail in Next/Turbopack at
+                    # request time. Treat that factual failure as repair debt;
+                    # otherwise the proof gate advertises only runtime_check and
+                    # rejects every attempted source fix forever.
+                    last_build_ok = False
+                    last_build_error_text = str(
+                        obs.get("detail") or obs.get("error") or "runtime check failed"
+                    )
+                    last_build_error_paths = _typescript_error_paths(last_build_error_text)
                     repair_reads_since_build.clear()
                     repair_context_compacted = False
                     wrote_since_build = False

@@ -171,11 +171,13 @@ async def test_history_session_refuses_a_bootstrapped_error_page(
 
 
 def test_history_session_uses_ephemeral_auth_and_a_stable_host() -> None:
-    first = runtime._history_environment(PROJECT_ID, "postgresql://isolated")
-    second = runtime._history_environment(PROJECT_ID, "postgresql://isolated")
+    first = runtime._history_environment(PROJECT_ID, "postgresql://isolated", "proj_history_a")
+    second = runtime._history_environment(PROJECT_ID, "postgresql://isolated", "proj_history_b")
 
     assert first["AUTH_SECRET"] != second["AUTH_SECRET"]
     assert first["OMNIA_PROJECT_ID"] == str(PROJECT_ID)
+    assert first["OMNIA_DB_SCHEMA"] == "proj_history_a"
+    assert second["OMNIA_DB_SCHEMA"] == "proj_history_b"
     assert runtime._history_session_slug(PROJECT_ID) == "history-0000000000000000"
 
 

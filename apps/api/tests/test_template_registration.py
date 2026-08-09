@@ -105,3 +105,27 @@ def test_max_preview_ai_uses_server_only_project_capability() -> None:
     assert "X-Omnia-MAX-Preview-Capability" in proxy_route
     assert 'operation !== "ai"' in proxy_route
     assert 'if (!initData) throw new Error("Откройте приложение внутри MAX")' not in client
+
+
+def test_max_database_tables_and_foreign_keys_use_the_project_schema() -> None:
+    schema = (_TEMPLATES_DIR / "max-miniapp-nextjs" / "src/lib/db/schema.ts").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'pgSchema(process.env.OMNIA_DB_SCHEMA || "public")' in schema
+    assert 'appSchema.table("max_users"' in schema
+    assert 'pgTable("max_users"' not in schema
+    init_db = (_TEMPLATES_DIR / "max-miniapp-nextjs" / "scripts/init-db.mjs").read_text(
+        encoding="utf-8"
+    )
+    package = (_TEMPLATES_DIR / "max-miniapp-nextjs" / "package.json").read_text(encoding="utf-8")
+    assert "REFERENCES ${users}" in init_db
+    assert "ON DELETE CASCADE NOT VALID" in init_db
+    assert "VALIDATE CONSTRAINT" in init_db
+    assert "EXCEPTION WHEN duplicate_object" in init_db
+    assert '"db:push": "node scripts/init-db.mjs"' in package
+    entrypoint = (_TEMPLATES_DIR / "max-miniapp-nextjs" / "docker-entrypoint.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "pnpm db:push\n" in entrypoint
+    assert "schema sync failed; starting app" not in entrypoint

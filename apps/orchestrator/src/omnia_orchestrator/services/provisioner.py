@@ -246,7 +246,11 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
     dev_origin = nginx_writer.dev_url(req.slug)
 
     env = {
+        # Optional caller values are lowest priority. Tenant/auth/runtime
+        # boundaries below must never be overridden by an internal request.
+        **req.initial_env,
         "DATABASE_URL": database_url,
+        "OMNIA_DB_SCHEMA": postgres_admin.project_schema_name(req.project_id),
         "NODE_ENV": "development",
         "OMNIA_PROJECT_ID": str(req.project_id),
         "OMNIA_PLATFORM_API_URL": os.getenv(
@@ -257,7 +261,6 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
         "AUTH_TRUST_HOST": "true",
         **_integration_env(),
         **_egress_env(),
-        **req.initial_env,
     }
 
     # Area C (DARK): when the orchestrator runs with OMNIA_GATE_SEED=1, ask the

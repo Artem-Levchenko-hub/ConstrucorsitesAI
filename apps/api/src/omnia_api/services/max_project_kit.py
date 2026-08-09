@@ -937,7 +937,8 @@ LOCKED RUNTIME API (use these exact exports; do not guess substitutes):
 PRODUCT DESIGN OWNERSHIP:
 - `src/app/globals.css` is model-owned. Preserve `@import "tailwindcss"`, but replace
   the minimal reset with the complete visual system required by the chosen concept.
-  External font imports must come before Tailwind. Do not edit the locked layout.
+  External font imports must come before Tailwind. This is ordinary global CSS, not a
+  CSS Module: never use `:global(...)` in it. Do not edit the locked layout.
 - Define real project-specific semantic CSS variables and component states. Do not use
   undefined template tokens, default indigo/violet AI styling or a repeated dashboard.
 - Design for 360–390px MAX WebView first: safe areas, thumb-friendly actions, content

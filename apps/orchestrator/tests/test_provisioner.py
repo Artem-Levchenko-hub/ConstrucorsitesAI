@@ -40,6 +40,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 async def _provision_capturing_spec(
     monkeypatch: pytest.MonkeyPatch,
     template_dir: Path | None = None,
+    initial_env: dict[str, str] | None = None,
 ) -> ContainerSpec:
     """Run `provision` with every side-effecting collaborator stubbed; return
     the ContainerSpec that would have been handed to Docker."""
@@ -83,6 +84,7 @@ async def _provision_capturing_spec(
         slug="demo-app",
         template="nextjs-entities",
         tier="free",
+        initial_env=initial_env or {},
     )
     await provisioner.provision(req)
     return captured["spec"]
@@ -103,6 +105,26 @@ async def test_provision_sets_unless_stopped_restart_policy(
     restarts a daemon-stopped container)."""
     spec = await _provision_capturing_spec(monkeypatch)
     assert spec.restart_policy_name == "unless-stopped"
+
+
+async def test_provision_injects_project_schema_for_drizzle_foreign_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = await _provision_capturing_spec(monkeypatch)
+
+    assert spec.env["OMNIA_DB_SCHEMA"] == "proj_00000000"
+
+
+async def test_provision_cannot_override_project_schema_through_initial_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = await _provision_capturing_spec(
+        monkeypatch,
+        initial_env={"OMNIA_DB_SCHEMA": "public", "DATABASE_URL": "attacker-controlled"},
+    )
+
+    assert spec.env["OMNIA_DB_SCHEMA"] == "proj_00000000"
+    assert spec.env["DATABASE_URL"] == "postgresql://u:p@host/db"
 
 
 async def test_provision_passes_template_manifest_as_integrity_marker(

@@ -48,6 +48,8 @@ def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     assert "Sonnet" not in prompt
     assert "Gemini" not in prompt
     assert "read_skill" not in prompt
+    assert "никогда не используй в нём `:global(...)`" in prompt
+    assert "минимальной точечной edit_file" in prompt
     names = {tool["name"] for tool in agent_native._TOOLS_CACHED}
     assert {"read_file", "write_file", "build", "done"} <= names
     assert "read_skill" not in names
@@ -3017,6 +3019,91 @@ async def test_completion_contract_finishes_without_ceremonial_provider_turn(
     assert calls == 2
     assert all({"probe", "verify_isolation"} <= names for names in advertised_tools)
     assert all("read_skill" not in names for names in advertised_tools)
+
+
+@pytest.mark.asyncio
+async def test_runtime_failure_reopens_source_repair_instead_of_proof_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": "export default function ProductApp(){return <main/>}",
+                    },
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": "src/app/globals.css",
+                        "search": ":global(.bad)",
+                        "replace": ".good",
+                    },
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+        ]
+    )
+    advertised: list[set[str]] = []
+    runtime_calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        advertised.append({str(tool["name"]) for tool in kwargs["tools"]})
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal runtime_calls
+        if action.name == "runtime_check":
+            runtime_calls += 1
+            if runtime_calls == 1:
+                return {
+                    "ok": False,
+                    "status_code": 500,
+                    "detail": "src/app/globals.css:343 invalid pseudo-class",
+                }
+        if action.name == "edit_file":
+            return {"ok": True, "content": ".good {}"}
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "green",
+        }
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        if not files:
+            return "write product"
+        if not evidence.get("build_after_write"):
+            return "Run build"
+        if not evidence.get("runtime_check_after_write"):
+            return "Run runtime_check"
+        return None
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="build",
+        execute=execute,
+        completion_check=complete,
+        max_steps=10,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert runtime_calls == 2
+    assert "edit_file" in advertised[3]
+    assert "runtime_check" not in advertised[3]
 
 
 @pytest.mark.asyncio
