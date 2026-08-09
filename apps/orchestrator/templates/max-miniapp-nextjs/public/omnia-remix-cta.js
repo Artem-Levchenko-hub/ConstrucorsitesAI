@@ -89,10 +89,12 @@
     var style = document.createElement("style");
     style.id = "omnia-remix-style";
     style.textContent =
-      "#omnia-remix-cta{position:fixed;right:20px;bottom:20px;z-index:2147483000;" +
+      "#omnia-remix-cta{position:fixed;right:10px;" +
+      "bottom:calc(82px + env(safe-area-inset-bottom));z-index:2147483000;" +
       "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}" +
       "#omnia-remix-btn{display:inline-flex;align-items:center;gap:9px;border:0;" +
-      "cursor:pointer;padding:14px 21px;border-radius:9999px;font-size:15px;" +
+      "cursor:pointer;width:46px;height:46px;padding:0;justify-content:center;" +
+      "border-radius:9999px;font-size:15px;" +
       "font-weight:600;letter-spacing:-.01em;color:#fff;text-decoration:none;" +
       "white-space:nowrap;" +
       "background:linear-gradient(90deg,#818cf8,#c084fc);" +
@@ -104,13 +106,10 @@
       "#omnia-remix-btn:active{transform:translateY(0) scale(.99)}" +
       "#omnia-remix-btn .omnia-remix-spark{font-size:16px;line-height:1;" +
       "animation:omnia-remix-spin 4s linear infinite}" +
+      "#omnia-remix-btn .omnia-remix-label{display:none}" +
       "@keyframes omnia-remix-in{from{opacity:0;transform:translateY(14px) scale(.96)}" +
       "to{opacity:1;transform:none}}" +
       "@keyframes omnia-remix-spin{to{transform:rotate(360deg)}}" +
-      "@media (max-width:479px){#omnia-remix-cta{right:10px;" +
-      "bottom:calc(82px + env(safe-area-inset-bottom))}" +
-      "#omnia-remix-btn{width:46px;height:46px;padding:0;justify-content:center}" +
-      "#omnia-remix-btn .omnia-remix-label{display:none}}" +
       "@media (prefers-reduced-motion:reduce){#omnia-remix-btn," +
       "#omnia-remix-btn .omnia-remix-spark{animation:none}" +
       "#omnia-remix-btn:hover{transform:none}}";
@@ -148,7 +147,9 @@
     (document.head || document.documentElement).appendChild(style);
     (document.body || document.documentElement).appendChild(wrap);
 
-    mountWatermark();
+    // MAX products already own persistent mobile navigation. One compact remix
+    // affordance preserves the viral loop without a second fixed watermark
+    // covering the generated product at phone and tablet widths.
   }
 
   // Viral seed badge (#VIRAL-WATERMARK, pillar 4). A subtle "Сделано на Omnia.AI"

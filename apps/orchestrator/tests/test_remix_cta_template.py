@@ -65,12 +65,13 @@ def test_remix_cta_contract() -> None:
 
 
 def test_max_remix_controls_do_not_cover_mobile_bottom_navigation() -> None:
-    """MAX apps own a persistent bottom nav; viral controls must clear it."""
+    """MAX apps own a persistent bottom nav; keep one compact control above it."""
     src = (_MAX / _CTA_REL).read_text(encoding="utf-8")
 
     assert "bottom:calc(82px + env(safe-area-inset-bottom))" in src
+    assert "width:46px;height:46px" in src
     assert "#omnia-remix-btn .omnia-remix-label{display:none}" in src
-    assert "#omnia-wm-made,#omnia-wm-name{display:none}" in src
+    assert "    mountWatermark();" not in src
 
 
 def test_remix_cta_wired_into_both_layouts() -> None:
