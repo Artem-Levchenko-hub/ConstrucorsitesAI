@@ -125,6 +125,8 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "max_demo_data_rejection" in source
     assert "create_max_preview_session" in source
     assert "_recover_max_resume_prompt" in source
+    assert "_merge_max_product_brief" in source
+    assert "max_source_completion_gap" in source
     assert "src/components/product/ProductApp.tsx" in source
     assert "normalize_max_globals_css" in source
     assert "await asyncio.sleep(2)" in source
@@ -235,6 +237,30 @@ def test_fresh_max_reference_gate_requires_visual_proof_after_final_write() -> N
 
     assert gap is not None
     assert "Run see" in gap
+
+
+def test_max_edit_reference_gate_also_requires_visual_proof_after_write() -> None:
+    gap = messages._reference_max_completion_gap(
+        {"src/app/globals.css": "body { color: black; }"},
+        {"runtime_check_after_write": 1},
+        require_product_entry=False,
+    )
+
+    assert gap is not None
+    assert "Run see" in gap
+
+
+def test_max_edit_keeps_original_product_brief_visible() -> None:
+    merged = messages._merge_max_product_brief(
+        "Ресторан: iiko, ЮKassa, каталог и заказы.",
+        "Сделай кнопки теплее.",
+    )
+
+    assert "ИСХОДНЫЙ БРИФ ПРОДУКТА" in merged
+    assert "iiko, ЮKassa" in merged
+    assert "ТЕКУЩАЯ ПРАВКА" in merged
+    assert "кнопки теплее" in merged
+    assert messages._merge_max_product_brief("тот же текст", "тот же текст") == "тот же текст"
 
 
 @pytest.mark.parametrize(
@@ -1221,6 +1247,147 @@ async def test_stable_max_red_build_forces_targeted_edit_and_blocks_full_rewrite
     assert builds == 2
     assert result.files["src/components/product/ProductApp.tsx"].endswith("fixed</main>}")
     assert "build is RED" in str(result.transcript)
+
+
+def test_typescript_repair_paths_include_named_local_type_dependency() -> None:
+    output = (
+        "src/components/product/catalog.ts(1,15): error TS2305: "
+        "Module '\"./types\"' has no exported member 'Category'."
+    )
+    written = {
+        "src/components/product/catalog.ts": "import type { Category } from './types';",
+        "src/components/product/types.ts": "export interface MenuItem {}",
+        "src/components/Elsewhere.tsx": "export const Elsewhere = 1;",
+    }
+
+    assert agent_native._typescript_repair_paths(output, written) == frozenset(
+        {
+            "src/components/product/catalog.ts",
+            "src/components/product/types.ts",
+        }
+    )
+
+
+def test_compact_repair_task_keeps_error_windows_not_entire_large_files() -> None:
+    source = "\n".join(f"const line{i} = {i};" for i in range(1, 501))
+    error = "src/components/product/ProductApp.tsx(250,7): error TS2322: bad"
+
+    task = agent_native._stable_max_compact_repair_task(
+        error,
+        frozenset({"src/components/product/ProductApp.tsx"}),
+        {"src/components/product/ProductApp.tsx": source},
+    )
+
+    assert "const line250 = 250;" in task
+    assert "const line1 = 1;" not in task
+    assert "const line500 = 500;" not in task
+    assert "intentionally omit unrelated code" in task
+
+
+@pytest.mark.asyncio
+async def test_stable_max_failed_exact_edit_allows_one_fresh_reread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    advertised: list[set[str]] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        advertised.append({str(tool["name"]) for tool in kwargs["tools"]})
+        if calls == 1:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": "export default function App(){return <main>bad bad</main>}",
+                    },
+                )
+            )
+        if calls == 2:
+            return _turn(("build", {}))
+        if calls == 3:
+            assert advertised[-1] == {"edit_file"}
+            return _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "search": "bad",
+                        "replace": "fixed",
+                    },
+                )
+            )
+        if calls == 4:
+            assert advertised[-1] == {"read_file", "edit_file"}
+            return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
+        if calls == 5:
+            assert advertised[-1] == {"edit_file"}
+            return _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "search": "<main>bad bad</main>",
+                        "replace": "<main>fixed</main>",
+                    },
+                )
+            )
+        if calls == 6:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    builds = 0
+    reads = 0
+    edits = 0
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal builds, reads, edits
+        if action.name == "write_file":
+            return {"ok": True, "content": action.args["content"]}
+        if action.name == "read_file":
+            reads += 1
+            return {
+                "ok": True,
+                "content": "export default function App(){return <main>bad bad</main>}",
+            }
+        if action.name == "edit_file":
+            edits += 1
+            if edits == 1:
+                return {"ok": False, "error": "search text must occur exactly once"}
+            return {
+                "ok": True,
+                "content": "export default function App(){return <main>fixed</main>}",
+            }
+        if action.name == "build":
+            builds += 1
+            return {
+                "ok": builds > 1,
+                "detail": (
+                    "clean"
+                    if builds > 1
+                    else "src/components/product/ProductApp.tsx(1,43): error TS2322: bad"
+                ),
+            }
+        return {"ok": True}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="repair product",
+        execute=execute,
+        max_steps=12,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert reads == 1
+    assert edits == 2
+    assert builds == 2
+    assert result.files["src/components/product/ProductApp.tsx"].endswith("<main>fixed</main>}")
 
 
 @pytest.mark.asyncio

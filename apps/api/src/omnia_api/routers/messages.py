@@ -272,7 +272,7 @@ def _reference_max_completion_gap(
             "Run runtime_check on / after the final product write; "
             "if it is red, fix that concrete runtime error first."
         )
-    if require_product_entry and evidence.get("see_after_write", 0) < 1:
+    if evidence.get("see_after_write", 0) < 1:
         return (
             "Run see on / after the final product write and apply any concrete visual "
             "issues before finishing."
@@ -997,6 +997,28 @@ def _recover_max_resume_prompt(candidates: Sequence[str]) -> str | None:
         if value and not _is_continue_request(value):
             return value
     return None
+
+
+def _merge_max_product_brief(original: str | None, current: str) -> str:
+    """Keep the first product brief visible during later MAX edits.
+
+    Snapshot prompts are durable product requirements, while the current prompt
+    normally describes one incremental change.  Supplying both prevents a
+    visual edit from silently deleting payments, restaurant integrations or
+    other working scenarios that are absent from the short follow-up.
+    """
+
+    original_text = (original or "").strip()
+    current_text = (current or "").strip()
+    if not original_text or original_text == current_text:
+        return current_text
+    return (
+        "ИСХОДНЫЙ БРИФ ПРОДУКТА (сохрани все требования, которые текущая правка "
+        "явно не отменяет):\n"
+        f"{original_text[:12_000]}\n\n"
+        "ТЕКУЩАЯ ПРАВКА:\n"
+        f"{current_text[:8_000]}"
+    )
 
 
 def _spawn_process_prompt(*, run_id: UUID, **kwargs: object) -> None:
@@ -3448,6 +3470,7 @@ async def _process_prompt(
             _is_continue = _has_prior_build and _is_continue_request(prompt_text)
             _is_edit = (not orchestrate) and not _is_continue
             _max_has_generated_snapshot = False
+            _max_original_brief: str | None = None
             if project_template == "max_miniapp":
                 async with factory() as _max_history_session:
                     _max_has_generated_snapshot = bool(
@@ -3459,6 +3482,17 @@ async def _process_prompt(
                             )
                         )
                     )
+                    if _max_has_generated_snapshot:
+                        _max_original_brief = await _max_history_session.scalar(
+                            select(Snapshot.prompt_text)
+                            .where(
+                                Snapshot.project_id == project_id,
+                                Snapshot.prompt_text.is_not(None),
+                                func.length(func.trim(Snapshot.prompt_text)) > 0,
+                            )
+                            .order_by(Snapshot.created_at.asc(), Snapshot.id.asc())
+                            .limit(1)
+                        )
                     if _is_continue and not _max_has_generated_snapshot:
                         _prior_max_prompts = list(
                             (
@@ -3483,6 +3517,11 @@ async def _process_prompt(
                                 "[PP] MAX resume recovered original brief from history",
                                 flush=True,
                             )
+            _max_product_brief = (
+                _merge_max_product_brief(_max_original_brief, prompt_text)
+                if project_template == "max_miniapp"
+                else prompt_text
+            )
 
             # Durable observable plan. A retry inherits the last failed run's
             # checkpoint, while a fresh request starts from a small deterministic
@@ -3558,6 +3597,7 @@ async def _process_prompt(
             if project_template == "max_miniapp":
                 from omnia_api.services.max_generation_contract import (
                     max_demo_data_rejection,
+                    max_source_completion_gap,
                 )
                 from omnia_api.services.max_project_kit import (
                     MAX_MODEL_LOCKED_FILES,
@@ -3571,7 +3611,7 @@ async def _process_prompt(
 
                         return read_max_skill(
                             str(action.args.get("skill") or ""),
-                            prompt=prompt_text,
+                            prompt=_max_product_brief,
                             project_id=str(project_id),
                         )
                     if action.name == "see":
@@ -3588,7 +3628,7 @@ async def _process_prompt(
                             _visual = await agent_vision.see_page(
                                 project_id,
                                 path=action.path or "/",
-                                prompt_context=prompt_text,
+                                prompt_context=_max_product_brief,
                                 bootstrap_url=_bootstrap_url,
                                 product_kind="max_miniapp",
                             )
@@ -4078,7 +4118,7 @@ async def _process_prompt(
                     _sel_block = ""
                 _agent_user = (
                     f"Внеси ТОЧЕЧНОЕ изменение в существующее приложение по "
-                    f"запросу:\n\n{prompt_text}\n{_sel_block}{_seed_block}\n\n"
+                    f"запросу:\n\n{_max_product_brief}\n{_sel_block}{_seed_block}\n\n"
                     f"Найди нужный файл (grep/read), внеси МИНИМАЛЬНУЮ правку "
                     f"(edit_file/write_file), запусти build, затем done. НЕ зацикливайся "
                     f"на чтении — как только нашёл причину, СРАЗУ пиши правку (а не ещё "
@@ -4098,6 +4138,9 @@ async def _process_prompt(
                         "сценарии. Сохрани MAX Bridge, серверную проверку initData, "
                         "профиль, webhook и managed Studio-файлы. Минимизируй разведку: "
                         "пиши код, запускай build, чини фактические ошибки до чистоты, "
+                        "Для названных в брифе ЮKassa/iiko сначала прочитай реальный "
+                        "integration-client и используй его: не показывай успешную оплату "
+                        "или синхронизацию заказа, если управляемый вызов не состоялся. "
                         "затем done. Не загружай skill-пакеты и не выполняй отдельные "
                         "церемониальные проверки. Не зашивай секреты и демо-профили."
                     )
@@ -4242,6 +4285,11 @@ async def _process_prompt(
                                 written,
                                 evidence,
                                 require_product_entry=not _max_has_generated_snapshot,
+                                source_gap=max_source_completion_gap(
+                                    _max_product_brief,
+                                    {**current_files, **written},
+                                    require_design_spec=False,
+                                ),
                             )
                         )
                         if project_template == "max_miniapp"

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import posixpath
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from itertools import count
@@ -372,18 +373,48 @@ def _stable_max_compact_repair_task(
     written: Mapping[str, str],
 ) -> str:
     sources: list[str] = []
-    remaining = 60_000
+    remaining = 24_000
     for path in sorted(paths):
         content = written.get(path, "")
         if not content or remaining <= 0:
             continue
-        excerpt = content[:remaining]
-        remaining -= len(excerpt)
-        sources.append(f"CURRENT `{path}` (preserve everything else):\n```tsx\n{excerpt}\n```")
+        lines = content.splitlines()
+        error_lines = sorted(
+            {
+                int(match.group("line"))
+                for match in _TYPESCRIPT_ERROR_LOCATION_RE.finditer(error or "")
+                if match.group("path") == path
+            }
+        )
+        windows: list[tuple[int, int]] = []
+        for line_number in error_lines:
+            center = min(max(line_number - 1, 0), max(len(lines) - 1, 0))
+            start = max(0, center - 8)
+            end = min(len(lines), center + 9)
+            if windows and start <= windows[-1][1] + 2:
+                windows[-1] = (windows[-1][0], max(windows[-1][1], end))
+            else:
+                windows.append((start, end))
+        if not windows:
+            windows = [(0, min(len(lines), 240))]
+        for start, end in windows:
+            if remaining <= 0:
+                break
+            excerpt = "\n".join(lines[start:end])[:remaining]
+            if not excerpt:
+                continue
+            remaining -= len(excerpt)
+            sources.append(
+                f"CURRENT `{path}` lines {start + 1}-{end} "
+                "(exact source; preserve omitted code):\n"
+                f"```tsx\n{excerpt}\n```"
+            )
     return (
         "TARGETED COMPILER REPAIR. The current product is already implemented. "
         "Do not redesign or recreate files. Call edit_file only, replacing the smallest exact "
-        "old_string that fixes all listed errors you can address in one edit.\n\n"
+        "old_string that fixes all listed errors you can address in one edit. Source windows "
+        "are exact but intentionally omit unrelated code; never include window labels in "
+        "search.\n\n"
         f"BUILD ERRORS:\n{error[:12_000]}\n\n" + "\n\n".join(sources)
     )
 
@@ -753,12 +784,49 @@ _PARALLEL_PAGES_RE = re.compile(
 )
 
 _TYPESCRIPT_ERROR_PATH_RE = re.compile(r"(?m)^((?:src|app|pages)/.+?)\(\d+,\d+\):\s+error\s+TS\d+")
+_TYPESCRIPT_ERROR_LOCATION_RE = re.compile(
+    r"(?m)^(?P<path>(?:src|app|pages)/.+?)\((?P<line>\d+),\d+\):\s+error\s+TS\d+"
+)
+_TYPESCRIPT_RELATIVE_MODULE_RE = re.compile(
+    r"""(?m)^(?P<source>(?:src|app|pages)/.+?)\(\d+,\d+\):\s+error\s+TS\d+:[^\n]*?"""
+    r"""Module\s+["']+(?P<module>\.{1,2}/[^"']+)["']+"""
+)
 
 
 def _typescript_error_paths(build_output: str) -> frozenset[str]:
     """Files named by TypeScript diagnostics in a build result."""
 
     return frozenset(_TYPESCRIPT_ERROR_PATH_RE.findall(build_output or ""))
+
+
+def _typescript_repair_paths(
+    build_output: str,
+    written: Mapping[str, str],
+) -> frozenset[str]:
+    """Diagnostic files plus local modules explicitly named by TypeScript.
+
+    A TS2305/TS2307 reported in ``catalog.ts`` is often fixed in its imported
+    ``types.ts`` contract. Restricting repair edits to the diagnostic file makes
+    that valid compiler-guided repair impossible and leaves the model cycling on
+    reads/builds. Only already-present relative source modules are admitted.
+    """
+
+    paths = set(_typescript_error_paths(build_output))
+    for match in _TYPESCRIPT_RELATIVE_MODULE_RE.finditer(build_output or ""):
+        source = str(match.group("source") or "")
+        module = str(match.group("module") or "")
+        base = posixpath.normpath(posixpath.join(posixpath.dirname(source), module))
+        candidates = (
+            base,
+            f"{base}.ts",
+            f"{base}.tsx",
+            f"{base}/index.ts",
+            f"{base}/index.tsx",
+        )
+        dependency = next((candidate for candidate in candidates if candidate in written), None)
+        if dependency:
+            paths.add(dependency)
+    return frozenset(paths)
 
 
 def _parallel_pages_hint(build_output: str) -> str | None:
@@ -1358,6 +1426,7 @@ async def run_native_build(
     last_build_error_paths: frozenset[str] = frozenset()
     last_build_error_text = ""
     repair_reads_since_build: set[str] = set()
+    repair_reread_paths: set[str] = set()
     repair_context_compacted = False
     wrote_since_build = False
     no_write_turns = 0  # consecutive assistant turns with no successful write
@@ -1685,6 +1754,8 @@ async def run_native_build(
                         if force_visual_repair
                         else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
                         if force_repair_verify
+                        else _STABLE_MAX_REPAIR_TOOLS_CACHED
+                        if force_repair_edit_only and repair_reread_paths
                         else _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED
                         if force_repair_edit_only
                         else _STABLE_MAX_PROGRESS_TOOLS_CACHED
@@ -2052,6 +2123,8 @@ async def run_native_build(
                     if force_style_write
                     else {"read_file", "edit_file", "build"}
                     if force_repair_verify
+                    else {"read_file", "edit_file"}
+                    if force_repair_edit_only and repair_reread_paths
                     else {"edit_file"}
                     if force_repair_edit_only
                     else {"read_file", "edit_file"}
@@ -2171,7 +2244,10 @@ async def run_native_build(
                     and name == "read_file"
                     and (
                         action.path not in last_build_error_paths
-                        or action.path in repair_reads_since_build
+                        or (
+                            action.path in repair_reads_since_build
+                            and action.path not in repair_reread_paths
+                        )
                     )
                 ):
                     obs = {
@@ -2229,7 +2305,21 @@ async def run_native_build(
                 ops_this_turn += 1
                 if obs.get("infra_dead"):
                     infra_this_turn += 1
+                if (
+                    tool_executed
+                    and repair_mode
+                    and name == "edit_file"
+                    and not obs.get("ok")
+                    and action.path in last_build_error_paths
+                ):
+                    # An exact edit can fail because its search text is stale or
+                    # non-unique. Let the next turn reread exactly that failing
+                    # file once; otherwise the edit-only guard creates a permanent
+                    # dead end where every recovery read is rejected.
+                    repair_reads_since_build.discard(action.path)
+                    repair_reread_paths.add(action.path)
                 if tool_executed and name in ("write_file", "edit_file") and obs.get("ok"):
+                    repair_reread_paths.discard(action.path)
                     if isinstance(obs.get("content"), str):
                         # executor returns the post-edit content (mirrors the
                         # text loop's tracking at agent_builder.py). Prefer it
@@ -2261,11 +2351,13 @@ async def run_native_build(
                     last_build_error_paths = (
                         frozenset()
                         if last_build_ok
-                        else _typescript_error_paths(
-                            str(obs.get("error") or obs.get("detail") or "")
+                        else _typescript_repair_paths(
+                            str(obs.get("error") or obs.get("detail") or ""),
+                            written,
                         )
                     )
                     repair_reads_since_build.clear()
+                    repair_reread_paths.clear()
                     repair_context_compacted = False
                     wrote_since_build = False
                 elif (
@@ -2284,6 +2376,7 @@ async def run_native_build(
                     )
                     last_build_error_paths = _typescript_error_paths(last_build_error_text)
                     repair_reads_since_build.clear()
+                    repair_reread_paths.clear()
                     repair_context_compacted = False
                     wrote_since_build = False
                 if obs.get("ok"):
@@ -2302,6 +2395,7 @@ async def run_native_build(
                             prewrite_inspection_exhausted = True
                     if repair_mode and name == "read_file":
                         repair_reads_since_build.add(action.path)
+                        repair_reread_paths.discard(action.path)
                     if name == "read_skill":
                         skill_id = str(action.args.get("skill") or "").strip().casefold()
                         if skill_id:

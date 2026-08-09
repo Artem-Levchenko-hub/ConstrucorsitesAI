@@ -182,6 +182,65 @@ def test_completion_requires_persistent_project_specific_design_spec() -> None:
     assert "three genuinely distinct" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
 
 
+def test_named_yookassa_and_iiko_require_real_managed_calls() -> None:
+    brief = "Ресторан: каталог iiko, заказы и реальная оплата через ЮKassa."
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += "\n// Каталог ресторана, iiko, ЮKassa, заказы\n"
+
+    gap = max_source_completion_gap(brief, files)
+    assert "getOmniaIntegrations" in str(gap)
+
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        "import { createMaxAction, getMaxActions, requestOmniaAI }",
+        "import { createMaxAction, getMaxActions, requestOmniaAI, "
+        "getOmniaIntegrations, createOmniaPayment, getOmniaCatalog }",
+    )
+    files["src/app/page.tsx"] += """
+async function integrationStatus() {
+  return await getOmniaIntegrations();
+}
+void integrationStatus;
+"""
+    gap = max_source_completion_gap(brief, files)
+    assert "createOmniaPayment" in str(gap)
+
+    files["src/app/page.tsx"] += """
+async function startPayment() {
+  return await createOmniaPayment({ amount: 100, description: "Заказ", return_url: "/" });
+}
+void startPayment;
+"""
+    gap = max_source_completion_gap(brief, files)
+    assert "confirmation_url" in str(gap)
+
+    files["src/app/page.tsx"] += """
+async function confirmPayment() {
+  const payment = await startPayment();
+  if (payment.confirmation_url) window.location.assign(payment.confirmation_url);
+}
+void confirmPayment;
+"""
+    gap = max_source_completion_gap(brief, files)
+    assert "getOmniaCatalog" in str(gap)
+
+    files["src/app/page.tsx"] += """
+async function loadRestaurantCatalog() {
+  return await getOmniaCatalog();
+}
+void loadRestaurantCatalog;
+"""
+    assert max_source_completion_gap(brief, files) is None
+
+
+def test_incremental_edit_can_explicitly_remove_provider_requirement() -> None:
+    brief = (
+        "ИСХОДНЫЙ БРИФ ПРОДУКТА:\nЗаказы с оплатой через ЮKassa.\n\n"
+        "ТЕКУЩАЯ ПРАВКА:\nУбери интеграцию с ЮKassa."
+    )
+
+    assert max_source_completion_gap(brief, _complete_single_file()) is None
+
+
 def test_completion_rejects_untouched_canvas_and_thin_cosmetic_page() -> None:
     assert "no product entry" in str(max_completion_gap(COMPLEX_BRIEF, {}, {})).lower()
 
@@ -229,7 +288,7 @@ def test_safe_css_import_order_is_byte_stable() -> None:
 
 def test_css_import_normalizer_deduplicates_repair_artifacts() -> None:
     font = "@import url('https://fonts.example/family');"
-    css = f"{font}\n@import \"tailwindcss\";\n{font}\n\n:root {{ color: black; }}\n"
+    css = f'{font}\n@import "tailwindcss";\n{font}\n\n:root {{ color: black; }}\n'
 
     fixed = normalize_max_globals_css(css)
 
@@ -307,17 +366,23 @@ def test_instructional_copy_is_not_mistaken_for_seeded_records() -> None:
 
 def test_completion_rejects_generic_identity_fallback_but_allows_neutral_copy() -> None:
     files = _complete_single_file()
-    files["src/app/page.tsx"] += '''
+    files["src/app/page.tsx"] += """
 const displayName = user?.first_name ?? "Пользователь";
-'''
+"""
     assert "generic identity fallback" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
 
     files = _complete_single_file()
-    files["src/app/page.tsx"] += '''
+    files["src/app/page.tsx"] += """
+const displayName = user?.first_name || "Гость MAX";
+"""
+    assert "generic identity fallback" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
 const greeting = user?.first_name ? `Рады видеть, ${user.first_name}` : "Начнём с цели";
 const aiRole = "User";
 // "Пользователь" is forbidden as a generic fallback.
-'''
+"""
     assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
 
 

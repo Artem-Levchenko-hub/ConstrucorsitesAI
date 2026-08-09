@@ -99,6 +99,8 @@ _AI_PROMPT_RE = re.compile(
     r"нейросет|gemini|claude|gpt)",
     re.IGNORECASE,
 )
+_YOOKASSA_PROMPT_RE = re.compile(r"(?:ю\s*(?:касс|kassa)|yoo\s*kassa)", re.IGNORECASE)
+_IIKO_PROMPT_RE = re.compile(r"(?:\biiko\b|\bайко\b)", re.IGNORECASE)
 _PERSISTENCE_PROMPT_RE = re.compile(
     r"(?:сохран|истори|профил|трениров|питан|сон|уведом|заказ|запис|бронир|данн)",
     re.IGNORECASE,
@@ -108,12 +110,12 @@ _ASYNC_STATES_PROMPT_RE = re.compile(
     re.IGNORECASE,
 )
 _GENERIC_IDENTITY_FALLBACK_RE = re.compile(
-    r'''(?:
-        (?:\?\?|\|\|)\s*["'`](?:Пользователь|Гость|User|Guest)["'`]
-        |>\s*(?:Пользователь|Гость|User|Guest)\s*<
+    r"""(?:
+        (?:\?\?|\|\|)\s*["'`](?:Пользователь|Гость|User|Guest)(?:\s+MAX)?["'`]
+        |>\s*(?:Пользователь|Гость|User|Guest)(?:\s+MAX)?\s*<
         |\b(?:displayName|userName|profileName|firstName|greetingName)\b
-            \s*=\s*["'`](?:Пользователь|Гость|User|Guest)["'`]
-    )''',
+            \s*=\s*["'`](?:Пользователь|Гость|User|Guest)(?:\s+MAX)?["'`]
+    )""",
     re.IGNORECASE | re.VERBOSE,
 )
 _SEEDED_COLLECTION_RE = re.compile(
@@ -220,6 +222,21 @@ MAX_REQUIRED_PREWRITE_SKILLS = (
     "production-readiness",
 )
 MAX_REQUIRED_POST_SEE_SKILL = "visual-evaluation"
+
+
+def _prompt_requires_provider(prompt: str, provider_re: re.Pattern[str]) -> bool:
+    """Respect an explicit provider removal in an incremental MAX edit."""
+
+    if provider_re.search(prompt) is None:
+        return False
+    current = prompt.rsplit("ТЕКУЩАЯ ПРАВКА:", 1)[-1]
+    provider = f"(?:{provider_re.pattern})"
+    removal = re.compile(
+        rf"(?:убер\w*|удал\w*|отключ\w*|исключ\w*|remove\w*|disable\w*|without|без|"
+        rf"не\s+нуж\w*)\s+(?:интеграц\w*\s+(?:с\s+)?|оплат\w*\s+через\s+)?{provider}",
+        re.IGNORECASE,
+    )
+    return removal.search(current) is None
 
 
 def _starts_js_regex(content: str, index: int) -> bool:
@@ -819,6 +836,56 @@ def max_source_completion_gap(
             )
         if re.search(r"settimeout\s*\([^)]*(?:analy|анализ|coach|тренер)", corpus, re.DOTALL):
             return "A timer is still simulating AI work. Replace it with requestOmniaAI."
+
+    integration_status_call = any(
+        _has_managed_named_import(source, "getOmniaIntegrations", "@/lib/omnia/integration-client")
+        and re.search(r"\bawait\s+getomniaintegrations\s*\(", code, re.IGNORECASE)
+        for source, code in product_source_views
+    )
+    yookassa_required = _prompt_requires_provider(prompt, _YOOKASSA_PROMPT_RE)
+    iiko_required = _prompt_requires_provider(prompt, _IIKO_PROMPT_RE)
+    if (yookassa_required or iiko_required) and not integration_status_call:
+        return (
+            "The brief names an external integration, but the UI never checks which tenant "
+            "providers are connected. Import and await getOmniaIntegrations from "
+            "@/lib/omnia/integration-client, then show connected and unavailable states honestly."
+        )
+
+    if yookassa_required:
+        managed_payment_call = any(
+            _has_managed_named_import(
+                source,
+                "createOmniaPayment",
+                "@/lib/omnia/integration-client",
+            )
+            and re.search(r"\bawait\s+createomniapayment\s*\(", code, re.IGNORECASE)
+            for source, code in product_source_views
+        )
+        if not managed_payment_call:
+            return (
+                "The brief requires YooKassa, but checkout never imports and awaits "
+                "createOmniaPayment from @/lib/omnia/integration-client. A local order action "
+                "must not simulate successful online payment."
+            )
+        if "confirmation_url" not in corpus:
+            return (
+                "The YooKassa flow ignores confirmation_url. Use the managed payment result "
+                "to open or redirect to the real provider confirmation; do not render payment "
+                "success immediately after a local order write."
+            )
+
+    if iiko_required:
+        managed_iiko_catalog_call = any(
+            _has_managed_named_import(source, "getOmniaCatalog", "@/lib/omnia/integration-client")
+            and re.search(r"\bawait\s+getomniacatalog\s*\(", code, re.IGNORECASE)
+            for source, code in product_source_views
+        )
+        if not managed_iiko_catalog_call:
+            return (
+                "The brief requires iiko, but the product never imports and awaits "
+                "getOmniaCatalog from @/lib/omnia/integration-client. Load the connected "
+                "restaurant catalog and render an honest fallback/error when it is unavailable."
+            )
 
     managed_identity_call = any(
         _has_managed_named_import(source, "useMaxApp", "@/components/MaxAppProvider")
