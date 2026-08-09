@@ -25,6 +25,102 @@ from omnia_api.services.max_generation_contract import (
 )
 
 
+@pytest.mark.asyncio
+async def test_max_visual_qa_recovers_after_transient_preview_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import agent_vision
+
+    project_id = uuid4()
+    session_calls = 0
+    sleeps: list[int] = []
+
+    async def fake_session(received_project_id: Any) -> dict[str, str]:
+        nonlocal session_calls
+        assert received_project_id == project_id
+        session_calls += 1
+        if session_calls == 1:
+            raise httpx.ConnectError("preview control plane warming")
+        return {"bootstrap_url": "https://preview.example/session?signature=secret"}
+
+    async def fake_see(received_project_id: Any, **kwargs: Any) -> dict[str, Any]:
+        assert received_project_id == project_id
+        assert kwargs["path"] == "/"
+        assert kwargs["product_kind"] == "max_miniapp"
+        return {
+            "ok": True,
+            "verdict": "beautiful",
+            "score": 9,
+            "needs_fix": False,
+        }
+
+    async def fake_sleep(delay: int) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        messages.orchestrator_client,
+        "create_max_preview_session",
+        fake_session,
+    )
+    monkeypatch.setattr(agent_vision, "see_page", fake_see)
+    monkeypatch.setattr(messages.asyncio, "sleep", fake_sleep)
+
+    result = await messages._run_max_visual_qa(
+        project_id,
+        path="/",
+        prompt_context="restaurant app",
+    )
+
+    assert result["ok"] is True
+    assert result["score"] == 9
+    assert session_calls == 2
+    assert sleeps == [2]
+
+
+@pytest.mark.asyncio
+async def test_max_visual_qa_does_not_retry_real_browser_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import agent_vision
+
+    session_calls = 0
+    see_calls = 0
+
+    async def fake_session(_project_id: Any) -> dict[str, str]:
+        nonlocal session_calls
+        session_calls += 1
+        return {"bootstrap_url": "https://preview.example/session?signature=secret"}
+
+    async def fake_see(_project_id: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        see_calls += 1
+        return {
+            "ok": False,
+            "verdict": "beautiful",
+            "score": 9,
+            "needs_fix": False,
+            "detail": "BROWSER SIGNALS:\n- GET /api/menu 500",
+        }
+
+    monkeypatch.setattr(
+        messages.orchestrator_client,
+        "create_max_preview_session",
+        fake_session,
+    )
+    monkeypatch.setattr(agent_vision, "see_page", fake_see)
+
+    result = await messages._run_max_visual_qa(
+        uuid4(),
+        path="/",
+        prompt_context="restaurant app",
+    )
+
+    assert result["ok"] is False
+    assert "BROWSER SIGNALS" in result["detail"]
+    assert session_calls == 1
+    assert see_calls == 1
+
+
 def test_generic_native_agent_and_autoheal_keep_primary_model() -> None:
     from omnia_api.services import autoheal
 
@@ -123,7 +219,7 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "Direct DB access is forbidden in MAX product files." in source
     assert "max_model_write_rejection" in source
     assert "max_demo_data_rejection" in source
-    assert "create_max_preview_session" in source
+    assert "_run_max_visual_qa" in source
     assert "_recover_max_resume_prompt" in source
     assert "_merge_max_product_brief" in source
     assert "max_source_completion_gap" in source
@@ -131,7 +227,7 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "normalize_max_globals_css" in source
     assert "await asyncio.sleep(2)" in source
     assert 'and project_template != "max_miniapp"' in source
-    assert 'product_kind="max_miniapp"' in source
+    assert 'product_kind="max_miniapp"' in inspect.getsource(messages._run_max_visual_qa)
     assert '".omnia/max-design-spec.json"' in source
     assert "EXISTING MAX ART DIRECTION" in source
     assert "_skills = None" in source

@@ -1021,6 +1021,76 @@ def _merge_max_product_brief(original: str | None, current: str) -> str:
     )
 
 
+_MAX_VISUAL_QA_RETRY_DELAYS_SECONDS = (0, 2, 5)
+
+
+async def _run_max_visual_qa(
+    project_id: UUID,
+    *,
+    path: str,
+    prompt_context: str,
+) -> dict[str, Any]:
+    """Run signed MAX visual QA with a short infrastructure-only retry.
+
+    ``agent_vision.see_page`` already retries a skipped visual judge against one
+    captured image.  This outer recovery covers the other transient boundary:
+    creating the signed preview session or rendering the page.  A real browser
+    failure carries a verdict and is returned immediately so it cannot be
+    mislabeled as unavailable infrastructure.
+    """
+
+    from omnia_api.services import agent_vision
+
+    last_error = "MAX visual QA unavailable"
+    for attempt, delay_seconds in enumerate(_MAX_VISUAL_QA_RETRY_DELAYS_SECONDS, start=1):
+        if delay_seconds:
+            await asyncio.sleep(delay_seconds)
+        try:
+            preview_session = await orchestrator_client.create_max_preview_session(project_id)
+            bootstrap_url = str(preview_session.get("bootstrap_url") or "")
+            visual = await agent_vision.see_page(
+                project_id,
+                path=path,
+                prompt_context=prompt_context,
+                bootstrap_url=bootstrap_url,
+                product_kind="max_miniapp",
+            )
+        except Exception as exc:
+            last_error = f"MAX visual QA unavailable: {type(exc).__name__}"
+            logging.getLogger(__name__).warning(
+                "metric=max_visual_qa_retry project_id=%s attempt=%d total=%d error_type=%s",
+                project_id,
+                attempt,
+                len(_MAX_VISUAL_QA_RETRY_DELAYS_SECONDS),
+                type(exc).__name__,
+            )
+            continue
+
+        if visual.get("ok"):
+            if attempt > 1:
+                logging.getLogger(__name__).info(
+                    "metric=max_visual_qa_retry_recovered project_id=%s attempt=%d",
+                    project_id,
+                    attempt,
+                )
+            return visual
+
+        # A captured page with a visual verdict is product evidence.  In
+        # particular, failed browser requests must stay red and reach the agent.
+        if visual.get("verdict") or "BROWSER SIGNALS" in str(visual.get("detail") or ""):
+            return visual
+
+        last_error = str(visual.get("error") or "MAX visual QA unavailable")
+        logging.getLogger(__name__).warning(
+            "metric=max_visual_qa_retry project_id=%s attempt=%d total=%d error_type=infra_result",
+            project_id,
+            attempt,
+            len(_MAX_VISUAL_QA_RETRY_DELAYS_SECONDS),
+        )
+
+    return {"ok": False, "error": last_error}
+
+
 def _spawn_process_prompt(*, run_id: UUID, **kwargs: object) -> None:
     """Fire-and-forget _process_prompt with a guaranteed strong reference.
 
@@ -3618,26 +3688,16 @@ async def _process_prompt(
                         # MAX previews authenticate through signed initData/session,
                         # not the generic email login. Bootstrap a short-lived
                         # preview identity before Playwright captures the product.
-                        from omnia_api.services import agent_vision
-
-                        try:
-                            _preview_session = await orchestrator_client.create_max_preview_session(
-                                project_id
-                            )
-                            _bootstrap_url = str(_preview_session.get("bootstrap_url") or "")
-                            _visual = await agent_vision.see_page(
-                                project_id,
-                                path=action.path or "/",
-                                prompt_context=_max_product_brief,
-                                bootstrap_url=_bootstrap_url,
-                                product_kind="max_miniapp",
-                            )
-                        except Exception as _see_exc:
-                            _visual = {
-                                "ok": False,
-                                "error": f"MAX visual QA unavailable: {type(_see_exc).__name__}",
-                            }
+                        _visual = await _run_max_visual_qa(
+                            project_id,
+                            path=action.path or "/",
+                            prompt_context=_max_product_brief,
+                        )
                         if not _visual.get("ok"):
+                            if _visual.get("verdict") or "BROWSER SIGNALS" in str(
+                                _visual.get("detail") or ""
+                            ):
+                                return _visual
                             # A QA-infrastructure miss is advisory. The independent
                             # build/runtime gates still block real product failures,
                             # and the model must not loop or roll back green code.
