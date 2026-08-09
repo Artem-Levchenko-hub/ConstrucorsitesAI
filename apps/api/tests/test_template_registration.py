@@ -76,3 +76,13 @@ def test_max_starter_exposes_the_managed_integration_contract() -> None:
             rf"export\s+(?:async\s+)?function\s+{export_name}\s*\(",
             implementation_source,
         )
+
+
+def test_max_preview_identity_is_neutral_until_max_profile_is_verified() -> None:
+    provider = (
+        _TEMPLATES_DIR / "max-miniapp-nextjs" / "src" / "components" / "MaxAppProvider.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert 'firstName: ""' in provider
+    assert "lastName: null" in provider
+    assert 'firstName: "Пользователь"' not in provider

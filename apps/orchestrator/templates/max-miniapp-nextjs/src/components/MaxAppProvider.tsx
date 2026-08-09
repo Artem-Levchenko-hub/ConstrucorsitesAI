@@ -69,8 +69,11 @@ function installAuthenticatedFetch(initData: string) {
 
 const previewUser: MaxSessionUser = {
   id: "preview",
-  firstName: "Пользователь",
-  lastName: "MAX",
+  // A preview has no verified MAX profile. Keep identity empty so product code
+  // exercises its honest neutral greeting instead of rendering a synthetic
+  // person that the visual/product gates correctly reject as fake data.
+  firstName: "",
+  lastName: null,
   username: "preview",
   languageCode: "ru",
   photoUrl: null,

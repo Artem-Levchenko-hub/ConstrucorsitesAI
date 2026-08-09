@@ -54,11 +54,12 @@ _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
 # competing types/catalog copies instead of the product entry.
 _STABLE_MAX_SUPPORT_FILE_LIMIT = 3
 _STABLE_MAX_PREWRITE_INSPECTION_LIMIT = 8
-# One initial visual verdict plus five evidence-led repair passes gives a strong
+# One initial visual verdict plus eight evidence-led repair passes gives a dense
 # mobile product enough room to cross the >=8 production floor without falling
-# back to the gateway's much larger financial fuse. Live 360/390 QA showed that
-# three passes could stop at 7/10 after every compiler/runtime proof was green.
-_STABLE_MAX_VISUAL_REPAIR_LIMIT = 5
+# back to the gateway's larger 80-request financial fuse. Live 360/390 QA showed
+# that five passes could finish known defects yet stop immediately before the
+# corrected render was re-proven.
+_STABLE_MAX_VISUAL_REPAIR_LIMIT = 8
 _HISTORY_PLACEHOLDER_MARKERS = (
     "[OMITTED FROM HISTORY:",
     "[OLDER TOOL RESULT OMITTED:",
@@ -959,7 +960,11 @@ _MAX_NATIVE_PREAMBLE = (
     "видно сразу, навигация не перекрывает контент, safe-area учтён, tap targets удобны "
     "для пальца, данные читаются без горизонтального скролла. Используй реальный профиль "
     "MAX и Bridge там, где это улучшает сценарий. Loading, empty, error/retry, success, "
-    "selected/pressed/disabled — полноценные состояния, а не подписи в макете.\n\n"
+    "selected/pressed/disabled — полноценные состояния, а не подписи в макете. Не ставь "
+    "fixed/sticky CTA поверх прокручиваемых контролов: оставляй действие в потоке либо "
+    "выделяй ему собственную непрозрачную область и реальный spacer. Если вариантов больше "
+    "трёх, используй компактные chips/segmented/grid или progressive disclosure, чтобы до "
+    "главного действия не стояла длинная колонка однотипных карточек.\n\n"
     "FIRST-RUN БЕЗ ПУСТОТЫ И ФАЛЬШИ. Честное отсутствие истории не означает пустой экран: "
     "первый viewport должен содержать обещание продукта, одно главное решение/действие и "
     "полезный следующий слой из брифа (например, выбор цели, каталог или объяснение процесса), "
@@ -1143,6 +1148,10 @@ def _stable_max_visual_repair_task(
         "turn when they fit; otherwise finish the component first and the executor will "
         "offer one bounded stylesheet-or-build turn next. "
         "Preserve working behavior, MAX integration, honest empty states, and accessibility. "
+        "Never fix a hidden CTA by floating it over scrollable choices: compact or stage the "
+        "choices and keep the action in flow, or reserve an opaque dock plus an actual spacer. "
+        "A preview identity can be absent; render neutral copy and never expose synthetic "
+        "Пользователь/User/Guest names. "
         "Prefer exact edits; keep total tool content below 24000 characters. Do not add fake "
         "user history, completed activity, statistics, testimonials, or decorative filler.\n\n"
         f"ORIGINAL TASK\n{task[:12_000]}\n\n"

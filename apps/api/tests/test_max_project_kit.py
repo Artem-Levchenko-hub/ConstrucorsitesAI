@@ -494,11 +494,12 @@ def test_model_directive_matches_locked_max_runtime_api() -> None:
     assert "demo/mock/sample/seed user records" in MAX_MODEL_DIRECTIVE
     assert "truthful empty states" in MAX_MODEL_DIRECTIVE
     assert (
-        "truthful empty history must still produce a composed first viewport"
-        in MAX_MODEL_DIRECTIVE
+        "truthful empty history must still produce a composed first viewport" in MAX_MODEL_DIRECTIVE
     )
     assert "never render a fake name" in MAX_MODEL_DIRECTIVE
     assert "settled 360px and 390px renders" in MAX_MODEL_DIRECTIVE
+    assert "Never float a fixed/sticky CTA over scrollable choices" in MAX_MODEL_DIRECTIVE
+    assert "option sets larger than three" in MAX_MODEL_DIRECTIVE
 
 
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:

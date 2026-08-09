@@ -1799,6 +1799,8 @@ async def test_stable_max_compacts_visual_repair_around_current_source_and_verdi
     assert "[FOCUSED VISUAL RESCUE]" in rescue["prompt"]
     assert "Increase CTA contrast" in rescue["prompt"]
     assert "first-screen" in rescue["prompt"]
+    assert "Never fix a hidden CTA by floating it over scrollable choices" in rescue["prompt"]
+    assert "Пользователь/User/Guest" in rescue["prompt"]
     assert rescue["tools"] == {"write_file", "edit_file"}
     assert result.done is True
     assert result.files[entry] == "polished-screen"
@@ -1905,7 +1907,7 @@ async def test_stable_max_allows_one_css_finish_turn_after_component_visual_repa
 
 
 @pytest.mark.asyncio
-async def test_stable_max_stops_after_five_unsuccessful_visual_repairs(
+async def test_stable_max_stops_after_bounded_unsuccessful_visual_repairs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
@@ -1914,7 +1916,7 @@ async def test_stable_max_stops_after_five_unsuccessful_visual_repairs(
         _turn(("build", {})),
         _turn(("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
     ]
-    for attempt in range(1, 6):
+    for attempt in range(1, agent_native._STABLE_MAX_VISUAL_REPAIR_LIMIT + 1):
         turns.extend(
             [
                 _turn(
@@ -1966,9 +1968,9 @@ async def test_stable_max_stops_after_five_unsuccessful_visual_repairs(
 
     assert result.done is False
     assert result.stop_reason == "visual_quality_unmet"
-    assert result.files[entry] == "screen-5"
-    assert call_count == 18
-    assert see_calls == 6
+    assert result.files[entry] == f"screen-{agent_native._STABLE_MAX_VISUAL_REPAIR_LIMIT}"
+    assert call_count == 3 + (3 * agent_native._STABLE_MAX_VISUAL_REPAIR_LIMIT)
+    assert see_calls == 1 + agent_native._STABLE_MAX_VISUAL_REPAIR_LIMIT
 
 
 @pytest.mark.asyncio

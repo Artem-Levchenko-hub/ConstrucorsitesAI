@@ -942,6 +942,10 @@ PRODUCT DESIGN OWNERSHIP:
   undefined template tokens, default indigo/violet AI styling or a repeated dashboard.
 - Design for 360–390px MAX WebView first: safe areas, thumb-friendly actions, content
   behind fixed navigation, loading/empty/error/retry/success, pressed/selected/disabled.
+- Never float a fixed/sticky CTA over scrollable choices. Keep it in document flow or give
+  an opaque dock a measured spacer; compact option sets larger than three into chips,
+  segmented controls, a small grid or progressive disclosure so the primary action is
+  reachable without a wall of full-width cards.
 - A truthful empty history must still produce a composed first viewport: product promise,
   one primary decision/action and useful brief-derived next content (goal choice, catalog or
   process preview) without invented achievements. Avoid large `space-between`/`min-height`

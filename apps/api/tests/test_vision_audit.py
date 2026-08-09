@@ -38,9 +38,7 @@ def test_parse_salvages_truncated_negative_verdict_for_repair():
     assert verdict.skipped is False
     assert verdict.verdict == "broken"
     assert verdict.score == 3
-    assert verdict.issues == (
-        "Нижняя навигация перекрывает контент — добавь safe-area отступ",
-    )
+    assert verdict.issues == ("Нижняя навигация перекрывает контент — добавь safe-area отступ",)
 
 
 def test_parse_never_salvages_truncated_beautiful_as_green_proof():
@@ -157,3 +155,5 @@ def test_max_rubric_does_not_invent_profile_identity() -> None:
     assert "не требуй показать реальное имя" in rubric
     assert "нейтральный текст" in rubric
     assert "«Пользователь»" in rubric
+    assert "не предлагай просто закрепить его поверх формы" in rubric
+    assert "не закрывает контролы" in rubric
