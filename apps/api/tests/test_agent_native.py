@@ -1970,6 +1970,7 @@ async def test_stable_max_stops_after_bounded_unsuccessful_visual_repairs(
 
     assert result.done is False
     assert result.stop_reason == "visual_quality_unmet"
+    assert "после восьми" in result.summary
     assert result.files[entry] == f"screen-{agent_native._STABLE_MAX_VISUAL_REPAIR_LIMIT}"
     assert call_count == 3 + (3 * agent_native._STABLE_MAX_VISUAL_REPAIR_LIMIT)
     assert see_calls == 1 + agent_native._STABLE_MAX_VISUAL_REPAIR_LIMIT

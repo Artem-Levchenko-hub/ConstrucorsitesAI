@@ -161,7 +161,22 @@ _SEEDED_NAME_PARTS = (
     "seed",
     "workout",
 )
-_STATIC_CATALOG_NAME_PARTS = ("catalog", "library", "program", "template")
+_STATIC_CATALOG_NAME_PARTS = (
+    "catalog",
+    "class",
+    "course",
+    "dish",
+    "exercise",
+    "library",
+    "menu",
+    "offering",
+    "plan",
+    "product",
+    "program",
+    "service",
+    "template",
+)
+_FAKE_COLLECTION_NAME_PARTS = ("demo", "fake", "fixture", "mock", "sample", "seed")
 _USER_ACTIVITY_NAME_PARTS = (
     "appointment",
     "booking",
@@ -506,17 +521,20 @@ def max_demo_data_rejection(path: str, content: str) -> str | None:
         body = str(match.group("body") or "")
         collection = _seeded_collection_literal(content or "", match)
         collection_keys = _js_object_keys(collection)
-        # Product reference content (exercise/workout libraries, programme
-        # templates) is not manufactured user history. It may contain duration,
-        # sets or reps, but never user identity or activity lifecycle fields.
+        # Product reference content (menus, products, services, exercise/workout
+        # libraries, programme templates) is not manufactured user history. It
+        # may contain price, duration, sets or reps, but never user identity or
+        # activity lifecycle fields.
         # Keeping this distinction avoids forcing a useful fresh app into an
         # empty catalog while still rejecting fake completed records.
         name_folded = name.casefold()
         static_reference = any(part in name_folded for part in _STATIC_CATALOG_NAME_PARTS)
         user_activity_name = any(part in name_folded for part in _USER_ACTIVITY_NAME_PARTS)
+        fake_collection_name = any(part in name_folded for part in _FAKE_COLLECTION_NAME_PARTS)
         if (
             static_reference
             and not user_activity_name
+            and not fake_collection_name
             and not any(_SEEDED_USER_RECORD_KEY_RE.fullmatch(key) for key in collection_keys)
         ):
             continue
@@ -563,10 +581,14 @@ def build_max_product_contract(prompt: str) -> str:
         "refreshes max_users on first open. Use useMaxApp for identity; never add password "
         "login or manufacture a profile.",
         "- Ship no hardcoded demo user data, history, metrics, orders, bookings or completed "
-        "workouts. Static exercise/workout catalog or programme templates are allowed only "
-        "when they are clearly reference content, never user activity. "
+        "workouts. Static business menus, product/service catalogs, exercise/workout "
+        "libraries and programme templates are allowed when they are clearly reference "
+        "content, never user activity. "
         "A new account starts with truthful empty states and creates real persisted data "
-        "through the managed client. Business catalog content comes from omniaMaxConfig.",
+        "through the managed client. Prefer business catalog content from omniaMaxConfig "
+        "when supplied; when it is empty and the brief requires a catalog, create a compact, "
+        "internally consistent starter reference catalog so the primary scenario works on "
+        "first open.",
         "- Use createMaxAction for persisted MAX user activity. Never store a provider key "
         "in source code or expose it to the browser.",
         "- Never import @/lib/db or drizzle-orm and never create parallel /api/max or "

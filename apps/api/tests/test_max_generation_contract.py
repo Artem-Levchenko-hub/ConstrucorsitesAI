@@ -158,6 +158,8 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "three distinct directions_considered" in contract
     assert "validated MAX initData" in contract
     assert "hardcoded demo" in contract
+    assert "static business menus" in contract.lower()
+    assert "primary scenario works on first open" in contract
 
 
 def test_completion_requires_persistent_project_specific_design_spec() -> None:
@@ -354,6 +356,55 @@ const WORKOUT_CATALOG = [
 """
     assert (
         max_demo_data_rejection("src/components/product/catalog.ts", catalog_with_wording) is None
+    )
+
+
+def test_static_business_menu_is_not_mistaken_for_user_orders() -> None:
+    menu = """
+const FALLBACK_MENU = [
+  {
+    id: "brioche",
+    name: "Бриошь с корицей",
+    category: "Выпечка",
+    description: "Воздушное тесто и корица",
+    composition: "Мука, молоко, масло, корица",
+    allergens: ["глютен", "лактоза"],
+    price: 320,
+    modifiers: [{ id: "warm", name: "Подогреть", price: 0 }],
+  },
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/menu.ts", menu) is None
+
+
+@pytest.mark.parametrize(
+    "user_fields",
+    [
+        'status: "completed", date: "2026-08-08"',
+        'userId: "42", orderId: "order-1"',
+        '"completed": true, "createdAt": "2026-08-08"',
+    ],
+)
+def test_static_business_menu_cannot_hide_user_activity(user_fields: str) -> None:
+    menu = f"""
+const FALLBACK_MENU = [
+  {{ id: "brioche", name: "Бриошь", price: 320, {user_fields} }},
+];
+"""
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/menu.ts", menu)).lower()
+    )
+
+
+def test_fake_named_business_menu_is_still_rejected() -> None:
+    menu = 'const DEMO_MENU = [{ id: "dish-1", name: "Бриошь", price: 320 }];'
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/menu.ts", menu)).lower()
     )
 
 
