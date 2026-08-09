@@ -157,3 +157,7 @@ def test_max_rubric_does_not_invent_profile_identity() -> None:
     assert "«Пользователь»" in rubric
     assert "не предлагай просто закрепить его поверх формы" in rubric
     assert "не закрывает контролы" in rubric
+    assert "initial-state не доказывает отсутствие интерактивных состояний" in rubric
+    assert "приглушённая disabled CTA корректны" in rubric
+    assert "Не требуй предвыбирать данные за пользователя" in rubric
+    assert "не называй естественный край прокручиваемого" in rubric
