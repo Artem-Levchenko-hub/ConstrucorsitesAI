@@ -6,6 +6,7 @@ import { createMaxSession, MAX_SESSION_COOKIE, type MaxSessionUser } from "@/lib
 
 const BOOTSTRAP_TTL_SECONDS = 120;
 const PREVIEW_SESSION_MAX_AGE_SECONDS = 15 * 60;
+const PREVIEW_CAPABILITY_COOKIE = "omnia-max-preview-capability";
 // MAX Studio replaces this sentinel with the canonical project UUID when it
 // syncs an existing app. The env fallback keeps the starter template usable
 // before that first managed-kit sync.
@@ -25,6 +26,10 @@ function unavailable(): NextResponse {
 
 function bootstrapMessage(projectId: string, expires: string): string {
   return `omnia:max-preview-session:v1\n${projectId}\n${expires}`;
+}
+
+function capabilityMessage(projectId: string, expires: string): string {
+  return `omnia:max-preview-capability:v1\n${projectId}\n${expires}`;
 }
 
 function validSignature(provided: string, expected: string): boolean {
@@ -85,6 +90,11 @@ export async function GET(request: Request) {
     const session = createMaxSession(PREVIEW_USER, {
       maxAge: PREVIEW_SESSION_MAX_AGE_SECONDS,
     });
+    const capabilityExpires = String(now + PREVIEW_SESSION_MAX_AGE_SECONDS);
+    const capabilitySignature = createHmac("sha256", secret)
+      .update(capabilityMessage(projectId, capabilityExpires), "utf8")
+      .digest("base64url");
+    const previewCapability = `v1.${capabilityExpires}.${capabilitySignature}`;
     // Keep the redirect relative to the public preview origin. Next.js exposes
     // its container listen address in request.url behind nginx, which would
     // otherwise send the browser to https://0.0.0.0:3000/.
@@ -101,6 +111,14 @@ export async function GET(request: Request) {
       partitioned: true,
       path: "/",
       maxAge: session.maxAge,
+    });
+    response.cookies.set(PREVIEW_CAPABILITY_COOKIE, previewCapability, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      partitioned: true,
+      path: "/",
+      maxAge: PREVIEW_SESSION_MAX_AGE_SECONDS,
     });
     return response;
   } catch {

@@ -372,3 +372,79 @@ async def test_signed_max_runtime_can_call_managed_ai_without_a_client_key(
     assert captured["project_id"] == str(project.id)
     assert captured["stage"] == "runtime_ai"
     assert "api_key" not in response.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_signed_preview_can_call_managed_ai_before_bot_connection(
+    client: httpx.AsyncClient,
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = await _register_and_create(client, monkeypatch)
+    project = await db_session.get(Project, UUID(project_id))
+    assert project is not None
+    preview_token = "v1.1893456900." + "a" * 43
+    validated: dict[str, object] = {}
+
+    async def validate(received_project_id: UUID, token: str) -> bool:
+        validated.update(project_id=received_project_id, token=token)
+        return True
+
+    async def no_limit(received_project_id: UUID, max_user_id: int) -> None:
+        validated.update(limit_project_id=received_project_id, max_user_id=max_user_id)
+
+    async def fake_complete(*_args, **_kwargs) -> str:
+        return "Готово: восстановительная тренировка на 25 минут."
+
+    monkeypatch.setattr(
+        integration_runtime_router.orchestrator_client,
+        "validate_max_preview_capability",
+        validate,
+    )
+    monkeypatch.setattr(integration_runtime_router, "_enforce_runtime_ai_limits", no_limit)
+    monkeypatch.setattr(llm_client, "complete_chat", fake_complete)
+
+    response = await client.post(
+        f"/api/runtime/projects/{project.id}/ai",
+        headers={"X-Omnia-MAX-Preview-Capability": preview_token},
+        json={"message": "Собери тренировку"},
+    )
+
+    assert response.status_code == 200
+    assert "25 минут" in response.json()["answer"]
+    assert validated == {
+        "project_id": project.id,
+        "token": preview_token,
+        "limit_project_id": project.id,
+        "max_user_id": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_invalid_preview_capability_never_reaches_managed_ai(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = await _register_and_create(client, monkeypatch)
+
+    async def invalid(_project_id: UUID, _token: str) -> bool:
+        return False
+
+    async def must_not_run(*_args, **_kwargs) -> str:
+        raise AssertionError("managed AI must not run for an invalid preview capability")
+
+    monkeypatch.setattr(
+        integration_runtime_router.orchestrator_client,
+        "validate_max_preview_capability",
+        invalid,
+    )
+    monkeypatch.setattr(llm_client, "complete_chat", must_not_run)
+
+    response = await client.post(
+        f"/api/runtime/projects/{project_id}/ai",
+        headers={"X-Omnia-MAX-Preview-Capability": "v1.1893456900." + "b" * 43},
+        json={"message": "Собери тренировку"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "max_preview_capability_invalid"

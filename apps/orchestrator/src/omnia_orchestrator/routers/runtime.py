@@ -19,6 +19,7 @@ import secrets
 from base64 import urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from hmac import compare_digest
 from hmac import new as hmac_new
 from time import time
 from typing import Annotated
@@ -66,6 +67,8 @@ from omnia_orchestrator.schemas.runtime import (
     KeepAliveRequest,
     KeepAliveResponse,
     LogsResponse,
+    MaxPreviewCapabilityValidateRequest,
+    MaxPreviewCapabilityValidateResponse,
     MaxPreviewSessionResponse,
     ProvisionRequest,
     ProvisionResponse,
@@ -121,6 +124,7 @@ _AGENT_MAX_BUILD = 24_000
 _MAX_PREVIEW_TEMPLATE = "max-miniapp-nextjs"
 _MAX_PREVIEW_BOOTSTRAP_TTL = timedelta(seconds=120)
 _MAX_PREVIEW_BOOTSTRAP_PATH = "/api/omnia/preview-session"
+_MAX_PREVIEW_CAPABILITY_TTL_SECONDS = 15 * 60
 _HISTORY_SESSION_LOCKS: dict[str, asyncio.Lock] = {}
 _HISTORY_SESSION_EXPIRY_TASKS: dict[str, asyncio.Task[None]] = {}
 _HISTORY_SWEEPER_TASK: asyncio.Task[None] | None = None
@@ -147,6 +151,20 @@ def _max_preview_bootstrap_signature(secret: str, project_id: str, expires: int)
     digest = hmac_new(
         secret.encode("utf-8"),
         _max_preview_bootstrap_message(project_id, expires),
+        sha256,
+    ).digest()
+    return urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _max_preview_capability_message(project_id: str, expires: int) -> bytes:
+    """Canonical input for the server-only development capability."""
+    return f"omnia:max-preview-capability:v1\n{project_id}\n{expires}".encode("ascii")
+
+
+def _max_preview_capability_signature(secret: str, project_id: str, expires: int) -> str:
+    digest = hmac_new(
+        secret.encode("utf-8"),
+        _max_preview_capability_message(project_id, expires),
         sha256,
     ).digest()
     return urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
@@ -246,6 +264,73 @@ async def create_max_preview_session(
         bootstrap_url=bootstrap_url,
         expires_at=expires_at.isoformat().replace("+00:00", "Z"),
     )
+
+
+@router.post(
+    "/{project_id}/max-preview-capability/validate",
+    response_model=MaxPreviewCapabilityValidateResponse,
+)
+async def validate_max_preview_capability(
+    project_id: UUID,
+    payload: MaxPreviewCapabilityValidateRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> MaxPreviewCapabilityValidateResponse:
+    """Validate a project-bound capability issued by the locked preview route."""
+    _verify_token(x_internal_token)
+    canonical_project_id = str(project_id)
+    parts = payload.token.split(".")
+    if (
+        len(parts) != 3
+        or parts[0] != "v1"
+        or not re.fullmatch(r"[1-9]\d{0,11}", parts[1])
+        or not re.fullmatch(r"[A-Za-z0-9_-]{43}", parts[2])
+    ):
+        raise OrchestratorError(
+            code="unauthorized",
+            message="MAX preview capability is invalid",
+            status_code=401,
+        )
+    expires = int(parts[1])
+    now = int(time())
+    if expires < now or expires > now + _MAX_PREVIEW_CAPABILITY_TTL_SECONDS:
+        raise OrchestratorError(
+            code="unauthorized",
+            message="MAX preview capability is invalid",
+            status_code=401,
+        )
+
+    container_name = await find_project_container(canonical_project_id, kind="dev")
+    if container_name is None:
+        raise OrchestratorError(
+            code="unauthorized",
+            message="MAX preview capability is invalid",
+            status_code=401,
+        )
+    container_status = await docker_container_status(container_name)
+    if (
+        container_status["state"] != "running"
+        or await container_image_template(container_name) != _MAX_PREVIEW_TEMPLATE
+    ):
+        raise OrchestratorError(
+            code="unauthorized",
+            message="MAX preview capability is invalid",
+            status_code=401,
+        )
+    secret = load_existing_auth_secret(canonical_project_id)
+    if secret is None:
+        raise OrchestratorError(
+            code="unauthorized",
+            message="MAX preview capability is invalid",
+            status_code=401,
+        )
+    expected = _max_preview_capability_signature(secret, canonical_project_id, expires)
+    if not compare_digest(parts[2], expected):
+        raise OrchestratorError(
+            code="unauthorized",
+            message="MAX preview capability is invalid",
+            status_code=401,
+        )
+    return MaxPreviewCapabilityValidateResponse(project_id=project_id, valid=True)
 
 
 @router.post("/wake", response_model=WakeResponse)

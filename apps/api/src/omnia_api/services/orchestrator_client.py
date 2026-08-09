@@ -191,6 +191,19 @@ async def create_max_preview_session(project_id: UUID) -> dict[str, Any]:
     return await _request("POST", f"/internal/projects/{project_id}/max-preview-session")
 
 
+async def validate_max_preview_capability(project_id: UUID, token: str) -> bool:
+    """Validate a server-only MAX development-preview capability."""
+    try:
+        payload = await _request(
+            "POST",
+            f"/internal/projects/{project_id}/max-preview-capability/validate",
+            json={"token": token},
+        )
+    except OrchestratorBadRequest:
+        return False
+    return payload.get("valid") is True and payload.get("project_id") == str(project_id)
+
+
 async def wake(project_id: UUID) -> dict[str, Any]:
     """POST /internal/projects/wake — start (or unpause) a previously provisioned project."""
     return await _request("POST", "/internal/projects/wake", json={"project_id": str(project_id)})

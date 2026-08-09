@@ -41,7 +41,12 @@ from omnia_api.schemas.integration_runtime import (
     RuntimePaymentRequest,
     RuntimePaymentStatusRequest,
 )
-from omnia_api.services import integration_oauth, integration_providers, llm_client
+from omnia_api.services import (
+    integration_oauth,
+    integration_providers,
+    llm_client,
+    orchestrator_client,
+)
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
@@ -51,6 +56,7 @@ MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
 class RuntimeContext:
     project_id: UUID
     max_user_id: int
+    is_preview: bool = False
 
 
 def _validate_init_data(init_data: str, bot_token: str) -> int:
@@ -81,7 +87,27 @@ def _validate_init_data(init_data: str, bot_token: str) -> int:
     return user_id
 
 
-async def _runtime_context(session: SessionDep, project_id: UUID, init_data: str) -> RuntimeContext:
+async def _runtime_context(
+    session: SessionDep,
+    project_id: UUID,
+    init_data: str | None,
+    *,
+    preview_capability: str | None = None,
+    allow_preview: bool = False,
+) -> RuntimeContext:
+    if allow_preview and not init_data and preview_capability:
+        if len(
+            preview_capability
+        ) > 128 or not await orchestrator_client.validate_max_preview_capability(
+            project_id, preview_capability
+        ):
+            raise ApiError(
+                "max_preview_capability_invalid",
+                "Защищённая сессия предпросмотра истекла. Обновите предпросмотр.",
+                status.HTTP_401_UNAUTHORIZED,
+            )
+        return RuntimeContext(project_id=project_id, max_user_id=0, is_preview=True)
+
     max_integration = (
         await session.execute(select(MaxIntegration).where(MaxIntegration.project_id == project_id))
     ).scalar_one_or_none()
@@ -93,7 +119,7 @@ async def _runtime_context(session: SessionDep, project_id: UUID, init_data: str
         )
     try:
         token = decrypt_strong(max_integration.bot_token_enc)
-        max_user_id = _validate_init_data(init_data, token)
+        max_user_id = _validate_init_data(init_data or "", token)
     except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise ApiError(
             "max_init_data_invalid",
@@ -251,11 +277,21 @@ async def request_runtime_ai(
     project_id: UUID,
     payload: RuntimeAIRequest,
     session: SessionDep,
-    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+    x_max_init_data: Annotated[str | None, Header(alias="X-MAX-Init-Data")] = None,
+    x_omnia_max_preview_capability: Annotated[
+        str | None,
+        Header(alias="X-Omnia-MAX-Preview-Capability"),
+    ] = None,
 ) -> RuntimeAIPublic:
     """Run managed owner-funded AI without exposing provider keys or routing."""
 
-    context = await _runtime_context(session, project_id, x_max_init_data)
+    context = await _runtime_context(
+        session,
+        project_id,
+        x_max_init_data,
+        preview_capability=x_omnia_max_preview_capability,
+        allow_preview=True,
+    )
     await _enforce_runtime_ai_limits(project_id, context.max_user_id)
     project = await session.get(Project, project_id)
     if project is None:

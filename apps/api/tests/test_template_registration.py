@@ -86,3 +86,22 @@ def test_max_preview_identity_is_neutral_until_max_profile_is_verified() -> None
     assert 'firstName: ""' in provider
     assert "lastName: null" in provider
     assert 'firstName: "Пользователь"' not in provider
+
+
+def test_max_preview_ai_uses_server_only_project_capability() -> None:
+    template = _TEMPLATES_DIR / "max-miniapp-nextjs"
+    preview_route = (template / "src/app/api/omnia/preview-session/route.ts").read_text(
+        encoding="utf-8"
+    )
+    proxy_route = (template / "src/app/api/omnia/integrations/[...path]/route.ts").read_text(
+        encoding="utf-8"
+    )
+    client = (template / "src/lib/omnia/client.ts").read_text(encoding="utf-8")
+
+    assert "omnia:max-preview-capability:v1" in preview_route
+    assert "httpOnly: true" in preview_route
+    assert "secure: true" in preview_route
+    assert "request.cookies.get(PREVIEW_CAPABILITY_COOKIE)" in proxy_route
+    assert "X-Omnia-MAX-Preview-Capability" in proxy_route
+    assert 'operation !== "ai"' in proxy_route
+    assert 'if (!initData) throw new Error("Откройте приложение внутри MAX")' not in client

@@ -287,6 +287,99 @@ def test_history_cleanup_journal_is_durable_and_secretless() -> None:
     assert history_cleanup.list_records() == []
 
 
+async def test_max_preview_capability_is_project_bound_and_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 1_893_456_000
+    expires = now + 900
+    secret = "auth-secret"
+    signature = runtime._max_preview_capability_signature(secret, str(PROJECT_ID), expires)
+    token = f"v1.{expires}.{signature}"
+    monkeypatch.setattr(runtime, "time", lambda: float(now))
+    monkeypatch.setattr(
+        runtime,
+        "find_project_container",
+        AsyncMock(return_value="omnia-dev-max-demo"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "docker_container_status",
+        AsyncMock(return_value={"state": "running"}),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "container_image_template",
+        AsyncMock(return_value="max-miniapp-nextjs"),
+    )
+    monkeypatch.setattr(runtime, "load_existing_auth_secret", lambda _project: secret)
+
+    response = await runtime.validate_max_preview_capability(
+        PROJECT_ID,
+        runtime.MaxPreviewCapabilityValidateRequest(token=token),
+        "test-token-test-token-test-token",
+    )
+
+    assert response.valid is True
+    assert response.project_id == PROJECT_ID
+
+
+@pytest.mark.parametrize("offset", [-1, 901])
+async def test_max_preview_capability_rejects_expired_or_excessive_lifetime(
+    monkeypatch: pytest.MonkeyPatch,
+    offset: int,
+) -> None:
+    now = 1_893_456_000
+    expires = now + offset
+    signature = runtime._max_preview_capability_signature("auth-secret", str(PROJECT_ID), expires)
+    monkeypatch.setattr(runtime, "time", lambda: float(now))
+
+    with pytest.raises(OrchestratorError) as exc_info:
+        await runtime.validate_max_preview_capability(
+            PROJECT_ID,
+            runtime.MaxPreviewCapabilityValidateRequest(token=f"v1.{expires}.{signature}"),
+            "test-token-test-token-test-token",
+        )
+
+    assert exc_info.value.code == "unauthorized"
+
+
+async def test_max_preview_capability_rejects_wrong_project_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 1_893_456_000
+    expires = now + 600
+    other_project = uuid4()
+    signature = runtime._max_preview_capability_signature(
+        "auth-secret", str(other_project), expires
+    )
+    monkeypatch.setattr(runtime, "time", lambda: float(now))
+    monkeypatch.setattr(
+        runtime,
+        "find_project_container",
+        AsyncMock(return_value="omnia-dev-max-demo"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "docker_container_status",
+        AsyncMock(return_value={"state": "running"}),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "container_image_template",
+        AsyncMock(return_value="max-miniapp-nextjs"),
+    )
+    monkeypatch.setattr(runtime, "load_existing_auth_secret", lambda _project: "auth-secret")
+
+    with pytest.raises(OrchestratorError) as exc_info:
+        await runtime.validate_max_preview_capability(
+            PROJECT_ID,
+            runtime.MaxPreviewCapabilityValidateRequest(token=f"v1.{expires}.{signature}"),
+            "test-token-test-token-test-token",
+        )
+
+    assert exc_info.value.code == "unauthorized"
+
+
 async def test_history_sweeper_releases_pre_container_journal_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
