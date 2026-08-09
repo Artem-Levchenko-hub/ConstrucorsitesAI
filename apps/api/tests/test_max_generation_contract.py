@@ -151,6 +151,7 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "питание" in labels
     assert "уведомления" in labels
     assert "requestOmniaAI" in contract
+    assert "never dump a long unbroken AI paragraph" in contract
     assert "fake timers" in contract
     assert "loading, empty, error/retry" in contract
     assert ".omnia/max-design-spec.json" in contract

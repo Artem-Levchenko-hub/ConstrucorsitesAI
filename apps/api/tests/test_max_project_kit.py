@@ -484,6 +484,7 @@ def test_model_directive_matches_locked_max_runtime_api() -> None:
     assert "languageCode" in MAX_MODEL_DIRECTIVE
     assert "There is no `useWebApp`, `useMaxUser`" in MAX_MODEL_DIRECTIVE
     assert "requestOmniaAI({ message, instructions, context })" in MAX_MODEL_DIRECTIVE
+    assert "Never dump a long\nunbroken AI paragraph" in MAX_MODEL_DIRECTIVE
     assert "Tailwind v4" in MAX_MODEL_DIRECTIVE
     assert "Recharts are not installed" in MAX_MODEL_DIRECTIVE
     assert "@maxhub/max-ui` 0.2.0" in MAX_MODEL_DIRECTIVE

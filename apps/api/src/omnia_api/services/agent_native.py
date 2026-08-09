@@ -966,6 +966,10 @@ _MAX_NATIVE_PREAMBLE = (
     "выделяй ему собственную непрозрачную область и реальный spacer. Если вариантов больше "
     "трёх, используй компактные chips/segmented/grid или progressive disclosure, чтобы до "
     "главного действия не стояла длинная колонка однотипных карточек.\n\n"
+    "AI-РЕЗУЛЬТАТ — ЭТО ЭКРАН, НЕ СЫРОЙ ТЕКСТ. Проси у managed AI короткий, "
+    "структурированный ответ и показывай его секциями, шагами или списком с ясной "
+    "иерархией. Никогда не выводи длинный `answer` одним сплошным абзацем в общей "
+    "карточке; на 360px сохрани читаемую длину строки и видимое следующее действие.\n\n"
     "FIRST-RUN БЕЗ ПУСТОТЫ И ФАЛЬШИ. Честное отсутствие истории не означает пустой экран: "
     "первый viewport должен содержать обещание продукта, одно главное решение/действие и "
     "полезный следующий слой из брифа (например, выбор цели, каталог или объяснение процесса), "
@@ -2230,7 +2234,12 @@ async def run_native_build(
                     repair_reads_since_build.clear()
                     repair_context_compacted = False
                     wrote_since_build = False
-                elif tool_executed and name == "runtime_check" and not obs.get("ok"):
+                elif (
+                    tool_executed
+                    and name == "runtime_check"
+                    and not obs.get("ok")
+                    and not obs.get("infra_dead")
+                ):
                     # A typecheck-clean app can still fail in Next/Turbopack at
                     # request time. Treat that factual failure as repair debt;
                     # otherwise the proof gate advertises only runtime_check and

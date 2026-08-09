@@ -902,6 +902,10 @@ the managed user-scoped API.
 When the brief requests AI, use the exact typed call
 `const { answer } = await requestOmniaAI({ message, instructions, context })`
 from `@/lib/omnia/integration-client`; the managed model runs server-side.
+Ask for a concise, structured answer suited to the product, then render it as
+scannable sections, steps or bullets with clear hierarchy. Never dump a long
+unbroken AI paragraph into one generic card; preserve wrapping, readable line
+length and a visible next action on 360px screens.
 Never embed a provider key in source or expose one to the browser. If a user pastes
 a credential into chat, do not write it or create an .env file: Omnia handles
 credentials only through the encrypted Studio Integration Hub.

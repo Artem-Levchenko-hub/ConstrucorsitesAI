@@ -3107,6 +3107,77 @@ async def test_runtime_failure_reopens_source_repair_instead_of_proof_loop(
 
 
 @pytest.mark.asyncio
+async def test_unavailable_runtime_retries_proof_without_reopening_source_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": "export default function ProductApp(){return <main/>}",
+                    },
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("runtime_check", {"path": "/"})),
+        ]
+    )
+    advertised: list[set[str]] = []
+    runtime_calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        advertised.append({str(tool["name"]) for tool in kwargs["tools"]})
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal runtime_calls
+        if action.name == "runtime_check":
+            runtime_calls += 1
+            if runtime_calls == 1:
+                return {
+                    "ok": False,
+                    "infra_dead": True,
+                    "detail": "route / did not answer yet",
+                }
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "green",
+        }
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        if not files:
+            return "write product"
+        if not evidence.get("build_after_write"):
+            return "Run build"
+        if not evidence.get("runtime_check_after_write"):
+            return "Run runtime_check"
+        return None
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="build",
+        execute=execute,
+        completion_check=complete,
+        max_steps=8,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert runtime_calls == 2
+    assert advertised[3] == {"runtime_check"}
+
+
+@pytest.mark.asyncio
 async def test_unavailable_see_does_not_satisfy_completion_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -575,7 +575,9 @@ def build_max_product_contract(prompt: str) -> str:
         "- If the brief asks for AI, call requestOmniaAI from "
         "@/lib/omnia/integration-client. It reaches the managed model server-side; "
         "the exact shape is `const { answer } = await requestOmniaAI({ message, "
-        "instructions, context })`. setTimeout/random/static text is not AI.",
+        "instructions, context })`. setTimeout/random/static text is not AI. Ask for a "
+        "concise structured answer and render it as scannable sections, steps or bullets; "
+        "never dump a long unbroken AI paragraph into a generic card.",
         "- After implementation: run a clean build, runtime_check the finished home screen "
         "and see it through the signed MAX preview. Apply concrete visual findings, then "
         "rebuild/runtime-check/see again until the visual verdict is clean; "

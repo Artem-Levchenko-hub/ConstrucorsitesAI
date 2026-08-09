@@ -3681,6 +3681,17 @@ async def _process_prompt(
                         _observation
                     ):
                         _code = _observation.get("status_code")
+                        if _code is None:
+                            return {
+                                **_observation,
+                                "ok": False,
+                                "infra_dead": True,
+                                "detail": (
+                                    f"MAX route {action.path or '/'} did not answer yet. "
+                                    "Keep the clean build, do not edit source, and retry "
+                                    "runtime_check after the dev server is ready."
+                                ),
+                            }
                         _runtime_detail = str(
                             _observation.get("detail")
                             or _observation.get("error")
@@ -3689,7 +3700,7 @@ async def _process_prompt(
                         return {
                             **_observation,
                             "ok": False,
-                            "infra_dead": _code is None,
+                            "infra_dead": False,
                             "detail": (
                                 f"MAX route {action.path or '/'} is not ready "
                                 f"(HTTP {_code if _code is not None else 'unavailable'}); "

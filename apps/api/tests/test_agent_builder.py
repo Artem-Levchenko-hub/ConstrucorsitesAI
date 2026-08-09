@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from omnia_api.services import agent_builder as ab
 
 # ── parse_action ────────────────────────────────────────────────────────────
@@ -295,6 +297,27 @@ def test_parse_new_observe_actions():
     assert a is not None and a.name == "runtime_check" and a.path == "/dashboard"
     b = ab.parse_action('<omnia:action name="read_logs">{}</omnia:action>')
     assert b is not None and b.name == "read_logs"
+
+
+@pytest.mark.asyncio
+async def test_runtime_check_never_invents_http_200_when_probe_has_no_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import orchestrator_client
+
+    async def runtime_status(*args: object, **kwargs: object) -> dict[str, object]:
+        return {"ok": True, "status_code": None}
+
+    monkeypatch.setattr(orchestrator_client, "runtime_status", runtime_status)
+    execute = ab.make_container_executor(project_id="project", slug="slug")
+
+    result = await execute(ab.Action("runtime_check", {"path": "/"}, ""))
+
+    assert result == {
+        "ok": True,
+        "status_code": None,
+        "detail": "route / did not answer yet; retry runtime_check without changing source",
+    }
 
 
 def test_runtime_debug_loop_recovers_then_done():

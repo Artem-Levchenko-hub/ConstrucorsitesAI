@@ -1557,8 +1557,13 @@ def make_container_executor(
                 )
                 ok = bool(res.get("ok", True))
                 code = res.get("status_code")
-                if ok:
-                    detail = f"route {path} renders OK (HTTP {code or 200})"
+                if ok and code is not None:
+                    detail = f"route {path} renders OK (HTTP {code})"
+                elif ok:
+                    detail = (
+                        f"route {path} did not answer yet; retry runtime_check "
+                        "without changing source"
+                    )
                 else:
                     err = res.get("error") or "5xx"
                     where = res.get("file")

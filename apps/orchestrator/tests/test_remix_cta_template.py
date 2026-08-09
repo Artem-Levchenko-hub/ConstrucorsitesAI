@@ -20,6 +20,7 @@ _DRIZZLE = _TEMPLATES / "nextjs-postgres-drizzle"
 # nextjs-realtime (messengers) originally shipped without any omnia public
 # scripts → select-mode / manual editor / remix CTA were dead. Pinned here too.
 _REALTIME = _TEMPLATES / "nextjs-realtime"
+_MAX = _TEMPLATES / "max-miniapp-nextjs"
 _CTA_REL = "public/omnia-remix-cta.js"
 
 
@@ -61,6 +62,15 @@ def test_remix_cta_contract() -> None:
     # No CDN: the only network destination is the derived control-plane origin.
     for cdn in ("cdnjs", "unpkg", "jsdelivr", "googleapis"):
         assert cdn not in src
+
+
+def test_max_remix_controls_do_not_cover_mobile_bottom_navigation() -> None:
+    """MAX apps own a persistent bottom nav; viral controls must clear it."""
+    src = (_MAX / _CTA_REL).read_text(encoding="utf-8")
+
+    assert "bottom:calc(82px + env(safe-area-inset-bottom))" in src
+    assert "#omnia-remix-btn .omnia-remix-label{display:none}" in src
+    assert "#omnia-wm-made,#omnia-wm-name{display:none}" in src
 
 
 def test_remix_cta_wired_into_both_layouts() -> None:

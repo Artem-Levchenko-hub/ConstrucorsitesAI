@@ -107,6 +107,10 @@
       "@keyframes omnia-remix-in{from{opacity:0;transform:translateY(14px) scale(.96)}" +
       "to{opacity:1;transform:none}}" +
       "@keyframes omnia-remix-spin{to{transform:rotate(360deg)}}" +
+      "@media (max-width:479px){#omnia-remix-cta{right:10px;" +
+      "bottom:calc(82px + env(safe-area-inset-bottom))}" +
+      "#omnia-remix-btn{width:46px;height:46px;padding:0;justify-content:center}" +
+      "#omnia-remix-btn .omnia-remix-label{display:none}}" +
       "@media (prefers-reduced-motion:reduce){#omnia-remix-btn," +
       "#omnia-remix-btn .omnia-remix-spark{animation:none}" +
       "#omnia-remix-btn:hover{transform:none}}";
@@ -215,7 +219,10 @@
       "transition:transform .16s ease,box-shadow .16s ease}" +
       "#omnia-wm-make:hover{transform:translateY(-1px);box-shadow:0 12px 30px rgba(99,102,241,.5)}" +
       "@keyframes omnia-wm-in{from{opacity:0;transform:translateY(12px) scale(.94)}to{opacity:1;transform:none}}" +
-      "@media (max-width:479px){#omnia-wm-made{display:none}}" +
+      "@media (max-width:479px){#omnia-wm{left:10px;" +
+      "bottom:calc(82px + env(safe-area-inset-bottom))}" +
+      "#omnia-wm-badge{width:44px;height:44px;padding:0;justify-content:center}" +
+      "#omnia-wm-made,#omnia-wm-name{display:none}}" +
       "@media (prefers-reduced-motion:reduce){#omnia-wm-badge,#omnia-wm-pop,#omnia-wm-make{" +
       "animation:none!important;transition:none!important}#omnia-wm-badge:hover{transform:none}}";
 
