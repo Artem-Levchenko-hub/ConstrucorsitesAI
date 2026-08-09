@@ -160,6 +160,12 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "hardcoded demo" in contract
     assert "static business menus" in contract.lower()
     assert "primary scenario works on first open" in contract
+    assert "coherent on every screen and state" in contract
+    assert "browser/default blue buttons" in contract
+    assert "never nest a button/link" in contract
+    assert "sibling controls" in contract
+    assert "real h1/h2" in contract
+    assert "stable aria-label" in contract
 
 
 def test_completion_requires_persistent_project_specific_design_spec() -> None:

@@ -163,3 +163,7 @@ def test_max_rubric_does_not_invent_profile_identity() -> None:
     assert "Не требуй предвыбирать данные за пользователя" in rubric
     assert "не называй естественный край прокручиваемого" in rubric
     assert "ОДНО И ТО ЖЕ ФОТО" in rubric
+    assert "quick-action" in rubric
+    assert "вторую интерактивную оболочку" in rubric
+    assert "дефолтная синяя кнопка" in rubric
+    assert "checkout" in rubric

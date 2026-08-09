@@ -577,6 +577,14 @@ def build_max_product_contract(prompt: str) -> str:
         "brief coverage, never by an arbitrary number of files. Decorative tabs are not screens.",
         "- Every button must execute a real state change or persisted request. No decorative "
         "controls, fake timers, TODOs, simulated success or claimed integrations.",
+        "- Keep the chosen visual system coherent on every screen and state, including cart, "
+        "checkout, success, empty/error and profile views. Do not fall back to browser/default "
+        "blue buttons, generic panels or a second accent palette outside the chosen art direction.",
+        "- Use semantic, accessible controls: every clickable surface is a native button or link; "
+        "never nest a button/link inside another button/link or a focusable role=button wrapper. "
+        "When a card has a quick action, keep the card container non-interactive and expose the "
+        "details action and quick action as sibling controls. Give each screen a real h1/h2 and "
+        "give icon-only/navigation buttons stable aria-label text that excludes badges/counts.",
         "- Real accounts come from validated MAX initData: the managed session creates or "
         "refreshes max_users on first open. Use useMaxApp for identity; never add password "
         "login or manufacture a profile.",
