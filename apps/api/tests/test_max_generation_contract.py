@@ -285,6 +285,24 @@ def test_instructional_copy_is_not_mistaken_for_seeded_records() -> None:
 
     assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
 
+
+def test_completion_rejects_generic_identity_fallback_but_allows_neutral_copy() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += '''
+const displayName = user?.first_name ?? "Пользователь";
+'''
+    assert "generic identity fallback" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += '''
+const greeting = user?.first_name ? `Рады видеть, ${user.first_name}` : "Начнём с цели";
+const aiRole = "User";
+// "Пользователь" is forbidden as a generic fallback.
+'''
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+
+def test_empty_profile_draft_is_not_mistaken_for_seeded_profile() -> None:
     files = _complete_single_file()
     files["src/app/page.tsx"] += """
 const profileDraft = { firstName: "", email: "" };

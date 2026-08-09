@@ -107,6 +107,15 @@ _ASYNC_STATES_PROMPT_RE = re.compile(
     r"(?:loading|empty|error|retry|загрузк|пуст\w*|ошибк|повтор)",
     re.IGNORECASE,
 )
+_GENERIC_IDENTITY_FALLBACK_RE = re.compile(
+    r'''(?:
+        (?:\?\?|\|\|)\s*["'`](?:Пользователь|Гость|User|Guest)["'`]
+        |>\s*(?:Пользователь|Гость|User|Guest)\s*<
+        |\b(?:displayName|userName|profileName|firstName|greetingName)\b
+            \s*=\s*["'`](?:Пользователь|Гость|User|Guest)["'`]
+    )''',
+    re.IGNORECASE | re.VERBOSE,
+)
 _SEEDED_COLLECTION_RE = re.compile(
     r"\b(?:const|let|var)\s+"
     r"(?:(?P<name>[A-Za-z_$][\w$]*)|"
@@ -787,6 +796,13 @@ def max_source_completion_gap(
         return (
             "The product does not consume the verified MAX account. Import useMaxApp "
             "from @/components/MaxAppProvider and call useMaxApp() in the product UI."
+        )
+    source_with_strings = _strip_js_non_code(product_source_blob, keep_strings=True)
+    if _GENERIC_IDENTITY_FALLBACK_RE.search(source_with_strings):
+        return (
+            "The product renders a generic identity fallback such as Пользователь/User/Guest. "
+            "Use the verified MAX first_name only when present; otherwise render neutral "
+            "non-personal copy instead of inventing a profile name."
         )
 
     persistence_required = _PERSISTENCE_PROMPT_RE.search(prompt) is not None

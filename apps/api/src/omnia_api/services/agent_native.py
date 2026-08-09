@@ -54,11 +54,11 @@ _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
 # competing types/catalog copies instead of the product entry.
 _STABLE_MAX_SUPPORT_FILE_LIMIT = 3
 _STABLE_MAX_PREWRITE_INSPECTION_LIMIT = 8
-# One initial visual verdict plus three focused repair passes is enough to prove
-# whether the generated direction can reach the production floor.  The gateway's
-# 80-request fuse must remain a last-resort money guard, not the normal controller
-# for a visual loop that keeps re-reading the same transcript.
-_STABLE_MAX_VISUAL_REPAIR_LIMIT = 3
+# One initial visual verdict plus five evidence-led repair passes gives a strong
+# mobile product enough room to cross the >=8 production floor without falling
+# back to the gateway's much larger financial fuse. Live 360/390 QA showed that
+# three passes could stop at 7/10 after every compiler/runtime proof was green.
+_STABLE_MAX_VISUAL_REPAIR_LIMIT = 5
 _HISTORY_PLACEHOLDER_MARKERS = (
     "[OMITTED FROM HISTORY:",
     "[OLDER TOOL RESULT OMITTED:",
@@ -574,6 +574,27 @@ def _tool_use_to_action(block: dict[str, Any]) -> Action:
     if not isinstance(inp, dict):
         inp = {}
     return Action(name=str(block.get("name", "")), args=dict(inp), raw="")
+
+
+def _normalize_stable_max_action_path(action: Action) -> Action:
+    """Repair one harmless provider path spelling before strict policy checks.
+
+    Some coding models occasionally prefix a project-relative MAX path with one
+    slash (``/src/...``). Only known project roots are repaired; arbitrary
+    absolute paths, duplicate slashes, traversal and backslashes remain intact
+    and are rejected by ``max_model_path_rejection`` in the executor.
+    """
+
+    path = action.path
+    if action.name not in {"list_dir", "read_file", "grep", "write_file", "edit_file"}:
+        return action
+    if not path.startswith(("/src/", "/public/product/", "/.omnia/")):
+        return action
+    return Action(
+        name=action.name,
+        args={**action.args, "path": path[1:]},
+        raw=action.raw,
+    )
 
 
 def _contains_history_placeholder(action: Action) -> bool:
@@ -1895,6 +1916,8 @@ async def run_native_build(
                     continue
 
                 action = _tool_use_to_action(tu)
+                if stable_max_loop:
+                    action = _normalize_stable_max_action_path(action)
                 lifecycle_error = ""
                 if max_runtime and name == "read_skill":
                     skill_id = str(action.args.get("skill") or "").strip().casefold()
@@ -1973,6 +1996,11 @@ async def run_native_build(
                     # let transcript compaction destroy the live source; allow
                     # one fresh read of the failing path on the next turn.
                     repair_reads_since_build.discard(action.path)
+                    if visual_feedback_step is not None:
+                        # The next paid turn must receive a fresh, authoritative
+                        # focused source bundle. Otherwise the compacted marker
+                        # remains in the transcript and can be echoed repeatedly.
+                        visual_context_compacted_step = None
                     obs = {"ok": False, "error": _HISTORY_PLACEHOLDER_WRITE_REJECTED}
                 elif visual_proof_unavailable_this_turn and name == "see":
                     # Tool calls in one assistant response are planned before
@@ -2298,7 +2326,7 @@ async def run_native_build(
                 return AgentResult(
                     done=False,
                     summary=(
-                        "Визуальная проверка всё ещё ниже production-уровня после трёх "
+                        "Визуальная проверка всё ещё ниже production-уровня после пяти "
                         "сфокусированных исправлений. Результат не опубликован, чтобы не "
                         "выдать посредственный интерфейс за готовое приложение."
                     ),

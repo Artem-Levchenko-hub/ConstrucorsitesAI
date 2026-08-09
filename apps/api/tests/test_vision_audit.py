@@ -149,3 +149,11 @@ async def test_max_audit_retry_busts_invalid_cached_answer_and_allows_complete_j
     assert "не длиннее 500 символов" in text
     assert "не более двух issues" in text
     assert "Повтор формата 2" in text
+
+
+def test_max_rubric_does_not_invent_profile_identity() -> None:
+    rubric = vision_audit._MAX_RUBRIC
+
+    assert "не требуй показать реальное имя" in rubric
+    assert "нейтральный текст" in rubric
+    assert "«Пользователь»" in rubric

@@ -1811,7 +1811,7 @@ async def test_stable_max_compacts_visual_repair_around_current_source_and_verdi
 
 
 @pytest.mark.asyncio
-async def test_stable_max_stops_after_three_unsuccessful_visual_repairs(
+async def test_stable_max_stops_after_five_unsuccessful_visual_repairs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
@@ -1820,7 +1820,7 @@ async def test_stable_max_stops_after_three_unsuccessful_visual_repairs(
         _turn(("build", {})),
         _turn(("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
     ]
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
         turns.extend(
             [
                 _turn(
@@ -1866,15 +1866,120 @@ async def test_stable_max_stops_after_three_unsuccessful_visual_repairs(
         task="Build the complete app.",
         execute=execute,
         completion_check=complete,
-        max_steps=30,
+        max_steps=40,
         stable_max_loop=True,
     )
 
     assert result.done is False
     assert result.stop_reason == "visual_quality_unmet"
-    assert result.files[entry] == "screen-3"
-    assert call_count == 12
-    assert see_calls == 4
+    assert result.files[entry] == "screen-5"
+    assert call_count == 18
+    assert see_calls == 6
+
+
+@pytest.mark.asyncio
+async def test_stable_max_rehydrates_visual_source_after_history_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    calls: list[dict[str, Any]] = []
+    turns = iter(
+        [
+            _turn(("write_file", {"path": entry, "content": "first-screen"})),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+            _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": entry,
+                        "old_string": "[OMITTED FROM HISTORY: 1200 characters already applied]",
+                        "new_string": "polished-screen",
+                    },
+                )
+            ),
+            _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": entry,
+                        "old_string": "first-screen",
+                        "new_string": "polished-screen",
+                    },
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "convo": json.loads(json.dumps(convo)),
+                "tools": {str(t["name"]) for t in kwargs["tools"]},
+            }
+        )
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    see_calls = 0
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        if action.name == "see":
+            see_calls += 1
+            return {
+                "ok": True,
+                "needs_fix": see_calls == 1,
+                "detail": "Increase CTA contrast.",
+            }
+        if action.name == "edit_file":
+            return {"ok": True, "content": "polished-screen", "detail": "edited"}
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build a premium training companion.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert calls[4]["tools"] == {"write_file", "edit_file"}
+    assert len(calls[5]["convo"]) == 1
+    assert "[FOCUSED VISUAL RESCUE]" in str(calls[5]["convo"][0])
+    assert "first-screen" in str(calls[5]["convo"][0])
+    assert result.done is True
+    assert result.files[entry] == "polished-screen"
+
+
+def test_stable_max_normalizes_only_known_leading_slash_paths() -> None:
+    repaired = agent_native._normalize_stable_max_action_path(
+        agent_native.Action(
+            name="edit_file",
+            args={"path": "/src/components/product/ProductApp.tsx"},
+        )
+    )
+    arbitrary = agent_native._normalize_stable_max_action_path(
+        agent_native.Action(name="write_file", args={"path": "/etc/passwd"})
+    )
+    duplicate = agent_native._normalize_stable_max_action_path(
+        agent_native.Action(name="write_file", args={"path": "//src/components/product/x.tsx"})
+    )
+
+    assert repaired.path == "src/components/product/ProductApp.tsx"
+    assert arbitrary.path == "/etc/passwd"
+    assert duplicate.path == "//src/components/product/x.tsx"
 
 
 @pytest.mark.asyncio
