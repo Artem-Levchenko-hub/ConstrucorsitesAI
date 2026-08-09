@@ -445,10 +445,30 @@ _STABLE_MAX_PROOF_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_PROOF_TOOLS[:-1],
     {**_STABLE_MAX_PROOF_TOOLS[-1], "cache_control": _CACHE},
 ]
+_STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
+    {
+        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "runtime_check"),
+        "cache_control": _CACHE,
+    }
+]
+_STABLE_MAX_SEE_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
+    {
+        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "see"),
+        "cache_control": _CACHE,
+    }
+]
 _STABLE_MAX_PROOF_REQUIRED = (
     "The product source and build are green. Stop reading or polishing blindly. "
     "Run runtime_check and see now; if see reports a concrete issue, edit it on the "
     "following turn, rebuild, and verify again."
+)
+_STABLE_MAX_RUNTIME_PROOF_REQUIRED = (
+    "The build is green but the final runtime is not proven. Run runtime_check now; "
+    "do not read, rewrite, or call see before the live route is green."
+)
+_STABLE_MAX_SEE_PROOF_REQUIRED = (
+    "The build and runtime are already green. Call see now; do not repeat runtime_check "
+    "or perform another blind rewrite before the rendered verdict."
 )
 _STABLE_MAX_VISUAL_REPAIR_REQUIRED = (
     "A concrete visual issue is already known. Stop searching or rereading. "
@@ -897,6 +917,14 @@ _MAX_NATIVE_PREAMBLE = (
     "для пальца, данные читаются без горизонтального скролла. Используй реальный профиль "
     "MAX и Bridge там, где это улучшает сценарий. Loading, empty, error/retry, success, "
     "selected/pressed/disabled — полноценные состояния, а не подписи в макете.\n\n"
+    "FIRST-RUN БЕЗ ПУСТОТЫ И ФАЛЬШИ. Честное отсутствие истории не означает пустой экран: "
+    "первый viewport должен содержать обещание продукта, одно главное решение/действие и "
+    "полезный следующий слой из брифа (например, выбор цели, каталог или объяснение процесса), "
+    "но не выдуманные достижения. Не растягивай блоки через space-between/min-height так, чтобы "
+    "между ними возникали огромные провалы. При nullable MAX-профиле никогда не показывай имя-"
+    "заглушку «Пользователь», «User» или «Гость»: используй нейтральную фразу без выдуманного "
+    "имени. Loading обязан сохранять ту же брендовую оболочку и геометрию, а 360px и 390px "
+    "после settle должны показывать один и тот же продукт, не разные splash/content экраны.\n\n"
     "ЖИВОЕ ДВИЖЕНИЕ. Добавляй короткие целевые micro-interactions: press feedback, "
     "переключение сегментов, изменение progress/counter, появление и удаление строки, "
     "skeleton→content, bottom sheet, подтверждение успеха/ошибки и MAX haptics. Анимируй "
@@ -1519,6 +1547,9 @@ async def run_native_build(
                 and completion_gap is not None
                 and ("runtime_check" in completion_gap or completion_gap.startswith("Run see"))
             )
+            proof_gap = completion_gap.casefold() if completion_gap is not None else ""
+            force_runtime_proof = force_proof and "runtime_check" in proof_gap
+            force_see_proof = force_proof and "see" in proof_gap and not force_runtime_proof
             force_visual_repair = (
                 stable_max_loop
                 and visual_feedback_step is not None
@@ -1558,6 +1589,10 @@ async def run_native_build(
                         if force_build_after_write
                         else _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED
                         if force_style_write
+                        else _STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED
+                        if force_runtime_proof
+                        else _STABLE_MAX_SEE_ONLY_TOOLS_CACHED
+                        if force_see_proof
                         else _STABLE_MAX_PROOF_TOOLS_CACHED
                         if force_proof
                         else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
@@ -1948,6 +1983,10 @@ async def run_native_build(
                         "ok": False,
                         "error": "Visual QA is unavailable; repeated see was skipped.",
                     }
+                elif force_runtime_proof and name != "runtime_check":
+                    obs = {"ok": False, "error": _STABLE_MAX_RUNTIME_PROOF_REQUIRED}
+                elif force_see_proof and name != "see":
+                    obs = {"ok": False, "error": _STABLE_MAX_SEE_PROOF_REQUIRED}
                 elif force_proof and name not in {"runtime_check", "see"}:
                     # Cached provider turns may still reference schemas from an
                     # earlier unrestricted phase. Enforce the proof transition at

@@ -942,6 +942,14 @@ PRODUCT DESIGN OWNERSHIP:
   undefined template tokens, default indigo/violet AI styling or a repeated dashboard.
 - Design for 360–390px MAX WebView first: safe areas, thumb-friendly actions, content
   behind fixed navigation, loading/empty/error/retry/success, pressed/selected/disabled.
+- A truthful empty history must still produce a composed first viewport: product promise,
+  one primary decision/action and useful brief-derived next content (goal choice, catalog or
+  process preview) without invented achievements. Avoid large `space-between`/`min-height`
+  voids. Loading keeps the same branded shell and geometry; settled 360px and 390px renders
+  must show the same product state rather than splash versus content.
+- When `user` is nullable, never render a fake name such as `Пользователь`, `User` or `Guest`.
+  Use neutral copy without pretending to know a person's name; use the real MAX first name
+  only when it is present.
 - Use purposeful transform/opacity micro-interactions and MAX haptics; respect
   `prefers-reduced-motion`. Hover may enhance desktop but must never carry meaning.
 

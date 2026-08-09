@@ -1587,6 +1587,9 @@ async def test_stable_max_forces_runtime_and_visual_proof_after_green_build(
             ),
             _turn(("build", {})),
             _turn(("runtime_check", {"path": "/"})),
+            # Simulate a cached response repeating the previous proof. Once
+            # runtime is green, only see may execute.
+            _turn(("runtime_check", {"path": "/"})),
             _turn(("see", {"path": "/"})),
         ]
     )
@@ -1628,8 +1631,9 @@ async def test_stable_max_forces_runtime_and_visual_proof_after_green_build(
     assert result.done is True
     assert result.stop_reason == "contract_green"
     assert advertised[2:] == [
-        {"runtime_check", "see"},
-        {"runtime_check", "see"},
+        {"runtime_check"},
+        {"see"},
+        {"see"},
     ]
 
 
@@ -1721,13 +1725,13 @@ async def test_stable_max_reopens_editing_after_actionable_visual_feedback(
         "{ return <main>polished</main>; }"
     )
     assert advertised[2:4] == [
-        {"runtime_check", "see"},
-        {"runtime_check", "see"},
+        {"runtime_check"},
+        {"see"},
     ]
     assert "write_file" in advertised[4]
     assert advertised[6:] == [
-        {"runtime_check", "see"},
-        {"runtime_check", "see"},
+        {"runtime_check"},
+        {"see"},
     ]
 
 
