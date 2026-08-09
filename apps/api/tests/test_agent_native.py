@@ -392,9 +392,7 @@ async def test_failed_first_max_cleanup_restores_rendered_starter(
     )
 
     assert '@import "tailwindcss"' in applied["src/app/globals.css"]
-    assert 'data-max-product-canvas="empty"' in applied[
-        "src/components/product/ProductApp.tsx"
-    ]
+    assert 'data-max-product-canvas="empty"' in applied["src/components/product/ProductApp.tsx"]
 
 
 def test_unsafe_agent_stop_never_exposes_partial_files_for_publication() -> None:
@@ -597,9 +595,7 @@ async def test_stable_max_caps_bundled_prewrite_inspection(
         nonlocal calls
         calls += 1
         if calls == 1:
-            return _turn(
-                *(("read_file", {"path": f"src/core-{index}.ts"}) for index in range(12))
-            )
+            return _turn(*(("read_file", {"path": f"src/core-{index}.ts"}) for index in range(12)))
         if calls == 2:
             assert {tool["name"] for tool in kwargs["tools"]} == {
                 "write_file",
@@ -890,8 +886,7 @@ async def test_stable_max_forces_build_immediately_after_product_entry_write(
                     {
                         "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
                         "content": (
-                            "export default function ProductApp()"
-                            "{return <main>rewrite</main>}"
+                            "export default function ProductApp(){return <main>rewrite</main>}"
                         ),
                     },
                 )
@@ -961,8 +956,7 @@ async def test_stable_max_forces_product_css_after_green_unstyled_entry(
                     {
                         "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
                         "content": (
-                            "export default function ProductApp()"
-                            "{return <main>rewrite</main>}"
+                            "export default function ProductApp(){return <main>rewrite</main>}"
                         ),
                     },
                 )
@@ -1808,6 +1802,106 @@ async def test_stable_max_compacts_visual_repair_around_current_source_and_verdi
     assert rescue["tools"] == {"write_file", "edit_file"}
     assert result.done is True
     assert result.files[entry] == "polished-screen"
+
+
+@pytest.mark.asyncio
+async def test_stable_max_allows_one_css_finish_turn_after_component_visual_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for production run 1f7cad03: component edits landed, but the
+    immediately-forced build rejected the model's following CTA/safe-area CSS
+    edits. The same visual defects then survived every proof cycle."""
+
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    stylesheet = "src/app/globals.css"
+    turns = iter(
+        [
+            _turn(
+                ("write_file", {"path": entry, "content": "first-screen"}),
+                (
+                    "write_file",
+                    {"path": stylesheet, "content": '@import "tailwindcss";\n.old{}'},
+                ),
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+            _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": entry,
+                        "search": "first-screen",
+                        "replace": "polished-screen",
+                    },
+                )
+            ),
+            _turn(
+                (
+                    "edit_file",
+                    {
+                        "path": stylesheet,
+                        "search": ".old{}",
+                        "replace": ".cta{width:100%;background:#f43}",
+                    },
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+        ]
+    )
+    advertised: list[set[str]] = []
+    executed: list[tuple[str, str]] = []
+    see_calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        advertised.append({str(tool["name"]) for tool in kwargs["tools"]})
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal see_calls
+        executed.append((action.name, action.path))
+        if action.name == "see":
+            see_calls += 1
+            return {
+                "ok": True,
+                "needs_fix": see_calls == 1,
+                "detail": "Make CTA full-width and add bottom safe-area padding.",
+            }
+        if action.name == "edit_file" and action.path == entry:
+            return {"ok": True, "content": "polished-screen", "detail": "edited"}
+        if action.name == "edit_file" and action.path == stylesheet:
+            return {
+                "ok": True,
+                "content": '@import "tailwindcss";\n.cta{width:100%;background:#f43}',
+                "detail": "edited",
+            }
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build a premium training companion.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=20,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert result.files[entry] == "polished-screen"
+    assert ".cta{width:100%" in result.files[stylesheet]
+    assert advertised[5] == {"edit_file", "build"}
+    assert advertised[6] == {"build"}
+    assert ("edit_file", stylesheet) in executed
 
 
 @pytest.mark.asyncio

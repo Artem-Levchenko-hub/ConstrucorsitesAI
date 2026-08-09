@@ -807,8 +807,11 @@ async def write_files(
     name: str, files: dict[str, str], *, dest_root: str = "/app"
 ) -> dict[str, str]:
     """Stream a set of AI-generated files into a running container via
-    `docker cp` semantics (put_archive). Paths in `files` are container-relative
-    to `dest_root` (default `/app`, matching Next.js workdir in the template).
+    staged `docker cp` semantics (put_archive + atomic rename). Paths in `files`
+    are container-relative to `dest_root` (default `/app`, matching Next.js
+    workdir in the template). The archive is never extracted directly over the
+    live source tree: Next HMR can otherwise observe a module between truncate
+    and rewrite and briefly expose a 500 during rollback.
 
     Returns a small summary {written: int, total_bytes: int, dropped: list-of-paths}.
 
@@ -823,9 +826,11 @@ async def write_files(
     Missing container = explicit OrchestratorError (caller should handle).
     """
     import io
+    import json
     import posixpath
     import tarfile
     import time
+    import uuid
 
     log.info("docker.write_files", name=name, files=len(files), dest_root=dest_root)
 
@@ -853,6 +858,7 @@ async def write_files(
 
         dropped: list[str] = []
         to_delete: list[str] = []
+        written_paths: list[str] = []
         written = 0
         total_bytes = 0
 
@@ -865,7 +871,7 @@ async def write_files(
             for raw_path, content in files.items():
                 # Sanitize: no .., no absolute, must stay under dest_root.
                 norm = posixpath.normpath(raw_path)
-                if norm.startswith("/") or norm.startswith(".."):
+                if norm in {"", ".", ".."} or norm.startswith("/") or norm.startswith("../"):
                     dropped.append(raw_path)
                     continue
                 # Prevent escape via well-crafted normpath edge cases.
@@ -904,25 +910,69 @@ async def write_files(
                 info.gid = 1000
                 info.mtime = ts
                 tar.addfile(info, io.BytesIO(data))
+                written_paths.append(norm)
                 written += 1
                 total_bytes += len(data)
 
         # Only push an archive when there's something to write — an all-deletes
-        # batch produces an empty tar that put_archive would reject.
+        # batch produces an empty tar that put_archive would reject. Extract to
+        # a private directory first, then atomically rename every regular file
+        # into the watched tree in one short synchronous process. Every target
+        # therefore remains either the complete old file or the complete new
+        # file; HMR never sees a missing/truncated ProductApp or globals.css.
         if written > 0:
+            stage_root = f"{dest_root}/.omnia-hot-reload-{uuid.uuid4().hex}"
+            prep = c.exec_run(["mkdir", "-p", stage_root], user="1000:1000")
+            if getattr(prep, "exit_code", 1) not in (0, None):
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"could not stage hot-reload files for {name}",
+                    status_code=500,
+                )
             buf.seek(0)
             try:
-                ok = c.put_archive(path=dest_root, data=buf.getvalue())
+                ok = c.put_archive(path=stage_root, data=buf.getvalue())
             except docker.errors.APIError as exc:
+                with suppress(Exception):
+                    c.exec_run(["rm", "-rf", stage_root], user="1000:1000")
                 raise OrchestratorError(
                     code="container_failure",
                     message=f"put_archive failed for {name}: {exc}",
                     status_code=500,
                 ) from exc
             if not ok:
+                with suppress(Exception):
+                    c.exec_run(["rm", "-rf", stage_root], user="1000:1000")
                 raise OrchestratorError(
                     code="container_failure",
                     message=f"put_archive returned False for {name}",
+                    status_code=500,
+                )
+            commit_payload = json.dumps(
+                {
+                    "stage": stage_root,
+                    "dest": dest_root,
+                    "files": written_paths,
+                },
+                separators=(",", ":"),
+            )
+            commit_script = (
+                'const fs=require("fs"),p=require("path"),d=JSON.parse(process.argv[1]);'
+                "for(const rel of d.files){const src=p.join(d.stage,rel),"
+                "dst=p.join(d.dest,rel);fs.mkdirSync(p.dirname(dst),{recursive:true});"
+                "fs.renameSync(src,dst)}"
+                "fs.rmSync(d.stage,{recursive:true,force:true});"
+            )
+            commit = c.exec_run(
+                ["node", "-e", commit_script, commit_payload],
+                user="1000:1000",
+            )
+            if getattr(commit, "exit_code", 1) not in (0, None):
+                with suppress(Exception):
+                    c.exec_run(["rm", "-rf", stage_root], user="1000:1000")
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"atomic hot-reload commit failed for {name}",
                     status_code=500,
                 )
 

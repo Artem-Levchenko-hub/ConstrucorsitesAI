@@ -438,6 +438,22 @@ _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
         "cache_control": _CACHE,
     }
 ]
+_STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED: list[dict[str, Any]] = [
+    _tool(
+        "edit_file",
+        "Apply the remaining exact visual repair to the product stylesheet.",
+        {
+            "path": {"type": "string", "enum": ["src/app/globals.css"]},
+            "search": _STR,
+            "replace": _STR,
+        },
+        ["path", "search", "replace"],
+    ),
+    {
+        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "build"),
+        "cache_control": _CACHE,
+    },
+]
 _STABLE_MAX_PROOF_TOOLS = [
     tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"runtime_check", "see"}
 ]
@@ -474,6 +490,12 @@ _STABLE_MAX_VISUAL_REPAIR_REQUIRED = (
     "A concrete visual issue is already known. Stop searching or rereading. "
     "Write or edit the product now to apply that visual feedback; then rebuild "
     "and verify the rendered result again."
+)
+_STABLE_MAX_VISUAL_FINISH_REQUIRED = (
+    "The component-side visual repair is applied. Before proof, either edit "
+    "`src/app/globals.css` once to finish the exact CSS/layout feedback or run "
+    "build now if no stylesheet change is needed. Do not rewrite ProductApp, "
+    "read files, or skip directly to runtime/see."
 )
 _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED = [
     {
@@ -1117,6 +1139,9 @@ def _stable_max_visual_repair_task(
         "is below the production visual floor. The current source and exact visual verdict "
         "are included below, so do not read, list, grep, plan, or explain. Your next action "
         "must write_file or edit_file and apply every concrete issue in one coherent pass. "
+        "When both component markup and stylesheet need changes, emit both edits in this "
+        "turn when they fit; otherwise finish the component first and the executor will "
+        "offer one bounded stylesheet-or-build turn next. "
         "Preserve working behavior, MAX integration, honest empty states, and accessibility. "
         "Prefer exact edits; keep total tool content below 24000 characters. Do not add fake "
         "user history, completed activity, statistics, testimonials, or decorative filler.\n\n"
@@ -1311,6 +1336,7 @@ async def run_native_build(
     visual_feedback_detail = ""
     visual_context_compacted_step: int | None = None
     visual_repair_attempts = 0
+    visual_finish_pending = False
     last_green_see_step: int | None = None
     pending_visual_evaluation_step: int | None = None
     visual_evaluation_ready = False
@@ -1516,6 +1542,7 @@ async def run_native_build(
             repair_mode = stable_max_loop and last_build_ok is False
             force_repair_write = repair_mode and not wrote_since_build
             force_repair_verify = repair_mode and wrote_since_build
+            force_visual_finish = stable_max_loop and visual_finish_pending and not repair_mode
             # A successful product write is not permission to redesign the same
             # screen again. Live MAX runs repeatedly rewrote ProductApp without
             # ever compiling it because every rewrite reset the no-write guard.
@@ -1527,6 +1554,7 @@ async def run_native_build(
                 and _STABLE_MAX_PRODUCT_ENTRY in written
                 and wrote_since_build
                 and not repair_mode
+                and not force_visual_finish
             )
             if (
                 force_repair_write
@@ -1578,6 +1606,7 @@ async def run_native_build(
             )
             force_product_progress = (
                 force_entry_write
+                or force_visual_finish
                 or force_build_after_write
                 or force_style_write
                 or force_repair_write
@@ -1606,6 +1635,8 @@ async def run_native_build(
                     tools=(
                         _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
                         if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
+                        else _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED
+                        if force_visual_finish
                         else _STABLE_MAX_BUILD_ONLY_TOOLS_CACHED
                         if force_build_after_write
                         else _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED
@@ -1856,6 +1887,8 @@ async def run_native_build(
             wrote_this_turn = False
             visual_proof_unavailable_this_turn = False
             visual_quality_exhausted_this_turn = False
+            visual_repair_paths_this_turn: set[str] = set()
+            visual_finish_satisfied_this_turn = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
             for tu in tool_uses:
@@ -1869,7 +1902,9 @@ async def run_native_build(
                                 "tool_use_id": tu_id,
                                 "is_error": True,
                                 "content": (
-                                    _STABLE_MAX_BUILD_REQUIRED
+                                    _STABLE_MAX_VISUAL_FINISH_REQUIRED
+                                    if force_visual_finish
+                                    else _STABLE_MAX_BUILD_REQUIRED
                                     if force_build_after_write
                                     else _STABLE_MAX_STYLE_REQUIRED
                                     if force_style_write
@@ -1977,6 +2012,8 @@ async def run_native_build(
                 allowed_progress_tools = (
                     {"build"}
                     if force_build_after_write
+                    else {"edit_file", "build"}
+                    if force_visual_finish
                     else {"write_file"}
                     if force_style_write
                     else {"read_file", "edit_file", "build"}
@@ -2015,6 +2052,11 @@ async def run_native_build(
                     obs = {"ok": False, "error": _STABLE_MAX_RUNTIME_PROOF_REQUIRED}
                 elif force_see_proof and name != "see":
                     obs = {"ok": False, "error": _STABLE_MAX_SEE_PROOF_REQUIRED}
+                elif force_visual_finish and (
+                    name not in {"edit_file", "build"}
+                    or (name == "edit_file" and action.path != "src/app/globals.css")
+                ):
+                    obs = {"ok": False, "error": _STABLE_MAX_VISUAL_FINISH_REQUIRED}
                 elif force_proof and name not in {"runtime_check", "see"}:
                     # Cached provider turns may still reference schemas from an
                     # earlier unrestricted phase. Enforce the proof transition at
@@ -2053,7 +2095,9 @@ async def run_native_build(
                     obs = {
                         "ok": False,
                         "error": (
-                            _STABLE_MAX_BUILD_REQUIRED
+                            _STABLE_MAX_VISUAL_FINISH_REQUIRED
+                            if force_visual_finish
+                            else _STABLE_MAX_BUILD_REQUIRED
                             if force_build_after_write
                             else _STABLE_MAX_STYLE_REQUIRED
                             if force_style_write
@@ -2145,6 +2189,10 @@ async def run_native_build(
                         written[action.path] = obs["content"]
                     wrote_since_build = True
                     wrote_this_turn = True
+                    if force_visual_repair:
+                        visual_repair_paths_this_turn.add(action.path)
+                    if force_visual_finish and action.path == "src/app/globals.css":
+                        visual_finish_satisfied_this_turn = True
                     # Tool calls in one assistant response are planned before
                     # any result is returned. Only a write from a LATER turn can
                     # have applied the visual critique.
@@ -2155,6 +2203,8 @@ async def run_native_build(
                     proof_after_write.clear()
                     last_green_see_step = None
                 elif tool_executed and name == "build":
+                    if force_visual_finish:
+                        visual_finish_satisfied_this_turn = True
                     last_build_ok = bool(obs.get("ok"))
                     last_build_error_text = str(obs.get("error") or obs.get("detail") or "")
                     last_build_error_paths = (
@@ -2210,6 +2260,17 @@ async def run_native_build(
                     if _hint:
                         _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
+
+            if force_visual_repair and wrote_this_turn:
+                # A visual verdict commonly requires both component markup and
+                # CSS. Live production traces showed the model applying the
+                # component edits first, then being forced straight into build;
+                # its next globals.css edits were rejected, so the same defects
+                # survived every repair. Offer exactly one bounded stylesheet-
+                # or-build turn, then resume deterministic proof.
+                visual_finish_pending = "src/app/globals.css" not in visual_repair_paths_this_turn
+            elif force_visual_finish and visual_finish_satisfied_this_turn:
+                visual_finish_pending = False
 
             if force_entry_write and _STABLE_MAX_PRODUCT_ENTRY not in written:
                 results.append({"type": "text", "text": _STABLE_MAX_ENTRY_REQUIRED})
