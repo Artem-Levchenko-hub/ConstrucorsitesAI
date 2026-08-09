@@ -2520,9 +2520,15 @@ async def test_stable_max_forces_known_visual_repair_after_one_inspection_turn(
         if action.name == "see":
             see_calls += 1
             return {
-                "ok": True,
+                "ok": see_calls != 1,
+                "verdict": "generic" if see_calls == 1 else "beautiful",
+                "score": 4 if see_calls == 1 else 9,
                 "needs_fix": see_calls == 1,
-                "detail": "Make the hero compact.",
+                "detail": (
+                    "Make the hero compact. BROWSER SIGNALS: GET /hero.jpg 404"
+                    if see_calls == 1
+                    else "clean"
+                ),
             }
         if action.name == "edit_file":
             return {"ok": True, "content": "polished", "detail": "updated"}

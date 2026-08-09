@@ -217,9 +217,19 @@ def _provider_failure(provider: str, response: httpx.Response) -> ApiError:
 async def runtime_integration_status(
     project_id: UUID,
     session: SessionDep,
-    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+    x_max_init_data: Annotated[str | None, Header(alias="X-MAX-Init-Data")] = None,
+    x_omnia_max_preview_capability: Annotated[
+        str | None,
+        Header(alias="X-Omnia-MAX-Preview-Capability"),
+    ] = None,
 ) -> RuntimeIntegrationStatus:
-    await _runtime_context(session, project_id, x_max_init_data)
+    await _runtime_context(
+        session,
+        project_id,
+        x_max_init_data,
+        preview_capability=x_omnia_max_preview_capability,
+        allow_preview=True,
+    )
     connections = await _connections(session, project_id)
     metrica = connections.get("yandex_metrica")
     return RuntimeIntegrationStatus(
@@ -589,9 +599,19 @@ async def create_runtime_lead(
 async def get_runtime_catalog(
     project_id: UUID,
     session: SessionDep,
-    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+    x_max_init_data: Annotated[str | None, Header(alias="X-MAX-Init-Data")] = None,
+    x_omnia_max_preview_capability: Annotated[
+        str | None,
+        Header(alias="X-Omnia-MAX-Preview-Capability"),
+    ] = None,
 ) -> RuntimeCatalogPublic:
-    await _runtime_context(session, project_id, x_max_init_data)
+    await _runtime_context(
+        session,
+        project_id,
+        x_max_init_data,
+        preview_capability=x_omnia_max_preview_capability,
+        allow_preview=True,
+    )
     connections = await _connections(session, project_id)
     connection = connections.get("iiko") or connections.get("moysklad")
     if connection is None:

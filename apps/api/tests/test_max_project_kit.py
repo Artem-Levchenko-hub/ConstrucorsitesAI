@@ -462,7 +462,8 @@ def test_history_refuses_root_server_and_build_config_bypasses(unsafe_path: str)
 
 
 def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
-    files = render_max_managed_files(_config(), uuid4())
+    project_id = uuid4()
+    files = render_max_managed_files(_config(), project_id)
     client = files["src/lib/omnia/integration-client.ts"]
     proxy = files["src/app/api/omnia/integrations/[...path]/route.ts"]
 
@@ -475,6 +476,9 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     assert '"tailwindcss": "^4.0.0"' in files["package.json"]
     assert '"catalog", "ai"' in proxy
     assert "/api/runtime/projects/${PROJECT_ID}/ai" in proxy
+    assert '["ai", "status", "catalog"].includes(operation)' in proxy
+    assert "if (!initData && !previewAllowed)" in proxy
+    assert f'const PROJECT_ID = "{project_id}";' in proxy
     assert "api_key" not in client.lower()
 
 

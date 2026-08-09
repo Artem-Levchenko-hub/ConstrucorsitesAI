@@ -60,7 +60,7 @@ _STABLE_MAX_SUPPORT_FILE_LIMIT = 3
 _STABLE_MAX_PREWRITE_INSPECTION_LIMIT = 8
 # One initial visual verdict plus eight evidence-led repair passes gives a dense
 # mobile product enough room to cross the >=8 production floor without falling
-# back to the gateway's larger 80-request financial fuse. Live 360/390 QA showed
+# back to the gateway's larger 160-request financial fuse. Live 360/390 QA showed
 # that five passes could finish known defects yet stop immediately before the
 # corrected render was re-proven.
 _STABLE_MAX_VISUAL_REPAIR_LIMIT = 8
@@ -1452,7 +1452,7 @@ async def run_native_build(
     prewrite_inspection_exhausted = False
 
     # Stable MAX builds must be allowed to finish their compile/repair loop.
-    # The durable gateway fuse (80 requests + cost ceilings) is the authoritative
+    # The durable gateway fuse (160 requests + cost ceilings) is the authoritative
     # hard stop; the generic 24-turn iterator must not cut a healthy repair short.
     max_runtime = "MAX VERIFICATION OVERRIDE" in system or reference_max_loop or stable_max_loop
     max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
@@ -2379,6 +2379,24 @@ async def run_native_build(
                     repair_reread_paths.clear()
                     repair_context_compacted = False
                     wrote_since_build = False
+                if (
+                    tool_executed
+                    and name == "see"
+                    and (
+                        obs.get("needs_fix")
+                        or (obs.get("verdict") and not obs.get("ok"))
+                    )
+                ):
+                    # Visual QA may be red because the rendered product made a
+                    # failed browser request.  That is actionable product
+                    # evidence even though the observation itself is ok=False;
+                    # keep the exact verdict and force a focused source repair.
+                    visual_feedback_step = step
+                    visual_feedback_detail = str(
+                        obs.get("detail") or obs.get("error") or "Visual quality is red."
+                    )
+                    if visual_repair_attempts >= _STABLE_MAX_VISUAL_REPAIR_LIMIT:
+                        visual_quality_exhausted_this_turn = True
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
                     if name == "generate_media" and visual_feedback_step is not None:
@@ -2404,12 +2422,10 @@ async def run_native_build(
                             pending_visual_evaluation_step = step
                     if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
                         if name == "see" and obs.get("needs_fix"):
-                            visual_feedback_step = step
-                            visual_feedback_detail = str(
-                                obs.get("detail") or obs.get("error") or "Visual quality is red."
-                            )
-                            if visual_repair_attempts >= _STABLE_MAX_VISUAL_REPAIR_LIMIT:
-                                visual_quality_exhausted_this_turn = True
+                            # Actionable visual feedback was recorded above for
+                            # both ok=True quality verdicts and ok=False browser
+                            # failures.  Neither is production proof yet.
+                            pass
                         elif name == "see" and (obs.get("proof_unavailable") or obs.get("skipped")):
                             # A fail-soft visual executor result must never satisfy
                             # a production visual-proof gate.

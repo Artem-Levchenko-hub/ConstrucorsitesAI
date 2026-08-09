@@ -40,6 +40,74 @@ async def test_runtime_ai_limit_fails_closed_when_redis_is_unavailable(monkeypat
     assert raised.value.status_code == 503
 
 
+@pytest.mark.asyncio
+async def test_read_only_runtime_endpoints_forward_signed_preview_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = UUID(int=7)
+    preview_token = "v1.1893456900." + "d" * 43
+    contexts: list[dict[str, object]] = []
+
+    async def fake_context(
+        session,
+        received_project_id: UUID,
+        init_data: str | None,
+        *,
+        preview_capability: str | None = None,
+        allow_preview: bool = False,
+    ) -> object:
+        contexts.append(
+            {
+                "session": session,
+                "project_id": received_project_id,
+                "init_data": init_data,
+                "preview_capability": preview_capability,
+                "allow_preview": allow_preview,
+            }
+        )
+        return object()
+
+    async def no_connections(_session, _project_id: UUID) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(integration_runtime_router, "_runtime_context", fake_context)
+    monkeypatch.setattr(integration_runtime_router, "_connections", no_connections)
+    fake_session = object()
+
+    status_result = await integration_runtime_router.runtime_integration_status(
+        project_id,
+        fake_session,  # type: ignore[arg-type]
+        None,
+        preview_token,
+    )
+    with pytest.raises(ApiError) as catalog_error:
+        await integration_runtime_router.get_runtime_catalog(
+            project_id,
+            fake_session,  # type: ignore[arg-type]
+            None,
+            preview_token,
+        )
+
+    assert status_result.providers == []
+    assert catalog_error.value.code == "integration_not_found"
+    assert contexts == [
+        {
+            "session": fake_session,
+            "project_id": project_id,
+            "init_data": None,
+            "preview_capability": preview_token,
+            "allow_preview": True,
+        },
+        {
+            "session": fake_session,
+            "project_id": project_id,
+            "init_data": None,
+            "preview_capability": preview_token,
+            "allow_preview": True,
+        },
+    ]
+
+
 async def _register_and_create(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -418,6 +486,42 @@ async def test_signed_preview_can_call_managed_ai_before_bot_connection(
         "limit_project_id": project.id,
         "max_user_id": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_signed_preview_can_read_integration_status_before_bot_connection(
+    client: httpx.AsyncClient,
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = await _register_and_create(client, monkeypatch)
+    project = await db_session.get(Project, UUID(project_id))
+    assert project is not None
+    preview_token = "v1.1893456900." + "c" * 43
+    validated: dict[str, object] = {}
+
+    async def validate(received_project_id: UUID, token: str) -> bool:
+        validated.update(project_id=received_project_id, token=token)
+        return True
+
+    monkeypatch.setattr(
+        integration_runtime_router.orchestrator_client,
+        "validate_max_preview_capability",
+        validate,
+    )
+
+    response = await client.get(
+        f"/api/runtime/projects/{project.id}/integrations",
+        headers={"X-Omnia-MAX-Preview-Capability": preview_token},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "providers": [],
+        "capabilities": ["Встроенный AI"],
+        "analytics_counter_id": None,
+    }
+    assert validated == {"project_id": project.id, "token": preview_token}
 
 
 @pytest.mark.asyncio

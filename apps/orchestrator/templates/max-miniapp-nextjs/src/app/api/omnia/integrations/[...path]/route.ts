@@ -39,7 +39,8 @@ export async function POST(request: NextRequest, context: Context) {
       { status: 401 },
     );
   }
-  if (!initData && operation !== "ai") {
+  const previewAllowed = ["ai", "status", "catalog"].includes(operation);
+  if (!initData && !previewAllowed) {
     return NextResponse.json(
       { error: { message: "Эта интеграция доступна после запуска приложения в MAX" } },
       { status: 401 },

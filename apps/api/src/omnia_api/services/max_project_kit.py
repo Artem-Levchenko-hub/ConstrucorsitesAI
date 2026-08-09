@@ -21,7 +21,7 @@ from omnia_api.services.secret_safety import max_model_write_rejection
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 17
+MAX_MANAGED_KIT_VERSION = 18
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 MAX_PRODUCT_ENTRY_PATH = "src/components/product/ProductApp.tsx"
@@ -126,6 +126,13 @@ def render_max_managed_files(
     project_literal = json.dumps(str(project_id) if project_id else "")
     preview_session_route = _template_file("src/app/api/omnia/preview-session/route.ts").replace(
         '"__OMNIA_PROJECT_ID__"', project_literal, 1
+    )
+    integration_proxy_route = _template_file(
+        "src/app/api/omnia/integrations/[...path]/route.ts"
+    ).replace(
+        'const PROJECT_ID = process.env.OMNIA_PROJECT_ID || "";',
+        f"const PROJECT_ID = {project_literal};",
+        1,
     )
     files = {
         "package.json": _template_file("package.json"),
@@ -323,64 +330,7 @@ export async function trackOmniaGoal(
   target.ym(Number(counterId), "reachGoal", goal, parameters);
 }
 """,
-        "src/app/api/omnia/integrations/[...path]/route.ts": f"""import {{ NextRequest, NextResponse }} from "next/server";
-
-const PROJECT_ID = {project_literal};
-const PLATFORM_API = (
-  process.env.OMNIA_PLATFORM_API_URL || "https://constructor.lead-generator.ru"
-).replace(/\\/$/, "");
-
-type Context = {{ params: Promise<{{ path: string[] }}> }};
-
-export async function POST(request: NextRequest, context: Context) {{
-  if (!PROJECT_ID) {{
-    return NextResponse.json(
-      {{ error: {{ message: "Integration Hub ещё не синхронизирован с приложением" }} }},
-      {{ status: 503 }},
-    );
-  }}
-  const {{ path }} = await context.params;
-  const operation = path.join("/");
-  if (!["status", "payments", "payment-status", "leads", "catalog", "ai"].includes(operation)) {{
-    return NextResponse.json({{ error: {{ message: "Unknown capability" }} }}, {{ status: 404 }});
-  }}
-  const body = await request.json().catch(() => ({{}})) as {{
-    initData?: unknown;
-    payload?: unknown;
-  }};
-  if (typeof body.initData !== "string") {{
-    return NextResponse.json(
-      {{ error: {{ message: "Откройте приложение внутри MAX" }} }},
-      {{ status: 401 }},
-    );
-  }}
-  const readOnly = operation === "status" || operation === "catalog";
-  const upstreamPath =
-    operation === "status"
-      ? `/api/runtime/projects/${{PROJECT_ID}}/integrations`
-      : operation === "catalog"
-        ? `/api/runtime/projects/${{PROJECT_ID}}/catalog`
-      : operation === "ai"
-        ? `/api/runtime/projects/${{PROJECT_ID}}/ai`
-      : operation === "payment-status"
-        ? `/api/runtime/projects/${{PROJECT_ID}}/payments/status`
-        : `/api/runtime/projects/${{PROJECT_ID}}/${{operation}}`;
-  const upstream = await fetch(`${{PLATFORM_API}}${{upstreamPath}}`, {{
-    method: readOnly ? "GET" : "POST",
-    headers: {{
-      "Content-Type": "application/json",
-      "X-MAX-Init-Data": body.initData,
-    }},
-    body: readOnly ? undefined : JSON.stringify(body.payload || {{}}),
-    cache: "no-store",
-  }});
-  const responseBody = await upstream.text();
-  return new NextResponse(responseBody, {{
-    status: upstream.status,
-    headers: {{ "Content-Type": upstream.headers.get("content-type") || "application/json" }},
-  }});
-}}
-""",
+        "src/app/api/omnia/integrations/[...path]/route.ts": integration_proxy_route,
         "src/app/legal/privacy/page.tsx": """import { omniaMaxConfig as app } from "@/lib/omnia/max-config";
 
 export const metadata = { title: `Политика конфиденциальности — ${app.app_name}` };

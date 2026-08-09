@@ -103,7 +103,8 @@ def test_max_preview_ai_uses_server_only_project_capability() -> None:
     assert "secure: true" in preview_route
     assert "request.cookies.get(PREVIEW_CAPABILITY_COOKIE)" in proxy_route
     assert "X-Omnia-MAX-Preview-Capability" in proxy_route
-    assert 'operation !== "ai"' in proxy_route
+    assert '["ai", "status", "catalog"].includes(operation)' in proxy_route
+    assert "if (!initData && !previewAllowed)" in proxy_route
     assert 'if (!initData) throw new Error("Откройте приложение внутри MAX")' not in client
 
 
