@@ -34,6 +34,7 @@ class VisionVerdict:
     issues: tuple[str, ...]
     skipped: bool = False
     raw: str = ""
+    skip_reason: str = ""
 
 
 # Neutral pass — used whenever vision can't run (mock mode, no gateway, parse
@@ -63,7 +64,13 @@ def _skip(reason: str, detail: str = "") -> VisionVerdict:
         emit("metric=vision_skip reason=%s count=%d detail=%r", reason, count, detail)
     else:
         emit("metric=vision_skip reason=%s count=%d", reason, count)
-    return _SKIPPED
+    return VisionVerdict(
+        verdict=_SKIPPED.verdict,
+        score=_SKIPPED.score,
+        issues=_SKIPPED.issues,
+        skipped=True,
+        skip_reason=reason,
+    )
 
 
 def skip_stats() -> dict[str, int]:

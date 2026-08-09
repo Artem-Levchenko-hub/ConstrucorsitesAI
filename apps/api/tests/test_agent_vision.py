@@ -19,6 +19,7 @@ async def test_max_see_bootstraps_signed_preview_before_capture(
     bootstrap = "https://fitness-dev.example/api/omnia/preview-session?expires=1&signature=x"
     captured: dict[str, Any] = {}
     audit_calls = 0
+    retry_delays: list[int] = []
 
     async def fake_capture(url: str, widths: Any, **kwargs: Any) -> dict[int, bytes]:
         captured.update(url=url, widths=tuple(widths), **kwargs)
@@ -27,10 +28,14 @@ async def test_max_see_bootstraps_signed_preview_before_capture(
     async def fake_audit(*args: Any, **kwargs: Any) -> Any:
         nonlocal audit_calls
         audit_calls += 1
-        return SimpleNamespace(skipped=True)
+        return SimpleNamespace(skipped=True, skip_reason="gateway_error")
+
+    async def fake_sleep(delay: int) -> None:
+        retry_delays.append(delay)
 
     monkeypatch.setattr(preview, "capture_live_url", fake_capture)
     monkeypatch.setattr(vision_audit, "audit_screenshots", fake_audit)
+    monkeypatch.setattr(agent_vision.asyncio, "sleep", fake_sleep)
 
     result = await agent_vision.see_page(
         uuid4(),
@@ -41,7 +46,9 @@ async def test_max_see_bootstraps_signed_preview_before_capture(
 
     assert result["ok"] is True
     assert result["proof_unavailable"] is True
-    assert audit_calls == 2
+    assert audit_calls == 4
+    assert retry_delays == [5, 10, 20]
+    assert result["audit_attempts"] == 4
     assert captured == {
         "url": "https://fitness-dev.example/profile",
         "widths": (390, 360),
@@ -72,12 +79,16 @@ async def test_see_reuses_capture_for_one_transient_judge_retry(
         nonlocal audit_calls
         audit_calls += 1
         if audit_calls == 1:
-            return SimpleNamespace(skipped=True)
+            return SimpleNamespace(skipped=True, skip_reason="gateway_error")
         return SimpleNamespace(skipped=False, verdict="beautiful", score=9, issues=())
+
+    async def fake_sleep(delay: int) -> None:
+        assert delay == 5
 
     monkeypatch.setattr(preview, "capture_live_url", fake_capture)
     monkeypatch.setattr(preview, "capture_diagnostics", fake_diagnostics)
     monkeypatch.setattr(vision_audit, "audit_screenshots", fake_audit)
+    monkeypatch.setattr(agent_vision.asyncio, "sleep", fake_sleep)
 
     result = await agent_vision.see_page(
         uuid4(),
