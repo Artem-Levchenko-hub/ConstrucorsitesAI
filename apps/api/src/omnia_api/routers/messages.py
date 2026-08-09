@@ -3636,6 +3636,19 @@ async def _process_prompt(
                             )
                             if _current is None:
                                 return {"ok": False, "error": f"not found: {action.path}"}
+                            if action.path == "src/app/globals.css":
+                                from omnia_api.services.max_generation_contract import (
+                                    normalize_max_globals_css,
+                                )
+
+                                _normalized_current = normalize_max_globals_css(_current)
+                                if _normalized_current != _current:
+                                    await orchestrator_client.hot_reload_exact(
+                                        project_id,
+                                        project_slug,
+                                        {action.path: _normalized_current},
+                                    )
+                                    _current = _normalized_current
                             if _current.count(_search) != 1:
                                 return {
                                     "ok": False,
@@ -3647,6 +3660,14 @@ async def _process_prompt(
                             _candidate = _current.replace(_search, str(_replace), 1)
                         else:
                             _candidate = str(action.args.get("content") or "")
+                        _normalized_max_css: str | None = None
+                        if action.path == "src/app/globals.css":
+                            from omnia_api.services.max_generation_contract import (
+                                normalize_max_globals_css,
+                            )
+
+                            _normalized_max_css = normalize_max_globals_css(_candidate)
+                            _candidate = _normalized_max_css
                         _secret_rejection = max_model_write_rejection(action.path, _candidate)
                         if _secret_rejection:
                             return {"ok": False, "error": _secret_rejection}
@@ -3674,6 +3695,20 @@ async def _process_prompt(
                                     "MAX Studio owns every server API route. "
                                     "Call the managed integration client instead of "
                                     "creating a parallel route."
+                                ),
+                            }
+                        if _normalized_max_css is not None:
+                            await orchestrator_client.hot_reload_exact(
+                                project_id,
+                                project_slug,
+                                {action.path: _normalized_max_css},
+                            )
+                            return {
+                                "ok": True,
+                                "content": _normalized_max_css,
+                                "detail": (
+                                    f"normalized and wrote {action.path} "
+                                    f"({len(_normalized_max_css)} bytes)"
                                 ),
                             }
                     _observation = await _base_agent_executor(action)

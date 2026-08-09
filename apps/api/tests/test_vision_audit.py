@@ -114,6 +114,7 @@ async def test_max_audit_uses_mobile_product_rubric_and_phone_widths(monkeypatch
     )
     assert "390px" in text and "360px" in text
     assert "1440px" not in text
+    assert "Не снижай за повтор фото score" in text
     assert sum(block.get("type") == "image_url" for block in captured["content"]) == 2
 
 
@@ -161,3 +162,4 @@ def test_max_rubric_does_not_invent_profile_identity() -> None:
     assert "приглушённая disabled CTA корректны" in rubric
     assert "Не требуй предвыбирать данные за пользователя" in rubric
     assert "не называй естественный край прокручиваемого" in rubric
+    assert "ОДНО И ТО ЖЕ ФОТО" in rubric

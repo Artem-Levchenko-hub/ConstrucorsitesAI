@@ -1288,6 +1288,37 @@ async def test_native_edit_file_counts_as_write_and_lands_in_files(
 
 
 @pytest.mark.asyncio
+async def test_native_write_tracks_executor_sanitized_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(("write_file", {"path": "src/app/globals.css", "content": "raw"})),
+            _turn(("done", {"summary": "done"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": "sanitized", "detail": "written"}
+
+    result = await agent_native.run_native_build(
+        system="s",
+        task="t",
+        execute=execute,
+        max_steps=2,
+    )
+
+    assert result.files == {"src/app/globals.css": "sanitized"}
+
+
+@pytest.mark.asyncio
 async def test_native_completion_check_rejects_thin_done_and_keeps_building(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

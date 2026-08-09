@@ -700,6 +700,21 @@ def test_css_import_correct_file_untouched() -> None:
     assert ab._sanitize_css_imports("src/app/globals.css", good) == good
 
 
+def test_css_import_sanitizer_deduplicates_and_keeps_tailwind_last() -> None:
+    duplicated = (
+        '@import "tailwindcss";\n'
+        + _FONTS_IMPORT
+        + "\n"
+        + _FONTS_IMPORT
+        + "\n:root{--a:1}"
+    )
+
+    out = ab._sanitize_css_imports("src/app/globals.css", duplicated)
+
+    assert out.count(_FONTS_IMPORT) == 1
+    assert out.startswith(_FONTS_IMPORT + '\n@import "tailwindcss";')
+
+
 def test_css_import_charset_stays_first() -> None:
     cs = '@charset "utf-8";\n.a{x:1}\n' + _FONTS_IMPORT
     out = ab._sanitize_css_imports("g.css", cs)

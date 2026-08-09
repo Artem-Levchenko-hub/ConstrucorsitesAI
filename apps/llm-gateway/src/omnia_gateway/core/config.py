@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     # count remains the absolute emergency brake against an infinite loop.
     native_run_max_cost_rub: float = 5000.0
     native_run_max_provider_cost_usd: float = 10.0
-    native_run_max_requests: int = 80
+    native_run_max_requests: int = 160
 
     # Read timeout for one long agentic pass, which can spend tens of
     # seconds; 240s tolerates the spike while staying under the api llm_client's

@@ -2230,13 +2230,14 @@ async def run_native_build(
                 if obs.get("infra_dead"):
                     infra_this_turn += 1
                 if tool_executed and name in ("write_file", "edit_file") and obs.get("ok"):
-                    if name == "write_file":
-                        written[action.path] = action.args.get("content", "")
-                    elif isinstance(obs.get("content"), str):
+                    if isinstance(obs.get("content"), str):
                         # executor returns the post-edit content (mirrors the
-                        # text loop's tracking at agent_builder.py) — closes the
-                        # gap where edit_file never dirtied the done fact-gate.
+                        # text loop's tracking at agent_builder.py). Prefer it
+                        # for writes too: deterministic executor sanitizers can
+                        # change the bytes that actually landed in the container.
                         written[action.path] = obs["content"]
+                    elif name == "write_file":
+                        written[action.path] = action.args.get("content", "")
                     wrote_since_build = True
                     wrote_this_turn = True
                     if force_visual_repair:

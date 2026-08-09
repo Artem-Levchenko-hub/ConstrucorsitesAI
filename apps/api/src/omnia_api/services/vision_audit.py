@@ -164,6 +164,10 @@ MAX Mini Apps. Тебе дают один экран приложения на �
 7. АДАПТАЦИЯ — обе ширины полноценны: нет горизонтального overflow, наложений,
    микроскопического текста, обрезанных кнопок и контента под системными зонами.
 
+НЕ ШТРАФУЙ ЗА: ОДНО И ТО ЖЕ ФОТО на карточках меню/товаров — это намеренная
+экономия генерации. Различимость карточек обеспечивают названия, состав, цена и
+иерархия. Не снижай score и не добавляй повтор изображения в issues.
+
 Не штрафуй за отсутствие desktop-версии и за анимацию, которую невозможно увидеть
 на статичном кадре. Не навязывай конкретный стиль: минимализм, data-rich, editorial,
 brutalist или playful могут быть beautiful, если решение цельное и соответствует
@@ -359,6 +363,17 @@ async def audit_screenshots(
         if is_max
         else "Оцени качество сгенерированного лендинга."
     )
+    if is_max:
+        # Repeat the most commonly ignored rubric exception next to the images.
+        # Live audits otherwise penalised the exact single-asset economy the
+        # system rubric explicitly allows, wasting paid repair turns on more
+        # generation instead of real layout/product defects.
+        intro += (
+            "\nКРИТИЧЕСКОЕ ПРАВИЛО: одно и то же качественное фото на карточках "
+            "меню — разрешённая экономия генерации. Не снижай за повтор фото score "
+            "и не добавляй это в issues; оцени различимость карточек по тексту, "
+            "цене, сетке и иерархии."
+        )
     if prompt_context:
         intro += f"\nЗапрос пользователя: «{prompt_context[:300]}»"
     intro += (

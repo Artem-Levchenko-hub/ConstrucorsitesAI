@@ -151,7 +151,7 @@ services:
       # stuck agent cannot drain the operator's upstream provider balance.
       NATIVE_RUN_MAX_COST_RUB: ${NATIVE_RUN_MAX_COST_RUB:-5000.0}
       NATIVE_RUN_MAX_PROVIDER_COST_USD: ${NATIVE_RUN_MAX_PROVIDER_COST_USD:-10.0}
-      NATIVE_RUN_MAX_REQUESTS: ${NATIVE_RUN_MAX_REQUESTS:-80}
+      NATIVE_RUN_MAX_REQUESTS: ${NATIVE_RUN_MAX_REQUESTS:-160}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       # Internal-only gateway.  The API talks to it over the Compose network;

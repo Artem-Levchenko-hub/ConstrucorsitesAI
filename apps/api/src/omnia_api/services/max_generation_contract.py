@@ -628,8 +628,13 @@ def normalize_max_globals_css(css: str) -> str:
     if not imports:
         return css
 
+    # Exact duplicate imports are easy for a repair model to create when it
+    # moves a late Google Fonts line to the top. Besides an extra request, the
+    # duplicate makes the next exact edit ambiguous and can trap the native
+    # loop in `search text must occur exactly once` forever.
+    unique_imports = list(dict.fromkeys(imports))
     ordered_imports = sorted(
-        imports,
+        unique_imports,
         key=lambda line: 1 if "tailwindcss" in line.lower() else 0,
     )
     import_order_is_safe = imports == ordered_imports

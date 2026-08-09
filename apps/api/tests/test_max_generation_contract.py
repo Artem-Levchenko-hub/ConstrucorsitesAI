@@ -221,6 +221,16 @@ def test_safe_css_import_order_is_byte_stable() -> None:
     assert normalize_max_globals_css(css) == css
 
 
+def test_css_import_normalizer_deduplicates_repair_artifacts() -> None:
+    font = "@import url('https://fonts.example/family');"
+    css = f"{font}\n@import \"tailwindcss\";\n{font}\n\n:root {{ color: black; }}\n"
+
+    fixed = normalize_max_globals_css(css)
+
+    assert fixed.count(font) == 1
+    assert fixed.startswith(f'{font}\n@import "tailwindcss";')
+
+
 def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
     files = _complete_files()
     files["src/app/page.tsx"] = (
