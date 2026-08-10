@@ -272,11 +272,6 @@ def _reference_max_completion_gap(
             "Run runtime_check on / after the final product write; "
             "if it is red, fix that concrete runtime error first."
         )
-    if evidence.get("see_after_write", 0) < 1:
-        return (
-            "Run see on / after the final product write and apply any concrete visual "
-            "issues before finishing."
-        )
     return None
 
 
@@ -4012,19 +4007,7 @@ async def _process_prompt(
             # (the #1 latency sink observed in the first live runs). Fail-soft.
             _seed_parts: list[str] = []
             try:
-                if project_template == "max_miniapp":
-                    _max_design_spec = await orchestrator_client.agent_read_file(
-                        project_id,
-                        project_slug,
-                        ".omnia/max-design-spec.json",
-                    )
-                    if _max_design_spec:
-                        _seed_parts.append(
-                            "EXISTING MAX ART DIRECTION — preserve and refine this identity; "
-                            "do not replace it with a generic dashboard:\n"
-                            + _max_design_spec[:6000]
-                        )
-                else:
+                if project_template != "max_miniapp":
                     _ents = await orchestrator_client.agent_list_dir(
                         project_id, project_slug, "entities"
                     )
@@ -4383,6 +4366,7 @@ async def _process_prompt(
                                     _max_product_brief,
                                     {**current_files, **written},
                                     require_design_spec=False,
+                                    require_native_legal_nav=True,
                                 ),
                             )
                         )

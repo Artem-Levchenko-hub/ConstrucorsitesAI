@@ -240,14 +240,18 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(() => state, [state]);
   return (
-    <MaxUI platform={appearance.platform} colorScheme={appearance.colorScheme}>
+    <MaxUI
+      className="omnia-max-runtime"
+      platform={appearance.platform}
+      colorScheme={appearance.colorScheme}
+    >
       <MaxContext.Provider value={value}>
         {state.mode === "loading" || state.mode === "error" ? (
           <AuthScreen error={state.error} onRetry={() => void authenticate()} />
         ) : (
           <>
             {children}
-            <OmniaCompliance />
+            <OmniaCompliance fallback />
           </>
         )}
       </MaxContext.Provider>

@@ -148,8 +148,8 @@ def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     assert "MAX capability catalog" not in prompt
     assert "никогда не используй в нём `:global(...)`" in prompt
     assert "минимальной точечной edit_file" in prompt
-    assert "обязательно вызови see" in prompt
-    assert "не объявляй генерацию завершённой" in prompt
+    assert "обязательно вызови see" not in prompt
+    assert "build" in prompt and "runtime_check" in prompt
     assert "fallback-каталог" in prompt
     assert "реальные заказы или историю" in prompt
     names = {tool["name"] for tool in agent_native._TOOLS_CACHED}
@@ -158,20 +158,21 @@ def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     assert agent_native._TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
     stable_names = {tool["name"] for tool in agent_native._STABLE_MAX_TOOLS_CACHED}
     assert {"read_file", "write_file", "build", "done"} <= stable_names
+    assert not ({"see", "probe", "verify_isolation"} & stable_names)
     ceremony = {"plan_task", "update_plan", "discover_capabilities", "call_capability"}
     assert not (ceremony & stable_names)
     assert agent_native._MAX_TOKENS == 32_768
 
 
-def test_max_edit_prompt_requires_signed_visual_proof() -> None:
+def test_max_edit_prompt_requires_runtime_proof_without_visual_ceremony() -> None:
     prompt = agent_native.native_system_prompt(
         "MAX PLATFORM CORE CONTRACT\nPreserve the app",
         stable_max_loop=True,
         stable_max_edit=True,
     )
 
-    assert "обязательно проверь итог через see" in prompt
-    assert "в подписанной MAX preview-сессии" in prompt
+    assert "обязательно проверь итог через see" not in prompt
+    assert "build/runtime_check" in prompt
 
 
 def test_generic_native_prompt_stays_unchanged_outside_max() -> None:
@@ -246,8 +247,8 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "await asyncio.sleep(2)" in source
     assert 'and project_template != "max_miniapp"' in source
     assert 'product_kind="max_miniapp"' in inspect.getsource(messages._run_max_visual_qa)
-    assert '".omnia/max-design-spec.json"' in source
-    assert "EXISTING MAX ART DIRECTION" in source
+    assert "EXISTING MAX ART DIRECTION" not in source
+    assert "require_native_legal_nav=True" in source
     assert "_skills = None" in source
 
 
@@ -332,7 +333,7 @@ def test_fresh_max_style_gate_ignores_class_names_inside_css_comments() -> None:
     assert "class vocabulary" in gap
 
 
-def test_fresh_max_reference_gate_requires_visual_proof_after_final_write() -> None:
+def test_fresh_max_reference_gate_finishes_after_runtime_proof() -> None:
     entry = (
         'export default function ProductApp() { return <main className="app-shell">'
         + ("product " * 60)
@@ -349,19 +350,17 @@ def test_fresh_max_reference_gate_requires_visual_proof_after_final_write() -> N
         require_product_entry=True,
     )
 
-    assert gap is not None
-    assert "Run see" in gap
+    assert gap is None
 
 
-def test_max_edit_reference_gate_also_requires_visual_proof_after_write() -> None:
+def test_max_edit_reference_gate_finishes_after_runtime_proof() -> None:
     gap = messages._reference_max_completion_gap(
         {"src/app/globals.css": "body { color: black; }"},
         {"runtime_check_after_write": 1},
         require_product_entry=False,
     )
 
-    assert gap is not None
-    assert "Run see" in gap
+    assert gap is None
 
 
 def test_max_edit_keeps_original_product_brief_visible() -> None:
@@ -1981,7 +1980,7 @@ async def test_stable_max_uses_durable_fuse_instead_of_generic_step_limit(
 
 
 @pytest.mark.asyncio
-async def test_stable_max_forces_runtime_and_visual_proof_after_green_build(
+async def test_stable_max_finishes_after_green_runtime_proof(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     advertised: list[set[str]] = []
@@ -2001,10 +2000,6 @@ async def test_stable_max_forces_runtime_and_visual_proof_after_green_build(
             ),
             _turn(("build", {})),
             _turn(("runtime_check", {"path": "/"})),
-            # Simulate a cached response repeating the previous proof. Once
-            # runtime is green, only see may execute.
-            _turn(("runtime_check", {"path": "/"})),
-            _turn(("see", {"path": "/"})),
         ]
     )
 
@@ -2029,8 +2024,6 @@ async def test_stable_max_forces_runtime_and_visual_proof_after_green_build(
             return "source missing"
         if not evidence.get("runtime_check_after_write"):
             return "Run runtime_check on the finished product after the last source write."
-        if not evidence.get("see_after_write"):
-            return "Run see once through the signed MAX preview after the last source write."
         return None
 
     result = await agent_native.run_native_build(
@@ -2044,11 +2037,7 @@ async def test_stable_max_forces_runtime_and_visual_proof_after_green_build(
 
     assert result.done is True
     assert result.stop_reason == "contract_green"
-    assert advertised[2:] == [
-        {"runtime_check"},
-        {"see"},
-        {"see"},
-    ]
+    assert advertised[2:] == [{"runtime_check"}]
 
 
 @pytest.mark.asyncio
@@ -2296,15 +2285,11 @@ async def test_stable_max_reopens_editing_after_actionable_visual_feedback(
     assert result.files[agent_native._STABLE_MAX_PRODUCT_ENTRY].endswith(
         "{ return <main>polished</main>; }"
     )
-    assert advertised[2:4] == [
-        {"runtime_check"},
-        {"see"},
-    ]
+    assert advertised[2] == {"runtime_check"}
+    assert "see" not in advertised[3]
     assert "write_file" in advertised[4]
-    assert advertised[6:] == [
-        {"runtime_check"},
-        {"see"},
-    ]
+    assert advertised[6] == {"runtime_check"}
+    assert "see" not in advertised[7]
 
 
 @pytest.mark.asyncio
@@ -2657,7 +2642,7 @@ async def test_stable_max_css_only_visual_repair_resumes_rendered_proof(
     assert advertised[4] == {"write_file", "edit_file", "generate_media"}
     assert advertised[5] == {"build"}
     assert advertised[6] == {"runtime_check"}
-    assert advertised[7] == {"see"}
+    assert "see" not in advertised[7]
 
 
 @pytest.mark.asyncio

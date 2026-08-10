@@ -21,7 +21,7 @@ from omnia_api.services.secret_safety import max_model_write_rejection
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 19
+MAX_MANAGED_KIT_VERSION = 20
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 MAX_PRODUCT_ENTRY_PATH = "src/components/product/ProductApp.tsx"
@@ -145,6 +145,7 @@ def render_max_managed_files(
         "public/omnia-inspector.js": _template_file("public/omnia-inspector.js"),
         MAX_PRODUCT_PAGE_PATH: _template_file(MAX_PRODUCT_PAGE_PATH),
         "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
+        "src/app/max-runtime.css": _template_file("src/app/max-runtime.css"),
         "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
         "src/components/OmniaCompliance.tsx": _template_file("src/components/OmniaCompliance.tsx"),
         MAX_PRODUCT_RUNTIME_PATH: _template_file(MAX_PRODUCT_RUNTIME_PATH),
@@ -456,6 +457,7 @@ MAX_MODEL_LOCKED_FILES = frozenset(
         "src/components/OmniaCompliance.tsx",
         MAX_PRODUCT_RUNTIME_PATH,
         "src/app/layout.tsx",
+        "src/app/max-runtime.css",
         "src/lib/db/index.ts",
         "src/lib/db/schema.ts",
         "src/lib/max/bot-api.ts",
@@ -838,6 +840,12 @@ Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
 and integration clients, webhook security and generated business config. The
 locked root page is only a browser-isolation boundary; never edit it or create
 app/API routes.
+The product owns all visible layout, navigation and styling. Never add a
+platform-owned visual shell or persistent legal footer. Keep `/support`,
+`/legal/privacy` and `/legal/terms` reachable from an app-native settings,
+profile, about or overflow menu. Mark the product root with
+`data-omnia-native-legal-nav="true"` once those three links exist so the managed
+legacy fallback stays hidden.
 Never declare `"use server"` or import `next/server`, `next/headers`, `next/cache`
 or server-only MAX modules from product code.
 A thin shell, decorative tabs, static demo response or fake timer is not a
@@ -872,7 +880,9 @@ LOCKED RUNTIME API (use these exact exports; do not guess substitutes):
   `{ answer, text, model }` from the same client.
 - Tailwind v4 is installed through `@import "tailwindcss"`; do not use v3
   `@tailwind` directives or unconfigured semantic utilities such as `border-border`.
-- The pinned `@maxhub/max-ui` 0.2.0 root exports are exactly: `Avatar`, `Button`,
+- MAX UI is optional; do not use it to impose a platform look on the product. If
+  the chosen product uses it, pinned `@maxhub/max-ui` 0.2.0 root exports are exactly:
+  `Avatar`, `Button`,
   `CellAction`, `CellHeader`, `CellInput`, `CellList`, `CellSimple`, `Counter`,
   `IconButton`, `Input`, `MaxUI`, `Spinner`, `Switch`, `Textarea`, `ToolButton`,
   `Typography`. Do not invent `Panel`, `Grid`, `Container`, `Flex` or other exports
@@ -890,27 +900,16 @@ LOCKED RUNTIME API (use these exact exports; do not guess substitutes):
 
 PRODUCT DESIGN OWNERSHIP:
 - `src/app/globals.css` is model-owned. Preserve `@import "tailwindcss"`, but replace
-  the minimal reset with the complete visual system required by the chosen concept.
+  the minimal reset with the styles required by the user's product.
   External font imports must come before Tailwind. This is ordinary global CSS, not a
   CSS Module: never use `:global(...)` in it. Do not edit the locked layout.
-- Define real project-specific semantic CSS variables and component states. Do not use
-  undefined template tokens, default indigo/violet AI styling or a repeated dashboard.
-- Design for 360–390px MAX WebView first: safe areas, thumb-friendly actions, content
-  behind fixed navigation, loading/empty/error/retry/success, pressed/selected/disabled.
-- Never float a fixed/sticky CTA over scrollable choices. Keep it in document flow or give
-  an opaque dock a measured spacer; compact option sets larger than three into chips,
-  segmented controls, a small grid or progressive disclosure so the primary action is
-  reachable without a wall of full-width cards.
-- A truthful empty history must still produce a composed first viewport: product promise,
-  one primary decision/action and useful brief-derived next content (goal choice, catalog or
-  process preview) without invented achievements. Avoid large `space-between`/`min-height`
-  voids. Loading keeps the same branded shell and geometry; settled 360px and 390px renders
-  must show the same product state rather than splash versus content.
+- The MAX runtime supplies no palette, card system, navigation recipe or product chrome.
+  Follow the user's brief and preserve the existing product's visual language on edits.
+- Keep the result usable at 360–390px: safe areas, readable content, reachable actions and
+  loading/empty/error/success states. These are product requirements, not a MAX skin.
 - When `user` is nullable, never render a fake name such as `Пользователь`, `User` or `Guest`.
   Use neutral copy without pretending to know a person's name; use the real MAX first name
   only when it is present.
-- Use purposeful transform/opacity micro-interactions and MAX haptics; respect
-  `prefers-reduced-motion`. Hover may enhance desktop but must never carry meaning.
 
 On a later surgical edit, preserve working behaviour and change only the relevant
 product files. Use edit_file/write_file so Omnia can attribute and safely roll

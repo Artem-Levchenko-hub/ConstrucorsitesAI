@@ -291,10 +291,7 @@ _STABLE_MAX_TOOL_NAMES = frozenset(
         "build",
         "read_logs",
         "runtime_check",
-        "see",
         "generate_media",
-        "probe",
-        "verify_isolation",
         "done",
     }
 )
@@ -331,7 +328,7 @@ _STABLE_MAX_PROGRESS_REQUIRED = (
 _STABLE_MAX_BUILD_REQUIRED = (
     "The product changed and must be compiled before any more rewriting. Run build now. "
     "If it is red, repair only the reported locations; if it is green, continue with "
-    "runtime and visual proof."
+    "runtime proof."
 )
 _STABLE_MAX_STYLE_REQUIRED = (
     "The product component exists, but its product-specific visual system is missing. "
@@ -509,7 +506,7 @@ _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED: list[dict[str, Any]] = [
     },
 ]
 _STABLE_MAX_PROOF_TOOLS = [
-    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"runtime_check", "see"}
+    tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "runtime_check"
 ]
 _STABLE_MAX_PROOF_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_PROOF_TOOLS[:-1],
@@ -521,24 +518,14 @@ _STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
         "cache_control": _CACHE,
     }
 ]
-_STABLE_MAX_SEE_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
-    {
-        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "see"),
-        "cache_control": _CACHE,
-    }
-]
 _STABLE_MAX_PROOF_REQUIRED = (
     "The product source and build are green. Stop reading or polishing blindly. "
-    "Run runtime_check and see now; if see reports a concrete issue, edit it on the "
-    "following turn, rebuild, and verify again."
+    "Run runtime_check now; if it reports a concrete issue, edit it on the following "
+    "turn, rebuild, and verify again."
 )
 _STABLE_MAX_RUNTIME_PROOF_REQUIRED = (
     "The build is green but the final runtime is not proven. Run runtime_check now; "
     "do not read, rewrite, or call see before the live route is green."
-)
-_STABLE_MAX_SEE_PROOF_REQUIRED = (
-    "The build and runtime are already green. Call see now; do not repeat runtime_check "
-    "or perform another blind rewrite before the rendered verdict."
 )
 _STABLE_MAX_VISUAL_REPAIR_REQUIRED = (
     "A concrete visual issue is already known. Stop searching or rereading. "
@@ -1112,10 +1099,9 @@ _DONE_WHEN_GREEN_NUDGE = (
     "owned resources) and call done NOW."
 )
 _MAX_DONE_WHEN_GREEN_NUDGE = (
-    "[LOOP GUARD] The MAX build is clean. Run runtime_check once after the final write "
-    "and run see through the signed MAX preview. If see returns a concrete visual issue, "
-    "apply it, rebuild, and see the repaired product again; otherwise call done NOW. Do "
-    "not call generic probe or verify_isolation."
+    "[LOOP GUARD] The MAX build is clean. Run runtime_check once after the final write, "
+    "fix any concrete runtime error, then call done NOW. Do not call visual ceremony, "
+    "generic probe or verify_isolation."
 )
 
 _MAX_NATIVE_VERIFICATION_OVERRIDE = (
@@ -1131,11 +1117,12 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
 )
 
 _MAX_REFERENCE_PREAMBLE = (
-    "Ты — автономный AI-агент, который за один непрерывный проход строит "
-    "полноценный MAX Mini App. Работай прямо с проектом: коротко изучи управляемые "
-    "файлы интеграции MAX, затем сразу создавай продукт по брифу — экраны, навигацию, состояния, "
-    "взаимодействия и аккуратный mobile-first дизайн. Не используй визуальный шаблон, "
-    "не подменяй функции текстом, TODO или декоративными кнопками. Не останавливайся "
+    "Ты — автономный инженер, который за один непрерывный проход строит "
+    "полноценный MAX Mini App. MAX runtime — только технический адаптер: он не задаёт "
+    "layout, палитру, навигацию или стиль продукта. Коротко изучи нужные контракты, затем "
+    "сразу создавай продукт по брифу. Не добавляй платформенную визуальную оболочку, "
+    "постоянный юридический футер или отдельный дизайн MAX. "
+    "Не подменяй функции текстом, TODO или декоративными кнопками. Не останавливайся "
     "на частичном результате и не объявляй успех словами. Большой интерфейс раскладывай "
     "по небольшим компонентам: суммарное содержимое write_file/edit_file за один ответ "
     "должно быть короче 24 000 символов, иначе аргументы инструмента будут обрезаны.\n\n"
@@ -1155,12 +1142,8 @@ _MAX_REFERENCE_PREAMBLE = (
     "последней записи. Если runtime_check красный, используй возвращённый файл и текст "
     "ошибки для минимальной точечной edit_file, затем снова build/runtime_check; не повторяй "
     "красную проверку без исправления. После чистого build и зелёного runtime_check "
-    "обязательно вызови see через подписанную MAX preview-сессию. Если see вернул "
-    "конкретную проблему, исправь её, снова выполни build/runtime_check и повтори see. "
-    "Вызови done только после чистого визуального verdict. Если visual QA недоступен, не "
-    "повторяй его вслепую и не объявляй генерацию завершённой: исполнитель сохранит "
-    "последнюю зелёную контрольную точку и честно остановит запуск. Не трать ходы на "
-    "церемониальный план, skill-пакеты или внешнее исследование, "
+    "вызови done. Не трать ходы на визуальную церемонию, skill-пакеты или внешнее "
+    "исследование, "
     "если без него можно сразу собрать приложение."
 )
 
@@ -1169,10 +1152,9 @@ _MAX_REFERENCE_EDIT_PREAMBLE = (
     "Сначала прочитай только целевой участок, затем внеси минимальное изменение, "
     "сохрани все остальные экраны, данные и сценарии. Не переписывай весь продукт, "
     "не меняй визуальное направление без прямого запроса и не трогай управляемое "
-    "MAX-ядро. После последней записи исправь фактические ошибки build/runtime_check, "
-    "затем обязательно проверь итог через see в подписанной MAX preview-сессии. Если see нашёл "
-    "проблему, исправь её и повтори весь цикл доказательств. Заверши только на зелёной "
-    "версии с чистым визуальным verdict. Не создавай демо-данные, секреты, параллельную "
+    "MAX-ядро. Не добавляй платформенную оболочку или юридический футер. После последней "
+    "записи исправь фактические ошибки build/runtime_check и заверши на зелёной версии. "
+    "Не создавай демо-данные, секреты, параллельную "
     "email-авторизацию, API или прямой доступ к БД."
 )
 
@@ -1807,11 +1789,10 @@ async def run_native_build(
                 and not wrote_since_build
                 and visual_feedback_step is None
                 and completion_gap is not None
-                and ("runtime_check" in completion_gap or completion_gap.startswith("Run see"))
+                and "runtime_check" in completion_gap
             )
             proof_gap = completion_gap.casefold() if completion_gap is not None else ""
             force_runtime_proof = force_proof and "runtime_check" in proof_gap
-            force_see_proof = force_proof and "see" in proof_gap and not force_runtime_proof
             force_visual_repair = (
                 stable_max_loop
                 and visual_feedback_step is not None
@@ -1859,8 +1840,6 @@ async def run_native_build(
                         if force_source_repair
                         else _STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED
                         if force_runtime_proof
-                        else _STABLE_MAX_SEE_ONLY_TOOLS_CACHED
-                        if force_see_proof
                         else _STABLE_MAX_PROOF_TOOLS_CACHED
                         if force_proof
                         else _STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED
@@ -2276,8 +2255,6 @@ async def run_native_build(
                     }
                 elif force_runtime_proof and name != "runtime_check":
                     obs = {"ok": False, "error": _STABLE_MAX_RUNTIME_PROOF_REQUIRED}
-                elif force_see_proof and name != "see":
-                    obs = {"ok": False, "error": _STABLE_MAX_SEE_PROOF_REQUIRED}
                 elif force_visual_finish and (
                     name not in {"edit_file", "build"}
                     or (name == "edit_file" and action.path != "src/app/globals.css")

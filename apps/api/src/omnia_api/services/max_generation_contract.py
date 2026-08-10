@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import posixpath
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 _CAPABILITIES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
@@ -236,6 +236,12 @@ _MANAGED_DB_PATHS = {
 
 _MAX_DESIGN_SPEC_PATH = ".omnia/max-design-spec.json"
 _REQUIRED_DESIGN_STATES = frozenset({"loading", "empty", "error", "success"})
+_NATIVE_LEGAL_NAV_MARKER = 'data-omnia-native-legal-nav="true"'
+_REQUIRED_NATIVE_LEGAL_LINKS = ("/support", "/legal/privacy", "/legal/terms")
+_NATIVE_LEGAL_NAV_MARKER_RE = re.compile(
+    r"<[A-Za-z][^>]*\bdata-omnia-native-legal-nav\s*=\s*"
+    r'''(?:"true"|'true'|\{\s*(?:true|"true"|'true')\s*\})'''
+)
 MAX_REQUIRED_PREWRITE_SKILLS = (
     "ui-ux-pro-max",
     "product-flow",
@@ -258,6 +264,25 @@ def _prompt_requires_provider(prompt: str, provider_re: re.Pattern[str]) -> bool
         re.IGNORECASE,
     )
     return removal.search(current) is None
+
+
+def _has_jsx_match(source: str, pattern: re.Pattern[str]) -> bool:
+    """Match JSX syntax only when the opening tag is executable source code."""
+
+    searchable = _strip_js_non_code(source, keep_strings=True)
+    code_mask = _js_code_mask(source)
+    return any(code_mask[match.start()] for match in pattern.finditer(searchable))
+
+
+def _has_reachable_native_legal_link(sources: Iterable[str], href: str) -> bool:
+    """Recognise a rendered JSX anchor/Next Link, not an unused URL string."""
+
+    escaped = re.escape(href)
+    pattern = re.compile(
+        rf'''<(?:a|Link)\b[^>]*\bhref\s*=\s*(?:"{escaped}"|'{escaped}'|'''
+        rf'''\{{\s*(?:"{escaped}"|'{escaped}')\s*\}})'''
+    )
+    return any(_has_jsx_match(source, pattern) for source in sources)
 
 
 def _starts_js_regex(content: str, index: int) -> bool:
@@ -923,6 +948,7 @@ def max_source_completion_gap(
     files: Mapping[str, str],
     *,
     require_design_spec: bool = True,
+    require_native_legal_nav: bool = False,
 ) -> str | None:
     """Return a source/product gap independently of runtime proof infrastructure.
 
@@ -1006,6 +1032,24 @@ def max_source_completion_gap(
     product_source_blob = "\n".join(product_sources)
     reachable_product_source_blob = "\n".join(reachable_product_files.values())
     corpus = product_source_blob.lower()
+    if require_native_legal_nav:
+        reachable_sources = tuple(reachable_product_files.values())
+        missing_legal_links = [
+            href
+            for href in _REQUIRED_NATIVE_LEGAL_LINKS
+            if not _has_reachable_native_legal_link(reachable_sources, href)
+        ]
+        has_legal_marker = any(
+            _has_jsx_match(source, _NATIVE_LEGAL_NAV_MARKER_RE) for source in reachable_sources
+        )
+        if not has_legal_marker or missing_legal_links:
+            missing_legal_detail = ", ".join(missing_legal_links) or _NATIVE_LEGAL_NAV_MARKER
+            return (
+                "Native MAX support/legal navigation is incomplete. Add reachable product links "
+                "for /support, /legal/privacy and /legal/terms "
+                f"(missing: {missing_legal_detail}), then mark "
+                f'the product root with {_NATIVE_LEGAL_NAV_MARKER}.'
+            )
     product_source_views = [
         (source, _strip_js_non_code(source, keep_strings=False)) for source in product_sources
     ]
@@ -1208,7 +1252,7 @@ def max_completion_gap(
     intentionally not blocking for MAX.
     """
 
-    source_gap = max_source_completion_gap(prompt, files)
+    source_gap = max_source_completion_gap(prompt, files, require_native_legal_nav=True)
     if source_gap:
         return source_gap
     missing_skills = [

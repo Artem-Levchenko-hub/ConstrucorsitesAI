@@ -246,6 +246,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "public/omnia-inspector.js",
         MAX_PRODUCT_PAGE_PATH,
         "src/app/layout.tsx",
+        "src/app/max-runtime.css",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
         MAX_PRODUCT_RUNTIME_PATH,
@@ -300,8 +301,16 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "requestUrl.origin !== window.location.origin" in provider
     assert '!requestUrl.pathname.startsWith("/api/")' in provider
     assert 'from "@/components/OmniaCompliance"' in provider
+    assert "<OmniaCompliance fallback" in provider
+    assert 'className="omnia-max-runtime"' in provider
     assert "src/components/OmniaCompliance.tsx" in files
-    assert 'from "@/lib/omnia/max-config"' in files["src/components/OmniaCompliance.tsx"]
+    compliance = files["src/components/OmniaCompliance.tsx"]
+    assert "data-omnia-native-legal-nav" in compliance
+    assert "<details" in compliance
+    assert "<footer" not in compliance
+    assert "src/app/max-runtime.css" in files
+    assert "display: contents" in files["src/app/max-runtime.css"]
+    assert 'import "./max-runtime.css"' in files["src/app/layout.tsx"]
     assert '"@/*": ["./src/*"]' in files["tsconfig.json"]
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
@@ -496,17 +505,16 @@ def test_model_directive_matches_locked_max_runtime_api() -> None:
     assert "@maxhub/max-ui` 0.2.0" in MAX_MODEL_DIRECTIVE
     assert "Do not invent `Panel`, `Grid`, `Container`, `Flex`" in MAX_MODEL_DIRECTIVE
     assert "src/app/globals.css` is model-owned" in MAX_MODEL_DIRECTIVE
-    assert "360–390px MAX WebView" in MAX_MODEL_DIRECTIVE
+    assert "MAX UI is optional" in MAX_MODEL_DIRECTIVE
+    assert "MAX runtime supplies no palette" in MAX_MODEL_DIRECTIVE
+    assert "usable at 360–390px" in MAX_MODEL_DIRECTIVE
+    assert "persistent legal footer" in MAX_MODEL_DIRECTIVE
+    assert "`/legal/privacy`" in MAX_MODEL_DIRECTIVE
+    assert 'data-omnia-native-legal-nav="true"' in MAX_MODEL_DIRECTIVE
     assert "real user profile automatically" in MAX_MODEL_DIRECTIVE
     assert "demo/mock/sample/seed user records" in MAX_MODEL_DIRECTIVE
     assert "truthful empty states" in MAX_MODEL_DIRECTIVE
-    assert (
-        "truthful empty history must still produce a composed first viewport" in MAX_MODEL_DIRECTIVE
-    )
     assert "never render a fake name" in MAX_MODEL_DIRECTIVE
-    assert "settled 360px and 390px renders" in MAX_MODEL_DIRECTIVE
-    assert "Never float a fixed/sticky CTA over scrollable choices" in MAX_MODEL_DIRECTIVE
-    assert "option sets larger than three" in MAX_MODEL_DIRECTIVE
 
 
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:

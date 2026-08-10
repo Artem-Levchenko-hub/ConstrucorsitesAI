@@ -57,9 +57,12 @@ def _complete_files() -> dict[str, str]:
             "export default function Page(){ const { user } = useMaxApp(); "
             "useEffect(() => { async function restore(){ await getMaxActions(); } "
             "void restore(); }, []); "
-            "return <main><button onClick={persist}>Сохранить</button>ИИ тренер: тренировки, сон, "
+            'return <main data-omnia-native-legal-nav="true"><button onClick={persist}>'
+            "Сохранить</button>ИИ тренер: тренировки, сон, "
             "питание, статистика, график, профиль, история, уведомления, loading, empty, "
-            "error, retry, {user?.firstName}</main>; }"
+            'error, retry, {user?.firstName}<nav><a href="/support">Поддержка</a>'
+            '<a href="/legal/privacy">Конфиденциальность</a>'
+            '<a href="/legal/terms">Условия</a></nav></main>; }'
         ),
         "src/components/Coach.tsx": "export function Coach(){ return <button>Анализ</button>; }\n"
         + "// coach interaction state\n" * 10,
@@ -120,7 +123,7 @@ export default function Page() {
       setEmpty(false);
     } catch { setFailure("Ошибка анализа — повторите"); } finally { setLoading(false); }
   }
-  return <main>
+  return <main data-omnia-native-legal-nav="true">
     <header><h1>Фитнес для {user?.firstName || "спортсмена"}</h1></header>
     <nav aria-label="Разделы">
       {["Тренировки", "Сон", "Питание", "Статистика", "Профиль",
@@ -134,6 +137,8 @@ export default function Page() {
     {empty && <p>Пусто: добавьте первую тренировку</p>}
     {failure && <button onClick={analyze}>Повтор</button>}
     {mode === "error" && <p>Ошибка MAX</p>}
+    <nav><a href="/support">Поддержка</a><a href="/legal/privacy">Конфиденциальность</a>
+      <a href="/legal/terms">Условия</a></nav>
   </main>;
 }
 """
@@ -180,6 +185,78 @@ def test_completion_requires_persistent_project_specific_design_spec() -> None:
     spec["directions_considered"] = ["same", "same", "same"]
     files[".omnia/max-design-spec.json"] = json.dumps(spec)
     assert "three genuinely distinct" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+
+def test_completion_requires_product_owned_legal_navigation_when_enabled() -> None:
+    files = _complete_files()
+    page = files["src/app/page.tsx"]
+    files["src/app/page.tsx"] = page.replace(
+        ' data-omnia-native-legal-nav="true"', ""
+    ).replace('<a href="/legal/terms">Условия</a>', "")
+
+    gap = max_source_completion_gap(
+        COMPLEX_BRIEF,
+        files,
+        require_design_spec=False,
+        require_native_legal_nav=True,
+    )
+
+    assert gap is not None
+    assert "Native MAX support/legal navigation is incomplete" in gap
+    assert "/legal/terms" in gap
+
+    files = _complete_files()
+    page = files["src/app/page.tsx"]
+    for href, label in (
+        ("/support", "Поддержка"),
+        ("/legal/privacy", "Конфиденциальность"),
+        ("/legal/terms", "Условия"),
+    ):
+        page = page.replace(f'<a href="{href}">{label}</a>', f"<span>{label}</span>")
+    files["src/app/page.tsx"] = (
+        'const unusedLegalUrls = ["/support", "/legal/privacy", "/legal/terms"];\n'
+        'const unusedMarkup = \'<a href="/support">x</a>'
+        '<a href="/legal/privacy">x</a><a href="/legal/terms">x</a>\';\n'
+        + page
+    )
+    assert (
+        "Native MAX support/legal navigation is incomplete"
+        in str(
+            max_source_completion_gap(
+                COMPLEX_BRIEF,
+                files,
+                require_design_spec=False,
+                require_native_legal_nav=True,
+            )
+        )
+    )
+
+    files = _complete_files()
+    page = files["src/app/page.tsx"].replace(' data-omnia-native-legal-nav="true"', "")
+    files["src/app/page.tsx"] = (
+        'const unusedMarker = \'<main data-omnia-native-legal-nav="true">\';\n' + page
+    )
+    assert (
+        "Native MAX support/legal navigation is incomplete"
+        in str(
+            max_source_completion_gap(
+                COMPLEX_BRIEF,
+                files,
+                require_design_spec=False,
+                require_native_legal_nav=True,
+            )
+        )
+    )
+
+    assert (
+        max_source_completion_gap(
+            COMPLEX_BRIEF,
+            _complete_files(),
+            require_design_spec=False,
+            require_native_legal_nav=True,
+        )
+        is None
+    )
 
 
 def test_named_yookassa_and_iiko_require_real_managed_calls() -> None:
