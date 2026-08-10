@@ -459,6 +459,70 @@ const FALLBACK_MENU = [
     assert max_demo_data_rejection("src/components/product/menu.ts", menu) is None
 
 
+def test_managed_catalog_cannot_be_hidden_by_populated_fallback() -> None:
+    files = _complete_single_file()
+    files["src/lib/omnia/max-config.ts"] = """
+export const omniaMaxConfig = {
+  content: [{ id: "bread", title: "Бородинский хлеб", price: "149 ₽", active: true }],
+};
+"""
+    files["src/components/product/catalog.ts"] = """
+const FALLBACK_MENU = [
+  { id: "other", name: "Другое изделие", price: 320 },
+];
+"""
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert gap is not None
+    assert "canonical catalog content" in gap
+    assert "FALLBACK_MENU" in gap
+
+
+def test_empty_managed_catalog_can_use_compact_reference_catalog() -> None:
+    files = _complete_single_file()
+    files["src/lib/omnia/max-config.ts"] = "export const omniaMaxConfig = { content: [] };"
+    files["src/components/product/catalog.ts"] = """
+const FALLBACK_MENU = [
+  { id: "brioche", name: "Бриошь", price: 320 },
+];
+"""
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+
+def test_managed_formatted_price_must_not_use_number_directly() -> None:
+    files = _complete_single_file()
+    files["src/lib/omnia/max-config.ts"] = """
+export const omniaMaxConfig = {
+  content: [{ id: "bread", title: "Бородинский хлеб", price: "149 ₽", active: true }],
+};
+"""
+    files["src/components/product/catalog.ts"] = """
+export function mapItem(raw: { title: string; price: string | number }) {
+  const price = typeof raw.price === "string" ? Number(raw.price) : raw.price;
+  return { id: raw.title, name: raw.title, price };
+}
+"""
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert gap is not None
+    assert "formatted strings" in gap
+    assert "Number" in gap
+
+
+def test_managed_config_cannot_be_cast_to_any() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += "\nconst support = String((omniaMaxConfig as any).support);"
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert gap is not None
+    assert "casts omniaMaxConfig" in gap
+    assert "support fields" in gap
+
+
 @pytest.mark.parametrize(
     "user_fields",
     [

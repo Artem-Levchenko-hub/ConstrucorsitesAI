@@ -118,6 +118,15 @@ _GENERIC_IDENTITY_FALLBACK_RE = re.compile(
     )""",
     re.IGNORECASE | re.VERBOSE,
 )
+_UNSAFE_MANAGED_CONFIG_CAST_RE = re.compile(
+    r"\bomniaMaxConfig\s+as\s+(?:any|unknown)\b",
+    re.IGNORECASE,
+)
+_UNSAFE_FORMATTED_PRICE_NUMBER_RE = re.compile(
+    r"typeof\s+[A-Za-z_$][\w$]*\.price\s*===\s*['\"]string['\"]"
+    r"\s*\?\s*Number\s*\(\s*[A-Za-z_$][\w$]*\.price\s*\)",
+    re.IGNORECASE | re.DOTALL,
+)
 _SEEDED_COLLECTION_RE = re.compile(
     r"\b(?:const|let|var)\s+"
     r"(?:(?P<name>[A-Za-z_$][\w$]*)|"
@@ -408,6 +417,47 @@ def _seeded_collection_literal(content: str, match: re.Match[str]) -> str:
     return content[opening:]
 
 
+def _managed_max_content_is_populated(files: Mapping[str, str]) -> bool:
+    """Return whether MAX Studio supplied at least one canonical content item."""
+
+    config = str(files.get("src/lib/omnia/max-config.ts") or "")
+    match = re.search(r"(?:['\"]content['\"]|\bcontent\b)\s*:\s*\[", config)
+    if not match:
+        return False
+    opening = config.find("[", match.start(), match.end())
+    if opening < 0:
+        return False
+    code_mask = _js_code_mask(config)
+    depth = 0
+    for index in range(opening, len(config)):
+        if not code_mask[index]:
+            continue
+        char = config[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return bool(config[opening + 1 : index].strip())
+    return False
+
+
+def _populated_fallback_catalog_name(content: str) -> str | None:
+    """Find a model-owned fallback catalog that can hide broken managed data."""
+
+    for match in _SEEDED_COLLECTION_RE.finditer(content or ""):
+        name = str(match.group("name") or match.group("state_name") or "")
+        name_folded = name.casefold()
+        if "fallback" not in name_folded:
+            continue
+        if not any(part in name_folded for part in _STATIC_CATALOG_NAME_PARTS):
+            continue
+        keys = _js_object_keys(_seeded_collection_literal(content or "", match))
+        if {"name", "title"}.intersection(keys) and "price" in keys:
+            return name
+    return None
+
+
 def _js_object_keys(content: str) -> set[str]:
     """Extract bare and quoted JS object keys, ignoring values and comments."""
 
@@ -614,6 +664,10 @@ def build_max_product_contract(prompt: str) -> str:
         "when supplied; when it is empty and the brief requires a catalog, create a compact, "
         "internally consistent starter reference catalog so the primary scenario works on "
         "first open.",
+        "- omniaMaxConfig is typed and authoritative. Never cast it to any/unknown or stringify "
+        "nested config objects. When omniaMaxConfig.content is populated, do not mask mapping "
+        "bugs with a populated fallback catalog: render those managed items, parse formatted "
+        "prices such as `149 ₽` safely, and render support fields individually.",
         "- Use createMaxAction for persisted MAX user activity. Never store a provider key "
         "in source code or expose it to the browser.",
         "- Never import @/lib/db or drizzle-orm and never create parallel /api/max or "
@@ -790,6 +844,32 @@ def max_source_completion_gap(
         demo_rejection = max_demo_data_rejection(path, content)
         if demo_rejection:
             return demo_rejection
+    managed_config_gaps: list[str] = []
+    if _managed_max_content_is_populated(files):
+        for path, content in files.items():
+            if not _is_product_source(path):
+                continue
+            fallback_name = _populated_fallback_catalog_name(content)
+            if fallback_name:
+                managed_config_gaps.append(
+                    "MAX Studio already supplied canonical catalog content, but product source "
+                    f"still contains populated {fallback_name}. Remove the populated fallback "
+                    "and render omniaMaxConfig.content so mapping failures stay visible."
+                )
+        if _UNSAFE_FORMATTED_PRICE_NUMBER_RE.search(product_source_blob):
+            managed_config_gaps.append(
+                "Managed catalog prices are formatted strings such as `149 ₽`, but product "
+                "source converts a string price with Number(...). Normalize the currency text "
+                "before conversion (or use parseFloat safely) so managed items are not dropped."
+            )
+    if _UNSAFE_MANAGED_CONFIG_CAST_RE.search(product_source_blob):
+        managed_config_gaps.append(
+            "Product source casts omniaMaxConfig to any/unknown, which hid an invalid nested "
+            "config render. Use the exported OmniaMaxConfig types and render support fields "
+            "individually; never stringify the support object."
+        )
+    if managed_config_gaps:
+        return "Managed MAX config contract failed: " + " ".join(managed_config_gaps)
     unsafe_product_db_paths = [
         path
         for path, content in files.items()
