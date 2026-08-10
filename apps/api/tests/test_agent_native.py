@@ -131,6 +131,7 @@ def test_generic_native_agent_and_autoheal_keep_primary_model() -> None:
 def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     prompt = agent_native.native_system_prompt(
         "MAX PLATFORM CORE CONTRACT\nBuild the app",
+        "MAX capability catalog: call read_skill(`ui-ux-pro-max`)",
         stable_max_loop=True,
     )
 
@@ -144,8 +145,11 @@ def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     assert "Sonnet" not in prompt
     assert "Gemini" not in prompt
     assert "read_skill" not in prompt
+    assert "MAX capability catalog" not in prompt
     assert "никогда не используй в нём `:global(...)`" in prompt
     assert "минимальной точечной edit_file" in prompt
+    assert "обязательно вызови see" in prompt
+    assert "не объявляй генерацию завершённой" in prompt
     names = {tool["name"] for tool in agent_native._TOOLS_CACHED}
     assert {"read_file", "write_file", "build", "done"} <= names
     assert "read_skill" not in names
@@ -155,6 +159,17 @@ def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     ceremony = {"plan_task", "update_plan", "discover_capabilities", "call_capability"}
     assert not (ceremony & stable_names)
     assert agent_native._MAX_TOKENS == 32_768
+
+
+def test_max_edit_prompt_requires_signed_visual_proof() -> None:
+    prompt = agent_native.native_system_prompt(
+        "MAX PLATFORM CORE CONTRACT\nPreserve the app",
+        stable_max_loop=True,
+        stable_max_edit=True,
+    )
+
+    assert "обязательно проверь итог через see" in prompt
+    assert "в подписанной MAX preview-сессии" in prompt
 
 
 def test_generic_native_prompt_stays_unchanged_outside_max() -> None:
