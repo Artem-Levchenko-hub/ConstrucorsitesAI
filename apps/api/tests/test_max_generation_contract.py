@@ -459,6 +459,30 @@ const FALLBACK_MENU = [
     assert max_demo_data_rejection("src/components/product/menu.ts", menu) is None
 
 
+def test_commercial_product_dictionaries_are_not_mistaken_for_user_records() -> None:
+    content = """
+const DRINKS = [
+  { id: "flat-white", name: "Флэт уайт", price: 290, category: "Кофе" },
+];
+const ADDONS = [
+  { id: "oat", label: "Овсяное молоко", price: 60 },
+];
+const SIZES = [
+  { id: "large", title: "Большой", price: 80 },
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/ProductApp.tsx", content) is None
+
+
+def test_commercial_shape_cannot_hide_user_orders() -> None:
+    content = 'const ORDERS = [{ id: "order-1", name: "Флэт уайт", price: 290 }];'
+
+    assert "demo user data" in str(
+        max_demo_data_rejection("src/components/product/ProductApp.tsx", content)
+    ).lower()
+
+
 @pytest.mark.parametrize("name", ["supportLabels", "dict", "statusLookup", "fieldMapping"])
 def test_ui_lookup_arrays_are_not_mistaken_for_user_records(name: str) -> None:
     content = f"""

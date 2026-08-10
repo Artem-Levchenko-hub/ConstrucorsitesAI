@@ -657,6 +657,10 @@ def max_demo_data_rejection(path: str, content: str) -> str | None:
         )
         user_activity_name = any(part in name_folded for part in _USER_ACTIVITY_NAME_PARTS)
         fake_collection_name = any(part in name_folded for part in _FAKE_COLLECTION_NAME_PARTS)
+        commercial_reference = (
+            "price" in collection_keys
+            and bool({"label", "name", "title"}.intersection(collection_keys))
+        )
         if (
             ui_lookup
             and not user_activity_name
@@ -666,6 +670,18 @@ def max_demo_data_rejection(path: str, content: str) -> str | None:
             continue
         if (
             static_reference
+            and not user_activity_name
+            and not fake_collection_name
+            and not any(_SEEDED_USER_RECORD_KEY_RE.fullmatch(key) for key in collection_keys)
+        ):
+            continue
+        # A model commonly names commercial dictionaries by the domain noun
+        # (DRINKS, ADDONS, SIZES) rather than CATALOG/MENU. Their display label
+        # plus price is product reference data, not manufactured user history.
+        # Keep activity/fake names and every identity/lifecycle field blocking,
+        # so ORDERS or DEMO_ITEMS cannot hide behind the same shape.
+        if (
+            commercial_reference
             and not user_activity_name
             and not fake_collection_name
             and not any(_SEEDED_USER_RECORD_KEY_RE.fullmatch(key) for key in collection_keys)
