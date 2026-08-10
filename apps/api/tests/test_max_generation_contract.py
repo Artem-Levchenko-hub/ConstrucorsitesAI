@@ -459,6 +459,30 @@ const FALLBACK_MENU = [
     assert max_demo_data_rejection("src/components/product/menu.ts", menu) is None
 
 
+@pytest.mark.parametrize("name", ["supportLabels", "dict", "statusLookup", "fieldMapping"])
+def test_ui_lookup_arrays_are_not_mistaken_for_user_records(name: str) -> None:
+    content = f"""
+const {name} = [
+  {{ id: "price", label: "Цена", price: 149 }},
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/ProductApp.tsx", content) is None
+
+
+@pytest.mark.parametrize("name", ["supportLabels", "dict", "statusLookup", "fieldMapping"])
+def test_ui_lookup_alias_cannot_hide_user_activity(name: str) -> None:
+    content = f"""
+const {name} = [
+  {{ id: "done", label: "Заказ", price: 149, orderId: "order-1", completed: true }},
+];
+"""
+
+    assert "demo user data" in str(
+        max_demo_data_rejection("src/components/product/ProductApp.tsx", content)
+    ).lower()
+
+
 def test_managed_catalog_cannot_be_hidden_by_populated_fallback() -> None:
     files = _complete_single_file()
     files["src/app/page.tsx"] = (
