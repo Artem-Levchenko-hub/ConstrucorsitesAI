@@ -1486,6 +1486,7 @@ async def run_native_build(
     last_build_error_text = ""
     repair_reads_since_build: set[str] = set()
     repair_reread_paths: set[str] = set()
+    repair_source_cache: dict[str, str] = {}
     repair_context_compacted = False
     wrote_since_build = False
     no_write_turns = 0  # consecutive assistant turns with no successful write
@@ -1724,7 +1725,10 @@ async def run_native_build(
                 force_repair_write
                 and last_build_error_paths
                 and not repair_context_compacted
-                and all(path in written for path in last_build_error_paths)
+                and all(
+                    path in written or path in repair_source_cache
+                    for path in last_build_error_paths
+                )
             ):
                 convo = [
                     {
@@ -1732,7 +1736,7 @@ async def run_native_build(
                         "content": _stable_max_compact_repair_task(
                             last_build_error_text,
                             last_build_error_paths,
-                            written,
+                            {**repair_source_cache, **written},
                         ),
                     }
                 ]
@@ -2226,6 +2230,7 @@ async def run_native_build(
                     # let transcript compaction destroy the live source; allow
                     # one fresh read of the failing path on the next turn.
                     repair_reads_since_build.discard(action.path)
+                    repair_source_cache.pop(action.path, None)
                     if visual_feedback_step is not None:
                         # The next paid turn must receive a fresh, authoritative
                         # focused source bundle. Otherwise the compacted marker
@@ -2406,8 +2411,10 @@ async def run_native_build(
                     # dead end where every recovery read is rejected.
                     repair_reads_since_build.discard(action.path)
                     repair_reread_paths.add(action.path)
+                    repair_source_cache.pop(action.path, None)
                 if tool_executed and name in ("write_file", "edit_file") and obs.get("ok"):
                     repair_reread_paths.discard(action.path)
+                    repair_source_cache.pop(action.path, None)
                     if isinstance(obs.get("content"), str):
                         # executor returns the post-edit content (mirrors the
                         # text loop's tracking at agent_builder.py). Prefer it
@@ -2444,6 +2451,7 @@ async def run_native_build(
                     )
                     repair_reads_since_build.clear()
                     repair_reread_paths.clear()
+                    repair_source_cache.clear()
                     repair_context_compacted = False
                     wrote_since_build = False
                 elif (
@@ -2463,6 +2471,7 @@ async def run_native_build(
                     last_build_error_paths = _typescript_error_paths(last_build_error_text)
                     repair_reads_since_build.clear()
                     repair_reread_paths.clear()
+                    repair_source_cache.clear()
                     repair_context_compacted = False
                     wrote_since_build = False
                 if (
@@ -2501,6 +2510,8 @@ async def run_native_build(
                     if repair_mode and name == "read_file":
                         repair_reads_since_build.add(action.path)
                         repair_reread_paths.discard(action.path)
+                        if isinstance(obs.get("content"), str):
+                            repair_source_cache[action.path] = obs["content"]
                     if name == "read_skill":
                         skill_id = str(action.args.get("skill") or "").strip().casefold()
                         if skill_id:

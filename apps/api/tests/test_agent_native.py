@@ -1381,6 +1381,82 @@ def test_compact_repair_task_keeps_error_windows_not_entire_large_files() -> Non
 
 
 @pytest.mark.asyncio
+async def test_stable_max_compacts_existing_failing_file_after_one_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    legacy = "src/components/product/catalog.ts"
+    broken = 'export const count: number = "bad";'
+    fixed = "export const count: number = 1;"
+    turns = iter(
+        [
+            _turn(("write_file", {"path": entry, "content": "export default function App(){}"})),
+            _turn(("build", {})),
+            _turn(("read_file", {"path": legacy})),
+            _turn(
+                (
+                    "edit_file",
+                    {"path": legacy, "search": broken, "replace": fixed},
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("done", {"summary": "Готово"})),
+        ]
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "convo": json.loads(json.dumps(convo)),
+                "tools": {str(tool["name"]) for tool in kwargs["tools"]},
+            }
+        )
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    builds = 0
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal builds
+        if action.name == "write_file":
+            return {"ok": True, "content": action.args["content"]}
+        if action.name == "read_file":
+            return {"ok": True, "content": broken}
+        if action.name == "edit_file":
+            return {"ok": True, "content": fixed}
+        if action.name == "build":
+            builds += 1
+            return {
+                "ok": builds > 1,
+                "detail": (
+                    "clean"
+                    if builds > 1
+                    else f"{legacy}(1,14): error TS2322: Type 'string' is not assignable"
+                ),
+            }
+        return {"ok": True}
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="repair existing product",
+        execute=execute,
+        max_steps=10,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert result.files[legacy] == fixed
+    assert calls[2]["tools"] == {"read_file", "edit_file"}
+    assert calls[3]["tools"] == {"edit_file"}
+    assert len(calls[3]["convo"]) == 1
+    assert "TARGETED COMPILER REPAIR" in str(calls[3]["convo"][0])
+    assert broken in str(calls[3]["convo"][0])
+
+
+@pytest.mark.asyncio
 async def test_stable_max_failed_exact_edit_allows_one_fresh_reread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
