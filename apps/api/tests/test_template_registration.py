@@ -113,9 +113,11 @@ def test_max_database_tables_and_foreign_keys_use_the_project_schema() -> None:
         encoding="utf-8"
     )
 
-    assert 'pgSchema(process.env.OMNIA_DB_SCHEMA || "public")' in schema
+    assert "pgTable" in schema
+    assert 'schemaName !== "public"' in schema
+    assert "pgSchema(schemaName).table" in schema
+    assert ": pgTable" in schema
     assert 'appSchema.table("max_users"' in schema
-    assert 'pgTable("max_users"' not in schema
     init_db = (_TEMPLATES_DIR / "max-miniapp-nextjs" / "scripts/init-db.mjs").read_text(
         encoding="utf-8"
     )

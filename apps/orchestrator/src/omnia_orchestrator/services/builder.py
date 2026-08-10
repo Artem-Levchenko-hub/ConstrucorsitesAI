@@ -146,6 +146,15 @@ def _restore_template_owned_prod_files(template_dir: Path, build_dir: Path) -> N
 _DB_PLACEHOLDER = "postgresql://placeholder:placeholder@127.0.0.1:1/placeholder"
 
 
+def _write_next_build_env(build_dir: Path, project_id: str) -> None:
+    """Provide safe server-only env while Next.js imports routes at build time."""
+    schema = postgres_admin.project_schema_name(UUID(project_id))
+    (build_dir / ".env.production").write_text(
+        f"DATABASE_URL={_DB_PLACEHOLDER}\nOMNIA_DB_SCHEMA={schema}\n",
+        encoding="utf-8",
+    )
+
+
 def _resolve_runtime_dsn(project_id: str) -> str:
     """Use the dev container's persisted DSN for prod — same schema, same role.
     Falls back to the placeholder so a project provisioned in degraded mode
@@ -547,15 +556,14 @@ async def _run(
                 (build_dir / stale).unlink(missing_ok=True)
             (build_dir / "next.config.ts").write_text(_PROD_NEXT_CONFIG, encoding="utf-8")
 
-        # 2c. Build-time DATABASE_URL. The template's db module throws at import
-        # if it's unset, and `next build` imports every route module during
-        # page-data collection. `next build` reads .env.production; the
-        # standalone runtime does NOT read .env files (it uses the container env
-        # we inject), so this placeholder never reaches production.
+        # 2c. Build-time DB env. `next build` imports every route module during
+        # page-data collection: DB-backed templates need a non-empty URL, and
+        # older MAX snapshots call pgSchema with OMNIA_DB_SCHEMA. Pin the real
+        # tenant schema so those immutable snapshots never fall back to the
+        # Drizzle-forbidden public schema. Standalone runtime uses the container
+        # env injected below, so the placeholder URL never serves a request.
         if is_next_template:
-            (build_dir / ".env.production").write_text(
-                f"DATABASE_URL={_DB_PLACEHOLDER}\n", encoding="utf-8"
-            )
+            _write_next_build_env(build_dir, project_id)
 
         # 2d. Dockerfile.prod has `COPY /app/public ./public`; the template
         # ships no public/ and a generated project may lack one too — ensure it

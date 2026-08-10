@@ -3,16 +3,25 @@ import {
   boolean,
   integer,
   jsonb,
+  type PgTableFn,
   pgSchema,
+  pgTable,
   text,
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
 
-// Every generated app has a dedicated Postgres schema. Qualifying tables here
-// keeps drizzle-kit foreign keys inside that tenant instead of silently
-// targeting public.max_users when the connection uses a custom search_path.
-const appSchema = pgSchema(process.env.OMNIA_DB_SCHEMA || "public");
+// Managed apps use a dedicated Postgres schema. Local builds may omit the env
+// and therefore use Postgres' default public schema, which Drizzle represents
+// with pgTable rather than the deliberately forbidden pgSchema("public").
+const schemaName = process.env.OMNIA_DB_SCHEMA;
+const appTable: PgTableFn<string | undefined> =
+  schemaName && schemaName !== "public"
+    ? pgSchema(schemaName).table
+    : pgTable;
+const appSchema = {
+  table: appTable,
+};
 
 export const maxUsers = appSchema.table("max_users", {
   id: uuid("id").primaryKey().defaultRandom(),

@@ -33,6 +33,17 @@ def test_materialize_snapshot_rejects_path_escape(tmp_path: Path) -> None:
         builder._materialize_snapshot(tmp_path, {"../outside.ts": "bad"})
 
 
+def test_next_build_env_pins_the_project_schema(tmp_path: Path) -> None:
+    project_id = "11111111-2222-3333-4444-555555555555"
+
+    builder._write_next_build_env(tmp_path, project_id)
+
+    assert (tmp_path / ".env.production").read_text(encoding="utf-8") == (
+        f"DATABASE_URL={builder._DB_PLACEHOLDER}\n"
+        "OMNIA_DB_SCHEMA=proj_11111111\n"
+    )
+
+
 @pytest.mark.asyncio
 async def test_exact_snapshot_deploy_does_not_require_live_dev_container(
     tmp_path: Path,
