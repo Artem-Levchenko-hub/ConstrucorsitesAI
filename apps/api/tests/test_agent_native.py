@@ -2140,6 +2140,60 @@ async def test_stable_max_focuses_green_build_on_remaining_source_contract_gap(
     assert "getOmniaIntegrations" in str(calls[2]["convo"][0])
 
 
+@pytest.mark.asyncio
+async def test_stable_max_rejects_and_bounds_byte_identical_source_repairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    initial = "export default function ProductApp(){return <main>bakery</main>}"
+    turns = iter(
+        [
+            _turn(("write_file", {"path": entry, "content": initial})),
+            _turn(("build", {})),
+            _turn(("edit_file", {"path": entry, "search": "bakery", "replace": "bakery"})),
+            _turn(("edit_file", {"path": entry, "search": "bakery", "replace": "bakery"})),
+        ]
+    )
+    calls: list[dict[str, Any]] = []
+    builds = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append(json.loads(json.dumps(convo)))
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal builds
+        if action.name == "build":
+            builds += 1
+            return {"ok": True, "detail": "typecheck clean"}
+        return {"ok": True, "content": initial, "detail": "edited"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        if "getOmniaIntegrations" not in files.get(entry, ""):
+            return "Import getOmniaIntegrations before finishing."
+        return None
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build a connected bakery application.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=12,
+        stable_max_loop=True,
+    )
+
+    assert result.done is False
+    assert result.stop_reason == "noop_write_red"
+    assert result.files[entry] == initial
+    assert builds == 2  # initial build plus one local terminal proof, never one per no-op
+    assert len(calls) == 4
+    assert "byte-identical" in json.dumps(calls[3])
+
+
 def test_stable_max_source_gap_classifier_preserves_proof_lifecycle() -> None:
     assert agent_native._is_stable_max_source_gap(
         "The brief names an external integration; import getOmniaIntegrations."

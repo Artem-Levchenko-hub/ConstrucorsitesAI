@@ -52,6 +52,7 @@ _GATEWAY_TIMEOUT = httpx.Timeout(660.0, connect=30.0, write=60.0, pool=30.0)
 _CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside one cycle
 _MAX_PROVIDER_RECONNECT_CYCLES = 3
 _MAX_TRUNCATED_WRITE_ABORT_AT = 2
+_STABLE_MAX_NOOP_WRITE_ABORT_AT = 2
 _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
 # A fresh build needs at most a design spec plus two compact domain/support files
 # before composing the screen. A larger allowance was observed live producing
@@ -67,6 +68,10 @@ _STABLE_MAX_VISUAL_REPAIR_LIMIT = 8
 _HISTORY_PLACEHOLDER_MARKERS = (
     "[OMITTED FROM HISTORY:",
     "[OLDER TOOL RESULT OMITTED:",
+)
+_NOOP_WRITE_REJECTED = (
+    "The file is byte-identical after this edit, so it is not progress and must not be "
+    "compiled again. Make one concrete source change that resolves the reported gap."
 )
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
@@ -1498,6 +1503,7 @@ async def run_native_build(
     repair_context_compacted = False
     wrote_since_build = False
     no_write_turns = 0  # consecutive assistant turns with no successful write
+    noop_write_turns = 0  # consecutive turns whose attempted writes changed zero bytes
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
     successful_tools: dict[str, int] = {}
     successful_skill_ids: set[str] = set()
@@ -2086,6 +2092,7 @@ async def run_native_build(
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
             wrote_this_turn = False
+            noop_write_this_turn = False
             visual_proof_unavailable_this_turn = False
             visual_quality_exhausted_this_turn = False
             visual_finish_satisfied_this_turn = False
@@ -2394,6 +2401,24 @@ async def run_native_build(
                         obs = await execute(action)
                     except Exception as exc:  # a tool crash must not kill the build
                         obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
+                if (
+                    tool_executed
+                    and name in {"write_file", "edit_file"}
+                    and obs.get("ok")
+                    and action.path in written
+                ):
+                    post_edit_content = obs.get("content")
+                    if (
+                        isinstance(post_edit_content, str)
+                        and post_edit_content == written[action.path]
+                    ):
+                        # The live MAX canary exposed a paid source-repair loop
+                        # where the model returned the same ProductApp bytes,
+                        # the executor reported success, and a fresh build was
+                        # charged after every false edit. Preserve the existing
+                        # green proof and tell the model that nothing changed.
+                        obs = {"ok": False, "error": _NOOP_WRITE_REJECTED}
+                        noop_write_this_turn = True
                 # Emit AFTER execute so the step carries a `detail` — what the tool
                 # actually did (written content preview, build output, read result)
                 # — so the UI can let the user drill INTO a step and see inside it.
@@ -2654,8 +2679,10 @@ async def run_native_build(
             # branches (looped-but-serves / edit-no-op) already consume it.
             if wrote_this_turn:
                 no_write_turns = 0
+                noop_write_turns = 0
             else:
                 no_write_turns += 1
+                noop_write_turns = noop_write_turns + 1 if noop_write_this_turn else 0
                 _nudge_at = _STABLE_MAX_FIRST_WRITE_AT if stable_max_loop else _NO_WRITE_NUDGE_AT
                 if _nudge_at <= no_write_turns and (
                     unbounded_max_runtime or no_write_turns < _NO_WRITE_ABORT_AT
@@ -2676,6 +2703,17 @@ async def run_native_build(
                     )
                     if emit:
                         await emit("agent.stalled", {"step": step})
+            if stable_max_loop and noop_write_turns >= _STABLE_MAX_NOOP_WRITE_ABORT_AT:
+                log.warning(
+                    "agent_native.noop_write_abort",
+                    step=step,
+                    consecutive_noop_turns=noop_write_turns,
+                )
+                return await _finish_without_provider(
+                    steps=step + 1,
+                    reason="noop_write",
+                    detail="two consecutive source edits changed zero bytes",
+                )
             if _STABLE_MAX_PRODUCT_ENTRY in written:
                 turns_without_product_entry = 0
             else:
