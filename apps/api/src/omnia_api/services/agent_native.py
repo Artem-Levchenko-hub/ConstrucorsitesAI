@@ -2282,11 +2282,16 @@ async def run_native_build(
                             "Embed its returned URL with edit_file now."
                         ),
                     }
-                elif force_visual_repair and name not in {
-                    "write_file",
-                    "edit_file",
-                    "generate_media",
-                } and not (force_build_after_write and name == "build"):
+                elif (
+                    force_visual_repair
+                    and name
+                    not in {
+                        "write_file",
+                        "edit_file",
+                        "generate_media",
+                    }
+                    and not (force_build_after_write and name == "build")
+                ):
                     # After one turn to inspect the concrete visual verdict,
                     # further search only inflates paid context and can hit the
                     # provider rate limit before the known repair is applied.
@@ -2486,10 +2491,7 @@ async def run_native_build(
                 if (
                     tool_executed
                     and name == "see"
-                    and (
-                        obs.get("needs_fix")
-                        or (obs.get("verdict") and not obs.get("ok"))
-                    )
+                    and (obs.get("needs_fix") or (obs.get("verdict") and not obs.get("ok")))
                 ):
                     # Visual QA may be red because the rendered product made a
                     # failed browser request.  That is actionable product
@@ -2555,21 +2557,21 @@ async def run_native_build(
                 # component edits first, then being forced straight into build;
                 # its next globals.css edits were rejected, so the same defects
                 # survived every repair. Offer exactly one bounded stylesheet-
-                # or-build turn, then resume deterministic proof.
+                # or-build turn, then resume deterministic proof. A CSS-only
+                # repair is also a complete bounded attempt: the next rendered
+                # verdict decides whether markup still needs work. Keeping the
+                # old verdict active after a stylesheet edit traps the model in
+                # an unbounded CSS -> build -> CSS loop without another ``see``.
                 product_repaired = any(
                     path != "src/app/globals.css" for path in visual_repair_paths
                 )
-                if product_repaired:
-                    visual_repair_attempts += 1
-                    visual_feedback_step = None
-                    visual_context_compacted_step = None
-                    visual_finish_pending = "src/app/globals.css" not in visual_repair_paths
-                    visual_repair_paths.clear()
-                else:
-                    # CSS alone cannot fix copy, duplicated controls or missing
-                    # product structure. Compile it, then keep the exact verdict
-                    # active until a product component is actually changed.
-                    visual_finish_pending = False
+                visual_repair_attempts += 1
+                visual_feedback_step = None
+                visual_context_compacted_step = None
+                visual_finish_pending = (
+                    product_repaired and "src/app/globals.css" not in visual_repair_paths
+                )
+                visual_repair_paths.clear()
             elif force_visual_finish and visual_finish_satisfied_this_turn:
                 visual_finish_pending = False
 

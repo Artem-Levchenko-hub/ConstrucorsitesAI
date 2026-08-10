@@ -2056,7 +2056,7 @@ async def test_stable_max_focuses_green_build_on_remaining_source_contract_gap(
     entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
     calls: list[dict[str, Any]] = []
     executed: list[str] = []
-    initial = 'export default function ProductApp(){return <main>bakery</main>}'
+    initial = "export default function ProductApp(){return <main>bakery</main>}"
     fixed = (
         'import { getOmniaIntegrations } from "@/lib/omnia/integration-client"; '
         "export default function ProductApp(){ void getOmniaIntegrations(); "
@@ -2521,7 +2521,7 @@ async def test_stable_max_allows_one_css_finish_turn_after_component_visual_repa
 
 
 @pytest.mark.asyncio
-async def test_stable_max_css_only_visual_repair_keeps_product_feedback_active(
+async def test_stable_max_css_only_visual_repair_resumes_rendered_proof(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
@@ -2542,18 +2542,12 @@ async def test_stable_max_css_only_visual_repair_keeps_product_feedback_active(
                 )
             ),
             _turn(("build", {})),
-            _turn(
-                (
-                    "edit_file",
-                    {"path": entry, "search": "screen-first", "replace": "screen-polished"},
-                )
-            ),
-            _turn(("build", {})),
             _turn(("runtime_check", {"path": "/"})),
             _turn(("see", {"path": "/"})),
         ]
     )
     advertised: list[set[str]] = []
+    executed: list[tuple[str, str]] = []
     see_calls = 0
 
     async def fake_call(
@@ -2566,12 +2560,13 @@ async def test_stable_max_css_only_visual_repair_keeps_product_feedback_active(
 
     async def execute(action: Any) -> dict[str, Any]:
         nonlocal see_calls
+        executed.append((action.name, action.path))
         if action.name == "see":
             see_calls += 1
             return {
                 "ok": True,
                 "needs_fix": see_calls == 1,
-                "detail": "Fix duplicated CTA copy and the blue button color.",
+                "detail": "Fix the collapsed layout and broken bottom navigation styles.",
             }
         if action.name == "edit_file" and action.path == stylesheet:
             return {"ok": True, "content": "css-polished", "detail": "edited"}
@@ -2580,24 +2575,33 @@ async def test_stable_max_css_only_visual_repair_keeps_product_feedback_active(
         return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
 
     def complete(files: Any, evidence: Any) -> str | None:
-        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
-        return None if files and all(evidence.get(key) for key in required) else "proof missing"
+        if not files:
+            return "product missing"
+        if not evidence.get("build_after_write"):
+            return "Run build after the last write."
+        if not evidence.get("runtime_check_after_write"):
+            return "Run runtime_check after the last write."
+        if not evidence.get("see_after_write"):
+            return "Run see on / after the final product write."
+        return None
 
     result = await agent_native.run_native_build(
         system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
         task="Build a premium bakery ordering app.",
         execute=execute,
         completion_check=complete,
-        max_steps=16,
+        max_steps=8,
         stable_max_loop=True,
     )
 
     assert result.done is True
-    assert result.files[entry] == "screen-polished"
+    assert result.files[entry] == "screen-first"
     assert result.files[stylesheet] == "css-polished"
+    assert ("edit_file", stylesheet) in executed
     assert advertised[4] == {"write_file", "edit_file", "generate_media"}
     assert advertised[5] == {"build"}
-    assert advertised[6] == {"write_file", "edit_file", "generate_media"}
+    assert advertised[6] == {"runtime_check"}
+    assert advertised[7] == {"see"}
 
 
 @pytest.mark.asyncio
