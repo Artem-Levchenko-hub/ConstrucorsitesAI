@@ -16,6 +16,7 @@ tools stay advisory and must never turn a clean product into another model loop.
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 from collections.abc import Mapping
 
@@ -458,6 +459,50 @@ def _populated_fallback_catalog_name(content: str) -> str | None:
     return None
 
 
+_PRODUCT_IMPORT_RE = re.compile(
+    r"(?:\bfrom\s*|\bimport\s*)['\"](?P<module>[^'\"]+)['\"]",
+    re.IGNORECASE,
+)
+
+
+def _reachable_product_sources(files: Mapping[str, str]) -> dict[str, str]:
+    """Follow product imports so stale snapshot files cannot block completion."""
+
+    roots = [
+        path
+        for path in ("src/components/product/ProductApp.tsx", "src/app/page.tsx")
+        if path in files
+    ]
+    if not roots:
+        return {path: content for path, content in files.items() if _is_product_source(path)}
+
+    reachable: dict[str, str] = {}
+    pending = list(roots)
+    while pending:
+        path = pending.pop()
+        if path in reachable or path not in files or not _is_product_source(path):
+            continue
+        content = str(files[path])
+        reachable[path] = content
+        for match in _PRODUCT_IMPORT_RE.finditer(_strip_js_non_code(content, keep_strings=True)):
+            module = str(match.group("module") or "")
+            if module.startswith("@/"):
+                base = "src/" + module[2:]
+            elif module.startswith("."):
+                base = posixpath.normpath(posixpath.join(posixpath.dirname(path), module))
+            else:
+                continue
+            candidates = (
+                base,
+                *(base + suffix for suffix in _PRODUCT_SUFFIXES),
+                *(posixpath.join(base, "index" + suffix) for suffix in _PRODUCT_SUFFIXES),
+            )
+            resolved = next((candidate for candidate in candidates if candidate in files), None)
+            if resolved is not None and resolved not in reachable:
+                pending.append(resolved)
+    return reachable
+
+
 def _js_object_keys(content: str) -> set[str]:
     """Extract bare and quoted JS object keys, ignoring values and comments."""
 
@@ -834,8 +879,10 @@ def max_source_completion_gap(
             return "MAX design spec is missing product states: " + ", ".join(missing_states) + "."
 
     capabilities = requested_max_capabilities(prompt)
+    reachable_product_files = _reachable_product_sources(files)
     product_sources = [content for path, content in files.items() if _is_product_source(path)]
     product_source_blob = "\n".join(product_sources)
+    reachable_product_source_blob = "\n".join(reachable_product_files.values())
     corpus = product_source_blob.lower()
     product_source_views = [
         (source, _strip_js_non_code(source, keep_strings=False)) for source in product_sources
@@ -846,9 +893,7 @@ def max_source_completion_gap(
             return demo_rejection
     managed_config_gaps: list[str] = []
     if _managed_max_content_is_populated(files):
-        for path, content in files.items():
-            if not _is_product_source(path):
-                continue
+        for content in reachable_product_files.values():
             fallback_name = _populated_fallback_catalog_name(content)
             if fallback_name:
                 managed_config_gaps.append(
@@ -856,13 +901,13 @@ def max_source_completion_gap(
                     f"still contains populated {fallback_name}. Remove the populated fallback "
                     "and render omniaMaxConfig.content so mapping failures stay visible."
                 )
-        if _UNSAFE_FORMATTED_PRICE_NUMBER_RE.search(product_source_blob):
+        if _UNSAFE_FORMATTED_PRICE_NUMBER_RE.search(reachable_product_source_blob):
             managed_config_gaps.append(
                 "Managed catalog prices are formatted strings such as `149 ₽`, but product "
                 "source converts a string price with Number(...). Normalize the currency text "
                 "before conversion (or use parseFloat safely) so managed items are not dropped."
             )
-    if _UNSAFE_MANAGED_CONFIG_CAST_RE.search(product_source_blob):
+    if _UNSAFE_MANAGED_CONFIG_CAST_RE.search(reachable_product_source_blob):
         managed_config_gaps.append(
             "Product source casts omniaMaxConfig to any/unknown, which hid an invalid nested "
             "config render. Use the exported OmniaMaxConfig types and render support fields "

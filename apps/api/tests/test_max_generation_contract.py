@@ -461,6 +461,9 @@ const FALLBACK_MENU = [
 
 def test_managed_catalog_cannot_be_hidden_by_populated_fallback() -> None:
     files = _complete_single_file()
+    files["src/app/page.tsx"] = (
+        'import "../components/product/catalog";\n' + files["src/app/page.tsx"]
+    )
     files["src/lib/omnia/max-config.ts"] = """
 export const omniaMaxConfig = {
   content: [{ id: "bread", title: "Бородинский хлеб", price: "149 ₽", active: true }],
@@ -493,6 +496,9 @@ const FALLBACK_MENU = [
 
 def test_managed_formatted_price_must_not_use_number_directly() -> None:
     files = _complete_single_file()
+    files["src/app/page.tsx"] = (
+        'import "../components/product/catalog";\n' + files["src/app/page.tsx"]
+    )
     files["src/lib/omnia/max-config.ts"] = """
 export const omniaMaxConfig = {
   content: [{ id: "bread", title: "Бородинский хлеб", price: "149 ₽", active: true }],
@@ -510,6 +516,25 @@ export function mapItem(raw: { title: string; price: string | number }) {
     assert gap is not None
     assert "formatted strings" in gap
     assert "Number" in gap
+
+
+def test_unreferenced_stale_fallback_does_not_block_repaired_product() -> None:
+    files = _complete_single_file()
+    files["src/lib/omnia/max-config.ts"] = """
+export const omniaMaxConfig = {
+  content: [{ id: "bread", title: "Бородинский хлеб", price: "149 ₽", active: true }],
+};
+"""
+    files["src/components/product/catalog.ts"] = """
+const FALLBACK_MENU = [
+  { id: "stale", name: "Старый товар", price: 320 },
+];
+export function stale(raw: { price: string }) {
+  return typeof raw.price === "string" ? Number(raw.price) : raw.price;
+}
+"""
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
 
 
 def test_managed_config_cannot_be_cast_to_any() -> None:
