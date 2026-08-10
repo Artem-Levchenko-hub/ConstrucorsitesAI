@@ -149,6 +149,12 @@ _SEEDED_USER_RECORD_KEY_RE = re.compile(
     r"workoutId|appointmentId|messageId)",
     re.IGNORECASE,
 )
+_SEEDED_LIFECYCLE_KEY_RE = re.compile(
+    r"(?:userId|maxUserId|createdAt|completedAt|happenedAt|performedAt|finishedAt|"
+    r"startedAt|lastCompletedAt|date|status|completed|done|progress|streak|bookingId|"
+    r"orderId|workoutId|appointmentId|messageId)",
+    re.IGNORECASE,
+)
 _SEEDED_PROFILE_RE = re.compile(
     r"\b(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)"
     r"\s*(?::[^=;\n]+)?=\s*\{[^}]{0,1200}"
@@ -180,6 +186,7 @@ _STATIC_CATALOG_NAME_PARTS = (
     "dict",
     "dish",
     "exercise",
+    "item",
     "label",
     "library",
     "lookup",
@@ -645,8 +652,18 @@ def max_demo_data_rejection(path: str, content: str) -> str | None:
         # empty catalog while still rejecting fake completed records.
         name_folded = name.casefold()
         static_reference = any(part in name_folded for part in _STATIC_CATALOG_NAME_PARTS)
+        ui_lookup = any(
+            part in name_folded for part in ("dict", "label", "lookup", "mapping")
+        )
         user_activity_name = any(part in name_folded for part in _USER_ACTIVITY_NAME_PARTS)
         fake_collection_name = any(part in name_folded for part in _FAKE_COLLECTION_NAME_PARTS)
+        if (
+            ui_lookup
+            and not user_activity_name
+            and not fake_collection_name
+            and not any(_SEEDED_LIFECYCLE_KEY_RE.fullmatch(key) for key in collection_keys)
+        ):
+            continue
         if (
             static_reference
             and not user_activity_name

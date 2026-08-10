@@ -463,7 +463,7 @@ const FALLBACK_MENU = [
 def test_ui_lookup_arrays_are_not_mistaken_for_user_records(name: str) -> None:
     content = f"""
 const {name} = [
-  {{ id: "price", label: "Цена", price: 149 }},
+  {{ id: "price", label: "Цена", price: 149, email: "Электронная почта" }},
 ];
 """
 
@@ -481,6 +481,16 @@ const {name} = [
     assert "demo user data" in str(
         max_demo_data_rejection("src/components/product/ProductApp.tsx", content)
     ).lower()
+
+
+def test_fallback_items_are_reference_content_at_write_time() -> None:
+    content = """
+const FALLBACK_ITEMS = [
+  { id: "bread", title: "Хлеб", price: 149 },
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/ProductApp.tsx", content) is None
 
 
 def test_managed_catalog_cannot_be_hidden_by_populated_fallback() -> None:
