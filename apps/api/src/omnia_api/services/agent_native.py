@@ -59,12 +59,12 @@ _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
 # competing types/catalog copies instead of the product entry.
 _STABLE_MAX_SUPPORT_FILE_LIMIT = 3
 _STABLE_MAX_PREWRITE_INSPECTION_LIMIT = 8
-# One initial visual verdict plus eight evidence-led repair passes gives a dense
-# mobile product enough room to cross the >=8 production floor without falling
-# back to the gateway's larger 160-request financial fuse. Live 360/390 QA showed
-# that five passes could finish known defects yet stop immediately before the
-# corrected render was re-proven.
-_STABLE_MAX_VISUAL_REPAIR_LIMIT = 8
+# One initial visual verdict plus two evidence-led repair passes is the paid QA
+# ceiling. Live canaries showed that allowing eight passes can spend hundreds of
+# roubles while a vision/model disagreement repeatedly redesigns the same screen.
+# A third red verdict is preserved honestly for a later targeted edit instead of
+# charging for five more speculative rewrites.
+_STABLE_MAX_VISUAL_REPAIR_LIMIT = 2
 _HISTORY_PLACEHOLDER_MARKERS = (
     "[OMITTED FROM HISTORY:",
     "[OLDER TOOL RESULT OMITTED:",
@@ -1143,6 +1143,11 @@ _MAX_REFERENCE_PREAMBLE = (
     "integration-client, webhook и закрытые Studio-файлы. Пользовательские данные "
     "бери из MAX и управляемого серверного хранилища; не зашивай демо-профили, "
     "историю, метрики или секреты. Не создавай параллельную email-регистрацию. "
+    "Но определения товаров, услуг, тарифов, категорий и вариантов, прямо запрошенные "
+    "в брифе, — это содержимое продукта, а не фальшивые пользовательские данные. Если "
+    "управляемый config.content пуст, добавь небольшой честный fallback-каталог по брифу "
+    "с названиями и ценами, чтобы первый запуск показывал рабочий сценарий; при наличии "
+    "config.content используй его. Никогда не подменяй этим реальные заказы или историю. "
     "src/app/globals.css — обычный глобальный CSS, не CSS Module: никогда не используй "
     "в нём `:global(...)`.\n\n"
     "Надёжный цикл: минимально прочитай нужные файлы → пиши полные продуктовые файлы "
@@ -1221,7 +1226,10 @@ def _stable_max_entry_focus_task(task: str, written: Mapping[str, str]) -> str:
         "composition. Import useful modules when their exports are clear; otherwise keep "
         "the complete user-facing UI in ProductApp. Stay below 24000 output characters. "
         "Include all requested screens, navigation, loading/empty/error/success states, and "
-        "real interactions; this is a full application, not a placeholder.\n\n"
+        "real interactions; this is a full application, not a placeholder. Requested product "
+        "definitions such as catalog items, services, plans, categories and prices are valid "
+        "reference content: provide a compact brief-specific fallback when managed content is "
+        "empty, but never invent user accounts, orders, history, metrics or success records.\n\n"
         f"ORIGINAL TASK\n{task}\n\n"
         "ALREADY WRITTEN SUPPORT\n" + "\n\n".join(support)
     )
@@ -1262,6 +1270,10 @@ def _stable_max_visual_repair_task(
         "choices and keep the action in flow, or reserve an opaque dock plus an actual spacer. "
         "A preview identity can be absent; render neutral copy and never expose synthetic "
         "Пользователь/User/Guest names. "
+        "Catalog, menu, service or plan definitions explicitly requested in the brief are "
+        "product reference content, not fake user records. If managed content is empty, render "
+        "a compact brief-specific fallback with real labels and prices instead of leaving the "
+        "requested primary screen empty. "
         "Prefer exact edits; keep total tool content below 24000 characters. Do not add fake "
         "user history, completed activity, statistics, testimonials, or decorative filler.\n\n"
         f"ORIGINAL TASK\n{task[:12_000]}\n\n"
@@ -2728,7 +2740,7 @@ async def run_native_build(
                 return AgentResult(
                     done=False,
                     summary=(
-                        "Визуальная проверка всё ещё ниже production-уровня после восьми "
+                        "Визуальная проверка всё ещё ниже production-уровня после двух "
                         "сфокусированных исправлений. Результат не опубликован, чтобы не "
                         "выдать посредственный интерфейс за готовое приложение."
                     ),
