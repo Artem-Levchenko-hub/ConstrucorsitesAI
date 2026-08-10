@@ -210,7 +210,8 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "_seg <" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
-    assert "not _agent_res.done or _bounded_stop" in source
+    assert "_preserve_verified_max_progress" in source
+    assert "and not _preserve_green_max_progress" in source
     assert "if path not in MAX_MODEL_LOCKED_FILES" in source
     assert "max_model_path_rejection(action.path)" in source
     assert "_max_runtime_probe_is_green" in source
@@ -539,6 +540,36 @@ def test_unsafe_agent_stop_never_exposes_partial_files_for_publication() -> None
         {"src/app/page.tsx": "complete rewrite"},
         must_restore_previous=False,
     ) == {"src/app/page.tsx": "complete rewrite"}
+
+
+def test_green_max_edit_is_preserved_only_as_verified_continuation() -> None:
+    from omnia_api.routers.messages import _preserve_verified_max_progress
+
+    files = {"src/components/product/ProductApp.tsx": "green candidate"}
+    assert _preserve_verified_max_progress(
+        project_template="max_miniapp",
+        is_edit=True,
+        stop_reason="max_steps_green",
+        generated_files=files,
+    )
+    assert not _preserve_verified_max_progress(
+        project_template="max_miniapp",
+        is_edit=False,
+        stop_reason="max_steps_green",
+        generated_files=files,
+    )
+    assert not _preserve_verified_max_progress(
+        project_template="max_miniapp",
+        is_edit=True,
+        stop_reason="max_steps_red",
+        generated_files=files,
+    )
+    assert not _preserve_verified_max_progress(
+        project_template="max_miniapp",
+        is_edit=True,
+        stop_reason="max_steps_green",
+        generated_files={},
+    )
 
 
 def test_hint_none_on_clean_or_unrelated_error() -> None:

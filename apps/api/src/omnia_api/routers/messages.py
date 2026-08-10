@@ -2686,6 +2686,40 @@ def _publishable_agent_files(
     return _merge_seeded_agent_files(seeded_files, generated_files)
 
 
+_GREEN_BOUNDED_MAX_STOPS = frozenset(
+    {
+        "max_steps_green",
+        "provider_stopped_green",
+        "spend_budget_green",
+        "paid_call_ambiguous_green",
+        "provider_rejected_green",
+    }
+)
+
+
+def _preserve_verified_max_progress(
+    *,
+    project_template: str,
+    is_edit: bool,
+    stop_reason: str,
+    generated_files: Mapping[str, str],
+) -> bool:
+    """Keep a green MAX edit so the next turn can finish visual polish.
+
+    A green bounded stop is not product completion, but discarding it makes a
+    follow-up restart from the older, visibly worse snapshot. Independent
+    typecheck/runtime verification below still rolls back any actually broken
+    candidate before canonical publication.
+    """
+
+    return (
+        project_template == "max_miniapp"
+        and is_edit
+        and bool(generated_files)
+        and stop_reason in _GREEN_BOUNDED_MAX_STOPS
+    )
+
+
 def _max_runtime_checkpoint_path(path: str) -> bool:
     """Keep only files a MAX build may mutate outside the managed runtime."""
 
@@ -4438,9 +4472,20 @@ async def _process_prompt(
                 "provider_rejected_green",
                 "provider_rejected_red",
             }
-            # A forced stop is never proof of product completion. Preserve the
-            # previous green snapshot for every stack, including MAX.
-            _must_restore_previous = not _agent_res.done or _bounded_stop
+            # A forced stop is never proof of product completion. A build-green
+            # MAX edit is nevertheless a safe continuation checkpoint: the
+            # independent typecheck/runtime gate below still rolls back a broken
+            # candidate, while preserving it avoids restarting visual polish
+            # from the older snapshot on every bounded run.
+            _preserve_green_max_progress = _preserve_verified_max_progress(
+                project_template=project_template,
+                is_edit=_is_edit,
+                stop_reason=_agent_res.stop_reason,
+                generated_files=_agent_res.files,
+            )
+            _must_restore_previous = (
+                not _agent_res.done or _bounded_stop
+            ) and not _preserve_green_max_progress
             _first_max_without_product = (
                 project_template == "max_miniapp" and not _max_has_generated_snapshot
             )
