@@ -3005,6 +3005,7 @@ async def test_max_runtime_stops_on_permanent_provider_rejection_without_retryin
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = {"provider": 0, "build": 0}
+    events: list[tuple[str, dict[str, Any]]] = []
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
@@ -3022,10 +3023,14 @@ async def test_max_runtime_stops_on_permanent_provider_rejection_without_retryin
     def incomplete(_files: Any, _evidence: Any) -> str | None:
         return "product source is incomplete"
 
+    async def emit(event: str, data: dict[str, Any]) -> None:
+        events.append((event, data))
+
     res = await agent_native.run_native_build(
         system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
         task="build the complete app",
         execute=execute,
+        emit=emit,
         completion_check=incomplete,
         max_steps=None,
     )
@@ -3033,6 +3038,12 @@ async def test_max_runtime_stops_on_permanent_provider_rejection_without_retryin
     assert calls == {"provider": 1, "build": 1}
     assert res.done is False
     assert res.stop_reason == "provider_rejected_red"
+    assert any(
+        event == "agent.step"
+        and data.get("action") == "provider_rejected"
+        and "HTTP 402" in str(data.get("detail"))
+        for event, data in events
+    )
 
 
 @pytest.mark.asyncio

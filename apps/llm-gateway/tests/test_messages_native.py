@@ -6,7 +6,7 @@ import json
 from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID
 
 import httpx
@@ -28,6 +28,19 @@ def app(neutralize_lifespan: None) -> FastAPI:
 def client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("invalid_request", "invalid_request"),
+        ("auth.failed", "auth.failed"),
+        ("credential-like value", ""),
+        ("x" * 81, ""),
+    ],
+)
+def test_upstream_error_type_is_safe_for_logs(raw: str, expected: str) -> None:
+    assert messages_native._safe_upstream_error_type(raw) == expected
 
 
 @pytest.fixture(autouse=True)
@@ -517,7 +530,9 @@ def test_native_endpoint_releases_reservation_after_explicit_upstream_rejection(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     release = AsyncMock(return_value=None)
+    warning = Mock()
     monkeypatch.setattr(messages_native.billing, "release_native_run_reservation", release)
+    monkeypatch.setattr(messages_native.log, "warning", warning)
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
@@ -549,6 +564,12 @@ def test_native_endpoint_releases_reservation_after_explicit_upstream_rejection(
     assert response.status_code == 400
     release.assert_awaited_once_with(UUID("99999999-9999-9999-9999-999999999999"))
     messages_native.billing.charge.assert_not_awaited()
+    warning.assert_called_once_with(
+        "native_messages.upstream_rejected",
+        run_id="33333333-3333-3333-3333-333333333333",
+        status_code=400,
+        upstream_error_type="invalid_request",
+    )
 
 
 def test_native_endpoint_keeps_reservation_after_ambiguous_upstream_failure(

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID, uuid4
@@ -346,6 +347,11 @@ def _non_negative_int(value: Any) -> int:
         return 0
 
 
+def _safe_upstream_error_type(value: Any) -> str:
+    raw = str(value or "")
+    return raw if re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", raw) else ""
+
+
 def _estimate_native_cost(model: str, payload: dict[str, Any]) -> Decimal:
     """Conservative enough to stop before the wallet floor, without reserving
     the entire output ceiling on every tool turn."""
@@ -599,7 +605,23 @@ async def native_messages(request: Request) -> Response:
             upstream_error = upstream.json().get("error", {})
             message = upstream_error.get("message") or upstream.text[:300]
         except (ValueError, AttributeError):
+            upstream_error = {}
             message = upstream.text[:300]
+        # Keep provider diagnostics useful without copying an upstream message
+        # into logs: it can contain request fragments or credentials. Numeric
+        # status + provider error type are enough to distinguish auth, payload,
+        # throttling and service failures during a production canary.
+        upstream_error_type = _safe_upstream_error_type(
+            upstream_error.get("type") or upstream_error.get("code")
+            if isinstance(upstream_error, dict)
+            else ""
+        )
+        log.warning(
+            "native_messages.upstream_rejected",
+            run_id=str(run_id),
+            status_code=upstream.status_code,
+            upstream_error_type=upstream_error_type,
+        )
         error_type = (
             "paid_call_ambiguous"
             if upstream.status_code >= 500 or upstream.status_code in {408, 425, 429}
