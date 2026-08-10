@@ -1928,6 +1928,110 @@ async def test_stable_max_forces_runtime_and_visual_proof_after_green_build(
 
 
 @pytest.mark.asyncio
+async def test_stable_max_focuses_green_build_on_remaining_source_contract_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    calls: list[dict[str, Any]] = []
+    executed: list[str] = []
+    initial = 'export default function ProductApp(){return <main>bakery</main>}'
+    fixed = (
+        'import { getOmniaIntegrations } from "@/lib/omnia/integration-client"; '
+        "export default function ProductApp(){ void getOmniaIntegrations(); "
+        "return <main>bakery</main>}"
+    )
+    turns = iter(
+        [
+            _turn(("write_file", {"path": entry, "content": initial})),
+            _turn(("build", {})),
+            # A stale cached response tries to inspect again. The source-gap
+            # executor must reject it without touching the project.
+            _turn(("read_file", {"path": entry})),
+            _turn(
+                (
+                    "edit_file",
+                    {"path": entry, "search": initial, "replace": fixed},
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"})),
+            _turn(("see", {"path": "/"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "convo": json.loads(json.dumps(convo)),
+                "tools": {str(tool["name"]) for tool in kwargs["tools"]},
+            }
+        )
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        executed.append(action.name)
+        if action.name == "edit_file":
+            return {"ok": True, "content": fixed, "detail": "integration added"}
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "clean",
+            "needs_fix": False,
+        }
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        source = files.get(entry, "")
+        if not source:
+            return "source missing"
+        if "getOmniaIntegrations" not in source:
+            return (
+                "The brief names an external integration. Import and await "
+                "getOmniaIntegrations from @/lib/omnia/integration-client."
+            )
+        if not evidence.get("runtime_check_after_write"):
+            return "Run runtime_check on the finished product after the last source write."
+        if not evidence.get("see_after_write"):
+            return "Run see once through the signed MAX preview after the last source write."
+        return None
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build a connected bakery application.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=12,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert result.files[entry] == fixed
+    assert "read_file" not in executed
+    assert calls[2]["tools"] == {"write_file", "edit_file"}
+    assert calls[3]["tools"] == {"write_file", "edit_file"}
+    assert len(calls[2]["convo"]) == 1
+    assert "[FOCUSED SOURCE CONTRACT REPAIR]" in str(calls[2]["convo"][0])
+    assert "getOmniaIntegrations" in str(calls[2]["convo"][0])
+
+
+def test_stable_max_source_gap_classifier_preserves_proof_lifecycle() -> None:
+    assert agent_native._is_stable_max_source_gap(
+        "The brief names an external integration; import getOmniaIntegrations."
+    )
+    assert not agent_native._is_stable_max_source_gap("proof missing")
+    assert not agent_native._is_stable_max_source_gap(
+        "Read visual-evaluation after the first rendered see."
+    )
+    assert not agent_native._is_stable_max_source_gap(
+        "Run runtime_check on the finished product after the last source write."
+    )
+
+
+@pytest.mark.asyncio
 async def test_stable_max_reopens_editing_after_actionable_visual_feedback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

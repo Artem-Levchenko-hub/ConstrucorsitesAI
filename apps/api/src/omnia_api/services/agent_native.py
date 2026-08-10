@@ -482,6 +482,11 @@ _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
         "cache_control": _CACHE,
     }
 ]
+_STABLE_MAX_SOURCE_REPAIR_REQUIRED = (
+    "A concrete source-contract gap remains after a clean build. Stop reading or "
+    "polishing unrelated UI. Write or edit the current product now to fix exactly "
+    "the stated gap, then rebuild."
+)
 _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED: list[dict[str, Any]] = [
     _tool(
         "edit_file",
@@ -1252,6 +1257,60 @@ def _stable_max_visual_repair_task(
     )
 
 
+def _stable_max_source_repair_task(
+    task: str,
+    gap: str,
+    written: Mapping[str, str],
+) -> str:
+    """Compact a green build around one objective source-contract gap."""
+
+    preferred = [
+        _STABLE_MAX_PRODUCT_ENTRY,
+        "src/app/globals.css",
+        ".omnia/max-design-spec.json",
+    ]
+    paths = [*preferred, *(path for path in written if path not in preferred)]
+    sources: list[str] = []
+    remaining = 72_000
+    for path in paths:
+        content = written.get(path, "")
+        if not content or remaining <= 0:
+            continue
+        excerpt = content[:remaining]
+        remaining -= len(excerpt)
+        sources.append(f"CURRENT `{path}`\n```\n{excerpt}\n```")
+    return (
+        "[FOCUSED SOURCE CONTRACT REPAIR]\n"
+        "The application already compiles. One objective production-contract gap remains "
+        "and the current source is included below. Do not read, list, grep, browse, plan, "
+        "or explain. Your next action must write_file or edit_file and fix exactly this gap "
+        "without redesigning working screens. Use the managed MAX integration primitives "
+        "named in the gap; keep provider-connected and unavailable states honest. Preserve "
+        "existing behavior, visual quality, accessibility, and real persisted actions. "
+        "Keep total tool content below 24000 characters. After the edit, build will be "
+        "required automatically.\n\n"
+        f"ORIGINAL TASK\n{task[:12_000]}\n\n"
+        f"EXACT CONTRACT GAP\n{gap[:8_000]}\n\n"
+        "CURRENT PRODUCT SOURCE\n" + "\n\n".join(sources)
+    )
+
+
+def _is_stable_max_source_gap(gap: str | None) -> bool:
+    """Distinguish editable contract debt from skill/runtime/visual proof debt."""
+
+    if not gap:
+        return False
+    lowered = gap.casefold()
+    return not (
+        "src/app/globals.css" in gap
+        or "proof" in lowered
+        or lowered.startswith("read required max capability packs")
+        or lowered.startswith("run runtime_check")
+        or lowered.startswith("run see")
+        or lowered.startswith("read visual-evaluation")
+    )
+
+
 async def _call_messages(
     client: httpx.AsyncClient,
     url: str,
@@ -1441,6 +1500,7 @@ async def run_native_build(
     visual_repair_attempts = 0
     visual_repair_paths: set[str] = set()
     visual_finish_pending = False
+    source_repair_context_gap: str | None = None
     last_green_see_step: int | None = None
     pending_visual_evaluation_step: int | None = None
     visual_evaluation_ready = False
@@ -1692,6 +1752,25 @@ async def run_native_build(
                 and completion_gap is not None
                 and "src/app/globals.css" in completion_gap
             )
+            force_source_repair = (
+                stable_max_loop
+                and last_build_ok is True
+                and not wrote_since_build
+                and visual_feedback_step is None
+                and _is_stable_max_source_gap(completion_gap)
+            )
+            if force_source_repair and source_repair_context_gap != completion_gap:
+                convo = [
+                    {
+                        "role": "user",
+                        "content": _stable_max_source_repair_task(
+                            task,
+                            str(completion_gap),
+                            written,
+                        ),
+                    }
+                ]
+                source_repair_context_gap = completion_gap
             force_proof = (
                 stable_max_loop
                 and last_build_ok is True
@@ -1713,6 +1792,7 @@ async def run_native_build(
                 or force_visual_finish
                 or force_build_after_write
                 or force_style_write
+                or force_source_repair
                 or force_repair_write
                 or force_repair_verify
                 or force_progress
@@ -1745,6 +1825,8 @@ async def run_native_build(
                         if force_build_after_write
                         else _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED
                         if force_style_write
+                        else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
+                        if force_source_repair
                         else _STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED
                         if force_runtime_proof
                         else _STABLE_MAX_SEE_ONLY_TOOLS_CACHED
@@ -2013,6 +2095,8 @@ async def run_native_build(
                                     if force_build_after_write
                                     else _STABLE_MAX_STYLE_REQUIRED
                                     if force_style_write
+                                    else _STABLE_MAX_SOURCE_REPAIR_REQUIRED
+                                    if force_source_repair
                                     else _STABLE_MAX_PROGRESS_REQUIRED
                                     if force_progress
                                     else _STABLE_MAX_REPAIR_VERIFY_REQUIRED
@@ -2121,6 +2205,8 @@ async def run_native_build(
                     if force_visual_finish
                     else {"write_file"}
                     if force_style_write
+                    else {"write_file", "edit_file"}
+                    if force_source_repair
                     else {"read_file", "edit_file", "build"}
                     if force_repair_verify
                     else {"read_file", "edit_file"}
@@ -2224,6 +2310,8 @@ async def run_native_build(
                             if force_build_after_write
                             else _STABLE_MAX_STYLE_REQUIRED
                             if force_style_write
+                            else _STABLE_MAX_SOURCE_REPAIR_REQUIRED
+                            if force_source_repair
                             else _STABLE_MAX_PROGRESS_REQUIRED
                             if force_progress
                             else _STABLE_MAX_REPAIR_VERIFY_REQUIRED
@@ -2332,6 +2420,8 @@ async def run_native_build(
                     wrote_this_turn = True
                     if force_visual_finish and action.path == "src/app/globals.css":
                         visual_finish_satisfied_this_turn = True
+                    if force_source_repair:
+                        source_repair_context_gap = None
                     # Tool calls in one assistant response are planned before
                     # any result is returned. Only a write from a LATER turn can
                     # have applied the visual critique.
