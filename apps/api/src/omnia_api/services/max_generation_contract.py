@@ -597,6 +597,94 @@ def _has_managed_named_import(content: str, symbol: str, module: str) -> bool:
     return False
 
 
+def _js_call_argument_segments(code: str, callee: str) -> list[str]:
+    """Return balanced argument segments for simple JavaScript calls."""
+
+    segments: list[str] = []
+    for match in re.finditer(rf"\b{re.escape(callee)}\s*\(", code, re.IGNORECASE):
+        opening = code.find("(", match.start(), match.end())
+        if opening < 0:
+            continue
+        depth = 0
+        for index in range(opening, min(len(code), opening + 12000)):
+            char = code[index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    segments.append(code[opening + 1 : index])
+                    break
+    return segments
+
+
+def _js_named_async_bodies(code: str) -> list[tuple[str, str]]:
+    """Return names and balanced bodies of common async JavaScript loaders."""
+
+    declarations = (
+        re.compile(
+            r"(?:const|let)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
+            r"(?:usecallback\s*\(\s*)?async\s*\([^)]*\)\s*=>\s*\{",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"async\s+function\s+(?P<name>[A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
+            re.IGNORECASE,
+        ),
+    )
+    bodies: list[tuple[str, str]] = []
+    for declaration in declarations:
+        for match in declaration.finditer(code):
+            opening = code.rfind("{", match.start(), match.end())
+            if opening < 0:
+                continue
+            depth = 0
+            for index in range(opening, min(len(code), opening + 12000)):
+                char = code[index]
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        bodies.append((match.group("name"), code[opening + 1 : index]))
+                        break
+    return bodies
+
+
+def _has_mounted_max_action_restore(source: str, code: str) -> bool:
+    """Recognise direct and callback-based reload restoration.
+
+    Production MAX apps commonly keep the async loader in ``useCallback`` and
+    invoke it from ``useEffect``. Requiring the literal ``await
+    getMaxActions()`` to appear inside the effect body rejected that correct
+    React pattern and caused repeated paid source-repair turns.
+    """
+
+    if not _has_managed_named_import(
+        source,
+        "getMaxActions",
+        "@/lib/omnia/integration-client",
+    ):
+        return False
+    effect_segments = _js_call_argument_segments(code, "useEffect")
+    if any(
+        re.search(r"\bawait\s+getmaxactions\s*\(", segment, re.IGNORECASE)
+        for segment in effect_segments
+    ):
+        return True
+
+    for name, body in _js_named_async_bodies(code):
+        if not re.search(r"\bawait\s+getmaxactions\s*\(", body, re.IGNORECASE):
+            continue
+        loader = re.escape(name)
+        if any(
+            re.search(rf"\b(?:void\s+)?{loader}\s*\(", segment, re.IGNORECASE)
+            for segment in effect_segments
+        ):
+            return True
+    return False
+
+
 def _is_product_source(path: str) -> bool:
     """Return whether a file is model-owned product UI/behaviour.
 
@@ -652,14 +740,11 @@ def max_demo_data_rejection(path: str, content: str) -> str | None:
         # empty catalog while still rejecting fake completed records.
         name_folded = name.casefold()
         static_reference = any(part in name_folded for part in _STATIC_CATALOG_NAME_PARTS)
-        ui_lookup = any(
-            part in name_folded for part in ("dict", "label", "lookup", "mapping")
-        )
+        ui_lookup = any(part in name_folded for part in ("dict", "label", "lookup", "mapping"))
         user_activity_name = any(part in name_folded for part in _USER_ACTIVITY_NAME_PARTS)
         fake_collection_name = any(part in name_folded for part in _FAKE_COLLECTION_NAME_PARTS)
-        commercial_reference = (
-            "price" in collection_keys
-            and bool({"label", "name", "title"}.intersection(collection_keys))
+        commercial_reference = "price" in collection_keys and bool(
+            {"label", "name", "title"}.intersection(collection_keys)
         )
         if (
             ui_lookup
@@ -1078,13 +1163,7 @@ def max_source_completion_gap(
         for source, code in product_source_views
     )
     managed_restore_call = any(
-        _has_managed_named_import(source, "getMaxActions", "@/lib/omnia/integration-client")
-        and re.search(
-            r"\buseeffect\s*\(.{0,1600}?\bawait\s+getmaxactions\s*\(",
-            code,
-            re.IGNORECASE | re.DOTALL,
-        )
-        for source, code in product_source_views
+        _has_mounted_max_action_restore(source, code) for source, code in product_source_views
     )
     if persistence_required and not managed_create_call:
         return (

@@ -478,9 +478,10 @@ const SIZES = [
 def test_commercial_shape_cannot_hide_user_orders() -> None:
     content = 'const ORDERS = [{ id: "order-1", name: "Флэт уайт", price: 290 }];'
 
-    assert "demo user data" in str(
-        max_demo_data_rejection("src/components/product/ProductApp.tsx", content)
-    ).lower()
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/ProductApp.tsx", content)).lower()
+    )
 
 
 @pytest.mark.parametrize("name", ["supportLabels", "dict", "statusLookup", "fieldMapping"])
@@ -502,9 +503,10 @@ const {name} = [
 ];
 """
 
-    assert "demo user data" in str(
-        max_demo_data_rejection("src/components/product/ProductApp.tsx", content)
-    ).lower()
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/ProductApp.tsx", content)).lower()
+    )
 
 
 def test_fallback_items_are_reference_content_at_write_time() -> None:
@@ -771,6 +773,45 @@ def test_completion_requires_verified_identity_and_read_after_write() -> None:
         "    void restore();\n"
         "  }, []);\n",
         "  void getMaxActions;\n",
+    )
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+    assert "does not restore it after reload" in str(gap)
+
+
+def test_completion_accepts_usecallback_loader_mounted_from_useeffect() -> None:
+    files = _complete_single_file()
+    page = files["src/app/page.tsx"].replace(
+        'import { useEffect, useState } from "react";',
+        'import { useCallback, useEffect, useState } from "react";',
+    )
+    page = page.replace(
+        "  useEffect(() => {\n"
+        "    async function restore() { await getMaxActions(); }\n"
+        "    void restore();\n"
+        "  }, []);\n",
+        "  const loadHistory = useCallback(async () => {\n"
+        "    const result = await getMaxActions();\n"
+        "    void result.actions;\n"
+        "  }, []);\n"
+        "  useEffect(() => {\n"
+        "    void loadHistory();\n"
+        "  }, [loadHistory]);\n",
+    )
+    files["src/app/page.tsx"] = page
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+    files["src/app/page.tsx"] = page.replace("void loadHistory();", "void loadHistory;")
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+    assert "does not restore it after reload" in str(gap)
+
+    files["src/app/page.tsx"] = page.replace(
+        "    const result = await getMaxActions();\n    void result.actions;",
+        "    void 0;\n"
+        "  }, []);\n"
+        "  const unrelatedLoader = async () => {\n"
+        "    const result = await getMaxActions();\n"
+        "    void result.actions;",
     )
     gap = max_source_completion_gap(COMPLEX_BRIEF, files)
     assert "does not restore it after reload" in str(gap)
