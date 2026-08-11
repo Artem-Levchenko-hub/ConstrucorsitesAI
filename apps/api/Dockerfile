@@ -3,7 +3,8 @@ FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=300
 # UV_COMPILE_BYTECODE intentionally disabled — on small VPS the parallel .pyc
 # compilation step regularly timed out (>60s on a single .py file). Cold start
 # is a bit slower without precompiled .pyc, but each module is bytecoded on
