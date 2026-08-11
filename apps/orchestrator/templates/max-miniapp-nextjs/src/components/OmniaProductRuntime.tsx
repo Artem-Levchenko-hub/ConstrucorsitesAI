@@ -1,19 +1,24 @@
 "use client";
 
-import dynamic from "next/dynamic";
+import { lazy, Suspense, useEffect, useState } from "react";
 
-// Product code is intentionally loaded only in the browser.  The generated
-// component therefore cannot execute inside the secret-bearing Next.js server,
-// while the model still owns every visual and behavioural product decision.
-const ProductApp = dynamic(() => import("@/components/product/ProductApp"), {
-  ssr: false,
-  loading: () => null,
-});
+// Keep generated code out of SSR without relying on next/dynamic's client-only
+// boundary. In dev/Turbopack that boundary can load the ProductApp chunk yet
+// leave its host empty after hydration. React.lazy is activated only after the
+// first browser commit, so SSR and the first hydration frame stay identical.
+const ProductApp = lazy(() => import("@/components/product/ProductApp"));
 
 export function OmniaProductRuntime() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   return (
     <div data-omnia-product-runtime="true" style={{ display: "contents" }}>
-      <ProductApp />
+      {mounted ? (
+        <Suspense fallback={null}>
+          <ProductApp />
+        </Suspense>
+      ) : null}
     </div>
   );
 }
