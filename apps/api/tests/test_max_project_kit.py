@@ -327,10 +327,10 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert 'style={{ display: "contents" }}' in files[MAX_PRODUCT_RUNTIME_PATH]
     product_runtime = files[MAX_PRODUCT_RUNTIME_PATH]
     assert 'from "next/dynamic"' not in product_runtime
-    assert 'lazy(() => import("@/components/product/ProductApp"))' in product_runtime
-    assert "useEffect(() => setMounted(true), [])" in product_runtime
-    assert "mounted ? (" in product_runtime
-    assert "<Suspense fallback={null}>" in product_runtime
+    assert 'from "@/components/product/ProductApp"' not in product_runtime
+    assert 'require("@/components/product/ProductApp")' in product_runtime
+    assert "setProductApp(() => productModule.default)" in product_runtime
+    assert "{ProductApp ? <ProductApp /> : null}" in product_runtime
     assert '"@/*": ["./src/*"]' in files["tsconfig.json"]
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
