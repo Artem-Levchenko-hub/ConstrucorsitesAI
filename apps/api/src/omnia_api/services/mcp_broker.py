@@ -88,11 +88,16 @@ def _validate_url(url: str, *, production: bool) -> str:
     if parsed.username or parsed.password or parsed.fragment:
         raise ValueError("MCP URL must not contain credentials or fragments")
     if parsed.scheme != "https":
-        local_dev = not production and parsed.scheme == "http" and host in {
-            "localhost",
-            "127.0.0.1",
-            "::1",
-        }
+        local_dev = (
+            not production
+            and parsed.scheme == "http"
+            and host
+            in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }
+        )
         if not local_dev:
             raise ValueError("MCP URL must use HTTPS")
     if not host:
@@ -117,6 +122,11 @@ def _from_mapping(raw: Mapping[str, Any], *, production: bool) -> McpServerSpec:
     tools = frozenset(str(item).strip() for item in tools_raw if str(item).strip())
     if not tools or any(not _TOOL_RE.fullmatch(item) for item in tools):
         raise ValueError(f"MCP server {key} has invalid allowed_tools")
+    if raw.get("read_only") is not True:
+        raise ValueError(
+            f"MCP server {key} must explicitly set read_only=true; "
+            "mutating capabilities are not accepted by the native agent"
+        )
     headers_raw = raw.get("headers_env")
     headers: list[tuple[str, str]] = []
     if headers_raw is not None:
@@ -136,7 +146,7 @@ def _from_mapping(raw: Mapping[str, Any], *, production: bool) -> McpServerSpec:
         title=str(raw.get("title") or key).strip()[:120],
         url=url,
         allowed_tools=tools,
-        read_only=bool(raw.get("read_only", True)),
+        read_only=True,
         auth_env=str(raw.get("auth_env") or "").strip(),
         headers_env=tuple(headers),
         timeout_seconds=timeout,
@@ -285,9 +295,7 @@ class McpBroker:
                     server=spec.key,
                     error=type(exc).__name__,
                 )
-                raise McpBrokerError(
-                    f"MCP server {spec.key} is temporarily unavailable"
-                ) from exc
+                raise McpBrokerError(f"MCP server {spec.key} is temporarily unavailable") from exc
             capabilities: list[McpCapability] = []
             for tool in page.tools:
                 name = str(tool.name)

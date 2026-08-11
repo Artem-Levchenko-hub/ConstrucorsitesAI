@@ -59,9 +59,7 @@ class _FakeClient:
         self.call_calls.append((name, arguments))
         return SimpleNamespace(
             content=[
-                SimpleNamespace(
-                    model_dump=lambda **_kwargs: {"type": "text", "text": "Fresh docs"}
-                )
+                SimpleNamespace(model_dump=lambda **_kwargs: {"type": "text", "text": "Fresh docs"})
             ],
             structured_content={"version": "current"},
             is_error=False,
@@ -155,8 +153,7 @@ async def test_operator_registry_rejects_insecure_production_url() -> None:
     settings = _settings(
         env="production",
         mcp_servers_json=(
-            '[{"key":"local","url":"http://127.0.0.1:9999/mcp",'
-            '"allowed_tools":["search"]}]'
+            '[{"key":"local","url":"http://127.0.0.1:9999/mcp","allowed_tools":["search"]}]'
         ),
     )
 
@@ -164,10 +161,37 @@ async def test_operator_registry_rejects_insecure_production_url() -> None:
         mcp_broker.configured_servers(settings)
 
 
-async def test_context7_is_a_real_default_remote_mcp_server() -> None:
-    servers = mcp_broker.configured_servers(
-        _settings(mcp_context7_enabled=True)
+@pytest.mark.parametrize("read_only_fragment", ["", ',"read_only":false'])
+async def test_custom_registry_requires_explicit_read_only_approval(
+    read_only_fragment: str,
+) -> None:
+    settings = _settings(
+        mcp_servers_json=(
+            '[{"key":"docs","url":"https://mcp.example.com/mcp",'
+            f'"allowed_tools":["search"]{read_only_fragment}}}]'
+        ),
     )
+
+    with pytest.raises(mcp_broker.McpBrokerError, match="explicitly set read_only=true"):
+        mcp_broker.configured_servers(settings)
+
+
+async def test_custom_registry_accepts_explicit_read_only_allow_list() -> None:
+    settings = _settings(
+        mcp_servers_json=(
+            '[{"key":"docs","url":"https://mcp.example.com/mcp",'
+            '"allowed_tools":["search"],"read_only":true}]'
+        ),
+    )
+
+    server = mcp_broker.configured_servers(settings)["docs"]
+
+    assert server.read_only is True
+    assert server.allowed_tools == {"search"}
+
+
+async def test_context7_is_a_real_default_remote_mcp_server() -> None:
+    servers = mcp_broker.configured_servers(_settings(mcp_context7_enabled=True))
 
     assert servers["context7"].url == "https://mcp.context7.com/mcp"
     assert servers["context7"].allowed_tools == {

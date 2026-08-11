@@ -249,7 +249,7 @@ def _reference_max_completion_gap(
     require_product_entry: bool,
     source_gap: str | None = None,
 ) -> str | None:
-    """Small factual MAX gate without the retired design/skill ceremony."""
+    """Small factual MAX gate with runtime and signed visual proof."""
 
     if not written:
         return (
@@ -273,6 +273,11 @@ def _reference_max_completion_gap(
         return (
             "Run runtime_check on / after the final product write; "
             "if it is red, fix that concrete runtime error first."
+        )
+    if evidence.get("see_after_write", 0) < 1:
+        return (
+            "Run see once through the signed MAX preview after the final product write; "
+            "apply any concrete visual defect, then rebuild and verify again."
         )
     return None
 
@@ -3995,6 +4000,7 @@ async def _process_prompt(
                     "build",
                     "runtime_check",
                     "see",
+                    "read_skill",
                     "probe",
                     "verify_isolation",
                     "generate_media",
@@ -4092,7 +4098,12 @@ async def _process_prompt(
             # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
             # perf canons aligned with the gates) when enabled. None → unchanged.
             _skills = None
-            if get_settings().use_skill_injection:
+            if project_template == "max_miniapp" and get_settings().use_native_agent:
+                # The native MAX surface exposes read_skill, so give it only the
+                # immutable allow-listed INDEX. Full packs stay server-side and
+                # are loaded by exact slug through the MAX executor.
+                _skills = agent_builder.load_stack_skill_index(_orch_name)
+            elif get_settings().use_skill_injection:
                 _skills = (
                     None
                     if project_template == "max_miniapp"

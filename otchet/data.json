@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-08-11",
-  "version": 37,
+  "version": 38,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Длинная MAX-генерация больше не обрывается на зависшем теле ответа",
-  "subtitle": "Gateway читает длинную композицию потоково, API ждёт классифицированный исход дольше внутреннего окна, завершённый ход можно получить повторно по устойчивому ID, а вся генерация имеет конечные границы и безопасный rollback.",
+  "title": "Активный MAX-агент получил полный безопасный набор инструментов",
+  "subtitle": "Один устойчивый native-loop теперь умеет читать и менять проект, вести наблюдаемый план, подключать серверные навыки, получать только разрешённые read-only MCP-факты и завершаться лишь после build, runtime и подписанной визуальной проверки.",
   "items": [
+   {
+    "s": "testing",
+    "t": "MAX native-loop идёт до проверенного результата с полным SAFE toolset",
+    "d": "Активный stable_max_loop получает 17 разрешённых инструментов: файлы, docs/logs, build/runtime, media, signed see, read_skill, plan checkpoints и allow-listed read-only MCP. Generic web-auth probe/isolation для MAX по-прежнему скрыты; locked-файлы, API routes, секреты и прямой DB остаются запрещены. Completion требует runtime_check и signed see после последней записи. Регрессия подтверждает продолжение того же logical turn после classified body timeout до contract_green; 177 релевантных тестов, Ruff и mypy зелёные. Живую продуктовую генерацию проверит владелец после доставки."
+   },
    {
     "s": "testing",
     "t": "HTTP 200 с медленным телом ответа больше не превращается в преждевременный rollback",
@@ -257,6 +262,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "11.08",
+   "what": "Поручил вернуть активному MAX-агенту полный безопасный набор native-инструментов и самостоятельно проверить живую продуктовую генерацию после доставки.",
+   "impact": "Stable MAX больше не ограничен чтением, записью и компиляцией: он видит signed visual QA, серверные capability packs, долговечный план и только явно разрешённые read-only MCP-вызовы. Автоматический сценарий доказывает продолжение после transient timeout до build, runtime и visual contract; финальная оценка остаётся за живым прогоном владельца."
+  },
   {
    "date": "11.08",
    "what": "Поручил устранить все блокирующие причины обрыва MAX-генерации и доводить каждый принятый запуск до честного терминального результата.",
@@ -2480,6 +2490,18 @@
    "evidence": "Gateway переводит native upstream на SSE и атомарно собирает фрагменты content/tool_calls; read timeout возвращает отдельный provider_response_timeout. Завершённый turn хранится в Redis по run_id + turn_id + request hash и возвращается без нового upstream-вызова. Gateway использует idle timeout 600 секунд и полный turn deadline 1200 секунд, API read timeout — 1320 секунд; один logical turn получает не более двух resume, MAX-run ограничен 120 native-ходами и 3600 секундами. Причины provider_response_timeout_recovery_exhausted, generation_deadline_exceeded, native_turn_limit_exceeded и api_process_restarted сохраняются в generation_runs.error. Локально: gateway 25/25, API native-agent 105/105; Ruff и mypy зелёные. Четыре DB-сценария startup/finalization не стартовали без локального PostgreSQL.",
    "impact": "Длинная генерация сохраняет прогресс транспорта вместо десятиминутной тишины и не откатывается из-за того, что внешний API закрыл соединение на две секунды раньше gateway. Если ответ действительно перестал поступать, восстановление ограничено и наблюдаемо; после исчерпания границ публикуется только полностью проверенная версия, иначе runtime возвращается к каноническому снимку.",
    "next_vector": "Production canary: искусственная пауза тела, потеря ответа после завершения, рестарт gateway/API и подтверждение terminal run + snapshot/rollback"
+  },
+  {
+   "id": "H129",
+   "title": "Полный безопасный toolset доводит MAX native-loop до проверенного результата",
+   "status": "testing",
+   "score": null,
+   "category": "MAX / native agent / инструменты / верификация",
+   "period": "11.08",
+   "description": "Вернуть активному stable_max_loop все семантически корректные MAX-инструменты, не ослабляя границы платформы, и требовать наблюдаемое build/runtime/visual доказательство после последней записи.",
+   "evidence": "Stable MAX получает 17 инструментов: list/read/grep/write/edit, docs/logs, build/runtime, generate_media, signed see, read_skill, plan_task/update_plan, discover_capabilities/call_capability и done. Generic probe/verify_isolation исключены как несовместимые с signed MAX auth. Custom MCP принимается только по HTTPS, с точным allowed_tools и явным read_only=true. Активный messages.py загружает immutable skill INDEX, сохраняет план и tool evidence, а completion gate требует runtime_check_after_write + see_after_write. Регрессионный сценарий после записи получает provider_response_timeout, продолжает тот же turn_id и заканчивает contract_green; 177 релевантных тестов, Ruff и mypy зелёные.",
+   "impact": "Агент снова может получить нужную экспертизу, свежую документацию и визуальную обратную связь в том же устойчивом цикле, а не останавливаться на компиляции или скрытом урезанном наборе. При этом внешние возможности остаются только чтением, изменения проходят MAX-политику, бесконечное ожидание ограничено, а непроверенное дерево не считается готовым.",
+   "next_vector": "Живая генерация владельцем: подтвердить план/skill/MCP при необходимости, signed visual repair и terminal snapshot без rollback"
   }
  ],
  "vectors": [
@@ -2993,6 +3015,10 @@
      true
     ],
     [
+     "Активный MAX native-loop: полный SAFE toolset, durable plan, read-only MCP и обязательные runtime + signed visual proof",
+     true
+    ],
+    [
      "Скрытое анимированное меню аккаунта без layout shift: естественный Tab/Escape, outside-click, reduced motion и низкий mobile viewport",
      true
     ],
@@ -3055,7 +3081,8 @@
     "H125",
      "H126",
      "H127",
-     "H128"
+     "H128",
+     "H129"
    ]
   }
  ],

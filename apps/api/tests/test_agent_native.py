@@ -128,7 +128,7 @@ def test_generic_native_agent_and_autoheal_keep_primary_model() -> None:
     assert autoheal._HEAL_MODEL == "gemini-3.1-pro-preview-customtools"
 
 
-def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
+def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     prompt = agent_native.native_system_prompt(
         "MAX PLATFORM CORE CONTRACT\nBuild the app",
         "MAX capability catalog: call read_skill(`ui-ux-pro-max`)",
@@ -144,8 +144,8 @@ def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" not in prompt
     assert "Sonnet" not in prompt
     assert "Gemini" not in prompt
-    assert "read_skill" not in prompt
-    assert "MAX capability catalog" not in prompt
+    assert "read_skill" in prompt
+    assert "MAX capability catalog" in prompt
     assert "никогда не используй в нём `:global(...)`" in prompt
     assert "минимальной точечной edit_file" in prompt
     assert "обязательно вызови see" not in prompt
@@ -157,10 +157,26 @@ def test_max_native_prompt_uses_the_compact_product_first_loop() -> None:
     assert "read_skill" not in names
     assert agent_native._TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
     stable_names = {tool["name"] for tool in agent_native._STABLE_MAX_TOOLS_CACHED}
-    assert {"read_file", "write_file", "build", "done"} <= stable_names
-    assert not ({"see", "probe", "verify_isolation"} & stable_names)
-    ceremony = {"plan_task", "update_plan", "discover_capabilities", "call_capability"}
-    assert not (ceremony & stable_names)
+    assert {
+        "list_dir",
+        "read_file",
+        "grep",
+        "docs",
+        "write_file",
+        "edit_file",
+        "build",
+        "read_logs",
+        "runtime_check",
+        "see",
+        "generate_media",
+        "read_skill",
+        "plan_task",
+        "update_plan",
+        "discover_capabilities",
+        "call_capability",
+        "done",
+    } == stable_names
+    assert not ({"probe", "verify_isolation"} & stable_names)
     assert agent_native._MAX_TOKENS == 32_768
 
 
@@ -219,6 +235,16 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "model=(" in source
     assert "MAX_STUDIO_LLM_MODEL" in source
     assert 'stable_max_loop=project_template == "max_miniapp"' in source
+    assert "load_stack_skill_index(_orch_name)" in source
+    assert 'if action.name == "read_skill"' in source
+    assert 'if action.name == "plan_task"' in source
+    assert 'if action.name == "update_plan"' in source
+    assert 'if action.name in {"discover_capabilities", "call_capability"}' in source
+    assert "await save_generation_agent_state(run_id, _agent_state)" in source
+    assert "McpBroker()" in source
+    assert "action.path in MAX_MODEL_LOCKED_FILES" in source
+    assert "max_model_path_rejection(action.path)" in source
+    assert "max_model_write_rejection(action.path, _candidate)" in source
     assert "_agent_steps = 120" in source
     assert "render_max_starter_files" not in source
     assert "Подготавливаю защищённое ядро MAX" not in source
@@ -249,7 +275,7 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert 'product_kind="max_miniapp"' in inspect.getsource(messages._run_max_visual_qa)
     assert "EXISTING MAX ART DIRECTION" not in source
     assert "require_native_legal_nav=True" in source
-    assert "_skills = None" in source
+    assert 'project_template == "max_miniapp" and get_settings().use_native_agent' in source
 
 
 def test_fresh_max_reference_gate_rejects_css_only_or_placeholder_entry() -> None:
@@ -333,7 +359,7 @@ def test_fresh_max_style_gate_ignores_class_names_inside_css_comments() -> None:
     assert "class vocabulary" in gap
 
 
-def test_fresh_max_reference_gate_finishes_after_runtime_proof() -> None:
+def test_fresh_max_reference_gate_requires_signed_visual_proof_after_runtime() -> None:
     entry = (
         'export default function ProductApp() { return <main className="app-shell">'
         + ("product " * 60)
@@ -350,13 +376,26 @@ def test_fresh_max_reference_gate_finishes_after_runtime_proof() -> None:
         require_product_entry=True,
     )
 
-    assert gap is None
+    assert gap is not None
+    assert "signed MAX preview" in gap
+
+    assert (
+        messages._reference_max_completion_gap(
+            {
+                "src/components/product/ProductApp.tsx": entry,
+                "src/app/globals.css": styles,
+            },
+            {"runtime_check_after_write": 1, "see_after_write": 1},
+            require_product_entry=True,
+        )
+        is None
+    )
 
 
-def test_max_edit_reference_gate_finishes_after_runtime_proof() -> None:
+def test_max_edit_reference_gate_finishes_after_runtime_and_visual_proof() -> None:
     gap = messages._reference_max_completion_gap(
         {"src/app/globals.css": "body { color: black; }"},
-        {"runtime_check_after_write": 1},
+        {"runtime_check_after_write": 1, "see_after_write": 1},
         require_product_entry=False,
     )
 
@@ -2286,10 +2325,10 @@ async def test_stable_max_reopens_editing_after_actionable_visual_feedback(
         "{ return <main>polished</main>; }"
     )
     assert advertised[2] == {"runtime_check"}
-    assert "see" not in advertised[3]
+    assert "see" in advertised[3]
     assert "write_file" in advertised[4]
     assert advertised[6] == {"runtime_check"}
-    assert "see" not in advertised[7]
+    assert "see" in advertised[7]
 
 
 @pytest.mark.asyncio
@@ -2642,7 +2681,7 @@ async def test_stable_max_css_only_visual_repair_resumes_rendered_proof(
     assert advertised[4] == {"write_file", "edit_file", "generate_media"}
     assert advertised[5] == {"build"}
     assert advertised[6] == {"runtime_check"}
-    assert "see" not in advertised[7]
+    assert "see" in advertised[7]
 
 
 @pytest.mark.asyncio
@@ -3476,6 +3515,132 @@ async def test_stable_max_resumes_classified_body_timeout_before_terminal_result
     assert result.stop_reason == "done"
     assert calls[:2] == [("run-1:0", 0), ("run-1:0", 1)]
     assert calls[2][0] == "run-1:1"
+
+
+@pytest.mark.asyncio
+async def test_active_max_safe_surface_survives_timeout_and_reaches_verified_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    timed_out = False
+    entry = (
+        'export default function ProductApp(){return <main className="app-shell">'
+        '<header className="app-header"><h1 className="hero-title">Product</h1></header>'
+        '<button className="primary-action">Start</button>'
+        + ("complete product flow " * 30)
+        + "</main>}"
+    )
+    styles = (
+        ".app-shell{min-height:100dvh}.app-header{padding:24px}"
+        ".hero-title{font-size:32px}.primary-action{min-height:44px}"
+        + ("/* product visual system */" * 20)
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal timed_out
+        calls.append(
+            {
+                "turn_id": kwargs["turn_id"],
+                "resume_count": kwargs["resume_count"],
+                "tools": {str(tool["name"]) for tool in kwargs["tools"]},
+            }
+        )
+        call_number = len(calls)
+        if call_number == 1:
+            return _turn(
+                (
+                    "plan_task",
+                    {
+                        "objective": "Build and verify the MAX product",
+                        "steps": ["compose", "verify"],
+                        "acceptance_criteria": ["clean runtime and signed visual proof"],
+                    },
+                ),
+                ("read_skill", {"skill": "product-flow", "reason": "brief"}),
+                ("discover_capabilities", {"server": "context7"}),
+                (
+                    "call_capability",
+                    {
+                        "server": "context7",
+                        "tool": "query-docs",
+                        "arguments": {"query": "MAX Mini App accessibility"},
+                        "reason": "fresh read-only documentation",
+                    },
+                ),
+            )
+        if call_number == 2:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/ProductApp.tsx",
+                        "content": entry,
+                    },
+                ),
+                (
+                    "write_file",
+                    {"path": "src/app/globals.css", "content": styles},
+                ),
+            )
+        if not timed_out:
+            timed_out = True
+            raise agent_native.ProviderResponseTimeoutError(504)
+        if call_number == 4:
+            return _turn(("build", {}))
+        if call_number == 5:
+            return _turn(("runtime_check", {"path": "/"}))
+        return _turn(("see", {"path": "/"}))
+
+    executed: list[str] = []
+
+    async def execute(action: Any) -> dict[str, Any]:
+        executed.append(action.name)
+        return {
+            "ok": True,
+            "content": action.args.get("content", "approved read-only evidence"),
+            "detail": "green",
+        }
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt(
+            "MAX PLATFORM CORE CONTRACT",
+            "MAX capability catalog: `product-flow`",
+            stable_max_loop=True,
+        ),
+        task="build product",
+        execute=execute,
+        run_id="run-active-max",
+        completion_check=lambda written, evidence: messages._reference_max_completion_gap(
+            written,
+            evidence,
+            require_product_entry=True,
+        ),
+        stable_max_loop=True,
+    )
+
+    assert calls[0]["tools"] == agent_native._STABLE_MAX_TOOL_NAMES
+    assert calls[2]["turn_id"] == calls[3]["turn_id"]
+    assert (calls[2]["resume_count"], calls[3]["resume_count"]) == (0, 1)
+    assert {
+        "plan_task",
+        "read_skill",
+        "discover_capabilities",
+        "call_capability",
+        "write_file",
+        "build",
+        "runtime_check",
+        "see",
+    } <= set(executed)
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
 
 
 @pytest.mark.asyncio

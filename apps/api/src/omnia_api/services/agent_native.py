@@ -271,6 +271,23 @@ _TOOLS: list[dict[str, Any]] = [
     ),
 ]
 
+# MAX deliberately excludes the generic web-auth probes: they cannot authenticate
+# a signed Mini App session and would produce misleading evidence. Everything else
+# below is executable through the MAX project/harness executor. ``read_skill`` is
+# MAX-only and loads a server-owned, immutable capability pack.
+_MAX_UNAVAILABLE_TOOLS = frozenset({"probe", "verify_isolation"})
+_MAX_READ_SKILL_TOOL = _tool(
+    "read_skill",
+    "Load one optional MAX capability pack by exact catalog slug. Use it to gain "
+    "specialist product, motion, data, AI UX, accessibility, media or MAX-platform "
+    "knowledge on demand. Load only packs relevant to the current brief; packs are "
+    "principles and evidence, never mandatory visual templates.",
+    {"skill": _STR, "reason": _STR},
+    ["skill", "reason"],
+)
+_MAX_BASE_TOOLS = [tool for tool in _TOOLS if tool["name"] not in _MAX_UNAVAILABLE_TOOLS]
+_MAX_TOOLS = [*_MAX_BASE_TOOLS[:-1], _MAX_READ_SKILL_TOOL, _MAX_BASE_TOOLS[-1]]
+
 # --- Anthropic prompt caching (AITunnel honours it on the native surface —
 # live-verified 15.07: cache_read ≈ 90% cheaper than a fresh write) ------------
 # The native loop resends the WHOLE growing transcript every turn, so caching is
@@ -287,26 +304,16 @@ _TOOLS_CACHED: list[dict[str, Any]] = [
     *_TOOLS[:-1],
     {**_TOOLS[-1], "cache_control": _CACHE},
 ]
+_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_MAX_TOOLS[:-1],
+    {**_MAX_TOOLS[-1], "cache_control": _CACHE},
+]
 
-# MAX Studio's proven pre-Gemini loop had no planning/capability/skill protocol:
-# the model inspected files, wrote the product, built, fixed, and called done.
-# Keep the current safe executor surface, but hide later orchestration ceremony.
-_STABLE_MAX_TOOL_NAMES = frozenset(
-    {
-        "list_dir",
-        "read_file",
-        "grep",
-        "docs",
-        "write_file",
-        "edit_file",
-        "build",
-        "read_logs",
-        "runtime_check",
-        "generate_media",
-        "done",
-    }
-)
-_STABLE_MAX_TOOLS = [tool for tool in _TOOLS if tool["name"] in _STABLE_MAX_TOOL_NAMES]
+# Stable MAX uses the complete executable MAX surface. The bounded phase gates below
+# still narrow individual repair/build turns, but the normal phase must not hide
+# visual QA, durable planning, skills or explicitly approved read-only MCP evidence.
+_STABLE_MAX_TOOL_NAMES = frozenset(str(tool["name"]) for tool in _MAX_TOOLS)
+_STABLE_MAX_TOOLS = list(_MAX_TOOLS)
 _STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_TOOLS[:-1],
     {**_STABLE_MAX_TOOLS[-1], "cache_control": _CACHE},
@@ -561,27 +568,6 @@ _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED = [
         ),
         "cache_control": _CACHE,
     }
-]
-
-# MAX has a narrower executor contract. Do not advertise operations which the
-# server will always reject or which authenticate through the generic web
-# harness (probe/isolation). Gemini otherwise spends turns discovering the
-# rejection even though the MAX prompt already says not to call them.
-_MAX_UNAVAILABLE_TOOLS = frozenset({"probe", "verify_isolation"})
-_MAX_READ_SKILL_TOOL = _tool(
-    "read_skill",
-    "Load one optional MAX capability pack by exact catalog slug. Use it to gain "
-    "specialist product, motion, data, AI UX, accessibility, media or MAX-platform "
-    "knowledge on demand. Load only packs relevant to the current brief; packs are "
-    "principles and evidence, never mandatory visual templates.",
-    {"skill": _STR, "reason": _STR},
-    ["skill", "reason"],
-)
-_MAX_BASE_TOOLS = [tool for tool in _TOOLS if tool["name"] not in _MAX_UNAVAILABLE_TOOLS]
-_MAX_TOOLS = [*_MAX_BASE_TOOLS[:-1], _MAX_READ_SKILL_TOOL, _MAX_BASE_TOOLS[-1]]
-_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_MAX_TOOLS[:-1],
-    {**_MAX_TOOLS[-1], "cache_control": _CACHE},
 ]
 
 # The reliable MAX path from 4cb0ee18 was a single Google tool loop, not a
@@ -1150,10 +1136,15 @@ _MAX_REFERENCE_PREAMBLE = (
     "→ build → исправь каждую реальную ошибку → runtime_check корневого экрана после "
     "последней записи. Если runtime_check красный, используй возвращённый файл и текст "
     "ошибки для минимальной точечной edit_file, затем снова build/runtime_check; не повторяй "
-    "красную проверку без исправления. После чистого build и зелёного runtime_check "
-    "вызови done. Не трать ходы на визуальную церемонию, skill-пакеты или внешнее "
-    "исследование, "
-    "если без него можно сразу собрать приложение."
+    "красную проверку без исправления. Затем вызови see через подписанную MAX preview-"
+    "сессию; конкретный визуальный дефект исправь, снова выполни build/runtime_check/see "
+    "и только после зелёного результата вызови done. Для существенной сборки можно одним "
+    "первым ходом вызвать plan_task вместе с полезными чтениями, а update_plan — только "
+    "после подтверждённого этапа. read_skill загружает лишь подходящие к брифу серверные "
+    "пакеты. discover_capabilities/call_capability разрешены только для свежих внешних "
+    "фактов: доступны исключительно одобренные оператором read-only MCP-инструменты, без "
+    "передачи им секретов и без изменения проекта. Не трать отдельные ходы на церемонию "
+    "или внешнее исследование, если без них можно сразу продвинуть сборку."
 )
 
 _MAX_REFERENCE_EDIT_PREAMBLE = (
@@ -1162,7 +1153,9 @@ _MAX_REFERENCE_EDIT_PREAMBLE = (
     "сохрани все остальные экраны, данные и сценарии. Не переписывай весь продукт, "
     "не меняй визуальное направление без прямого запроса и не трогай управляемое "
     "MAX-ядро. Не добавляй платформенную оболочку или юридический футер. После последней "
-    "записи исправь фактические ошибки build/runtime_check и заверши на зелёной версии. "
+    "записи исправь фактические ошибки build/runtime_check, проверь итог через signed see "
+    "и заверши только на зелёной версии. План, навыки и одобренный read-only MCP доступны, "
+    "но используй их лишь когда они действительно помогают этой точечной правке. "
     "Не создавай демо-данные, секреты, параллельную "
     "email-авторизацию, API или прямой доступ к БД."
 )
@@ -1191,10 +1184,10 @@ def native_system_prompt(
         else _NATIVE_PREAMBLE,
         guide,
     ]
-    # The stable Sonnet loop deliberately has no read_skill tool. Do not append
-    # its capability catalog: advertising unavailable calls wastes paid turns
-    # and contradicts the compact product-first protocol.
-    if skills and skills.strip() and not stable_max_loop:
+    # MAX now exposes read_skill in the active stable loop. Append only the
+    # server-generated catalog supplied by messages.py; the executor still
+    # resolves exact known slugs and rejects unknown packs.
+    if skills and skills.strip():
         parts.append(skills.strip())
     return "\n\n".join(p for p in parts if p)
 
