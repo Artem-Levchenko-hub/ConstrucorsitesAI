@@ -37,6 +37,10 @@ import { createProject, listProjects } from "@/lib/api/projects";
 import { getMaxAccess } from "@/lib/api/max-account";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
 import {
+  clearMaxDemoDraft,
+  useMaxDemoDraft,
+} from "@/hooks/useMaxDemoDraft";
+import {
   MAX_APP_TYPES,
   MAX_FEATURES,
   MAX_STYLES,
@@ -45,6 +49,7 @@ import {
   type MaxFeature,
   type MaxStyleId,
 } from "@/lib/max-brief";
+import type { MaxDemoDraft } from "@/lib/max-demo";
 import { cn } from "@/lib/utils";
 import { MaxStudioProjectCard } from "./MaxStudioProjectCard";
 import { MaxStudioAccountDisclosure } from "./MaxStudioAccountDisclosure";
@@ -77,18 +82,48 @@ function StudioNav({ email }: { email: string }) {
 }
 
 export function MaxStudio({ email }: { email: string }) {
+  const demoDraft = useMaxDemoDraft();
+  return (
+    <MaxStudioContent
+      key={demoDraft?.createdAt ?? "without-demo"}
+      email={email}
+      initialDemoDraft={demoDraft}
+    />
+  );
+}
+
+function MaxStudioContent({
+  email,
+  initialDemoDraft,
+}: {
+  email: string;
+  initialDemoDraft: MaxDemoDraft | null;
+}) {
   const router = useRouter();
   const qc = useQueryClient();
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(Boolean(initialDemoDraft));
   const [search, setSearch] = useState("");
-  const [name, setName] = useState("");
-  const [idea, setIdea] = useState("");
-  const [appType, setAppType] = useState<MaxAppTypeId>("loyalty");
-  const [audience, setAudience] = useState("");
-  const [primaryAction, setPrimaryAction] = useState("");
-  const [features, setFeatures] = useState<MaxFeature[]>(STARTER_FEATURES);
-  const [style, setStyle] = useState<MaxStyleId>("brand");
-  const [brandColors, setBrandColors] = useState("");
+  const [name, setName] = useState(initialDemoDraft?.brief.name ?? "");
+  const [idea, setIdea] = useState(initialDemoDraft?.brief.idea ?? "");
+  const [appType, setAppType] = useState<MaxAppTypeId>(
+    initialDemoDraft?.brief.appType ?? "loyalty",
+  );
+  const [audience, setAudience] = useState(
+    initialDemoDraft?.brief.audience ?? "",
+  );
+  const [primaryAction, setPrimaryAction] = useState(
+    initialDemoDraft?.brief.primaryAction ?? "",
+  );
+  const [features, setFeatures] = useState<MaxFeature[]>(
+    initialDemoDraft?.brief.features ?? STARTER_FEATURES,
+  );
+  const [style, setStyle] = useState<MaxStyleId>(
+    initialDemoDraft?.brief.style ?? "brand",
+  );
+  const [brandColors, setBrandColors] = useState(
+    initialDemoDraft?.brief.brandColors ?? "",
+  );
+  const [demoDraft, setDemoDraft] = useState(initialDemoDraft);
   const projectsHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
@@ -146,6 +181,8 @@ export function MaxStudio({ email }: { email: string }) {
     },
     onSuccess: ({ project, prompt, configSaved }) => {
       qc.invalidateQueries({ queryKey: ["projects"] });
+      clearMaxDemoDraft();
+      setDemoDraft(null);
       toast[configSaved ? "success" : "warning"](
         configSaved ? "MAX Mini App создан" : "Приложение создано",
         {
@@ -236,6 +273,18 @@ export function MaxStudio({ email }: { email: string }) {
               )}
             </section>
 
+            {demoDraft && (
+              <section className="mt-6 flex flex-col gap-4 rounded-[12px] border border-accent/30 bg-accent-subtle p-5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold">Демо «{demoDraft.brief.name}» готово к переносу</p>
+                  <p className="mt-1 text-xs leading-5 text-[#6d6962]">Описание уже заполнено. Подтвердите создание — начнётся первая реальная сборка, после которой можно скачать код.</p>
+                </div>
+                <Button onClick={() => setDialogOpen(true)} className="shrink-0">
+                  <Sparkles className="size-4" /> Продолжить демо
+                </Button>
+              </section>
+            )}
+
             {projects.isLoading ? (
               <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-[260px] rounded-[12px]" />)}
@@ -284,12 +333,14 @@ export function MaxStudio({ email }: { email: string }) {
           >
             <div className="shrink-0 border-b border-[#d8d4cb] px-5 pb-5 pr-16 pt-5 sm:p-6 sm:pr-14">
               <div>
-                <p className="omnia-kicker text-accent">Новый MAX-проект</p>
+                <p className="omnia-kicker text-accent">{demoDraft ? "Сохранённое демо" : "Новый MAX-проект"}</p>
                 <DialogTitle className="mt-2 text-2xl font-semibold text-[#171716]">
-                  Опишите бизнес — получите приложение
+                  {demoDraft ? "Превратим демо в рабочий проект" : "Опишите бизнес — получите приложение"}
                 </DialogTitle>
                 <DialogDescription className="mt-1 text-sm text-[#6d6962]">
-                  Названия и одного понятного сценария достаточно. MAX Partner пока не нужен.
+                  {demoDraft
+                    ? "Проверьте перенесённое описание — после создания сразу откроется живая сборка."
+                    : "Названия и одного понятного сценария достаточно. MAX Partner пока не нужен."}
                 </DialogDescription>
               </div>
             </div>
@@ -351,7 +402,7 @@ export function MaxStudio({ email }: { email: string }) {
                 <Button type="button" variant="outline" className="min-h-11" onClick={() => setDialogOpen(false)}>Отмена</Button>
                 <Button disabled={!ready || create.isPending} className="min-h-11">
                   {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                  Получить демо-приложение
+                  {demoDraft ? "Создать рабочий проект" : "Получить демо-приложение"}
                 </Button>
               </div>
             </div>

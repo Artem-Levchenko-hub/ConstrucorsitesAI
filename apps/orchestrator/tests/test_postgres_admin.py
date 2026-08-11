@@ -36,6 +36,7 @@ def _admin_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_project_short_id_first_8_hex() -> None:
     assert postgres_admin._project_short_id(PROJECT_ID) == "01234567"
+    assert postgres_admin.project_schema_name(PROJECT_ID) == "proj_01234567"
 
 
 def test_quote_ident_accepts_valid() -> None:

@@ -725,7 +725,7 @@
   }
 
   function post(msg) {
-    if (window.parent)
+    if (window.parent && window.parent !== window)
       window.parent.postMessage(msg, trustedParentOrigin || "*");
   }
 
@@ -736,6 +736,9 @@
     var d = e.data;
     if (!d || typeof d.type !== "string") return;
     switch (d.type) {
+      case "omnia:inspect:ping":
+        post({ type: "omnia:inspect:ready", version: 4 });
+        break;
       case "omnia:editor:set-mode":
         setEditorMode(d.mode);
         break;

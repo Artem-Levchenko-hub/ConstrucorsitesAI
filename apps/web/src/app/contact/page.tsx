@@ -12,7 +12,7 @@ export default function ContactPage() {
     >
       <div className="grid gap-5 lg:grid-cols-3">
         {[
-          { Icon: MessageSquare, title: "Начать проект", text: "Создайте аккаунт и опишите приложение в коротком брифе.", href: "/max/register", label: "Открыть студию" },
+          { Icon: MessageSquare, title: "Начать проект", text: "Опишите приложение и сначала посмотрите интерактивное демо без аккаунта.", href: "/max/demo", label: "Собрать демо" },
           { Icon: Building2, title: "Корпоративный запуск", text: "Интеграции с внутренними системами, собственная VPS и сопровождение.", href: "mailto:sales@lead-generator.ru", label: "sales@lead-generator.ru" },
           { Icon: Mail, title: "Поддержка", text: "Вопросы по аккаунту, публикации, оплате и работающим приложениям.", href: "mailto:support@lead-generator.ru", label: "support@lead-generator.ru" },
         ].map(({ Icon, title, text, href, label }) => (

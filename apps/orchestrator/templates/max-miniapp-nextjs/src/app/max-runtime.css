@@ -1,0 +1,13 @@
+/*
+ * MAX UI remains available for products that deliberately use its components,
+ * but its required context provider must not become the product's visual shell.
+ */
+.omnia-max-runtime {
+  display: contents;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-rendering: inherit;
+  -webkit-font-smoothing: inherit;
+  -moz-osx-font-smoothing: inherit;
+}

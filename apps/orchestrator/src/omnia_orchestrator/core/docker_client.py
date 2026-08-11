@@ -77,6 +77,10 @@ class ContainerSpec:
     restart_policy_name: str = "no"  # "unless-stopped" for deployed prod
     tier: str = "free"  # `omnia.tier` label — drives hibernate pause/stop policy
     container_port: int = 3000  # internal port the app listens on (StackSpec-driven)
+    # File baked into the template image and required for PID 1 to start.  When
+    # a previous faulty sync removed the protected core, provision recreates
+    # that container instead of returning a restart loop as "running".
+    integrity_path: str | None = None
     # ── Sandbox hardening (Phase 1) — all default to current behaviour ───────
     runtime: str = ""  # docker --runtime, e.g. "runsc" (gVisor); "" = daemon default (runc)
     harden: bool = False  # add no-new-privileges + a PID ceiling (safe for non-root images)
@@ -210,8 +214,10 @@ async def start_container(spec: ContainerSpec) -> str:
     """Create + start a container. Returns container id.
 
     Idempotent: if a container with the same name exists, restart it if
-    stopped and return the existing id without recreating. This matters
-    because `provision` and `wake` may race on a fresh project.
+    stopped and return the existing id without recreating. A container whose
+    baked runtime manifest is missing is recreated so provision can recover
+    from an incomplete/legacy sync. This matters because `provision` and
+    `wake` may race on a fresh project.
 
     Exception — image change: if the existing container runs a DIFFERENT image
     than `spec.image`, it is stale and must be replaced. This happens on a stack
@@ -261,9 +267,32 @@ async def start_container(spec: ContainerSpec) -> str:
             else:
                 if existing.status == "paused":
                     existing.unpause()  # can't .start() a frozen container
-                elif existing.status != "running":
+                elif existing.status not in {"running", "restarting", "dead"}:
                     existing.start()
-                return str(existing.id)
+                existing.reload()
+                core_ok = existing.status == "running"
+                if core_ok and spec.integrity_path:
+                    try:
+                        check = existing.exec_run(
+                            cmd=["test", "-f", f"/app/{spec.integrity_path}"],
+                            user="1000:1000",
+                        )
+                        core_ok = check.exit_code == 0
+                    except (docker.errors.APIError, requests.exceptions.RequestException):
+                        core_ok = False
+                if core_ok:
+                    return str(existing.id)
+                # Canonical project state lives in the API snapshot.  Recreate
+                # a broken runtime from the current template; the API overlays
+                # the product snapshot immediately after provision returns.
+                log.warning(
+                    "docker.recreate_invalid_runtime",
+                    name=spec.name,
+                    status=existing.status,
+                    integrity_path=spec.integrity_path,
+                )
+                with suppress(docker.errors.APIError, docker.errors.NotFound):
+                    existing.remove(force=True)
 
         # Sandbox hardening (Phase 1) — every entry is OFF by default, so when
         # the spec carries no overrides the run kwargs are byte-identical to
@@ -778,8 +807,11 @@ async def write_files(
     name: str, files: dict[str, str], *, dest_root: str = "/app"
 ) -> dict[str, str]:
     """Stream a set of AI-generated files into a running container via
-    `docker cp` semantics (put_archive). Paths in `files` are container-relative
-    to `dest_root` (default `/app`, matching Next.js workdir in the template).
+    staged `docker cp` semantics (put_archive + atomic rename). Paths in `files`
+    are container-relative to `dest_root` (default `/app`, matching Next.js
+    workdir in the template). The archive is never extracted directly over the
+    live source tree: Next HMR can otherwise observe a module between truncate
+    and rewrite and briefly expose a 500 during rollback.
 
     Returns a small summary {written: int, total_bytes: int, dropped: list-of-paths}.
 
@@ -794,9 +826,11 @@ async def write_files(
     Missing container = explicit OrchestratorError (caller should handle).
     """
     import io
+    import json
     import posixpath
     import tarfile
     import time
+    import uuid
 
     log.info("docker.write_files", name=name, files=len(files), dest_root=dest_root)
 
@@ -824,6 +858,7 @@ async def write_files(
 
         dropped: list[str] = []
         to_delete: list[str] = []
+        written_paths: list[str] = []
         written = 0
         total_bytes = 0
 
@@ -836,7 +871,7 @@ async def write_files(
             for raw_path, content in files.items():
                 # Sanitize: no .., no absolute, must stay under dest_root.
                 norm = posixpath.normpath(raw_path)
-                if norm.startswith("/") or norm.startswith(".."):
+                if norm in {"", ".", ".."} or norm.startswith("/") or norm.startswith("../"):
                     dropped.append(raw_path)
                     continue
                 # Prevent escape via well-crafted normpath edge cases.
@@ -875,25 +910,69 @@ async def write_files(
                 info.gid = 1000
                 info.mtime = ts
                 tar.addfile(info, io.BytesIO(data))
+                written_paths.append(norm)
                 written += 1
                 total_bytes += len(data)
 
         # Only push an archive when there's something to write — an all-deletes
-        # batch produces an empty tar that put_archive would reject.
+        # batch produces an empty tar that put_archive would reject. Extract to
+        # a private directory first, then atomically rename every regular file
+        # into the watched tree in one short synchronous process. Every target
+        # therefore remains either the complete old file or the complete new
+        # file; HMR never sees a missing/truncated ProductApp or globals.css.
         if written > 0:
+            stage_root = f"{dest_root}/.omnia-hot-reload-{uuid.uuid4().hex}"
+            prep = c.exec_run(["mkdir", "-p", stage_root], user="1000:1000")
+            if getattr(prep, "exit_code", 1) not in (0, None):
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"could not stage hot-reload files for {name}",
+                    status_code=500,
+                )
             buf.seek(0)
             try:
-                ok = c.put_archive(path=dest_root, data=buf.getvalue())
+                ok = c.put_archive(path=stage_root, data=buf.getvalue())
             except docker.errors.APIError as exc:
+                with suppress(Exception):
+                    c.exec_run(["rm", "-rf", stage_root], user="1000:1000")
                 raise OrchestratorError(
                     code="container_failure",
                     message=f"put_archive failed for {name}: {exc}",
                     status_code=500,
                 ) from exc
             if not ok:
+                with suppress(Exception):
+                    c.exec_run(["rm", "-rf", stage_root], user="1000:1000")
                 raise OrchestratorError(
                     code="container_failure",
                     message=f"put_archive returned False for {name}",
+                    status_code=500,
+                )
+            commit_payload = json.dumps(
+                {
+                    "stage": stage_root,
+                    "dest": dest_root,
+                    "files": written_paths,
+                },
+                separators=(",", ":"),
+            )
+            commit_script = (
+                'const fs=require("fs"),p=require("path"),d=JSON.parse(process.argv[1]);'
+                "for(const rel of d.files){const src=p.join(d.stage,rel),"
+                "dst=p.join(d.dest,rel);fs.mkdirSync(p.dirname(dst),{recursive:true});"
+                "fs.renameSync(src,dst)}"
+                "fs.rmSync(d.stage,{recursive:true,force:true});"
+            )
+            commit = c.exec_run(
+                ["node", "-e", commit_script, commit_payload],
+                user="1000:1000",
+            )
+            if getattr(commit, "exit_code", 1) not in (0, None):
+                with suppress(Exception):
+                    c.exec_run(["rm", "-rf", stage_root], user="1000:1000")
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"atomic hot-reload commit failed for {name}",
                     status_code=500,
                 )
 

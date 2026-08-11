@@ -9,6 +9,7 @@ container or git object ever sees them.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -43,6 +44,20 @@ _MAX_RAW_DB_IMPORT_RE = re.compile(
     r")[\"']"
 )
 
+_MANAGED_AI_HINT = (
+    "Секрет провайдера был удалён до передачи модели. Пользователю нужна AI-функция "
+    "внутри MAX Mini App: реализуй её через управляемый requestOmniaAI из "
+    "@/lib/omnia/integration-client. Не проси и не сохраняй внешний ключ, не создавай "
+    ".env и не имитируй AI локальными ответами."
+)
+
+
+@dataclass(frozen=True)
+class SafeMaxPrompt:
+    chat_text: str
+    model_text: str
+    credential_removed: bool
+
 
 def contains_provider_secret(value: str) -> bool:
     """Return true only for high-confidence credential shapes.
@@ -61,6 +76,25 @@ def redact_provider_secrets(value: str) -> str:
     for pattern in _SECRET_TOKEN_PATTERNS:
         redacted = pattern.sub("[CREDENTIAL REDACTED]", redacted)
     return redacted
+
+
+def prepare_safe_max_prompt(value: str) -> SafeMaxPrompt:
+    """Redact a pasted credential but keep the product request buildable.
+
+    The chat stores only ``chat_text``.  The model receives ``model_text`` with
+    an explicit managed-runtime instruction, never the credential.  This turns
+    an accidental secret paste into a working AI-native app request instead of
+    a dead-end configuration reply.
+    """
+
+    removed = contains_provider_secret(value)
+    chat_text = redact_provider_secrets(value) if removed else value
+    model_text = f"{chat_text}\n\n{_MANAGED_AI_HINT}" if removed else chat_text
+    return SafeMaxPrompt(
+        chat_text=chat_text,
+        model_text=model_text,
+        credential_removed=removed,
+    )
 
 
 def is_secret_file(path: str) -> bool:
@@ -124,8 +158,10 @@ def max_model_write_rejection(path: str, candidate: str) -> str | None:
 
 
 __all__ = [
+    "SafeMaxPrompt",
     "contains_provider_secret",
     "is_secret_file",
     "max_model_write_rejection",
+    "prepare_safe_max_prompt",
     "redact_provider_secrets",
 ]

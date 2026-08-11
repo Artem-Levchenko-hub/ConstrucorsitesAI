@@ -57,15 +57,26 @@ class Settings(BaseSettings):
     # Native-agent financial fuse. It is independent from the restored bounded
     # Sonnet loop and applies to free runs too: ``free`` means the customer
     # wallet is not debited, not that provider spend is unlimited.
-    native_run_max_cost_rub: float = 1200.0
-    native_run_max_provider_cost_usd: float = 2.5
-    native_run_max_requests: int = 80
+    # A complete MAX build can legitimately need several long composition and
+    # repair calls. Keep a generous per-run envelope; the independent request
+    # count remains the absolute emergency brake against an infinite loop.
+    native_run_max_cost_rub: float = 5000.0
+    native_run_max_provider_cost_usd: float = 10.0
+    native_run_max_requests: int = 160
 
     # Read timeout for one long agentic pass, which can spend tens of
     # seconds; 240s tolerates the spike while staying under the api llm_client's
     # 300s read timeout so a genuine hang still surfaces cleanly.
     # Env: REQUEST_TIMEOUT_SECONDS.
     request_timeout_seconds: int = 240
+
+    # Native tool responses are consumed as SSE inside the gateway. This is an
+    # idle-between-chunks timeout, not a whole-response deadline; the API caller
+    # has a strictly larger read window so the gateway can always return a
+    # classified terminal error instead of losing the socket first.
+    native_response_idle_timeout_seconds: int = 600
+    native_response_total_timeout_seconds: int = 1200
+    native_turn_cache_ttl_seconds: int = 86400
 
     log_level: str = "INFO"
 

@@ -38,7 +38,6 @@ from omnia_api.services.max_project_kit import (
     render_max_history_files,
     render_max_managed_files,
     render_max_restored_files,
-    render_max_starter_files,
 )
 
 
@@ -133,6 +132,19 @@ def test_history_renderer_keeps_product_files_but_drops_managed_core() -> None:
     assert runtime_files["src/lib/max/session.ts"] != "old live auth"
     assert runtime_files["public/omnia-inspector.js"] != "old inspector"
     assert "Кофе" in runtime_files["src/lib/omnia/max-config.ts"]
+
+
+def test_empty_initial_history_restores_neutral_generation_canvas() -> None:
+    runtime_files = render_max_history_files({}, _config(), uuid4())
+    config_only_files = render_max_history_files(
+        {"src/lib/omnia/max-config.ts": "managed config only"},
+        _config(),
+        uuid4(),
+    )
+
+    assert 'data-max-product-canvas="empty"' in runtime_files[MAX_PRODUCT_ENTRY_PATH]
+    assert '@import "tailwindcss"' in runtime_files["src/app/globals.css"]
+    assert 'data-max-product-canvas="empty"' in config_only_files[MAX_PRODUCT_ENTRY_PATH]
 
 
 def test_history_preserves_every_current_model_owned_product_artifact() -> None:
@@ -230,9 +242,11 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "package.json",
         "pnpm-lock.yaml",
         "postcss.config.mjs",
+        "tsconfig.json",
         "public/omnia-inspector.js",
         MAX_PRODUCT_PAGE_PATH,
         "src/app/layout.tsx",
+        "src/app/max-runtime.css",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
         MAX_PRODUCT_RUNTIME_PATH,
@@ -287,8 +301,17 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "requestUrl.origin !== window.location.origin" in provider
     assert '!requestUrl.pathname.startsWith("/api/")' in provider
     assert 'from "@/components/OmniaCompliance"' in provider
+    assert "<OmniaCompliance fallback" in provider
+    assert 'className="omnia-max-runtime"' in provider
     assert "src/components/OmniaCompliance.tsx" in files
-    assert 'from "@/lib/omnia/max-config"' in files["src/components/OmniaCompliance.tsx"]
+    compliance = files["src/components/OmniaCompliance.tsx"]
+    assert "data-omnia-native-legal-nav" in compliance
+    assert "<details" in compliance
+    assert "<footer" not in compliance
+    assert "src/app/max-runtime.css" in files
+    assert "display: contents" in files["src/app/max-runtime.css"]
+    assert 'import "./max-runtime.css"' in files["src/app/layout.tsx"]
+    assert '"@/*": ["./src/*"]' in files["tsconfig.json"]
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
     assert "timingSafeEqual" in validator
@@ -332,23 +355,6 @@ def test_managed_kit_never_contains_model_or_generation_calls() -> None:
     assert "llmgw" not in combined
     assert "/chat/completions" not in combined
     assert "generate(" not in combined
-
-
-def test_starter_kit_is_a_working_green_product_shell() -> None:
-    files = render_max_starter_files(_config(), uuid4())
-
-    assert "OmniaProductRuntime" in files[MAX_PRODUCT_PAGE_PATH]
-    assert "ssr: false" in files[MAX_PRODUCT_RUNTIME_PATH]
-    assert "export default function ProductApp" in files[MAX_PRODUCT_ENTRY_PATH]
-    assert "useMaxApp" in files[MAX_PRODUCT_ENTRY_PATH]
-    assert "Начать" in files[MAX_PRODUCT_ENTRY_PATH]
-    assert "src/app/globals.css" in files
-    assert "src/app/layout.tsx" in files
-    css = files["src/app/globals.css"]
-    assert ":root" in css
-    assert ".max-shell" in css
-    assert "@media" in css
-    assert "TODO" not in "\n".join(files.values())
 
 
 def test_entry_migration_preserves_legacy_product_behind_locked_runtime() -> None:
@@ -465,7 +471,8 @@ def test_history_refuses_root_server_and_build_config_bypasses(unsafe_path: str)
 
 
 def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
-    files = render_max_managed_files(_config(), uuid4())
+    project_id = uuid4()
+    files = render_max_managed_files(_config(), project_id)
     client = files["src/lib/omnia/integration-client.ts"]
     proxy = files["src/app/api/omnia/integrations/[...path]/route.ts"]
 
@@ -474,10 +481,15 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     assert "text: result.answer" in client
     assert "createMaxAction" in client
     assert "getMaxActions" in client
+    assert 'credentials: "include"' in client
+    assert 'if (!initData) throw new Error("Откройте приложение внутри MAX")' not in client
     assert '"lucide-react": "^0.469.0"' in files["package.json"]
     assert '"tailwindcss": "^4.0.0"' in files["package.json"]
     assert '"catalog", "ai"' in proxy
     assert "/api/runtime/projects/${PROJECT_ID}/ai" in proxy
+    assert '["ai", "status", "catalog"].includes(operation)' in proxy
+    assert "if (!initData && !previewAllowed)" in proxy
+    assert f'const PROJECT_ID = "{project_id}";' in proxy
     assert "api_key" not in client.lower()
 
 
@@ -487,15 +499,22 @@ def test_model_directive_matches_locked_max_runtime_api() -> None:
     assert "languageCode" in MAX_MODEL_DIRECTIVE
     assert "There is no `useWebApp`, `useMaxUser`" in MAX_MODEL_DIRECTIVE
     assert "requestOmniaAI({ message, instructions, context })" in MAX_MODEL_DIRECTIVE
+    assert "Never dump a long\nunbroken AI paragraph" in MAX_MODEL_DIRECTIVE
     assert "Tailwind v4" in MAX_MODEL_DIRECTIVE
     assert "Recharts are not installed" in MAX_MODEL_DIRECTIVE
     assert "@maxhub/max-ui` 0.2.0" in MAX_MODEL_DIRECTIVE
     assert "Do not invent `Panel`, `Grid`, `Container`, `Flex`" in MAX_MODEL_DIRECTIVE
     assert "src/app/globals.css` is model-owned" in MAX_MODEL_DIRECTIVE
-    assert "360–390px MAX WebView" in MAX_MODEL_DIRECTIVE
+    assert "MAX UI is optional" in MAX_MODEL_DIRECTIVE
+    assert "MAX runtime supplies no palette" in MAX_MODEL_DIRECTIVE
+    assert "usable at 360–390px" in MAX_MODEL_DIRECTIVE
+    assert "persistent legal footer" in MAX_MODEL_DIRECTIVE
+    assert "`/legal/privacy`" in MAX_MODEL_DIRECTIVE
+    assert 'data-omnia-native-legal-nav="true"' in MAX_MODEL_DIRECTIVE
     assert "real user profile automatically" in MAX_MODEL_DIRECTIVE
     assert "demo/mock/sample/seed user records" in MAX_MODEL_DIRECTIVE
     assert "truthful empty states" in MAX_MODEL_DIRECTIVE
+    assert "never render a fake name" in MAX_MODEL_DIRECTIVE
 
 
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:

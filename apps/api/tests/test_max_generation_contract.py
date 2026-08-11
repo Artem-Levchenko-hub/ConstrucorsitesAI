@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from omnia_api.services.max_generation_contract import (
     MAX_REQUIRED_POST_SEE_SKILL,
     MAX_REQUIRED_PREWRITE_SKILLS,
@@ -55,9 +57,12 @@ def _complete_files() -> dict[str, str]:
             "export default function Page(){ const { user } = useMaxApp(); "
             "useEffect(() => { async function restore(){ await getMaxActions(); } "
             "void restore(); }, []); "
-            "return <main><button onClick={persist}>Сохранить</button>ИИ тренер: тренировки, сон, "
+            'return <main data-omnia-native-legal-nav="true"><button onClick={persist}>'
+            "Сохранить</button>ИИ тренер: тренировки, сон, "
             "питание, статистика, график, профиль, история, уведомления, loading, empty, "
-            "error, retry, {user?.firstName}</main>; }"
+            'error, retry, {user?.firstName}<nav><a href="/support">Поддержка</a>'
+            '<a href="/legal/privacy">Конфиденциальность</a>'
+            '<a href="/legal/terms">Условия</a></nav></main>; }'
         ),
         "src/components/Coach.tsx": "export function Coach(){ return <button>Анализ</button>; }\n"
         + "// coach interaction state\n" * 10,
@@ -118,7 +123,7 @@ export default function Page() {
       setEmpty(false);
     } catch { setFailure("Ошибка анализа — повторите"); } finally { setLoading(false); }
   }
-  return <main>
+  return <main data-omnia-native-legal-nav="true">
     <header><h1>Фитнес для {user?.firstName || "спортсмена"}</h1></header>
     <nav aria-label="Разделы">
       {["Тренировки", "Сон", "Питание", "Статистика", "Профиль",
@@ -132,6 +137,8 @@ export default function Page() {
     {empty && <p>Пусто: добавьте первую тренировку</p>}
     {failure && <button onClick={analyze}>Повтор</button>}
     {mode === "error" && <p>Ошибка MAX</p>}
+    <nav><a href="/support">Поддержка</a><a href="/legal/privacy">Конфиденциальность</a>
+      <a href="/legal/terms">Условия</a></nav>
   </main>;
 }
 """
@@ -149,12 +156,21 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "питание" in labels
     assert "уведомления" in labels
     assert "requestOmniaAI" in contract
+    assert "never dump a long unbroken AI paragraph" in contract
     assert "fake timers" in contract
     assert "loading, empty, error/retry" in contract
     assert ".omnia/max-design-spec.json" in contract
     assert "three distinct directions_considered" in contract
     assert "validated MAX initData" in contract
     assert "hardcoded demo" in contract
+    assert "static business menus" in contract.lower()
+    assert "primary scenario works on first open" in contract
+    assert "coherent on every screen and state" in contract
+    assert "browser/default blue buttons" in contract
+    assert "never nest a button/link" in contract
+    assert "sibling controls" in contract
+    assert "real h1/h2" in contract
+    assert "stable aria-label" in contract
 
 
 def test_completion_requires_persistent_project_specific_design_spec() -> None:
@@ -169,6 +185,137 @@ def test_completion_requires_persistent_project_specific_design_spec() -> None:
     spec["directions_considered"] = ["same", "same", "same"]
     files[".omnia/max-design-spec.json"] = json.dumps(spec)
     assert "three genuinely distinct" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+
+def test_completion_requires_product_owned_legal_navigation_when_enabled() -> None:
+    files = _complete_files()
+    page = files["src/app/page.tsx"]
+    files["src/app/page.tsx"] = page.replace(
+        ' data-omnia-native-legal-nav="true"', ""
+    ).replace('<a href="/legal/terms">Условия</a>', "")
+
+    gap = max_source_completion_gap(
+        COMPLEX_BRIEF,
+        files,
+        require_design_spec=False,
+        require_native_legal_nav=True,
+    )
+
+    assert gap is not None
+    assert "Native MAX support/legal navigation is incomplete" in gap
+    assert "/legal/terms" in gap
+
+    files = _complete_files()
+    page = files["src/app/page.tsx"]
+    for href, label in (
+        ("/support", "Поддержка"),
+        ("/legal/privacy", "Конфиденциальность"),
+        ("/legal/terms", "Условия"),
+    ):
+        page = page.replace(f'<a href="{href}">{label}</a>', f"<span>{label}</span>")
+    files["src/app/page.tsx"] = (
+        'const unusedLegalUrls = ["/support", "/legal/privacy", "/legal/terms"];\n'
+        'const unusedMarkup = \'<a href="/support">x</a>'
+        '<a href="/legal/privacy">x</a><a href="/legal/terms">x</a>\';\n'
+        + page
+    )
+    assert (
+        "Native MAX support/legal navigation is incomplete"
+        in str(
+            max_source_completion_gap(
+                COMPLEX_BRIEF,
+                files,
+                require_design_spec=False,
+                require_native_legal_nav=True,
+            )
+        )
+    )
+
+    files = _complete_files()
+    page = files["src/app/page.tsx"].replace(' data-omnia-native-legal-nav="true"', "")
+    files["src/app/page.tsx"] = (
+        'const unusedMarker = \'<main data-omnia-native-legal-nav="true">\';\n' + page
+    )
+    assert (
+        "Native MAX support/legal navigation is incomplete"
+        in str(
+            max_source_completion_gap(
+                COMPLEX_BRIEF,
+                files,
+                require_design_spec=False,
+                require_native_legal_nav=True,
+            )
+        )
+    )
+
+    assert (
+        max_source_completion_gap(
+            COMPLEX_BRIEF,
+            _complete_files(),
+            require_design_spec=False,
+            require_native_legal_nav=True,
+        )
+        is None
+    )
+
+
+def test_named_yookassa_and_iiko_require_real_managed_calls() -> None:
+    brief = "Ресторан: каталог iiko, заказы и реальная оплата через ЮKassa."
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += "\n// Каталог ресторана, iiko, ЮKassa, заказы\n"
+
+    gap = max_source_completion_gap(brief, files)
+    assert "getOmniaIntegrations" in str(gap)
+
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        "import { createMaxAction, getMaxActions, requestOmniaAI }",
+        "import { createMaxAction, getMaxActions, requestOmniaAI, "
+        "getOmniaIntegrations, createOmniaPayment, getOmniaCatalog }",
+    )
+    files["src/app/page.tsx"] += """
+async function integrationStatus() {
+  return await getOmniaIntegrations();
+}
+void integrationStatus;
+"""
+    gap = max_source_completion_gap(brief, files)
+    assert "createOmniaPayment" in str(gap)
+
+    files["src/app/page.tsx"] += """
+async function startPayment() {
+  return await createOmniaPayment({ amount: 100, description: "Заказ", return_url: "/" });
+}
+void startPayment;
+"""
+    gap = max_source_completion_gap(brief, files)
+    assert "confirmation_url" in str(gap)
+
+    files["src/app/page.tsx"] += """
+async function confirmPayment() {
+  const payment = await startPayment();
+  if (payment.confirmation_url) window.location.assign(payment.confirmation_url);
+}
+void confirmPayment;
+"""
+    gap = max_source_completion_gap(brief, files)
+    assert "getOmniaCatalog" in str(gap)
+
+    files["src/app/page.tsx"] += """
+async function loadRestaurantCatalog() {
+  return await getOmniaCatalog();
+}
+void loadRestaurantCatalog;
+"""
+    assert max_source_completion_gap(brief, files) is None
+
+
+def test_incremental_edit_can_explicitly_remove_provider_requirement() -> None:
+    brief = (
+        "ИСХОДНЫЙ БРИФ ПРОДУКТА:\nЗаказы с оплатой через ЮKassa.\n\n"
+        "ТЕКУЩАЯ ПРАВКА:\nУбери интеграцию с ЮKassa."
+    )
+
+    assert max_source_completion_gap(brief, _complete_single_file()) is None
 
 
 def test_completion_rejects_untouched_canvas_and_thin_cosmetic_page() -> None:
@@ -214,6 +361,16 @@ def test_safe_css_import_order_is_byte_stable() -> None:
 """
 
     assert normalize_max_globals_css(css) == css
+
+
+def test_css_import_normalizer_deduplicates_repair_artifacts() -> None:
+    font = "@import url('https://fonts.example/family');"
+    css = f'{font}\n@import "tailwindcss";\n{font}\n\n:root {{ color: black; }}\n'
+
+    fixed = normalize_max_globals_css(css)
+
+    assert fixed.count(font) == 1
+    assert fixed.startswith(f'{font}\n@import "tailwindcss";')
 
 
 def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
@@ -283,6 +440,30 @@ def test_instructional_copy_is_not_mistaken_for_seeded_records() -> None:
 
     assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
 
+
+def test_completion_rejects_generic_identity_fallback_but_allows_neutral_copy() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
+const displayName = user?.first_name ?? "Пользователь";
+"""
+    assert "generic identity fallback" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
+const displayName = user?.first_name || "Гость MAX";
+"""
+    assert "generic identity fallback" in str(max_source_completion_gap(COMPLEX_BRIEF, files))
+
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += """
+const greeting = user?.first_name ? `Рады видеть, ${user.first_name}` : "Начнём с цели";
+const aiRole = "User";
+// "Пользователь" is forbidden as a generic fallback.
+"""
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+
+def test_empty_profile_draft_is_not_mistaken_for_seeded_profile() -> None:
     files = _complete_single_file()
     files["src/app/page.tsx"] += """
 const profileDraft = { firstName: "", email: "" };
@@ -295,6 +476,320 @@ def test_demo_data_guard_only_applies_to_model_owned_product_source() -> None:
 
     assert "truthful empty state" in str(max_demo_data_rejection("src/app/page.tsx", content))
     assert max_demo_data_rejection("src/lib/omnia/max-config.ts", content) is None
+
+
+def test_static_workout_catalog_is_not_mistaken_for_user_history() -> None:
+    catalog = """
+const WORKOUT_CATALOG = [
+  { id: "mobility-15", title: "Мобильность", duration: 15, sets: 3, reps: "8" },
+];
+"""
+    library = """
+const WORKOUT_LIBRARY = [
+  { id: "strength-30", title: "Сила", duration: 30, sets: 4, reps: "10" },
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/catalog.ts", catalog) is None
+    assert max_demo_data_rejection("src/components/product/library.ts", library) is None
+
+    catalog_with_later_state = (
+        catalog + "\ntype ScreenState = { status: 'idle' | 'loading'; progress: number };"
+    )
+    assert (
+        max_demo_data_rejection("src/components/product/catalog.ts", catalog_with_later_state)
+        is None
+    )
+
+    catalog_with_wording = """
+const WORKOUT_CATALOG = [
+  {
+    id: "daily-20",
+    title: "status: ежедневная практика",
+    description: "progress: от простого к сложному",
+    duration: 20,
+    /* completed: wording in a maintainer comment only */
+  },
+];
+"""
+    assert (
+        max_demo_data_rejection("src/components/product/catalog.ts", catalog_with_wording) is None
+    )
+
+
+def test_static_business_menu_is_not_mistaken_for_user_orders() -> None:
+    menu = """
+const FALLBACK_MENU = [
+  {
+    id: "brioche",
+    name: "Бриошь с корицей",
+    category: "Выпечка",
+    description: "Воздушное тесто и корица",
+    composition: "Мука, молоко, масло, корица",
+    allergens: ["глютен", "лактоза"],
+    price: 320,
+    modifiers: [{ id: "warm", name: "Подогреть", price: 0 }],
+  },
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/menu.ts", menu) is None
+
+
+def test_commercial_product_dictionaries_are_not_mistaken_for_user_records() -> None:
+    content = """
+const DRINKS = [
+  { id: "flat-white", name: "Флэт уайт", price: 290, category: "Кофе" },
+];
+const ADDONS = [
+  { id: "oat", label: "Овсяное молоко", price: 60 },
+];
+const SIZES = [
+  { id: "large", title: "Большой", price: 80 },
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/ProductApp.tsx", content) is None
+
+
+def test_commercial_shape_cannot_hide_user_orders() -> None:
+    content = 'const ORDERS = [{ id: "order-1", name: "Флэт уайт", price: 290 }];'
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/ProductApp.tsx", content)).lower()
+    )
+
+
+@pytest.mark.parametrize("name", ["supportLabels", "dict", "statusLookup", "fieldMapping"])
+def test_ui_lookup_arrays_are_not_mistaken_for_user_records(name: str) -> None:
+    content = f"""
+const {name} = [
+  {{ id: "price", label: "Цена", price: 149, email: "Электронная почта" }},
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/ProductApp.tsx", content) is None
+
+
+@pytest.mark.parametrize("name", ["supportLabels", "dict", "statusLookup", "fieldMapping"])
+def test_ui_lookup_alias_cannot_hide_user_activity(name: str) -> None:
+    content = f"""
+const {name} = [
+  {{ id: "done", label: "Заказ", price: 149, orderId: "order-1", completed: true }},
+];
+"""
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/ProductApp.tsx", content)).lower()
+    )
+
+
+def test_fallback_items_are_reference_content_at_write_time() -> None:
+    content = """
+const FALLBACK_ITEMS = [
+  { id: "bread", title: "Хлеб", price: 149 },
+];
+"""
+
+    assert max_demo_data_rejection("src/components/product/ProductApp.tsx", content) is None
+
+
+def test_managed_catalog_cannot_be_hidden_by_populated_fallback() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = (
+        'import "../components/product/catalog";\n' + files["src/app/page.tsx"]
+    )
+    files["src/lib/omnia/max-config.ts"] = """
+export const omniaMaxConfig = {
+  content: [{ id: "bread", title: "Бородинский хлеб", price: "149 ₽", active: true }],
+};
+"""
+    files["src/components/product/catalog.ts"] = """
+const FALLBACK_MENU = [
+  { id: "other", name: "Другое изделие", price: 320 },
+];
+"""
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert gap is not None
+    assert "canonical catalog content" in gap
+    assert "FALLBACK_MENU" in gap
+
+
+def test_empty_managed_catalog_can_use_compact_reference_catalog() -> None:
+    files = _complete_single_file()
+    files["src/lib/omnia/max-config.ts"] = "export const omniaMaxConfig = { content: [] };"
+    files["src/components/product/catalog.ts"] = """
+const FALLBACK_MENU = [
+  { id: "brioche", name: "Бриошь", price: 320 },
+];
+"""
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+
+def test_managed_formatted_price_must_not_use_number_directly() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] = (
+        'import "../components/product/catalog";\n' + files["src/app/page.tsx"]
+    )
+    files["src/lib/omnia/max-config.ts"] = """
+export const omniaMaxConfig = {
+  content: [{ id: "bread", title: "Бородинский хлеб", price: "149 ₽", active: true }],
+};
+"""
+    files["src/components/product/catalog.ts"] = """
+export function mapItem(raw: { title: string; price: string | number }) {
+  const price = typeof raw.price === "string" ? Number(raw.price) : raw.price;
+  return { id: raw.title, name: raw.title, price };
+}
+"""
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert gap is not None
+    assert "formatted strings" in gap
+    assert "Number" in gap
+
+
+def test_unreferenced_stale_fallback_does_not_block_repaired_product() -> None:
+    files = _complete_single_file()
+    files["src/lib/omnia/max-config.ts"] = """
+export const omniaMaxConfig = {
+  content: [{ id: "bread", title: "Бородинский хлеб", price: "149 ₽", active: true }],
+};
+"""
+    files["src/components/product/catalog.ts"] = """
+const FALLBACK_MENU = [
+  { id: "stale", name: "Старый товар", price: 320 },
+];
+export function stale(raw: { price: string }) {
+  return typeof raw.price === "string" ? Number(raw.price) : raw.price;
+}
+"""
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+
+def test_managed_config_cannot_be_cast_to_any() -> None:
+    files = _complete_single_file()
+    files["src/app/page.tsx"] += "\nconst support = String((omniaMaxConfig as any).support);"
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert gap is not None
+    assert "casts omniaMaxConfig" in gap
+    assert "support fields" in gap
+
+
+@pytest.mark.parametrize(
+    "user_fields",
+    [
+        'status: "completed", date: "2026-08-08"',
+        'userId: "42", orderId: "order-1"',
+        '"completed": true, "createdAt": "2026-08-08"',
+    ],
+)
+def test_static_business_menu_cannot_hide_user_activity(user_fields: str) -> None:
+    menu = f"""
+const FALLBACK_MENU = [
+  {{ id: "brioche", name: "Бриошь", price: 320, {user_fields} }},
+];
+"""
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/menu.ts", menu)).lower()
+    )
+
+
+def test_fake_named_business_menu_is_still_rejected() -> None:
+    menu = 'const DEMO_MENU = [{ id: "dish-1", name: "Бриошь", price: 320 }];'
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/menu.ts", menu)).lower()
+    )
+
+
+def test_static_catalog_with_user_activity_fields_is_still_rejected() -> None:
+    content = """
+const WORKOUT_CATALOG = [
+  { id: "done-1", title: "Сила", userId: "42", completedAt: "2026-08-08" },
+];
+"""
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/catalog.ts", content)).lower()
+    )
+
+    later_record = """
+const WORKOUT_CATALOG = [
+  { id: "reference-1", title: "Сила", duration: 30 },
+  { id: "done-1", title: "Кардио", userId: "42", completedAt: "2026-08-08" },
+];
+"""
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/catalog.ts", later_record)).lower()
+    )
+
+    deceptive_terminator = """
+const WORKOUT_CATALOG = [
+  { id: "reference-1", title: "];", duration: 30 },
+  { id: "done-1", title: "Кардио", userId: "42", completed: true },
+];
+"""
+    assert (
+        "demo user data"
+        in str(
+            max_demo_data_rejection("src/components/product/catalog.ts", deceptive_terminator)
+        ).lower()
+    )
+
+
+@pytest.mark.parametrize(
+    "activity_fields",
+    [
+        'completed: true, date: "2026-08-08"',
+        'status: "completed", happenedAt: "2026-08-08"',
+        "progress: 75, streak: 4",
+        'firstName: "Анна", username: "fitness_pro"',
+    ],
+)
+def test_static_catalog_alias_cannot_hide_fake_activity(activity_fields: str) -> None:
+    content = f'const WORKOUT_LIBRARY = [{{ id: "done-1", {activity_fields} }}];'
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/library.ts", content)).lower()
+    )
+
+
+def test_static_catalog_alias_cannot_hide_quoted_activity_keys() -> None:
+    content = """
+const WORKOUT_CATALOG = [
+  { "id": "done-1", "status": "completed", "date": "2026-08-08" },
+];
+"""
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/catalog.ts", content)).lower()
+    )
+
+
+def test_user_activity_collection_cannot_hide_behind_catalog_suffix() -> None:
+    content = 'const ORDER_CATALOG = [{ id: "order-1", title: "Заказ" }];'
+
+    assert (
+        "demo user data"
+        in str(max_demo_data_rejection("src/components/product/catalog.ts", content)).lower()
+    )
 
 
 def test_completion_requires_only_max_compatible_runtime_proof() -> None:
@@ -355,6 +850,45 @@ def test_completion_requires_verified_identity_and_read_after_write() -> None:
         "    void restore();\n"
         "  }, []);\n",
         "  void getMaxActions;\n",
+    )
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+    assert "does not restore it after reload" in str(gap)
+
+
+def test_completion_accepts_usecallback_loader_mounted_from_useeffect() -> None:
+    files = _complete_single_file()
+    page = files["src/app/page.tsx"].replace(
+        'import { useEffect, useState } from "react";',
+        'import { useCallback, useEffect, useState } from "react";',
+    )
+    page = page.replace(
+        "  useEffect(() => {\n"
+        "    async function restore() { await getMaxActions(); }\n"
+        "    void restore();\n"
+        "  }, []);\n",
+        "  const loadHistory = useCallback(async () => {\n"
+        "    const result = await getMaxActions();\n"
+        "    void result.actions;\n"
+        "  }, []);\n"
+        "  useEffect(() => {\n"
+        "    void loadHistory();\n"
+        "  }, [loadHistory]);\n",
+    )
+    files["src/app/page.tsx"] = page
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+    files["src/app/page.tsx"] = page.replace("void loadHistory();", "void loadHistory;")
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+    assert "does not restore it after reload" in str(gap)
+
+    files["src/app/page.tsx"] = page.replace(
+        "    const result = await getMaxActions();\n    void result.actions;",
+        "    void 0;\n"
+        "  }, []);\n"
+        "  const unrelatedLoader = async () => {\n"
+        "    const result = await getMaxActions();\n"
+        "    void result.actions;",
     )
     gap = max_source_completion_gap(COMPLEX_BRIEF, files)
     assert "does not restore it after reload" in str(gap)

@@ -1,9 +1,8 @@
 """OpenAI-compatible text provider for llmgw.ru.
 
 The public API lives under ``https://api.llmgw.ru/v1`` and uses
-``Authorization: Bearer <LLMGW_API_KEY>``. The provider requires canonical
-Gemini uses llmgw's vendor-prefixed id. Sonnet 5 uses llmgw's canonical
-``claude-sonnet-5`` id.
+``Authorization: Bearer <LLMGW_API_KEY>``. The provider requires its
+vendor-prefixed catalog ids for both Gemini and Sonnet 5.
 
 Why a sync ``httpx.Client`` on a worker thread instead of ``AsyncClient``: the
 gateway container may carry an ``HTTPS_PROXY`` (a UK egress used only to
@@ -56,7 +55,7 @@ def _http_status_is_ambiguous(status_code: int) -> bool:
 # Omnia model ID → the exact llmgw catalog id sent as the OpenAI `model` field.
 _MODEL_SLUG: dict[str, str] = {
     "gemini-3.1-pro-preview-customtools": "google/gemini-3.1-pro-preview-customtools",
-    "claude-sonnet-5": "claude-sonnet-5",
+    "claude-sonnet-5": "anthropic/claude-sonnet-5",
 }
 
 # The native Messages response may add the provider prefix; accept both forms.
@@ -69,9 +68,7 @@ _SLUG_TO_OMNIA: dict[str, str] = {
 
 # Natively multimodal models — keep OpenAI image_url blocks instead of flattening
 # them (the acceptance/vision judge + the agent `see` tool send screenshots).
-_MULTIMODAL: frozenset[str] = frozenset(
-    {"gemini-3.1-pro-preview-customtools", "claude-sonnet-5"}
-)
+_MULTIMODAL: frozenset[str] = frozenset({"gemini-3.1-pro-preview-customtools", "claude-sonnet-5"})
 
 _DEFAULT_MAX_TOKENS = 32768
 # Long art-director / writer passes run ~150s non-streaming. 240s clears them while

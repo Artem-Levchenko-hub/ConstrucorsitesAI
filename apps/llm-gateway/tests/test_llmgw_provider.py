@@ -35,8 +35,8 @@ def test_is_llmgw_model() -> None:
 
 
 def test_slug_mapping_round_trip() -> None:
-    # Omnia id → canonical llmgw catalog slug.
-    assert llmgw.native_slug(_MODEL) == "claude-sonnet-5"
+    # Omnia id → exact vendor-prefixed llmgw catalog slug.
+    assert llmgw.native_slug(_MODEL) == "anthropic/claude-sonnet-5"
     assert llmgw.native_slug("unknown-model") == "unknown-model"
     # Upstream response `model` → Omnia id (both surfaces' spellings).
     assert llmgw.slug_to_omnia("claude-sonnet-5") == _MODEL
@@ -202,9 +202,7 @@ async def test_astream_eof_without_terminal_marker_is_ambiguous(monkeypatch) -> 
             super().__init__(lambda: None)
 
         def stream(self, *_args, **_kwargs):
-            return _StreamResponse(
-                ['data: {"choices":[{"delta":{"content":"partial"}}]}']
-            )
+            return _StreamResponse(['data: {"choices":[{"delta":{"content":"partial"}}]}'])
 
     monkeypatch.setattr(llmgw, "_key_and_url", lambda _model: ("key", "https://provider.invalid"))
     monkeypatch.setattr(llmgw.httpx, "Client", Client)

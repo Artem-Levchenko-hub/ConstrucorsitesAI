@@ -19,7 +19,7 @@ CREATIVE_CAPABILITY_PACKS = {
 }
 
 
-def test_max_system_gets_only_compact_capability_catalog() -> None:
+def test_stable_max_system_omits_unavailable_capability_catalog() -> None:
     index = agent_builder.load_stack_skill_index("max-miniapp-nextjs")
 
     assert index is not None
@@ -28,12 +28,14 @@ def test_max_system_gets_only_compact_capability_catalog() -> None:
     assert "`ui-ux-pro-max`" in index
     assert "Micro feedback" not in index
 
-    prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT", index)
-    assert "MAX capability catalog" in prompt
-    assert "`product-flow`" in prompt
-    assert "read_skill(`ui-ux-pro-max`)" in prompt
-    assert "read_skill(`production-readiness`)" in prompt
-    assert "read_skill(`visual-evaluation`)" in prompt
+    prompt = agent_native.native_system_prompt(
+        "MAX PLATFORM CORE CONTRACT",
+        index,
+        stable_max_loop=True,
+    )
+    assert "MAX capability catalog" not in prompt
+    assert "read_skill" not in prompt
+    assert "MAX PLATFORM CORE CONTRACT" in prompt
 
 
 def test_creative_capability_architecture_is_routable_without_templates() -> None:

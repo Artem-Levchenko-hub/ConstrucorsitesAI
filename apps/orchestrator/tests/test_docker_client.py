@@ -9,6 +9,7 @@ the label-set we stamp onto containers.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import docker  # type: ignore[import-untyped]
@@ -96,12 +97,20 @@ def test_container_spec_carries_tier_for_hibernate() -> None:
 
 
 class _FakeContainer:
-    def __init__(self, cid: str, image: str, status: str = "running") -> None:
+    def __init__(
+        self,
+        cid: str,
+        image: str,
+        status: str = "running",
+        *,
+        manifest_exists: bool = True,
+    ) -> None:
         self.id = cid
         self.status = status
         self.attrs = {"Config": {"Image": image}}
         self.removed = False
         self.started = False
+        self.manifest_exists = manifest_exists
 
     def reload(self) -> None:
         pass
@@ -115,6 +124,9 @@ class _FakeContainer:
 
     def remove(self, force: bool = False) -> None:
         self.removed = True
+
+    def exec_run(self, **_: Any) -> SimpleNamespace:
+        return SimpleNamespace(exit_code=0 if self.manifest_exists else 1)
 
 
 class _FakeContainers:
@@ -158,13 +170,14 @@ class _FakeClient:
         self.networks = _FakeNetworks()
 
 
-def _spec(image: str) -> ContainerSpec:
+def _spec(image: str, *, integrity_path: str | None = None) -> ContainerSpec:
     return ContainerSpec(
         name="omnia-dev-x",
         image=image,
         port=3200,
         project_id="00000000-0000-0000-0000-000000000001",
         env={},
+        integrity_path=integrity_path,
     )
 
 
@@ -201,6 +214,30 @@ async def test_start_container_reuses_when_image_matches(
     assert same.removed is False
     assert client.containers.run_called is False
     assert cid == "live-id"
+
+
+async def test_start_container_recreates_when_template_core_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broken = _FakeContainer(
+        "broken-id",
+        "omnia-template-max-miniapp-nextjs:dev",
+        status="running",
+        manifest_exists=False,
+    )
+    client = _FakeClient(broken)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    cid = await docker_client.start_container(
+        _spec(
+            "omnia-template-max-miniapp-nextjs:dev",
+            integrity_path="package.json",
+        )
+    )
+
+    assert broken.removed is True
+    assert client.containers.run_called is True
+    assert cid == "new-container-id"
 
 
 def test_module_exposes_expected_public_api() -> None:

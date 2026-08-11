@@ -4,6 +4,7 @@ const PROJECT_ID = process.env.OMNIA_PROJECT_ID || "";
 const PLATFORM_API = (
   process.env.OMNIA_PLATFORM_API_URL || "https://constructor.lead-generator.ru"
 ).replace(/\/$/, "");
+const PREVIEW_CAPABILITY_COOKIE = "omnia-max-preview-capability";
 
 type Context = { params: Promise<{ path: string[] }> };
 
@@ -30,9 +31,18 @@ export async function POST(request: NextRequest, context: Context) {
     initData?: unknown;
     payload?: unknown;
   };
-  if (typeof body.initData !== "string") {
+  const initData = typeof body.initData === "string" ? body.initData : "";
+  const previewCapability = request.cookies.get(PREVIEW_CAPABILITY_COOKIE)?.value || "";
+  if (!initData && !previewCapability) {
     return NextResponse.json(
       { error: { message: "Откройте приложение внутри MAX" } },
+      { status: 401 },
+    );
+  }
+  const previewAllowed = ["ai", "status", "catalog"].includes(operation);
+  if (!initData && !previewAllowed) {
+    return NextResponse.json(
+      { error: { message: "Эта интеграция доступна после запуска приложения в MAX" } },
       { status: 401 },
     );
   }
@@ -47,12 +57,17 @@ export async function POST(request: NextRequest, context: Context) {
       : operation === "payment-status"
         ? `/api/runtime/projects/${PROJECT_ID}/payments/status`
       : `/api/runtime/projects/${PROJECT_ID}/${operation}`;
+  const upstreamHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (initData) {
+    upstreamHeaders["X-MAX-Init-Data"] = initData;
+  } else {
+    upstreamHeaders["X-Omnia-MAX-Preview-Capability"] = previewCapability;
+  }
   const upstream = await fetch(`${PLATFORM_API}${upstreamPath}`, {
     method: readOnly ? "GET" : "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-MAX-Init-Data": body.initData,
-    },
+    headers: upstreamHeaders,
     body: readOnly ? undefined : JSON.stringify(body.payload || {}),
     cache: "no-store",
   });

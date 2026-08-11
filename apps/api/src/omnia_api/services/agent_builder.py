@@ -1394,23 +1394,31 @@ def _css_import_misplaced(content: str) -> bool:
 
 
 def _sanitize_css_imports(path: str, content: str) -> str:
-    """Hoist every @import to the top of a .css file (after @charset). No-op — and
-    byte-identical — unless an @import is actually misplaced, so a correct file is
-    never rewritten."""
+    """Hoist and deduplicate CSS imports, keeping Tailwind after external imports.
+
+    Tailwind expands into rules during the Next build, so a font import after
+    Tailwind can become an illegal late import even when both source lines are at
+    the top. A safe already-normalized file remains byte-identical.
+    """
     if not _is_css(path) or "@import" not in content.lower():
-        return content
-    if not _css_import_misplaced(content):
         return content
     imports = [m.group(0).strip() for m in _CSS_IMPORT_RE.finditer(content)]
     if not imports:
         return content  # @import lives inside a rule/comment — leave it alone
+    unique_imports = list(dict.fromkeys(imports))
+    ordered_imports = sorted(
+        unique_imports,
+        key=lambda line: 1 if "tailwindcss" in line.lower() else 0,
+    )
+    if not _css_import_misplaced(content) and imports == ordered_imports:
+        return content
     rest = _CSS_IMPORT_RE.sub("", content)
     charset = ""
     cm = _CSS_CHARSET_RE.search(rest)
     if cm:
         charset = cm.group(0).strip() + "\n"
         rest = _CSS_CHARSET_RE.sub("", rest, count=1)
-    block = "".join(i + "\n" for i in imports)
+    block = "".join(i + "\n" for i in ordered_imports)
     return charset + block + rest.lstrip("\n")
 
 
@@ -1572,8 +1580,13 @@ def make_container_executor(
                 )
                 ok = bool(res.get("ok", True))
                 code = res.get("status_code")
-                if ok:
-                    detail = f"route {path} renders OK (HTTP {code or 200})"
+                if ok and code is not None:
+                    detail = f"route {path} renders OK (HTTP {code})"
+                elif ok:
+                    detail = (
+                        f"route {path} did not answer yet; retry runtime_check "
+                        "without changing source"
+                    )
                 else:
                     err = res.get("error") or "5xx"
                     where = res.get("file")

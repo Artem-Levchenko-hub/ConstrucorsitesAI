@@ -202,10 +202,14 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
     def _spawn(**kwargs: object) -> None:
         spawned.append(kwargs)
 
+    async def _not_deployed(_project_id: uuid.UUID) -> dict[str, object]:
+        return {}
+
     app.dependency_overrides[get_current_user] = _current_user
     monkeypatch.setattr(messages, "get_settings", lambda: settings)
     monkeypatch.setattr(messages, "_spawn_process_prompt", _spawn)
     monkeypatch.setattr(messages, "get_redis", lambda: _NoopRedis())
+    monkeypatch.setattr(messages.orchestrator_client, "get_deploy", _not_deployed)
     payload = {
         "prompt": "Собери статический сайт",
         "skip_clarify": True,
@@ -374,6 +378,7 @@ async def test_build_without_snapshot_is_failed_product_outcome(
 
     await db_session.refresh(run)
     assert run.status == "failed"
+    assert run.error == "api_process_restarted"
     assert run.finished_at is not None
     assert run.error == "build finished without a committed snapshot"
 

@@ -22,7 +22,7 @@ export function PublicPageShell({
           <BrandMark />
           <div className="flex items-center gap-3">
             <Link href="/" className="hidden items-center gap-2 text-xs text-[#6d6962] hover:text-[#171716] sm:inline-flex"><ArrowLeft className="size-4" />На главную</Link>
-            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-9 px-4 text-xs">Создать приложение</Link>
+            <Link href="/max/demo" className="omnia-button omnia-button-primary min-h-9 px-4 text-xs">Попробовать демо</Link>
           </div>
         </div>
       </header>

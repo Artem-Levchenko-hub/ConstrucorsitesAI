@@ -153,6 +153,7 @@ def test_inspector_reports_runtime_errors() -> None:
     assert '"unhandledrejection"' in src
     # Gating contract: silent without a workspace parent (public /p/ stays clean).
     assert "window.parent === window" in src
+    assert "window.parent && window.parent !== window" in src
 
 
 def test_inspector_atomic_editor_mode_contract() -> None:

@@ -69,8 +69,11 @@ function installAuthenticatedFetch(initData: string) {
 
 const previewUser: MaxSessionUser = {
   id: "preview",
-  firstName: "Пользователь",
-  lastName: "MAX",
+  // A preview has no verified MAX profile. Keep identity empty so product code
+  // exercises its honest neutral greeting instead of rendering a synthetic
+  // person that the visual/product gates correctly reject as fake data.
+  firstName: "",
+  lastName: null,
   username: "preview",
   languageCode: "ru",
   photoUrl: null,
@@ -237,14 +240,18 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(() => state, [state]);
   return (
-    <MaxUI platform={appearance.platform} colorScheme={appearance.colorScheme}>
+    <MaxUI
+      className="omnia-max-runtime"
+      platform={appearance.platform}
+      colorScheme={appearance.colorScheme}
+    >
       <MaxContext.Provider value={value}>
         {state.mode === "loading" || state.mode === "error" ? (
           <AuthScreen error={state.error} onRetry={() => void authenticate()} />
         ) : (
           <>
             {children}
-            <OmniaCompliance />
+            <OmniaCompliance fallback />
           </>
         )}
       </MaxContext.Provider>

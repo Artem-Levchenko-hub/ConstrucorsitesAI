@@ -428,6 +428,9 @@ def test_max_miniapp_prompt_routes_to_platform_stack() -> None:
     assert "MAX_BOT_TOKEN" in sp
     assert "requireMaxUser()" in sp
     assert "Telegram WebApp API" in sp
+    assert "MAX UI доступен, но необязателен" in sp
+    assert "постоянный юридический футер" in sp
+    assert 'data-omnia-native-legal-nav="true"' in sp
     assert _TGBOT_MARKER not in sp
     assert _SPA_MARKER not in sp
 

@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Response, status
 from fastapi.responses import StreamingResponse
 from slugify import slugify
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,11 +27,13 @@ from omnia_api.core.security import create_access_token
 from omnia_api.models.billing import BillingAccount
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.lead import Lead
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.models.usage import Usage
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.project import (
@@ -794,6 +796,28 @@ async def delete_project(
     # the ORM layer when the project row goes.
     await asyncio.to_thread(repo_svc.delete_repo, project.id)
 
+    # Usage is an immutable billing ledger and must survive project deletion.
+    # It points both to Project and to two rows (Message/GenerationRun) that
+    # cascade from Project. PostgreSQL can execute those referential actions in
+    # either order; without this single explicit detach, one SET NULL branch can
+    # validate against a child already removed by another branch and abort the
+    # whole delete with fk_usage_run_id_generation_runs. Preserve the ledger,
+    # but remove every project-owned pointer before starting the cascade.
+    project_message_ids = select(Message.id).where(Message.project_id == project.id)
+    project_run_ids = select(GenerationRun.id).where(
+        GenerationRun.project_id == project.id
+    )
+    await session.execute(
+        update(Usage)
+        .where(
+            or_(
+                Usage.project_id == project.id,
+                Usage.message_id.in_(project_message_ids),
+                Usage.run_id.in_(project_run_ids),
+            )
+        )
+        .values(project_id=None, message_id=None, run_id=None)
+    )
     await session.delete(project)
     await session.commit()
 

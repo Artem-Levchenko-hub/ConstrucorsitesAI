@@ -93,8 +93,12 @@ def _egress_env() -> dict[str, str]:
         return {}
     nop = s.container_egress_no_proxy
     return {
-        "HTTP_PROXY": proxy, "HTTPS_PROXY": proxy, "NO_PROXY": nop,
-        "http_proxy": proxy, "https_proxy": proxy, "no_proxy": nop,
+        "HTTP_PROXY": proxy,
+        "HTTPS_PROXY": proxy,
+        "NO_PROXY": nop,
+        "http_proxy": proxy,
+        "https_proxy": proxy,
+        "no_proxy": nop,
     }
 
 
@@ -136,6 +140,7 @@ def load_existing_auth_secret(project_id: str) -> str | None:
         return None
     return value or None
 
+
 log = structlog.get_logger("omnia_orchestrator.provisioner")
 
 # A cold image rebuild is shared by template, but the rest of provisioning is
@@ -167,6 +172,7 @@ def _template_source_dir(template: str) -> Path:
 
 def _copy_template(src: Path, dest: Path) -> None:
     """Copy template tree, skipping node_modules / .next / .git / __pycache__."""
+
     def _ignore(_dir: str, names: list[str]) -> list[str]:
         return [n for n in names if n in {"node_modules", ".next", ".git", "__pycache__"}]
 
@@ -240,7 +246,11 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
     dev_origin = nginx_writer.dev_url(req.slug)
 
     env = {
+        # Optional caller values are lowest priority. Tenant/auth/runtime
+        # boundaries below must never be overridden by an internal request.
+        **req.initial_env,
         "DATABASE_URL": database_url,
+        "OMNIA_DB_SCHEMA": postgres_admin.project_schema_name(req.project_id),
         "NODE_ENV": "development",
         "OMNIA_PROJECT_ID": str(req.project_id),
         "OMNIA_PLATFORM_API_URL": os.getenv(
@@ -251,7 +261,6 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
         "AUTH_TRUST_HOST": "true",
         **_integration_env(),
         **_egress_env(),
-        **req.initial_env,
     }
 
     # Area C (DARK): when the orchestrator runs with OMNIA_GATE_SEED=1, ask the
@@ -260,9 +269,7 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
     # no seed account.
     if os.getenv("OMNIA_GATE_SEED") == "1":
         env["OMNIA_GATE_SEED"] = "1"
-        env["OMNIA_GATE_SEED_EMAIL"] = os.getenv(
-            "OMNIA_GATE_SEED_EMAIL", "gate@omnia.local"
-        )
+        env["OMNIA_GATE_SEED_EMAIL"] = os.getenv("OMNIA_GATE_SEED_EMAIL", "gate@omnia.local")
 
     # Next.js 15 + Turbopack peaks well past 2 GB during the first compile of a
     # heavy entity/fullstack app (many routes); once warm it settles around
@@ -275,11 +282,7 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
     # daemon API stopped/paused, so an idle-sweep `stop` stays down until /wake.
     # Per-project network isolation (Phase 1) — own bridge net per project when
     # enabled, else None → docker_client uses the shared runtime net (current).
-    network_name = (
-        f"omnia-proj-{req.project_id}"
-        if settings.isolate_project_network
-        else None
-    )
+    network_name = f"omnia-proj-{req.project_id}" if settings.isolate_project_network else None
 
     spec = ContainerSpec(
         name=container_name,
@@ -292,6 +295,10 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
         restart_policy_name="unless-stopped",
         tier=req.tier,
         container_port=stack.container_port,
+        integrity_path=next(
+            (name for name in ("package.json", "pyproject.toml") if (src / name).is_file()),
+            None,
+        ),
         network_name=network_name,
         # Sandbox hardening (Phase 1) — the agent runs arbitrary bash in this
         # dev container, so it is the untrusted boundary. All knobs default to

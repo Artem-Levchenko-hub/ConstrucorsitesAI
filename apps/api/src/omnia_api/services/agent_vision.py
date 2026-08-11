@@ -18,6 +18,8 @@ that could kill the loop.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -27,6 +29,13 @@ from uuid import UUID
 # for an irrelevant 1440px render.
 _WEB_SEE_WIDTHS = (1440, 360)
 _MAX_SEE_WIDTHS = (390, 360)
+# A full MAX build is much more expensive than another audit of the same captured
+# pixels. The visual provider has shown 20-60 second transient brownouts in
+# production, so keep the quality gate strict but give it a bounded recovery
+# window before the caller discards an otherwise green application.
+_MAX_VISION_RETRY_DELAYS_SECONDS = (0, 5, 10, 20)
+
+log = logging.getLogger(__name__)
 
 
 async def see_page(
@@ -77,22 +86,54 @@ async def see_page(
             url,
             widths,
             bootstrap_url=bootstrap_url,
+            hide_platform_chrome=True,
         )
     except Exception as exc:
         return {"ok": False, "error": f"could not render {rel}: {type(exc).__name__}"}
     if not shots:
         return {"ok": False, "error": f"render produced no screenshot for {rel}"}
 
-    verdict = await vision_audit.audit_screenshots(
-        shots,
-        prompt_context=prompt_context,
-        project_id=str(pid),
-        product_kind=product_kind,
-    )
+    # A screenshot capture is comparatively expensive, while an unavailable or
+    # unparsable judge response is often transient. Reuse the same captured
+    # pixels for a bounded delayed retry window instead of sending the native
+    # build agent through another paid reasoning turn just to call ``see`` again.
+    verdict = None
+    delays = _MAX_VISION_RETRY_DELAYS_SECONDS if product_kind == "max_miniapp" else (0,)
+    for attempt, delay_seconds in enumerate(delays):
+        if delay_seconds:
+            await asyncio.sleep(delay_seconds)
+        verdict = await vision_audit.audit_screenshots(
+            shots,
+            prompt_context=prompt_context,
+            project_id=str(pid),
+            product_kind=product_kind,
+            retry_index=attempt,
+        )
+        if not verdict.skipped:
+            if attempt:
+                log.info(
+                    "metric=max_vision_retry_recovered project_id=%s attempt=%d",
+                    pid,
+                    attempt + 1,
+                )
+            break
+        log.warning(
+            "metric=max_vision_retry_skipped project_id=%s attempt=%d total=%d reason=%s",
+            pid,
+            attempt + 1,
+            len(delays),
+            getattr(verdict, "skip_reason", "unknown") or "unknown",
+        )
+    assert verdict is not None
     if verdict.skipped:
         return {
             "ok": True,
-            "detail": f"saw {rel}, but the vision judge was unavailable (skipped)",
+            "detail": (
+                f"saw {rel}, but the vision judge was unavailable after "
+                f"{len(delays)} attempts"
+            ),
+            "proof_unavailable": True,
+            "audit_attempts": len(delays),
         }
     max_quality_failed = product_kind == "max_miniapp" and (
         verdict.verdict != "beautiful" or int(verdict.score) < 8

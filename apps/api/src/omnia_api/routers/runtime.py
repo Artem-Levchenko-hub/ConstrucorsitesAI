@@ -73,6 +73,28 @@ _DEPLOY_MAX_FILE_BYTES = 2 * 1024 * 1024
 _DEPLOY_MAX_TOTAL_BYTES = 32 * 1024 * 1024
 
 
+async def _acquire_runtime_start_lock(session: AsyncSession, project_id: UUID) -> None:
+    """Fail fast when generation/config already owns the project transaction lock.
+
+    Waiting on ``pg_advisory_xact_lock`` is bounded by the database command timeout.
+    A simultaneous Studio generation therefore used to surface as an unhandled 500
+    ``TimeoutError`` even though the correct product response is a retryable conflict.
+    """
+
+    acquired = (
+        await session.execute(
+            text("SELECT pg_try_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": str(project_id)},
+        )
+    ).scalar_one()
+    if not acquired:
+        raise ApiError(
+            "conflict",
+            "Проект уже подготавливается или выполняет генерацию",
+            status.HTTP_409_CONFLICT,
+        )
+
+
 def _validate_deploy_source_files(files: dict[str, str]) -> None:
     """Bound the immutable internal deploy payload before crossing services."""
     if not files:
@@ -217,10 +239,7 @@ async def start_runtime(
     provisions on first call. (Wake-on-request is wired separately at the ingress
     layer, so a sleeping preview self-revives on the first visitor hit.)
     """
-    await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
-        {"project_id": str(project_id)},
-    )
+    await _acquire_runtime_start_lock(session, project_id)
     project = (
         await session.execute(
             select(Project)

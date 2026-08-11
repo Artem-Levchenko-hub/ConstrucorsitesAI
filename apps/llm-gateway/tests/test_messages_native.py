@@ -6,7 +6,7 @@ import json
 from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID
 
 import httpx
@@ -28,6 +28,19 @@ def app(neutralize_lifespan: None) -> FastAPI:
 def client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("invalid_request", "invalid_request"),
+        ("auth.failed", "auth.failed"),
+        ("credential-like value", ""),
+        ("x" * 81, ""),
+    ],
+)
+def test_upstream_error_type_is_safe_for_logs(raw: str, expected: str) -> None:
+    assert messages_native._safe_upstream_error_type(raw) == expected
 
 
 @pytest.fixture(autouse=True)
@@ -326,7 +339,7 @@ def test_native_endpoint_uses_sonnet_chat_tools(
 
     assert response.status_code == 200
     assert captured["url"] == "https://api.llmgw.ru/v1/chat/completions"
-    assert captured["json"]["model"] == "claude-sonnet-5"
+    assert captured["json"]["model"] == "anthropic/claude-sonnet-5"
     assert captured["json"]["tools"][0]["function"]["name"] == "done"
     assert response.json()["content"][0] == {
         "type": "tool_use",
@@ -336,9 +349,7 @@ def test_native_endpoint_uses_sonnet_chat_tools(
     }
     assert messages_native.billing.charge.await_args.kwargs[
         "provider_cost_usd"
-    ] == messages_native._reserve_native_provider_cost(
-        "claude-sonnet-5", captured["json"]
-    )
+    ] == messages_native._reserve_native_provider_cost("claude-sonnet-5", captured["json"])
 
 
 def test_native_endpoint_attributes_and_bills_actual_cached_usage(
@@ -417,9 +428,9 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     assert reserve_kwargs["reserved_cost_rub"] > Decimal("0")
     assert reserve_kwargs["reserved_provider_cost_usd"] > Decimal("0")
     assert reserve_kwargs["reserved_provider_cost_usd"] != Decimal("0.35")
-    assert reserve_kwargs["max_requests"] == 80
-    assert reserve_kwargs["max_cost_rub"] == Decimal("1200.0")
-    assert reserve_kwargs["max_provider_cost_usd"] == Decimal("2.5")
+    assert reserve_kwargs["max_requests"] == 160
+    assert reserve_kwargs["max_cost_rub"] == Decimal("5000.0")
+    assert reserve_kwargs["max_provider_cost_usd"] == Decimal("10.0")
 
 
 def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
@@ -519,7 +530,9 @@ def test_native_endpoint_releases_reservation_after_explicit_upstream_rejection(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     release = AsyncMock(return_value=None)
+    warning = Mock()
     monkeypatch.setattr(messages_native.billing, "release_native_run_reservation", release)
+    monkeypatch.setattr(messages_native.log, "warning", warning)
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
@@ -551,6 +564,12 @@ def test_native_endpoint_releases_reservation_after_explicit_upstream_rejection(
     assert response.status_code == 400
     release.assert_awaited_once_with(UUID("99999999-9999-9999-9999-999999999999"))
     messages_native.billing.charge.assert_not_awaited()
+    warning.assert_called_once_with(
+        "native_messages.upstream_rejected",
+        run_id="33333333-3333-3333-3333-333333333333",
+        status_code=400,
+        upstream_error_type="invalid_request",
+    )
 
 
 def test_native_endpoint_keeps_reservation_after_ambiguous_upstream_failure(
@@ -588,6 +607,177 @@ def test_native_endpoint_keeps_reservation_after_ambiguous_upstream_failure(
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "paid_call_ambiguous"
     release.assert_not_awaited()
+
+
+def test_native_stream_aggregates_tool_call_fragments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
+    chunks = [
+        {
+            "id": "provider-turn-1",
+            "model": "anthropic/claude-sonnet-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "write_", "arguments": '{"path":'},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "provider-turn-1",
+            "model": "anthropic/claude-sonnet-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
+                                    "name": "file",
+                                    "arguments": '"src/app.tsx","content":"ok"}',
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+        },
+    ]
+    body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    upstream = httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=body,
+        request=request,
+    )
+    sent: dict[str, Any] = {}
+
+    class StreamContext:
+        def __enter__(self) -> httpx.Response:
+            return upstream
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def stream(self, _method: str, _url: str, **kwargs: Any) -> StreamContext:
+            sent.update(kwargs)
+            return StreamContext()
+
+    monkeypatch.setattr(messages_native.httpx, "Client", FakeClient)
+
+    response = messages_native._post_llmgw(
+        "https://provider.test/v1/chat/completions",
+        {"model": "anthropic/claude-sonnet-5", "messages": []},
+        {"Authorization": "Bearer test"},
+    )
+
+    data = response.json()
+    tool_call = data["choices"][0]["message"]["tool_calls"][0]
+    assert sent["json"]["stream"] is True
+    assert sent["json"]["stream_options"] == {"include_usage": True}
+    assert tool_call["id"] == "call_1"
+    assert tool_call["function"] == {
+        "name": "write_file",
+        "arguments": '{"path":"src/app.tsx","content":"ok"}',
+    }
+    assert data["usage"]["completion_tokens"] == 7
+
+
+def test_native_endpoint_classifies_stalled_response_body(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda _model: ("test-key", "https://provider.test/v1"),
+    )
+    monkeypatch.setattr(
+        messages_native,
+        "_post_llmgw",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(httpx.ReadTimeout("stalled body")),
+    )
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-sonnet-5",
+            "user": "11111111-1111-1111-1111-111111111111",
+            "metadata": {
+                "run_id": "33333333-3333-3333-3333-333333333333",
+                "turn_id": "33333333-3333-3333-3333-333333333333:4",
+                "free": True,
+            },
+            "messages": [{"role": "user", "content": "long composition"}],
+        },
+    )
+
+    assert response.status_code == 504
+    assert response.json()["error"]["type"] == "provider_response_timeout"
+
+
+def test_native_endpoint_replays_settled_logical_turn_before_provider(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settled = {
+        "id": "msg_replayed",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5",
+        "content": [{"type": "text", "text": "reconciled"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 2},
+    }
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda _model: ("test-key", "https://provider.test/v1"),
+    )
+    cached = AsyncMock(return_value=settled)
+    monkeypatch.setattr(messages_native, "_cached_turn_result", cached)
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-sonnet-5",
+            "user": "11111111-1111-1111-1111-111111111111",
+            "metadata": {
+                "run_id": "33333333-3333-3333-3333-333333333333",
+                "turn_id": "33333333-3333-3333-3333-333333333333:4",
+                "free": True,
+            },
+            "messages": [{"role": "user", "content": "same logical turn"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["content"][0]["text"] == "reconciled"
+    messages_native.billing.reserve_native_run_request.assert_not_awaited()
 
 
 def test_native_endpoint_marks_post_provider_settlement_failure_as_ambiguous(
@@ -726,3 +916,14 @@ def test_native_endpoint_blocks_unattributed_calls_before_provider(
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "invalid_request_error"
     reserve.assert_not_awaited()
+
+
+def test_native_product_timeout_outlives_observed_four_minute_response() -> None:
+    timeout = messages_native._upstream_timeout()
+    settings = messages_native.get_settings()
+
+    assert timeout.connect == 30.0
+    assert timeout.write == 60.0
+    assert timeout.pool == 30.0
+    assert timeout.read == 600.0
+    assert settings.native_response_total_timeout_seconds == 1200

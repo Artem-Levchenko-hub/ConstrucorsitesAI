@@ -16,8 +16,9 @@ tools stay advisory and must never turn a clean product into another model loop.
 from __future__ import annotations
 
 import json
+import posixpath
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 _CAPABILITIES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
@@ -99,6 +100,8 @@ _AI_PROMPT_RE = re.compile(
     r"нейросет|gemini|claude|gpt)",
     re.IGNORECASE,
 )
+_YOOKASSA_PROMPT_RE = re.compile(r"(?:ю\s*(?:касс|kassa)|yoo\s*kassa)", re.IGNORECASE)
+_IIKO_PROMPT_RE = re.compile(r"(?:\biiko\b|\bайко\b)", re.IGNORECASE)
 _PERSISTENCE_PROMPT_RE = re.compile(
     r"(?:сохран|истори|профил|трениров|питан|сон|уведом|заказ|запис|бронир|данн)",
     re.IGNORECASE,
@@ -106,6 +109,24 @@ _PERSISTENCE_PROMPT_RE = re.compile(
 _ASYNC_STATES_PROMPT_RE = re.compile(
     r"(?:loading|empty|error|retry|загрузк|пуст\w*|ошибк|повтор)",
     re.IGNORECASE,
+)
+_GENERIC_IDENTITY_FALLBACK_RE = re.compile(
+    r"""(?:
+        (?:\?\?|\|\|)\s*["'`](?:Пользователь|Гость|User|Guest)(?:\s+MAX)?["'`]
+        |>\s*(?:Пользователь|Гость|User|Guest)(?:\s+MAX)?\s*<
+        |\b(?:displayName|userName|profileName|firstName|greetingName)\b
+            \s*=\s*["'`](?:Пользователь|Гость|User|Guest)(?:\s+MAX)?["'`]
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+_UNSAFE_MANAGED_CONFIG_CAST_RE = re.compile(
+    r"\bomniaMaxConfig\s+as\s+(?:any|unknown)\b",
+    re.IGNORECASE,
+)
+_UNSAFE_FORMATTED_PRICE_NUMBER_RE = re.compile(
+    r"typeof\s+[A-Za-z_$][\w$]*\.price\s*===\s*['\"]string['\"]"
+    r"\s*\?\s*Number\s*\(\s*[A-Za-z_$][\w$]*\.price\s*\)",
+    re.IGNORECASE | re.DOTALL,
 )
 _SEEDED_COLLECTION_RE = re.compile(
     r"\b(?:const|let|var)\s+"
@@ -119,6 +140,19 @@ _SEEDED_COLLECTION_RE = re.compile(
 _SEEDED_RECORD_FIELD_RE = re.compile(
     r"\b(?:userId|maxUserId|createdAt|completedAt|duration|reps|sets|weight|"
     r"calories|price|bookingId|orderId|workoutId|appointmentId|messageId)\s*:",
+    re.IGNORECASE,
+)
+_SEEDED_USER_RECORD_KEY_RE = re.compile(
+    r"(?:userId|maxUserId|createdAt|completedAt|happenedAt|performedAt|finishedAt|"
+    r"startedAt|lastCompletedAt|date|status|completed|done|progress|streak|first_?name|"
+    r"last_?name|full_?name|email|avatar|photo_?url|username|bookingId|orderId|"
+    r"workoutId|appointmentId|messageId)",
+    re.IGNORECASE,
+)
+_SEEDED_LIFECYCLE_KEY_RE = re.compile(
+    r"(?:userId|maxUserId|createdAt|completedAt|happenedAt|performedAt|finishedAt|"
+    r"startedAt|lastCompletedAt|date|status|completed|done|progress|streak|bookingId|"
+    r"orderId|workoutId|appointmentId|messageId)",
     re.IGNORECASE,
 )
 _SEEDED_PROFILE_RE = re.compile(
@@ -145,6 +179,38 @@ _SEEDED_NAME_PARTS = (
     "seed",
     "workout",
 )
+_STATIC_CATALOG_NAME_PARTS = (
+    "catalog",
+    "class",
+    "course",
+    "dict",
+    "dish",
+    "exercise",
+    "item",
+    "label",
+    "library",
+    "lookup",
+    "mapping",
+    "menu",
+    "offering",
+    "plan",
+    "product",
+    "program",
+    "service",
+    "template",
+)
+_FAKE_COLLECTION_NAME_PARTS = ("demo", "fake", "fixture", "mock", "sample", "seed")
+_USER_ACTIVITY_NAME_PARTS = (
+    "appointment",
+    "booking",
+    "history",
+    "message",
+    "metric",
+    "order",
+    "progress",
+    "record",
+    "user",
+)
 
 _PRODUCT_SUFFIXES = (".ts", ".tsx", ".css")
 _NON_PRODUCT_PATHS = {
@@ -170,6 +236,12 @@ _MANAGED_DB_PATHS = {
 
 _MAX_DESIGN_SPEC_PATH = ".omnia/max-design-spec.json"
 _REQUIRED_DESIGN_STATES = frozenset({"loading", "empty", "error", "success"})
+_NATIVE_LEGAL_NAV_MARKER = 'data-omnia-native-legal-nav="true"'
+_REQUIRED_NATIVE_LEGAL_LINKS = ("/support", "/legal/privacy", "/legal/terms")
+_NATIVE_LEGAL_NAV_MARKER_RE = re.compile(
+    r"<[A-Za-z][^>]*\bdata-omnia-native-legal-nav\s*=\s*"
+    r'''(?:"true"|'true'|\{\s*(?:true|"true"|'true')\s*\})'''
+)
 MAX_REQUIRED_PREWRITE_SKILLS = (
     "ui-ux-pro-max",
     "product-flow",
@@ -177,6 +249,40 @@ MAX_REQUIRED_PREWRITE_SKILLS = (
     "production-readiness",
 )
 MAX_REQUIRED_POST_SEE_SKILL = "visual-evaluation"
+
+
+def _prompt_requires_provider(prompt: str, provider_re: re.Pattern[str]) -> bool:
+    """Respect an explicit provider removal in an incremental MAX edit."""
+
+    if provider_re.search(prompt) is None:
+        return False
+    current = prompt.rsplit("ТЕКУЩАЯ ПРАВКА:", 1)[-1]
+    provider = f"(?:{provider_re.pattern})"
+    removal = re.compile(
+        rf"(?:убер\w*|удал\w*|отключ\w*|исключ\w*|remove\w*|disable\w*|without|без|"
+        rf"не\s+нуж\w*)\s+(?:интеграц\w*\s+(?:с\s+)?|оплат\w*\s+через\s+)?{provider}",
+        re.IGNORECASE,
+    )
+    return removal.search(current) is None
+
+
+def _has_jsx_match(source: str, pattern: re.Pattern[str]) -> bool:
+    """Match JSX syntax only when the opening tag is executable source code."""
+
+    searchable = _strip_js_non_code(source, keep_strings=True)
+    code_mask = _js_code_mask(source)
+    return any(code_mask[match.start()] for match in pattern.finditer(searchable))
+
+
+def _has_reachable_native_legal_link(sources: Iterable[str], href: str) -> bool:
+    """Recognise a rendered JSX anchor/Next Link, not an unused URL string."""
+
+    escaped = re.escape(href)
+    pattern = re.compile(
+        rf'''<(?:a|Link)\b[^>]*\bhref\s*=\s*(?:"{escaped}"|'{escaped}'|'''
+        rf'''\{{\s*(?:"{escaped}"|'{escaped}')\s*\}})'''
+    )
+    return any(_has_jsx_match(source, pattern) for source in sources)
 
 
 def _starts_js_regex(content: str, index: int) -> bool:
@@ -326,6 +432,178 @@ def _js_code_mask(content: str) -> list[bool]:
     return mask
 
 
+def _seeded_collection_literal(content: str, match: re.Match[str]) -> str:
+    """Return the matched array without trusting brackets inside JS strings/comments."""
+
+    body_start = match.start("body")
+    opening = content.rfind("[", match.start(), body_start)
+    if opening < 0:
+        return str(match.group(0) or "")
+    code_mask = _js_code_mask(content)
+    depth = 0
+    for index in range(opening, len(content)):
+        if not code_mask[index]:
+            continue
+        char = content[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return content[opening : index + 1]
+    return content[opening:]
+
+
+def _managed_max_content_is_populated(files: Mapping[str, str]) -> bool:
+    """Return whether MAX Studio supplied at least one canonical content item."""
+
+    config = str(files.get("src/lib/omnia/max-config.ts") or "")
+    match = re.search(r"(?:['\"]content['\"]|\bcontent\b)\s*:\s*\[", config)
+    if not match:
+        return False
+    opening = config.find("[", match.start(), match.end())
+    if opening < 0:
+        return False
+    code_mask = _js_code_mask(config)
+    depth = 0
+    for index in range(opening, len(config)):
+        if not code_mask[index]:
+            continue
+        char = config[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return bool(config[opening + 1 : index].strip())
+    return False
+
+
+def _populated_fallback_catalog_name(content: str) -> str | None:
+    """Find a model-owned fallback catalog that can hide broken managed data."""
+
+    for match in _SEEDED_COLLECTION_RE.finditer(content or ""):
+        name = str(match.group("name") or match.group("state_name") or "")
+        name_folded = name.casefold()
+        if "fallback" not in name_folded:
+            continue
+        if not any(part in name_folded for part in _STATIC_CATALOG_NAME_PARTS):
+            continue
+        keys = _js_object_keys(_seeded_collection_literal(content or "", match))
+        if {"name", "title"}.intersection(keys) and "price" in keys:
+            return name
+    return None
+
+
+_PRODUCT_IMPORT_RE = re.compile(
+    r"(?:\bfrom\s*|\bimport\s*)['\"](?P<module>[^'\"]+)['\"]",
+    re.IGNORECASE,
+)
+
+
+def _reachable_product_sources(files: Mapping[str, str]) -> dict[str, str]:
+    """Follow product imports so stale snapshot files cannot block completion."""
+
+    roots = [
+        path
+        for path in ("src/components/product/ProductApp.tsx", "src/app/page.tsx")
+        if path in files
+    ]
+    if not roots:
+        return {path: content for path, content in files.items() if _is_product_source(path)}
+
+    reachable: dict[str, str] = {}
+    pending = list(roots)
+    while pending:
+        path = pending.pop()
+        if path in reachable or path not in files or not _is_product_source(path):
+            continue
+        content = str(files[path])
+        reachable[path] = content
+        for match in _PRODUCT_IMPORT_RE.finditer(_strip_js_non_code(content, keep_strings=True)):
+            module = str(match.group("module") or "")
+            if module.startswith("@/"):
+                base = "src/" + module[2:]
+            elif module.startswith("."):
+                base = posixpath.normpath(posixpath.join(posixpath.dirname(path), module))
+            else:
+                continue
+            candidates = (
+                base,
+                *(base + suffix for suffix in _PRODUCT_SUFFIXES),
+                *(posixpath.join(base, "index" + suffix) for suffix in _PRODUCT_SUFFIXES),
+            )
+            resolved = next((candidate for candidate in candidates if candidate in files), None)
+            if resolved is not None and resolved not in reachable:
+                pending.append(resolved)
+    return reachable
+
+
+def _js_object_keys(content: str) -> set[str]:
+    """Extract bare and quoted JS object keys, ignoring values and comments."""
+
+    keys: set[str] = set()
+    index = 0
+    length = len(content)
+    while index < length:
+        char = content[index]
+        next_char = content[index + 1] if index + 1 < length else ""
+        if char == "/" and next_char == "/":
+            newline = content.find("\n", index + 2)
+            index = length if newline < 0 else newline + 1
+            continue
+        if char == "/" and next_char == "*":
+            closing = content.find("*/", index + 2)
+            index = length if closing < 0 else closing + 2
+            continue
+        if char == "/" and _starts_js_regex(content, index):
+            index += 1
+            while index < length:
+                if content[index] == "\\":
+                    index += 2
+                    continue
+                if content[index] == "/":
+                    index += 1
+                    while index < length and content[index].isalpha():
+                        index += 1
+                    break
+                index += 1
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+            index += 1
+            token: list[str] = []
+            while index < length:
+                char = content[index]
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    index += 1
+                    break
+                token.append(char)
+                index += 1
+            lookahead = index
+            while lookahead < length and content[lookahead].isspace():
+                lookahead += 1
+            if lookahead < length and content[lookahead] == ":":
+                keys.add("".join(token))
+            continue
+        if char.isalpha() or char in {"_", "$"}:
+            start = index
+            index += 1
+            while index < length and (content[index].isalnum() or content[index] in {"_", "$"}):
+                index += 1
+            lookahead = index
+            while lookahead < length and content[lookahead].isspace():
+                lookahead += 1
+            if lookahead < length and content[lookahead] == ":":
+                keys.add(content[start:index])
+            continue
+        index += 1
+    return keys
+
+
 def _has_managed_named_import(content: str, symbol: str, module: str) -> bool:
     code_mask = _js_code_mask(content)
     content = _strip_js_non_code(content, keep_strings=True)
@@ -340,6 +618,94 @@ def _has_managed_named_import(content: str, symbol: str, module: str) -> bool:
             continue
         specifiers = re.sub(r"/\*.*?\*/", "", match.group("specifiers"), flags=re.DOTALL)
         if any(exact_symbol_re.fullmatch(item.strip()) for item in specifiers.split(",")):
+            return True
+    return False
+
+
+def _js_call_argument_segments(code: str, callee: str) -> list[str]:
+    """Return balanced argument segments for simple JavaScript calls."""
+
+    segments: list[str] = []
+    for match in re.finditer(rf"\b{re.escape(callee)}\s*\(", code, re.IGNORECASE):
+        opening = code.find("(", match.start(), match.end())
+        if opening < 0:
+            continue
+        depth = 0
+        for index in range(opening, min(len(code), opening + 12000)):
+            char = code[index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    segments.append(code[opening + 1 : index])
+                    break
+    return segments
+
+
+def _js_named_async_bodies(code: str) -> list[tuple[str, str]]:
+    """Return names and balanced bodies of common async JavaScript loaders."""
+
+    declarations = (
+        re.compile(
+            r"(?:const|let)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
+            r"(?:usecallback\s*\(\s*)?async\s*\([^)]*\)\s*=>\s*\{",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"async\s+function\s+(?P<name>[A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
+            re.IGNORECASE,
+        ),
+    )
+    bodies: list[tuple[str, str]] = []
+    for declaration in declarations:
+        for match in declaration.finditer(code):
+            opening = code.rfind("{", match.start(), match.end())
+            if opening < 0:
+                continue
+            depth = 0
+            for index in range(opening, min(len(code), opening + 12000)):
+                char = code[index]
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        bodies.append((match.group("name"), code[opening + 1 : index]))
+                        break
+    return bodies
+
+
+def _has_mounted_max_action_restore(source: str, code: str) -> bool:
+    """Recognise direct and callback-based reload restoration.
+
+    Production MAX apps commonly keep the async loader in ``useCallback`` and
+    invoke it from ``useEffect``. Requiring the literal ``await
+    getMaxActions()`` to appear inside the effect body rejected that correct
+    React pattern and caused repeated paid source-repair turns.
+    """
+
+    if not _has_managed_named_import(
+        source,
+        "getMaxActions",
+        "@/lib/omnia/integration-client",
+    ):
+        return False
+    effect_segments = _js_call_argument_segments(code, "useEffect")
+    if any(
+        re.search(r"\bawait\s+getmaxactions\s*\(", segment, re.IGNORECASE)
+        for segment in effect_segments
+    ):
+        return True
+
+    for name, body in _js_named_async_bodies(code):
+        if not re.search(r"\bawait\s+getmaxactions\s*\(", body, re.IGNORECASE):
+            continue
+        loader = re.escape(name)
+        if any(
+            re.search(rf"\b(?:void\s+)?{loader}\s*\(", segment, re.IGNORECASE)
+            for segment in effect_segments
+        ):
             return True
     return False
 
@@ -389,7 +755,49 @@ def max_demo_data_rejection(path: str, content: str) -> str | None:
     for match in _SEEDED_COLLECTION_RE.finditer(content or ""):
         name = str(match.group("name") or match.group("state_name") or "")
         body = str(match.group("body") or "")
-        if any(part in name.casefold() for part in _SEEDED_NAME_PARTS) or (
+        collection = _seeded_collection_literal(content or "", match)
+        collection_keys = _js_object_keys(collection)
+        # Product reference content (menus, products, services, exercise/workout
+        # libraries, programme templates) is not manufactured user history. It
+        # may contain price, duration, sets or reps, but never user identity or
+        # activity lifecycle fields.
+        # Keeping this distinction avoids forcing a useful fresh app into an
+        # empty catalog while still rejecting fake completed records.
+        name_folded = name.casefold()
+        static_reference = any(part in name_folded for part in _STATIC_CATALOG_NAME_PARTS)
+        ui_lookup = any(part in name_folded for part in ("dict", "label", "lookup", "mapping"))
+        user_activity_name = any(part in name_folded for part in _USER_ACTIVITY_NAME_PARTS)
+        fake_collection_name = any(part in name_folded for part in _FAKE_COLLECTION_NAME_PARTS)
+        commercial_reference = "price" in collection_keys and bool(
+            {"label", "name", "title"}.intersection(collection_keys)
+        )
+        if (
+            ui_lookup
+            and not user_activity_name
+            and not fake_collection_name
+            and not any(_SEEDED_LIFECYCLE_KEY_RE.fullmatch(key) for key in collection_keys)
+        ):
+            continue
+        if (
+            static_reference
+            and not user_activity_name
+            and not fake_collection_name
+            and not any(_SEEDED_USER_RECORD_KEY_RE.fullmatch(key) for key in collection_keys)
+        ):
+            continue
+        # A model commonly names commercial dictionaries by the domain noun
+        # (DRINKS, ADDONS, SIZES) rather than CATALOG/MENU. Their display label
+        # plus price is product reference data, not manufactured user history.
+        # Keep activity/fake names and every identity/lifecycle field blocking,
+        # so ORDERS or DEMO_ITEMS cannot hide behind the same shape.
+        if (
+            commercial_reference
+            and not user_activity_name
+            and not fake_collection_name
+            and not any(_SEEDED_USER_RECORD_KEY_RE.fullmatch(key) for key in collection_keys)
+        ):
+            continue
+        if any(part in name_folded for part in _SEEDED_NAME_PARTS) or (
             _SEEDED_RECORD_FIELD_RE.search(body) is not None
         ):
             matched_name = name
@@ -428,12 +836,30 @@ def build_max_product_contract(prompt: str) -> str:
         "brief coverage, never by an arbitrary number of files. Decorative tabs are not screens.",
         "- Every button must execute a real state change or persisted request. No decorative "
         "controls, fake timers, TODOs, simulated success or claimed integrations.",
+        "- Keep the chosen visual system coherent on every screen and state, including cart, "
+        "checkout, success, empty/error and profile views. Do not fall back to browser/default "
+        "blue buttons, generic panels or a second accent palette outside the chosen art direction.",
+        "- Use semantic, accessible controls: every clickable surface is a native button or link; "
+        "never nest a button/link inside another button/link or a focusable role=button wrapper. "
+        "When a card has a quick action, keep the card container non-interactive and expose the "
+        "details action and quick action as sibling controls. Give each screen a real h1/h2 and "
+        "give icon-only/navigation buttons stable aria-label text that excludes badges/counts.",
         "- Real accounts come from validated MAX initData: the managed session creates or "
         "refreshes max_users on first open. Use useMaxApp for identity; never add password "
         "login or manufacture a profile.",
-        "- Ship no hardcoded demo user data, history, metrics, orders, bookings or workouts. "
+        "- Ship no hardcoded demo user data, history, metrics, orders, bookings or completed "
+        "workouts. Static business menus, product/service catalogs, exercise/workout "
+        "libraries and programme templates are allowed when they are clearly reference "
+        "content, never user activity. "
         "A new account starts with truthful empty states and creates real persisted data "
-        "through the managed client. Business catalog content comes from omniaMaxConfig.",
+        "through the managed client. Prefer business catalog content from omniaMaxConfig "
+        "when supplied; when it is empty and the brief requires a catalog, create a compact, "
+        "internally consistent starter reference catalog so the primary scenario works on "
+        "first open.",
+        "- omniaMaxConfig is typed and authoritative. Never cast it to any/unknown or stringify "
+        "nested config objects. When omniaMaxConfig.content is populated, do not mask mapping "
+        "bugs with a populated fallback catalog: render those managed items, parse formatted "
+        "prices such as `149 ₽` safely, and render support fields individually.",
         "- Use createMaxAction for persisted MAX user activity. Never store a provider key "
         "in source code or expose it to the browser.",
         "- Never import @/lib/db or drizzle-orm and never create parallel /api/max or "
@@ -442,7 +868,9 @@ def build_max_product_contract(prompt: str) -> str:
         "- If the brief asks for AI, call requestOmniaAI from "
         "@/lib/omnia/integration-client. It reaches the managed model server-side; "
         "the exact shape is `const { answer } = await requestOmniaAI({ message, "
-        "instructions, context })`. setTimeout/random/static text is not AI.",
+        "instructions, context })`. setTimeout/random/static text is not AI. Ask for a "
+        "concise structured answer and render it as scannable sections, steps or bullets; "
+        "never dump a long unbroken AI paragraph into a generic card.",
         "- After implementation: run a clean build, runtime_check the finished home screen "
         "and see it through the signed MAX preview. Apply concrete visual findings, then "
         "rebuild/runtime-check/see again until the visual verdict is clean; "
@@ -471,8 +899,13 @@ def normalize_max_globals_css(css: str) -> str:
     if not imports:
         return css
 
+    # Exact duplicate imports are easy for a repair model to create when it
+    # moves a late Google Fonts line to the top. Besides an extra request, the
+    # duplicate makes the next exact edit ambiguous and can trap the native
+    # loop in `search text must occur exactly once` forever.
+    unique_imports = list(dict.fromkeys(imports))
     ordered_imports = sorted(
-        imports,
+        unique_imports,
         key=lambda line: 1 if "tailwindcss" in line.lower() else 0,
     )
     import_order_is_safe = imports == ordered_imports
@@ -515,6 +948,7 @@ def max_source_completion_gap(
     files: Mapping[str, str],
     *,
     require_design_spec: bool = True,
+    require_native_legal_nav: bool = False,
 ) -> str | None:
     """Return a source/product gap independently of runtime proof infrastructure.
 
@@ -593,9 +1027,29 @@ def max_source_completion_gap(
             return "MAX design spec is missing product states: " + ", ".join(missing_states) + "."
 
     capabilities = requested_max_capabilities(prompt)
+    reachable_product_files = _reachable_product_sources(files)
     product_sources = [content for path, content in files.items() if _is_product_source(path)]
     product_source_blob = "\n".join(product_sources)
+    reachable_product_source_blob = "\n".join(reachable_product_files.values())
     corpus = product_source_blob.lower()
+    if require_native_legal_nav:
+        reachable_sources = tuple(reachable_product_files.values())
+        missing_legal_links = [
+            href
+            for href in _REQUIRED_NATIVE_LEGAL_LINKS
+            if not _has_reachable_native_legal_link(reachable_sources, href)
+        ]
+        has_legal_marker = any(
+            _has_jsx_match(source, _NATIVE_LEGAL_NAV_MARKER_RE) for source in reachable_sources
+        )
+        if not has_legal_marker or missing_legal_links:
+            missing_legal_detail = ", ".join(missing_legal_links) or _NATIVE_LEGAL_NAV_MARKER
+            return (
+                "Native MAX support/legal navigation is incomplete. Add reachable product links "
+                "for /support, /legal/privacy and /legal/terms "
+                f"(missing: {missing_legal_detail}), then mark "
+                f'the product root with {_NATIVE_LEGAL_NAV_MARKER}.'
+            )
     product_source_views = [
         (source, _strip_js_non_code(source, keep_strings=False)) for source in product_sources
     ]
@@ -603,6 +1057,30 @@ def max_source_completion_gap(
         demo_rejection = max_demo_data_rejection(path, content)
         if demo_rejection:
             return demo_rejection
+    managed_config_gaps: list[str] = []
+    if _managed_max_content_is_populated(files):
+        for content in reachable_product_files.values():
+            fallback_name = _populated_fallback_catalog_name(content)
+            if fallback_name:
+                managed_config_gaps.append(
+                    "MAX Studio already supplied canonical catalog content, but product source "
+                    f"still contains populated {fallback_name}. Remove the populated fallback "
+                    "and render omniaMaxConfig.content so mapping failures stay visible."
+                )
+        if _UNSAFE_FORMATTED_PRICE_NUMBER_RE.search(reachable_product_source_blob):
+            managed_config_gaps.append(
+                "Managed catalog prices are formatted strings such as `149 ₽`, but product "
+                "source converts a string price with Number(...). Normalize the currency text "
+                "before conversion (or use parseFloat safely) so managed items are not dropped."
+            )
+    if _UNSAFE_MANAGED_CONFIG_CAST_RE.search(reachable_product_source_blob):
+        managed_config_gaps.append(
+            "Product source casts omniaMaxConfig to any/unknown, which hid an invalid nested "
+            "config render. Use the exported OmniaMaxConfig types and render support fields "
+            "individually; never stringify the support object."
+        )
+    if managed_config_gaps:
+        return "Managed MAX config contract failed: " + " ".join(managed_config_gaps)
     unsafe_product_db_paths = [
         path
         for path, content in files.items()
@@ -650,6 +1128,56 @@ def max_source_completion_gap(
         if re.search(r"settimeout\s*\([^)]*(?:analy|анализ|coach|тренер)", corpus, re.DOTALL):
             return "A timer is still simulating AI work. Replace it with requestOmniaAI."
 
+    integration_status_call = any(
+        _has_managed_named_import(source, "getOmniaIntegrations", "@/lib/omnia/integration-client")
+        and re.search(r"\bawait\s+getomniaintegrations\s*\(", code, re.IGNORECASE)
+        for source, code in product_source_views
+    )
+    yookassa_required = _prompt_requires_provider(prompt, _YOOKASSA_PROMPT_RE)
+    iiko_required = _prompt_requires_provider(prompt, _IIKO_PROMPT_RE)
+    if (yookassa_required or iiko_required) and not integration_status_call:
+        return (
+            "The brief names an external integration, but the UI never checks which tenant "
+            "providers are connected. Import and await getOmniaIntegrations from "
+            "@/lib/omnia/integration-client, then show connected and unavailable states honestly."
+        )
+
+    if yookassa_required:
+        managed_payment_call = any(
+            _has_managed_named_import(
+                source,
+                "createOmniaPayment",
+                "@/lib/omnia/integration-client",
+            )
+            and re.search(r"\bawait\s+createomniapayment\s*\(", code, re.IGNORECASE)
+            for source, code in product_source_views
+        )
+        if not managed_payment_call:
+            return (
+                "The brief requires YooKassa, but checkout never imports and awaits "
+                "createOmniaPayment from @/lib/omnia/integration-client. A local order action "
+                "must not simulate successful online payment."
+            )
+        if "confirmation_url" not in corpus:
+            return (
+                "The YooKassa flow ignores confirmation_url. Use the managed payment result "
+                "to open or redirect to the real provider confirmation; do not render payment "
+                "success immediately after a local order write."
+            )
+
+    if iiko_required:
+        managed_iiko_catalog_call = any(
+            _has_managed_named_import(source, "getOmniaCatalog", "@/lib/omnia/integration-client")
+            and re.search(r"\bawait\s+getomniacatalog\s*\(", code, re.IGNORECASE)
+            for source, code in product_source_views
+        )
+        if not managed_iiko_catalog_call:
+            return (
+                "The brief requires iiko, but the product never imports and awaits "
+                "getOmniaCatalog from @/lib/omnia/integration-client. Load the connected "
+                "restaurant catalog and render an honest fallback/error when it is unavailable."
+            )
+
     managed_identity_call = any(
         _has_managed_named_import(source, "useMaxApp", "@/components/MaxAppProvider")
         and re.search(
@@ -664,6 +1192,13 @@ def max_source_completion_gap(
             "The product does not consume the verified MAX account. Import useMaxApp "
             "from @/components/MaxAppProvider and call useMaxApp() in the product UI."
         )
+    source_with_strings = _strip_js_non_code(product_source_blob, keep_strings=True)
+    if _GENERIC_IDENTITY_FALLBACK_RE.search(source_with_strings):
+        return (
+            "The product renders a generic identity fallback such as Пользователь/User/Guest. "
+            "Use the verified MAX first_name only when present; otherwise render neutral "
+            "non-personal copy instead of inventing a profile name."
+        )
 
     persistence_required = _PERSISTENCE_PROMPT_RE.search(prompt) is not None
     managed_create_call = any(
@@ -672,13 +1207,7 @@ def max_source_completion_gap(
         for source, code in product_source_views
     )
     managed_restore_call = any(
-        _has_managed_named_import(source, "getMaxActions", "@/lib/omnia/integration-client")
-        and re.search(
-            r"\buseeffect\s*\(.{0,1600}?\bawait\s+getmaxactions\s*\(",
-            code,
-            re.IGNORECASE | re.DOTALL,
-        )
-        for source, code in product_source_views
+        _has_mounted_max_action_restore(source, code) for source, code in product_source_views
     )
     if persistence_required and not managed_create_call:
         return (
@@ -723,7 +1252,7 @@ def max_completion_gap(
     intentionally not blocking for MAX.
     """
 
-    source_gap = max_source_completion_gap(prompt, files)
+    source_gap = max_source_completion_gap(prompt, files, require_native_legal_nav=True)
     if source_gap:
         return source_gap
     missing_skills = [

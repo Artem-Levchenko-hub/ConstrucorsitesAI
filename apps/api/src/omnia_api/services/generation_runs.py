@@ -171,7 +171,7 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
                     # unique index until a later restart/recovery can restore
                     # the canonical files.
                     run.status = "cancel_requested"
-                    run.error = "runtime cleanup is still pending after API restart"
+                    run.error = "runtime_cleanup_pending_after_restart"
                     continue
                 run.status = "cancelled"
                 run.error = None
@@ -188,7 +188,7 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
                         message.tokens_out = 0
                 continue
         run.status = "failed"
-        run.error = "API process restarted before generation completed"
+        run.error = "api_process_restarted"
         run.finished_at = now
         if run.assistant_message_id is None:
             continue
@@ -249,6 +249,25 @@ async def set_generation_run_status(
             run.finished_at = now
         if error is not None:
             run.error = error[:2000]
+        await session.commit()
+
+
+async def set_generation_run_error(run_id: UUID, error_code: str) -> None:
+    """Persist a stable terminal reason while work is still being reconciled.
+
+    The run remains active until snapshot/rollback reconciliation finishes. This
+    avoids releasing the project lock while partial runtime files may still be
+    visible, while ensuring the later generic finalizer cannot erase the cause.
+    """
+
+    from omnia_api.core.db import get_engine
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        run = await session.get(GenerationRun, run_id)
+        if run is None:
+            return
+        run.error = error_code[:2000]
         await session.commit()
 
 

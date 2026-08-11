@@ -45,6 +45,6 @@ async def get(key: str) -> dict[str, Any] | None:
         return None
 
 
-async def set(key: str, value: dict[str, Any]) -> None:
-    ttl = get_settings().cache_ttl_seconds
+async def set(key: str, value: dict[str, Any], *, ttl_seconds: int | None = None) -> None:
+    ttl = max(1, int(ttl_seconds or get_settings().cache_ttl_seconds))
     await get_redis().set(key, json.dumps(value, ensure_ascii=False), ex=ttl)

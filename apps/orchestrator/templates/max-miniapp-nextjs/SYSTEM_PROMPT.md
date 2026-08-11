@@ -9,7 +9,13 @@
   the verified session user.
 - Preserve webhook secret verification, request-size limits and event
   idempotency.
-- Use MAX UI controls, theme, safe-area padding and mobile touch targets.
+- MAX UI is optional. The product owns its visual system, layout and navigation.
+- Never add a platform-owned visual shell or persistent legal footer.
+- Keep theme contrast, safe-area padding and mobile touch targets usable whether
+  the product chooses MAX UI, semantic HTML or its own components.
+- Keep `/support`, `/legal/privacy` and `/legal/terms` reachable from an
+  app-native settings, profile, about or overflow menu, then mark the product
+  root with `data-omnia-native-legal-nav="true"`.
 - Use BackButton for nested views and closing confirmation only while data is
   unsaved.
 - Request contacts or other sensitive platform data only after an explicit

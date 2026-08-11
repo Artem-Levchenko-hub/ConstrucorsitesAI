@@ -21,7 +21,7 @@ from omnia_api.services.secret_safety import max_model_write_rejection
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 16
+MAX_MANAGED_KIT_VERSION = 20
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 MAX_PRODUCT_ENTRY_PATH = "src/components/product/ProductApp.tsx"
@@ -127,13 +127,25 @@ def render_max_managed_files(
     preview_session_route = _template_file("src/app/api/omnia/preview-session/route.ts").replace(
         '"__OMNIA_PROJECT_ID__"', project_literal, 1
     )
+    integration_proxy_route = _template_file(
+        "src/app/api/omnia/integrations/[...path]/route.ts"
+    ).replace(
+        'const PROJECT_ID = process.env.OMNIA_PROJECT_ID || "";',
+        f"const PROJECT_ID = {project_literal};",
+        1,
+    )
     files = {
         "package.json": _template_file("package.json"),
         "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
+        # MAX source uses the @/* alias throughout the protected runtime.  The
+        # base container may predate the MAX template, so its generic tsconfig
+        # cannot be trusted to carry that alias into a freshly overlaid starter.
+        "tsconfig.json": _template_file("tsconfig.json"),
         "public/omnia-inspector.js": _template_file("public/omnia-inspector.js"),
         MAX_PRODUCT_PAGE_PATH: _template_file(MAX_PRODUCT_PAGE_PATH),
         "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
+        "src/app/max-runtime.css": _template_file("src/app/max-runtime.css"),
         "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
         "src/components/OmniaCompliance.tsx": _template_file("src/components/OmniaCompliance.tsx"),
         MAX_PRODUCT_RUNTIME_PATH: _template_file(MAX_PRODUCT_RUNTIME_PATH),
@@ -178,9 +190,9 @@ async function invoke<T>(
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
-  if (!initData) throw new Error("Откройте приложение внутри MAX");
   const response = await fetch(`/api/omnia/integrations/${path}`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ initData, payload }),
   });
@@ -319,64 +331,7 @@ export async function trackOmniaGoal(
   target.ym(Number(counterId), "reachGoal", goal, parameters);
 }
 """,
-        "src/app/api/omnia/integrations/[...path]/route.ts": f"""import {{ NextRequest, NextResponse }} from "next/server";
-
-const PROJECT_ID = {project_literal};
-const PLATFORM_API = (
-  process.env.OMNIA_PLATFORM_API_URL || "https://constructor.lead-generator.ru"
-).replace(/\\/$/, "");
-
-type Context = {{ params: Promise<{{ path: string[] }}> }};
-
-export async function POST(request: NextRequest, context: Context) {{
-  if (!PROJECT_ID) {{
-    return NextResponse.json(
-      {{ error: {{ message: "Integration Hub ещё не синхронизирован с приложением" }} }},
-      {{ status: 503 }},
-    );
-  }}
-  const {{ path }} = await context.params;
-  const operation = path.join("/");
-  if (!["status", "payments", "payment-status", "leads", "catalog", "ai"].includes(operation)) {{
-    return NextResponse.json({{ error: {{ message: "Unknown capability" }} }}, {{ status: 404 }});
-  }}
-  const body = await request.json().catch(() => ({{}})) as {{
-    initData?: unknown;
-    payload?: unknown;
-  }};
-  if (typeof body.initData !== "string") {{
-    return NextResponse.json(
-      {{ error: {{ message: "Откройте приложение внутри MAX" }} }},
-      {{ status: 401 }},
-    );
-  }}
-  const readOnly = operation === "status" || operation === "catalog";
-  const upstreamPath =
-    operation === "status"
-      ? `/api/runtime/projects/${{PROJECT_ID}}/integrations`
-      : operation === "catalog"
-        ? `/api/runtime/projects/${{PROJECT_ID}}/catalog`
-      : operation === "ai"
-        ? `/api/runtime/projects/${{PROJECT_ID}}/ai`
-      : operation === "payment-status"
-        ? `/api/runtime/projects/${{PROJECT_ID}}/payments/status`
-        : `/api/runtime/projects/${{PROJECT_ID}}/${{operation}}`;
-  const upstream = await fetch(`${{PLATFORM_API}}${{upstreamPath}}`, {{
-    method: readOnly ? "GET" : "POST",
-    headers: {{
-      "Content-Type": "application/json",
-      "X-MAX-Init-Data": body.initData,
-    }},
-    body: readOnly ? undefined : JSON.stringify(body.payload || {{}}),
-    cache: "no-store",
-  }});
-  const responseBody = await upstream.text();
-  return new NextResponse(responseBody, {{
-    status: upstream.status,
-    headers: {{ "Content-Type": upstream.headers.get("content-type") || "application/json" }},
-  }});
-}}
-""",
+        "src/app/api/omnia/integrations/[...path]/route.ts": integration_proxy_route,
         "src/app/legal/privacy/page.tsx": """import { omniaMaxConfig as app } from "@/lib/omnia/max-config";
 
 export const metadata = { title: `Политика конфиденциальности — ${app.app_name}` };
@@ -502,6 +457,7 @@ MAX_MODEL_LOCKED_FILES = frozenset(
         "src/components/OmniaCompliance.tsx",
         MAX_PRODUCT_RUNTIME_PATH,
         "src/app/layout.tsx",
+        "src/app/max-runtime.css",
         "src/lib/db/index.ts",
         "src/lib/db/schema.ts",
         "src/lib/max/bot-api.ts",
@@ -845,10 +801,17 @@ def render_max_history_files(
     incompatibility = max_legacy_snapshot_incompatibility(snapshot_files)
     if incompatibility:
         raise ValueError(f"MAX snapshot cannot be restored safely: {incompatibility}")
+    product = max_history_product_files(snapshot_files)
+    default_entry = _template_file(MAX_PRODUCT_ENTRY_PATH) if not product else _EMPTY_PRODUCT_ENTRY
     return {
         **render_max_managed_files(config, project_id),
-        MAX_PRODUCT_ENTRY_PATH: _EMPTY_PRODUCT_ENTRY,
-        **max_history_product_files(snapshot_files),
+        # New MAX projects intentionally start with an empty Git snapshot while
+        # the maintained starter lives in the runtime image. Reconciliation of
+        # that empty snapshot must restore the same usable starter, not delete
+        # its model-owned entry and CSS after a failed/cancelled first build.
+        "src/app/globals.css": _template_file("src/app/globals.css"),
+        MAX_PRODUCT_ENTRY_PATH: default_entry,
+        **product,
     }
 
 
@@ -868,9 +831,8 @@ def render_max_restored_files(
 
 MAX_MODEL_DIRECTIVE = """
 MAX PLATFORM CORE CONTRACT
-Restore the proven pre-Gemini MAX generation flow used for FitnessStat and
-Coffee Nearby: one native Anthropic tool loop owns the product end-to-end.
-The existing starter is a working safety baseline, not the requested result.
+One native AI tool loop owns the requested product end-to-end. The maintained
+MAX runtime already exists and is not a product template or generated result.
 Rewrite src/components/product/ProductApp.tsx and src/app/globals.css for the
 user's actual product, then run build, fix factual errors and call done.
 
@@ -878,6 +840,12 @@ Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
 and integration clients, webhook security and generated business config. The
 locked root page is only a browser-isolation boundary; never edit it or create
 app/API routes.
+The product owns all visible layout, navigation and styling. Never add a
+platform-owned visual shell or persistent legal footer. Keep `/support`,
+`/legal/privacy` and `/legal/terms` reachable from an app-native settings,
+profile, about or overflow menu. Mark the product root with
+`data-omnia-native-legal-nav="true"` once those three links exist so the managed
+legacy fallback stays hidden.
 Never declare `"use server"` or import `next/server`, `next/headers`, `next/cache`
 or server-only MAX modules from product code.
 A thin shell, decorative tabs, static demo response or fake timer is not a
@@ -892,6 +860,10 @@ the managed user-scoped API.
 When the brief requests AI, use the exact typed call
 `const { answer } = await requestOmniaAI({ message, instructions, context })`
 from `@/lib/omnia/integration-client`; the managed model runs server-side.
+Ask for a concise, structured answer suited to the product, then render it as
+scannable sections, steps or bullets with clear hierarchy. Never dump a long
+unbroken AI paragraph into one generic card; preserve wrapping, readable line
+length and a visible next action on 360px screens.
 Never embed a provider key in source or expose one to the browser. If a user pastes
 a credential into chat, do not write it or create an .env file: Omnia handles
 credentials only through the encrypted Studio Integration Hub.
@@ -908,44 +880,39 @@ LOCKED RUNTIME API (use these exact exports; do not guess substitutes):
   `{ answer, text, model }` from the same client.
 - Tailwind v4 is installed through `@import "tailwindcss"`; do not use v3
   `@tailwind` directives or unconfigured semantic utilities such as `border-border`.
-- The pinned `@maxhub/max-ui` 0.2.0 root exports are exactly: `Avatar`, `Button`,
+- MAX UI is optional; do not use it to impose a platform look on the product. If
+  the chosen product uses it, pinned `@maxhub/max-ui` 0.2.0 root exports are exactly:
+  `Avatar`, `Button`,
   `CellAction`, `CellHeader`, `CellInput`, `CellList`, `CellSimple`, `Counter`,
   `IconButton`, `Input`, `MaxUI`, `Spinner`, `Switch`, `Textarea`, `ToolButton`,
   `Typography`. Do not invent `Panel`, `Grid`, `Container`, `Flex` or other exports
   from newer documentation. Use semantic HTML + product CSS for custom composition.
+- `Typography` and `Avatar` are component namespaces, not JSX components. Never render
+  `<Typography>` or `<Avatar>` directly. Use documented subcomponents such as
+  `Typography.Title`, `Typography.Body`, `Avatar.Container`, `Avatar.Image` and
+  `Avatar.Text`, or use semantic HTML. `Button.size` accepts only `"small"`,
+  `"medium"` or `"large"` — never `"s"`/`"m"`/`"l"`.
+- `omniaMaxConfig` has top-level `app_name`, `summary`, `primary_action`, `features`,
+  `content`, `operator`, `support` and `legal`. `content` is an array of catalog items;
+  it never has `businessName` or other profile fields.
 - Use only dependencies present in `package.json`. `lucide-react` is available;
   chart libraries such as Recharts are not installed.
 
 PRODUCT DESIGN OWNERSHIP:
 - `src/app/globals.css` is model-owned. Preserve `@import "tailwindcss"`, but replace
-  the minimal reset with the complete visual system required by the chosen concept.
-  External font imports must come before Tailwind. Do not edit the locked layout.
-- Define real project-specific semantic CSS variables and component states. Do not use
-  undefined template tokens, default indigo/violet AI styling or a repeated dashboard.
-- Design for 360–390px MAX WebView first: safe areas, thumb-friendly actions, content
-  behind fixed navigation, loading/empty/error/retry/success, pressed/selected/disabled.
-- Use purposeful transform/opacity micro-interactions and MAX haptics; respect
-  `prefers-reduced-motion`. Hover may enhance desktop but must never carry meaning.
+  the minimal reset with the styles required by the user's product.
+  External font imports must come before Tailwind. This is ordinary global CSS, not a
+  CSS Module: never use `:global(...)` in it. Do not edit the locked layout.
+- The MAX runtime supplies no palette, card system, navigation recipe or product chrome.
+  Follow the user's brief and preserve the existing product's visual language on edits.
+- Keep the result usable at 360–390px: safe areas, readable content, reachable actions and
+  loading/empty/error/success states. These are product requirements, not a MAX skin.
+- When `user` is nullable, never render a fake name such as `Пользователь`, `User` or `Guest`.
+  Use neutral copy without pretending to know a person's name; use the real MAX first name
+  only when it is present.
 
 On a later surgical edit, preserve working behaviour and change only the relevant
 product files. Use edit_file/write_file so Omnia can attribute and safely roll
 changes back. Do not spend turns loading capability packs or performing ceremony:
 read only what is needed, implement, build, fix, done.
 """.strip()
-
-
-def render_max_starter_files(
-    config: MaxProjectConfigPayload, project_id: UUID | str | None = None
-) -> dict[str, str]:
-    """Buildable stable MAX starter plus the current trusted platform core.
-
-    The starter is the same working baseline shape used before the Gemini
-    migration. The model must still personalise and implement the requested
-    product; keeping a green base prevents a failed provider turn from leaving a
-    blank application.
-    """
-    return {
-        **render_max_managed_files(config, project_id),
-        MAX_PRODUCT_ENTRY_PATH: _template_file(MAX_PRODUCT_ENTRY_PATH),
-        "src/app/globals.css": _template_file("src/app/globals.css"),
-    }

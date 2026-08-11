@@ -15,7 +15,10 @@ the build loop to continue correctly.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID, uuid4
@@ -27,7 +30,7 @@ from fastapi import APIRouter, Request, Response
 from omnia_gateway.core.config import get_settings
 from omnia_gateway.core.errors import WalletEmptyError
 from omnia_gateway.providers import llmgw
-from omnia_gateway.services import billing, file_logger
+from omnia_gateway.services import billing, cache, file_logger
 from omnia_gateway.services.model_router import native_messages_route
 from omnia_gateway.services.pricing import (
     PROVIDER_INPUT_OVERHEAD_TOKENS,
@@ -38,7 +41,16 @@ from omnia_gateway.services.pricing import (
 log = structlog.get_logger(__name__)
 router = APIRouter()
 
-_TIMEOUT_S = 240.0
+# A complete MAX product composition can legitimately take more than four
+# minutes upstream even when the response stays inside the agent's bounded tool
+# payload.  A read timeout after request transmission is billing-ambiguous and
+# therefore cannot be retried; cutting it short discards the whole generation.
+# Keep connection/write/pool failures tight while giving the paid response time
+# to finish.  The API caller waits longer than this value.
+_UPSTREAM_CONNECT_TIMEOUT_SECONDS = 30.0
+_UPSTREAM_WRITE_TIMEOUT_SECONDS = 60.0
+_UPSTREAM_POOL_TIMEOUT_SECONDS = 30.0
+_TURN_ID_RE = re.compile(r"^[A-Za-z0-9:._-]{1,200}$")
 
 
 def _err(status: int, err_type: str, message: str) -> Response:
@@ -340,6 +352,11 @@ def _non_negative_int(value: Any) -> int:
         return 0
 
 
+def _safe_upstream_error_type(value: Any) -> str:
+    raw = str(value or "")
+    return raw if re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", raw) else ""
+
+
 def _estimate_native_cost(model: str, payload: dict[str, Any]) -> Decimal:
     """Conservative enough to stop before the wallet floor, without reserving
     the entire output ceiling on every tool turn."""
@@ -441,13 +458,209 @@ def _reported_cost(
     return rub, usd
 
 
+def _upstream_timeout() -> httpx.Timeout:
+    """Idle timeout for one upstream chunk, not the whole composition."""
+
+    return httpx.Timeout(
+        float(get_settings().native_response_idle_timeout_seconds),
+        connect=_UPSTREAM_CONNECT_TIMEOUT_SECONDS,
+        write=_UPSTREAM_WRITE_TIMEOUT_SECONDS,
+        pool=_UPSTREAM_POOL_TIMEOUT_SECONDS,
+    )
+
+
+def _turn_request_hash(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _turn_cache_key(run_id: UUID, turn_id: str) -> str:
+    return f"native-turn:{run_id}:{turn_id}"
+
+
+async def _cached_turn_result(
+    run_id: UUID,
+    turn_id: str,
+    request_hash: str,
+) -> dict[str, Any] | None:
+    """Return a settled logical turn after a lost API response.
+
+    Redis is an optimisation, not a new availability dependency: if it is
+    unavailable the durable request reservation and normal provider path still
+    apply. A turn id may never be replayed with a different transcript.
+    """
+
+    try:
+        record = await cache.get(_turn_cache_key(run_id, turn_id))
+    except Exception:
+        log.exception("native_messages.turn_cache_read_failed", run_id=str(run_id))
+        return None
+    if record is None:
+        return None
+    if record.get("request_hash") != request_hash:
+        raise ValueError("provider turn id was reused with a different request")
+    response = record.get("response")
+    return response if isinstance(response, dict) else None
+
+
+async def _store_turn_result(
+    run_id: UUID,
+    turn_id: str,
+    request_hash: str,
+    response: dict[str, Any],
+) -> None:
+    try:
+        await cache.set(
+            _turn_cache_key(run_id, turn_id),
+            {"request_hash": request_hash, "response": response},
+            ttl_seconds=get_settings().native_turn_cache_ttl_seconds,
+        )
+    except Exception:
+        log.exception("native_messages.turn_cache_write_failed", run_id=str(run_id))
+
+
 def _post_llmgw(url: str, payload: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
-    with httpx.Client(
-        timeout=httpx.Timeout(_TIMEOUT_S, connect=30.0),
+    """Consume upstream SSE internally and rebuild one OpenAI response.
+
+    Native tool calls are still returned atomically to the API, so no partial
+    file operation can escape. Streaming only changes the gateway-to-provider
+    transport: every received chunk resets httpx's read-idle timeout and avoids
+    treating a long, healthy composition as a stalled response body.
+    """
+
+    streamed_payload = {
+        **payload,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    streamed_headers = {**headers, "accept": "text/event-stream"}
+    started_at = time.monotonic()
+    total_timeout_seconds = max(
+        1,
+        int(get_settings().native_response_total_timeout_seconds),
+    )
+    with httpx.Client(  # noqa: SIM117 - response context depends on the opened client
+        timeout=_upstream_timeout(),
         trust_env=False,
         mounts={"all://": httpx.HTTPTransport()},
     ) as client:
-        return client.post(url, json=payload, headers=headers)
+        with client.stream(
+            "POST", url, json=streamed_payload, headers=streamed_headers
+        ) as response:
+            if response.status_code >= 400:
+                content = response.read()
+                return httpx.Response(
+                    response.status_code,
+                    content=content,
+                    headers=response.headers,
+                    request=response.request,
+                )
+
+            content_type = response.headers.get("content-type", "").lower()
+            if "text/event-stream" not in content_type:
+                content = response.read()
+                return httpx.Response(
+                    response.status_code,
+                    content=content,
+                    headers=response.headers,
+                    request=response.request,
+                )
+
+            response_id = ""
+            response_model = str(streamed_payload.get("model") or "")
+            content_parts: list[str] = []
+            tool_calls: dict[int, dict[str, Any]] = {}
+            usage: dict[str, Any] = {}
+            finish_reason: str | None = None
+            saw_done = False
+
+            for raw_line in response.iter_lines():
+                if time.monotonic() - started_at >= total_timeout_seconds:
+                    raise httpx.ReadTimeout(
+                        "upstream response exceeded its total deadline",
+                        request=response.request,
+                    )
+                if not raw_line or not raw_line.startswith("data:"):
+                    continue
+                raw_data = raw_line[5:].strip()
+                if raw_data == "[DONE]":
+                    saw_done = True
+                    break
+                try:
+                    chunk = json.loads(raw_data)
+                except ValueError as exc:
+                    raise httpx.RemoteProtocolError("malformed upstream SSE JSON") from exc
+                if not isinstance(chunk, dict) or chunk.get("error"):
+                    raise httpx.RemoteProtocolError("upstream SSE returned an error event")
+                response_id = str(chunk.get("id") or response_id)
+                response_model = str(chunk.get("model") or response_model)
+                if isinstance(chunk.get("usage"), dict):
+                    usage = dict(chunk["usage"])
+                choices = chunk.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0] if isinstance(choices[0], dict) else {}
+                if choice.get("finish_reason") is not None:
+                    finish_reason = str(choice["finish_reason"])
+                raw_delta = choice.get("delta")
+                delta: dict[str, Any] = raw_delta if isinstance(raw_delta, dict) else {}
+                content_delta = delta.get("content")
+                if isinstance(content_delta, str):
+                    content_parts.append(content_delta)
+                raw_tool_calls = delta.get("tool_calls")
+                if not isinstance(raw_tool_calls, list):
+                    continue
+                for raw_tool_call in raw_tool_calls:
+                    if not isinstance(raw_tool_call, dict):
+                        continue
+                    index = int(raw_tool_call.get("index") or 0)
+                    current = tool_calls.setdefault(
+                        index,
+                        {
+                            "id": "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        },
+                    )
+                    if isinstance(raw_tool_call.get("id"), str):
+                        current["id"] += raw_tool_call["id"]
+                    function_delta = raw_tool_call.get("function")
+                    if not isinstance(function_delta, dict):
+                        continue
+                    if isinstance(function_delta.get("name"), str):
+                        current["function"]["name"] += function_delta["name"]
+                    if isinstance(function_delta.get("arguments"), str):
+                        current["function"]["arguments"] += function_delta["arguments"]
+
+            if not saw_done and finish_reason is None:
+                raise httpx.RemoteProtocolError("upstream SSE ended without a terminal marker")
+            ordered_tool_calls = [tool_calls[index] for index in sorted(tool_calls)]
+            if not content_parts and not ordered_tool_calls:
+                raise httpx.RemoteProtocolError("upstream SSE contained no usable completion")
+            data = {
+                "id": response_id or f"chatcmpl-{uuid4()}",
+                "object": "chat.completion",
+                "model": response_model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "".join(content_parts) or None,
+                            "tool_calls": ordered_tool_calls,
+                        },
+                        "finish_reason": finish_reason
+                        or ("tool_calls" if ordered_tool_calls else "stop"),
+                    }
+                ],
+                "usage": usage,
+            }
+            return httpx.Response(
+                200,
+                json=data,
+                headers=response.headers,
+                request=response.request,
+            )
 
 
 @router.post("/v1/messages")
@@ -477,12 +690,19 @@ async def native_messages(request: Request) -> Response:
     run_id = _uuid(metadata.get("run_id"))
     stage = str(metadata.get("stage") or "native_agent")[:80]
     retry_count = _non_negative_int(metadata.get("retry_count"))
+    turn_id = str(metadata.get("turn_id") or "")
     free = bool(metadata.get("free", False))
     if user_id is None or run_id is None:
         return _err(
             400,
             "invalid_request_error",
             "native agent calls require valid user and run attribution",
+        )
+    if turn_id and not _TURN_ID_RE.fullmatch(turn_id):
+        return _err(
+            400,
+            "invalid_request_error",
+            "native agent calls require a valid logical turn id",
         )
 
     try:
@@ -503,10 +723,37 @@ async def native_messages(request: Request) -> Response:
     if isinstance(body.get("temperature"), (int, float)):
         payload["temperature"] = body["temperature"]
 
+    request_hash = _turn_request_hash(payload)
+    # Rolling deploy compatibility: an older API has no explicit turn id. Its
+    # canonical request hash is stable and still gives safe replay semantics.
+    turn_id = turn_id or f"legacy-{request_hash[:32]}"
+    try:
+        cached_result = await _cached_turn_result(run_id, turn_id, request_hash)
+    except ValueError:
+        return _err(
+            409,
+            "provider_turn_conflict",
+            "logical provider turn was reused with a different request",
+        )
+    if cached_result is not None:
+        log.info(
+            "native_messages.turn_reconciled",
+            run_id=str(run_id),
+            turn_id=turn_id,
+        )
+        return Response(
+            content=json.dumps(cached_result),
+            status_code=200,
+            media_type="application/json",
+        )
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "content-type": "application/json",
-        "accept": "application/json",
+        "accept": "text/event-stream",
+        # llmgw may forward or honour this standard best-effort key. Omnia's own
+        # settled-response cache remains the authoritative replay mechanism.
+        "Idempotency-Key": turn_id,
     }
 
     estimated_cost_rub = _estimate_native_cost(model, payload)
@@ -570,6 +817,19 @@ async def native_messages(request: Request) -> Response:
             payload,
             headers,
         )
+    except httpx.ReadTimeout as exc:
+        log.warning(
+            "native_messages.response_timeout",
+            model=model,
+            run_id=str(run_id),
+            turn_id=turn_id,
+            error=type(exc).__name__,
+        )
+        return _err(
+            504,
+            "provider_response_timeout",
+            "upstream response body stopped making progress",
+        )
     except httpx.HTTPError as exc:
         log.warning("native_messages.transport_error", model=model, error=str(exc))
         return _err(
@@ -593,7 +853,23 @@ async def native_messages(request: Request) -> Response:
             upstream_error = upstream.json().get("error", {})
             message = upstream_error.get("message") or upstream.text[:300]
         except (ValueError, AttributeError):
+            upstream_error = {}
             message = upstream.text[:300]
+        # Keep provider diagnostics useful without copying an upstream message
+        # into logs: it can contain request fragments or credentials. Numeric
+        # status + provider error type are enough to distinguish auth, payload,
+        # throttling and service failures during a production canary.
+        upstream_error_type = _safe_upstream_error_type(
+            upstream_error.get("type") or upstream_error.get("code")
+            if isinstance(upstream_error, dict)
+            else ""
+        )
+        log.warning(
+            "native_messages.upstream_rejected",
+            run_id=str(run_id),
+            status_code=upstream.status_code,
+            upstream_error_type=upstream_error_type,
+        )
         error_type = (
             "paid_call_ambiguous"
             if upstream.status_code >= 500 or upstream.status_code in {408, 425, 429}
@@ -692,7 +968,9 @@ async def native_messages(request: Request) -> Response:
         "retry_count": retry_count,
         "run_id": str(run_id),
         "stage": stage,
+        "turn_id": turn_id,
     }
+    await _store_turn_result(run_id, turn_id, request_hash, adapted)
     try:
         file_logger.log_request(
             {

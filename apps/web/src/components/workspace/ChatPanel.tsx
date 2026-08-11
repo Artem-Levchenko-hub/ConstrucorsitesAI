@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PanelLeftClose } from "lucide-react";
+import { toast } from "sonner";
 import { listMessages } from "@/lib/api/messages";
+import { redactCredentialsBeforeTransport } from "@/lib/credential-safety";
 import type {
   AgentStep,
   DesignPreview,
@@ -37,6 +39,12 @@ type DiscoveryChoices = {
   designPreview?: DesignPreview | null;
 };
 
+type PromptSubmitOptions = {
+  skipClarify?: boolean;
+  designPresetId?: string | null;
+  idempotencyKey?: string;
+};
+
 export function ChatPanel({
   projectId,
   projectSlug,
@@ -57,6 +65,27 @@ export function ChatPanel({
   const { submit, cancel, cancelPending, pendingPrompt } = usePromptStream(
     projectId,
     projectSlug,
+  );
+
+  const submitSafely = useCallback(
+    (
+      text: string,
+      selections: SelectedElement[] = [],
+      options?: PromptSubmitOptions,
+    ) => {
+      const safe =
+        mode === "max"
+          ? redactCredentialsBeforeTransport(text)
+          : { text, credentialsRemoved: false };
+      if (safe.credentialsRemoved) {
+        toast.success("Секрет удалён до отправки", {
+          description:
+            "Задача продолжит сборку через встроенный AI — ключ не попадёт в сеть, чат или код.",
+        });
+      }
+      submit(safe.text, modelId, selections, options);
+    },
+    [mode, submit],
   );
   const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -88,26 +117,26 @@ export function ChatPanel({
   // (one short question at a time) before the first build. Every later prompt
   // submits the same way.
   const handleSubmit = (text: string, selections: SelectedElement[]) => {
-    submit(text, modelId, selections);
+    submitSafely(text, selections);
   };
 
   // «Починить» on an error card → submit a follow-up fix prompt through the
   // normal pipeline (surgical edit / rebuild as the triage decides).
   const handleFix = (prompt: string) => {
-    submit(prompt, modelId, []);
+    submitSafely(prompt);
   };
 
   // A fork recap card's one-tap starter edit → submit it as the remixer's first
   // prompt through the normal pipeline (the warm first move, pillar 4).
   const handleSuggest = (prompt: string) => {
-    submit(prompt, modelId, []);
+    submitSafely(prompt);
   };
 
   // Discovery chip tapped (or an inline «Другое» answer) → submit it as the
   // user's answer to the question. Used by both single-select and the joined
   // multi-select «Готово» submission (the card builds the combined string).
   const handlePickChoice = (choice: string) => {
-    submit(choice, modelId, []);
+    submitSafely(choice);
   };
 
   // «Я готов — постройте сейчас» — leave the onboarding popup early and build now.
@@ -115,7 +144,7 @@ export function ChatPanel({
   // floor, so the next turn generates instead of asking another question. The
   // user is never trapped in the interview (NORTH STAR pillar 2 — явный skip).
   const handleSkip = () => {
-    submit("Постройте сейчас", modelId, []);
+    submitSafely("Постройте сейчас");
   };
 
   // Determine streaming state from data: an assistant message with
@@ -167,14 +196,14 @@ export function ChatPanel({
   // skip_clarify so the server builds straight away instead of re-interviewing.
   const handleSurveyDone = (combined: string, presetId: string | null) => {
     clearSurvey();
-    submit(combined.trim() || "Постройте сейчас", modelId, [], {
+    submitSafely(combined.trim() || "Постройте сейчас", [], {
       skipClarify: true,
       designPresetId: presetId,
     });
   };
   const handleSurveySkip = () => {
     clearSurvey();
-    submit("Постройте сейчас", modelId, [], { skipClarify: true });
+    submitSafely("Постройте сейчас", [], { skipClarify: true });
   };
 
   // Auto-scroll on new messages / chunks.
@@ -202,7 +231,7 @@ export function ChatPanel({
     }
     if (p && p.trim() && messages.length === 0) {
       autoFiredRef.current = true;
-      submit(p.trim(), modelId, [], {
+      submitSafely(p.trim(), [], {
         skipClarify: true,
         // Stable on the server across tabs/reloads/devices. Even if the handoff
         // effect somehow fires twice, reserve_generation_run replays this exact
@@ -211,7 +240,7 @@ export function ChatPanel({
       });
       window.history.replaceState(null, "", basePath);
     }
-  }, [messages, submit, basePath, projectId]);
+  }, [messages, submitSafely, basePath, projectId]);
 
   return (
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную

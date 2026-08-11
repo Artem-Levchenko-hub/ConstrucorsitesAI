@@ -80,6 +80,27 @@ def test_explicit_rebuild_orchestrates() -> None:
     assert decide_intent("поменяй дизайн полностью", is_first_prompt=False) == ORCHESTRATE
 
 
+def test_negated_rebuild_language_stays_an_edit() -> None:
+    prompts = (
+        "не переписывай продукт с нуля, исправь только оплату",
+        "не надо делать всё заново — сохрани текущий дизайн",
+        "не пересобери страницу, поправь кнопку",
+        "do not rebuild from scratch; preserve the existing app",
+    )
+
+    for prompt in prompts:
+        assert decide_intent(prompt, is_first_prompt=False) == CHEAP, prompt
+
+    # A prior negation in another clause must not hide a later real rebuild.
+    assert (
+        decide_intent(
+            "не меняй тексты, но сделай весь сайт с нуля",
+            is_first_prompt=False,
+        )
+        == ORCHESTRATE
+    )
+
+
 def test_bare_peredelai_on_one_thing_is_cheap() -> None:
     """ "переделай" alone (a single element) must stay an edit — only whole-page
     rebuild phrases ("переделай сайт", "с нуля", "заново") orchestrate."""

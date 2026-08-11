@@ -48,6 +48,17 @@ class MaxPreviewSessionResponse(BaseModel):
     expires_at: str  # ISO8601 UTC
 
 
+class MaxPreviewCapabilityValidateRequest(BaseModel):
+    """Opaque capability forwarded only by the locked MAX preview proxy."""
+
+    token: str = Field(min_length=48, max_length=128)
+
+
+class MaxPreviewCapabilityValidateResponse(BaseModel):
+    project_id: UUID
+    valid: Literal[True]
+
+
 class WakeRequest(BaseModel):
     project_id: UUID
 

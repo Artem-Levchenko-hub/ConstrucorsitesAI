@@ -209,7 +209,7 @@ export default function MaxGuidePage() {
           <div className="flex items-center gap-2">
             <Link href="/max/product" className="hidden min-h-10 items-center rounded-md px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee] sm:inline-flex"><ArrowLeft className="mr-2 size-3.5" />О продукте</Link>
             <Link href="/login?next=/max" className="omnia-button omnia-button-secondary min-h-10 px-4 text-xs">Войти</Link>
-            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-10 px-4 text-xs">Начать</Link>
+            <Link href="/max/demo" className="omnia-button omnia-button-primary min-h-10 px-4 text-xs">Попробовать демо</Link>
           </div>
         </div>
       </header>

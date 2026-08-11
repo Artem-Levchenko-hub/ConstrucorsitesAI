@@ -121,6 +121,7 @@ from omnia_api.services.generation_runs import (
     merge_generation_agent_state,
     reserve_generation_run,
     save_generation_agent_state,
+    set_generation_run_error,
     set_generation_run_status,
 )
 from omnia_api.services.image_resolver import resolve_images
@@ -196,6 +197,51 @@ def _max_runtime_probe_is_green(probe: Mapping[str, Any]) -> bool:
     return bool(probe.get("ok")) and isinstance(code, int) and 200 <= code < 400
 
 
+_MAX_LITERAL_CLASS_RE = re.compile(r"className\s*=\s*['\"]([^'\"]+)['\"]")
+_MAX_CSS_CLASS_RE = re.compile(r"\.(-?[_a-zA-Z]+[_a-zA-Z0-9-]*)")
+
+
+def _fresh_max_style_gap(written: Mapping[str, str], entry: str) -> str | None:
+    """Reject a typed-but-unstyled fresh product before visual QA.
+
+    The maintained starter has its own class vocabulary. A model can create a
+    perfectly valid ProductApp with new class names, skip globals.css, and still
+    pass typecheck/runtime HTTP 200 while rendering as raw browser controls.
+    """
+
+    globals_css = str(written.get("src/app/globals.css") or "").strip()
+    if len(globals_css) < 400:
+        return (
+            "A fresh MAX product must also rewrite src/app/globals.css with the "
+            "product-specific mobile visual system; the starter CSS is not the result."
+        )
+    css = "\n".join(str(content) for path, content in written.items() if path.endswith(".css"))
+    css_code = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    if (
+        '@import "tailwindcss"' in css_code
+        or "@import 'tailwindcss'" in css_code
+        or "@tailwind " in css_code
+    ):
+        return None
+    literal_classes = {
+        token
+        for value in _MAX_LITERAL_CLASS_RE.findall(entry)
+        for token in value.split()
+        if re.fullmatch(r"-?[_a-zA-Z]+[_a-zA-Z0-9-]*", token)
+    }
+    if len(literal_classes) < 4:
+        return None
+    defined_classes = set(_MAX_CSS_CLASS_RE.findall(css_code))
+    styled = literal_classes.intersection(defined_classes)
+    if len(styled) * 2 < len(literal_classes):
+        missing = ", ".join(sorted(literal_classes - defined_classes)[:8])
+        return (
+            "The ProductApp class vocabulary is not implemented in product CSS. "
+            f"Style the actual component classes before done (examples: {missing})."
+        )
+    return None
+
+
 def _reference_max_completion_gap(
     written: Mapping[str, str],
     evidence: Mapping[str, int],
@@ -207,7 +253,7 @@ def _reference_max_completion_gap(
 
     if not written:
         return (
-            "The Google agent has not changed a product file yet. "
+            "The agent has not changed a product file yet. "
             "Implement the requested MAX app before finishing."
         )
     if source_gap:
@@ -218,8 +264,11 @@ def _reference_max_completion_gap(
             return (
                 "A fresh MAX build must replace "
                 "src/components/product/ProductApp.tsx with a real product, not only "
-                "CSS, a placeholder or platform core."
+                "CSS or a placeholder."
             )
+        style_gap = _fresh_max_style_gap(written, entry)
+        if style_gap:
+            return style_gap
     if evidence.get("runtime_check_after_write", 0) < 1:
         return (
             "Run runtime_check on / after the final product write; "
@@ -266,6 +315,27 @@ async def _resync_cancelled_runtime(project_id: UUID, touched_paths: set[str]) -
             project_id,
             snapshot.commit_sha,
         )
+        if project.template == "max_miniapp":
+            # A brand-new MAX project's canonical Git snapshot is empty by
+            # design; the maintained starter is rendered into its live runtime.
+            # Restore through that same trusted renderer so cleanup cannot turn
+            # touched ProductApp/globals paths into delete intents.
+            from omnia_api.models.max_project_config import MaxProjectConfig
+            from omnia_api.schemas.max_studio import MaxProjectConfigPayload
+            from omnia_api.services.max_project_kit import (
+                default_max_project_config,
+                max_project_config_from_files,
+                render_max_history_files,
+            )
+
+            record = await session.get(MaxProjectConfig, project.id)
+            snapshot_config = max_project_config_from_files(canonical)
+            config = (
+                MaxProjectConfigPayload.model_validate(record.config)
+                if record is not None
+                else snapshot_config or default_max_project_config(project.name)
+            )
+            canonical = render_max_history_files(canonical, config, project.id)
         patch = {path: canonical.get(path, "") for path in touched_paths}
         await orchestrator_client.hot_reload_exact(project_id, project.slug, patch)
         project.runtime_sync_required = False
@@ -864,6 +934,8 @@ def _agent_result_message(res: Any, *, is_edit: bool) -> str:
         "safe_starter_rolled_back",
         "core_only_rolled_back",
         "core_preparation_failed",
+        "first_build_rolled_back",
+        "runtime_checkpoint_failed",
         "verification_rolled_back",
     }:
         return (getattr(res, "summary", "") or "").strip() or "Сборка не завершена."
@@ -922,6 +994,98 @@ def _recover_max_resume_prompt(candidates: Sequence[str]) -> str | None:
         if value and not _is_continue_request(value):
             return value
     return None
+
+
+def _merge_max_product_brief(original: str | None, current: str) -> str:
+    """Keep the first product brief visible during later MAX edits.
+
+    Snapshot prompts are durable product requirements, while the current prompt
+    normally describes one incremental change.  Supplying both prevents a
+    visual edit from silently deleting payments, restaurant integrations or
+    other working scenarios that are absent from the short follow-up.
+    """
+
+    original_text = (original or "").strip()
+    current_text = (current or "").strip()
+    if not original_text or original_text == current_text:
+        return current_text
+    return (
+        "ИСХОДНЫЙ БРИФ ПРОДУКТА (сохрани все требования, которые текущая правка "
+        "явно не отменяет):\n"
+        f"{original_text[:12_000]}\n\n"
+        "ТЕКУЩАЯ ПРАВКА:\n"
+        f"{current_text[:8_000]}"
+    )
+
+
+_MAX_VISUAL_QA_RETRY_DELAYS_SECONDS = (0, 2, 5)
+
+
+async def _run_max_visual_qa(
+    project_id: UUID,
+    *,
+    path: str,
+    prompt_context: str,
+) -> dict[str, Any]:
+    """Run signed MAX visual QA with a short infrastructure-only retry.
+
+    ``agent_vision.see_page`` already retries a skipped visual judge against one
+    captured image.  This outer recovery covers the other transient boundary:
+    creating the signed preview session or rendering the page.  A real browser
+    failure carries a verdict and is returned immediately so it cannot be
+    mislabeled as unavailable infrastructure.
+    """
+
+    from omnia_api.services import agent_vision
+
+    last_error = "MAX visual QA unavailable"
+    for attempt, delay_seconds in enumerate(_MAX_VISUAL_QA_RETRY_DELAYS_SECONDS, start=1):
+        if delay_seconds:
+            await asyncio.sleep(delay_seconds)
+        try:
+            preview_session = await orchestrator_client.create_max_preview_session(project_id)
+            bootstrap_url = str(preview_session.get("bootstrap_url") or "")
+            visual = await agent_vision.see_page(
+                project_id,
+                path=path,
+                prompt_context=prompt_context,
+                bootstrap_url=bootstrap_url,
+                product_kind="max_miniapp",
+            )
+        except Exception as exc:
+            last_error = f"MAX visual QA unavailable: {type(exc).__name__}"
+            logging.getLogger(__name__).warning(
+                "metric=max_visual_qa_retry project_id=%s attempt=%d total=%d error_type=%s",
+                project_id,
+                attempt,
+                len(_MAX_VISUAL_QA_RETRY_DELAYS_SECONDS),
+                type(exc).__name__,
+            )
+            continue
+
+        if visual.get("ok"):
+            if attempt > 1:
+                logging.getLogger(__name__).info(
+                    "metric=max_visual_qa_retry_recovered project_id=%s attempt=%d",
+                    project_id,
+                    attempt,
+                )
+            return visual
+
+        # A captured page with a visual verdict is product evidence.  In
+        # particular, failed browser requests must stay red and reach the agent.
+        if visual.get("verdict") or "BROWSER SIGNALS" in str(visual.get("detail") or ""):
+            return visual
+
+        last_error = str(visual.get("error") or "MAX visual QA unavailable")
+        logging.getLogger(__name__).warning(
+            "metric=max_visual_qa_retry project_id=%s attempt=%d total=%d error_type=infra_result",
+            project_id,
+            attempt,
+            len(_MAX_VISUAL_QA_RETRY_DELAYS_SECONDS),
+        )
+
+    return {"ok": False, "error": last_error}
 
 
 def _spawn_process_prompt(*, run_id: UUID, **kwargs: object) -> None:
@@ -1468,6 +1632,17 @@ async def post_prompt(
     current_user: CurrentUserDep,
 ) -> PromptResponse:
     project = await _ensure_owner(session, project_id, current_user.id)
+
+    # A credential pasted into MAX chat must never reach persistence or a model.
+    # Keep the product request: redact it before even hashing the prompt and
+    # route the model to the managed, secretless runtime instead of stopping.
+    from omnia_api.services.secret_safety import prepare_safe_max_prompt
+
+    safe_max_prompt = prepare_safe_max_prompt(payload.prompt)
+    credential_removed = project.template == "max_miniapp" and safe_max_prompt.credential_removed
+    if credential_removed:
+        payload = payload.model_copy(update={"prompt": safe_max_prompt.chat_text})
+
     idempotency_key = payload.idempotency_key or str(uuid4())
     generation_run, replayed = await reserve_generation_run(
         session,
@@ -1538,18 +1713,6 @@ async def post_prompt(
             status.HTTP_409_CONFLICT,
         )
 
-    # A credential pasted into MAX chat is configuration, not a code-generation
-    # request.  Redirect it before wallet checks/model dispatch and redact the
-    # chat row; generated repositories must never become a secret store.
-    from omnia_api.services.secret_safety import (
-        contains_provider_secret,
-        redact_provider_secrets,
-    )
-
-    credential_redirect = project.template == "max_miniapp" and contains_provider_secret(
-        payload.prompt
-    )
-
     # Free-tier gate: regular projects keep the historical per-user allowance.
     # MAX has one separate instant-demo build.  The user row is locked and the
     # allowance is reserved in this request transaction before any model task is
@@ -1558,15 +1721,13 @@ async def post_prompt(
     # free → skips this wallet-floor check AND the gateway debit (metadata.free).
     max_demo_reserved = False
     if project.template == "max_miniapp":
-        if get_settings().unlimited_generations or credential_redirect:
+        if get_settings().unlimited_generations:
             is_free = True
         else:
             locked_user = await session.get(User, current_user.id, with_for_update=True)
             if locked_user is None:
                 raise ApiError("unauthorized", "user not found", status.HTTP_401_UNAUTHORIZED)
-            is_free = (
-                locked_user.max_demo_generations_used < MAX_DEMO_GENERATION_LIMIT
-            )
+            is_free = locked_user.max_demo_generations_used < MAX_DEMO_GENERATION_LIMIT
             if is_free:
                 locked_user.max_demo_generations_used += 1
                 max_demo_reserved = True
@@ -1574,7 +1735,7 @@ async def post_prompt(
         is_free = get_settings().unlimited_generations or (
             (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
         )
-    if not is_free and not credential_redirect:
+    if not is_free:
         account = await resolve_billing_account(session, current_user.id)
         wallet = (
             await session.execute(select(Wallet).where(Wallet.billing_account_id == account.id))
@@ -1722,13 +1883,8 @@ async def post_prompt(
     # now, the survey arrives via `onboarding.survey` (see _run_async_onboarding).
     async_onboarding = False
     do_clarify = False
-    effective_prompt = payload.prompt
-    interview_eligible = (
-        is_first_build
-        and not payload.skip_clarify
-        and not selected_dump
-        and not credential_redirect
-    )
+    effective_prompt = safe_max_prompt.model_text if credential_removed else payload.prompt
+    interview_eligible = is_first_build and not payload.skip_clarify and not selected_dump
     if interview_eligible and settings.use_progressive_discovery:
         # Gather the prior conversation (questions already asked + answers) to
         # drive the next discovery turn. The newest message (payload.prompt) is
@@ -1870,7 +2026,6 @@ async def post_prompt(
     # PROPOSAL P-H1). Fail-soft (R-10): a hiccup falls back to a static build.
     if (
         is_first_build
-        and not credential_redirect
         and discovery_result is None
         and not discovery_ask
         and not do_clarify
@@ -1993,7 +2148,7 @@ async def post_prompt(
         # App-ification triage rule (P-H1), flag-gated so it's a no-op until enabled.
         appify_enabled=settings.use_followup_appification,
     )
-    orchestrate = intent == ORCHESTRATE and not credential_redirect
+    orchestrate = intent == ORCHESTRATE
 
     # Model choice is server-side — the user never picks. `force_model` is the
     # hidden admin override (env FORCE_MODEL). Otherwise the triage decides:
@@ -2011,9 +2166,7 @@ async def post_prompt(
     user_msg = Message(
         project_id=project_id,
         role="user",
-        content=(
-            redact_provider_secrets(payload.prompt) if credential_redirect else payload.prompt
-        ),
+        content=payload.prompt,
         model_id=None,  # user turns have no model
         selected_elements=selected_dump,
         created_at=_now,
@@ -2055,15 +2208,7 @@ async def post_prompt(
     # request sees the active-run guard and cannot start in parallel.
     turn_mode: Literal["build", "edit", "clarify"] = (
         "clarify"
-        if (
-            credential_redirect
-            or discovery_ask
-            or async_onboarding
-            or do_clarify
-            or run_intent
-            or run_ask
-            or run_decline
-        )
+        if (discovery_ask or async_onboarding or do_clarify or run_intent or run_ask or run_decline)
         else ("build" if orchestrate else "edit")
     )
     # A clarification/configuration turn does not receive the demo build.  The
@@ -2083,19 +2228,7 @@ async def post_prompt(
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
 
-    if credential_redirect:
-        _spawn_text_turn(
-            project_id,
-            assistant_msg.id,
-            (
-                "Ключ не сохранён и не передан агенту. Подключите провайдера через "
-                "«Интеграции» — там секрет хранится зашифрованно и не попадает в код "
-                "или историю проекта. Если ключ уже был отправлен в чат, отзовите его "
-                "у провайдера и создайте новый."
-            ),
-            run_id=generation_run.id,
-        )
-    elif async_onboarding:
+    if async_onboarding:
         # Deferred first-turn onboarding: no gateway call ran in-request. Plan the
         # question batch out of band (Opus ~60-70s) and deliver the survey over WS
         # so POST already returned inside the client's 30s budget.
@@ -2522,11 +2655,7 @@ _ANIME_SCRIPT = '<script src="assets/anime.min.js" defer></script>'
 _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 _DEPTH_SCRIPT = '<script src="assets/omnia-depth.js" defer></script>'
 _DEPTH_ASSET = (
-    Path(__file__).resolve().parents[1]
-    / "templates"
-    / "blank"
-    / "assets"
-    / "omnia-depth.js"
+    Path(__file__).resolve().parents[1] / "templates" / "blank" / "assets" / "omnia-depth.js"
 )
 
 # Container-backed React templates that hot-reload `<file path=…>` blocks into a
@@ -2568,6 +2697,89 @@ def _publishable_agent_files(
     if must_restore_previous:
         return {}
     return _merge_seeded_agent_files(seeded_files, generated_files)
+
+
+_GREEN_BOUNDED_MAX_STOPS = frozenset(
+    {
+        "max_steps_green",
+        "provider_stopped_green",
+        "spend_budget_green",
+        "paid_call_ambiguous_green",
+        "provider_rejected_green",
+    }
+)
+
+
+def _preserve_verified_max_progress(
+    *,
+    project_template: str,
+    is_edit: bool,
+    stop_reason: str,
+    generated_files: Mapping[str, str],
+) -> bool:
+    """Keep a green MAX edit so the next turn can finish visual polish.
+
+    A green bounded stop is not product completion, but discarding it makes a
+    follow-up restart from the older, visibly worse snapshot. Independent
+    typecheck/runtime verification below still rolls back any actually broken
+    candidate before canonical publication.
+    """
+
+    return (
+        project_template == "max_miniapp"
+        and is_edit
+        and bool(generated_files)
+        and stop_reason in _GREEN_BOUNDED_MAX_STOPS
+    )
+
+
+def _max_runtime_checkpoint_path(path: str) -> bool:
+    """Keep only files a MAX build may mutate outside the managed runtime."""
+
+    from omnia_api.services.max_project_kit import (
+        MAX_MODEL_LOCKED_FILES,
+        max_model_path_rejection,
+    )
+
+    return path in {"package.json", "pnpm-lock.yaml"} or (
+        path not in MAX_MODEL_LOCKED_FILES and max_model_path_rejection(path) is None
+    )
+
+
+async def _capture_max_runtime_checkpoint(project_id: UUID, slug: str) -> dict[str, str]:
+    """Snapshot the live product tree before a first build, without scaffolding it."""
+
+    live_paths = await orchestrator_client.agent_list_source_files(project_id, slug)
+    paths = [path for path in live_paths if _max_runtime_checkpoint_path(path)]
+    contents = await asyncio.gather(
+        *(orchestrator_client.agent_read_file(project_id, slug, path) for path in paths)
+    )
+    missing = [path for path, content in zip(paths, contents, strict=True) if content is None]
+    if missing:
+        raise RuntimeError(f"MAX runtime checkpoint could not read: {missing[0]}")
+    return {path: cast(str, content) for path, content in zip(paths, contents, strict=True)}
+
+
+def _max_runtime_restore_patch(
+    checkpoint: Mapping[str, str], live_paths: Sequence[str]
+) -> dict[str, str]:
+    """Restore captured product bytes and delete product paths created by a failed run."""
+
+    mutable_live = {path for path in live_paths if _max_runtime_checkpoint_path(path)}
+    return {
+        **{path: "" for path in sorted(mutable_live.difference(checkpoint))},
+        **dict(checkpoint),
+    }
+
+
+async def _restore_max_runtime_checkpoint(
+    project_id: UUID, slug: str, checkpoint: Mapping[str, str]
+) -> dict[str, Any]:
+    live_paths = await orchestrator_client.agent_list_source_files(project_id, slug)
+    patch = _max_runtime_restore_patch(checkpoint, live_paths)
+    if patch:
+        await orchestrator_client.hot_reload_exact(project_id, slug, patch)
+    return await orchestrator_client.agent_build(project_id, slug)
 
 
 # A6a — managed auth columns the AI must never drop when it rewrites
@@ -3377,6 +3589,7 @@ async def _process_prompt(
             _is_continue = _has_prior_build and _is_continue_request(prompt_text)
             _is_edit = (not orchestrate) and not _is_continue
             _max_has_generated_snapshot = False
+            _max_original_brief: str | None = None
             if project_template == "max_miniapp":
                 async with factory() as _max_history_session:
                     _max_has_generated_snapshot = bool(
@@ -3388,6 +3601,17 @@ async def _process_prompt(
                             )
                         )
                     )
+                    if _max_has_generated_snapshot:
+                        _max_original_brief = await _max_history_session.scalar(
+                            select(Snapshot.prompt_text)
+                            .where(
+                                Snapshot.project_id == project_id,
+                                Snapshot.prompt_text.is_not(None),
+                                func.length(func.trim(Snapshot.prompt_text)) > 0,
+                            )
+                            .order_by(Snapshot.created_at.asc(), Snapshot.id.asc())
+                            .limit(1)
+                        )
                     if _is_continue and not _max_has_generated_snapshot:
                         _prior_max_prompts = list(
                             (
@@ -3412,6 +3636,11 @@ async def _process_prompt(
                                 "[PP] MAX resume recovered original brief from history",
                                 flush=True,
                             )
+            _max_product_brief = (
+                _merge_max_product_brief(_max_original_brief, prompt_text)
+                if project_template == "max_miniapp"
+                else prompt_text
+            )
 
             # Durable observable plan. A retry inherits the last failed run's
             # checkpoint, while a fresh request starts from a small deterministic
@@ -3487,6 +3716,7 @@ async def _process_prompt(
             if project_template == "max_miniapp":
                 from omnia_api.services.max_generation_contract import (
                     max_demo_data_rejection,
+                    max_source_completion_gap,
                 )
                 from omnia_api.services.max_project_kit import (
                     MAX_MODEL_LOCKED_FILES,
@@ -3500,33 +3730,23 @@ async def _process_prompt(
 
                         return read_max_skill(
                             str(action.args.get("skill") or ""),
-                            prompt=prompt_text,
+                            prompt=_max_product_brief,
                             project_id=str(project_id),
                         )
                     if action.name == "see":
                         # MAX previews authenticate through signed initData/session,
                         # not the generic email login. Bootstrap a short-lived
                         # preview identity before Playwright captures the product.
-                        from omnia_api.services import agent_vision
-
-                        try:
-                            _preview_session = await orchestrator_client.create_max_preview_session(
-                                project_id
-                            )
-                            _bootstrap_url = str(_preview_session.get("bootstrap_url") or "")
-                            _visual = await agent_vision.see_page(
-                                project_id,
-                                path=action.path or "/",
-                                prompt_context=prompt_text,
-                                bootstrap_url=_bootstrap_url,
-                                product_kind="max_miniapp",
-                            )
-                        except Exception as _see_exc:
-                            _visual = {
-                                "ok": False,
-                                "error": f"MAX visual QA unavailable: {type(_see_exc).__name__}",
-                            }
+                        _visual = await _run_max_visual_qa(
+                            project_id,
+                            path=action.path or "/",
+                            prompt_context=_max_product_brief,
+                        )
                         if not _visual.get("ok"):
+                            if _visual.get("verdict") or "BROWSER SIGNALS" in str(
+                                _visual.get("detail") or ""
+                            ):
+                                return _visual
                             # A QA-infrastructure miss is advisory. The independent
                             # build/runtime gates still block real product failures,
                             # and the model must not loop or roll back green code.
@@ -3565,6 +3785,19 @@ async def _process_prompt(
                             )
                             if _current is None:
                                 return {"ok": False, "error": f"not found: {action.path}"}
+                            if action.path == "src/app/globals.css":
+                                from omnia_api.services.max_generation_contract import (
+                                    normalize_max_globals_css,
+                                )
+
+                                _normalized_current = normalize_max_globals_css(_current)
+                                if _normalized_current != _current:
+                                    await orchestrator_client.hot_reload_exact(
+                                        project_id,
+                                        project_slug,
+                                        {action.path: _normalized_current},
+                                    )
+                                    _current = _normalized_current
                             if _current.count(_search) != 1:
                                 return {
                                     "ok": False,
@@ -3576,6 +3809,14 @@ async def _process_prompt(
                             _candidate = _current.replace(_search, str(_replace), 1)
                         else:
                             _candidate = str(action.args.get("content") or "")
+                        _normalized_max_css: str | None = None
+                        if action.path == "src/app/globals.css":
+                            from omnia_api.services.max_generation_contract import (
+                                normalize_max_globals_css,
+                            )
+
+                            _normalized_max_css = normalize_max_globals_css(_candidate)
+                            _candidate = _normalized_max_css
                         _secret_rejection = max_model_write_rejection(action.path, _candidate)
                         if _secret_rejection:
                             return {"ok": False, "error": _secret_rejection}
@@ -3605,19 +3846,49 @@ async def _process_prompt(
                                     "creating a parallel route."
                                 ),
                             }
+                        if _normalized_max_css is not None:
+                            await orchestrator_client.hot_reload_exact(
+                                project_id,
+                                project_slug,
+                                {action.path: _normalized_max_css},
+                            )
+                            return {
+                                "ok": True,
+                                "content": _normalized_max_css,
+                                "detail": (
+                                    f"normalized and wrote {action.path} "
+                                    f"({len(_normalized_max_css)} bytes)"
+                                ),
+                            }
                     _observation = await _base_agent_executor(action)
                     if action.name == "runtime_check" and not _max_runtime_probe_is_green(
                         _observation
                     ):
                         _code = _observation.get("status_code")
+                        if _code is None:
+                            return {
+                                **_observation,
+                                "ok": False,
+                                "infra_dead": True,
+                                "detail": (
+                                    f"MAX route {action.path or '/'} did not answer yet. "
+                                    "Keep the clean build, do not edit source, and retry "
+                                    "runtime_check after the dev server is ready."
+                                ),
+                            }
+                        _runtime_detail = str(
+                            _observation.get("detail")
+                            or _observation.get("error")
+                            or "runtime failure"
+                        )
                         return {
                             **_observation,
                             "ok": False,
-                            "infra_dead": _code is None,
+                            "infra_dead": False,
                             "detail": (
                                 f"MAX route {action.path or '/'} is not ready "
                                 f"(HTTP {_code if _code is not None else 'unavailable'}); "
-                                "create or fix the route before finishing."
+                                f"create or fix the route before finishing. {_runtime_detail}"
                             ),
                         }
                     return _observation
@@ -3756,19 +4027,7 @@ async def _process_prompt(
             # (the #1 latency sink observed in the first live runs). Fail-soft.
             _seed_parts: list[str] = []
             try:
-                if project_template == "max_miniapp":
-                    _max_design_spec = await orchestrator_client.agent_read_file(
-                        project_id,
-                        project_slug,
-                        ".omnia/max-design-spec.json",
-                    )
-                    if _max_design_spec:
-                        _seed_parts.append(
-                            "EXISTING MAX ART DIRECTION — preserve and refine this identity; "
-                            "do not replace it with a generic dashboard:\n"
-                            + _max_design_spec[:6000]
-                        )
-                else:
+                if project_template != "max_miniapp":
                     _ents = await orchestrator_client.agent_list_dir(
                         project_id, project_slug, "entities"
                     )
@@ -3956,7 +4215,7 @@ async def _process_prompt(
                     _sel_block = ""
                 _agent_user = (
                     f"Внеси ТОЧЕЧНОЕ изменение в существующее приложение по "
-                    f"запросу:\n\n{prompt_text}\n{_sel_block}{_seed_block}\n\n"
+                    f"запросу:\n\n{_max_product_brief}\n{_sel_block}{_seed_block}\n\n"
                     f"Найди нужный файл (grep/read), внеси МИНИМАЛЬНУЮ правку "
                     f"(edit_file/write_file), запусти build, затем done. НЕ зацикливайся "
                     f"на чтении — как только нашёл причину, СРАЗУ пиши правку (а не ещё "
@@ -3970,12 +4229,15 @@ async def _process_prompt(
                     _agent_user = (
                         "Собери полноценный MAX Mini App по запросу пользователя:\n\n"
                         f"{prompt_text}\n\n{_seed_block}\n\n"
-                        "Рабочий MAX starter уже запущен. Не считай его готовым продуктом: "
-                        "перепиши src/components/product/ProductApp.tsx и "
+                        "Среда MAX уже запущена. Сразу создай продукт: перепиши "
+                        "src/components/product/ProductApp.tsx и "
                         "src/app/globals.css под запрос, реализуй все нужные экраны и "
                         "сценарии. Сохрани MAX Bridge, серверную проверку initData, "
                         "профиль, webhook и managed Studio-файлы. Минимизируй разведку: "
                         "пиши код, запускай build, чини фактические ошибки до чистоты, "
+                        "Для названных в брифе ЮKassa/iiko сначала прочитай реальный "
+                        "integration-client и используй его: не показывай успешную оплату "
+                        "или синхронизацию заказа, если управляемый вызов не состоялся. "
                         "затем done. Не загружай skill-пакеты и не выполняй отдельные "
                         "церемониальные проверки. Не зашивай секреты и демо-профили."
                     )
@@ -4005,6 +4267,7 @@ async def _process_prompt(
             _escalate_model = model_for_role("agent_escalation", override=force_model)
             _agent_res = None
             _max_seed_files: dict[str, str] = {}
+            _max_runtime_checkpoint: dict[str, str] | None = None
             if project_template == "max_miniapp" and _max_has_generated_snapshot:
                 # Upgrade legacy model-owned root pages before another paid turn.
                 # Product bytes are preserved, but execute through the current
@@ -4047,115 +4310,41 @@ async def _process_prompt(
                         transcript=[],
                         stop_reason="platform_core_failed",
                     )
-            # Restore the pre-Gemini MAX path: start from a verified, working
-            # product baseline and let one native Anthropic-family agent rewrite
-            # it end-to-end. A zero-write run is still rejected below, so the
-            # starter can never masquerade as the requested product.
+            # The MAX runtime is already provisioned from the maintained template.
+            # Do not overlay a second generated "core" before the paid build. Keep
+            # a local product checkpoint instead so a failed first run can restore
+            # exact bytes without publishing or regenerating a starter.
             if (
                 project_template == "max_miniapp"
                 and orchestrate
                 and not _max_has_generated_snapshot
             ):
                 try:
-                    from omnia_api.models.max_project_config import MaxProjectConfig
-                    from omnia_api.schemas.max_studio import MaxProjectConfigPayload
-                    from omnia_api.services.max_project_kit import (
-                        max_legacy_server_file_deletions,
-                        render_max_starter_files,
+                    _max_runtime_checkpoint = await _capture_max_runtime_checkpoint(
+                        project_id, project_slug
                     )
-
-                    async with factory() as _max_session:
-                        _max_record = await _max_session.get(MaxProjectConfig, project_id)
-                    _max_config = (
-                        MaxProjectConfigPayload.model_validate(_max_record.config)
-                        if _max_record is not None
-                        else MaxProjectConfigPayload(
-                            app_name=project_name or "MAX Mini App",
-                            app_type="custom",
-                            summary=prompt_text[:1000] or "Сервис внутри MAX",
-                        )
-                    )
-                    _starter_files = {
-                        **max_legacy_server_file_deletions(current_files),
-                        **render_max_starter_files(_max_config, project_id),
-                    }
-                    await _agent_emit(
-                        "agent.step",
-                        {
-                            "step": 0,
-                            "action": "platform_core",
-                            "human": "Подготавливаю защищённое ядро MAX",
-                            "path": "",
-                            "detail": (
-                                f"Готовлю {len(_starter_files)} файлов рабочего MAX starter; "
-                                "затем Sonnet 5 соберёт продукт."
-                            ),
-                            "ok": True,
-                        },
-                    )
-                    # Apply the trusted platform boundary and working product
-                    # baseline atomically before the first paid Sonnet turn.
-                    _starter_patch = {
-                        "src/app/page.tsx": "",
-                        "src/components/product/ProductApp.tsx": "",
-                        **_starter_files,
-                    }
-                    await orchestrator_client.hot_reload_exact(
-                        project_id,
-                        project_slug,
-                        _starter_patch,
-                    )
-                    _max_seed_files = _starter_files
-                    _starter_build = await orchestrator_client.agent_build(project_id, project_slug)
-                    if not _starter_build.get("ok"):
-                        await asyncio.sleep(1.0)
-                        _starter_build = await orchestrator_client.agent_build(
-                            project_id, project_slug
-                        )
-                    if _starter_build.get("ok"):
-                        await _agent_emit(
-                            "agent.step",
-                            {
-                                "step": 0,
-                                "action": "build",
-                                "human": "Основа готова — запускаю Sonnet 5",
-                                "path": "",
-                                "detail": (
-                                    "MAX starter собирается чисто; Sonnet 5 начинает "
-                                    "полную сборку продукта."
-                                ),
-                                "ok": True,
-                            },
-                        )
-                    else:
-                        raise RuntimeError(
-                            "trusted MAX platform core failed two deterministic builds"
-                        )
-                except Exception as _starter_exc:
-                    print(f"[PP] MAX starter preparation skipped: {_starter_exc!r}", flush=True)
-                    # Never spend a model call against an unverified or legacy UI
-                    # base. The user can retry after infrastructure recovery without
-                    # paying for a generation that was unsafe before turn one.
+                except Exception as _checkpoint_exc:
+                    print(f"[PP] MAX runtime checkpoint failed: {_checkpoint_exc!r}", flush=True)
                     _agent_res = agent_builder.AgentResult(
                         done=False,
                         summary=(
-                            "Генерация не запускалась: не удалось подготовить чистое ядро "
-                            "MAX без продуктового шаблона. Деньги за вызов модели не списаны."
+                            "Генерация не запускалась: не удалось сохранить контрольную "
+                            "точку среды. Деньги за AI-вызов не списаны."
                         ),
                         files={},
                         steps=0,
-                        stop_reason="core_preparation_failed",
+                        stop_reason="runtime_checkpoint_failed",
                     )
                     await _agent_emit(
                         "agent.step",
                         {
                             "step": 0,
-                            "action": "platform_core",
-                            "human": "Не удалось подготовить чистое ядро MAX",
+                            "action": "runtime_checkpoint",
+                            "human": "Не удалось сохранить среду перед сборкой",
                             "path": "",
                             "detail": (
-                                "Sonnet 5 не запущен, чтобы не тратить деньги на "
-                                "генерацию поверх старого шаблона."
+                                "AI-агент не запущен, чтобы не тратить деньги на "
+                                "сборку без безопасного отката."
                             ),
                             "ok": False,
                         },
@@ -4176,6 +4365,8 @@ async def _process_prompt(
                     system=agent_native.native_system_prompt(
                         _stack_guide or "",
                         _skills,
+                        stable_max_loop=project_template == "max_miniapp",
+                        stable_max_edit=(project_template == "max_miniapp" and _is_edit),
                     ),
                     task=_agent_user,
                     execute=_agent_executor,
@@ -4185,7 +4376,23 @@ async def _process_prompt(
                     message_id=str(assistant_message_id),
                     free=is_free,
                     emit=_agent_emit,
-                    completion_check=None,
+                    completion_check=(
+                        (
+                            lambda written, evidence: _reference_max_completion_gap(
+                                written,
+                                evidence,
+                                require_product_entry=not _max_has_generated_snapshot,
+                                source_gap=max_source_completion_gap(
+                                    _max_product_brief,
+                                    {**current_files, **written},
+                                    require_design_spec=False,
+                                    require_native_legal_nav=True,
+                                ),
+                            )
+                        )
+                        if project_template == "max_miniapp"
+                        else None
+                    ),
                     reference_max_loop=False,
                     max_steps=_agent_steps,
                     model=(
@@ -4213,12 +4420,16 @@ async def _process_prompt(
                     edit_mode=_is_edit,
                     bare_mode=_bare_stack,
                 )
-            # A green starter is not proof that the user's request was generated.
+            # A green runtime is not proof that the user's request was generated.
             # Native `done` may otherwise succeed after only reading/building the
-            # template. Require at least one attributable model write on a seeded
-            # first MAX build; without it, keep the run incomplete instead of
-            # committing the untouched starter as a successful generation.
-            if _max_seed_files and not _agent_res.files:
+            # existing environment. Require at least one attributable model write
+            # on a first MAX build.
+            if (
+                project_template == "max_miniapp"
+                and not _max_has_generated_snapshot
+                and _max_runtime_checkpoint is not None
+                and not _agent_res.files
+            ):
                 await _agent_emit(
                     "agent.stalled",
                     {
@@ -4227,8 +4438,8 @@ async def _process_prompt(
                         "human": "AI-агент не внёс изменения — сборка не засчитана",
                         "path": "",
                         "detail": (
-                            "Проверенный шаблон остался без осмысленной AI-правки; "
-                            "он не будет выдан как готовый результат."
+                            "AI-агент не создал продуктовые файлы; пустая попытка "
+                            "не будет выдана как готовый результат."
                         ),
                         "ok": False,
                     },
@@ -4236,7 +4447,7 @@ async def _process_prompt(
                 _agent_res = agent_builder.AgentResult(
                     done=False,
                     summary=(
-                        "Sonnet 5 не внёс ни одного изменения в MAX-приложение; "
+                        "AI-агент не внёс ни одного изменения в MAX-приложение; "
                         "неизменённый шаблон не засчитан как готовая генерация."
                     ),
                     files={},
@@ -4253,6 +4464,17 @@ async def _process_prompt(
             # and verify the known-good application deterministically. This is
             # what makes "stop at wallet/step limit" compatible with the promise
             # that Studio always leaves a complete application behind.
+            if not _agent_res.done:
+                _failure_code = (
+                    "provider_response_timeout_recovery_exhausted"
+                    if _agent_res.stop_reason.startswith("provider_response_timeout")
+                    else "generation_deadline_exceeded"
+                    if _agent_res.stop_reason.startswith("generation_deadline")
+                    else "native_turn_limit_exceeded"
+                    if _agent_res.stop_reason.startswith("max_steps")
+                    else f"agent_stopped:{_agent_res.stop_reason or 'unknown'}"
+                )
+                await set_generation_run_error(run_id, _failure_code)
             _bounded_stop = _agent_res.stop_reason in {
                 "max_steps_green",
                 "max_steps_red",
@@ -4264,10 +4486,25 @@ async def _process_prompt(
                 "paid_call_ambiguous_red",
                 "provider_rejected_green",
                 "provider_rejected_red",
+                "provider_response_timeout_green",
+                "provider_response_timeout_red",
+                "generation_deadline_green",
+                "generation_deadline_red",
             }
-            # A forced stop is never proof of product completion. Preserve the
-            # previous green snapshot for every stack, including MAX.
-            _must_restore_previous = not _agent_res.done or _bounded_stop
+            # A forced stop is never proof of product completion. A build-green
+            # MAX edit is nevertheless a safe continuation checkpoint: the
+            # independent typecheck/runtime gate below still rolls back a broken
+            # candidate, while preserving it avoids restarting visual polish
+            # from the older snapshot on every bounded run.
+            _preserve_green_max_progress = _preserve_verified_max_progress(
+                project_template=project_template,
+                is_edit=_is_edit,
+                stop_reason=_agent_res.stop_reason,
+                generated_files=_agent_res.files,
+            )
+            _must_restore_previous = (
+                not _agent_res.done or _bounded_stop
+            ) and not _preserve_green_max_progress
             _first_max_without_product = (
                 project_template == "max_miniapp" and not _max_has_generated_snapshot
             )
@@ -4331,40 +4568,14 @@ async def _process_prompt(
                 except Exception as _rollback_exc:
                     print(f"[PP] hard-limit rollback failed: {_rollback_exc!r}", flush=True)
             elif _must_restore_previous and _first_max_without_product:
-                # Config sync creates a legitimate snapshot before the first AI
-                # build, but that snapshot may contain only managed files and no
-                # product page. It is not a rollback target. Restore only the
-                # buildable platform core, remove every generated product path,
-                # and do not publish the core as a successful application.
+                # A first build has no product snapshot in Git. Restore the exact
+                # live checkpoint captured before AI and delete every new product
+                # path. No generated core or starter becomes user output.
                 try:
-                    from omnia_api.models.max_project_config import MaxProjectConfig
-                    from omnia_api.schemas.max_studio import MaxProjectConfigPayload
-                    from omnia_api.services.max_project_kit import render_max_starter_files
-
-                    async with factory() as _max_session:
-                        _max_record = await _max_session.get(MaxProjectConfig, project_id)
-                    _max_config = (
-                        MaxProjectConfigPayload.model_validate(_max_record.config)
-                        if _max_record is not None
-                        else MaxProjectConfigPayload(
-                            app_name=project_name or "MAX Mini App",
-                            app_type="custom",
-                            summary=prompt_text[:1000] or "Сервис внутри MAX",
-                        )
-                    )
-                    _safe_files = render_max_starter_files(_max_config, project_id)
-                    _new_paths = sorted(
-                        {path for path in _agent_res.files if path not in _safe_files}
-                    )
-                    _safe_patch = {
-                        **_safe_files,
-                        **{path: "" for path in _new_paths},
-                    }
-                    await orchestrator_client.hot_reload_exact(
-                        project_id, project_slug, _safe_patch
-                    )
-                    _rollback_build = await orchestrator_client.agent_build(
-                        project_id, project_slug
+                    if _max_runtime_checkpoint is None:
+                        raise RuntimeError("MAX runtime checkpoint is unavailable")
+                    _rollback_build = await _restore_max_runtime_checkpoint(
+                        project_id, project_slug, _max_runtime_checkpoint
                     )
                     if _rollback_build.get("ok"):
                         _max_seed_files = {}
@@ -4372,36 +4583,36 @@ async def _process_prompt(
                             done=False,
                             summary=(
                                 "Первая генерация не завершена. Частичные файлы отброшены; "
-                                "сохранено только безопасное ядро MAX без продуктовой страницы."
+                                "среда возвращена к состоянию до запуска AI."
                             ),
                             files={},
                             steps=_agent_res.steps,
                             transcript=_agent_res.transcript,
-                            stop_reason="core_only_rolled_back",
+                            stop_reason="first_build_rolled_back",
                         )
                         await _agent_emit(
                             "agent.step",
                             {
                                 "step": _agent_res.steps,
                                 "action": "rollback",
-                                "human": "Генерация не завершена — сохраняю только ядро MAX",
+                                "human": "Генерация не завершена — возвращаю исходную среду",
                                 "path": "",
                                 "detail": (
-                                    "Все частичные красные файлы отброшены; MAX core без "
-                                    "продуктовой страницы снова проходит проверку."
+                                    "Все частичные файлы отброшены; состояние до AI-сборки "
+                                    "снова проходит проверку."
                                 ),
                                 "ok": False,
                             },
                         )
                     else:
                         print(
-                            "[PP] first-MAX safe fallback build red: "
+                            "[PP] first-MAX checkpoint restore build red: "
                             f"{_rollback_build.get('detail') or _rollback_build.get('error')}",
                             flush=True,
                         )
                 except Exception as _rollback_exc:
                     print(
-                        f"[PP] first-MAX safe fallback failed: {_rollback_exc!r}",
+                        f"[PP] first-MAX checkpoint restore failed: {_rollback_exc!r}",
                         flush=True,
                     )
 
@@ -4528,11 +4739,13 @@ async def _process_prompt(
                     ]
                     _depth = _scan_depth(files)
                     if _depth.judged:
-                        _outcomes.append(_agf.GateOutcome(
-                            name="interactive_depth",
-                            passed=_depth.passed,
-                            failures=[_depth_feedback(_depth)] if not _depth.passed else [],
-                        ))
+                        _outcomes.append(
+                            _agf.GateOutcome(
+                                name="interactive_depth",
+                                passed=_depth.passed,
+                                failures=[_depth_feedback(_depth)] if not _depth.passed else [],
+                            )
+                        )
                     # SAST gate (K3a) — static injection/secret scan; blocking only
                     # when sast_gate_blocking is on (else advisory-logged below).
                     if get_settings().use_sast_gate:
@@ -4856,39 +5069,11 @@ async def _process_prompt(
                             project_id, project_slug
                         )
                         _verification_rolled_back = bool(_rollback_build.get("ok"))
-                    elif project_template == "max_miniapp":
-                        # A brand-new MAX project has no product snapshot yet. Its
-                        # safe fallback is the versioned core without a product page.
-                        from omnia_api.models.max_project_config import MaxProjectConfig
-                        from omnia_api.schemas.max_studio import MaxProjectConfigPayload
-                        from omnia_api.services.max_project_kit import render_max_starter_files
-
-                        async with factory() as _max_session:
-                            _max_record = await _max_session.get(MaxProjectConfig, project_id)
-                        _max_config = (
-                            MaxProjectConfigPayload.model_validate(_max_record.config)
-                            if _max_record is not None
-                            else MaxProjectConfigPayload(
-                                app_name=project_name or "MAX Mini App",
-                                app_type="custom",
-                                summary=prompt_text[:1000] or "Сервис внутри MAX",
-                            )
-                        )
-                        _safe_files = render_max_starter_files(_max_config, project_id)
-                        _new_paths = sorted({path for path in files if path not in _safe_files})
-                        _safe_patch = {
-                            **_safe_files,
-                            **{path: "" for path in _new_paths},
-                        }
-                        await orchestrator_client.hot_reload_exact(
-                            project_id, project_slug, _safe_patch
-                        )
-                        _rollback_build = await orchestrator_client.agent_build(
-                            project_id, project_slug
+                    elif project_template == "max_miniapp" and _max_runtime_checkpoint is not None:
+                        _rollback_build = await _restore_max_runtime_checkpoint(
+                            project_id, project_slug, _max_runtime_checkpoint
                         )
                         _verification_rolled_back = bool(_rollback_build.get("ok"))
-                        if _verification_rolled_back:
-                            files = _safe_files
                     if _verification_rolled_back:
                         if current_sha and not _first_max_without_product:
                             files = {}

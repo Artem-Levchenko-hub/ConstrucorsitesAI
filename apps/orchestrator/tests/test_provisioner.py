@@ -39,6 +39,8 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 async def _provision_capturing_spec(
     monkeypatch: pytest.MonkeyPatch,
+    template_dir: Path | None = None,
+    initial_env: dict[str, str] | None = None,
 ) -> ContainerSpec:
     """Run `provision` with every side-effecting collaborator stubbed; return
     the ContainerSpec that would have been handed to Docker."""
@@ -49,7 +51,11 @@ async def _provision_capturing_spec(
         return "deadbeef" * 8
 
     # Template copy + source resolution → no filesystem touch.
-    monkeypatch.setattr(provisioner, "_template_source_dir", lambda _t: Path("."))
+    monkeypatch.setattr(
+        provisioner,
+        "_template_source_dir",
+        lambda _t: template_dir or Path("."),
+    )
     monkeypatch.setattr(provisioner, "_copy_template", lambda _s, _d: None)
     monkeypatch.setattr(provisioner, "_load_or_create_auth_secret", lambda _p: "auth-secret")
 
@@ -78,6 +84,7 @@ async def _provision_capturing_spec(
         slug="demo-app",
         template="nextjs-entities",
         tier="free",
+        initial_env=initial_env or {},
     )
     await provisioner.provision(req)
     return captured["spec"]
@@ -98,6 +105,37 @@ async def test_provision_sets_unless_stopped_restart_policy(
     restarts a daemon-stopped container)."""
     spec = await _provision_capturing_spec(monkeypatch)
     assert spec.restart_policy_name == "unless-stopped"
+
+
+async def test_provision_injects_project_schema_for_drizzle_foreign_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = await _provision_capturing_spec(monkeypatch)
+
+    assert spec.env["OMNIA_DB_SCHEMA"] == "proj_00000000"
+
+
+async def test_provision_cannot_override_project_schema_through_initial_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = await _provision_capturing_spec(
+        monkeypatch,
+        initial_env={"OMNIA_DB_SCHEMA": "public", "DATABASE_URL": "attacker-controlled"},
+    )
+
+    assert spec.env["OMNIA_DB_SCHEMA"] == "proj_00000000"
+    assert spec.env["DATABASE_URL"] == "postgresql://u:p@host/db"
+
+
+async def test_provision_passes_template_manifest_as_integrity_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+
+    spec = await _provision_capturing_spec(monkeypatch, tmp_path)
+
+    assert spec.integrity_path == "package.json"
 
 
 async def test_provision_memory_is_config_driven(

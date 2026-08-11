@@ -28,6 +28,8 @@ def test_agent_edit_prompt_includes_max_template_contract() -> None:
     assert "STACK-SPECIFIC CONTRACT" in system
     assert "Use `window.WebApp` only" in system
     assert "Do not add Telegram WebApp" in system
+    assert "MAX UI is optional" in system
+    assert "Never add a platform-owned visual shell or persistent legal footer" in system
 
 
 def test_generic_agent_edit_prompt_is_unchanged_without_stack_guide() -> None:

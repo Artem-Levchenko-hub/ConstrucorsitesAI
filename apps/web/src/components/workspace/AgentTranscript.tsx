@@ -33,6 +33,7 @@ import {
   creativePhaseStates,
 } from "@/lib/agent-experience";
 import { agentTranscriptTitle } from "@/lib/agent-transcript";
+import { hidePrivateModelNames } from "@/lib/model-privacy";
 import { cn } from "@/lib/utils";
 import { EASE_OUT } from "@/lib/motion";
 
@@ -102,8 +103,8 @@ function formatElapsed(sec: number): string {
 function stepLabel(s: AgentStep): string {
   // Backend now sends a ready human phrase in `action` («Пишу главную страницу»).
   // ACTION_LABEL still resolves an older raw tool name; otherwise show as-is.
-  if (s.kind !== "step") return s.action;
-  return ACTION_LABEL[s.action] ?? s.action;
+  if (s.kind !== "step") return hidePrivateModelNames(s.action);
+  return hidePrivateModelNames(ACTION_LABEL[s.action] ?? s.action);
 }
 
 /**
@@ -307,7 +308,7 @@ export function AgentTranscript({
                 const live =
                   streaming && last && s.kind === "step" && s.action !== "done";
                 const failed = s.ok === false;
-                const detail = (s.detail ?? "").trim();
+                const detail = hidePrivateModelNames(s.detail ?? "").trim();
                 const canDrill = detail.length > 0;
                 const isOpen = !!openSteps[i];
                 return (
