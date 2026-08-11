@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { DownloadButton } from "@/components/workspace/DownloadButton";
+import { getLatestGeneration } from "@/lib/api/messages";
 import { listProjects } from "@/lib/api/projects";
 import {
   listSnapshots,
@@ -39,6 +40,10 @@ import {
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project, Snapshot } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
+import {
+  isGenerationActive,
+  shouldDeferMaxRuntimeStart,
+} from "@/lib/max-runtime-start";
 import {
   MAX_VERSION_HISTORY_LIMIT,
   visibleMaxSnapshots,
@@ -141,7 +146,34 @@ function MaxWorkspaceContent({
   const requestedHistorySnapshot = useRef<string | null>(null);
   const historySessionRequestId = useRef(0);
   const historySessionTail = useRef<Promise<void>>(Promise.resolve());
+  const [hasStarterHandoff] = useState(
+    typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("starter") === "1",
+  );
+  const [starterHandoffExpired, setStarterHandoffExpired] = useState(false);
   const queryClient = useQueryClient();
+  const latestGeneration = useQuery({
+    queryKey: ["generation", project.id],
+    queryFn: () => getLatestGeneration(project.id),
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (isGenerationActive(status)) {
+        return 1_000;
+      }
+      return hasStarterHandoff && !starterHandoffExpired && !query.state.data
+        ? 500
+        : false;
+    },
+  });
+  const deferInitialRuntimeStart = shouldDeferMaxRuntimeStart({
+    generationQueryPending: latestGeneration.isPending || latestGeneration.isFetching,
+    generationStatus: latestGeneration.data?.status,
+    hasGeneration: Boolean(latestGeneration.data),
+    hasStarterHandoff,
+    starterHandoffExpired,
+  });
   const navigationInteractive = desktopNavigationLayout
     ? navigationVisible
     : mobileNavOpen;
@@ -153,6 +185,12 @@ function MaxWorkspaceContent({
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
+
+  useEffect(() => {
+    if (!hasStarterHandoff || latestGeneration.data) return;
+    const timeout = window.setTimeout(() => setStarterHandoffExpired(true), 35_000);
+    return () => window.clearTimeout(timeout);
+  }, [hasStarterHandoff, latestGeneration.data]);
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const snapshots = useQuery({
     queryKey: ["snapshots", project.id],
@@ -603,6 +641,7 @@ function MaxWorkspaceContent({
       >
           <MaxLivePreview
             project={project}
+            deferInitialRuntimeStart={deferInitialRuntimeStart}
             snapshots={versionSnapshots}
             snapshotsLoading={snapshots.isPending}
             currentSnapshotId={currentSnapshotId}
@@ -667,6 +706,7 @@ function MaxWorkspaceContent({
               <div className="min-h-0 flex-1">
                 <MaxLivePreview
                   project={project}
+                  deferInitialRuntimeStart={deferInitialRuntimeStart}
                   snapshots={versionSnapshots}
                   snapshotsLoading={snapshots.isPending}
                   currentSnapshotId={currentSnapshotId}

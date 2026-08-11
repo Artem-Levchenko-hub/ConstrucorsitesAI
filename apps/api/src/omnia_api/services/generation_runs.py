@@ -20,6 +20,31 @@ def prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
+async def _acquire_generation_lock(session: AsyncSession, project_id: UUID) -> None:
+    """Acquire the project slot without waiting for the DB command timeout.
+
+    Runtime startup and snapshot/config reconciliation use the same transaction
+    lock while they call the orchestrator. A blocking advisory lock turns that
+    normal overlap into an unhandled asyncpg ``TimeoutError``. Fail as an
+    explicit retryable conflict instead; the first MAX build is submitted before
+    its preview starts, so this path only covers genuine concurrent activity.
+    """
+
+    acquired = (
+        await session.execute(
+            text("SELECT pg_try_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": str(project_id)},
+        )
+    ).scalar_one()
+    if not acquired:
+        raise ApiError(
+            "conflict",
+            "Проект ещё подготавливается. Повторите отправку через несколько секунд.",
+            status.HTTP_409_CONFLICT,
+            details={"reason": "project_busy"},
+        )
+
+
 async def reserve_generation_run(
     session: AsyncSession,
     *,
@@ -35,10 +60,7 @@ async def reserve_generation_run(
     request while work is active is rejected instead of racing the same repo.
     """
 
-    await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
-        {"project_id": str(project_id)},
-    )
+    await _acquire_generation_lock(session, project_id)
 
     existing = (
         await session.execute(

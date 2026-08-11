@@ -18,6 +18,7 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import messages
 from omnia_api.services.generation_runs import (
+    _acquire_generation_lock,
     finalize_generation_run,
     latest_failed_agent_state,
     reconcile_completed_build_runs,
@@ -27,6 +28,47 @@ from omnia_api.services.generation_runs import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+class _LockResult:
+    def __init__(self, acquired: bool) -> None:
+        self.acquired = acquired
+
+    def scalar_one(self) -> bool:
+        return self.acquired
+
+
+class _LockSession:
+    def __init__(self, acquired: bool) -> None:
+        self.acquired = acquired
+        self.calls: list[tuple[object, dict[str, str]]] = []
+
+    async def execute(self, statement: object, params: dict[str, str]) -> _LockResult:
+        self.calls.append((statement, params))
+        return _LockResult(self.acquired)
+
+
+async def test_generation_lock_uses_non_blocking_advisory_lock() -> None:
+    project_id = uuid.uuid4()
+    session = _LockSession(True)
+
+    await _acquire_generation_lock(session, project_id)  # type: ignore[arg-type]
+
+    assert len(session.calls) == 1
+    statement, params = session.calls[0]
+    assert "pg_try_advisory_xact_lock" in str(statement)
+    assert params == {"project_id": str(project_id)}
+
+
+async def test_generation_lock_reports_retryable_project_busy_conflict() -> None:
+    session = _LockSession(False)
+
+    with pytest.raises(ApiError) as blocked:
+        await _acquire_generation_lock(session, uuid.uuid4())  # type: ignore[arg-type]
+
+    assert blocked.value.code == "conflict"
+    assert blocked.value.status_code == 409
+    assert blocked.value.details == {"reason": "project_busy"}
 
 
 async def _owner_and_project(

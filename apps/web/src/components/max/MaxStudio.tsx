@@ -34,8 +34,10 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { createProject, listProjects } from "@/lib/api/projects";
+import { sendPrompt } from "@/lib/api/messages";
 import { getMaxAccess } from "@/lib/api/max-account";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
+import { redactCredentialsBeforeTransport } from "@/lib/credential-safety";
 import {
   clearMaxDemoDraft,
   useMaxDemoDraft,
@@ -140,16 +142,18 @@ function MaxStudioContent({
   const create = useMutation({
     mutationFn: async () => {
       const project = await createProject({ name: name.trim(), template: "max_miniapp" });
-      const prompt = buildMaxProjectPrompt({
-        name,
-        idea,
-        appType,
-        audience,
-        primaryAction,
-        features,
-        style,
-        brandColors,
-      });
+      const prompt = redactCredentialsBeforeTransport(
+        buildMaxProjectPrompt({
+          name,
+          idea,
+          appType,
+          audience,
+          primaryAction,
+          features,
+          style,
+          brandColors,
+        }),
+      ).text;
       let configSaved = true;
       try {
         await saveMaxProjectConfig(project.id, {
@@ -177,9 +181,18 @@ function MaxStudioContent({
       } catch {
         configSaved = false;
       }
-      return { project, prompt, configSaved };
+      let promptAccepted = true;
+      try {
+        await sendPrompt(project.id, prompt, "topmix-v1", undefined, {
+          skipClarify: true,
+          idempotencyKey: `max-starter-${project.id}`,
+        });
+      } catch {
+        promptAccepted = false;
+      }
+      return { project, prompt, configSaved, promptAccepted };
     },
-    onSuccess: ({ project, prompt, configSaved }) => {
+    onSuccess: ({ project, prompt, configSaved, promptAccepted }) => {
       qc.invalidateQueries({ queryKey: ["projects"] });
       clearMaxDemoDraft();
       setDemoDraft(null);
@@ -191,6 +204,10 @@ function MaxStudioContent({
             : "Профиль нужно сохранить в панели готовности.",
         },
       );
+      if (promptAccepted) {
+        router.push(`/max/${project.id}`);
+        return;
+      }
       try {
         window.sessionStorage.setItem(`omnia:max:starter:${project.id}`, prompt);
         router.push(`/max/${project.id}?starter=1`);

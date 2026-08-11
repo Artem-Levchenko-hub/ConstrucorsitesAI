@@ -923,6 +923,17 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
+        if (
+          e instanceof ApiError &&
+          e.code === "conflict" &&
+          e.details?.reason === "project_busy"
+        ) {
+          _failPrompt(
+            "Проект ещё подготавливается",
+            "Повторите отправку через несколько секунд.",
+          );
+          return;
+        }
         if (e instanceof ApiError && e.code === "conflict") {
           // Another tab/remount already submitted this project. Drop only this
           // optimistic duplicate and keep the project WS attached to the
