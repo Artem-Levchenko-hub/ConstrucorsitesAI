@@ -2047,7 +2047,7 @@ _SPA_STACK = """\
 
 _MAX_MINIAPP_STACK = """\
 СТЕК — MINI APP ДЛЯ МЕССЕНДЖЕРА MAX. Next.js 15 App Router + React 18.3 +
-TypeScript + Postgres/Drizzle + MAX Bridge. MAX UI доступен, но необязателен.
+TypeScript + Postgres/Drizzle + MAX Bridge. Платформенный runtime полностью headless.
 
 ШАБЛОН УЖЕ СОДЕРЖИТ критическую платформенную обвязку — используй её, не
 переписывай: `src/lib/max/bridge.ts`, `validate-init-data.ts`, `session.ts`,
@@ -2069,9 +2069,9 @@ TypeScript + Postgres/Drizzle + MAX Bridge. MAX UI доступен, но нео
   лимит тела и idempotency событий. Платформенные файлы меняй только если задача
   прямо требует расширить интеграцию и сохраняет эти инварианты.
 • Визуальная система, layout и навигация принадлежат продукту. Не добавляй
-  постоянный юридический футер или отдельную платформенную оболочку. MAX UI можно
-  использовать только если он подходит брифу; semantic HTML и свои компоненты
-  равноправны. Всегда учитывай тему, safe-area, мобильную ширину, крупные touch
+  постоянный юридический футер или отдельную платформенную оболочку. Не импортируй
+  `@maxhub/max-ui`: используй semantic HTML, lucide-react и свои компоненты.
+  Всегда учитывай тему, safe-area, мобильную ширину, крупные touch
   targets и системную кнопку BackButton. Ссылки `/support`, `/legal/privacy` и
   `/legal/terms` размести нативно в настройках, профиле, «О приложении» или меню,
   а корень продукта пометь `data-omnia-native-legal-nav="true"`.
@@ -3003,12 +3003,28 @@ def _expand_ru_to_en(prompt: str) -> tuple[str, ...]:
     return tuple(tokens)
 
 
-_CHART_SIGNAL_TOKENS = frozenset({
-    "dashboard", "analytics", "metrics", "stats", "statistics",
-    "kpi", "graphs", "charts", "visualization", "viz",
-    "аналитик", "график", "метрик", "статистик", "дашборд",
-    "отчёт", "отчет", "панель",
-})
+_CHART_SIGNAL_TOKENS = frozenset(
+    {
+        "dashboard",
+        "analytics",
+        "metrics",
+        "stats",
+        "statistics",
+        "kpi",
+        "graphs",
+        "charts",
+        "visualization",
+        "viz",
+        "аналитик",
+        "график",
+        "метрик",
+        "статистик",
+        "дашборд",
+        "отчёт",
+        "отчет",
+        "панель",
+    }
+)
 
 
 # Phase J — vertical detection for `lookup_micro_copy` seeding.
@@ -3020,46 +3036,46 @@ _CHART_SIGNAL_TOKENS = frozenset({
 # "no vertical match" → caller skips micro_copy injection.
 _PRODUCT_TYPE_TO_VERTICAL: tuple[tuple[str, str], ...] = (
     ("real estate", "realestate"),
-    ("property",    "realestate"),
-    ("fitness",     "fitness"),
-    ("gym",         "fitness"),
-    ("workout",     "fitness"),
-    ("saas",        "saas"),
-    ("dashboard",   "saas"),
-    ("crm",         "saas"),
-    ("erp",         "saas"),
-    ("b2b",         "saas"),
-    ("medical",     "medical"),
-    ("clinic",      "medical"),
-    ("healthcare",  "medical"),
-    ("pharmacy",    "medical"),
-    ("dental",      "medical"),
-    ("legal",       "legal"),
-    ("law",         "legal"),
-    ("attorney",    "legal"),
-    ("restaurant",  "food"),
-    ("cafe",        "food"),
-    ("bakery",      "food"),
-    ("food",        "food"),
-    ("course",      "education"),
-    ("learning",    "education"),
-    ("school",      "education"),
-    ("e-learning",  "education"),
-    ("childcare",   "education"),
-    ("daycare",     "education"),
-    ("meditation",  "wellness"),
+    ("property", "realestate"),
+    ("fitness", "fitness"),
+    ("gym", "fitness"),
+    ("workout", "fitness"),
+    ("saas", "saas"),
+    ("dashboard", "saas"),
+    ("crm", "saas"),
+    ("erp", "saas"),
+    ("b2b", "saas"),
+    ("medical", "medical"),
+    ("clinic", "medical"),
+    ("healthcare", "medical"),
+    ("pharmacy", "medical"),
+    ("dental", "medical"),
+    ("legal", "legal"),
+    ("law", "legal"),
+    ("attorney", "legal"),
+    ("restaurant", "food"),
+    ("cafe", "food"),
+    ("bakery", "food"),
+    ("food", "food"),
+    ("course", "education"),
+    ("learning", "education"),
+    ("school", "education"),
+    ("e-learning", "education"),
+    ("childcare", "education"),
+    ("daycare", "education"),
+    ("meditation", "wellness"),
     ("mindfulness", "wellness"),
-    ("spa",         "wellness"),
-    ("wellness",    "wellness"),
-    ("yoga",        "wellness"),
-    ("blog",        "media"),
-    ("news",        "media"),
-    ("magazine",    "media"),
-    ("media",       "media"),
-    ("e-commerce",  "commerce"),
-    ("ecommerce",   "commerce"),
-    ("shop",        "commerce"),
-    ("store",       "commerce"),
+    ("spa", "wellness"),
+    ("wellness", "wellness"),
+    ("yoga", "wellness"),
+    ("blog", "media"),
+    ("news", "media"),
+    ("magazine", "media"),
+    ("media", "media"),
+    ("e-commerce", "commerce"),
+    ("ecommerce", "commerce"),
+    ("shop", "commerce"),
+    ("store", "commerce"),
 )
 
 
@@ -3082,9 +3098,17 @@ def _detect_vertical(product_type: str | None) -> str | None:
 # Mention of "app"/"приложение"/"mobile"/"iOS"/"Android" → mobile,
 # everything else → desktop (the default for landings/websites).
 _MOBILE_SIGNAL_TOKENS: tuple[str, ...] = (
-    "mobile", "ios", "android", "приложение", "приложения",
-    " app ", " app,", " app.", "the app",
-    "smartphone", "tablet",
+    "mobile",
+    "ios",
+    "android",
+    "приложение",
+    "приложения",
+    " app ",
+    " app,",
+    " app.",
+    "the app",
+    "smartphone",
+    "tablet",
 )
 
 
@@ -3101,9 +3125,7 @@ def _detect_target(user_prompt: str) -> str:
     return "desktop"
 
 
-def _compute_skill_brief(
-    user_prompt: str | None, project_id: str | None
-) -> str | None:
+def _compute_skill_brief(user_prompt: str | None, project_id: str | None) -> str | None:
     """Pull a project-specific design brief out of the vendored `ui-ux-pro-max`
     library (`apps/api/skills/ui-ux-pro-max/`).
 
@@ -3189,15 +3211,13 @@ def _compute_skill_brief(
             shadow_tint = None
 
     micro_copy = None
-    vertical = _detect_vertical(
-        palette["product_type"] if palette is not None else None
-    )
+    vertical = _detect_vertical(palette["product_type"] if palette is not None else None)
     if vertical:
         try:
             micro_copy = {
-                "save":      skill_library.lookup_micro_copy("save", vertical),
+                "save": skill_library.lookup_micro_copy("save", vertical),
                 "subscribe": skill_library.lookup_micro_copy("subscribe", vertical),
-                "delete":    skill_library.lookup_micro_copy("delete", vertical),
+                "delete": skill_library.lookup_micro_copy("delete", vertical),
             }
         except ValueError:
             micro_copy = None
@@ -3268,13 +3288,13 @@ def _format_palette_anchor(preset_id: str | None) -> str:
 ОБЯЗАТЕЛЬНАЯ ПАЛИТРА И ШРИФТЫ — anchor, читай ПЕРЕД остальным промптом и держи в голове до конца ответа.
 
 ЦВЕТА — ставь ТОЛЬКО эти HEX, никакие другие в Tailwind config / :root не вводи:
-  bg     = {p['bg']}     bg-alt = {p['bg_alt']}
-  fg     = {p['fg']}     muted  = {p['muted']}
-  accent = {p['accent']}     border = {p['border']}
+  bg     = {p["bg"]}     bg-alt = {p["bg_alt"]}
+  fg     = {p["fg"]}     muted  = {p["muted"]}
+  accent = {p["accent"]}     border = {p["border"]}
 
 ШРИФТЫ — подключи ИМЕННО эти Google Fonts, без подмен:
-  display: {f['display']}   ·   body: {f['body']}
-  <link rel="stylesheet" href="{f['google_fonts_url']}">
+  display: {f["display"]}   ·   body: {f["body"]}
+  <link rel="stylesheet" href="{f["google_fonts_url"]}">
 
 КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНЫ (это твои тренировочные дефолты — здесь они БРАК):
   • indigo (#4f46e5 / #6366f1 / #818cf8 / indigo-500/600/700)
@@ -3389,20 +3409,22 @@ def _drop_blocks_for_tier(sections: tuple[str, ...], tier: str) -> tuple[str, ..
 # keeps the full prompt and is what actually emits the files. Design-thinking
 # blocks (taste, composition, palette anchor, kit-reference moves, quality bar)
 # are intentionally NOT here — the brief needs them.
-_BRIEF_ONLY_DROP: frozenset[str] = frozenset({
-    _FUNCTIONAL_CONTRACT,
-    _SELF_CHECK,
-    _RESPONSE,
-    _LANDING_SECTION_KIT,
-    _STATIC_STACK,
-    _FULLSTACK_STACK,
-    _ENTITIES_STACK,
-    _ENTITIES_UI,
-    _SPA_STACK,
-    _MAX_MINIAPP_STACK,
-    _TGBOT_STACK,
-    _API_STACK,
-})
+_BRIEF_ONLY_DROP: frozenset[str] = frozenset(
+    {
+        _FUNCTIONAL_CONTRACT,
+        _SELF_CHECK,
+        _RESPONSE,
+        _LANDING_SECTION_KIT,
+        _STATIC_STACK,
+        _FULLSTACK_STACK,
+        _ENTITIES_STACK,
+        _ENTITIES_UI,
+        _SPA_STACK,
+        _MAX_MINIAPP_STACK,
+        _TGBOT_STACK,
+        _API_STACK,
+    }
+)
 
 
 _ART_DIRECTOR = """\
@@ -3671,10 +3693,9 @@ def build_system_prompt(
             FidelitySpec,
             spec_prompt_directive,
         )
+
         spec_directive = spec_prompt_directive(FidelitySpec.from_dict(discovery_spec))
-    design_anchor_parts = [
-        p for p in (spec_directive, palette_anchor, skill_block) if p
-    ]
+    design_anchor_parts = [p for p in (spec_directive, palette_anchor, skill_block) if p]
     design_anchor = "\n\n".join(design_anchor_parts) if design_anchor_parts else ""
 
     # Phase A.2 — _DESIGN_KIT is the generic catalog of per-industry
@@ -3683,9 +3704,7 @@ def build_system_prompt(
     # catalog), the catalog becomes a competing source of truth — the model
     # randomly picks between them. Suppress the catalog when we have anchored
     # guidance; keep it as the fallback when we have nothing.
-    include_design_kit = (
-        (preset_id is None) and (not skill_block) and (not design_tokens_block)
-    )
+    include_design_kit = (preset_id is None) and (not skill_block) and (not design_tokens_block)
 
     # Phase A3 — language override.  Empty for "ru" (default) → RU prompt is
     # byte-identical to pre-A3 calls.  Non-empty for any other language → the
@@ -3899,14 +3918,13 @@ def build_art_director_system(
     if project_id:
         try:
             from omnia_api.services.design_tokens import tokens_for_project
+
             design_tokens_block = tokens_for_project(
                 project_id, industry_hint=preset_id
             ).prompt_block()
         except Exception:
             design_tokens_block = None
-    skill_brief = (
-        None if design_tokens_block else _compute_skill_brief(user_prompt, project_id)
-    )
+    skill_brief = None if design_tokens_block else _compute_skill_brief(user_prompt, project_id)
     return build_system_prompt(
         template,
         preset_id,
@@ -4328,15 +4346,32 @@ def _build_edit_messages(
     # the request is actually about that dimension.
     _p = (user_prompt or "").lower()
     _wants_bg = any(
-        k in _p for k in (
-            "фон", "background", "цвет", "палитр", "градиент",
-            "тёмн", "темн", "светл", "оттенок", " тон",
+        k in _p
+        for k in (
+            "фон",
+            "background",
+            "цвет",
+            "палитр",
+            "градиент",
+            "тёмн",
+            "темн",
+            "светл",
+            "оттенок",
+            " тон",
         )
     )
     _wants_img = any(
-        k in _p for k in (
-            "картин", "фото", "изображ", "image", "баннер",
-            "иллюстрац", "генери", "сгенер", "снимок",
+        k in _p
+        for k in (
+            "картин",
+            "фото",
+            "изображ",
+            "image",
+            "баннер",
+            "иллюстрац",
+            "генери",
+            "сгенер",
+            "снимок",
         )
     )
     _wants_add = any(
@@ -4346,11 +4381,33 @@ def _build_edit_messages(
     # visual tweak. Drives the _EDIT_SCAFFOLD_NEXT block on container stacks when
     # use_feature_scaffold is on (give-it-functionality, DARK).
     _wants_feature = any(
-        k in _p for k in (
-            "раздел", "страниц", "форм", "сущност", "crud", "каталог", "табл",
-            "записи", "запис", "бронир", "заявк", "учёт", "учет", "дашборд",
-            "панель", "панел", "управлен", "заказ", "корзин", "entity", "функци",
-            "эндпоинт", "endpoint", "база данных", "базу данных",
+        k in _p
+        for k in (
+            "раздел",
+            "страниц",
+            "форм",
+            "сущност",
+            "crud",
+            "каталог",
+            "табл",
+            "записи",
+            "запис",
+            "бронир",
+            "заявк",
+            "учёт",
+            "учет",
+            "дашборд",
+            "панель",
+            "панел",
+            "управлен",
+            "заказ",
+            "корзин",
+            "entity",
+            "функци",
+            "эндпоинт",
+            "endpoint",
+            "база данных",
+            "базу данных",
         )
     )
     # Stack-aware: container stacks (Next.js/React/entities/Vite-spa) have NO
@@ -4395,8 +4452,7 @@ def _build_edit_messages(
 
     if current_files:
         files_block = "\n\n".join(
-            f'<file path="{path}">\n{content}\n</file>'
-            for path, content in current_files.items()
+            f'<file path="{path}">\n{content}\n</file>' for path, content in current_files.items()
         )
         messages.append(
             {
@@ -4461,17 +4517,12 @@ def build_edit_rewrite_messages(
     back with ONLY the requested change applied. Reliable (plain generation, no
     byte-exact SEARCH to reproduce) — the caller guards against a silent
     re-design by verifying the original copy survived before committing."""
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": _EDIT_REWRITE_SYSTEM}
-    ]
+    messages: list[dict[str, str]] = [{"role": "system", "content": _EDIT_REWRITE_SYSTEM}]
     if current_files:
         files_block = "\n\n".join(
-            f'<file path="{path}">\n{content}\n</file>'
-            for path, content in current_files.items()
+            f'<file path="{path}">\n{content}\n</file>' for path, content in current_files.items()
         )
-        messages.append(
-            {"role": "user", "content": "Текущее состояние страницы:\n" + files_block}
-        )
+        messages.append({"role": "user", "content": "Текущее состояние страницы:\n" + files_block})
     messages.extend(_history_for_edit(history))
     final_user = user_prompt
     if selected_elements:
@@ -4513,13 +4564,10 @@ def build_container_rewrite_messages(
     with ONLY the requested change applied. Reliable (plain generation, no
     byte-exact SEARCH to reproduce); the caller guards against a silent rewrite
     via a content-preservation ratio before committing."""
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": _CONTAINER_REWRITE_SYSTEM}
-    ]
+    messages: list[dict[str, str]] = [{"role": "system", "content": _CONTAINER_REWRITE_SYSTEM}]
     if target_files:
         files_block = "\n\n".join(
-            f'<file path="{path}">\n{content}\n</file>'
-            for path, content in target_files.items()
+            f'<file path="{path}">\n{content}\n</file>' for path, content in target_files.items()
         )
         messages.append(
             {
@@ -4615,7 +4663,11 @@ def build_messages(
     # flows down so _build_edit_messages can select the generic identity.
     if edit_mode:
         return _build_edit_messages(
-            current_files, history, user_prompt, selected_elements, template,
+            current_files,
+            history,
+            user_prompt,
+            selected_elements,
+            template,
             language=language,
             is_imported=is_imported,
         )
@@ -4641,6 +4693,7 @@ def build_messages(
     #   freeform → premium writes full HTML freely + project-seeded design tokens
     #   plain    → budget/balanced freeform-HTML + multipass (unchanged)
     from omnia_api.core.config import generation_mode
+
     mode = generation_mode(model_id, project_id)
     # Catalog mode emits a web PageIR JSON (section catalog → HTML). It is
     # meaningless for the non-web templates: `code` (arbitrary-language source),
@@ -4651,6 +4704,7 @@ def build_messages(
         mode = "freeform"
     if mode == "catalog":
         from omnia_api.services.lean_prompt import build_catalog_messages
+
         return build_catalog_messages(
             history=history,
             user_prompt=user_prompt,
@@ -4667,6 +4721,7 @@ def build_messages(
     if mode == "freeform" and project_id:
         try:
             from omnia_api.services.design_tokens import tokens_for_project
+
             design_tokens_block = tokens_for_project(
                 project_id, industry_hint=preset_id
             ).prompt_block()
@@ -4678,9 +4733,7 @@ def build_messages(
     # prompt has no industry-token signal we can match against
     # (`_compute_skill_brief` returns None). In freeform mode the seeded
     # design tokens are authoritative, so skip the brief's competing palette.
-    skill_brief = (
-        None if design_tokens_block else _compute_skill_brief(user_prompt, project_id)
-    )
+    skill_brief = None if design_tokens_block else _compute_skill_brief(user_prompt, project_id)
 
     # Phase F.2 — `model_id` flows into `build_system_prompt` so the prompt
     # assembler can trim heavy blocks for budget/balanced tiers. Omitted
@@ -4703,8 +4756,7 @@ def build_messages(
 
     if current_files:
         files_block = "\n\n".join(
-            f'<file path="{path}">\n{content}\n</file>'
-            for path, content in current_files.items()
+            f'<file path="{path}">\n{content}\n</file>' for path, content in current_files.items()
         )
         messages.append(
             {

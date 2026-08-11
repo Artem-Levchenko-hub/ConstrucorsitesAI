@@ -11,5 +11,9 @@ const ProductApp = dynamic(() => import("@/components/product/ProductApp"), {
 });
 
 export function OmniaProductRuntime() {
-  return <ProductApp />;
+  return (
+    <div data-omnia-product-runtime="true" style={{ display: "contents" }}>
+      <ProductApp />
+    </div>
+  );
 }

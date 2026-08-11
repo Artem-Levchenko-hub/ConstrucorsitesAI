@@ -1,6 +1,6 @@
 /*
- * MAX UI remains available for products that deliberately use its components,
- * but its required context provider must not become the product's visual shell.
+ * The MAX bridge/auth runtime is visually neutral. Historical projects that
+ * already imported MAX UI receive their compatibility provider separately.
  */
 .omnia-max-runtime {
   display: contents;

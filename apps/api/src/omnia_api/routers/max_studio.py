@@ -46,6 +46,7 @@ from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     default_max_project_config,
     max_legacy_snapshot_incompatibility,
+    max_snapshot_uses_legacy_max_ui,
     render_max_entry_migration_files,
     render_max_managed_files,
 )
@@ -98,7 +99,11 @@ def _max_config_sync_files(
             status.HTTP_409_CONFLICT,
         )
     return {
-        **render_max_managed_files(payload, project_id),
+        **render_max_managed_files(
+            payload,
+            project_id,
+            legacy_max_ui=max_snapshot_uses_legacy_max_ui(current_files),
+        ),
         **render_max_entry_migration_files(current_files),
     }
 
@@ -497,9 +502,7 @@ async def get_max_readiness(
         )
     ).scalar_one()
     configured_publish_slots = launch_plan.entitlements.get("static_publish_slots")
-    can_publish = (
-        isinstance(configured_publish_slots, int) and configured_publish_slots > 0
-    )
+    can_publish = isinstance(configured_publish_slots, int) and configured_publish_slots > 0
     record = await session.get(MaxProjectConfig, project_id)
     config = MaxProjectConfigPayload.model_validate(record.config) if record else None
     integration = (

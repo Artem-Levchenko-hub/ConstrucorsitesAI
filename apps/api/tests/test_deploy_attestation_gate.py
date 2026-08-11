@@ -108,8 +108,17 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
     async def status(_project_id: uuid.UUID) -> dict[str, str]:
         return {"state": "running"}
 
+    async def read_live(
+        _project_id: uuid.UUID,
+        _slug: str,
+        _path: str,
+    ) -> None:
+        return None
+
+    async def list_live(_project_id: uuid.UUID, _slug: str) -> list[str]:
+        return ["src/app/page.tsx", "src/stale.ts"]
+
     async def hot_reload(
-        *,
         project_id: uuid.UUID,
         slug: str,
         files: dict[str, str],
@@ -120,6 +129,7 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
     async def release_proof(
         _project_id: uuid.UUID,
         _slug: str,
+        **_kwargs: object,
     ) -> FunctionalVerdict:
         return FunctionalVerdict(
             passed=True,
@@ -136,7 +146,15 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
         status,
     )
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.orchestrator_client.hot_reload",
+        "omnia_api.services.deploy_attestation.orchestrator_client.agent_read_file",
+        read_live,
+    )
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.orchestrator_client.agent_list_source_files",
+        list_live,
+    )
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.orchestrator_client.hot_reload_exact",
         hot_reload,
     )
     monkeypatch.setattr(
@@ -151,7 +169,10 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
         (
             project.id,
             project.slug,
-            {"src/app/page.tsx": "export default function Page() { return null }"},
+            {
+                "src/app/page.tsx": "export default function Page() { return null }",
+                "src/stale.ts": "",
+            },
         )
     ]
 

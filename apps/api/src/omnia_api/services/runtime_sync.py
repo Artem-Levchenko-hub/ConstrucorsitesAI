@@ -37,6 +37,58 @@ def mark_runtime_sync_required(project: Project, paths: Iterable[str]) -> None:
     project.runtime_sync_paths = sorted(merged)
 
 
+async def effective_runtime_files(
+    session: AsyncSession,
+    project: Project,
+    snapshot_files: dict[str, str],
+) -> dict[str, str]:
+    """Build the exact template-overlay tree that runtime/deploy checks execute."""
+
+    if project.template != "max_miniapp":
+        return snapshot_files
+    record = await session.get(MaxProjectConfig, project.id)
+    snapshot_config = max_project_config_from_files(snapshot_files)
+    config = (
+        MaxProjectConfigPayload.model_validate(record.config)
+        if record is not None
+        else snapshot_config or default_max_project_config(project.name)
+    )
+    return render_max_history_files(snapshot_files, config, project.id)
+
+
+async def live_file_delta(
+    project_id: UUID,
+    slug: str,
+    desired: dict[str, str],
+    *,
+    delete_paths: Iterable[str] = (),
+) -> dict[str, str]:
+    """Return only byte-different writes plus known live deletions.
+
+    Rewriting an unchanged ``next.config.ts`` restarts a Next dev server. A
+    canonical reconciliation must therefore be exact without touching files
+    whose live bytes already match the snapshot.
+    """
+
+    semaphore = asyncio.Semaphore(8)
+
+    async def read(path: str) -> tuple[str, str | None]:
+        async with semaphore:
+            return path, await orchestrator_client.agent_read_file(project_id, slug, path)
+
+    live = dict(await asyncio.gather(*(read(path) for path in desired)))
+    patch = {
+        path: content
+        for path, content in desired.items()
+        if (content == "" and live.get(path) is not None)
+        or (content != "" and live.get(path) != content)
+    }
+    for path in delete_paths:
+        if path not in desired:
+            patch[path] = ""
+    return patch
+
+
 async def reconcile_locked_runtime(
     session: AsyncSession,
     project: Project,
@@ -110,25 +162,25 @@ async def reconcile_locked_runtime(
         # Comparing the raw product-only snapshot against every live path would
         # delete package.json/bridge/routes; dropping all locked files would in
         # turn lose max-config and the project-bound preview route.
-        record = await session.get(MaxProjectConfig, project.id)
-        snapshot_config = max_project_config_from_files(canonical)
-        config = (
-            MaxProjectConfigPayload.model_validate(record.config)
-            if record is not None
-            else snapshot_config or default_max_project_config(project.name)
-        )
-        canonical = render_max_history_files(canonical, config, project.id)
+        canonical = await effective_runtime_files(session, project, canonical)
     if full_tree:
         live_paths = await orchestrator_client.agent_list_source_files(project.id, project.slug)
         if project.template == "max_miniapp":
             live_paths = list(max_history_product_files(dict.fromkeys(live_paths, "")))
-        patch = {
-            **{path: "" for path in live_paths if path not in canonical},
-            **canonical,
-        }
+        patch = await live_file_delta(
+            project.id,
+            project.slug,
+            canonical,
+            delete_paths=(path for path in live_paths if path not in canonical),
+        )
     else:
-        patch = {path: canonical.get(path, "") for path in paths}
-    await orchestrator_client.hot_reload_exact(project.id, project.slug, patch)
+        patch = await live_file_delta(
+            project.id,
+            project.slug,
+            {path: canonical.get(path, "") for path in paths},
+        )
+    if patch:
+        await orchestrator_client.hot_reload_exact(project.id, project.slug, patch)
     project.runtime_sync_required = False
     project.runtime_sync_paths = []
     await session.flush()
@@ -161,6 +213,8 @@ async def reconcile_project_runtime(
 
 
 __all__ = [
+    "effective_runtime_files",
+    "live_file_delta",
     "mark_runtime_sync_required",
     "reconcile_locked_runtime",
     "reconcile_project_runtime",

@@ -61,6 +61,11 @@ async def test_reconcile_applies_canonical_writes_and_deletes(
         "read_files",
         lambda *_args: {"src/app/page.tsx": "canonical"},
     )
+    monkeypatch.setattr(
+        runtime_sync.orchestrator_client,
+        "agent_read_file",
+        AsyncMock(return_value="stale live bytes"),
+    )
     hot_reload = AsyncMock(return_value={"written": 1, "deleted": 1})
     monkeypatch.setattr(runtime_sync.orchestrator_client, "hot_reload_exact", hot_reload)
 
@@ -121,6 +126,11 @@ async def test_full_reconcile_restores_snapshot_and_deletes_stale_starter_files(
         runtime_sync.orchestrator_client,
         "agent_list_source_files",
         AsyncMock(return_value=["src/app/page.tsx", "src/starter-only.ts"]),
+    )
+    monkeypatch.setattr(
+        runtime_sync.orchestrator_client,
+        "agent_read_file",
+        AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
         runtime_sync.repo_svc,
@@ -189,6 +199,11 @@ async def test_full_max_reconcile_never_deletes_platform_core(
         ),
     )
     monkeypatch.setattr(
+        runtime_sync.orchestrator_client,
+        "agent_read_file",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
         runtime_sync.repo_svc,
         "read_files",
         lambda *_args: {
@@ -220,3 +235,42 @@ async def test_full_max_reconcile_never_deletes_platform_core(
     assert runtime_patch["package.json"]
     assert runtime_patch["src/app/page.tsx"]
     assert runtime_patch["src/lib/omnia/client.ts"]
+
+
+@pytest.mark.asyncio
+async def test_full_reconcile_skips_byte_identical_live_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project()
+    snapshot = SimpleNamespace(commit_sha="abc123")
+    canonical = {"src/app/page.tsx": "canonical"}
+    session = SimpleNamespace(get=AsyncMock(return_value=snapshot), flush=AsyncMock())
+    monkeypatch.setattr(
+        runtime_sync.orchestrator_client,
+        "get_status",
+        AsyncMock(return_value={"state": "running"}),
+    )
+    monkeypatch.setattr(
+        runtime_sync.orchestrator_client,
+        "agent_list_source_files",
+        AsyncMock(return_value=list(canonical)),
+    )
+    monkeypatch.setattr(
+        runtime_sync.orchestrator_client,
+        "agent_read_file",
+        AsyncMock(return_value="canonical"),
+    )
+    monkeypatch.setattr(runtime_sync.repo_svc, "read_files", lambda *_args: canonical)
+    hot_reload = AsyncMock()
+    monkeypatch.setattr(runtime_sync.orchestrator_client, "hot_reload_exact", hot_reload)
+
+    synced = await runtime_sync.reconcile_locked_runtime(
+        session,
+        project,
+        ensure_running=False,
+        full_tree=True,
+    )
+
+    assert synced is True
+    hot_reload.assert_not_awaited()
+    assert project.runtime_sync_required is False

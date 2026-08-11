@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 from omnia_api.core.config import get_settings
@@ -49,3 +50,36 @@ async def test_release_proof_combines_build_runtime_and_transport_checks(
         ("runtime", True),
         ("nosniff", True),
     ]
+
+
+async def test_max_release_proof_requires_hydrated_product(monkeypatch) -> None:
+    project_id = uuid4()
+
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "agent_build",
+        AsyncMock(return_value={"ok": True, "detail": "clean"}),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "runtime_status",
+        AsyncMock(return_value={"ok": True, "status_code": 200}),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "get_status",
+        AsyncMock(return_value={"dev_url": "https://max-dev.example.test"}),
+    )
+    settings = get_settings().model_copy(update={"use_security_gate": False})
+    monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
+    failed = Check("max_hydration", False, "ProductApp did not mount")
+
+    verdict = await release_proof.run_release_proof(
+        project_id,
+        "max-app",
+        require_hydrated_product=True,
+        hydrated_product_check=failed,
+    )
+
+    assert not verdict.passed
+    assert verdict.checks[-1] == failed

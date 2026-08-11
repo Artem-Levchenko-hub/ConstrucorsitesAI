@@ -9,7 +9,29 @@ from omnia_api.services import orchestrator_client
 from omnia_api.services.functional_gate import Check, FunctionalVerdict, summarize
 
 
-async def run_release_proof(project_id: UUID, project_slug: str) -> FunctionalVerdict:
+async def run_max_hydration_check(project_id: UUID) -> Check:
+    """Prove the generated MAX product mounted, without re-running build checks."""
+
+    try:
+        status_payload = await orchestrator_client.get_status(project_id)
+        raw_base_url = status_payload.get("dev_url") if isinstance(status_payload, dict) else None
+        if not raw_base_url:
+            raise RuntimeError("dev_url missing")
+        from omnia_api.services import max_hydration_gate
+
+        hydration = await max_hydration_gate.audit_url(str(raw_base_url))
+        return Check("max_hydration", hydration.passed, hydration.detail[:240])
+    except Exception as exc:
+        return Check("max_hydration", False, f"probe failed: {exc!r}")
+
+
+async def run_release_proof(
+    project_id: UUID,
+    project_slug: str,
+    *,
+    require_hydrated_product: bool = False,
+    hydrated_product_check: Check | None = None,
+) -> FunctionalVerdict:
     """Prove that the live project typechecks, serves HTTP and has safe transport.
 
     Every failure becomes a failed check instead of escaping. Callers can therefore
@@ -43,9 +65,7 @@ async def run_release_proof(project_id: UUID, project_slug: str) -> FunctionalVe
             )
         )
         status_payload = await orchestrator_client.get_status(project_id)
-        raw_base_url = (
-            status_payload.get("dev_url") if isinstance(status_payload, dict) else None
-        )
+        raw_base_url = status_payload.get("dev_url") if isinstance(status_payload, dict) else None
         base_url = str(raw_base_url) if raw_base_url else None
     except Exception as exc:
         checks.append(Check("runtime", False, f"probe failed: {exc!r}"))
@@ -60,5 +80,16 @@ async def run_release_proof(project_id: UUID, project_slug: str) -> FunctionalVe
             checks.extend(Check(check.name, check.ok, check.detail) for check in security.checks)
         except Exception as exc:
             checks.append(Check("transport_security", False, f"probe failed: {exc!r}"))
+
+    if require_hydrated_product:
+        if hydrated_product_check is not None:
+            checks.append(hydrated_product_check)
+        elif base_url:
+            from omnia_api.services import max_hydration_gate
+
+            hydration = await max_hydration_gate.audit_url(base_url)
+            checks.append(Check("max_hydration", hydration.passed, hydration.detail[:240]))
+        else:
+            checks.append(Check("max_hydration", False, "dev_url missing"))
 
     return summarize(checks)
