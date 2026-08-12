@@ -24,6 +24,7 @@ class SubscriptionPublic(BaseModel):
 
     id: UUID
     status: str
+    is_lifetime: bool
     auto_renew: bool
     cancel_at_period_end: bool
     current_period_start: datetime | None

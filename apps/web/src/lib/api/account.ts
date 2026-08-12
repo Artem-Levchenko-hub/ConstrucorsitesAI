@@ -46,6 +46,7 @@ export type BillingPlan = {
 export type Subscription = {
   id: string;
   status: "trialing" | "active" | "past_due" | "paused";
+  is_lifetime: boolean;
   auto_renew: boolean;
   cancel_at_period_end: boolean;
   current_period_start: string | null;

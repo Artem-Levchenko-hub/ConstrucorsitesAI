@@ -304,6 +304,12 @@ async def create_subscription_checkout(
             .with_for_update()
         )
     ).scalar_one_or_none()
+    if current is not None and current.is_lifetime:
+        raise ApiError(
+            "subscription_already_active",
+            "Для аккаунта уже действует пожизненный максимальный тариф",
+            status.HTTP_409_CONFLICT,
+        )
     if current is not None and current.plan_id == plan.id and current.status == "active":
         raise ApiError(
             "subscription_already_active",

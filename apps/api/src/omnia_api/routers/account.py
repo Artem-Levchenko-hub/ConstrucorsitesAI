@@ -155,6 +155,7 @@ async def export_account_data(
             {
                 "id": str(subscription.id),
                 "status": subscription.status,
+                "is_lifetime": subscription.is_lifetime,
                 "plan": {
                     "code": plan.code,
                     "version": plan.version,

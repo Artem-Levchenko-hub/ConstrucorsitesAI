@@ -189,7 +189,9 @@ export function AccountControlCenter({
                 {subscription.data?.plan.name ?? "Загрузка…"}
               </h2>
               <p className="mt-1 text-sm text-fg-tertiary">
-                {subscription.data?.current_period_end
+                {subscription.data?.is_lifetime
+                  ? "Максимальные возможности закреплены за аккаунтом навсегда"
+                  : subscription.data?.current_period_end
                   ? `Оплачен до ${new Date(
                       subscription.data.current_period_end,
                     ).toLocaleDateString("ru-RU")}`
@@ -198,7 +200,9 @@ export function AccountControlCenter({
             </div>
             {subscription.data && (
               <span className="rounded-full bg-success/10 px-3 py-1 text-xs font-medium text-success">
-                {subscription.data.cancel_at_period_end
+                {subscription.data.is_lifetime
+                  ? "Пожизненно"
+                  : subscription.data.cancel_at_period_end
                   ? "Отменится в конце периода"
                   : subscription.data.auto_renew
                     ? "Продлевается"
@@ -250,21 +254,25 @@ export function AccountControlCenter({
             </div>
           )}
 
-          <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-[10px] border border-border-default bg-surface p-4 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5 size-4 accent-accent"
-              checked={autoRenewConsent}
-              onChange={(event) => setAutoRenewConsent(event.target.checked)}
-            />
-            <span>
-              <span className="block font-medium">Включить автопродление при покупке</span>
-              <span className="mt-1 block text-xs leading-5 text-fg-tertiary">
-                Разрешаю ежемесячное списание стоимости тарифа с сохранённого
-                способа оплаты. Согласие можно отозвать здесь в любой момент.
+          {!subscription.data?.is_lifetime && (
+            <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-[10px] border border-border-default bg-surface p-4 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 accent-accent"
+                checked={autoRenewConsent}
+                onChange={(event) => setAutoRenewConsent(event.target.checked)}
+              />
+              <span>
+                <span className="block font-medium">
+                  Включить автопродление при покупке
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-fg-tertiary">
+                  Разрешаю ежемесячное списание стоимости тарифа с сохранённого
+                  способа оплаты. Согласие можно отозвать здесь в любой момент.
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+          )}
 
           <div className="mt-6 grid gap-3 lg:grid-cols-3">
             {(plans.data ?? []).map((plan) => {
@@ -317,6 +325,7 @@ export function AccountControlCenter({
                       variant={isCurrent ? "outline" : "primary"}
                       disabled={
                         isCurrent ||
+                        subscription.data?.is_lifetime ||
                         !paymentConfig.data?.enabled ||
                         subscribe.isPending
                       }
@@ -332,11 +341,11 @@ export function AccountControlCenter({
             })}
           </div>
           <p className="mt-4 text-xs leading-5 text-fg-tertiary">
-            Первая покупка активирует тариф на месяц и начисляет включённый
-            кредит только после подтверждения ЮKassa. Автопродление не включается
-            без отдельного согласия.
+            {subscription.data?.is_lifetime
+              ? "Пожизненный тариф не требует оплаты, продления или управления способом оплаты."
+              : "Первая покупка активирует тариф на месяц и начисляет включённый кредит только после подтверждения ЮKassa. Автопродление не включается без отдельного согласия."}
           </p>
-          {!paymentConfig.data?.enabled && (
+          {!subscription.data?.is_lifetime && !paymentConfig.data?.enabled && (
             <p className="mt-4 rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">
               {paymentConfig.data?.reason ?? "Платёжный контур пока недоступен"}
             </p>

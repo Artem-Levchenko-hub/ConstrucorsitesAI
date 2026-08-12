@@ -288,6 +288,13 @@ class Subscription(Base):
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="active", server_default="active"
     )
+    # Non-commercial grants use the same canonical plan/entitlement path as
+    # paid subscriptions, but never enter renewal or downgrade processing.
+    # The database shape constraint below makes the promise durable even if a
+    # future caller accidentally supplies payment lifecycle fields.
+    is_lifetime: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     auto_renew: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
@@ -327,6 +334,16 @@ class Subscription(Base):
             "current_period_end IS NULL OR current_period_start IS NULL "
             "OR current_period_end > current_period_start",
             name="ck_subscriptions_period_order",
+        ),
+        CheckConstraint(
+            "NOT is_lifetime OR ("
+            "status = 'active' AND auto_renew = false "
+            "AND cancel_at_period_end = false "
+            "AND payment_method_id IS NULL "
+            "AND current_period_end IS NULL "
+            "AND next_charge_at IS NULL "
+            "AND grace_period_ends_at IS NULL)",
+            name="ck_subscriptions_lifetime_shape",
         ),
         Index(
             "uq_subscriptions_account_live",

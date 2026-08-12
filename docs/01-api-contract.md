@@ -88,7 +88,7 @@ Stop — серверная операция: `/generation/cancel` записы�
 | Метод | Path | Тело | Ответ |
 |---|---|---|---|
 | `GET` | `/api/billing/plans` | — | Активные версии тарифов `Free`, `Pro`, `Business` |
-| `GET` | `/api/billing/subscription` | — | Текущая подписка платёжного аккаунта вместе с зафиксированной версией тарифа |
+| `GET` | `/api/billing/subscription` | — | Текущая подписка платёжного аккаунта вместе с зафиксированной версией тарифа и `is_lifetime` |
 | `PATCH` | `/api/billing/subscription` | `{action: "cancel" \| "restore", consent_version?}` | Отмена в конце периода или восстановление автопродления с актуальным согласием |
 | `GET` | `/api/wallet` | — | `{balance_rub, recent_charges, free_generations_left, free_generation_limit, unlimited_generations}`; каждая операция содержит `entry_type`, `balance_after_rub`, `external_ref` |
 | `POST` | `/api/wallet/topup` | `{amount_rub}` | `{balance_rub}`; тестовый маршрут закрыт по умолчанию |
@@ -107,6 +107,13 @@ Stop — серверная операция: `/generation/cancel` записы�
 включается только отдельным флагом и актуальной версией согласия. Worker
 повторяет неуспешное списание через 12 часов, сохраняет платные права на
 трёхдневный grace-период и затем создаёт Free-подписку без удаления проектов.
+
+`is_lifetime=true` означает явный бессрочный grant: такая подписка всегда
+`active`, не имеет способа оплаты, даты окончания, следующего списания или
+grace-периода. Она использует обычную версию тарифа и все штатные entitlement
+gates, но исключена из checkout, cancel/restore и renewal worker. Поэтому
+пожизненный Business даёт ровно максимальные текущие права Business, не
+отключая rate limit и safety-ограничения генерации.
 
 ### Models (для селектора в UI)
 
