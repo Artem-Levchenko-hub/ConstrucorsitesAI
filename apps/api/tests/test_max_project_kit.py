@@ -241,6 +241,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert set(files) == {
         "package.json",
         "pnpm-lock.yaml",
+        "next.config.ts",
         "postcss.config.mjs",
         "tsconfig.json",
         "public/omnia-inspector.js",

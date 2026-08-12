@@ -145,6 +145,7 @@ def render_max_managed_files(
     files = {
         "package.json": _template_file("package.json"),
         "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
+        "next.config.ts": _template_file("next.config.ts"),
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
         # MAX source uses the @/* alias throughout the protected runtime.  The
         # base container may predate the MAX template, so its generic tsconfig
