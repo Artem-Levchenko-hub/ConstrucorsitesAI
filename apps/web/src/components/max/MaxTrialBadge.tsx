@@ -24,6 +24,19 @@ export function MaxTrialBadge() {
   if (wallet.isPending || wallet.isError) return null;
 
   const left = wallet.data?.free_generations_left ?? 0;
+  const unlimited = wallet.data?.unlimited_generations ?? false;
+  if (unlimited) {
+    return (
+      <div
+        className="hidden h-9 items-center gap-1.5 rounded-[8px] border border-accent/30 bg-accent-subtle px-2.5 text-[10px] font-semibold text-accent sm:inline-flex"
+        title="Для аккаунта создателя включена безлимитная генерация"
+        aria-label="Безлимитная генерация включена"
+      >
+        <Sparkles className="size-3.5" />
+        Безлимит
+      </div>
+    );
+  }
   return (
     <Link
       href="/billing/plan"

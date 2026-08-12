@@ -41,8 +41,13 @@ class User(Base):
     status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="active", default="active"
     )
-    role: Mapped[str] = mapped_column(
-        Text, nullable=False, server_default="user", default="user"
+    role: Mapped[str] = mapped_column(Text, nullable=False, server_default="user", default="user")
+    # Account-scoped owner/tester entitlement.  This bypasses wallet and free-demo
+    # counters only; request throttling and per-run provider safety limits remain
+    # active so an accidental loop cannot turn this privilege into a platform-wide
+    # availability incident.
+    unlimited_generations: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
     )
     deletion_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

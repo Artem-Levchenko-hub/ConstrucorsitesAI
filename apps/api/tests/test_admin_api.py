@@ -70,10 +70,9 @@ async def test_admin_can_manage_account_and_business_with_audit(
 
     listed = await client.get("/api/admin/users")
     assert listed.status_code == 200
-    target_before = next(
-        item for item in listed.json() if item["email"] == "target@example.com"
-    )
+    target_before = next(item for item in listed.json() if item["email"] == "target@example.com")
     assert target_before["is_admin"] is False
+    assert target_before["unlimited_generations"] is False
     assert target_before["email_verified_at"] is None
     assert target_before["business"]["status"] == "pending"
 
@@ -81,6 +80,7 @@ async def test_admin_can_manage_account_and_business_with_audit(
         f"/api/admin/users/{target.id}",
         json={
             "role": "admin",
+            "unlimited_generations": True,
             "email_verified": True,
             "status": "active",
             "business_verified": True,
@@ -90,6 +90,7 @@ async def test_admin_can_manage_account_and_business_with_audit(
     assert updated.status_code == 200
     assert updated.json()["role"] == "admin"
     assert updated.json()["is_admin"] is True
+    assert updated.json()["unlimited_generations"] is True
     assert updated.json()["email_verified_at"] is not None
     assert updated.json()["business"]["status"] == "verified"
 
@@ -98,8 +99,27 @@ async def test_admin_can_manage_account_and_business_with_audit(
     assert audit.json()[0]["actor_email"] == "admin@example.com"
     assert audit.json()[0]["target_email"] == "target@example.com"
     assert audit.json()[0]["details"]["after"]["role"] == "admin"
+    assert audit.json()[0]["details"]["after"]["unlimited_generations"] is True
     events = list((await db_session.execute(select(AdminAuditEvent))).scalars())
     assert len(events) == 1
+
+
+async def test_admin_role_does_not_imply_unlimited_generation(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    admin_data = await _register(client, "admin@example.com")
+    admin = await db_session.get(User, admin_data["id"])
+    assert admin is not None
+    admin.role = "admin"
+    await db_session.commit()
+
+    response = await client.get("/api/admin/users")
+
+    assert response.status_code == 200
+    own_account = next(item for item in response.json() if item["id"] == str(admin.id))
+    assert own_account["role"] == "admin"
+    assert own_account["unlimited_generations"] is False
 
 
 async def test_admin_cannot_suspend_self(

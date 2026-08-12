@@ -1,13 +1,18 @@
 {
  "meta": {
-  "updated": "2026-08-11",
-  "version": 38,
+  "updated": "2026-08-12",
+  "version": 39,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "Активный MAX-агент получил полный безопасный набор инструментов",
   "subtitle": "Один устойчивый native-loop теперь умеет читать и менять проект, вести наблюдаемый план, подключать серверные навыки, получать только разрешённые read-only MCP-факты и завершаться лишь после build, runtime и подписанной визуальной проверки.",
   "items": [
+   {
+    "s": "testing",
+    "t": "Аккаунт создателя отделён от общих лимитов генерации",
+    "d": "Для undj00x03@gmail.com подготовлена постоянная роль администратора и отдельное account-scoped право безлимитной генерации. Оно обходит только кошелёк и пробные счётчики, но сохраняет rate limit, single-flight и предохранители одного запуска; миграция пишет bootstrap-событие в admin audit и прерывает deploy, если не нашла ровно один существующий аккаунт. Локально 13 unit/migration тестов, Ruff, mypy, web typecheck и ESLint зелёные; production grant и живая генерация будут подтверждены после доставки."
+   },
    {
     "s": "testing",
     "t": "MAX native-loop идёт до проверенного результата с полным SAFE toolset",
@@ -262,6 +267,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "12.08",
+   "what": "Поручил выдать аккаунту создателя undj00x03@gmail.com постоянные права администратора и безлимитную генерацию для тестирования продукта.",
+   "impact": "Права разделены на два явных флага: администратор управляет продуктом, а безлимит освобождает только этот аккаунт от кошелька и пробных счётчиков. Защитные границы частоты, одного активного запуска и одного generation run не снимаются; изменение мигрируется и фиксируется в admin audit."
+  },
   {
    "date": "11.08",
    "what": "Поручил вернуть активному MAX-агенту полный безопасный набор native-инструментов и самостоятельно проверить живую продуктовую генерацию после доставки.",
@@ -2502,6 +2512,18 @@
    "evidence": "Stable MAX получает 17 инструментов: list/read/grep/write/edit, docs/logs, build/runtime, generate_media, signed see, read_skill, plan_task/update_plan, discover_capabilities/call_capability и done. Generic probe/verify_isolation исключены как несовместимые с signed MAX auth. Custom MCP принимается только по HTTPS, с точным allowed_tools и явным read_only=true. Активный messages.py загружает immutable skill INDEX, сохраняет план и tool evidence, а completion gate требует runtime_check_after_write + see_after_write. Регрессионный сценарий после записи получает provider_response_timeout, продолжает тот же turn_id и заканчивает contract_green; 177 релевантных тестов, Ruff и mypy зелёные.",
    "impact": "Агент снова может получить нужную экспертизу, свежую документацию и визуальную обратную связь в том же устойчивом цикле, а не останавливаться на компиляции или скрытом урезанном наборе. При этом внешние возможности остаются только чтением, изменения проходят MAX-политику, бесконечное ожидание ограничено, а непроверенное дерево не считается готовым.",
    "next_vector": "Живая генерация владельцем: подтвердить план/skill/MCP при необходимости, signed visual repair и terminal snapshot без rollback"
+  },
+  {
+   "id": "H130",
+   "title": "Персональное право создателя даёт безлимитное тестирование без ослабления общих защит",
+   "status": "testing",
+   "score": null,
+   "category": "продукт / доступ / безопасность",
+   "period": "12.08",
+   "description": "Выдать одному подтверждённому аккаунту постоянные admin-права и обход кошелька/пробных лимитов, не связывая безлимит со всей ролью администратора и не отключая защитные ограничения.",
+   "evidence": "Alembic 0044 добавляет users.unlimited_generations с default=false, обновляет только CITEXT-email undj00x03@gmail.com, требует rowcount=1 и создаёт creator.privileges.bootstrap в admin_audit_events. Admin API управляет правом отдельно от role; generation gate передаёт metadata.free, но rate_limit_prompt и run/provider guards остаются на прежних путях. Локально 13 unit/migration тестов, Ruff, mypy, web typecheck и ESLint зелёные. DB-backed admin API suite не стартовал без локального PostgreSQL; production row и живая генерация ещё не подтверждены.",
+   "impact": "Создатель сможет многократно проверять обычные и MAX-проекты без ручного пополнения и расхода демо. Обычные администраторы не получают это право автоматически, а аварийный цикл всё ещё ограничен общими предохранителями.",
+   "next_vector": "После доставки проверить ровно одну production-строку, audit event, /api/admin/access, /api/wallet и один живой MAX run без движения кошелька"
   }
  ],
  "vectors": [
@@ -2959,6 +2981,10 @@
      true
     ],
     [
+     "Персональный creator-доступ: persisted admin + безлимит без отключения rate-limit и run safety",
+     false
+    ],
+    [
      "Продуктовый лендинг: MAX доступен отдельно, веб-приложения, лендинги и mobile apps честно закрыты как направления в разработке",
      true
     ],
@@ -3082,7 +3108,8 @@
      "H126",
      "H127",
      "H128",
-     "H129"
+     "H129",
+     "H130"
    ]
   }
  ],

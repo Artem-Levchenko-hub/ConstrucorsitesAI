@@ -34,12 +34,17 @@
 |---|---|---|---|
 | `GET` | `/api/admin/access` | — | `{is_admin, role, email}` |
 | `GET` | `/api/admin/users` | `?query=&limit=` | `AdminUser[]` |
-| `PATCH` | `/api/admin/users/:id` | `{role?, email_verified?, status?, business_verified?, note?}` | `AdminUser` |
+| `PATCH` | `/api/admin/users/:id` | `{role?, unlimited_generations?, email_verified?, status?, business_verified?, note?}` | `AdminUser` |
 | `GET` | `/api/admin/audit` | `?limit=` | `AdminAuditEvent[]` |
 
 Изменение роли, статуса и верификации записывается в `admin_audit_events` с
 инициатором, целевым аккаунтом и состоянием до/после. Самоблокировка и снятие
 собственной persisted admin-роли запрещены.
+
+`unlimited_generations` — отдельное account-scoped право владельца/тестера. Оно
+отключает проверку кошелька и расход пробных генераций, но не отключает rate
+limit, single-flight и предохранители одного generation run. Роль `admin` сама
+по себе безлимит не выдаёт.
 
 ### Projects
 
@@ -85,7 +90,7 @@ Stop — серверная операция: `/generation/cancel` записы�
 | `GET` | `/api/billing/plans` | — | Активные версии тарифов `Free`, `Pro`, `Business` |
 | `GET` | `/api/billing/subscription` | — | Текущая подписка платёжного аккаунта вместе с зафиксированной версией тарифа |
 | `PATCH` | `/api/billing/subscription` | `{action: "cancel" \| "restore", consent_version?}` | Отмена в конце периода или восстановление автопродления с актуальным согласием |
-| `GET` | `/api/wallet` | — | `{balance_rub, recent_charges}`; каждая операция содержит `entry_type`, `balance_after_rub`, `external_ref` |
+| `GET` | `/api/wallet` | — | `{balance_rub, recent_charges, free_generations_left, free_generation_limit, unlimited_generations}`; каждая операция содержит `entry_type`, `balance_after_rub`, `external_ref` |
 | `POST` | `/api/wallet/topup` | `{amount_rub}` | `{balance_rub}`; тестовый маршрут закрыт по умолчанию |
 | `GET` | `/api/payments` | — | Последние платежи текущего платёжного аккаунта |
 | `POST` | `/api/payments` | `{package_code, idempotency_key}` | Разовое пополнение через ЮKassa; недоступно без реквизитов магазина |

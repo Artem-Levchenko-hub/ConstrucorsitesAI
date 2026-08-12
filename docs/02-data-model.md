@@ -20,6 +20,8 @@
 | `password_hash` | text | NOT NULL |
 | `created_at` | timestamptz | NOT NULL DEFAULT now() |
 | `last_login_at` | timestamptz | NULL |
+| `role` | text | NOT NULL DEFAULT `user`, CHECK IN (`user`, `admin`) |
+| `unlimited_generations` | bool | NOT NULL DEFAULT false; account-scoped обход кошелька/пробных счётчиков |
 
 `citext` — case-insensitive (через `CREATE EXTENSION citext`).
 
@@ -376,6 +378,7 @@ COMMENT ON COLUMN usage.purpose IS
 | `0036` | `billing_accounts`; кошелёк, журнал, платежи и подписка переведены на business-aware владельца | Codex |
 | `0037` | `pending_payment` и partial unique guard для одной незавершённой покупки тарифа на account | Codex |
 | `0038` | версия согласия на renewal, guard одного ожидающего продления и канонический keep-alive проекта | Codex |
+| `0044` | account-scoped `unlimited_generations` и аудируемая выдача creator-прав | Codex |
 
 ## Trigger для `updated_at`
 

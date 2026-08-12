@@ -6,6 +6,7 @@ import {
   BadgeCheck,
   Ban,
   CircleAlert,
+  Infinity as InfinityIcon,
   KeyRound,
   Loader2,
   RotateCcw,
@@ -151,6 +152,11 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                           Администратор
                         </span>
                       )}
+                      {user.unlimited_generations && (
+                        <span className="rounded-full bg-[#248a4b]/10 px-2.5 py-1 text-[10px] font-medium text-[#248a4b]">
+                          Безлимит
+                        </span>
+                      )}
                       <span
                         className={cn(
                           "rounded-full px-2.5 py-1 text-[10px] font-medium",
@@ -249,6 +255,23 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                       Сделать админом
                     </Button>
                   )}
+                  <Button
+                    variant="outline"
+                    disabled={pending}
+                    onClick={() =>
+                      update.mutate({
+                        user,
+                        change: {
+                          unlimited_generations: !user.unlimited_generations,
+                        },
+                      })
+                    }
+                  >
+                    <InfinityIcon className="size-4" />
+                    {user.unlimited_generations
+                      ? "Отключить безлимит"
+                      : "Включить безлимит"}
+                  </Button>
                   {user.status === "active" ? (
                     <Button
                       variant="outline"

@@ -53,6 +53,7 @@ async def get_wallet(session: SessionDep, current_user: CurrentUserDep) -> Walle
         recent_charges=charges,
         free_generations_left=max(0, free_limit - used),
         free_generation_limit=free_limit,
+        unlimited_generations=current_user.unlimited_generations,
     )
 
 

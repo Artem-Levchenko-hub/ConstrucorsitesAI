@@ -28,6 +28,10 @@ from omnia_api.core.config import (
 from omnia_api.core.db import get_engine
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.core.generation_access import (
+    has_unlimited_generation_access,
+    should_consume_free_generation,
+)
 from omnia_api.core.minio import preview_public_url
 from omnia_api.core.ratelimit import rate_limit_prompt
 from omnia_api.core.redis import (
@@ -1722,11 +1726,13 @@ async def post_prompt(
     # MAX has one separate instant-demo build.  The user row is locked and the
     # allowance is reserved in this request transaction before any model task is
     # spawned, so two projects/tabs cannot both pass a stale counter check.
-    # `UNLIMITED_GENERATIONS=true` (testing escape hatch) forces every gen to be
-    # free → skips this wallet-floor check AND the gateway debit (metadata.free).
+    # The global testing escape hatch or a persisted account entitlement makes
+    # the run free: wallet/demo counters are bypassed and the gateway receives
+    # metadata.free.  Rate limiting and per-run safety guards still apply.
+    has_unlimited_generations = has_unlimited_generation_access(current_user)
     max_demo_reserved = False
     if project.template == "max_miniapp":
-        if get_settings().unlimited_generations:
+        if has_unlimited_generations:
             is_free = True
         else:
             locked_user = await session.get(User, current_user.id, with_for_update=True)
@@ -1737,7 +1743,7 @@ async def post_prompt(
                 locked_user.max_demo_generations_used += 1
                 max_demo_reserved = True
     else:
-        is_free = get_settings().unlimited_generations or (
+        is_free = has_unlimited_generations or (
             (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
         )
     if not is_free:
@@ -3381,10 +3387,16 @@ async def _process_prompt(
     accumulated = ""
 
     async def _consume_free_generation(session: AsyncSession) -> None:
-        if not is_free or max_demo_reserved or project_template == "max_miniapp":
-            return
         user_row = await session.get(User, user_id)
-        if user_row is not None:
+        # An owner/tester run is free forever and must not mutate the onboarding
+        # allowance.  Re-read the persisted flag because this work runs after the
+        # request transaction in a background task.
+        if user_row is not None and should_consume_free_generation(
+            user_row,
+            is_free=is_free,
+            max_demo_reserved=max_demo_reserved,
+            project_template=project_template,
+        ):
             user_row.free_generations_used = (user_row.free_generations_used or 0) + 1
 
     # Persisted agentic transcript: every `agent.step` payload published this turn

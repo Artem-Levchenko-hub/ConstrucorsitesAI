@@ -32,16 +32,13 @@ def _public_user(
         email=str(user.email),
         role=user.role,
         is_admin=is_admin_user(user),
+        unlimited_generations=user.unlimited_generations,
         status=user.status,
         email_verified_at=user.email_verified_at,
         created_at=user.created_at,
         last_login_at=user.last_login_at,
         wallet_balance_rub=str(wallet.balance_rub if wallet else 0),
-        business=(
-            BusinessProfilePublic.model_validate(business)
-            if business is not None
-            else None
-        ),
+        business=(BusinessProfilePublic.model_validate(business) if business is not None else None),
     )
 
 
@@ -111,6 +108,7 @@ async def update_user(
     target, wallet, business = await _user_row(session, user_id)
     before = {
         "role": target.role,
+        "unlimited_generations": target.unlimited_generations,
         "status": target.status,
         "email_verified": target.email_verified_at is not None,
         "business_status": business.status if business else None,
@@ -137,6 +135,9 @@ async def update_user(
                     status.HTTP_409_CONFLICT,
                 )
         target.role = payload.role
+
+    if payload.unlimited_generations is not None:
+        target.unlimited_generations = payload.unlimited_generations
 
     if payload.email_verified is not None:
         target.email_verified_at = now if payload.email_verified else None
@@ -169,6 +170,7 @@ async def update_user(
 
     after = {
         "role": target.role,
+        "unlimited_generations": target.unlimited_generations,
         "status": target.status,
         "email_verified": target.email_verified_at is not None,
         "business_status": business.status if business else None,

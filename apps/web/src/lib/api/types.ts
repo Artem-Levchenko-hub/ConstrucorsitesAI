@@ -359,6 +359,7 @@ export type WalletState = {
   // stale backend response without the fields doesn't break the type.
   free_generations_left?: number;
   free_generation_limit?: number;
+  unlimited_generations?: boolean;
 };
 
 // How the server will handle a prompt turn (mirrors api PromptResponse.mode):

@@ -25,6 +25,7 @@ class WalletPublic(BaseModel):
     # First-N free generations remaining for this user (wow-effect onboarding).
     free_generations_left: int = 0
     free_generation_limit: int = 0
+    unlimited_generations: bool = False
 
 
 class TopupRequest(BaseModel):
