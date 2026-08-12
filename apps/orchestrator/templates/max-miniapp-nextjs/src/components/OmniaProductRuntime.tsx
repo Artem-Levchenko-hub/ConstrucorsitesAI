@@ -1,15 +1,26 @@
 "use client";
 
-import dynamic from "next/dynamic";
+import { type ComponentType, useEffect, useState } from "react";
 
-// Product code is intentionally loaded only in the browser.  The generated
-// component therefore cannot execute inside the secret-bearing Next.js server,
-// while the model still owns every visual and behavioural product decision.
-const ProductApp = dynamic(() => import("@/components/product/ProductApp"), {
-  ssr: false,
-  loading: () => null,
-});
+type ProductComponent = ComponentType;
 
 export function OmniaProductRuntime() {
-  return <ProductApp />;
+  const [ProductApp, setProductApp] = useState<ProductComponent | null>(null);
+
+  useEffect(() => {
+    // A synchronous bundler require avoids the async Turbopack boundary that can
+    // load ProductApp's chunk but never resolve it in a hot-reloaded dev runtime.
+    // Keeping it inside an effect also prevents generated module code from being
+    // evaluated by the secret-bearing Next.js server.
+    const productModule = require("@/components/product/ProductApp") as {
+      default: ProductComponent;
+    };
+    setProductApp(() => productModule.default);
+  }, []);
+
+  return (
+    <div data-omnia-product-runtime="true" style={{ display: "contents" }}>
+      {ProductApp ? <ProductApp /> : null}
+    </div>
+  );
 }

@@ -25,4 +25,19 @@ describe("MAX instant-demo funnel", () => {
     expect(launch).toContain("Вы делаете в MAX Partner:");
     expect(launch).toContain("карточку и бота, модерацию");
   });
+
+  it("reserves the first generation before opening the auto-starting preview", () => {
+    const studio = source("components/max/MaxStudio.tsx");
+    const submitAt = studio.indexOf("await sendPrompt(project.id, prompt");
+    const navigateAt = studio.indexOf("router.push(`/max/${project.id}`)");
+
+    expect(submitAt).toBeGreaterThan(-1);
+    expect(navigateAt).toBeGreaterThan(submitAt);
+    expect(studio).toContain("idempotencyKey: `max-starter-${project.id}`");
+    const preview = source("components/max/MaxLivePreview.tsx");
+    expect(preview).toContain("if (deferInitialRuntimeStart) return");
+    expect(preview).toContain(
+      "enabled: runtimeRunning && !deferInitialRuntimeStart",
+    );
+  });
 });

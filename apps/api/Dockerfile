@@ -46,7 +46,7 @@ RUN uv sync --frozen --no-install-project \
     && uv run --no-sync playwright install chromium
 
 COPY . ./
-RUN uv sync --frozen
+RUN UV_HTTP_TIMEOUT=300 uv sync --frozen
 
 ENV PATH="/app/.venv/bin:${PATH}"
 

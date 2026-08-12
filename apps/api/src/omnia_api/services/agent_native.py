@@ -309,11 +309,25 @@ _MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     {**_MAX_TOOLS[-1], "cache_control": _CACHE},
 ]
 
-# Stable MAX uses the complete executable MAX surface. The bounded phase gates below
-# still narrow individual repair/build turns, but the normal phase must not hide
-# visual QA, durable planning, skills or explicitly approved read-only MCP evidence.
-_STABLE_MAX_TOOL_NAMES = frozenset(str(tool["name"]) for tool in _MAX_TOOLS)
-_STABLE_MAX_TOOLS = list(_MAX_TOOLS)
+# The stable MAX loop is an engineering loop, not a design orchestrator. Keep
+# only tools that directly create or prove the product; planning, skills, MCP
+# discovery and visual judging add paid turns without making completion safer.
+_STABLE_MAX_TOOL_NAMES = frozenset(
+    {
+        "list_dir",
+        "read_file",
+        "grep",
+        "docs",
+        "write_file",
+        "edit_file",
+        "build",
+        "read_logs",
+        "runtime_check",
+        "generate_media",
+        "done",
+    }
+)
+_STABLE_MAX_TOOLS = [tool for tool in _TOOLS if tool["name"] in _STABLE_MAX_TOOL_NAMES]
 _STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_TOOLS[:-1],
     {**_STABLE_MAX_TOOLS[-1], "cache_control": _CACHE},
@@ -1136,15 +1150,10 @@ _MAX_REFERENCE_PREAMBLE = (
     "→ build → исправь каждую реальную ошибку → runtime_check корневого экрана после "
     "последней записи. Если runtime_check красный, используй возвращённый файл и текст "
     "ошибки для минимальной точечной edit_file, затем снова build/runtime_check; не повторяй "
-    "красную проверку без исправления. Затем вызови see через подписанную MAX preview-"
-    "сессию; конкретный визуальный дефект исправь, снова выполни build/runtime_check/see "
-    "и только после зелёного результата вызови done. Для существенной сборки можно одним "
-    "первым ходом вызвать plan_task вместе с полезными чтениями, а update_plan — только "
-    "после подтверждённого этапа. read_skill загружает лишь подходящие к брифу серверные "
-    "пакеты. discover_capabilities/call_capability разрешены только для свежих внешних "
-    "фактов: доступны исключительно одобренные оператором read-only MCP-инструменты, без "
-    "передачи им секретов и без изменения проекта. Не трать отдельные ходы на церемонию "
-    "или внешнее исследование, если без них можно сразу продвинуть сборку."
+    "красную проверку без исправления. После чистых build и runtime_check вызови done: "
+    "система сама проверит гидратацию и наличие реального продукта перед публикацией. "
+    "Не трать ходы на визуальную церемонию, навыки, планирование или внешнее исследование, "
+    "если конкретная библиотечная сигнатура не требует docs."
 )
 
 _MAX_REFERENCE_EDIT_PREAMBLE = (
@@ -1153,9 +1162,8 @@ _MAX_REFERENCE_EDIT_PREAMBLE = (
     "сохрани все остальные экраны, данные и сценарии. Не переписывай весь продукт, "
     "не меняй визуальное направление без прямого запроса и не трогай управляемое "
     "MAX-ядро. Не добавляй платформенную оболочку или юридический футер. После последней "
-    "записи исправь фактические ошибки build/runtime_check, проверь итог через signed see "
-    "и заверши только на зелёной версии. План, навыки и одобренный read-only MCP доступны, "
-    "но используй их лишь когда они действительно помогают этой точечной правке. "
+    "записи исправь фактические ошибки build/runtime_check и заверши на зелёной версии; "
+    "система сама проверит гидратацию продукта перед публикацией. "
     "Не создавай демо-данные, секреты, параллельную "
     "email-авторизацию, API или прямой доступ к БД."
 )
@@ -1184,10 +1192,9 @@ def native_system_prompt(
         else _NATIVE_PREAMBLE,
         guide,
     ]
-    # MAX now exposes read_skill in the active stable loop. Append only the
-    # server-generated catalog supplied by messages.py; the executor still
-    # resolves exact known slugs and rejects unknown packs.
-    if skills and skills.strip():
+    # Stable MAX deliberately omits read_skill and its catalog: advertising
+    # unavailable design ceremony wastes paid turns and prompt budget.
+    if skills and skills.strip() and not stable_max_loop:
         parts.append(skills.strip())
     return "\n\n".join(p for p in parts if p)
 

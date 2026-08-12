@@ -253,7 +253,7 @@ def _reference_max_completion_gap(
     require_product_entry: bool,
     source_gap: str | None = None,
 ) -> str | None:
-    """Small factual MAX gate with runtime and signed visual proof."""
+    """Small factual MAX source/runtime gate without design ceremony."""
 
     if not written:
         return (
@@ -277,11 +277,6 @@ def _reference_max_completion_gap(
         return (
             "Run runtime_check on / after the final product write; "
             "if it is red, fix that concrete runtime error first."
-        )
-    if evidence.get("see_after_write", 0) < 1:
-        return (
-            "Run see once through the signed MAX preview after the final product write; "
-            "apply any concrete visual defect, then rebuild and verify again."
         )
     return None
 
@@ -629,6 +624,39 @@ def _failed_build_body(accumulated: str, stream_error: object) -> str:
     blank, forever-"streaming" chat row. Mirrors ``_emergency_error``.
     """
     return accumulated if accumulated.strip() else f"[Ошибка генерации: {str(stream_error)[:300]}]"
+
+
+def _failed_max_terminal_body(accumulated: str, reason: str) -> str:
+    """Persist the MAX failure even after the ephemeral websocket event is gone."""
+
+    marker = f"[Сборка MAX не завершена: {reason[:300]}]"
+    body = accumulated.rstrip()
+    return f"{marker}\n\n{body}".strip()
+
+
+def _max_terminal_failure(
+    *,
+    project_template: str,
+    has_snapshot_files: bool,
+    verification_failed: bool,
+) -> tuple[str, str] | None:
+    """Return a durable MAX failure instead of ever emitting a false ``llm.done``."""
+
+    if project_template != "max_miniapp":
+        return None
+    if verification_failed:
+        return (
+            "final_verification_failed",
+            "Финальная проверка не подтвердила рабочий экран. "
+            "Изменения не опубликованы; сохранена предыдущая рабочая версия.",
+        )
+    if not has_snapshot_files:
+        return (
+            "max_snapshot_missing",
+            "Сборка MAX не создала проверенный снимок. "
+            "Она не отмечена готовой; повторите запрос или нажмите «Починить».",
+        )
+    return None
 
 
 async def _probe_compile_errors(
@@ -4110,12 +4138,7 @@ async def _process_prompt(
             # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
             # perf canons aligned with the gates) when enabled. None → unchanged.
             _skills = None
-            if project_template == "max_miniapp" and get_settings().use_native_agent:
-                # The native MAX surface exposes read_skill, so give it only the
-                # immutable allow-listed INDEX. Full packs stay server-side and
-                # are loaded by exact slug through the MAX executor.
-                _skills = agent_builder.load_stack_skill_index(_orch_name)
-            elif get_settings().use_skill_injection:
+            if get_settings().use_skill_injection:
                 _skills = (
                     None
                     if project_template == "max_miniapp"
@@ -5064,11 +5087,34 @@ async def _process_prompt(
                     )
             # ──────────────────────────────────────────────────────────────────
 
+            # MAX needs browser evidence, not only HTTP 200. This deterministic
+            # gate judges no palette/layout choices: it proves that the managed
+            # runtime hydrated the generated ProductApp into visible DOM.
+            _release_verdict = None
+            _max_hydration_check = None
+            _verification_failed = False
+            if project_template == "max_miniapp" and files:
+                from omnia_api.services.functional_gate import summarize
+                from omnia_api.services.release_proof import run_max_hydration_check
+
+                _max_hydration_check = await run_max_hydration_check(project_id)
+                _release_verdict = summarize([_max_hydration_check])
+                if not _release_verdict.passed:
+                    _runtime_ok = False
+                    _rt_error = _release_verdict.summary
+                    print(
+                        f"[PP] MAX hydrated-product proof RED: {_release_verdict.summary}",
+                        flush=True,
+                    )
+
             # Final green-tree invariant. Generic runs may stop on their turn
             # budget; MAX may stop on its durable spend/provider guard. This
             # independent verification still prevents a stale dev-server
             # response from being published.
-            if get_settings().use_native_agent and (not _runtime_ok or not _typecheck_ok):
+            if (get_settings().use_native_agent or project_template == "max_miniapp") and (
+                not _runtime_ok or not _typecheck_ok
+            ):
+                _verification_failed = project_template == "max_miniapp"
                 _verification_error = _tc_error or _rt_error or "final verification failed"
                 _verification_rolled_back = False
                 try:
@@ -5562,7 +5608,12 @@ async def _process_prompt(
             if files and get_settings().use_build_attestation:
                 from omnia_api.services.release_proof import run_release_proof
 
-                _release_verdict = await run_release_proof(project_id, project_slug)
+                _release_verdict = await run_release_proof(
+                    project_id,
+                    project_slug,
+                    require_hydrated_product=project_template == "max_miniapp",
+                    hydrated_product_check=_max_hydration_check,
+                )
                 if _att_capture is None:
                     _att_capture = []
                 _att_capture.append(("release", _release_verdict))
@@ -5715,6 +5766,34 @@ async def _process_prompt(
                     ),
                     fixable=True,
                 )
+
+            _max_failure = _max_terminal_failure(
+                project_template=project_template,
+                has_snapshot_files=bool(files),
+                verification_failed=_verification_failed,
+            )
+            if _max_failure is not None:
+                error_code, error_message = _max_failure
+                async with factory() as session:
+                    msg = await session.get(Message, assistant_message_id)
+                    if msg is not None:
+                        msg.content = _failed_max_terminal_body(accumulated, error_message)
+                        msg.tokens_in = msg.tokens_in or 0
+                        msg.tokens_out = msg.tokens_out or 0
+                        msg.agent_steps = _agent_step_log or None
+                    await session.commit()
+                await set_generation_run_error(run_id, error_code)
+                await publish_event(
+                    project_id,
+                    "llm.error",
+                    {
+                        "message_id": str(assistant_message_id),
+                        "error": error_message,
+                        "code": error_code,
+                    },
+                )
+                await clear_stream_state(project_id, assistant_message_id)
+                return
 
             await publish_event(
                 project_id,

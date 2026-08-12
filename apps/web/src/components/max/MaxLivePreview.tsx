@@ -67,6 +67,7 @@ const DEVICE_HEIGHT = SCREEN_HEIGHT + STATUS_BAR_HEIGHT + DEVICE_BEZEL * 2;
 
 export function MaxLivePreview({
   project,
+  deferInitialRuntimeStart = false,
   snapshots,
   snapshotsLoading,
   currentSnapshotId,
@@ -79,6 +80,7 @@ export function MaxLivePreview({
   onClose,
 }: {
   project: Project;
+  deferInitialRuntimeStart?: boolean;
   snapshots: Snapshot[];
   snapshotsLoading: boolean;
   currentSnapshotId: string | null;
@@ -267,7 +269,7 @@ export function MaxLivePreview({
   const managedKit = useQuery({
     queryKey: ["max-managed-kit-sync", project.id],
     queryFn: () => syncMaxManagedKit(project.id),
-    enabled: runtimeRunning,
+    enabled: runtimeRunning && !deferInitialRuntimeStart,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
   });
@@ -288,12 +290,13 @@ export function MaxLivePreview({
   });
 
   useEffect(() => {
+    if (deferInitialRuntimeStart) return;
     if (runtime.isLoading || started.current) return;
     if (runtime.isError || !runtime.data || ["stopped", "paused", "failed"].includes(runtime.data.state)) {
       started.current = true;
       start.mutate();
     }
-  }, [runtime.isLoading, runtime.isError, runtime.data, start]);
+  }, [deferInitialRuntimeStart, runtime.isLoading, runtime.isError, runtime.data, start]);
 
   useEffect(() => {
     const stage = deviceStage.current;

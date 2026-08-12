@@ -1,6 +1,6 @@
 "use client";
 
-import dynamic from "next/dynamic";
+import { MaxUI } from "@maxhub/max-ui";
 import {
   createContext,
   useCallback,
@@ -12,18 +12,35 @@ import {
 
 import { configureMaxShell, getMaxWebApp } from "@/lib/max/bridge";
 import type { MaxSessionUser } from "@/lib/max/session";
+import { legacyMaxUiEnabled } from "@/lib/omnia/max-ui-compat";
 import { OmniaCompliance } from "@/components/OmniaCompliance";
-
-const MaxUI = dynamic(
-  () => import("@maxhub/max-ui").then((module) => module.MaxUI),
-  { ssr: false },
-);
 
 type MaxContextValue = {
   mode: "loading" | "max" | "preview" | "error";
   user: MaxSessionUser | null;
   error: string | null;
 };
+
+function LegacyMaxUiBoundary({
+  children,
+  platform,
+  colorScheme,
+}: {
+  children: React.ReactNode;
+  platform: "ios" | "android";
+  colorScheme: "light" | "dark";
+}) {
+  // MaxUI 0.2.0 reads window.matchMedia while rendering. Keep SSR and the
+  // first hydration frame headless, then enable it only in a real browser.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+  if (!hydrated) return children;
+  return (
+    <MaxUI platform={platform} colorScheme={colorScheme}>
+      {children}
+    </MaxUI>
+  );
+}
 
 const MaxContext = createContext<MaxContextValue>({
   mode: "loading",
@@ -239,22 +256,34 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
   }, [authenticate]);
 
   const value = useMemo(() => state, [state]);
+  const content = (
+    <MaxContext.Provider value={value}>
+      {state.mode === "loading" || state.mode === "error" ? (
+        <AuthScreen error={state.error} onRetry={() => void authenticate()} />
+      ) : (
+        <>
+          {children}
+          <OmniaCompliance fallback />
+        </>
+      )}
+    </MaxContext.Provider>
+  );
   return (
-    <MaxUI
+    <div
       className="omnia-max-runtime"
-      platform={appearance.platform}
-      colorScheme={appearance.colorScheme}
+      data-max-platform={appearance.platform}
+      data-max-color-scheme={appearance.colorScheme}
     >
-      <MaxContext.Provider value={value}>
-        {state.mode === "loading" || state.mode === "error" ? (
-          <AuthScreen error={state.error} onRetry={() => void authenticate()} />
-        ) : (
-          <>
-            {children}
-            <OmniaCompliance fallback />
-          </>
-        )}
-      </MaxContext.Provider>
-    </MaxUI>
+      {legacyMaxUiEnabled ? (
+        <LegacyMaxUiBoundary
+          platform={appearance.platform}
+          colorScheme={appearance.colorScheme}
+        >
+          {content}
+        </LegacyMaxUiBoundary>
+      ) : (
+        content
+      )}
+    </div>
   );
 }

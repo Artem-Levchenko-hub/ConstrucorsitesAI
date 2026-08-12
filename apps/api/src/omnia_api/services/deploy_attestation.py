@@ -21,7 +21,9 @@ from omnia_api.services.attestation import (
     now_iso,
     verify_digest,
 )
+from omnia_api.services.max_project_kit import max_history_product_files
 from omnia_api.services.release_proof import run_release_proof
+from omnia_api.services.runtime_sync import effective_runtime_files, live_file_delta
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,19 @@ class DeployProof:
 def blocking_required(settings: Settings) -> bool:
     """Production cannot disable the release proof through a bad env toggle."""
     return settings.env.lower() in {"prod", "production"} or settings.deploy_attestation_blocking
+
+
+def live_delete_paths(
+    project_template: str,
+    live_paths: list[str],
+    canonical_files: dict[str, str],
+) -> tuple[str, ...]:
+    """Select stale overlay paths without deleting MAX base-image platform files."""
+
+    candidates = live_paths
+    if project_template == "max_miniapp":
+        candidates = list(max_history_product_files(dict.fromkeys(live_paths, "")))
+    return tuple(sorted(path for path in candidates if path not in canonical_files))
 
 
 def _digest_is_valid(attestation: Attestation) -> bool:
@@ -134,13 +149,22 @@ async def ensure_current_release_proof(
     files = await asyncio.to_thread(repo_svc.read_files, project.id, snapshot.commit_sha)
     if not files:
         return DeployProof(False, "snapshot_empty", commit_sha=snapshot.commit_sha)
-    await orchestrator_client.hot_reload(
-        project_id=project.id,
-        slug=project.slug,
-        files=files,
+    desired = await effective_runtime_files(session, project, files)
+    live_paths = await orchestrator_client.agent_list_source_files(project.id, project.slug)
+    patch = await live_file_delta(
+        project.id,
+        project.slug,
+        desired,
+        delete_paths=live_delete_paths(project.template, live_paths, desired),
     )
+    if patch:
+        await orchestrator_client.hot_reload_exact(project.id, project.slug, patch)
 
-    verdict = await run_release_proof(project.id, project.slug)
+    verdict = await run_release_proof(
+        project.id,
+        project.slug,
+        require_hydrated_product=project.template == "max_miniapp",
+    )
     issued_at = now_iso()
     stack = orchestrator_template(project.template) or project.template
     record = build_attestation(

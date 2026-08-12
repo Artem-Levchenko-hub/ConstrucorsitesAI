@@ -264,6 +264,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "src/app/api/omnia/events/route.ts",
         "src/lib/omnia/max-config.ts",
         "src/lib/omnia/client.ts",
+        "src/lib/omnia/max-ui-compat.ts",
         "src/app/api/omnia/config/route.ts",
         "src/lib/omnia/integration-client.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
@@ -303,6 +304,17 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert 'from "@/components/OmniaCompliance"' in provider
     assert "<OmniaCompliance fallback" in provider
     assert 'className="omnia-max-runtime"' in provider
+    assert "data-max-platform={appearance.platform}" in provider
+    assert "next/dynamic" not in provider
+    assert "legacyMaxUiEnabled" in provider
+    assert "function LegacyMaxUiBoundary" in provider
+    assert "if (!hydrated) return children" in provider
+    assert "useEffect(() => setHydrated(true), [])" in provider
+    assert 'import "@maxhub/max-ui/dist/styles.css"' in files["src/app/layout.tsx"]
+    assert "export const legacyMaxUiEnabled = false;" in files["src/lib/omnia/max-ui-compat.ts"]
+    # Dormant dependency stays pinned only so historical products that imported
+    # it still compile; new runtime/prompt code never applies its visual system.
+    assert '"@maxhub/max-ui": "0.2.0"' in files["package.json"]
     assert "src/components/OmniaCompliance.tsx" in files
     compliance = files["src/components/OmniaCompliance.tsx"]
     assert "data-omnia-native-legal-nav" in compliance
@@ -311,6 +323,14 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "src/app/max-runtime.css" in files
     assert "display: contents" in files["src/app/max-runtime.css"]
     assert 'import "./max-runtime.css"' in files["src/app/layout.tsx"]
+    assert 'data-omnia-product-runtime="true"' in files[MAX_PRODUCT_RUNTIME_PATH]
+    assert 'style={{ display: "contents" }}' in files[MAX_PRODUCT_RUNTIME_PATH]
+    product_runtime = files[MAX_PRODUCT_RUNTIME_PATH]
+    assert 'from "next/dynamic"' not in product_runtime
+    assert 'from "@/components/product/ProductApp"' not in product_runtime
+    assert 'require("@/components/product/ProductApp")' in product_runtime
+    assert "setProductApp(() => productModule.default)" in product_runtime
+    assert "{ProductApp ? <ProductApp /> : null}" in product_runtime
     assert '"@/*": ["./src/*"]' in files["tsconfig.json"]
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
@@ -366,6 +386,60 @@ def test_entry_migration_preserves_legacy_product_behind_locked_runtime() -> Non
     assert files[MAX_PRODUCT_PAGE_PATH] != legacy
     assert "OmniaProductRuntime" in files[MAX_PRODUCT_PAGE_PATH]
     assert "ssr: false" in files[MAX_PRODUCT_RUNTIME_PATH]
+
+
+def test_entry_migration_does_not_create_a_null_product() -> None:
+    files = render_max_entry_migration_files({})
+
+    assert MAX_PRODUCT_ENTRY_PATH not in files
+
+
+def test_legacy_null_product_restores_neutral_canvas() -> None:
+    legacy_null = """"use client";
+
+// Safe fallback used only when a historical snapshot has no product entry.
+export default function ProductApp() {
+  return null;
+}
+"""
+
+    product = max_history_product_files({MAX_PRODUCT_ENTRY_PATH: legacy_null})
+    rendered = render_max_history_files(
+        {MAX_PRODUCT_ENTRY_PATH: legacy_null},
+        _config(),
+        uuid4(),
+    )
+
+    assert MAX_PRODUCT_ENTRY_PATH not in product
+    assert 'data-max-product-canvas="empty"' in rendered[MAX_PRODUCT_ENTRY_PATH]
+
+
+def test_legacy_max_ui_provider_is_enabled_only_for_historical_imports() -> None:
+    legacy = {
+        MAX_PRODUCT_ENTRY_PATH: (
+            'import { Button } from "@maxhub/max-ui"; '
+            "export default function ProductApp() { return <Button>Go</Button>; }"
+        )
+    }
+    custom = {
+        MAX_PRODUCT_ENTRY_PATH: (
+            "export default function ProductApp() { return <main>Custom</main>; }"
+        )
+    }
+
+    legacy_files = render_max_history_files(legacy, _config(), uuid4())
+    custom_files = render_max_history_files(custom, _config(), uuid4())
+    synced_legacy = max_studio._max_config_sync_files(_config(), uuid4(), legacy)
+
+    assert (
+        "export const legacyMaxUiEnabled = true;" in legacy_files["src/lib/omnia/max-ui-compat.ts"]
+    )
+    assert (
+        "export const legacyMaxUiEnabled = false;" in custom_files["src/lib/omnia/max-ui-compat.ts"]
+    )
+    assert (
+        "export const legacyMaxUiEnabled = true;" in synced_legacy["src/lib/omnia/max-ui-compat.ts"]
+    )
 
 
 def test_legacy_server_cleanup_covers_all_next_execution_entrypoints() -> None:
@@ -502,10 +576,9 @@ def test_model_directive_matches_locked_max_runtime_api() -> None:
     assert "Never dump a long\nunbroken AI paragraph" in MAX_MODEL_DIRECTIVE
     assert "Tailwind v4" in MAX_MODEL_DIRECTIVE
     assert "Recharts are not installed" in MAX_MODEL_DIRECTIVE
-    assert "@maxhub/max-ui` 0.2.0" in MAX_MODEL_DIRECTIVE
-    assert "Do not invent `Panel`, `Grid`, `Container`, `Flex`" in MAX_MODEL_DIRECTIVE
+    assert "do not import `@maxhub/max-ui`" in MAX_MODEL_DIRECTIVE
+    assert "managed MAX runtime is headless" in MAX_MODEL_DIRECTIVE
     assert "src/app/globals.css` is model-owned" in MAX_MODEL_DIRECTIVE
-    assert "MAX UI is optional" in MAX_MODEL_DIRECTIVE
     assert "MAX runtime supplies no palette" in MAX_MODEL_DIRECTIVE
     assert "usable at 360–390px" in MAX_MODEL_DIRECTIVE
     assert "persistent legal footer" in MAX_MODEL_DIRECTIVE

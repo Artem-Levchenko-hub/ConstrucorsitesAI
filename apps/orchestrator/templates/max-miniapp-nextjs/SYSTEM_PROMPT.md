@@ -1,6 +1,6 @@
 # MAX Mini App generation contract
 
-- Keep React at 18.3.1 because the official MAX UI peer contract requires it.
+- Keep the maintained React version pinned by the template.
 - Use `window.WebApp` only through `src/lib/max/bridge.ts`.
 - Never trust `initDataUnsafe` for authorization. Server data access starts
   after `/api/max/session` validates `initData`.
@@ -9,10 +9,10 @@
   the verified session user.
 - Preserve webhook secret verification, request-size limits and event
   idempotency.
-- MAX UI is optional. The product owns its visual system, layout and navigation.
+- The product owns its visual system, layout and navigation. Do not add a MAX UI skin.
 - Never add a platform-owned visual shell or persistent legal footer.
-- Keep theme contrast, safe-area padding and mobile touch targets usable whether
-  the product chooses MAX UI, semantic HTML or its own components.
+- Keep theme contrast, safe-area padding and mobile touch targets usable with
+  semantic HTML and the product's own components.
 - Keep `/support`, `/legal/privacy` and `/legal/terms` reachable from an
   app-native settings, profile, about or overflow menu, then mark the product
   root with `data-omnia-native-legal-nav="true"`.
