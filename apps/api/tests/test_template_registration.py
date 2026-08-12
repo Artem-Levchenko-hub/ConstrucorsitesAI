@@ -62,12 +62,14 @@ def test_max_starter_docker_context_and_windows_entrypoint_are_safe() -> None:
     assert "sed -i 's/\\r$//' docker-entrypoint.sh" in dockerfile
 
 
-def test_max_preview_disables_the_click_blocking_dev_indicator() -> None:
-    next_config = (
-        _TEMPLATES_DIR / "max-miniapp-nextjs" / "next.config.ts"
+def test_max_preview_hides_the_click_blocking_dev_portal() -> None:
+    runtime_css = (
+        _TEMPLATES_DIR / "max-miniapp-nextjs" / "src/app/max-runtime.css"
     ).read_text(encoding="utf-8")
 
-    assert "devIndicators: false" in next_config
+    assert "nextjs-portal" in runtime_css
+    assert "display: none !important" in runtime_css
+    assert "pointer-events: none !important" in runtime_css
 
 
 def test_max_starter_exposes_the_managed_integration_contract() -> None:

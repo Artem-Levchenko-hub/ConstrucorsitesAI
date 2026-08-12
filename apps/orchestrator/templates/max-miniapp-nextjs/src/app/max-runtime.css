@@ -11,3 +11,13 @@
   -webkit-font-smoothing: inherit;
   -moz-osx-font-smoothing: inherit;
 }
+
+/*
+ * Next's development indicator is useful in a browser tab, but its shadow-DOM
+ * host can stretch across the phone iframe and intercept every product tap.
+ * Runtime failures still reach the editor through omnia-inspector.js.
+ */
+nextjs-portal {
+  display: none !important;
+  pointer-events: none !important;
+}
