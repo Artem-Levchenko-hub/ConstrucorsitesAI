@@ -50,14 +50,15 @@ _GATEWAY_POOL_TIMEOUT_SECONDS = 30.0
 _CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside one cycle
 _MAX_PROVIDER_RECONNECT_CYCLES = 3
 _MAX_PROVIDER_TIMEOUT_RESUMES = 2
+_MAX_FREE_AMBIGUOUS_RESUMES = 2
 _MAX_TRUNCATED_WRITE_ABORT_AT = 2
 _STABLE_MAX_NOOP_WRITE_ABORT_AT = 2
 _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
-# A fresh build needs at most a design spec plus two compact domain/support files
-# before composing the screen. A larger allowance was observed live producing
-# competing types/catalog copies instead of the product entry.
-_STABLE_MAX_SUPPORT_FILE_LIMIT = 3
-_STABLE_MAX_PREWRITE_INSPECTION_LIMIT = 8
+# One batched inspection turn is enough because the headless runtime contract
+# includes the exact managed API signatures. The next provider turn must create
+# the usable product entry; support-first runs are not recoverable if the
+# provider disappears between files.
+_STABLE_MAX_PREWRITE_INSPECTION_LIMIT = 6
 # One initial visual verdict plus two evidence-led repair passes is the paid QA
 # ceiling. Live canaries showed that allowing eight passes can spend hundreds of
 # roubles while a vision/model disagreement repeatedly redesigns the same screen.
@@ -333,25 +334,19 @@ _STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     {**_STABLE_MAX_TOOLS[-1], "cache_control": _CACHE},
 ]
 
-# A first MAX build already starts from a clean, known starter. Four model turns
-# are ample to inspect its small product surface. After that, expose only write
-# tools until the first real product change lands. This turns the no-write nudge
-# into an enforceable cost boundary instead of letting a model re-read the same
-# files until the generic 12-turn explore guard aborts the generation.
-_STABLE_MAX_FIRST_WRITE_AT = 4
-# After two write-only turns, stop offering arbitrary support paths even when
-# the file cap is not full. Live runs showed duplicate-support retries could
-# otherwise continue indefinitely without composing the product entry.
-_STABLE_MAX_ENTRY_FOCUS_AT = _STABLE_MAX_FIRST_WRITE_AT + 2
+# A fresh MAX build starts from a known headless runtime. Allow one model turn
+# for batched reads, then expose only the product entry until it exists.
+_STABLE_MAX_FIRST_WRITE_AT = 1
+_STABLE_MAX_ENTRY_FOCUS_AT = _STABLE_MAX_FIRST_WRITE_AT + 1
 _STABLE_MAX_WRITE_REQUIRED = (
     "A product write is now required. Use write_file or edit_file; "
     "read/list/grep/build/done calls are disabled until one product file is written."
 )
 _STABLE_MAX_ENTRY_REQUIRED = (
-    "The main product entry is still unchanged. Stay in write-only mode: create one compact "
-    "required product component per turn (total tool content below 24000 characters), then "
-    f"compose the complete screen in `{_STABLE_MAX_PRODUCT_ENTRY}`. Do not put the whole app "
-    "in one oversized file. Notes, fake data, or decorative placeholders are not progress."
+    "The product entry is still unchanged. Write the complete usable first version directly "
+    f"to `{_STABLE_MAX_PRODUCT_ENTRY}` now (tool content below 24000 characters). Include the "
+    "main screens, navigation, states and styling in this first vertical slice; extract support "
+    "files only after the app exists. Notes, TODOs and decorative placeholders are not progress."
 )
 _STABLE_MAX_PROGRESS_REQUIRED = (
     "The product entry exists, but this build is not proven yet. Stop reading. Your next "
@@ -371,13 +366,9 @@ _STABLE_MAX_INSPECTION_COMPLETE = (
     "The MAX core has been inspected enough. Re-reading it will not improve the product. "
     "Write a product file now; compiler-guided repair will expose any remaining API mismatch."
 )
-_STABLE_MAX_SUPPORT_ADVANCE_REQUIRED = (
-    "That supporting file is already written. Do not rewrite it before the product entry "
-    f"exists. Create the next required component or compose `{_STABLE_MAX_PRODUCT_ENTRY}` now."
-)
 _STABLE_MAX_ENTRY_NOW_REQUIRED = (
-    "The supporting-file budget is complete. Compose the real screen in "
-    f"`{_STABLE_MAX_PRODUCT_ENTRY}` now; add or refine remaining components after that."
+    "Create the real usable screen in "
+    f"`{_STABLE_MAX_PRODUCT_ENTRY}` before any supporting product file."
 )
 _HISTORY_PLACEHOLDER_WRITE_REJECTED = (
     "A transcript history placeholder is not source code and was not written. "
@@ -582,6 +573,15 @@ _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED = [
         ),
         "cache_control": _CACHE,
     }
+]
+_STABLE_MAX_PREENTRY_READ_TOOLS = [
+    tool
+    for tool in _STABLE_MAX_TOOLS
+    if tool["name"] in {"list_dir", "read_file", "grep", "docs"}
+]
+_STABLE_MAX_PREENTRY_TOOLS_CACHED = [
+    *_STABLE_MAX_PREENTRY_READ_TOOLS,
+    _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED[0],
 ]
 
 # The reliable MAX path from 4cb0ee18 was a single Google tool loop, not a
@@ -1127,33 +1127,21 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
 
 _MAX_REFERENCE_PREAMBLE = (
     "Ты — автономный инженер, который за один непрерывный проход строит "
-    "полноценный MAX Mini App. MAX runtime — только технический адаптер: он не задаёт "
-    "layout, палитру, навигацию или стиль продукта. Коротко изучи нужные контракты, затем "
-    "сразу создавай продукт по брифу. Не добавляй платформенную визуальную оболочку, "
-    "постоянный юридический футер или отдельный дизайн MAX. "
-    "Не подменяй функции текстом, TODO или декоративными кнопками. Не останавливайся "
-    "на частичном результате и не объявляй успех словами. Большой интерфейс раскладывай "
-    "по небольшим компонентам: суммарное содержимое write_file/edit_file за один ответ "
-    "должно быть короче 24 000 символов, иначе аргументы инструмента будут обрезаны.\n\n"
-    "Сохрани управляемую MAX-обвязку: подписанный initData, useMaxApp/профиль, "
-    "integration-client, webhook и закрытые Studio-файлы. Пользовательские данные "
-    "бери из MAX и управляемого серверного хранилища; не зашивай демо-профили, "
-    "историю, метрики или секреты. Не создавай параллельную email-регистрацию. "
-    "Но определения товаров, услуг, тарифов, категорий и вариантов, прямо запрошенные "
-    "в брифе, — это содержимое продукта, а не фальшивые пользовательские данные. Если "
-    "управляемый config.content пуст, добавь небольшой честный fallback-каталог по брифу "
-    "с названиями и ценами, чтобы первый запуск показывал рабочий сценарий; при наличии "
-    "config.content используй его. Никогда не подменяй этим реальные заказы или историю. "
-    "src/app/globals.css — обычный глобальный CSS, не CSS Module: никогда не используй "
-    "в нём `:global(...)`.\n\n"
-    "Надёжный цикл: минимально прочитай нужные файлы → пиши полные продуктовые файлы "
-    "→ build → исправь каждую реальную ошибку → runtime_check корневого экрана после "
-    "последней записи. Если runtime_check красный, используй возвращённый файл и текст "
-    "ошибки для минимальной точечной edit_file, затем снова build/runtime_check; не повторяй "
-    "красную проверку без исправления. После чистых build и runtime_check вызови done: "
-    "система сама проверит гидратацию и наличие реального продукта перед публикацией. "
-    "Не трать ходы на визуальную церемонию, навыки, планирование или внешнее исследование, "
-    "если конкретная библиотечная сигнатура не требует docs."
+    "полноценный MAX Mini App. MAX здесь только headless-адаптер Bridge/auth/API и не "
+    "задаёт дизайн или структуру продукта. За один короткий batched-read изучи только "
+    "необходимые сигнатуры, затем ПЕРВОЙ продуктовой записью полностью замени "
+    f"`{_STABLE_MAX_PRODUCT_ENTRY}`: собери в нём рабочий мобильный MVP со всеми главными "
+    "экранами, навигацией и состояниями из брифа. Используй Tailwind-классы или inline styles, "
+    "чтобы этот первый вертикальный срез уже был оформлен; вспомогательные файлы выноси позже. "
+    "Один tool response держи короче 24 000 символов.\n\n"
+    "Не трогай управляемые MAX-файлы, не создавай API routes, не раскрывай секреты и не "
+    "добавляй email/password-вход. Демо-данные и локальные примеры разрешены, когда они "
+    "нужны брифу или первому preview; не выдавай их за MAX-профиль и не вставляй ключи. "
+    "В новой генерации никогда не импортируй `@maxhub/max-ui`: зависимость сохранена только "
+    "для совместимости со старыми снимками. Используй обычный React/Tailwind/product CSS. "
+    "После записи запусти build, исправь только реальные ошибки компилятора и заверши. "
+    "Система сама проверит, что ProductApp видим и гидратирован. Не трать ходы на design/legal "
+    "ceremony, планирование, повторные чтения или формальные чек-листы."
 )
 
 _MAX_REFERENCE_EDIT_PREAMBLE = (
@@ -1494,6 +1482,7 @@ async def run_native_build(
     max_steps: int | None = 24,
     model: str = _MODEL,
     stable_max_loop: bool = False,
+    stable_max_product_first: bool = True,
 ) -> AgentResult:
     """Drive one native tool-use loop until the model calls ``done`` after a clean
     build or reaches ``max_steps``. MAX uses the same bounded loop as the proven
@@ -1538,6 +1527,7 @@ async def run_native_build(
     visual_evaluation_ready = False
     provider_reconnect_cycles = 0
     provider_timeout_resumes = 0
+    free_ambiguous_resumes = 0
     provider_turn_index = 0
     truncated_no_write_turns = 0
     turns_without_product_entry = 0
@@ -1550,6 +1540,7 @@ async def run_native_build(
     # Both limits are independent so a slow provider or a model that keeps
     # finding work must still terminate without publishing partial files.
     max_runtime = "MAX VERIFICATION OVERRIDE" in system or reference_max_loop or stable_max_loop
+    product_first = stable_max_loop and stable_max_product_first
     max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
     effective_max_steps = (
         max(1, int(settings.agent_builder_max_runtime_steps))
@@ -1727,13 +1718,10 @@ async def run_native_build(
                 ]
                 visual_context_compacted_step = visual_feedback_step
             if (
-                stable_max_loop
+                product_first
                 and not entry_focus_compacted
                 and _STABLE_MAX_PRODUCT_ENTRY not in written
-                and (
-                    len(written) >= _STABLE_MAX_SUPPORT_FILE_LIMIT
-                    or turns_without_product_entry >= _STABLE_MAX_ENTRY_FOCUS_AT
-                )
+                and turns_without_product_entry >= _STABLE_MAX_ENTRY_FOCUS_AT
             ):
                 convo = [
                     {
@@ -1743,7 +1731,7 @@ async def run_native_build(
                 ]
                 entry_focus_compacted = True
             force_entry_write = (
-                stable_max_loop
+                product_first
                 and _STABLE_MAX_PRODUCT_ENTRY not in written
                 and (
                     turns_without_product_entry >= _STABLE_MAX_FIRST_WRITE_AT
@@ -1873,10 +1861,10 @@ async def run_native_build(
                         free=free,
                         stage=call_stage,
                         turn_id=f"{run_id or 'run'}:{provider_turn_index}",
-                        resume_count=provider_timeout_resumes,
+                        resume_count=provider_timeout_resumes + free_ambiguous_resumes,
                         tools=(
                             _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
-                            if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
+                            if force_entry_write
                             else _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED
                             if force_visual_finish
                             else _STABLE_MAX_BUILD_ONLY_TOOLS_CACHED
@@ -1901,8 +1889,8 @@ async def run_native_build(
                             if force_progress
                             else _STABLE_MAX_REPAIR_TOOLS_CACHED
                             if force_repair_write
-                            else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
-                            if force_entry_write
+                            else _STABLE_MAX_PREENTRY_TOOLS_CACHED
+                            if product_first and _STABLE_MAX_PRODUCT_ENTRY not in written
                             else _STABLE_MAX_TOOLS_CACHED
                             if stable_max_loop
                             else _MAX_REFERENCE_TOOLS_CACHED
@@ -1920,6 +1908,7 @@ async def run_native_build(
                     )
                 provider_turn_index += 1
                 provider_timeout_resumes = 0
+                free_ambiguous_resumes = 0
             except TimeoutError:
                 log.warning("agent_native.generation_deadline", step=step)
                 return await _finish_without_provider(
@@ -1985,16 +1974,42 @@ async def run_native_build(
                     "agent_native.max_paid_call_ambiguous",
                     step=step,
                     status_code=exc.status_code,
+                    free=free,
                 )
+                if free and max_runtime:
+                    free_ambiguous_resumes += 1
+                    if free_ambiguous_resumes <= _MAX_FREE_AMBIGUOUS_RESUMES:
+                        if emit:
+                            await emit(
+                                "agent.step",
+                                {
+                                    "step": step,
+                                    "action": "provider_resume",
+                                    "path": "",
+                                    "detail": (
+                                        "Ответ бесплатного AI-вызова потерялся. Повторяю тот же "
+                                        "логический шаг с тем же идентификатором; пользовательское "
+                                        "списание не выполняется."
+                                    ),
+                                    "ok": False,
+                                },
+                            )
+                        await asyncio.sleep(min(6.0, 2.0 * free_ambiguous_resumes))
+                        continue
                 if emit:
                     await emit(
                         "agent.step",
                         {
                             "step": step,
-                            "action": "accounting_guard",
+                            "action": (
+                                "provider_recovery_exhausted" if free else "accounting_guard"
+                            ),
                             "path": "",
                             "detail": (
-                                "Ответ платного вызова неоднозначен. Повтор отключён, "
+                                "Восстановить ответ бесплатного AI-вызова не удалось; "
+                                "проверяю уже собранную версию локально."
+                                if free
+                                else "Ответ платного вызова неоднозначен. Повтор отключён, "
                                 "чтобы исключить двойное списание; проверяю уже "
                                 "собранную версию локально."
                             ),
@@ -2004,7 +2019,11 @@ async def run_native_build(
                 return await _finish_without_provider(
                     steps=step,
                     reason="provider_stopped",
-                    detail="paid provider call was not retried after ambiguous settlement",
+                    detail=(
+                        "free provider response recovery exhausted"
+                        if free
+                        else "paid provider call was not retried after ambiguous settlement"
+                    ),
                 )
             except PermanentProviderError as exc:
                 log.warning(
@@ -2380,7 +2399,7 @@ async def run_native_build(
                     # provider rate limit before the known repair is applied.
                     obs = {"ok": False, "error": _STABLE_MAX_VISUAL_REPAIR_REQUIRED}
                 elif (
-                    stable_max_loop
+                    product_first
                     and _STABLE_MAX_PRODUCT_ENTRY not in written
                     and name in {"read_file", "list_dir", "grep", "docs"}
                     and (
@@ -2455,18 +2474,10 @@ async def run_native_build(
                         "error": _stable_max_repair_required(last_build_error_paths),
                     }
                 elif (
-                    force_entry_write
-                    and name in {"write_file", "edit_file"}
-                    and action.path != _STABLE_MAX_PRODUCT_ENTRY
-                    and action.path in written
-                ):
-                    obs = {"ok": False, "error": _STABLE_MAX_SUPPORT_ADVANCE_REQUIRED}
-                elif (
-                    stable_max_loop
+                    product_first
                     and _STABLE_MAX_PRODUCT_ENTRY not in written
                     and name in {"write_file", "edit_file"}
                     and action.path != _STABLE_MAX_PRODUCT_ENTRY
-                    and len(written) >= _STABLE_MAX_SUPPORT_FILE_LIMIT
                 ):
                     obs = {"ok": False, "error": _STABLE_MAX_ENTRY_NOW_REQUIRED}
                 elif lifecycle_error:
@@ -2610,7 +2621,7 @@ async def run_native_build(
                     if name == "generate_media" and visual_feedback_step is not None:
                         visual_media_generated_step = visual_feedback_step
                     if (
-                        stable_max_loop
+                        product_first
                         and _STABLE_MAX_PRODUCT_ENTRY not in written
                         and name in {"read_file", "list_dir", "grep", "docs"}
                     ):

@@ -1,42 +1,20 @@
-# MAX Mini App generation contract
+# MAX headless platform adapter
 
-- Keep the maintained React version pinned by the template.
-- Use `window.WebApp` only through `src/lib/max/bridge.ts`.
-- Never trust `initDataUnsafe` for authorization. Server data access starts
-  after `/api/max/session` validates `initData`.
-- Keep bot credentials and webhook secrets server-only.
-- Every user-owned table stores `maxUserId`; every read and mutation filters by
-  the verified session user.
-- Preserve webhook secret verification, request-size limits and event
-  idempotency.
-- The product owns its visual system, layout and navigation. Do not add a MAX UI skin.
-- Never add a platform-owned visual shell or persistent legal footer.
-- Keep theme contrast, safe-area padding and mobile touch targets usable with
-  semantic HTML and the product's own components.
-- Keep `/support`, `/legal/privacy` and `/legal/terms` reachable from an
-  app-native settings, profile, about or overflow menu, then mark the product
-  root with `data-omnia-native-legal-nav="true"`.
-- Use BackButton for nested views and closing confirmation only while data is
-  unsaved.
-- Request contacts or other sensitive platform data only after an explicit
-  user action.
-- Do not add Telegram WebApp, VK Bridge, Auth.js or password login.
-- Treat `src/lib/omnia/max-config.ts`, `/legal/privacy`, `/legal/terms`,
-  `/support`, `/api/omnia/*`, the MAX session and webhook files as
-  Omnia-managed infrastructure. Import the config; do not duplicate or delete it.
-- Render `omniaMaxConfig.content` as the editable business catalog. The owner
-  changes it in MAX Studio without another model call.
-- Every primary CTA must perform a real persisted operation through
-  `/api/omnia/actions`; never ship decorative buttons or fake success states.
-- Persist explicit consent through `/api/omnia/consents` before marketing
-  notifications, contacts, payments or other optional personal-data use.
-- Track key funnel events through `/api/omnia/events`; do not send personal data
-  to third-party analytics by default.
-- Support loading, empty, error, retry and success states for every async flow.
-- Use the Bot API for start/help/open-app flows and the Bridge wrappers for
-  links, sharing, contacts, storage, haptics and the BackButton.
-- For sales include visible price/order confirmation/cancellation/refund states.
-  For bookings prevent duplicate slots. For loyalty keep a transaction ledger.
-  For user content include report/block/moderation states.
-- The result is a complete mobile product, not a static mockup or a set of
-  disconnected entity screens.
+- The maintained runtime already owns MAX Bridge, verified `initData`, the MAX
+  profile/session, bot webhook, legal/support routes and managed integrations.
+- It is not a visual or product template. Build the user-visible product in
+  `src/components/product/ProductApp.tsx`; the product owns layout, navigation,
+  copy, states and styling.
+- On a fresh build, write a complete usable `ProductApp.tsx` before extracting
+  helpers or changing other product files. Never import `@maxhub/max-ui` in a
+  fresh product; that package remains only for historical snapshot compatibility.
+  Use ordinary React, Tailwind or product CSS. Run `build` and fix factual errors.
+- Do not edit the locked root page/layout, MAX runtime, API routes, package/build
+  config or server secrets. Do not create parallel API routes or email/password auth.
+- Use `useMaxApp` from `@/components/MaxAppProvider` and managed functions from
+  `@/lib/omnia/integration-client` only when the requested product needs them.
+- Demo/local data is allowed when requested or useful for preview. Never embed a
+  credential or present demo identity as the authenticated MAX user.
+- Do not add a MAX visual shell, mandatory legal footer/marker, design spec or
+  platform-themed component system. The final browser gate only checks that the
+  compiled `ProductApp` hydrates into a real visible screen.

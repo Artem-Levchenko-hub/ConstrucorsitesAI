@@ -864,80 +864,32 @@ def render_max_restored_files(
 
 
 MAX_MODEL_DIRECTIVE = """
-MAX PLATFORM CORE CONTRACT
-One native AI tool loop owns the requested product end-to-end. The maintained
-MAX runtime already exists and is not a product template or generated result.
-Rewrite src/components/product/ProductApp.tsx and src/app/globals.css for the
-user's actual product, then run build, fix factual errors and call done.
+MAX HEADLESS PLATFORM ADAPTER
+The maintained runtime already provides MAX Bridge, verified initData, the MAX
+profile, bot webhook, legal/support routes and managed integrations. It is not a
+visual or product template. The model owns ProductApp and all visible UI.
 
-Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
-and integration clients, webhook security and generated business config. The
-locked root page is only a browser-isolation boundary; never edit it or create
-app/API routes.
-The product owns all visible layout, navigation and styling. Never add a
-platform-owned visual shell or persistent legal footer. Keep `/support`,
-`/legal/privacy` and `/legal/terms` reachable from an app-native settings,
-profile, about or overflow menu. Mark the product root with
-`data-omnia-native-legal-nav="true"` once those three links exist so the managed
-legacy fallback stays hidden.
-Never declare `"use server"` or import `next/server`, `next/headers`, `next/cache`
-or server-only MAX modules from product code.
-A thin shell, decorative tabs, static demo response or fake timer is not a
-finished application. Persist user actions with
-`createMaxAction` and read them with `getMaxActions`, both from
-`@/lib/omnia/integration-client`. Never import `@/lib/db`/`drizzle-orm` or create
-parallel API routes: MAX Studio owns auth, tenant filtering and persistence.
-The signed MAX launch creates the real user profile automatically. Use `useMaxApp()`;
-never add email/password auth or hardcode demo/mock/sample/seed user records. A new
-account starts from truthful empty states, and data shown after reload must come from
-the managed user-scoped API.
-When the brief requests AI, use the exact typed call
-`const { answer } = await requestOmniaAI({ message, instructions, context })`
-from `@/lib/omnia/integration-client`; the managed model runs server-side.
-Ask for a concise, structured answer suited to the product, then render it as
-scannable sections, steps or bullets with clear hierarchy. Never dump a long
-unbroken AI paragraph into one generic card; preserve wrapping, readable line
-length and a visible next action on 360px screens.
-Never embed a provider key in source or expose one to the browser. If a user pastes
-a credential into chat, do not write it or create an .env file: Omnia handles
-credentials only through the encrypted Studio Integration Hub.
+For a fresh build, the first product write must be the complete usable
+`src/components/product/ProductApp.tsx`. Use Tailwind utilities or inline styles so
+that first vertical slice already contains the requested screens, navigation and
+states. Extract helpers or rewrite `src/app/globals.css` only after ProductApp exists.
 
-LOCKED RUNTIME API (use these exact exports; do not guess substitutes):
-- `import { useMaxApp } from "@/components/MaxAppProvider"`; it returns
-  `{ mode, user, error }`, where `mode` is `"loading" | "max" | "preview" | "error"`.
-- `user` is nullable and has `id`, `firstName`, `lastName`, `username`,
-  `languageCode`, `photoUrl`. There is no `useWebApp`, `useMaxUser`, snake_case
-  user field, or `retry` property on this hook.
-- `createMaxAction(actionType, payload)` and `getMaxActions()` are exported from
-  `@/lib/omnia/integration-client`; `getMaxActions()` resolves to `{ actions }`.
-- `requestOmniaAI({ message, instructions, context })` resolves to
-  `{ answer, text, model }` from the same client.
-- Tailwind v4 is installed through `@import "tailwindcss"`; do not use v3
-  `@tailwind` directives or unconfigured semantic utilities such as `border-border`.
-- The managed MAX runtime is headless: it supplies bridge/auth/data capabilities,
-  never a palette, component skin or visual shell. Use semantic HTML, `lucide-react`
-  and product-owned CSS; do not import `@maxhub/max-ui`.
-- `omniaMaxConfig` has top-level `app_name`, `summary`, `primary_action`, `features`,
-  `content`, `operator`, `support` and `legal`. `content` is an array of catalog items;
-  it never has `businessName` or other profile fields.
-- Use only dependencies present in `package.json`. `lucide-react` is available;
-  chart libraries such as Recharts are not installed.
+Platform boundaries only:
+- Do not edit locked runtime files, root layout/page, package/build config or create
+  app/API routes. Never import `@/lib/db`, `drizzle-orm` or server-only modules.
+- For a fresh build, never import `@maxhub/max-ui`; that dependency exists only to
+  render historical snapshots. Use ordinary React, Tailwind or product CSS.
+- Do not expose credentials, copy a pasted key into source, or add email/password auth.
+- `useMaxApp` comes from `@/components/MaxAppProvider` and returns
+  `{ mode, user, error }`; nullable `user` has `id`, `firstName`, `lastName`,
+  `username`, `languageCode`, `photoUrl`.
+- `createMaxAction`, `getMaxActions` and `requestOmniaAI` come from
+  `@/lib/omnia/integration-client`. The AI call is
+  `requestOmniaAI({ message, instructions, context })`.
+- Demo/local data is allowed when the brief requests it or preview needs a useful
+  first state. Never present demo identity as the authenticated MAX user.
 
-PRODUCT DESIGN OWNERSHIP:
-- `src/app/globals.css` is model-owned. Preserve `@import "tailwindcss"`, but replace
-  the minimal reset with the styles required by the user's product.
-  External font imports must come before Tailwind. This is ordinary global CSS, not a
-  CSS Module: never use `:global(...)` in it. Do not edit the locked layout.
-- The MAX runtime supplies no palette, card system, navigation recipe or product chrome.
-  Follow the user's brief and preserve the existing product's visual language on edits.
-- Keep the result usable at 360–390px: safe areas, readable content, reachable actions and
-  loading/empty/error/success states. These are product requirements, not a MAX skin.
-- When `user` is nullable, never render a fake name such as `Пользователь`, `User` or `Guest`.
-  Use neutral copy without pretending to know a person's name; use the real MAX first name
-  only when it is present.
-
-On a later surgical edit, preserve working behaviour and change only the relevant
-product files. Use edit_file/write_file so Omnia can attribute and safely roll
-changes back. Do not spend turns loading capability packs or performing ceremony:
-read only what is needed, implement, build, fix, done.
+Do not add MAX-owned chrome, a required legal footer/marker, a design spec or other
+ceremony. Implement the user's product, run build, repair factual compiler errors,
+then finish. Independent runtime hydration is checked after the agent loop.
 """.strip()

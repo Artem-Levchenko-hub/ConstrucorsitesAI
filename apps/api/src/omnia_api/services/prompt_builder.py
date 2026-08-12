@@ -2049,48 +2049,21 @@ _MAX_MINIAPP_STACK = """\
 СТЕК — MINI APP ДЛЯ МЕССЕНДЖЕРА MAX. Next.js 15 App Router + React 18.3 +
 TypeScript + Postgres/Drizzle + MAX Bridge. Платформенный runtime полностью headless.
 
-ШАБЛОН УЖЕ СОДЕРЖИТ критическую платформенную обвязку — используй её, не
-переписывай: `src/lib/max/bridge.ts`, `validate-init-data.ts`, `session.ts`,
-`bot-api.ts`, `/api/max/session`, `/api/max/webhook`, `MaxAppProvider`.
+Runtime уже содержит и защищает `window.WebApp` Bridge, серверную проверку
+`initData`, MAX-профиль, `MAX_BOT_TOKEN`, `MAX_WEBHOOK_SECRET`, webhook и managed
+Integration Hub. Это только платформенный адаптер, не шаблон интерфейса.
 
-• Клиент получает контекст только через `window.WebApp` из официального Bridge.
-  В обычном браузерном preview автоматически работает mock-профиль. Никаких
-  Telegram WebApp API, VK Bridge и самодельных postMessage-протоколов.
-  ОБЯЗАТЕЛЬНО учитывай `useMaxApp().mode`: пока `loading` показывай skeleton,
-  в `preview` рендери реалистичные demo/local данные и НЕ вызывай API, которым
-  нужна настоящая MAX-сессия; запросы к защищённым данным разрешены только при
-  `mode === "max"`. Preview не должен показывать пользователю `Unauthorized`.
-• Авторизация конечного пользователя — проверенный на СЕРВЕРЕ MAX `initData`.
-  Для owner-scoped данных вызывай `requireMaxUser()` и фильтруй КАЖДЫЙ select /
-  update / delete по `maxUserId`. Не доверяй `user_id` из JSON/body клиента.
-• Токен бота доступен только серверу как `MAX_BOT_TOKEN`. Секрет webhook —
-  `MAX_WEBHOOK_SECRET`. Не выводи их в HTML, client bundle, логи или ответы API.
-• Не ослабляй HMAC-проверку initData, constant-time проверку webhook secret,
-  лимит тела и idempotency событий. Платформенные файлы меняй только если задача
-  прямо требует расширить интеграцию и сохраняет эти инварианты.
-• Визуальная система, layout и навигация принадлежат продукту. Не добавляй
-  постоянный юридический футер или отдельную платформенную оболочку. Не импортируй
-  `@maxhub/max-ui`: используй semantic HTML, lucide-react и свои компоненты.
-  Всегда учитывай тему, safe-area, мобильную ширину, крупные touch
-  targets и системную кнопку BackButton. Ссылки `/support`, `/legal/privacy` и
-  `/legal/terms` размести нативно в настройках, профиле, «О приложении» или меню,
-  а корень продукта пометь `data-omnia-native-legal-nav="true"`.
-• `requestContact` и другие чувствительные действия вызывай только по явному
-  клику пользователя с понятным объяснением.
-• Бизнес-интеграции уже доступны через безопасный клиент
-  `src/lib/omnia/integration-client.ts`: `getOmniaIntegrations()`,
-  `createOmniaPayment()`, `getOmniaPayment()`, `createOmniaLead()`,
-  `getOmniaCatalog()` и `trackOmniaGoal()`. Для оплаты, заявок, меню/товаров и
-  аналитики вызывай эти функции — никогда не проси пользователя вставлять
-  API-ключ в сгенерированное приложение и не обращайся к провайдеру напрямую.
-  Клиент передаёт подписанный MAX initData платформе, а секреты остаются в
-  Integration Hub. Обрабатывай состояние «интеграция ещё не подключена» понятным
-  CTA.
-• Webhook обязан быстро вернуть HTTP 200; тяжёлую работу выноси из request path.
-  Повторные события дедуплицируй по event key в `max_webhook_events`.
-• Не добавляй Auth.js, отдельный login/password или Telegram-бота: личность уже
-  подтверждает MAX. Не модифицируй package.json/Dockerfile/next.config без прямой
-  необходимости — production-контракт принадлежит orchestrator-у."""
+• Видимый продукт целиком принадлежит генератору. Первой записью создай рабочий
+  `src/components/product/ProductApp.tsx` со всеми главными экранами, навигацией,
+  состояниями и стилем из запроса; вспомогательные файлы выноси после него.
+• Не меняй runtime, root page/layout, API routes, package/build config и секреты.
+  Не создавай отдельный login/password и не переключайся на Telegram/VK/site.
+  В новой генерации не импортируй `@maxhub/max-ui`: пакет оставлен только для
+  совместимости со старыми снимками. Используй обычный React/Tailwind/product CSS.
+• Используй `useMaxApp` и `src/lib/omnia/integration-client.ts`, только когда это
+  нужно сценарию. Демо/local данные разрешены для preview и по запросу пользователя.
+• Не добавляй платформенный UI, обязательный legal footer/marker или MAX-дизайн.
+  После реализации запусти build и исправь только фактические ошибки."""
 
 _MAX_MINIAPP_EDIT_GUARD = """\
 НЕИЗМЕНЯЕМЫЙ КОНТРАКТ ПРОЕКТА — ЭТО MINI APP ВНУТРИ МЕССЕНДЖЕРА MAX.
@@ -2098,8 +2071,8 @@ _MAX_MINIAPP_EDIT_GUARD = """\
 переключай проект на обычный сайт, Telegram/VK Mini App или отдельное приложение,
 даже если пользователь просит «сделать сайт»: адаптируй желаемый экран под MAX.
 Сохраняй официальный `window.WebApp` Bridge, серверную проверку initData,
-MAX-профиль, server-only токен бота, защищённый идемпотентный webhook, safe-area
-и мобильные touch targets. Не добавляй отдельный email/password-вход."""
+MAX-профиль, server-only токен бота и защищённый webhook. Не добавляй отдельный
+email/password-вход и не навязывай MAX-визуал или обязательный legal footer."""
 
 _TGBOT_STACK = """\
 СТЕК — TELEGRAM-БОТ НА AIOGRAM 3 (Python 3.12, long-polling, без webhook).
@@ -3333,7 +3306,7 @@ _PALETTE_TAIL_REMINDER = """\
 # stack: layout rigor, palette, style preset, visual-richness, image
 # generation toggles. The other two container-backed templates (tgbot/api)
 # are pure backend and don't get any of that.
-_VISUAL_TEMPLATES = {"fullstack", "nextjs_entities", "spa", "max_miniapp"}
+_VISUAL_TEMPLATES = {"fullstack", "nextjs_entities", "spa"}
 # Templates that are backend-only — Python + asyncio + Postgres. They
 # skip every visual block; their `_STACK` text is the entire stack
 # guidance.
@@ -3643,7 +3616,7 @@ def build_system_prompt(
     * ``fullstack`` (Next.js + Postgres + Drizzle + Auth.js) — _FULLSTACK_STACK
     * ``nextjs_entities`` (Base44-style entity engine + generative frontend) — _ENTITIES_STACK
     * ``spa`` (Vite + React + react-router) — _SPA_STACK
-    * ``max_miniapp`` (MAX Bridge/UI + Bot API + webhook) — _MAX_MINIAPP_STACK
+    * ``max_miniapp`` (headless MAX adapter + generated product) — _MAX_MINIAPP_STACK
     * ``tgbot`` (aiogram 3 + asyncpg) — _TGBOT_STACK, бэкенд only
     * ``api`` (FastAPI + SQLAlchemy 2 + JWT) — _API_STACK, бэкенд only
     * ``blank/landing/portfolio/blog`` — _STATIC_STACK + _ANIMATION_KIT
@@ -3791,22 +3764,13 @@ def build_system_prompt(
             _RESPONSE,
         )
     elif template == "max_miniapp":
+        # MAX is a headless platform target, not a visual template. The native
+        # agent owns ProductApp; generic landing-page art direction and palette
+        # contracts only compete with the user's product brief.
         sections = (
             *((lang_block,) if lang_block else ()),
             _IDENTITY,
-            *((design_anchor,) if design_anchor else ()),
-            _ART_DIRECTOR,
-            _TASTE_CODEX,
-            _QUALITY_BAR,
-            _COPY_RULES,
-            _LAYOUT_RIGOR,
-            *((_DESIGN_KIT,) if include_design_kit else ()),
-            *((preset_block,) if preset_block else ()),
-            image_block,
-            _FUNCTIONAL_CONTRACT,
             _MAX_MINIAPP_STACK,
-            _SELF_CHECK,
-            _PALETTE_TAIL_REMINDER,
             _RESPONSE,
         )
     elif template == "tgbot":

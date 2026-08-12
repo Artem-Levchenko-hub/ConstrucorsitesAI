@@ -426,12 +426,15 @@ def test_max_miniapp_prompt_routes_to_platform_stack() -> None:
     sp = build_system_prompt("max_miniapp")
     assert _MAX_MARKER in sp
     assert "MAX_BOT_TOKEN" in sp
-    assert "requireMaxUser()" in sp
-    assert "Telegram WebApp API" in sp
     assert "Платформенный runtime полностью headless" in sp
-    assert "Не импортируй\n  `@maxhub/max-ui`" in sp
-    assert "постоянный юридический футер" in sp
-    assert 'data-omnia-native-legal-nav="true"' in sp
+    assert "src/components/product/ProductApp.tsx" in sp
+    assert "Демо/local данные разрешены" in sp
+    assert "не импортируй `@maxhub/max-ui`" in sp
+    assert "обязательный legal footer/marker" in sp
+    assert 'data-omnia-native-legal-nav="true"' not in sp
+    assert "АРТ-ДИРЕКЦИЯ" not in sp
+    assert "КОДЕКС ВКУСА" not in sp
+    assert "AWWWARDS" not in sp
     assert _TGBOT_MARKER not in sp
     assert _SPA_MARKER not in sp
 

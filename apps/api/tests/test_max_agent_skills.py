@@ -19,7 +19,7 @@ CREATIVE_CAPABILITY_PACKS = {
 }
 
 
-def test_stable_max_system_exposes_server_owned_capability_catalog() -> None:
+def test_stable_max_system_omits_optional_capability_catalog() -> None:
     index = agent_builder.load_stack_skill_index("max-miniapp-nextjs")
 
     assert index is not None
@@ -33,8 +33,8 @@ def test_stable_max_system_exposes_server_owned_capability_catalog() -> None:
         index,
         stable_max_loop=True,
     )
-    assert "MAX capability catalog" in prompt
-    assert "read_skill" in prompt
+    assert "MAX capability catalog" not in prompt
+    assert "read_skill" not in prompt
     assert "MAX PLATFORM CORE CONTRACT" in prompt
 
 

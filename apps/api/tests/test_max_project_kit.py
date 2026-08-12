@@ -385,7 +385,8 @@ def test_entry_migration_preserves_legacy_product_behind_locked_runtime() -> Non
     assert files[MAX_PRODUCT_ENTRY_PATH] == legacy
     assert files[MAX_PRODUCT_PAGE_PATH] != legacy
     assert "OmniaProductRuntime" in files[MAX_PRODUCT_PAGE_PATH]
-    assert "ssr: false" in files[MAX_PRODUCT_RUNTIME_PATH]
+    assert 'require("@/components/product/ProductApp")' in files[MAX_PRODUCT_RUNTIME_PATH]
+    assert "useEffect" in files[MAX_PRODUCT_RUNTIME_PATH]
 
 
 def test_entry_migration_does_not_create_a_null_product() -> None:
@@ -567,27 +568,19 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     assert "api_key" not in client.lower()
 
 
-def test_model_directive_matches_locked_max_runtime_api() -> None:
-    assert 'useMaxApp } from "@/components/MaxAppProvider"' in MAX_MODEL_DIRECTIVE
+def test_model_directive_is_headless_and_matches_locked_max_runtime_api() -> None:
+    assert "MAX HEADLESS PLATFORM ADAPTER" in MAX_MODEL_DIRECTIVE
+    assert "first product write" in MAX_MODEL_DIRECTIVE
+    assert "src/components/product/ProductApp.tsx" in MAX_MODEL_DIRECTIVE
+    assert "@/components/MaxAppProvider" in MAX_MODEL_DIRECTIVE
     assert "firstName" in MAX_MODEL_DIRECTIVE
     assert "languageCode" in MAX_MODEL_DIRECTIVE
-    assert "There is no `useWebApp`, `useMaxUser`" in MAX_MODEL_DIRECTIVE
     assert "requestOmniaAI({ message, instructions, context })" in MAX_MODEL_DIRECTIVE
-    assert "Never dump a long\nunbroken AI paragraph" in MAX_MODEL_DIRECTIVE
-    assert "Tailwind v4" in MAX_MODEL_DIRECTIVE
-    assert "Recharts are not installed" in MAX_MODEL_DIRECTIVE
-    assert "do not import `@maxhub/max-ui`" in MAX_MODEL_DIRECTIVE
-    assert "managed MAX runtime is headless" in MAX_MODEL_DIRECTIVE
-    assert "src/app/globals.css` is model-owned" in MAX_MODEL_DIRECTIVE
-    assert "MAX runtime supplies no palette" in MAX_MODEL_DIRECTIVE
-    assert "usable at 360–390px" in MAX_MODEL_DIRECTIVE
-    assert "persistent legal footer" in MAX_MODEL_DIRECTIVE
-    assert "`/legal/privacy`" in MAX_MODEL_DIRECTIVE
-    assert 'data-omnia-native-legal-nav="true"' in MAX_MODEL_DIRECTIVE
-    assert "real user profile automatically" in MAX_MODEL_DIRECTIVE
-    assert "demo/mock/sample/seed user records" in MAX_MODEL_DIRECTIVE
-    assert "truthful empty states" in MAX_MODEL_DIRECTIVE
-    assert "never render a fake name" in MAX_MODEL_DIRECTIVE
+    assert "Demo/local data is allowed" in MAX_MODEL_DIRECTIVE
+    assert "never import `@maxhub/max-ui`" in MAX_MODEL_DIRECTIVE
+    assert "Do not expose credentials" in MAX_MODEL_DIRECTIVE
+    assert "required legal footer/marker" in MAX_MODEL_DIRECTIVE
+    assert 'data-omnia-native-legal-nav="true"' not in MAX_MODEL_DIRECTIVE
 
 
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:

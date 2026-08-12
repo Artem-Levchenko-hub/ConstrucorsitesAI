@@ -201,83 +201,50 @@ def _max_runtime_probe_is_green(probe: Mapping[str, Any]) -> bool:
     return bool(probe.get("ok")) and isinstance(code, int) and 200 <= code < 400
 
 
-_MAX_LITERAL_CLASS_RE = re.compile(r"className\s*=\s*['\"]([^'\"]+)['\"]")
-_MAX_CSS_CLASS_RE = re.compile(r"\.(-?[_a-zA-Z]+[_a-zA-Z0-9-]*)")
-
-
-def _fresh_max_style_gap(written: Mapping[str, str], entry: str) -> str | None:
-    """Reject a typed-but-unstyled fresh product before visual QA.
-
-    The maintained starter has its own class vocabulary. A model can create a
-    perfectly valid ProductApp with new class names, skip globals.css, and still
-    pass typecheck/runtime HTTP 200 while rendering as raw browser controls.
-    """
-
-    globals_css = str(written.get("src/app/globals.css") or "").strip()
-    if len(globals_css) < 400:
+def _fresh_max_product_write_rejection(
+    content: str,
+    *,
+    has_generated_snapshot: bool,
+) -> str | None:
+    if not has_generated_snapshot and "@maxhub/max-ui" in content:
         return (
-            "A fresh MAX product must also rewrite src/app/globals.css with the "
-            "product-specific mobile visual system; the starter CSS is not the result."
-        )
-    css = "\n".join(str(content) for path, content in written.items() if path.endswith(".css"))
-    css_code = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
-    if (
-        '@import "tailwindcss"' in css_code
-        or "@import 'tailwindcss'" in css_code
-        or "@tailwind " in css_code
-    ):
-        return None
-    literal_classes = {
-        token
-        for value in _MAX_LITERAL_CLASS_RE.findall(entry)
-        for token in value.split()
-        if re.fullmatch(r"-?[_a-zA-Z]+[_a-zA-Z0-9-]*", token)
-    }
-    if len(literal_classes) < 4:
-        return None
-    defined_classes = set(_MAX_CSS_CLASS_RE.findall(css_code))
-    styled = literal_classes.intersection(defined_classes)
-    if len(styled) * 2 < len(literal_classes):
-        missing = ", ".join(sorted(literal_classes - defined_classes)[:8])
-        return (
-            "The ProductApp class vocabulary is not implemented in product CSS. "
-            f"Style the actual component classes before done (examples: {missing})."
+            "Fresh MAX products cannot import @maxhub/max-ui; use ordinary React, "
+            "Tailwind or product CSS. The dependency exists only to render "
+            "historical snapshots."
         )
     return None
 
 
 def _reference_max_completion_gap(
     written: Mapping[str, str],
-    evidence: Mapping[str, int],
+    _evidence: Mapping[str, int],
     *,
     require_product_entry: bool,
-    source_gap: str | None = None,
 ) -> str | None:
-    """Small factual MAX source/runtime gate without design ceremony."""
+    """Minimal MAX delivery gate; final browser proof runs after this loop."""
 
     if not written:
         return (
             "The agent has not changed a product file yet. "
             "Implement the requested MAX app before finishing."
         )
-    if source_gap:
-        return source_gap
     if require_product_entry:
+        if any("@maxhub/max-ui" in content for content in written.values()):
+            return (
+                "Fresh MAX products must not import @maxhub/max-ui. Use ordinary React, "
+                "Tailwind or product CSS; the package remains only for historical snapshots."
+            )
         entry = str(written.get("src/components/product/ProductApp.tsx") or "").strip()
-        if len(entry) < 400 or "export default" not in entry:
+        if (
+            "export default" not in entry
+            or 'data-max-product-canvas="empty"' in entry
+            or "data-max-product-canvas='empty'" in entry
+        ):
             return (
                 "A fresh MAX build must replace "
                 "src/components/product/ProductApp.tsx with a real product, not only "
                 "CSS or a placeholder."
             )
-        style_gap = _fresh_max_style_gap(written, entry)
-        if style_gap:
-            return style_gap
-    if evidence.get("runtime_check_after_write", 0) < 1:
-        return (
-            "Run runtime_check on / after the final product write; "
-            "if it is red, fix that concrete runtime error first."
-        )
     return None
 
 
@@ -3759,10 +3726,6 @@ async def _process_prompt(
             )
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
             if project_template == "max_miniapp":
-                from omnia_api.services.max_generation_contract import (
-                    max_demo_data_rejection,
-                    max_source_completion_gap,
-                )
                 from omnia_api.services.max_project_kit import (
                     MAX_MODEL_LOCKED_FILES,
                     max_model_path_rejection,
@@ -3865,9 +3828,12 @@ async def _process_prompt(
                         _secret_rejection = max_model_write_rejection(action.path, _candidate)
                         if _secret_rejection:
                             return {"ok": False, "error": _secret_rejection}
-                        _demo_rejection = max_demo_data_rejection(action.path, _candidate)
-                        if _demo_rejection:
-                            return {"ok": False, "error": _demo_rejection}
+                        _fresh_ui_rejection = _fresh_max_product_write_rejection(
+                            _candidate,
+                            has_generated_snapshot=_max_has_generated_snapshot,
+                        )
+                        if _fresh_ui_rejection:
+                            return {"ok": False, "error": _fresh_ui_rejection}
                         from omnia_api.services.sast_gate import check_sast
 
                         _sast = check_sast({action.path: _candidate})
@@ -4275,17 +4241,16 @@ async def _process_prompt(
                     _agent_user = (
                         "Собери полноценный MAX Mini App по запросу пользователя:\n\n"
                         f"{prompt_text}\n\n{_seed_block}\n\n"
-                        "Среда MAX уже запущена. Сразу создай продукт: перепиши "
-                        "src/components/product/ProductApp.tsx и "
-                        "src/app/globals.css под запрос, реализуй все нужные экраны и "
-                        "сценарии. Сохрани MAX Bridge, серверную проверку initData, "
-                        "профиль, webhook и managed Studio-файлы. Минимизируй разведку: "
-                        "пиши код, запускай build, чини фактические ошибки до чистоты, "
-                        "Для названных в брифе ЮKassa/iiko сначала прочитай реальный "
-                        "integration-client и используй его: не показывай успешную оплату "
-                        "или синхронизацию заказа, если управляемый вызов не состоялся. "
-                        "затем done. Не загружай skill-пакеты и не выполняй отдельные "
-                        "церемониальные проверки. Не зашивай секреты и демо-профили."
+                        "Среда MAX уже запущена и не задаёт дизайн. Первой продуктовой "
+                        "записью полностью замени src/components/product/ProductApp.tsx: "
+                        "собери целостный мобильный MVP со всеми главными экранами, "
+                        "навигацией и состояниями из запроса. Этот первый файл уже должен "
+                        "быть видимым и оформленным; вспомогательные файлы выноси только "
+                        "после него. Сохрани управляемые Bridge/initData/profile/webhook "
+                        "файлы, не создавай свои API routes и не вставляй секреты. Явно "
+                        "запрошенные демонстрационные данные разрешены. Затем запусти build, "
+                        "исправь фактические ошибки компилятора и заверши без формальных "
+                        "design/legal чек-листов."
                     )
                     # Exact pre-Gemini production ceiling used by successful MAX
                     # builds. The independent atomic gateway fuse still bounds
@@ -4428,12 +4393,6 @@ async def _process_prompt(
                                 written,
                                 evidence,
                                 require_product_entry=not _max_has_generated_snapshot,
-                                source_gap=max_source_completion_gap(
-                                    _max_product_brief,
-                                    {**current_files, **written},
-                                    require_design_spec=False,
-                                    require_native_legal_nav=True,
-                                ),
                             )
                         )
                         if project_template == "max_miniapp"
@@ -4447,6 +4406,10 @@ async def _process_prompt(
                         else PRIMARY_LLM_MODEL
                     ),
                     stable_max_loop=project_template == "max_miniapp",
+                    stable_max_product_first=(
+                        project_template == "max_miniapp"
+                        and not _max_has_generated_snapshot
+                    ),
                 )
             elif _agent_res is None:
                 _agent_res = await agent_builder.run_agent_build(

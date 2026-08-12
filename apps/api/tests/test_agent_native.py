@@ -136,7 +136,8 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     )
 
     assert "один непрерывный проход" in prompt
-    assert "сразу создавай продукт" in prompt
+    assert "ПЕРВОЙ продуктовой записью" in prompt
+    assert "ProductApp.tsx" in prompt
     assert "защищённое ядро" not in prompt
     assert "короче 24 000 символов" in prompt
     assert "MAX PLATFORM CORE CONTRACT" in prompt
@@ -146,12 +147,10 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     assert "Gemini" not in prompt
     assert "read_skill" not in prompt
     assert "MAX capability catalog" not in prompt
-    assert "никогда не используй в нём `:global(...)`" in prompt
-    assert "минимальной точечной edit_file" in prompt
+    assert "Демо-данные и локальные примеры разрешены" in prompt
     assert "обязательно вызови see" not in prompt
-    assert "build" in prompt and "runtime_check" in prompt
-    assert "fallback-каталог" in prompt
-    assert "реальные заказы или историю" in prompt
+    assert "design/legal" in prompt
+    assert "build" in prompt
     names = {tool["name"] for tool in agent_native._TOOLS_CACHED}
     assert {"read_file", "write_file", "build", "done"} <= names
     assert "read_skill" not in names
@@ -257,18 +256,18 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "project.current_snapshot_id != current_snapshot_id" in source
     assert "Direct DB access is forbidden in MAX product files." in source
     assert "max_model_write_rejection" in source
-    assert "max_demo_data_rejection" in source
+    assert "max_demo_data_rejection" not in source
     assert "_run_max_visual_qa" in source
     assert "_recover_max_resume_prompt" in source
     assert "_merge_max_product_brief" in source
-    assert "max_source_completion_gap" in source
+    assert "max_source_completion_gap" not in source
     assert "src/components/product/ProductApp.tsx" in source
     assert "normalize_max_globals_css" in source
     assert "await asyncio.sleep(2)" in source
     assert 'and project_template != "max_miniapp"' in source
     assert 'product_kind="max_miniapp"' in inspect.getsource(messages._run_max_visual_qa)
     assert "EXISTING MAX ART DIRECTION" not in source
-    assert "require_native_legal_nav=True" in source
+    assert "require_native_legal_nav=True" not in source
     assert "run_max_hydration_check(project_id)" in source
     assert "_max_terminal_failure(" in source
 
@@ -314,8 +313,8 @@ def test_max_terminal_failure_rejects_missing_snapshot_and_failed_hydration() ->
     )
 
 
-def test_fresh_max_reference_gate_rejects_css_only_or_placeholder_entry() -> None:
-    evidence = {"runtime_check_after_write": 1, "see_after_write": 1}
+def test_fresh_max_reference_gate_rejects_css_only_or_managed_empty_entry() -> None:
+    evidence: dict[str, int] = {}
 
     assert messages._reference_max_completion_gap(
         {"src/app/globals.css": "body { color: black; }"},
@@ -325,24 +324,17 @@ def test_fresh_max_reference_gate_rejects_css_only_or_placeholder_entry() -> Non
     assert messages._reference_max_completion_gap(
         {
             "src/components/product/ProductApp.tsx": (
-                "export default function ProductApp() { return <p>Hi</p>; }"
+                "export default function ProductApp() { return "
+                "<main data-max-product-canvas=\"empty\" />; }"
             )
         },
         evidence,
         require_product_entry=True,
     )
-    entry = (
-        'export default function ProductApp() { return <main className="app-shell">'
-        + ("product " * 60)
-        + "</main>; }"
-    )
-    styles = ".app-shell { min-height: 100dvh; }\n" + ("/* product visual system */\n" * 20)
+    entry = 'export default function ProductApp() { return <main>Рабочий продукт</main>; }'
     assert (
         messages._reference_max_completion_gap(
-            {
-                "src/components/product/ProductApp.tsx": entry,
-                "src/app/globals.css": styles,
-            },
+            {"src/components/product/ProductApp.tsx": entry},
             evidence,
             require_product_entry=True,
         )
@@ -350,7 +342,7 @@ def test_fresh_max_reference_gate_rejects_css_only_or_placeholder_entry() -> Non
     )
 
 
-def test_fresh_max_reference_gate_rejects_unstyled_component_classes() -> None:
+def test_fresh_max_reference_gate_does_not_judge_css_architecture() -> None:
     entry = (
         'export default function ProductApp() { return <main className="app-shell">'
         '<header className="app-header"><h1 className="hero-title">Fit</h1></header>'
@@ -358,20 +350,51 @@ def test_fresh_max_reference_gate_rejects_unstyled_component_classes() -> None:
     )
     starter_css = ".max-shell { padding: 20px; }\n" + ("/* starter */\n" * 40)
 
-    gap = messages._reference_max_completion_gap(
+    assert messages._reference_max_completion_gap(
         {
             "src/components/product/ProductApp.tsx": entry,
             "src/app/globals.css": starter_css,
         },
         {"runtime_check_after_write": 1, "see_after_write": 1},
         require_product_entry=True,
+    ) is None
+
+
+def test_fresh_max_reference_gate_rejects_legacy_max_ui_but_edit_allows_it() -> None:
+    legacy_component = (
+        'import { Button } from "@maxhub/max-ui"; '
+        "export default function ProductApp(){return <Button>Start</Button>}"
     )
 
-    assert gap is not None
-    assert "class vocabulary" in gap
+    assert "historical snapshots" in str(
+        messages._reference_max_completion_gap(
+            {"src/components/product/ProductApp.tsx": legacy_component},
+            {},
+            require_product_entry=True,
+        )
+    )
+    assert (
+        messages._reference_max_completion_gap(
+            {"src/components/product/LegacyCard.tsx": legacy_component},
+            {},
+            require_product_entry=False,
+        )
+        is None
+    )
+    assert messages._fresh_max_product_write_rejection(
+        legacy_component,
+        has_generated_snapshot=False,
+    )
+    assert (
+        messages._fresh_max_product_write_rejection(
+            legacy_component,
+            has_generated_snapshot=True,
+        )
+        is None
+    )
 
 
-def test_fresh_max_style_gate_ignores_class_names_inside_css_comments() -> None:
+def test_fresh_max_reference_gate_does_not_require_runtime_ceremony() -> None:
     entry = (
         'export default function ProductApp() { return <main className="app-shell">'
         '<header className="app-header"><h1 className="hero-title">Fit</h1></header>'
@@ -382,17 +405,14 @@ def test_fresh_max_style_gate_ignores_class_names_inside_css_comments() -> None:
         ".unrelated { padding: 20px; }\n" + ("/* enough bytes but no product selectors */\n" * 20)
     )
 
-    gap = messages._reference_max_completion_gap(
+    assert messages._reference_max_completion_gap(
         {
             "src/components/product/ProductApp.tsx": entry,
             "src/app/globals.css": deceptive_css,
         },
-        {"runtime_check_after_write": 1, "see_after_write": 1},
+        {},
         require_product_entry=True,
-    )
-
-    assert gap is not None
-    assert "class vocabulary" in gap
+    ) is None
 
 
 def test_fresh_max_reference_gate_finishes_after_runtime_without_visual_ceremony() -> None:
@@ -773,7 +793,7 @@ async def test_stable_max_loop_forces_a_first_write_after_bounded_exploration(
         calls.append(names)
         if "read_file" in names and len(calls) <= agent_native._STABLE_MAX_FIRST_WRITE_AT:
             return _turn(("read_file", {"path": "src/components/product/ProductApp.tsx"}))
-        if names == {"write_file", "edit_file"}:
+        if names == {"write_file"}:
             return _turn(
                 (
                     "write_file",
@@ -811,7 +831,7 @@ async def test_stable_max_loop_forces_a_first_write_after_bounded_exploration(
     assert result.done is True
     assert result.stop_reason == "done"
     assert executed_reads == 1
-    assert calls[agent_native._STABLE_MAX_FIRST_WRITE_AT] == {"write_file", "edit_file"}
+    assert calls[agent_native._STABLE_MAX_FIRST_WRITE_AT] == {"write_file"}
     assert "src/components/product/ProductApp.tsx" in result.files
 
 
@@ -830,10 +850,7 @@ async def test_stable_max_caps_bundled_prewrite_inspection(
         if calls == 1:
             return _turn(*(("read_file", {"path": f"src/core-{index}.ts"}) for index in range(12)))
         if calls == 2:
-            assert {tool["name"] for tool in kwargs["tools"]} == {
-                "write_file",
-                "edit_file",
-            }
+            assert {tool["name"] for tool in kwargs["tools"]} == {"write_file"}
             assert "inspected enough" in str(convo[-1])
             return _turn(
                 (
@@ -886,10 +903,7 @@ async def test_stable_max_first_write_is_enforced_when_provider_reuses_old_tools
         if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 1:
             # Simulate a compatible gateway/provider continuing to call a tool
             # advertised earlier in the cached conversation.
-            assert {tool["name"] for tool in kwargs["tools"]} == {
-                "write_file",
-                "edit_file",
-            }
+            assert {tool["name"] for tool in kwargs["tools"]} == {"write_file"}
             return _turn(("grep", {"pattern": "ProductApp", "path": "src"}))
         if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 2:
             return _turn(
@@ -928,11 +942,11 @@ async def test_stable_max_first_write_is_enforced_when_provider_reuses_old_tools
 
     assert result.done is True
     assert executed_reads == 1
-    assert "main product entry is still unchanged" in str(result.transcript)
+    assert "[FOCUSED PRODUCT ENTRY]" in str(result.transcript)
 
 
 @pytest.mark.asyncio
-async def test_stable_max_supporting_files_do_not_unlock_reading_before_product_entry(
+async def test_stable_max_rejects_support_files_before_product_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
@@ -956,21 +970,6 @@ async def test_stable_max_supporting_files_do_not_unlock_reading_before_product_
                 )
             )
         if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 2:
-            assert "main product entry is still unchanged" in str(convo[-1])
-            assert {tool["name"] for tool in kwargs["tools"]} == {
-                "write_file",
-                "edit_file",
-            }
-            return _turn(
-                (
-                    "write_file",
-                    {
-                        "path": "src/components/product/types.ts",
-                        "content": "export type Item = { id: string; title: string }",
-                    },
-                )
-            )
-        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
             assert len(convo) == 1
             assert "[FOCUSED PRODUCT ENTRY]" in str(convo[-1])
             path_schema = kwargs["tools"][0]["input_schema"]["properties"]["path"]
@@ -986,7 +985,7 @@ async def test_stable_max_supporting_files_do_not_unlock_reading_before_product_
                     },
                 )
             )
-        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 4:
+        if calls == agent_native._STABLE_MAX_FIRST_WRITE_AT + 3:
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
 
@@ -1007,83 +1006,77 @@ async def test_stable_max_supporting_files_do_not_unlock_reading_before_product_
     )
 
     assert result.done is True
-    assert executed_paths == [
-        "src/components/product/types.ts",
-        agent_native._STABLE_MAX_PRODUCT_ENTRY,
+    assert executed_paths == [agent_native._STABLE_MAX_PRODUCT_ENTRY]
+    assert "src/components/product/types.ts" not in result.files
+
+
+def test_stable_max_preentry_surface_allows_only_product_entry_write() -> None:
+    names = {tool["name"] for tool in agent_native._STABLE_MAX_PREENTRY_TOOLS_CACHED}
+    assert names == {"list_dir", "read_file", "grep", "docs", "write_file"}
+    assert not ({"edit_file", "build", "done"} & names)
+
+    write_tool = next(
+        tool
+        for tool in agent_native._STABLE_MAX_PREENTRY_TOOLS_CACHED
+        if tool["name"] == "write_file"
+    )
+    assert write_tool["input_schema"]["properties"]["path"]["enum"] == [
+        agent_native._STABLE_MAX_PRODUCT_ENTRY
     ]
-    assert "src/components/product/types.ts" in result.files
 
 
 @pytest.mark.asyncio
-async def test_stable_max_compacts_to_entry_only_after_support_budget(
+async def test_stable_max_edit_can_change_support_file_without_rewriting_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = 0
+    turns = iter(
+        [
+            _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/StatsCard.tsx",
+                        "content": "export default function StatsCard(){return <div>42</div>}",
+                    },
+                )
+            ),
+            _turn(("build", {})),
+            _turn(("done", {"summary": "Готово"})),
+        ]
+    )
+    advertised: list[set[str]] = []
     executed_paths: list[str] = []
-    supports = [
-        f"src/components/product/Part{i}.tsx"
-        for i in range(agent_native._STABLE_MAX_SUPPORT_FILE_LIMIT + 1)
-    ]
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
     ) -> dict[str, Any]:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return _turn(
-                *(
-                    ("write_file", {"path": path, "content": f"export const Part{i}=1"})
-                    for i, path in enumerate(supports)
-                )
-            )
-        if calls == 2:
-            assert len(convo) == 1
-            assert "[FOCUSED PRODUCT ENTRY]" in str(convo[0])
-            assert kwargs["thinking_budget"] == agent_native._ENTRY_FOCUS_THINKING_BUDGET
-            assert {tool["name"] for tool in kwargs["tools"]} == {"write_file"}
-            path_schema = kwargs["tools"][0]["input_schema"]["properties"]["path"]
-            assert path_schema["enum"] == [agent_native._STABLE_MAX_PRODUCT_ENTRY]
-            # Simulate a provider-compatible gateway reusing an earlier schema.
-            return _turn(("write_file", {"path": supports[0], "content": "export const Part0=2"}))
-        if calls == 3:
-            assert "supporting-file budget is complete" in str(convo[-1])
-            return _turn(
-                (
-                    "write_file",
-                    {
-                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
-                        "content": (
-                            "export default function ProductApp(){return <main>Complete</main>}"
-                        ),
-                    },
-                )
-            )
-        if calls == 4:
-            assert kwargs["thinking_budget"] == agent_native._THINKING_BUDGET
-            return _turn(("build", {}))
-        return _turn(("done", {"summary": "Готово"}))
+        advertised.append({tool["name"] for tool in kwargs["tools"]})
+        return next(turns)
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
 
     async def execute(action: Any) -> dict[str, Any]:
         if action.name == "write_file":
             executed_paths.append(action.path)
-        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "clean",
+        }
 
     result = await agent_native.run_native_build(
         system="MAX runtime",
-        task="build full product",
+        task="update one existing component",
         execute=execute,
-        max_steps=20,
+        max_steps=8,
         stable_max_loop=True,
+        stable_max_product_first=False,
     )
 
     assert result.done is True
-    assert executed_paths == [
-        *supports[: agent_native._STABLE_MAX_SUPPORT_FILE_LIMIT],
-        agent_native._STABLE_MAX_PRODUCT_ENTRY,
-    ]
+    assert executed_paths == ["src/components/product/StatsCard.tsx"]
+    assert "edit_file" in advertised[0]
+    assert agent_native._STABLE_MAX_PRODUCT_ENTRY not in result.files
 
 
 @pytest.mark.asyncio
@@ -2037,7 +2030,7 @@ async def test_stable_max_uses_durable_fuse_instead_of_generic_step_limit(
     # calls were planned before the build result existed.
     assert len(calls) == 33
     assert calls[0]["model"] == "claude-sonnet-5"
-    assert calls[0]["tools"] == agent_native._STABLE_MAX_TOOLS_CACHED
+    assert calls[0]["tools"] == agent_native._STABLE_MAX_PREENTRY_TOOLS_CACHED
     assert result.steps == 33
 
 
@@ -3543,6 +3536,72 @@ async def test_stable_max_resumes_classified_body_timeout_before_terminal_result
 
 
 @pytest.mark.asyncio
+async def test_stable_max_retries_ambiguous_free_turn_with_same_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, int]] = []
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append((kwargs["turn_id"], kwargs["resume_count"]))
+        if len(calls) == 1:
+            raise agent_native.AmbiguousPaidCallError(503)
+        if len(calls) == 2:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "content": (
+                            "export default function ProductApp(){return <main>Ready</main>}"
+                        ),
+                    },
+                )
+            )
+        return _turn(("build", {}))
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "clean",
+        }
+
+    async def emit(event: str, data: dict[str, Any]) -> None:
+        events.append((event, data))
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+
+    result = await agent_native.run_native_build(
+        system="MAX starter",
+        task="build product",
+        execute=execute,
+        run_id="free-run-1",
+        free=True,
+        emit=emit,
+        completion_check=lambda written, evidence: messages._reference_max_completion_gap(
+            written,
+            evidence,
+            require_product_entry=True,
+        ),
+        stable_max_loop=True,
+    )
+
+    assert calls[:2] == [("free-run-1:0", 0), ("free-run-1:0", 1)]
+    assert calls[2][0] == "free-run-1:1"
+    assert result.done is True
+    assert result.stop_reason == "contract_green"
+    assert any(data.get("action") == "provider_resume" for _event, data in events)
+    assert not any(data.get("action") == "accounting_guard" for _event, data in events)
+
+
+@pytest.mark.asyncio
 async def test_active_max_safe_surface_survives_timeout_and_reaches_verified_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3634,7 +3693,13 @@ async def test_active_max_safe_surface_survives_timeout_and_reaches_verified_con
         stable_max_loop=True,
     )
 
-    assert calls[0]["tools"] == agent_native._STABLE_MAX_TOOL_NAMES
+    assert calls[0]["tools"] == {
+        "list_dir",
+        "read_file",
+        "grep",
+        "docs",
+        "write_file",
+    }
     assert calls[2]["turn_id"] == calls[3]["turn_id"]
     assert (calls[2]["resume_count"], calls[3]["resume_count"]) == (0, 1)
     assert {
@@ -3642,7 +3707,6 @@ async def test_active_max_safe_surface_survives_timeout_and_reaches_verified_con
         "grep",
         "write_file",
         "build",
-        "runtime_check",
     } <= set(executed)
     assert result.done is True
     assert result.stop_reason == "contract_green"
