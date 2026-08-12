@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
+  Bot,
   Building2,
   Check,
   CircleAlert,
@@ -13,6 +14,7 @@ import {
   MailCheck,
   RefreshCw,
   ShieldCheck,
+  Sparkles,
   UserRoundCheck,
 } from "lucide-react";
 import Link from "next/link";
@@ -116,6 +118,30 @@ export function MaxOnboarding({ email }: { email: string }) {
       : business.status !== "verified"
         ? 3
         : 4;
+  const stepGuidance = {
+    1: {
+      now: `Откройте письмо на ${email}, нажмите ссылку и вернитесь на эту страницу.`,
+      prepare: "Если письма нет две минуты, проверьте «Спам» и запросите отправку ещё раз.",
+      max: "В MAX Partner пока ничего делать не нужно.",
+    },
+    2: {
+      now: "Выберите реального владельца будущего бота и внесите реквизиты точно как в ФНС.",
+      prepare: "Подготовьте ФИО или название, ИНН и ОГРН/ОГРНИП, если он нужен для вашего типа.",
+      max: "Позже создайте бота в MAX от этого же владельца — иначе подключение не пройдёт проверку.",
+    },
+    3: {
+      now: "Дождитесь результата на этой странице. Повторно регистрироваться или создавать проект не нужно.",
+      prepare: "Если появится замечание, исправьте только указанные реквизиты и отправьте их снова.",
+      max: "Пока можно подготовить название, описание и изображение для карточки бота, но не передавайте токен третьим лицам.",
+    },
+    4: {
+      now: data?.can_launch
+        ? "Вернитесь к проекту: Studio покажет следующий обязательный шаг."
+        : "Подключите Pro, когда готовы получить постоянный HTTPS и запускать приложение.",
+      prepare: "Демо, превью и описание проекта сохраняются независимо от тарифа.",
+      max: "Создание и модерация бота понадобятся на отдельном следующем этапе — Studio покажет точную инструкцию.",
+    },
+  }[step];
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -178,6 +204,37 @@ export function MaxOnboarding({ email }: { email: string }) {
             );
           })}
         </div>
+
+        <section
+          data-testid="max-onboarding-native-guide"
+          className="mt-5 overflow-hidden rounded-[12px] border border-accent/25 bg-[#fcfbf7]"
+        >
+          <div className="border-b border-[#e7e3da] bg-accent/[.045] px-5 py-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[.14em] text-accent">
+              Что делать на этом шаге
+            </p>
+          </div>
+          <div className="grid divide-y divide-[#e7e3da] sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+            {[
+              [UserRoundCheck, "Сейчас", stepGuidance.now],
+              [Sparkles, "Подготовьте", stepGuidance.prepare],
+              [Bot, "Что насчёт MAX", stepGuidance.max],
+            ].map(([Icon, label, copy]) => {
+              const GuideIcon = Icon as typeof UserRoundCheck;
+              return (
+                <div key={String(label)} className="p-5">
+                  <p className="flex items-center gap-2 text-xs font-semibold">
+                    <GuideIcon className="size-3.5 text-accent" />
+                    {String(label)}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-[#6d6962]">
+                    {String(copy)}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
 
         {!data?.email_verified && (
           <section className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">

@@ -40,6 +40,7 @@ import {
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project, Snapshot } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
+import { getMaxNativeGuidance } from "@/lib/max-native-guidance";
 import {
   isGenerationActive,
   shouldDeferMaxRuntimeStart,
@@ -210,6 +211,7 @@ function MaxWorkspaceContent({
   });
   const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
   const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
+  const nativeGuidance = getMaxNativeGuidance(nextStage?.id);
   const launchLabel = readiness.isLoading
     ? "Проверяем…"
     : nextStage
@@ -589,7 +591,7 @@ function MaxWorkspaceContent({
         <button
           type="button"
           onClick={() => setLaunchOpen(true)}
-          className="flex min-h-14 shrink-0 items-center gap-3 border-b border-[#d8d4cb] bg-[#f5f3ee] px-4 text-left transition-colors hover:bg-[#ece8df] sm:px-5"
+          className="flex min-h-16 shrink-0 items-center gap-3 border-b border-[#d8d4cb] bg-[#f5f3ee] px-4 py-2 text-left transition-colors hover:bg-[#ece8df] sm:px-5"
           data-testid="max-next-action-bar"
         >
           <span className="grid size-7 shrink-0 place-items-center rounded-full bg-accent text-[10px] font-semibold text-accent-fg">
@@ -606,13 +608,25 @@ function MaxWorkspaceContent({
                 ? "Не удалось проверить готовность — откройте панель для повтора"
                 : readiness.isLoading
                   ? "Проверяем состояние проекта…"
-                  : nextStage?.label ?? "Все обязательные этапы пройдены"}
+                  : nativeGuidance.title}
             </span>
+            {readiness.isSuccess && (
+              <span className="mt-0.5 block truncate text-[10px] text-[#6d6962]">
+                {nativeGuidance.userAction}
+              </span>
+            )}
           </span>
-          <span className="hidden shrink-0 text-[10px] text-[#8d887f] sm:block">
-            {readiness.isSuccess
-              ? `${journey.completedCount} из ${journey.total}`
-              : "Статус обновляется"}
+          <span className="hidden max-w-[220px] shrink-0 text-right text-[10px] leading-4 text-[#8d887f] lg:block">
+            {readiness.isSuccess ? (
+              <>
+                <strong className="block text-[#6d6962]">
+                  {nativeGuidance.maxRequiredNow ? "Сейчас в MAX" : "MAX пока не нужен"}
+                </strong>
+                <span className="line-clamp-2">{nativeGuidance.maxAction}</span>
+              </>
+            ) : (
+              "Статус обновляется"
+            )}
           </span>
           <ChevronDown className="size-3.5 shrink-0 -rotate-90 text-[#8d887f]" />
         </button>

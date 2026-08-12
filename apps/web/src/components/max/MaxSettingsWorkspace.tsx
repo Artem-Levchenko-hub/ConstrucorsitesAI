@@ -169,9 +169,9 @@ export function MaxSettingsWorkspace({
             <p className="mt-5 flex items-center gap-2 text-xs text-[#8d887f]"><ShieldCheck className="size-4 text-[#248a4b]" />Секрет хранится зашифрованно и не отображается повторно.</p>
             </div>
             <aside className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
-            <p className="omnia-kicker text-[#8d887f]">Что проверить</p>
+            <p className="omnia-kicker text-[#8d887f]">Что сделать в MAX</p>
             <ol className="mt-5 space-y-4 text-sm">
-              {["Бот создан владельцем бизнеса", "Бот прошёл модерацию MAX", "Токен скопирован без пробелов", "Backend Bot API отвечает из production"].map((item, index) => (
+              {["Войдите в MAX Partner как подтверждённый здесь владелец", "Создайте бота, заполните карточку и отправьте её на модерацию", "После одобрения откройте Bot API и скопируйте секрет", "Вернитесь сюда и нажмите «Проверить и подключить»"].map((item, index) => (
                 <li key={item} className="flex gap-3"><span className="grid size-6 shrink-0 place-items-center rounded-full border border-[#d8d4cb] font-mono text-[9px] text-[#8d887f]">{index + 1}</span><span className="pt-0.5 text-[#6d6962]">{item}</span></li>
               ))}
             </ol>
@@ -212,6 +212,17 @@ export function MaxSettingsWorkspace({
                   вернитесь сюда: мы проверим доступность приложения и сохраним ваше
                   подтверждение. MAX пока не сообщает эту настройку через публичный API.
                 </p>
+                <ol className="mt-4 grid gap-2 text-xs leading-5 text-[#6d6962] sm:grid-cols-3">
+                  {[
+                    "1. Откройте Чат-боты и выберите своего бота",
+                    "2. Расширенные настройки → Мини-приложение → вставьте URL",
+                    "3. Сохраните в MAX и нажмите здесь «Я вставил URL»",
+                  ].map((item) => (
+                    <li key={item} className="rounded-[8px] bg-[#f5f3ee] px-3 py-2">
+                      {item}
+                    </li>
+                  ))}
+                </ol>
                 {integration.data?.app_url && (
                   <p className="mt-3 truncate font-mono text-[11px] text-[#8d887f]">
                     {integration.data.app_url}
