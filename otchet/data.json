@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-08-12",
-  "version": 40,
+  "version": 41,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Активный MAX-агент получил полный безопасный набор инструментов",
-  "subtitle": "Один устойчивый native-loop теперь умеет читать и менять проект, вести наблюдаемый план, подключать серверные навыки, получать только разрешённые read-only MCP-факты и завершаться лишь после build, runtime и подписанной визуальной проверки.",
+  "title": "MAX Studio объясняет следующий шаг прямо по ходу работы",
+  "subtitle": "От первого описания и демо до владельца, бота, публикации и проверки внутри MAX пользователь видит рядом с действием, что сделать самому, что выполнит Omnia и когда нужно перейти в MAX Partner.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Весь MAX-путь получил единый слой нативных подсказок",
+    "d": "Подсказки завязаны на шесть серверных этапов готовности и показывают точное действие, роль Omnia, отдельный шаг в MAX Partner и проверяемый признак завершения. Они встроены в демо, создание проекта, карточки, онбординг владельца, редактор, настройки, интеграцию бота, публикацию и post-launch. TypeScript, ESLint, 184 web-теста и production build зелёные; live browser QA на desktop и 390×844 прошёл без overflow и console errors, все публичные MAX/health-маршруты отдают 200."
+   },
    {
     "s": "testing",
    "t": "Аккаунт создателя получает пожизненный максимальный тариф и безлимитное тестирование",
@@ -267,6 +272,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "12.08",
+   "what": "Поручил подтянуть свежую версию билдера и сделать максимально нативные подсказки по всему пользовательскому пути, включая точные действия в MAX.",
+   "impact": "Вместо отдельной справки Studio теперь ведёт по реальному состоянию проекта: рядом с каждым этапом объясняет действие пользователя, автоматическую работу Omnia, ручной шаг в MAX Partner и признак готовности. Демо и ранняя сборка прямо говорят, что бот и кабинет MAX пока не нужны; этапы бота и URL дают точный маршрут по MAX Partner."
+  },
   {
    "date": "12.08",
    "what": "Поручил выдать аккаунту создателя undj00x03@gmail.com постоянные права администратора, безлимитную генерацию и максимально возможную пожизненную подписку.",
@@ -2524,6 +2534,18 @@
    "evidence": "Alembic 0044 добавляет users.unlimited_generations и выдаёт admin+безлимит только CITEXT-email undj00x03@gmail.com. Alembic 0045 требует ровно одного пользователя, billing-account, live subscription и активного Business, отказывается работать при pending checkout, завершает прежний тариф и создаёт active is_lifetime Business без payment/end/renewal полей. Оба grant пишут отдельные admin audit events. Business v1 — максимальный каталог: 10 проектов/публикаций, 1 always-on runtime, 5 мест, 10 доменов, integrations=true, preview_idle_minutes=0. API запрещает заменить lifetime checkout-ом или cancel/restore; lifecycle явно его исключает. Локально: 9 migration/chain тестов, Ruff, mypy, web typecheck и ESLint зелёные; Alembic показывает единственный head 0045 и корректный offline SQL 0044→0045. DB-backed API тест не стартовал без локального PostgreSQL; production grant ещё не подтверждён.",
    "impact": "Создатель сможет без срока пользоваться максимальными штатными MAX-возможностями и многократно проверять генерацию без ручного пополнения. Право проходит те же runtime/deploy gates, что Business, но не может случайно истечь или смениться покупкой; обычные пользователи и администраторы не получают его автоматически, а rate limit и run/provider guards остаются активны.",
    "next_vector": "После доставки проверить migration head, ровно одну lifetime Business subscription, оба audit event, UI «Пожизненно», /api/wallet и один живой MAX run без движения кошелька"
+  },
+  {
+   "id": "H131",
+   "title": "Контекстная помощь ведёт пользователя по MAX-пути без отдельного обучающего тура",
+   "status": "worked",
+   "score": 9,
+   "category": "MAX / UX / onboarding / публикация",
+   "period": "12.08",
+   "description": "Показывать одно точное следующее действие во всех ключевых точках пути и явно разделять работу пользователя, автоматические действия Omnia и ручные шаги в MAX Partner.",
+   "evidence": "Добавлена единая stage-aware модель помощи для demo, app, access, max, publish, verify и post-launch; каждое состояние содержит действие, роль Omnia, MAX Partner path и success signal. Компонент MaxJourneyGuide подключён ко всем проектным разделам, редактор и карточки используют ту же модель, а демо, форма создания, онбординг и диалог Bot API получили локальные подсказки у решения. TypeScript и ESLint чистые; 184/184 web-теста и Next.js production build прошли. Ревизия b48a4c5f доставлена в production: контейнер healthy, internal health=ok, /api/health, /web-health, /max/demo, /max и /max/start отдают 200. Live browser QA подтвердил новый текст, document scrollWidth=innerWidth=390 и console errors=0.",
+   "impact": "Пользователю больше не нужно угадывать, рано ли идти в MAX, где брать секрет бота и куда вставлять production URL. Интерфейс объясняет действие в том месте, где оно требуется, и сохраняет компактный рабочий экран без блокирующих попапов.",
+   "next_vector": "На следующем реальном проекте измерить, на каком этапе пользователь всё ещё просит помощь, и точечно сократить этот шаг"
   }
  ],
  "vectors": [
@@ -3065,6 +3087,10 @@
      true
     ],
     [
+     "Контекстные подсказки на всём MAX-пути: действие пользователя, работа Omnia, точный шаг в MAX Partner и признак готовности",
+     true
+    ],
+    [
      "Dependency-aware repair, durable brief, managed ЮKassa/iiko contract и обязательный signed visual see для fresh/edit-run",
      false
     ],
@@ -3113,7 +3139,8 @@
      "H127",
      "H128",
      "H129",
-     "H130"
+     "H130",
+     "H131"
    ]
   }
  ],

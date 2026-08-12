@@ -366,10 +366,18 @@ function MaxStudioContent({
               <div className="space-y-2">
                 <Label htmlFor="max-project-name">Название</Label>
                 <Input id="max-project-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Кофе рядом" className="h-11 border-[#d8d4cb] bg-white" maxLength={100} />
+                <p className="text-[11px] leading-4 text-[#8d887f]">
+                  Так название увидят пользователи в приложении и карточке MAX.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="max-project-idea">Что пользователь сможет делать?</Label>
                 <Textarea id="max-project-idea" value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-24 resize-none border-[#d8d4cb] bg-white" maxLength={600} />
+                <p aria-live="polite" className={cn("text-[11px] leading-4", idea.trim().length > 9 ? "text-[#248a4b]" : "text-[#8d887f]")}>
+                  {idea.trim().length > 9
+                    ? "Описание готово: дальше его можно уточнять обычными сообщениями в чате."
+                    : "Опишите одного пользователя, его главное действие и результат. Например: «Гость выбирает время и получает подтверждение записи»."}
+                </p>
               </div>
               <fieldset>
                 <legend className="text-sm font-medium">Тип приложения</legend>
@@ -414,7 +422,7 @@ function MaxStudioContent({
             </div>
 
             <div className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#d8d4cb] bg-[#fcfbf7] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:p-5">
-              <p className="hidden text-xs text-[#8d887f] sm:block">После открытия сразу покажем живую сборку в телефоне.</p>
+              <p className="hidden max-w-[360px] text-xs leading-5 text-[#8d887f] sm:block">После открытия сразу покажем живую сборку в телефоне. В MAX Partner пока ничего создавать не нужно.</p>
               <div className="flex flex-col-reverse gap-2 sm:ml-auto sm:flex-row">
                 <Button type="button" variant="outline" className="min-h-11" onClick={() => setDialogOpen(false)}>Отмена</Button>
                 <Button disabled={!ready || create.isPending} className="min-h-11">

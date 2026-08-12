@@ -18,12 +18,14 @@ describe("MAX instant-demo funnel", () => {
   it("promises one immediate demo and postpones external MAX work until launch", () => {
     const studio = source("components/max/MaxStudio.tsx");
     const launch = source("components/max/MaxLaunchPanel.tsx");
+    const guidance = source("lib/max-native-guidance.ts");
 
     expect(studio).toContain("Одна полноценная демо-сборка без верификации бизнеса и оплаты");
     expect(studio).toContain("Получить демо-приложение");
     expect(launch).toContain("Omnia подготовит:");
     expect(launch).toContain("Вы делаете в MAX Partner:");
-    expect(launch).toContain("карточку и бота, модерацию");
+    expect(launch).toContain("nativeGuidance.maxAction");
+    expect(guidance).toContain("Аккаунт MAX Partner, бот, токен и модерация для демо не нужны");
   });
 
   it("reserves the first generation before opening the auto-starting preview", () => {

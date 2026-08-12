@@ -27,6 +27,7 @@ import {
   copyMaxLaunchUrl,
 } from "@/lib/max-launch-steps";
 import { getMaxJourney, getMaxJourneyItemHref } from "@/lib/max-journey";
+import { getMaxNativeGuidance } from "@/lib/max-native-guidance";
 import { cn } from "@/lib/utils";
 
 export function MaxLaunchPanel({
@@ -72,6 +73,7 @@ export function MaxLaunchPanel({
   const readinessAvailable = readiness.isSuccess && items.length > 0;
   const journey = getMaxJourney(project.id, items);
   const currentStage = readinessAvailable ? journey.currentStage : undefined;
+  const nativeGuidance = getMaxNativeGuidance(currentStage?.id);
   const nextItem = currentStage
     ? items.find(
         (item) =>
@@ -173,13 +175,19 @@ export function MaxLaunchPanel({
           </div>
 
           <div className="mt-4 grid gap-2 text-[11px] leading-4">
+            <div className="rounded-md bg-accent/[.07] px-3 py-2 text-[#4f4a72]">
+              <span className="font-semibold">Сейчас вы:</span>{" "}
+              {nativeGuidance.userAction}
+            </div>
             <div className="rounded-md bg-success/[.06] px-3 py-2 text-[#476451]">
-              <span className="font-semibold">Omnia подготовит:</span> демо, проверку данных,
-              production URL и webhook.
+              <span className="font-semibold">Omnia подготовит:</span>{" "}
+              {nativeGuidance.omniaAction}
             </div>
             <div className="rounded-md bg-[#f5f3ee] px-3 py-2 text-[#6d6962]">
-              <span className="font-semibold text-[#171716]">Вы делаете в MAX Partner:</span>{" "}
-              верификацию, карточку и бота, модерацию, копирование секрета и привязку URL.
+              <span className="font-semibold text-[#171716]">
+                Вы делаете в MAX Partner:
+              </span>{" "}
+              {nativeGuidance.maxAction}
             </div>
           </div>
 
@@ -198,6 +206,10 @@ export function MaxLaunchPanel({
                 Действие: {nextItem.action}
               </p>
             )}
+            <p className="mt-2 text-[10px] leading-4 text-[#476451]">
+              <span className="font-semibold">Готово, когда:</span>{" "}
+              {nativeGuidance.successSignal}
+            </p>
           </div>
           {currentStage ? (
             <Button asChild className="mt-4 h-11 w-full">

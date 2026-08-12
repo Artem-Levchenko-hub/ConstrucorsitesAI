@@ -272,6 +272,10 @@ export function MaxPublicDemo() {
             <label htmlFor="max-demo-description" className="text-sm font-medium">
               Что должен уметь ваш MAX-сервис?
             </label>
+            <p className="mt-1 text-[11px] leading-5 text-fg-secondary">
+              Напишите: кто пользуется → что делает → какой получает результат. Бот,
+              токен и кабинет MAX на этом шаге не нужны.
+            </p>
             <Textarea
               id="max-demo-description"
               value={description}

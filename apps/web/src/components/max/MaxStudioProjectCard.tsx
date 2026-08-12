@@ -16,6 +16,7 @@ import {
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
+import { getMaxNativeGuidance } from "@/lib/max-native-guidance";
 
 export function MaxStudioProjectCard({
   project,
@@ -36,6 +37,7 @@ export function MaxStudioProjectCard({
   });
   const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
   const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
+  const nativeGuidance = getMaxNativeGuidance(nextStage?.id);
   const nextHref = nextStage?.href ?? `/max/${project.id}/dashboard`;
 
   return (
@@ -148,6 +150,12 @@ export function MaxStudioProjectCard({
                   : nextStage?.label ?? "Приложение готово к работе"}
             </p>
           </div>
+          {readiness.isSuccess && (
+            <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-[#6d6962]">
+              <span className="font-semibold text-[#171716]">Сейчас:</span>{" "}
+              {nativeGuidance.userAction}
+            </p>
+          )}
 
           <Link
             href={nextHref}

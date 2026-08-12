@@ -11,6 +11,7 @@ import {
   MaxProjectNav,
   type MaxProjectNavKey,
 } from "@/components/max/MaxProjectNav";
+import { MaxJourneyGuide } from "@/components/max/MaxJourneyGuide";
 
 const helpHref: Record<MaxProjectNavKey, string> = {
   editor: "/max/guide#builder",
@@ -81,6 +82,7 @@ export function MaxSectionShell({
               <h1 className="mt-3 text-[32px] font-semibold tracking-[-.045em] sm:text-[46px]">{title}</h1>
               <p className="mt-3 max-w-[700px] text-sm leading-6 text-[#6d6962]">{lead}</p>
             </header>
+            <MaxJourneyGuide projectId={projectId} />
             {children}
           </div>
         </main>
