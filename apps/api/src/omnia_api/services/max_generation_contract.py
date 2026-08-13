@@ -243,6 +243,7 @@ _NATIVE_LEGAL_NAV_MARKER_RE = re.compile(
     r"""(?:"true"|'true'|\{\s*(?:true|"true"|'true')\s*\})"""
 )
 MAX_REQUIRED_PREWRITE_SKILLS = (
+    "premium-mobile-foundation",
     "ui-ux-pro-max",
     "product-flow",
     "art-direction",
@@ -1269,6 +1270,7 @@ def max_completion_gap(
     evidence: Mapping[str, int],
     *,
     build_plan: object | None = None,
+    design_dna: object | None = None,
 ) -> str | None:
     """Return the actionable product/runtime gap for the native MAX agent.
 
@@ -1285,6 +1287,23 @@ def max_completion_gap(
         plan_gap = max_build_plan_completion_gap(build_plan, files)
         if plan_gap:
             return plan_gap
+    if design_dna is not None:
+        from omnia_api.services.max_design_director import MaxDesignDNA, completion_gap
+
+        if not isinstance(design_dna, MaxDesignDNA):
+            return "MAX Design Director state is missing or invalid; rebuild it before done."
+        design_gap = completion_gap(design_dna, files)
+        if design_gap:
+            return design_gap
+        missing_director_skills = [
+            skill for skill in design_dna.skill_slices if evidence.get(f"skill:{skill}", 0) < 1
+        ]
+        if missing_director_skills:
+            return (
+                "Read the Design Director capability slices before done: "
+                + ", ".join(missing_director_skills)
+                + "."
+            )
     if evidence.get("plan_task", 0) < 1:
         return "Create the observable MAX execution plan with plan_task before done."
     if evidence.get("update_plan", 0) < 1:

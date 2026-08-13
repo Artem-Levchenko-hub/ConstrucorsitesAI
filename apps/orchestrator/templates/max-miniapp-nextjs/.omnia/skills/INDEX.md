@@ -6,6 +6,8 @@ in the run. Surgical edits inherit the established product and visual system.
 
 ## Lifecycle core
 
+- `premium-mobile-foundation` — deterministic accessible contracts for mobile
+  navigation, sheets, forms, charts, async/offline states, touch and safe areas.
 - `ui-ux-pro-max` — master creative router and project-matched design evidence.
 - `product-flow` — scenarios, information architecture, onboarding and the
   shortest honest path to activation. Read before the first product write.

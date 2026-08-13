@@ -3710,6 +3710,8 @@ async def _process_prompt(
                 else prompt_text
             )
             _max_acceptance_contract = ""
+            _max_design_dna: Any = None
+            _max_visual_proof: Any = None
             if project_template == "max_miniapp":
                 from omnia_api.services.max_generation_contract import (
                     build_max_product_contract,
@@ -3796,6 +3798,7 @@ async def _process_prompt(
                 from omnia_api.services.secret_safety import max_model_write_rejection
 
                 async def _agent_executor(action: agent_builder.Action) -> dict[str, Any]:
+                    nonlocal _max_visual_proof
                     if action.name == "read_skill":
                         from omnia_api.services.max_agent_skills import read_max_skill
 
@@ -3811,16 +3814,55 @@ async def _process_prompt(
                         _visual = await _run_max_visual_qa(
                             project_id,
                             path=action.path or "/",
-                            prompt_context=_max_product_brief,
+                            prompt_context=(
+                                _max_product_brief
+                                + (
+                                    _max_design_dna.prompt_block()
+                                    if _max_design_dna is not None
+                                    else ""
+                                )
+                            ),
                         )
+                        from omnia_api.services.functional_gate import Check, summarize
+
+                        if _visual.get("verdict"):
+                            _visual_ok = bool(_visual.get("ok")) and not bool(
+                                _visual.get("needs_fix")
+                            )
+                            _max_visual_proof = summarize(
+                                [
+                                    Check(
+                                        "max_visual_360_390",
+                                        _visual_ok,
+                                        (
+                                            f"verdict={_visual.get('verdict')}; "
+                                            f"score={_visual.get('score')}; widths=360,390"
+                                        ),
+                                    )
+                                ]
+                            )
+                        elif _visual.get("proof_unavailable") or not _visual.get("ok"):
+                            _max_visual_proof = summarize(
+                                [
+                                    Check(
+                                        "max_visual_360_390",
+                                        False,
+                                        str(
+                                            _visual.get("error")
+                                            or _visual.get("detail")
+                                            or "visual proof unavailable"
+                                        )[:240],
+                                    )
+                                ]
+                            )
                         if not _visual.get("ok"):
                             if _visual.get("verdict") or "BROWSER SIGNALS" in str(
                                 _visual.get("detail") or ""
                             ):
                                 return _visual
-                            # A QA-infrastructure miss is advisory. The independent
-                            # build/runtime gates still block real product failures,
-                            # and the model must not loop or roll back green code.
+                            # Preserve the structured unavailable signal. The native
+                            # loop terminates fail-closed without wasting another
+                            # model segment, and the final release proof cannot publish.
                             return {
                                 "ok": True,
                                 "detail": str(_visual.get("error") or "MAX visual QA unavailable"),
@@ -4265,6 +4307,63 @@ async def _process_prompt(
                 raise
             except Exception as _bp_exc:
                 print(f"[PP] build_plan skipped: {_bp_exc!r}", flush=True)
+            # Deterministic pre-code Design Director for the MAX App Engineer.
+            # It persists one selected art direction, all three explored concepts
+            # and truthful managed capability contracts alongside the shared plan.
+            if project_template == "max_miniapp":
+                from omnia_api.services import max_design_director as _max_director
+
+                _stored_dna = _max_director.read_from_discovery(
+                    (proj.discovery_spec if proj is not None else None) or project_discovery_spec
+                )
+                _fresh_dna = _max_director.compile_max_design_dna(
+                    _max_product_brief,
+                    project_id=str(project_id),
+                    build_plan=_build_plan,
+                )
+                # Surgical edits inherit the established visual identity, while
+                # newly requested integrations refresh their truth contracts.
+                _max_design_dna = (
+                    replace(
+                        _stored_dna,
+                        capabilities=_fresh_dna.capabilities,
+                        skill_slices=_fresh_dna.skill_slices,
+                    )
+                    if _stored_dna is not None and (_is_edit or _is_continue)
+                    else _fresh_dna
+                )
+                if proj is None:
+                    raise RuntimeError("MAX Design Director cannot persist: project missing")
+                proj.discovery_spec = _max_director.merge_into_discovery(
+                    proj.discovery_spec, _max_design_dna
+                )
+                await session.commit()
+                project_discovery_spec = dict(proj.discovery_spec or {})
+                _seed_block += _max_design_dna.prompt_block()
+                _agent_state = agent_plan.record_tool_evidence(
+                    _agent_state,
+                    tool="design_director",
+                    ok=True,
+                    summary=(
+                        f"selected={_max_design_dna.chosen_id}; concepts=3; capabilities="
+                        + ",".join(item.id for item in _max_design_dna.capabilities)
+                    ),
+                )
+                await save_generation_agent_state(run_id, _agent_state)
+                await _agent_emit(
+                    "agent.step",
+                    {
+                        "step": 0,
+                        "action": "design_director",
+                        "human": "Определяю арт-дирекцию и продуктовые возможности",
+                        "path": ".omnia/max-design-spec.json",
+                        "detail": (
+                            f"Сравнил 3 концепции, выбрал {_max_design_dna.chosen.name}; "
+                            f"зафиксировал {len(_max_design_dna.capabilities)} контрактов."
+                        ),
+                        "ok": True,
+                    },
+                )
             if _is_continue:
                 # Resume: finish the partial app the agent left in the live
                 # container (the prior turn committed + hot-reloaded what it had).
@@ -4451,10 +4550,11 @@ async def _process_prompt(
                         merged,
                         evidence,
                         build_plan=_build_plan,
+                        design_dna=_max_design_dna,
                     )
                     if gap:
                         return gap
-                    return agent_plan.completion_gap(_agent_state)
+                    return cast(str | None, agent_plan.completion_gap(_agent_state))
 
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(
@@ -5664,6 +5764,34 @@ async def _process_prompt(
                         and max_prompt_requires_persistence(_max_product_brief)
                     ),
                 )
+                if project_template == "max_miniapp":
+                    from omnia_api.services.functional_gate import Check, summarize
+                    from omnia_api.services.max_design_director import evidence_verdict
+
+                    _design_proof = evidence_verdict(
+                        _max_design_dna,
+                        {**current_files, **_max_seed_files, **files},
+                    )
+                    _visual_gate = _max_visual_proof or summarize(
+                        [
+                            Check(
+                                "max_visual_360_390",
+                                False,
+                                "No independent signed visual proof was captured.",
+                            )
+                        ]
+                    )
+                    # The final signed release record contains design choice,
+                    # capability coverage and the independent 360/390 verdict.
+                    # Missing proof is red; the existing rollback path below
+                    # therefore prevents a snapshot from claiming completion.
+                    _release_verdict = summarize(
+                        [
+                            *_release_verdict.checks,
+                            *_design_proof.checks,
+                            *_visual_gate.checks,
+                        ]
+                    )
                 if _att_capture is None:
                     _att_capture = []
                 _att_capture.append(("release", _release_verdict))

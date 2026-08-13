@@ -4,6 +4,7 @@ from omnia_api.services import agent_builder, agent_native
 from omnia_api.services.max_agent_skills import read_max_skill
 
 CREATIVE_CAPABILITY_PACKS = {
+    "premium-mobile-foundation",
     "product-flow",
     "art-direction",
     "interaction-motion",
@@ -19,7 +20,7 @@ CREATIVE_CAPABILITY_PACKS = {
 }
 
 
-def test_stable_max_system_omits_optional_capability_catalog() -> None:
+def test_stable_max_system_routes_required_skills_without_full_optional_catalog() -> None:
     index = agent_builder.load_stack_skill_index("max-miniapp-nextjs")
 
     assert index is not None
@@ -34,7 +35,8 @@ def test_stable_max_system_omits_optional_capability_catalog() -> None:
         stable_max_loop=True,
     )
     assert "MAX capability catalog" not in prompt
-    assert "read_skill" not in prompt
+    assert "read_skill(`premium-mobile-foundation`)" in prompt
+    assert "read_skill(`ui-ux-pro-max`)" in prompt
     assert "MAX PLATFORM CORE CONTRACT" in prompt
 
 

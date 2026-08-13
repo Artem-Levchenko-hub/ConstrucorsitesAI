@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 51,
+  "version": 52,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "Полноценный цифровой продукт закреплён как нерушимое правило",
   "subtitle": "Каждая генерация решает реальную задачу бизнеса через полный agentic engineering и не может подменить production-результат прототипом.",
   "items": [
+   {
+    "s": "testing",
+    "t": "MAX App Engineer получил обязательного Design Director и signed quality floor",
+    "d": "До первой строки продуктового кода сервер детерминированно сравнивает три разные концепции, выбирает и сохраняет DesignDNA и правдивые capability-контракты. Агент получает premium mobile foundation и доменный skill, а финальный snapshot требует точного DesignDNA, managed actions и независимого beautiful-verdict на 360/390; generic, fake success или недоступный visual proof блокируют выпуск. Локально зелёные 110 focused-тестов, Ruff и mypy; production canary ожидает доставку."
+   },
    {
     "s": "worked",
     "t": "Product doctrine теперь автоматически видит Codex на любом компьютере",
@@ -307,6 +312,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "13.08",
+   "what": "Поручил превратить MAX-генератор в специализированного MAX App Engineer уровня code-agent: полноценные приложения, сильнейшая арт-дирекция, готовые функциональные обвязки и доказуемое качество.",
+   "impact": "Решение реализовано поверх зрелого native-loop, а не отдельным генератором: Design Director до кода сохраняет три концепции и выбранный DesignDNA, capability planner задаёт честные managed-интеграции, premium mobile foundation закрепляет доступность и mobile craft, а signed visual/functional attestation блокирует generic, fake-success и отсутствующие доказательства."
+  },
   {
    "date": "13.08",
    "what": "Потребовал навсегда закрепить цель Omnia: создавать полноценные цифровые продукты, которые максимально решают реальные задачи бизнеса, а не быстрые демо или красивые оболочки.",
@@ -2738,6 +2748,18 @@
       "evidence": "В корень репозитория добавлен highest-priority раздел AGENTS.md, который Codex читает при работе с проектом; подробный docs/PRODUCT_DOCTRINE.md формализует production contract, agentic engineering loop, prototype exception и enforcement через executable gates. JSON и ссылки проверены, правило доставляется через Git и поэтому действует после checkout на другом компьютере.",
       "impact": "Цель владельца перестала зависеть от памяти конкретного чата или компьютера. Будущие агенты обязаны доводить релевантный бизнес-сценарий до реальных данных, интеграций, проверки и выпуска либо честно фиксировать внешний blocker, но не объявлять демо полноценным приложением.",
       "next_vector": "V9 — последовательно кодировать доктрину в executable completion/release gates каждого генераторного маршрута"
+    },
+    {
+      "id": "H143",
+      "title": "MAX App Engineer: DesignDNA до кода и signed visual/capability gate",
+      "status": "testing",
+      "score": null,
+      "category": "MAX / дизайн / генерация / верификация",
+      "period": "13.08",
+      "description": "Сделать сильный MAX-дизайн воспроизводимым: до кода сравнивать три разные арт-концепции, сохранять выбранный DesignDNA, подключать premium mobile/domain skills и выпускать только после независимого visual и functional proof.",
+      "evidence": "Добавлен pure max_design_director.py с deterministic DesignDNA, capability contracts, discovery round-trip, completion и attestation verdict; premium-mobile-foundation skill и MAX App Engineer identity; messages.py сохраняет решение, показывает agent.step, передаёт DNA в repair/vision и включает design/capability/360+390 visual checks в fail-closed release verdict. Generic/score<8 и unavailable visual proof уже блокируются bounded native-loop. Локально: 110 MAX/design/vision/attestation/release/ordinary-routing tests, focused Ruff и mypy зелёные.",
+      "impact": "Качество больше не держится на названии модели или наборе плагинов. У каждой генерации есть осмысленная уникальная арт-дирекция, общая mobile-планка и независимый критик; приложение не публикуется, если выглядит типовым, врёт об интеграциях или не имеет визуального доказательства.",
+      "next_vector": "Доставить и выполнить fresh production canary: проверить agent.step Design Director, три concepts в discovery/spec, beautiful >=8 на 360/390 и exact-commit attestation"
     }
  ],
  "vectors": [
@@ -2774,6 +2796,10 @@
     [
      "Проверить MAX анти-нейродизайн контракт на живой генерации",
      false
+    ],
+    [
+     "MAX App Engineer: обязательный persisted DesignDNA, 3 концепции, premium foundation и signed visual/capability gate",
+     true
     ]
    ],
    "hyp_ids": [
@@ -2785,7 +2811,8 @@
     "H79",
     "H81",
     "H90",
-    "H136"
+    "H136",
+    "H143"
    ]
   },
   {
@@ -3402,10 +3429,15 @@
     [
      "Design/functional/release evidence хранится с каждой опубликованной версией и блокирует подмену результата демо",
      false
+    ],
+    [
+     "MAX сохраняет DesignDNA, capability и visual 360/390 evidence в atomic release attestation",
+     true
     ]
    ],
    "hyp_ids": [
-    "H142"
+    "H142",
+    "H143"
    ]
   }
  ],

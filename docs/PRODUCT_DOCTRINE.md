@@ -60,6 +60,31 @@ data must be visibly labelled, isolated from production claims and recorded as a
 unfinished dependency. Prototype evidence cannot satisfy a production acceptance
 or release gate.
 
+## MAX App Engineer
+
+MAX Mini Apps use the same native code-agent loop as other production container
+applications, with MAX-specific locked runtime, signed identity, Bridge, managed
+integrations, legal routes and secret boundaries. Before product code, the
+server-owned Design Director persists a deterministic DesignDNA: audience,
+emotional promise, three materially different concepts, one selected direction
+with rationale, composition, typography, semantic colours, geometry and density,
+data-visualisation language, motion, signature interaction and anti-patterns.
+
+The selected direction is not a reusable screen template. A deterministic premium
+mobile foundation supplies accessibility and interaction contracts for navigation,
+sheets, forms, charts, async/offline states, touch targets and safe areas; a domain
+skill supplies product depth. Relevant managed capabilities (AI, payments, leads,
+catalogue, analytics, persisted actions, MAX identity and legal) are planned with
+truth requirements and executable evidence. Fake success and unavailable visual
+proof are release failures.
+
+Every completed MAX revision must carry an independent signed visual verdict at
+360px and 390px, plus functional and capability evidence. A generic or rushed
+render gets at most two targeted repair passes in the bounded native loop; if the
+quality floor remains unmet, the last known-good product is preserved and no new
+snapshot is published. See [`MAX_APP_ENGINEER.md`](MAX_APP_ENGINEER.md) for the
+architecture and proof chain.
+
 If an external dependency is unavailable, agents still complete all safe,
 unblocked engineering work. They then identify the exact owner or provider action
 required and keep the product's readiness status honest.
