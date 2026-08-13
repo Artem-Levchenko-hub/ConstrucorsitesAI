@@ -164,7 +164,11 @@ def test_inspector_atomic_editor_mode_contract() -> None:
         repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
     ).read_text(encoding="utf-8")
     assert 'case "omnia:editor:set-mode"' in src
-    assert 'post({ type: "omnia:editor:state", mode: mode })' in src
+    assert 'var editorModeSeq = -1' in src
+    assert 'if (d.seq <= editorModeSeq)' in src
+    assert 'state.editorSession = editorSession' in src
+    assert 'state.seq = editorModeSeq' in src
+    assert 'if (isSequencedLegacyReplay(d)) break' in src
 
 
 def test_inspector_has_precise_selector_and_cross_origin_guards() -> None:
@@ -181,7 +185,7 @@ def test_inspector_has_precise_selector_and_cross_origin_guards() -> None:
     assert "trustedParentOrigin && e.origin !== trustedParentOrigin" in src
     assert 'case "omnia:preview:chrome"' in src
     assert "scrollbar-width:none" in src
-    assert 'post({ type: "omnia:inspect:ready", version: 5 })' in src
+    assert 'post({ type: "omnia:inspect:ready", version: 6 })' in src
 
 
 def test_inspector_pick_is_single_shot() -> None:

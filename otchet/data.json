@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 47,
+  "version": 48,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2658,7 +2658,19 @@
     "evidence": "Run cc2251be-bd5d-4f93-a2ec-02b0704af792: build_plan завершён в 08:37:03 UTC, второй /v1/messages получил HTTP 200, затем в 08:47:05 gateway записал The read operation timed out и ошибочно вернул 502 paid_call_ambiguous; message остался пустым с tokens_out=NULL. Исправлены timeout-family catch, интервалы 180/600/660/1200 секунд и outer terminalization. Локально: API lifecycle 3/3, gateway 26/26, web 5/5, Ruff и typecheck зелёные.",
     "impact": "Сборка больше не может бесконечно держать single-flight и крутить интерфейс: провайдерский сбой становится наблюдаемой конечной ошибкой, после которой доступен безопасный повтор.",
     "next_vector": "Доставить api/gateway/web и повторить MAX generation canary"
-   }
+    },
+    {
+     "id": "H138",
+     "title": "Переход MAX-редактора в просмотр стал монотонным",
+     "status": "testing",
+     "score": null,
+     "category": "MAX / preview / browser / надёжность",
+     "period": "13.08",
+     "description": "Исключить позднее повторное включение inspector после выхода из AI- или ручного режима и не допустить цикла подтверждений между iframe и workspace.",
+     "evidence": "Родитель раньше отправлял atomic+2 legacy команды сразу и через 120/450/1100 мс, а inspector v5 подтверждал каждую применённую команду без номера перехода. Введены editorSession+seq, единый реестр отменяемых таймеров, точная дедупликация ACK и inspector v6, который игнорирует stale seq и enveloped legacy fallback. Fake-timer/JSDOM проверка: inspect/style→off не содержит позднего enable, точный off ACK сокращает обмен до 6 сообщений, 50 циклов оставляют 0 таймеров и выполняют 50 обычных кликов; web 30/30, API select-mode 15/15, typecheck и targeted ESLint зелёные.",
+     "impact": "Обычный просмотр открывается только после подтверждённого выключения перехвата. Старый retry, duplicate ACK или fallback для прежней сессии больше не может вернуть редактор и заблокировать клики всего workspace.",
+     "next_vector": "Доставить web/api/orchestrator, синхронизировать managed kit и повторить editor→view→все вкладки в production"
+    }
  ],
  "vectors": [
   {
@@ -3240,6 +3252,10 @@
     [
      "Bounded provider timeout и обязательная terminalization MAX-run; production canary",
      false
+    ],
+    [
+     "Монотонный editor→view протокол: session/seq, отмена stale retry и подтверждённый mode OFF; production owner-check",
+     false
     ]
    ],
    "hyp_ids": [
@@ -3279,7 +3295,8 @@
        "H132",
        "H135",
        "H136",
-       "H137"
+        "H137",
+        "H138"
    ]
   }
  ],

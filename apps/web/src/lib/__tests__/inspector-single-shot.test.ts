@@ -13,6 +13,110 @@ const inspectorSource = readFileSync(
 );
 
 describe("canonical inspector ordinary viewing mode", () => {
+  it("ignores stale atomic and legacy enables after a newer off transition", () => {
+    const shell = new JSDOM('<iframe id="preview"></iframe>', {
+      runScripts: "dangerously",
+      url: "https://constructor.example/workspace",
+    });
+    const preview = shell.window.document.querySelector("iframe")
+      ?.contentWindow as DOMWindow | null | undefined;
+    if (!preview) throw new Error("test iframe did not initialise");
+    preview.document.body.innerHTML = '<button id="product">Товар</button>';
+    const appClicks: string[] = [];
+    preview.document
+      .querySelector("#product")
+      ?.addEventListener("click", () => appClicks.push("product"));
+    const parentPost = vi
+      .spyOn(shell.window, "postMessage")
+      .mockImplementation(() => undefined);
+    preview.eval(inspectorSource);
+    const send = (data: Record<string, unknown>) =>
+      preview.dispatchEvent(
+        new preview.MessageEvent("message", {
+          data,
+          source: shell.window,
+          origin: "https://constructor.example",
+        }),
+      );
+    const envelope = { editorSession: "workspace-rapid", seq: 1 };
+
+    send({ type: "omnia:editor:set-mode", mode: "inspect", ...envelope });
+    send({
+      type: "omnia:editor:set-mode",
+      mode: "off",
+      editorSession: envelope.editorSession,
+      seq: 2,
+    });
+    send({ type: "omnia:inspect:enable", ...envelope });
+    send({
+      type: "omnia:editor:set-mode",
+      mode: "inspect",
+      ...envelope,
+    });
+
+    for (let index = 0; index < 5; index += 1) {
+      preview.document.querySelector("#product")?.dispatchEvent(
+        new preview.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    }
+
+    expect(appClicks).toHaveLength(5);
+    expect(preview.document.documentElement.style.cursor).toBe("");
+    const states = parentPost.mock.calls
+      .map(([message]) => message as Record<string, unknown>)
+      .filter((message) => message.type === "omnia:editor:state");
+    expect(states).toHaveLength(4);
+    expect(states.at(-1)).toEqual(
+      expect.objectContaining({
+        mode: "off",
+        editorSession: envelope.editorSession,
+        seq: 2,
+      }),
+    );
+    shell.window.close();
+  });
+
+  it("does not return to a retired parent editor session", () => {
+    const shell = new JSDOM('<iframe id="preview"></iframe>', {
+      runScripts: "dangerously",
+      url: "https://constructor.example/workspace",
+    });
+    const preview = shell.window.document.querySelector("iframe")
+      ?.contentWindow as DOMWindow | null | undefined;
+    if (!preview) throw new Error("test iframe did not initialise");
+    preview.eval(inspectorSource);
+    const send = (data: Record<string, unknown>) =>
+      preview.dispatchEvent(
+        new preview.MessageEvent("message", {
+          data,
+          source: shell.window,
+          origin: "https://constructor.example",
+        }),
+      );
+
+    send({
+      type: "omnia:editor:set-mode",
+      mode: "inspect",
+      editorSession: "old-workspace",
+      seq: 10,
+    });
+    send({
+      type: "omnia:editor:set-mode",
+      mode: "off",
+      editorSession: "new-workspace",
+      seq: 1,
+    });
+    send({
+      type: "omnia:editor:set-mode",
+      mode: "inspect",
+      editorSession: "old-workspace",
+      seq: 11,
+    });
+
+    expect(preview.document.documentElement.style.cursor).toBe("");
+    shell.window.close();
+  });
+
   it("leaves repeated normal navigation entirely inside the application", () => {
     const shell = new JSDOM('<iframe id="preview"></iframe>', {
       runScripts: "dangerously",

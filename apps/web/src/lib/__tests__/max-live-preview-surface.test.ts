@@ -55,7 +55,11 @@ describe("MAX live preview surface", () => {
     expect(livePreview).not.toContain("Цвет и видимость — без расхода ИИ");
     expect(livePreview).toContain('<h2 className="text-xs font-semibold">Превью</h2>');
     expect(livePreview).not.toContain("Mobile WebView");
-    expect(livePreview).toContain("editorModeMessages(activeEditorMode)");
+    expect(livePreview).toContain("createEditorModeSync({");
+    expect(livePreview).toContain("editorModeSync.transition(activeEditorMode)");
+    expect(livePreview).toContain("editorModeSync.acknowledge(data)");
+    expect(livePreview).toContain('acknowledgedEditorTransition?.mode !== "off"');
+    expect(livePreview).toContain('data-testid="max-view-mode-syncing"');
     expect(livePreview).toContain(
       "loadedPreviewUrl !== displayPreviewUrl",
     );

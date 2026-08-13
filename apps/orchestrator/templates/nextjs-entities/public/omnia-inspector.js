@@ -64,6 +64,10 @@
   // Save the backend merges these edits into the committed block, and a reload
   // collapses both into one — same look (parity).
   var styleMode = false;
+  var editorMode = "off";
+  var editorSession = "";
+  var editorModeSeq = -1;
+  var retiredEditorSessions = {};
   var hoverLabel = null;
   var hoverLabelText = null;
   var overrideModel = { tokens: {}, elements: {}, fonts: {} };
@@ -630,12 +634,67 @@
 
   // Atomic mode transition used by the workspace shell. A single command avoids
   // the old inspect-enable/style-disable race when switching Manual → AI.
+  function postEditorState() {
+    var state = { type: "omnia:editor:state", mode: editorMode };
+    if (editorSession && editorModeSeq >= 0) {
+      state.editorSession = editorSession;
+      state.seq = editorModeSeq;
+    }
+    post(state);
+  }
+
   function setEditorMode(mode) {
     if (mode !== "inspect" && mode !== "style") mode = "off";
+    editorMode = mode;
     styleMode = mode === "style";
     if (mode === "off") disable();
     else enable();
-    post({ type: "omnia:editor:state", mode: mode });
+    postEditorState();
+  }
+
+  function setSequencedEditorMode(d) {
+    var hasEnvelope =
+      typeof d.editorSession === "string" &&
+      d.editorSession &&
+      typeof d.seq === "number" &&
+      isFinite(d.seq) &&
+      d.seq >= 0;
+    if (!hasEnvelope) {
+      setEditorMode(d.mode);
+      return;
+    }
+    if (editorSession !== d.editorSession) {
+      if (retiredEditorSessions[d.editorSession]) {
+        postEditorState();
+        return;
+      }
+      if (editorSession) retiredEditorSessions[editorSession] = true;
+      editorSession = d.editorSession;
+      editorModeSeq = -1;
+    }
+    // Replays and delayed commands never mutate state. They only report the
+    // newest accepted mode, allowing the parent to converge without feedback.
+    if (d.seq <= editorModeSeq) {
+      postEditorState();
+      return;
+    }
+    editorModeSeq = d.seq;
+    setEditorMode(d.mode);
+  }
+
+  function isSequencedLegacyReplay(d) {
+    if (
+      typeof d.editorSession !== "string" ||
+      !d.editorSession ||
+      typeof d.seq !== "number"
+    ) {
+      return false;
+    }
+    // Legacy fallbacks carry the same envelope. Old inspectors ignore these
+    // fields and consume the fallback; version 6 must never let any enveloped
+    // fallback (including one from an older session) override atomic state.
+    if (d.editorSession === editorSession) postEditorState();
+    return true;
   }
 
   function clearAll() {
@@ -746,15 +805,17 @@
     if (!d || typeof d.type !== "string") return;
     switch (d.type) {
       case "omnia:inspect:ping":
-        post({ type: "omnia:inspect:ready", version: 5 });
+        post({ type: "omnia:inspect:ready", version: 6 });
         break;
       case "omnia:editor:set-mode":
-        setEditorMode(d.mode);
+        setSequencedEditorMode(d);
         break;
       case "omnia:inspect:enable":
+        if (isSequencedLegacyReplay(d)) break;
         setEditorMode("inspect");
         break;
       case "omnia:inspect:disable":
+        if (isSequencedLegacyReplay(d)) break;
         if (!styleMode) setEditorMode("off");
         break;
       case "omnia:inspect:clear":
@@ -764,9 +825,11 @@
         removeOne(d.id);
         break;
       case "omnia:style:enable":
+        if (isSequencedLegacyReplay(d)) break;
         setEditorMode("style");
         break;
       case "omnia:style:disable":
+        if (isSequencedLegacyReplay(d)) break;
         if (styleMode) setEditorMode("off");
         break;
       case "omnia:style:set":
@@ -903,5 +966,5 @@
 
   // Tell the parent we're ready so it can (re)send enable after a reload while
   // select-mode is still on.
-  post({ type: "omnia:inspect:ready", version: 5 });
+  post({ type: "omnia:inspect:ready", version: 6 });
 })();

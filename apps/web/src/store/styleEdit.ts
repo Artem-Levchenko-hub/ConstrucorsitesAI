@@ -117,8 +117,14 @@ export const useStyleEditStore = create<StyleEditState>((set) => ({
         : state,
     ),
   setStyleMode: (on) =>
-    set(on ? { styleMode: true } : { styleMode: false, selected: null }),
-  stopStylePicking: () => set({ styleMode: false }),
+    set((state) => {
+      if (on) return state.styleMode ? state : { styleMode: true };
+      return !state.styleMode && state.selected === null
+        ? state
+        : { styleMode: false, selected: null };
+    }),
+  stopStylePicking: () =>
+    set((state) => (state.styleMode ? { styleMode: false } : state)),
   selectElement: (el) => set({ selected: el }),
   setElementProp: (selector, key, value) =>
     set((s) => {

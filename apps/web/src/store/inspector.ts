@@ -61,7 +61,8 @@ export const useInspectorStore = create<InspectorState>((set) => ({
           }
         : state,
     ),
-  setInspectMode: (on) => set({ inspectMode: on }),
+  setInspectMode: (on) =>
+    set((state) => (state.inspectMode === on ? state : { inspectMode: on })),
   toggleInspectMode: () => set((s) => ({ inspectMode: !s.inspectMode })),
   addSelection: (el) =>
     set((s) =>

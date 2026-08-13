@@ -52,7 +52,7 @@ import {
 } from "@/lib/api/runtime";
 import type { Project, Snapshot } from "@/lib/api/types";
 import {
-  editorModeMessages,
+  createEditorModeSync,
   previewTargetOrigin,
   stopEditorPickingAfterPick,
   type EditorMode,
@@ -110,6 +110,8 @@ export function MaxLivePreview({
   const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
   const [loadedPreviewUrl, setLoadedPreviewUrl] = useState<string | null>(null);
   const [inspectorReady, setInspectorReady] = useState(false);
+  const [acknowledgedEditorTransition, setAcknowledgedEditorTransition] =
+    useState<{ mode: EditorMode; seq: number } | null>(null);
   const [loadedHistoricalSessionUrl, setLoadedHistoricalSessionUrl] = useState<
     string | null
   >(null);
@@ -185,6 +187,15 @@ export function MaxLivePreview({
     const targetOrigin = previewTargetOrigin(frame.src, window.location.origin);
     if (targetOrigin) frame.contentWindow.postMessage(message, targetOrigin);
   }, []);
+  const [editorModeSync] = useState(() =>
+    createEditorModeSync({
+      editorSession: editorInstanceId,
+    }),
+  );
+  useEffect(() => {
+    editorModeSync.setPostMessage(postToPreview);
+    return () => editorModeSync.setPostMessage(() => undefined);
+  }, [editorModeSync, postToPreview]);
   const sendRuntimeHeartbeat = useCallback(() => {
     const now = Date.now();
     if (now - lastHeartbeatAt.current < 10_000) return;
@@ -194,9 +205,6 @@ export function MaxLivePreview({
       // never block normal interactions inside the generated application.
     });
   }, [project.id]);
-  const syncEditorMode = useCallback(() => {
-    editorModeMessages(activeEditorMode).forEach(postToPreview);
-  }, [activeEditorMode, postToPreview]);
   const replayPendingStyles = useCallback(() => {
     const propNames = {
       color: "color",
@@ -220,11 +228,17 @@ export function MaxLivePreview({
   }, [postToPreview]);
   const selectEditorMode = useCallback(
     (mode: EditorMode) => {
+      // Cancel captured retries synchronously in the click handler. Waiting for
+      // the React effect cleanup leaves a small window where a stale enable can
+      // run after the user has already chosen ordinary viewing.
+      editorModeSync.transition(mode);
       setStyleMode(mode === "style");
       setInspectMode(mode === "inspect");
     },
-    [setInspectMode, setStyleMode],
+    [editorModeSync, setInspectMode, setStyleMode],
   );
+
+  useEffect(() => () => editorModeSync.dispose(), [editorModeSync]);
 
   useEffect(() => {
     if (!viewingHistorical) return;
@@ -382,17 +396,20 @@ export function MaxLivePreview({
     { label: "Безопасная сессия", done: Boolean(previewUrl) },
   ];
 
-  // Mode changes happen long after the iframe's initial load. Gate the sync by
-  // the URL that actually completed loading so exact-origin postMessage never
-  // targets the temporary about:blank document.
+  // Mode changes happen long after the iframe's initial load. Each transition
+  // owns one monotonic sequence and one timer registry. Cleanup cancels every
+  // retry before another mode or iframe can become active.
   useEffect(() => {
-    if (!displayPreviewUrl || loadedPreviewUrl !== displayPreviewUrl) return;
-    syncEditorMode();
-    const retries = [120, 450, 1_100].map((delay) =>
-      window.setTimeout(syncEditorMode, delay),
-    );
-    return () => retries.forEach(window.clearTimeout);
-  }, [displayPreviewUrl, loadedPreviewUrl, syncEditorMode]);
+    if (!displayPreviewUrl || loadedPreviewUrl !== displayPreviewUrl) {
+      editorModeSync.cancelPending();
+      return;
+    }
+    const current = editorModeSync.getCurrent();
+    if (!current || current.mode !== activeEditorMode) {
+      editorModeSync.transition(activeEditorMode);
+    }
+    return () => editorModeSync.cancelPending();
+  }, [activeEditorMode, displayPreviewUrl, editorModeSync, loadedPreviewUrl]);
 
   // One strict message boundary serves both editor paths. AI picks become
   // commentable chips in the existing MAX composer; manual picks open the
@@ -411,14 +428,30 @@ export function MaxLivePreview({
       const data = event.data as {
         type?: string;
         el?: Record<string, unknown>;
+        mode?: unknown;
+        editorSession?: unknown;
+        seq?: unknown;
+        version?: unknown;
       };
       if (!data || typeof data.type !== "string") return;
       if (data.type === "omnia:inspect:ready") {
         frame.dataset.maxPreviewReady = "true";
         setInspectorReady(true);
         postToPreview({ type: "omnia:preview:chrome", hideScrollbar: true });
-        syncEditorMode();
+        editorModeSync.resend();
         replayPendingStyles();
+        return;
+      }
+      if (data.type === "omnia:editor:state") {
+        if (editorModeSync.acknowledge(data)) {
+          const current = editorModeSync.getCurrent();
+          if (current) {
+            setAcknowledgedEditorTransition({
+              mode: current.mode,
+              seq: current.seq,
+            });
+          }
+        }
         return;
       }
       if (data.type !== "omnia:pick" || !data.el) return;
@@ -456,6 +489,7 @@ export function MaxLivePreview({
           nextIndex:
             typeof element.nextIndex === "number" ? element.nextIndex : 0,
         });
+        editorModeSync.cancelPending();
         stopEditorPickingAfterPick("style", {
           setInspectMode,
           stopStylePicking,
@@ -471,6 +505,7 @@ export function MaxLivePreview({
         .selections.some((selection) => selection.selector === selector);
       if (alreadySelected) {
         postToPreview({ type: "omnia:inspect:remove", id: rawId });
+        editorModeSync.cancelPending();
         stopEditorPickingAfterPick("inspect", {
           setInspectMode,
           stopStylePicking,
@@ -491,6 +526,7 @@ export function MaxLivePreview({
         description:
           "Опишите изменение в чате — ИИ затронет только выделенное.",
       });
+      editorModeSync.cancelPending();
       stopEditorPickingAfterPick("inspect", {
         setInspectMode,
         stopStylePicking,
@@ -508,7 +544,7 @@ export function MaxLivePreview({
     selectionIdPrefix,
     setInspectMode,
     stopStylePicking,
-    syncEditorMode,
+    editorModeSync,
   ]);
 
   // A single-shot pick leaves its selected mark and panel visible while capture
@@ -767,7 +803,15 @@ export function MaxLivePreview({
                       key={displayPreviewUrl}
                       src={displayPreviewUrl}
                       title={`Превью ${project.name}`}
-                      className="absolute inset-0 size-full border-0 bg-white"
+                      className={cn(
+                        "absolute inset-0 size-full border-0 bg-white",
+                        activeEditorMode === "off" &&
+                          (!editorModeSync.isAcknowledged("off") ||
+                            acknowledgedEditorTransition?.mode !== "off" ||
+                            acknowledgedEditorTransition.seq !==
+                              editorModeSync.getCurrent()?.seq) &&
+                          "pointer-events-none",
+                      )}
                       allow="clipboard-read; clipboard-write"
                       referrerPolicy="no-referrer"
                       data-testid="max-live-iframe"
@@ -780,6 +824,9 @@ export function MaxLivePreview({
                       onLoad={(event) => {
                         event.currentTarget.dataset.maxPreviewReady = "false";
                         setInspectorReady(false);
+                        setAcknowledgedEditorTransition(null);
+                        editorModeSync.dispose();
+                        editorModeSync.transition(activeEditorMode);
                         if (previewUrl) setLastWorkingUrl(previewUrl);
                         if (displayPreviewUrl) {
                           setLoadedPreviewUrl(displayPreviewUrl);
@@ -790,6 +837,20 @@ export function MaxLivePreview({
                         });
                       }}
                       />
+                      {activeEditorMode === "off" &&
+                        (!editorModeSync.isAcknowledged("off") ||
+                          acknowledgedEditorTransition?.mode !== "off" ||
+                          acknowledgedEditorTransition.seq !==
+                            editorModeSync.getCurrent()?.seq) && (
+                          <div
+                            className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-white/20"
+                            data-testid="max-view-mode-syncing"
+                          >
+                            <span className="rounded-full border border-[#d8d4cb] bg-[#fcfbf7]/92 px-3 py-1.5 text-[9px] font-medium text-[#6d6962] shadow-sm backdrop-blur">
+                              Включаем просмотр…
+                            </span>
+                          </div>
+                        )}
                       {!previewUrl && preparing && (
                         <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7]/95 px-3 py-2 text-left shadow-sm backdrop-blur">
                           <p className="flex items-center gap-2 text-[11px] font-medium text-[#171716]">
