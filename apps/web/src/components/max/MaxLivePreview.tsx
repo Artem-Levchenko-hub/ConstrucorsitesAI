@@ -50,6 +50,7 @@ import type { Project, Snapshot } from "@/lib/api/types";
 import {
   editorModeMessages,
   previewTargetOrigin,
+  stopEditorPickingAfterPick,
   type EditorMode,
 } from "@/lib/editor-bridge";
 import { maxSnapshotLabel, maxSnapshotVersion } from "@/lib/max-version-history";
@@ -117,6 +118,9 @@ export function MaxLivePreview({
   const selections = useInspectorStore((state) => state.selections);
   const styleMode = useStyleEditStore((state) => state.styleMode);
   const setStyleMode = useStyleEditStore((state) => state.setStyleMode);
+  const stopStylePicking = useStyleEditStore(
+    (state) => state.stopStylePicking,
+  );
   const styleSelected = useStyleEditStore((state) => state.selected);
   const activeEditorMode: EditorMode = styleMode
     ? "style"
@@ -398,7 +402,13 @@ export function MaxLivePreview({
       const element = data.el;
       const selector = String(element.selector ?? "");
       if (!selector) return;
-      if (useStyleEditStore.getState().styleMode) {
+      const pickedMode: EditorMode = useStyleEditStore.getState().styleMode
+        ? "style"
+        : useInspectorStore.getState().inspectMode
+          ? "inspect"
+          : "off";
+      if (pickedMode === "off") return;
+      if (pickedMode === "style") {
         useStyleEditStore.getState().selectElement({
           selector,
           tag: String(element.tag ?? ""),
@@ -422,6 +432,11 @@ export function MaxLivePreview({
           nextIndex:
             typeof element.nextIndex === "number" ? element.nextIndex : 0,
         });
+        stopEditorPickingAfterPick("style", {
+          setInspectMode,
+          stopStylePicking,
+          postMessage: postToAllProjectPreviews,
+        });
         return;
       }
 
@@ -432,6 +447,11 @@ export function MaxLivePreview({
         .selections.some((selection) => selection.selector === selector);
       if (alreadySelected) {
         postToPreview({ type: "omnia:inspect:remove", id: rawId });
+        stopEditorPickingAfterPick("inspect", {
+          setInspectMode,
+          stopStylePicking,
+          postMessage: postToAllProjectPreviews,
+        });
         return;
       }
       const id = `${selectionIdPrefix}${rawId}`;
@@ -447,31 +467,42 @@ export function MaxLivePreview({
         description:
           "Опишите изменение в чате — ИИ затронет только выделенное.",
       });
+      stopEditorPickingAfterPick("inspect", {
+        setInspectMode,
+        stopStylePicking,
+        postMessage: postToAllProjectPreviews,
+      });
     }
 
     window.addEventListener("message", onPreviewMessage);
     return () => window.removeEventListener("message", onPreviewMessage);
   }, [
     addSelection,
+    postToAllProjectPreviews,
     postToPreview,
     replayPendingStyles,
     selectionIdPrefix,
+    setInspectMode,
+    stopStylePicking,
     syncEditorMode,
   ]);
 
-  // The style inspector keeps its selected mark when disabled so it can resume
-  // quickly. MAX deliberately clears that mark when the panel closes or the
-  // user leaves manual mode; otherwise the phone looks editable after editing
-  // has visibly ended.
+  // A single-shot pick leaves its selected mark and panel visible while capture
+  // mode is off. Clear the mark only when that panel is explicitly closed (or
+  // an explicit mode change clears the selection), not on the automatic stop.
   const previousEditorMode = useRef<EditorMode>("off");
+  const hadStyleSelection = useRef(false);
   useEffect(() => {
     const leftStyleMode =
-      previousEditorMode.current === "style" && activeEditorMode !== "style";
-    const closedStylePanel = activeEditorMode === "style" && !styleSelected;
+      previousEditorMode.current === "style" &&
+      activeEditorMode !== "style" &&
+      !styleSelected;
+    const closedStylePanel = hadStyleSelection.current && !styleSelected;
     if (leftStyleMode || closedStylePanel) {
       postToPreview({ type: "omnia:inspect:clear" });
     }
     previousEditorMode.current = activeEditorMode;
+    hadStyleSelection.current = Boolean(styleSelected);
   }, [activeEditorMode, postToPreview, styleSelected]);
 
   // Removing a chip (or sending the prompt) must remove the matching outline in
@@ -863,7 +894,7 @@ export function MaxLivePreview({
           )}
         </div>
       </div>
-      {!viewingHistorical && styleMode && styleSelected && (
+      {!viewingHistorical && styleSelected && (
         <StylePanel
           projectId={project.id}
           post={postToAllProjectPreviews}

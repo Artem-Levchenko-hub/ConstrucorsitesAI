@@ -3,8 +3,8 @@
  *
  * Lives INSIDE the previewed page. The workspace shell (parent window) talks to
  * it via postMessage; on demand it lets the user hover-highlight and click-pick
- * elements, then reports each pick back so the chat can attach it as a commentable
- * chip. The model edits the HTML *source*, not the live DOM, so we send the
+ * elements, then reports one pick and immediately releases click interception so
+ * the generated app stays interactive. The model edits the HTML *source*, not the live DOM, so we send the
  * element's outerHTML + visible text (more useful for locating it than a CSS
  * selector alone) alongside a best-effort selector.
  *
@@ -567,6 +567,11 @@
         },
       },
     });
+    // Picking is single-shot. Release capture listeners synchronously inside
+    // the iframe as well as notifying the parent, so the very next interaction
+    // reaches the generated app even across a delayed postMessage round-trip.
+    // `disable()` deliberately keeps the selected outline in place.
+    setEditorMode("off");
   }
 
   function blockEarlyInteraction(e) {
@@ -737,7 +742,7 @@
     if (!d || typeof d.type !== "string") return;
     switch (d.type) {
       case "omnia:inspect:ping":
-        post({ type: "omnia:inspect:ready", version: 4 });
+        post({ type: "omnia:inspect:ready", version: 5 });
         break;
       case "omnia:editor:set-mode":
         setEditorMode(d.mode);
@@ -900,5 +905,5 @@
 
   // Tell the parent we're ready so it can (re)send enable after a reload while
   // select-mode is still on.
-  post({ type: "omnia:inspect:ready", version: 4 });
+  post({ type: "omnia:inspect:ready", version: 5 });
 })();

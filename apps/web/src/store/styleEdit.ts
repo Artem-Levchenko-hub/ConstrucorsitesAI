@@ -59,6 +59,8 @@ type StyleEditState = {
   scopeToProject: (projectId: string) => void;
   releaseProjectScope: (projectId: string) => void;
   setStyleMode: (on: boolean) => void;
+  /** Stop intercepting app clicks after a pick, preserving the open panel. */
+  stopStylePicking: () => void;
   selectElement: (el: StyleSelected) => void;
   setElementProp: (
     selector: string,
@@ -109,6 +111,7 @@ export const useStyleEditStore = create<StyleEditState>((set) => ({
     ),
   setStyleMode: (on) =>
     set(on ? { styleMode: true } : { styleMode: false, selected: null }),
+  stopStylePicking: () => set({ styleMode: false }),
   selectElement: (el) => set({ selected: el }),
   setElementProp: (selector, key, value) =>
     set((s) => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   editorModeMessages,
   previewTargetOrigin,
+  stopEditorPickingAfterPick,
   type EditorMode,
 } from "@/lib/editor-bridge";
 
@@ -83,5 +84,39 @@ describe("previewTargetOrigin", () => {
     expect(
       previewTargetOrigin("javascript:alert(1)", "https://constructor.example"),
     ).toBeNull();
+  });
+});
+
+describe("single-shot editor picking", () => {
+  it.each(["inspect", "style"] satisfies EditorMode[])(
+    "turns %s off in the store before sending the atomic iframe update",
+    (mode) => {
+      const order: string[] = [];
+      const stopped = stopEditorPickingAfterPick(mode, {
+        setInspectMode: (on) => order.push(`inspect:${String(on)}`),
+        stopStylePicking: () => order.push("style:false"),
+        postMessage: (message) => order.push(`post:${message.type}`),
+      });
+
+      expect(stopped).toBe(true);
+      expect(order[0]).toBe(mode === "style" ? "style:false" : "inspect:false");
+      expect(order.slice(1)).toEqual([
+        "post:omnia:editor:set-mode",
+        "post:omnia:inspect:disable",
+        "post:omnia:style:disable",
+      ]);
+    },
+  );
+
+  it("ignores a stale pick after the mode is already off", () => {
+    const order: string[] = [];
+    expect(
+      stopEditorPickingAfterPick("off", {
+        setInspectMode: () => order.push("inspect"),
+        stopStylePicking: () => order.push("style"),
+        postMessage: () => order.push("post"),
+      }),
+    ).toBe(false);
+    expect(order).toEqual([]);
   });
 });

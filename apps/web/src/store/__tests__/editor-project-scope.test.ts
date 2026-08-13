@@ -108,4 +108,24 @@ describe("MAX editor project scope", () => {
       dirty: false,
     });
   });
+
+  it("stops style picking without closing the selected-element panel", () => {
+    const style = useStyleEditStore.getState();
+    style.setStyleMode(true);
+    style.selectElement({
+      selector: "#catalog-tab",
+      tag: "button",
+      color: "rgb(0, 0, 0)",
+      backgroundColor: "rgb(255, 255, 255)",
+      borderColor: "rgb(0, 0, 0)",
+      fontFamily: "Inter",
+    });
+
+    useStyleEditStore.getState().stopStylePicking();
+
+    expect(useStyleEditStore.getState()).toMatchObject({
+      styleMode: false,
+      selected: { selector: "#catalog-tab" },
+    });
+  });
 });

@@ -25,6 +25,7 @@ import { EASE_OUT, springSnappy } from "@/lib/motion";
 import {
   editorModeMessages,
   previewTargetOrigin,
+  stopEditorPickingAfterPick,
   type EditorMode,
 } from "@/lib/editor-bridge";
 import { listSnapshots } from "@/lib/api/snapshots";
@@ -87,6 +88,7 @@ export function PreviewFrame({
   // select-mode (both hijack clicks in the preview).
   const styleMode = useStyleEditStore((s) => s.styleMode);
   const setStyleMode = useStyleEditStore((s) => s.setStyleMode);
+  const stopStylePicking = useStyleEditStore((s) => s.stopStylePicking);
   const styleSelected = useStyleEditStore((s) => s.selected);
   const onToggleInspect = useCallback(() => {
     setHeroMediaOpen(false);
@@ -390,9 +392,17 @@ export function PreviewFrame({
       }
       if (d.type === "omnia:pick" && d.el) {
         const el = d.el;
+        const pickedMode: EditorMode = useStyleEditStore.getState().styleMode
+          ? "style"
+          : useInspectorStore.getState().inspectMode
+            ? "inspect"
+            : "off";
+        // A delayed/duplicate message after the single-shot picker is already
+        // off must never create another selection or re-open an editor panel.
+        if (pickedMode === "off") return;
         // Style mode routes the pick to the style panel (computed color/font);
         // select mode attaches it as a commentable chip for an AI edit.
-        if (useStyleEditStore.getState().styleMode) {
+        if (pickedMode === "style") {
           useStyleEditStore.getState().selectElement({
             selector: String(el.selector ?? ""),
             tag: String(el.tag ?? ""),
@@ -422,6 +432,13 @@ export function PreviewFrame({
             comment: "",
           });
         }
+        // Single-shot contract: preserve the selection/panel, but atomically
+        // drop both capture listeners before the next app interaction.
+        stopEditorPickingAfterPick(pickedMode, {
+          setInspectMode,
+          stopStylePicking,
+          postMessage: postToPreview,
+        });
       }
     }
     window.addEventListener("message", onMessage);
@@ -432,7 +449,10 @@ export function PreviewFrame({
     project.id,
     viewingOld,
     qc,
+    setInspectMode,
+    stopStylePicking,
     syncEditorMode,
+    postToPreview,
   ]);
 
   // A new committed snapshot = a fresh build/edit: forget which preview errors
@@ -455,6 +475,17 @@ export function PreviewFrame({
     }
     prevPickIds.current = curr;
   }, [selections, postToPreview]);
+
+  // Single-shot style picking keeps the mark while the panel is open. The
+  // panel's explicit close/reset clears store selection, which is the point at
+  // which the preview outline should disappear too.
+  const hadStyleSelection = useRef(false);
+  useEffect(() => {
+    if (hadStyleSelection.current && !styleSelected) {
+      postToPreview({ type: "omnia:inspect:clear" });
+    }
+    hadStyleSelection.current = Boolean(styleSelected);
+  }, [postToPreview, styleSelected]);
 
   const apiOrigin =
     process.env.NEXT_PUBLIC_API_URL ??
@@ -1030,7 +1061,7 @@ export function PreviewFrame({
                   )}
                 </AnimatePresence>
 
-                {styleMode && styleSelected && (
+                {styleSelected && (
                   <StylePanel projectId={project.id} post={postToPreview} />
                 )}
                 {heroMediaOpen && (

@@ -5,6 +5,12 @@ export type EditorBridgeMessage = {
   mode?: EditorMode;
 };
 
+type StopEditorPickingHandlers = {
+  setInspectMode: (on: boolean) => void;
+  stopStylePicking: () => void;
+  postMessage: (message: EditorBridgeMessage) => void;
+};
+
 /** Resolve the exact iframe origin used for postMessage; null means do not send. */
 export function previewTargetOrigin(
   iframeSrc: string,
@@ -60,4 +66,24 @@ export function editorModeMessages(mode: EditorMode): EditorBridgeMessage[] {
     { type: "omnia:inspect:disable" },
     { type: "omnia:style:disable" },
   ];
+}
+
+/**
+ * Finish a successful element pick without clearing the picked element.
+ *
+ * Store state is switched off before the iframe command is sent, so a React
+ * rerender cannot briefly re-arm interception after the user starts interacting
+ * with the generated app again. `off` means the pick was stale and is ignored.
+ */
+export function stopEditorPickingAfterPick(
+  mode: EditorMode,
+  handlers: StopEditorPickingHandlers,
+): boolean {
+  if (mode === "off") return false;
+
+  if (mode === "style") handlers.stopStylePicking();
+  else handlers.setInspectMode(false);
+
+  editorModeMessages("off").forEach(handlers.postMessage);
+  return true;
 }

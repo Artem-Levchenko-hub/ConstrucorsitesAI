@@ -181,7 +181,19 @@ def test_inspector_has_precise_selector_and_cross_origin_guards() -> None:
     assert "trustedParentOrigin && e.origin !== trustedParentOrigin" in src
     assert 'case "omnia:preview:chrome"' in src
     assert "scrollbar-width:none" in src
-    assert 'post({ type: "omnia:inspect:ready", version: 4 })' in src
+    assert 'post({ type: "omnia:inspect:ready", version: 5 })' in src
+
+
+def test_inspector_pick_is_single_shot() -> None:
+    """A successful pick releases capture before the next app interaction."""
+    repo = Path(__file__).resolve().parents[3]
+    src = (
+        repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
+    ).read_text(encoding="utf-8")
+    pick_post = src.index('type: "omnia:pick"')
+    release = src.index('setEditorMode("off");', pick_post)
+    early_blocker = src.index("function blockEarlyInteraction")
+    assert pick_post < release < early_blocker
 
 
 def test_vite_spa_loads_canonical_inspector_only_inside_workspace() -> None:
